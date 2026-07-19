@@ -1,32 +1,91 @@
 import * as crypto from "crypto";
-import { isUtf8 } from "buffer";
-import { execFile } from "child_process";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { promisify } from "util";
+
+import { canonicalizePath, isPathWithinRoot } from "../util/paths.js";
 
 import type { ReviewScope } from "../core/capabilities/background.js";
+import { execFile } from "child_process";
+import { isUtf8 } from "buffer";
+import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 const MAX_REVIEW_SNAPSHOT_BYTES = 1_000_000;
 
-function normalizePaths(cwd: string, paths: string[] | undefined): string[] {
+export interface CaptureReviewScopeOptions {
+  workspaceRoots?: readonly string[];
+}
+
+interface ResolvedReviewPath {
+  absolutePath: string;
+  relativePath: string;
+  root: string;
+}
+
+function normalizePaths(
+  cwd: string,
+  paths: string[] | undefined,
+  options: CaptureReviewScopeOptions,
+): ResolvedReviewPath[] {
+  const comparisonKey = (value: string): string =>
+    process.platform === "win32" ? value.toLowerCase() : value;
+  const isWithinRoot = (filePath: string, root: string): boolean =>
+    isPathWithinRoot(comparisonKey(filePath), comparisonKey(root));
+  const seenRoots = new Set<string>();
+  const roots = (
+    options.workspaceRoots?.length ? options.workspaceRoots : [cwd]
+  )
+    .map((root) => ({
+      rawRoot: path.resolve(root),
+      canonicalRoot: canonicalizePath(root),
+    }))
+    .filter(({ canonicalRoot }) => {
+      const key = comparisonKey(canonicalRoot);
+      if (seenRoots.has(key)) return false;
+      seenRoots.add(key);
+      return true;
+    })
+    .sort((left, right) => right.rawRoot.length - left.rawRoot.length);
   return (paths ?? []).map((input) => {
     const trimmed = input.trim();
     if (!trimmed) throw new Error("Review scope paths cannot be empty.");
-    if (path.isAbsolute(trimmed)) {
-      throw new Error(`Review scope path must be workspace-relative: ${input}`);
+    const rawAbsolutePath = path.resolve(
+      path.isAbsolute(trimmed) ? trimmed : path.resolve(cwd, trimmed),
+    );
+    const canonicalPath = canonicalizePath(rawAbsolutePath);
+    const canonicalOwner = roots.find(({ canonicalRoot }) =>
+      isWithinRoot(canonicalPath, canonicalRoot),
+    );
+    const lexicalOwner = canonicalOwner
+      ? undefined
+      : roots.find(({ rawRoot }) => isWithinRoot(rawAbsolutePath, rawRoot));
+    const root = canonicalOwner ?? lexicalOwner;
+    if (!root) {
+      const allowedRoots = roots.map(({ canonicalRoot }) => canonicalRoot);
+      const acceptedExample = path.join(
+        allowedRoots[0] ?? cwd,
+        "path",
+        "to",
+        "file.ts",
+      );
+      throw new Error(
+        `Review scope path is outside the open workspace roots: ${input}. Allowed roots: ${allowedRoots.join(", ") || cwd}. Accepted example: ${acceptedExample}`,
+      );
     }
-    const resolved = path.resolve(cwd, trimmed);
-    const relative = path.relative(cwd, resolved);
-    if (
-      relative === ".." ||
-      relative.startsWith(`..${path.sep}`) ||
-      path.isAbsolute(relative)
-    ) {
-      throw new Error(`Review scope path is outside the workspace: ${input}`);
-    }
-    return relative.replaceAll(path.sep, "/") || ".";
+    const absolutePath = canonicalOwner
+      ? canonicalPath
+      : path.resolve(
+          root.canonicalRoot,
+          path.relative(root.rawRoot, rawAbsolutePath),
+        );
+    return {
+      absolutePath,
+      root: root.canonicalRoot,
+      relativePath:
+        path
+          .relative(root.canonicalRoot, absolutePath)
+          .replaceAll(path.sep, "/") || ".",
+    };
   });
 }
 
@@ -41,7 +100,9 @@ async function git(cwd: string, args: string[]): Promise<string> {
     return stdout;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unable to capture review scope with Git: ${detail}`);
+    throw new Error(
+      `Unable to capture review scope with Git: ${detail}. If this workspace is not a Git repository, use reviewScope kind "files" with explicit paths.`,
+    );
   }
 }
 
@@ -54,17 +115,18 @@ function fenced(content: string, language: string): string {
   return `${fence}${language}\n${content.trimEnd()}\n${fence}`;
 }
 
-async function captureFiles(cwd: string, paths: string[]): Promise<string> {
+async function captureFiles(paths: ResolvedReviewPath[]): Promise<string> {
   const sections: string[] = [];
-  for (const relativePath of paths) {
-    const absolutePath = path.resolve(cwd, relativePath);
+  const spansMultipleRoots = new Set(paths.map((entry) => entry.root)).size > 1;
+  for (const { absolutePath, relativePath } of paths) {
+    const displayPath = spansMultipleRoots ? absolutePath : relativePath;
     let stat;
     try {
       stat = await fs.lstat(absolutePath);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        sections.push(`File ${JSON.stringify(relativePath)} is missing.`);
+        sections.push(`File ${JSON.stringify(displayPath)} is missing.`);
         continue;
       }
       throw error;
@@ -73,28 +135,28 @@ async function captureFiles(cwd: string, paths: string[]): Promise<string> {
     if (stat.isSymbolicLink()) {
       const target = await fs.readlink(absolutePath);
       sections.push(
-        `File ${JSON.stringify(relativePath)} is a symbolic link to ${JSON.stringify(target)}.`,
+        `File ${JSON.stringify(displayPath)} is a symbolic link to ${JSON.stringify(target)}.`,
       );
       continue;
     }
     if (!stat.isFile()) {
-      throw new Error(`Review scope path is not a file: ${relativePath}`);
+      throw new Error(`Review scope path is not a file: ${displayPath}`);
     }
     if (stat.size > MAX_REVIEW_SNAPSHOT_BYTES) {
       throw new Error(
-        `Review scope file ${relativePath} is ${stat.size} bytes, above the ${MAX_REVIEW_SNAPSHOT_BYTES}-byte limit.`,
+        `Review scope file ${displayPath} is ${stat.size} bytes, above the ${MAX_REVIEW_SNAPSHOT_BYTES}-byte limit.`,
       );
     }
 
     const content = await fs.readFile(absolutePath);
     if (content.includes(0) || !isUtf8(content)) {
       sections.push(
-        `Binary file ${JSON.stringify(relativePath)} (${content.byteLength} bytes, sha256:${crypto.createHash("sha256").update(content).digest("hex")}).`,
+        `Binary file ${JSON.stringify(displayPath)} (${content.byteLength} bytes, sha256:${crypto.createHash("sha256").update(content).digest("hex")}).`,
       );
       continue;
     }
     sections.push(
-      `File: ${relativePath}\n${fenced(content.toString("utf8"), "text")}`,
+      `File: ${displayPath}\n${fenced(content.toString("utf8"), "text")}`,
     );
   }
   return sections.join("\n\n");
@@ -127,6 +189,7 @@ function wrapSnapshot(kind: ReviewScope["kind"], body: string): string {
 export async function captureReviewScope(
   cwd: string,
   scope: ReviewScope,
+  options: CaptureReviewScopeOptions = {},
 ): Promise<string> {
   if (scope.kind === "diff") {
     const label = scope.label?.trim() || "Provided diff";
@@ -136,23 +199,31 @@ export async function captureReviewScope(
     );
   }
 
-  const paths = normalizePaths(cwd, scope.paths);
+  const paths = normalizePaths(cwd, scope.paths, options);
 
   if (scope.kind === "files") {
     if (paths.length === 0) {
       throw new Error("reviewScope.files requires at least one path.");
     }
-    return wrapSnapshot(scope.kind, await captureFiles(cwd, paths));
+    return wrapSnapshot(scope.kind, await captureFiles(paths));
   }
 
-  const pathArgs = paths.length > 0 ? ["--", ...paths] : [];
+  const pathRoots = [...new Set(paths.map((entry) => entry.root))];
+  if (pathRoots.length > 1) {
+    throw new Error(
+      `Git review scopes cannot span multiple workspace roots: ${pathRoots.join(", ")}. Use reviewScope kind "files" for an exact cross-root snapshot.`,
+    );
+  }
+  const gitRoot = pathRoots[0] ?? canonicalizePath(cwd);
+  const gitPaths = paths.map((entry) => entry.relativePath);
+  const pathArgs = gitPaths.length > 0 ? ["--", ...gitPaths] : [];
 
   if (scope.kind === "commit_range") {
     const range = scope.range.trim();
     if (!range || range.startsWith("-")) {
       throw new Error("reviewScope.commit_range requires a valid Git range.");
     }
-    const diff = await git(cwd, [
+    const diff = await git(gitRoot, [
       "diff",
       "--no-ext-diff",
       "--no-color",
@@ -162,7 +233,7 @@ export async function captureReviewScope(
     ]);
     return wrapSnapshot(
       scope.kind,
-      `Git range: ${range}${paths.length ? `\nPaths: ${paths.join(", ")}` : ""}\n\n${fenced(diff, "diff")}`,
+      `Git range: ${range}${gitPaths.length ? `\nPaths: ${gitPaths.join(", ")}` : ""}\n\n${fenced(diff, "diff")}`,
     );
   }
 
@@ -172,7 +243,7 @@ export async function captureReviewScope(
   const sections: string[] = [];
 
   if (include.has("staged")) {
-    const diff = await git(cwd, [
+    const diff = await git(gitRoot, [
       "diff",
       "--cached",
       "--no-ext-diff",
@@ -183,7 +254,7 @@ export async function captureReviewScope(
     if (diff) sections.push(`Staged changes:\n${fenced(diff, "diff")}`);
   }
   if (include.has("unstaged")) {
-    const diff = await git(cwd, [
+    const diff = await git(gitRoot, [
       "diff",
       "--no-ext-diff",
       "--no-color",
@@ -194,7 +265,7 @@ export async function captureReviewScope(
       sections.push(`Unstaged tracked changes:\n${fenced(diff, "diff")}`);
   }
   if (include.has("untracked")) {
-    const output = await git(cwd, [
+    const output = await git(gitRoot, [
       "ls-files",
       "--others",
       "--exclude-standard",
@@ -203,13 +274,16 @@ export async function captureReviewScope(
     ]);
     const untracked = output.split("\0").filter(Boolean);
     if (untracked.length > 0) {
-      sections.push(`Untracked files:\n${await captureFiles(cwd, untracked)}`);
+      const untrackedPaths = normalizePaths(gitRoot, untracked, {
+        workspaceRoots: [gitRoot],
+      });
+      sections.push(`Untracked files:\n${await captureFiles(untrackedPaths)}`);
     }
   }
 
   const manifest = [
     `Included states: ${[...include].join(", ")}`,
-    paths.length ? `Paths: ${paths.join(", ")}` : "Paths: all",
+    gitPaths.length ? `Paths: ${gitPaths.join(", ")}` : "Paths: all",
     "",
     ...sections,
   ].join("\n");

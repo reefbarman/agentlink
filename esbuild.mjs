@@ -7,8 +7,9 @@ import { stageSandboxRuntime } from "./scripts/package-sandbox-runtime.mjs";
 
 const watch = process.argv.includes("--watch");
 
-// Load .env.local if it exists (for DEV_BUILD=true opt-in)
-let devBuild = false;
+// Load .env.local if it exists (for DEV_BUILD=true opt-in). An explicit
+// environment value keeps builds deterministic in CI and isolated worktrees.
+let devBuild = process.env.DEV_BUILD === "true";
 try {
   const envLocal = readFileSync(".env.local", "utf-8");
   devBuild = /^DEV_BUILD\s*=\s*true$/m.test(envLocal);
@@ -30,6 +31,18 @@ const extensionOptions = {
   define: {
     __DEV_BUILD__: JSON.stringify(devBuild),
   },
+};
+
+/** @type {esbuild.BuildOptions} */
+const composeRuntimeOptions = {
+  entryPoints: ["src/agent/compose/composeRuntime.ts"],
+  bundle: true,
+  outfile: "dist/compose-runtime.mjs",
+  format: "esm",
+  platform: "node",
+  target: "node22",
+  sourcemap: true,
+  minify: false,
 };
 
 /** @type {esbuild.BuildOptions} */
@@ -161,9 +174,17 @@ const browserGatewayHelperOptions = {
   },
 };
 
+const wasmDestDir = "dist/wasm";
+mkdirSync(wasmDestDir, { recursive: true });
+copyFileSync(
+  "node_modules/@jitl/quickjs-wasmfile-release-asyncify/dist/emscripten-module.wasm",
+  path.join(wasmDestDir, "quickjs-release-asyncify.wasm"),
+);
+
 if (watch) {
   const [
     extCtx,
+    composeRuntimeCtx,
     sideCtx,
     appCtx,
     frCtx,
@@ -175,6 +196,7 @@ if (watch) {
     helperCtx,
   ] = await Promise.all([
     esbuild.context(extensionOptions),
+    esbuild.context(composeRuntimeOptions),
     esbuild.context(sidebarOptions),
     esbuild.context(approvalOptions),
     esbuild.context(frPreviewOptions),
@@ -187,6 +209,7 @@ if (watch) {
   ]);
   await Promise.all([
     extCtx.watch(),
+    composeRuntimeCtx.watch(),
     sideCtx.watch(),
     appCtx.watch(),
     frCtx.watch(),
@@ -201,6 +224,7 @@ if (watch) {
 } else {
   await Promise.all([
     esbuild.build(extensionOptions),
+    esbuild.build(composeRuntimeOptions),
     esbuild.build(sidebarOptions),
     esbuild.build(approvalOptions),
     esbuild.build(frPreviewOptions),
@@ -221,8 +245,6 @@ if (watch) {
     "dist/codicon.ttf",
   );
   // Copy tree-sitter WASM files to dist/wasm/
-  const wasmDestDir = "dist/wasm";
-  mkdirSync(wasmDestDir, { recursive: true });
   // Core parser WASM
   copyFileSync(
     "node_modules/web-tree-sitter/web-tree-sitter.wasm",

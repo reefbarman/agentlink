@@ -62,6 +62,14 @@ describe("executeCodexResponsesStream", () => {
         providerResponseId: undefined,
       },
       { type: "content_blocks", blocks: [{ type: "text", text: "hello" }] },
+      {
+        type: "model_stop",
+        reason: "end_turn",
+        assistantMessage: {
+          role: "assistant",
+          content: [{ type: "text", text: "hello" }],
+        },
+      },
       { type: "done" },
     ]);
   });

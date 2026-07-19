@@ -4,6 +4,7 @@ import type {
   CoreModelMessage,
   CoreModelToolDefinition,
 } from "../../../modelRuntime.js";
+import type { CoreHostedToolDefinition } from "../../../webAccess.js";
 
 import type { CoreReasoningEffort } from "../../../modelCatalog.js";
 import type { Reasoning } from "openai/resources/shared";
@@ -23,6 +24,8 @@ export type CodexRequestBody = OpenAIResponses.ResponseCreateParamsStreaming;
 export type CodexInputItem = OpenAIResponses.ResponseInputItem;
 export type CodexTool = OpenAIResponses.Tool;
 export type CodexPromptCacheRetention = "in_memory" | "24h";
+
+const CODEX_REPLAY_PROVIDER_IDS = new Set(["codex", "openai-codex"]);
 
 export interface CodexInputSummary {
   contentPartCount: number;
@@ -87,10 +90,20 @@ export function sanitizeCodexCallId(id: string): string {
  */
 export function translateCodexMessages(
   messages: CoreModelMessage[],
+  options: { useProviderReplay?: boolean } = {},
 ): CodexInputItem[] {
   const input: CodexInputItem[] = [];
 
   for (const msg of messages) {
+    const replayItems =
+      options.useProviderReplay === false
+        ? undefined
+        : extractCodexReplayItems(msg);
+    if (replayItems) {
+      input.push(...replayItems);
+      continue;
+    }
+
     if (typeof msg.content === "string") {
       if (msg.role === "user") {
         input.push({
@@ -155,23 +168,67 @@ export function translateCodexMessages(
           break;
 
         case "tool_result": {
-          const output =
+          const contentBlocks = Array.isArray(block.content)
+            ? block.content
+            : null;
+          const text =
             typeof block.content === "string"
               ? block.content
-              : Array.isArray(block.content)
-                ? block.content
-                    .filter(
-                      (b): b is { type: "text"; text: string } =>
-                        b.type === "text",
-                    )
-                    .map((b) => b.text)
-                    .join("")
-                : "";
+              : (contentBlocks
+                  ?.filter(
+                    (b): b is { type: "text"; text: string } =>
+                      b.type === "text",
+                  )
+                  .map((b) => b.text)
+                  .join("") ?? "");
+          const callId = sanitizeCodexCallId(block.tool_use_id);
+          // function_call_output is text-only in the Responses API, so media
+          // blocks are re-attached as a user message immediately after it.
+          const images =
+            contentBlocks?.filter(
+              (b): b is Extract<typeof b, { type: "image" }> =>
+                b.type === "image",
+            ) ?? [];
+          const documents =
+            contentBlocks?.filter(
+              (b): b is Extract<typeof b, { type: "document" }> =>
+                b.type === "document",
+            ) ?? [];
           toolResults.push({
             type: "function_call_output",
-            call_id: sanitizeCodexCallId(block.tool_use_id),
-            output,
+            call_id: callId,
+            output:
+              images.length > 0 || documents.length > 0
+                ? [text, "[Media attached in the following user message.]"]
+                    .filter(Boolean)
+                    .join("\n")
+                : text,
           });
+          if (images.length > 0 || documents.length > 0) {
+            toolResults.push({
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: `Media output of tool call ${callId}:`,
+                },
+                ...images.map(
+                  (image): UserInputContent => ({
+                    type: "input_image",
+                    image_url: `data:${image.source.media_type};base64,${image.source.data}`,
+                    detail: "auto",
+                  }),
+                ),
+                ...documents.map(
+                  (document): UserInputContent => ({
+                    type: "input_file",
+                    filename: document.title ?? "document.pdf",
+                    file_data: `data:${document.source.media_type};base64,${document.source.data}`,
+                  }),
+                ),
+              ],
+            });
+          }
           break;
         }
 
@@ -220,6 +277,67 @@ export function translateCodexTools(
   return translated;
 }
 
+export function translateCodexHostedTools(
+  tools: readonly CoreHostedToolDefinition[],
+): CodexTool[] {
+  return tools.map((tool) => {
+    if (tool.type !== "web_search") {
+      throw new Error(
+        `Codex Responses does not support hosted tool type: ${tool.type}`,
+      );
+    }
+
+    const filters =
+      tool.allowedDomains?.length || tool.blockedDomains?.length
+        ? {
+            ...(tool.allowedDomains?.length
+              ? { allowed_domains: [...tool.allowedDomains] }
+              : {}),
+            ...(tool.blockedDomains?.length
+              ? { blocked_domains: [...tool.blockedDomains] }
+              : {}),
+          }
+        : undefined;
+    return {
+      type: "web_search",
+      ...(filters ? { filters } : {}),
+    } as unknown as CodexTool;
+  });
+}
+
+function extractCodexReplayItems(
+  message: CoreModelMessage,
+): CodexInputItem[] | undefined {
+  const replay = message.providerReplay;
+  if (
+    message.role !== "assistant" ||
+    !replay ||
+    replay.codecVersion !== 1 ||
+    replay.degraded ||
+    !CODEX_REPLAY_PROVIDER_IDS.has(replay.providerId) ||
+    !replay.payload ||
+    typeof replay.payload !== "object" ||
+    Array.isArray(replay.payload)
+  ) {
+    return undefined;
+  }
+
+  const output = replay.payload.output;
+  if (
+    !Array.isArray(output) ||
+    output.some(
+      (item) =>
+        !item ||
+        typeof item !== "object" ||
+        Array.isArray(item) ||
+        typeof item.type !== "string",
+    )
+  ) {
+    return undefined;
+  }
+  return output as unknown as CodexInputItem[];
+}
+
 export function buildCodexReasoning(
   effort: CoreReasoningEffort,
   context?: "all_turns",
@@ -251,6 +369,7 @@ export function buildCodexResolvedRequestBody(args: {
   reasoningEffort?: CoreReasoningEffort;
   reasoningMode?: "standard" | "pro";
   tools?: CodexTool[];
+  hostedTools?: readonly CoreHostedToolDefinition[];
 }): CodexResolvedRequestBodyResult {
   const configuredModel = args.model?.trim() || CODEX_DEFAULT_MODEL;
   const modelResolution = resolveCodexEffectiveModel(
@@ -267,6 +386,7 @@ export function buildCodexResolvedRequestBody(args: {
     reasoningEffort: args.reasoningEffort,
     reasoningMode: args.reasoningMode,
     tools: args.tools,
+    hostedTools: args.hostedTools,
     caps: getEndpointCaps({ method: args.authMethod }),
   });
 
@@ -288,8 +408,21 @@ export function buildCodexEndpointRequestBody(args: {
   reasoningEffort?: CoreReasoningEffort;
   reasoningMode?: "standard" | "pro";
   tools?: CodexTool[];
+  hostedTools?: readonly CoreHostedToolDefinition[];
   caps: ResponsesCaps;
 }): CodexRequestBody {
+  if (args.hostedTools?.length && !args.caps.supportsHostedWebSearch) {
+    throw new Error(
+      "Codex hosted web search is unavailable for this authenticated endpoint",
+    );
+  }
+  const hostedTools = args.hostedTools?.length
+    ? translateCodexHostedTools(args.hostedTools)
+    : undefined;
+  const tools = [...(args.tools ?? []), ...(hostedTools ?? [])];
+  const include = hostedTools?.length
+    ? (["web_search_call.action.sources"] as CodexRequestBody["include"])
+    : undefined;
   return buildCodexStreamRequestBody({
     model: args.model,
     input: args.input,
@@ -315,7 +448,8 @@ export function buildCodexEndpointRequestBody(args: {
     previousResponseId: args.caps.supportsPreviousResponseId
       ? args.state?.previousResponseId
       : undefined,
-    tools: args.tools,
+    tools,
+    include,
     promptCacheKey: args.caps.supportsPromptCacheKey
       ? args.cache?.key
       : undefined,
@@ -335,6 +469,7 @@ export function buildCodexStreamRequestBody(args: {
   reasoning?: Reasoning;
   previousResponseId?: string;
   tools?: CodexTool[];
+  include?: CodexRequestBody["include"];
   promptCacheKey?: string;
   promptCacheRetention?: CodexPromptCacheRetention;
 }): CodexRequestBody {
@@ -352,6 +487,7 @@ export function buildCodexStreamRequestBody(args: {
       ? { previous_response_id: args.previousResponseId }
       : {}),
     ...(args.tools && args.tools.length > 0 ? { tools: args.tools } : {}),
+    ...(args.include?.length ? { include: args.include } : {}),
     ...(args.promptCacheKey ? { prompt_cache_key: args.promptCacheKey } : {}),
     ...(args.promptCacheRetention
       ? { prompt_cache_retention: args.promptCacheRetention }

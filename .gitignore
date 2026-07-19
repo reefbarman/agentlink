@@ -7,6 +7,6 @@ dist/
 telemetry-reports/
 releases/
 .env.local
-plans/
+plans/*
 .mcp.json
 /AGENTS.md

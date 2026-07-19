@@ -5,15 +5,19 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ApprovalPanelProvider } from "./ApprovalPanelProvider.js";
 
-const { configuration } = vi.hoisted(() => ({
-  configuration: {
+const { configuration, getConfiguration } = vi.hoisted(() => {
+  const configuration = {
     get: vi.fn((_key: string, fallback?: unknown) => fallback),
-  },
-}));
+  };
+  return {
+    configuration,
+    getConfiguration: vi.fn((..._args: unknown[]) => configuration),
+  };
+});
 
 vi.mock("vscode", () => ({
   workspace: {
-    getConfiguration: vi.fn(() => configuration),
+    getConfiguration,
   },
   commands: {
     executeCommand: vi.fn(),
@@ -30,10 +34,18 @@ vi.mock("vscode", () => ({
       toString: () => `${base.toString()}/${parts.join("/")}`,
     })),
     file: (fsPath: string) => ({ fsPath, toString: () => fsPath }),
+    parse: (value: string) => ({
+      fsPath: value.replace(/^file:\/\//, ""),
+      toString: () => value,
+    }),
   },
 }));
 
-function createProvider() {
+function createProvider(
+  resolveProjectContext?: ConstructorParameters<
+    typeof ApprovalPanelProvider
+  >[2],
+) {
   const statusBarManager = {
     setPendingCount: vi.fn(),
     showAlert: vi.fn(() => ({ dispose: vi.fn() })),
@@ -43,7 +55,21 @@ function createProvider() {
     provider: new ApprovalPanelProvider(
       { toString: () => "file:///extension" } as never,
       statusBarManager as never,
+      resolveProjectContext,
     ),
+  };
+}
+
+function projectContext(input: { sessionId?: string; targetPath?: string }) {
+  const suffix = input.sessionId === "session-b" ? "b" : "a";
+  return {
+    sourceProject: {
+      projectId: `project-${suffix}`,
+      displayName: `Project ${suffix.toUpperCase()}`,
+      availability: "available" as const,
+    },
+    targetPath: input.targetPath,
+    projectResourceUri: `file:///workspace/${suffix}`,
   };
 }
 
@@ -91,8 +117,8 @@ describe("ApprovalPanelProvider webview shell", () => {
 });
 
 describe("ApprovalPanelProvider command security projection", () => {
-  it("forwards the exact token-free security summary to shared approval surfaces", async () => {
-    const { provider } = createProvider();
+  it("forwards token-free security and project attribution together", async () => {
+    const { provider } = createProvider(projectContext);
     let shown: ApprovalRequest | undefined;
     provider.onForwardApproval = (request, respond) => {
       shown = request;
@@ -131,12 +157,143 @@ describe("ApprovalPanelProvider command security projection", () => {
       provider.enqueueCommandApproval("npm test", "npm test", {
         cwd: "/workspace",
         security,
+        sessionId: "session-b",
       }).promise,
     ).resolves.toMatchObject({ decision: "run-once" });
 
     expect(shown?.security).toBe(security);
+    expect(shown?.sourceProject?.projectId).toBe("project-b");
     expect(shown).not.toHaveProperty("sandboxCapabilityRequest");
     expect(shown).not.toHaveProperty("bindingDigest");
+  });
+});
+
+describe("ApprovalPanelProvider project attribution", () => {
+  it("snapshots resolved project context once when the request is enqueued", async () => {
+    const resolveProjectContext = vi.fn(projectContext);
+    const { provider } = createProvider(resolveProjectContext);
+    let shownRequest: ApprovalRequest | undefined;
+
+    provider.onForwardApproval = (request, respond) => {
+      shownRequest = request;
+      respond({ type: "decision", id: request.id, decision: "accept" });
+    };
+
+    await expect(
+      provider.enqueueWriteApproval("src/output.txt", {
+        operation: "modify",
+        outsideWorkspace: false,
+        sessionId: "session-b",
+        targetPath: "/workspace/b/src/output.txt",
+      }).promise,
+    ).resolves.toMatchObject({ decision: "accept" });
+
+    expect(resolveProjectContext).toHaveBeenCalledTimes(1);
+    expect(resolveProjectContext).toHaveBeenCalledWith({
+      sessionId: "session-b",
+      targetPath: "/workspace/b/src/output.txt",
+    });
+    expect(shownRequest).toMatchObject({
+      sourceProject: {
+        projectId: "project-b",
+        displayName: "Project B",
+        availability: "available",
+      },
+      targetPath: "/workspace/b/src/output.txt",
+    });
+  });
+
+  it("does not reuse a recent command approval across source projects", async () => {
+    const { provider } = createProvider(projectContext);
+    const shownProjects: string[] = [];
+
+    provider.onForwardApproval = (request, respond) => {
+      shownProjects.push(request.sourceProject?.projectId ?? "unscoped");
+      respond({ type: "decision", id: request.id, decision: "run-once" });
+    };
+
+    await expect(
+      provider.enqueueCommandApproval("npm test", "npm test", {
+        sessionId: "session-a",
+      }).promise,
+    ).resolves.toEqual({ decision: "run-once" });
+    await expect(
+      provider.enqueueCommandApproval("npm test", "npm test", {
+        sessionId: "session-b",
+      }).promise,
+    ).resolves.toEqual({ decision: "run-once" });
+
+    expect(shownProjects).toEqual(["project-a", "project-b"]);
+  });
+
+  it("does not reuse a queued path approval across source projects", async () => {
+    const { provider } = createProvider(projectContext);
+    const shownProjects: string[] = [];
+    let firstPending:
+      | { id: string; respond: (msg: DecisionMessage) => void }
+      | undefined;
+
+    provider.onForwardApproval = (request, respond) => {
+      shownProjects.push(request.sourceProject?.projectId ?? "unscoped");
+      if (!firstPending) {
+        firstPending = { id: request.id, respond };
+        return;
+      }
+      respond({ type: "decision", id: request.id, decision: "allow-once" });
+    };
+
+    const first = provider.enqueuePathApproval(
+      "/outside/shared/a.txt",
+      "session-a",
+    ).promise;
+    const second = provider.enqueuePathApproval(
+      "/outside/shared/b.txt",
+      "session-b",
+    ).promise;
+
+    firstPending!.respond({
+      type: "decision",
+      id: firstPending!.id,
+      decision: "allow-once",
+    });
+
+    await expect(first).resolves.toEqual({ decision: "allow-once" });
+    await expect(second).resolves.toEqual({ decision: "allow-once" });
+    expect(shownProjects).toEqual(["project-a", "project-b"]);
+  });
+
+  it("reads recent approval TTL from the source project resource", async () => {
+    getConfiguration.mockImplementation((...args: unknown[]) => {
+      const resource = args[1] as { toString: () => string } | undefined;
+      return {
+        get: vi.fn((_key: string, fallback?: unknown) =>
+          resource?.toString() === "file:///workspace/a" ? 0 : fallback,
+        ),
+      };
+    });
+    const { provider } = createProvider(projectContext);
+    const shownProjects: string[] = [];
+
+    provider.onForwardApproval = (request, respond) => {
+      shownProjects.push(request.sourceProject?.projectId ?? "unscoped");
+      respond({ type: "decision", id: request.id, decision: "run-once" });
+    };
+
+    await provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "session-a",
+    }).promise;
+    await provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "session-a",
+    }).promise;
+
+    expect(shownProjects).toEqual(["project-a", "project-a"]);
+    expect(getConfiguration).toHaveBeenCalledWith(
+      "agentlink",
+      expect.objectContaining({
+        toString: expect.any(Function),
+      }),
+    );
+    getConfiguration.mockImplementation(() => configuration);
   });
 });
 

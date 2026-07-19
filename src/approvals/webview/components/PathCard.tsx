@@ -107,6 +107,9 @@ export function PathCard({ request, submit, followUpRef }: PathCardProps) {
     <ApprovalLayout
       queuePosition={request.queuePosition}
       queueTotal={request.queueTotal}
+      sourceProject={request.sourceProject}
+      targetProject={request.targetProject}
+      targetPath={request.targetPath}
       purpose="Read or access a path outside the workspace"
       rulesContent={rulesJsx}
       rulesModified={!isSkipped}

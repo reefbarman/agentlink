@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { CodexProvider } from "./CodexProvider.js";
+
 const { createMock, openAiConstructorMock } = vi.hoisted(() => {
   const createMock = vi.fn();
   const openAiConstructorMock = vi.fn();
@@ -31,8 +33,6 @@ vi.mock("openai", () => {
   };
 });
 
-import { CodexProvider } from "./CodexProvider.js";
-
 function makeAuthManager(overrides?: Partial<Record<string, unknown>>) {
   return {
     resolveModelAuth: vi.fn().mockResolvedValue({
@@ -62,6 +62,26 @@ describe("CodexProvider.complete", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  it.each(["apiKey", "oauth"] as const)(
+    "resolves hosted-web capabilities for the %s transport",
+    async (method) => {
+      const authManager = makeAuthManager({
+        getPreferredAuthMethod: vi.fn().mockResolvedValue(method),
+      });
+      const provider = new CodexProvider(authManager as never);
+
+      await expect(
+        provider.getRequestCapabilities("gpt-5.5"),
+      ).resolves.toMatchObject({
+        hostedWeb: {
+          search: { supported: true },
+          fetch: { supported: false },
+        },
+      });
+      expect(authManager.getPreferredAuthMethod).toHaveBeenCalled();
+    },
+  );
 
   it("uses streaming mode and omits unsupported temperature", async () => {
     let requestBody: Record<string, unknown> | undefined;
@@ -125,6 +145,12 @@ describe("CodexProvider.complete", () => {
         cacheReadTokens: 0,
         cacheCreationTokens: 0,
       },
+      providerResponseId: undefined,
+      assistantMessage: {
+        role: "assistant",
+        content: [{ type: "text", text: "hello" }],
+      },
+      stopReason: "end_turn",
     });
   });
 
@@ -337,6 +363,11 @@ describe("CodexProvider.complete", () => {
         cacheCreationTokens: 0,
       },
       providerResponseId: "resp_123",
+      assistantMessage: {
+        role: "assistant",
+        content: [{ type: "text", text: "api" }],
+      },
+      stopReason: "end_turn",
     });
   });
 
@@ -384,6 +415,12 @@ describe("CodexProvider.complete", () => {
         cacheReadTokens: 150,
         cacheCreationTokens: 0,
       },
+      providerResponseId: undefined,
+      assistantMessage: {
+        role: "assistant",
+        content: [{ type: "text", text: "api" }],
+      },
+      stopReason: "end_turn",
     });
   });
 
@@ -427,11 +464,17 @@ describe("CodexProvider.complete", () => {
     expect(result).toEqual({
       text: "api",
       usage: {
-        inputTokens: 80,
+        inputTokens: 50,
         outputTokens: 10,
         cacheReadTokens: 120,
         cacheCreationTokens: 30,
       },
+      providerResponseId: undefined,
+      assistantMessage: {
+        role: "assistant",
+        content: [{ type: "text", text: "api" }],
+      },
+      stopReason: "end_turn",
     });
   });
 
@@ -811,6 +854,21 @@ describe("CodexProvider.stream", () => {
           },
         ],
       },
+      {
+        type: "model_stop",
+        reason: "tool_use",
+        assistantMessage: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "call_123",
+              name: "demo_tool",
+              input: { foo: "bar" },
+            },
+          ],
+        },
+      },
       { type: "done" },
     ]);
   });
@@ -893,6 +951,24 @@ describe("CodexProvider.stream", () => {
           },
         ],
       },
+      {
+        type: "model_stop",
+        reason: "end_turn",
+        assistantMessage: {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "plan",
+              signature: "",
+            },
+            {
+              type: "text",
+              text: "[Refusal]  cannot do thatfinal",
+            },
+          ],
+        },
+      },
       { type: "done" },
     ]);
   });
@@ -940,6 +1016,14 @@ describe("CodexProvider.stream", () => {
       {
         type: "content_blocks",
         blocks: [{ type: "text", text: "hello world" }],
+      },
+      {
+        type: "model_stop",
+        reason: "end_turn",
+        assistantMessage: {
+          role: "assistant",
+          content: [{ type: "text", text: "hello world" }],
+        },
       },
       { type: "done" },
     ]);
@@ -1113,8 +1197,9 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     expect(oauthIds).toContain("gpt-5.6-terra");
     expect(oauthIds).toContain("gpt-5.6-luna");
     expect(oauthIds).toContain("gpt-5.5");
-    expect(oauthIds).toContain("gpt-5.4-mini");
-    expect(oauthIds).not.toContain("gpt-5.4-pro");
+    expect(oauthIds).toContain("gpt-5.3-codex-spark");
+    expect(oauthIds).not.toContain("gpt-5.4");
+    expect(oauthIds).not.toContain("gpt-5.4-mini");
     expect(oauthIds).not.toContain("gpt-5.2-codex");
 
     const apiKeyProvider = new CodexProvider(
@@ -1124,11 +1209,14 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
     const apiKeyIds = apiKeyProvider.listModels().map((m) => m.id);
+    expect(apiKeyIds).toContain("gpt-5.6-sol");
+    expect(apiKeyIds).toContain("gpt-5.5");
     expect(apiKeyIds).toContain("gpt-5.4-pro");
     expect(apiKeyIds).toContain("gpt-5.2-codex");
+    expect(apiKeyIds).not.toContain("gpt-5.3-codex-spark");
   });
 
-  it("retries an unavailable preview model with its stable equivalent", async () => {
+  it("retries an unavailable GPT-5.6 model with its older equivalent", async () => {
     const attemptedModels: unknown[] = [];
     createMock
       .mockImplementationOnce(async (body: Record<string, unknown>) => {
@@ -1161,11 +1249,11 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
       events.push(event);
     }
 
-    expect(attemptedModels).toEqual(["gpt-5.6-luna", "gpt-5.4-mini"]);
+    expect(attemptedModels).toEqual(["gpt-5.6-luna", "gpt-5.5"]);
     expect(events).toContainEqual({
       type: "model_fallback",
       requestedModel: "gpt-5.6-luna",
-      effectiveModel: "gpt-5.4-mini",
+      effectiveModel: "gpt-5.5",
     });
   });
 

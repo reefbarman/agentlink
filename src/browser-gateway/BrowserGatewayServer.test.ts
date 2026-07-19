@@ -7,6 +7,7 @@ import { BrowserGatewayService } from "./BrowserGatewayService.js";
 import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
 import { InMemoryAgentUiEventHub } from "../agent/AgentUiPublisher.js";
 import { StreamingBaselineRecorder } from "../shared/streamingBaselineMetrics.js";
+import { buildBrowserGatewayHelperTrustHeaders } from "./browserGatewayRequestTrust.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
 
 vi.mock("vscode", () => {
@@ -42,7 +43,25 @@ vi.mock("vscode", () => {
 });
 
 function makeSessionManagerStub() {
+  const projectScope = {
+    projectId: "project-a",
+    displayName: "Project A",
+  };
   return {
+    getWorkspaceProjects: vi.fn(() => [
+      {
+        id: "project-a",
+        name: "Project A",
+        uri: "file:///workspace/a",
+        rootPath: "/workspace/a",
+        availability: { status: "available" },
+      },
+    ]),
+    getDefaultProjectScope: vi.fn(() => projectScope),
+    setBrowserPreferredProject: vi.fn(() => true),
+    getSession: vi.fn((id: string) =>
+      id === "session-1" ? { projectScope } : undefined,
+    ),
     listPersistedSessions: vi.fn(() => [
       {
         schemaVersion: 1,
@@ -55,6 +74,7 @@ function makeSessionManagerStub() {
         totalOutputTokens: 20,
         createdAt: 1,
         lastActiveAt: 2,
+        projectScope,
       },
     ]),
     getForegroundSession: vi.fn(() => ({
@@ -67,6 +87,8 @@ function makeSessionManagerStub() {
       lastOutputTokens: 20,
       lastCacheReadTokens: 3,
       estimatedTotalUsed: 33,
+      projectScope,
+      projectAvailability: "available",
       getAllMessages: vi.fn(() => [
         { role: "user", content: "hello" },
         { role: "assistant", content: [{ type: "text", text: "world" }] },
@@ -103,6 +125,7 @@ function makeMcpConfigSnapshot() {
         exists: true,
         editable: true,
         priority: 3,
+        readStatus: "available" as const,
       },
     ],
     entries: [],
@@ -132,6 +155,16 @@ function makeChatViewProviderStub() {
     submitBrowserApprovalDecision: vi.fn(() => true),
     submitBrowserQuestionResponse: vi.fn(() => true),
     publishBrowserQuestionProgress: vi.fn(() => true),
+    submitBrowserFormElicitation: vi.fn<
+      () =>
+        | { ok: true }
+        | { ok: false; reason: "stale_request" }
+        | {
+            ok: false;
+            reason: "invalid_values";
+            errors: Record<string, string>;
+          }
+    >(() => ({ ok: true })),
     submitBrowserUrlElicitation: vi.fn(() => true),
     submitBrowserSend: vi.fn<() => Promise<{ ok: boolean; queued?: boolean }>>(
       async () => ({ ok: true }),
@@ -179,8 +212,24 @@ function makeChatViewProviderStub() {
     submitBrowserAttachFile: vi.fn(async () => ({
       files: ["/tmp/from-picker.txt"],
     })),
+    submitBrowserSteerQueuedMessage: vi.fn(async () => ({ ok: true })),
+    submitBrowserInterjectQueuedMessage: vi.fn(() => ({ ok: true })),
     submitBrowserStop: vi.fn(() => ({ ok: true })),
     submitBrowserStopBackground: vi.fn(() => ({ ok: true })),
+    submitBrowserAskAgentWebPolicy: vi.fn(() => ({
+      ok: true,
+      settings: {
+        searchBackend: "native",
+        fetchBackend: "native",
+        allowedDomains: [],
+        blockedDomains: [],
+        maxSearchUsesPerTurn: 5,
+        maxFetchUsesPerTurn: 3,
+        maxFetchContentTokens: 25000,
+        maxReplayBytesPerTurn: 5242880,
+      },
+      revision: "web-policy-revision-1",
+    })),
     submitBrowserAskAgentMcpStatus: vi.fn(() => ({
       ok: true,
       infos: makeMcpConfigSnapshot().statusInfos,
@@ -195,6 +244,13 @@ function makeChatViewProviderStub() {
       ok: true,
       configSnapshot: makeMcpConfigSnapshot(),
     })),
+    submitMcpConfigMutation: vi.fn(async (mutation) => ({
+      operationId: mutation.operationId,
+      ok: true,
+      configSaved: true,
+      errors: [],
+      configSnapshot: makeMcpConfigSnapshot(),
+    })),
     submitBrowserMcpConfigServer: vi.fn(async () => ({
       ok: true,
       configSnapshot: makeMcpConfigSnapshot(),
@@ -204,6 +260,7 @@ function makeChatViewProviderStub() {
       configSnapshot: makeMcpConfigSnapshot(),
     })),
     submitBrowserMcpConfigOpenRaw: vi.fn(async () => ({ ok: true })),
+    submitBrowserMcpAction: vi.fn(async () => ({ ok: true, infos: [] })),
     getBrowserBgTranscript: vi.fn((sessionId: string) => ({
       ok: true,
       transcript: {
@@ -641,6 +698,16 @@ describe("BrowserGatewayServer", () => {
       "Workspace One",
       "/workspace/one",
       vi.fn(),
+      undefined,
+      () => "helper-secret",
+    );
+    const helperLoopbackHeaders = buildBrowserGatewayHelperTrustHeaders(
+      "helper-secret",
+      "loopback",
+    );
+    const helperNonLoopbackHeaders = buildBrowserGatewayHelperTrustHeaders(
+      "helper-secret",
+      "non-loopback",
     );
     const port = await server.start(0);
     const baseUrl = `http://127.0.0.1:${port}`;
@@ -726,6 +793,34 @@ describe("BrowserGatewayServer", () => {
       sessionTitle: "Test Session",
     });
 
+    const unauthorizedAskWebPolicyResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/web-policy`,
+    );
+    expect(unauthorizedAskWebPolicyResponse.status).toBe(401);
+
+    const askWebPolicyResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/web-policy`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(askWebPolicyResponse.ok).toBe(true);
+    expect(await askWebPolicyResponse.json()).toEqual({
+      ok: true,
+      settings: {
+        searchBackend: "native",
+        fetchBackend: "native",
+        allowedDomains: [],
+        blockedDomains: [],
+        maxSearchUsesPerTurn: 5,
+        maxFetchUsesPerTurn: 3,
+        maxFetchContentTokens: 25000,
+        maxReplayBytesPerTurn: 5242880,
+      },
+      revision: "web-policy-revision-1",
+    });
+    expect(
+      chatViewProvider.submitBrowserAskAgentWebPolicy,
+    ).toHaveBeenCalledOnce();
+
     const unauthorizedAskMcpStatusResponse = await fetch(
       `${baseUrl}/internal/ask-agent/mcp-status`,
     );
@@ -775,6 +870,7 @@ describe("BrowserGatewayServer", () => {
         headers: {
           Authorization: "Bearer test-token",
           "Content-Type": "application/json",
+          ...helperLoopbackHeaders,
         },
         body: JSON.stringify({
           profile: "ask-agent",
@@ -807,7 +903,7 @@ describe("BrowserGatewayServer", () => {
     );
     expect(mainMcpConfigSaveResponse.status).toBe(403);
     expect(await mainMcpConfigSaveResponse.json()).toEqual({
-      error: "main_profile_read_only_in_browser",
+      error: "browser_mcp_config_unavailable",
     });
     expect(
       chatViewProvider.submitBrowserMcpConfigServer,
@@ -832,12 +928,254 @@ describe("BrowserGatewayServer", () => {
         }),
       },
     );
-    expect(askMcpConfigOpenRawResponse.ok).toBe(true);
-    expect(chatViewProvider.submitBrowserMcpConfigOpenRaw).toHaveBeenCalledWith(
+    expect(askMcpConfigOpenRawResponse.status).toBe(403);
+    expect(await askMcpConfigOpenRawResponse.json()).toEqual({
+      error: "browser_mcp_config_unavailable",
+    });
+    expect(
+      chatViewProvider.submitBrowserMcpConfigOpenRaw,
+    ).not.toHaveBeenCalled();
+
+    const missingHelperTrustResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
       {
-        profile: "ask-agent",
-        scope: "ask-agent-global",
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          server: { name: "forged", command: "forged-mcp" },
+        }),
       },
+    );
+    expect(missingHelperTrustResponse.status).toBe(403);
+    expect(await missingHelperTrustResponse.json()).toEqual({
+      error: "helper_trust_required",
+    });
+
+    const lanStdioResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          server: { name: "lan-stdio", command: "lan-mcp" },
+        }),
+      },
+    );
+    expect(lanStdioResponse.status).toBe(403);
+    expect(await lanStdioResponse.json()).toEqual({
+      error: "browser_local_process_requires_loopback",
+    });
+
+    const lanHttpResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          server: {
+            name: "lan-http",
+            type: "http",
+            url: "https://example.com/mcp",
+          },
+        }),
+      },
+    );
+    expect(lanHttpResponse.ok).toBe(true);
+
+    const lanBatchRemoveResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          operationId: "lan-remove",
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          expectedRevision: "revision-1",
+          operations: [{ kind: "remove", serverName: "lan-http" }],
+        }),
+      },
+    );
+    expect(lanBatchRemoveResponse.status).toBe(403);
+    expect(await lanBatchRemoveResponse.json()).toEqual({
+      error: "browser_local_process_requires_loopback",
+    });
+
+    const lanBatchSecretResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          operationId: "lan-secret",
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          expectedRevision: "revision-1",
+          operations: [
+            {
+              kind: "upsert",
+              conflictAction: "replace",
+              server: {
+                name: "lan-http",
+                type: "http",
+                url: "https://example.com/mcp",
+                headers: { mode: "patch", set: { Authorization: "secret" } },
+              },
+            },
+          ],
+        }),
+      },
+    );
+    expect(lanBatchSecretResponse.status).toBe(403);
+    expect(await lanBatchSecretResponse.json()).toEqual({
+      error: "browser_secret_write_requires_loopback",
+    });
+
+    const lanBatchPreserveResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          operationId: "lan-preserve",
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          expectedRevision: "revision-1",
+          operations: [
+            {
+              kind: "upsert",
+              conflictAction: "replace",
+              server: {
+                name: "lan-http",
+                type: "http",
+                url: "https://example.com/mcp",
+                env: { mode: "preserve" },
+                headers: { mode: "preserve" },
+              },
+            },
+          ],
+        }),
+      },
+    );
+    expect(lanBatchPreserveResponse.ok).toBe(true);
+    expect(await lanBatchPreserveResponse.json()).toMatchObject({
+      operationId: "lan-preserve",
+      ok: true,
+    });
+
+    const lanBatchHttpResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          operationId: "lan-http-batch",
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          expectedRevision: "revision-1",
+          operations: [
+            {
+              kind: "upsert",
+              conflictAction: "replace",
+              server: {
+                name: "lan-http",
+                type: "http",
+                url: "https://example.com/mcp",
+              },
+            },
+          ],
+        }),
+      },
+    );
+    expect(lanBatchHttpResponse.ok).toBe(true);
+    expect(await lanBatchHttpResponse.json()).toMatchObject({
+      operationId: "lan-http-batch",
+      ok: true,
+    });
+    expect(chatViewProvider.submitMcpConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({ operationId: "lan-http-batch" }),
+    );
+
+    const lanDeleteResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          serverName: "lan-http",
+        }),
+      },
+    );
+    expect(lanDeleteResponse.status).toBe(403);
+    expect(await lanDeleteResponse.json()).toEqual({
+      error: "browser_local_process_requires_loopback",
+    });
+
+    const browserDisableResponse = await fetch(`${baseUrl}/api/mcp/action`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ serverName: "linear", action: "disable" }),
+    });
+    expect(browserDisableResponse.status).toBe(403);
+    expect(await browserDisableResponse.json()).toEqual({
+      error: "main_profile_read_only_in_browser",
+    });
+    expect(chatViewProvider.submitBrowserMcpAction).not.toHaveBeenCalled();
+
+    const browserReconnectResponse = await fetch(`${baseUrl}/api/mcp/action`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ serverName: "linear", action: "reconnect" }),
+    });
+    expect(browserReconnectResponse.ok).toBe(true);
+    expect(chatViewProvider.submitBrowserMcpAction).toHaveBeenCalledWith(
+      "linear",
+      "reconnect",
     );
 
     const pageResponse = await fetch(`${baseUrl}/`);
@@ -861,7 +1199,7 @@ describe("BrowserGatewayServer", () => {
     const snapshotResponse = await fetch(`${baseUrl}/api/ui-state`);
     expect(snapshotResponse.ok).toBe(true);
     const snapshotJson = await snapshotResponse.json();
-    expect(snapshotJson).toEqual({
+    expect(snapshotJson).toMatchObject({
       ui: {
         approval: {
           kind: "write",
@@ -882,6 +1220,7 @@ describe("BrowserGatewayServer", () => {
           ],
         },
         questionProgress: null,
+        formElicitation: null,
         urlElicitation: null,
         recentEvents: [
           {
@@ -910,7 +1249,6 @@ describe("BrowserGatewayServer", () => {
       session: {
         sessions: [
           {
-            schemaVersion: 1,
             id: "session-1",
             mode: "code",
             model: "claude-sonnet-4-6",
@@ -1135,6 +1473,16 @@ describe("BrowserGatewayServer", () => {
         id: "question-1",
         answers: { q1: "Yes" },
         notes: {},
+        attachments: {
+          q1: [
+            {
+              kind: "image",
+              name: "screen.png",
+              mimeType: "image/png",
+              base64: "image-data",
+            },
+          ],
+        },
       }),
     });
     expect(authorizedQuestion.status).toBe(200);
@@ -1144,8 +1492,129 @@ describe("BrowserGatewayServer", () => {
         id: "question-1",
         answers: { q1: "Yes" },
         notes: {},
+        attachments: {
+          q1: [
+            {
+              kind: "image",
+              name: "screen.png",
+              mimeType: "image/png",
+              base64: "image-data",
+            },
+          ],
+        },
       },
     );
+
+    const unauthorizedFormElicitation = await fetch(
+      `${baseUrl}/api/form-elicitation`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: "form-1",
+          action: "accept",
+          values: { project: "agentlink" },
+        }),
+      },
+    );
+    expect(unauthorizedFormElicitation.status).toBe(401);
+
+    const authorizedFormElicitation = await fetch(
+      `${baseUrl}/api/form-elicitation`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({
+          id: "form-1",
+          action: "accept",
+          values: {
+            project: "agentlink",
+            retries: 2,
+            enabled: true,
+            regions: ["us", "eu"],
+          },
+        }),
+      },
+    );
+    expect(authorizedFormElicitation.status).toBe(200);
+    expect(await authorizedFormElicitation.json()).toEqual({ ok: true });
+    expect(chatViewProvider.submitBrowserFormElicitation).toHaveBeenCalledWith({
+      id: "form-1",
+      action: "accept",
+      values: {
+        project: "agentlink",
+        retries: 2,
+        enabled: true,
+        regions: ["us", "eu"],
+      },
+    });
+
+    const invalidFormElicitation = await fetch(
+      `${baseUrl}/api/form-elicitation`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({
+          id: "form-1",
+          action: "accept",
+          values: { nested: { rejected: true } },
+        }),
+      },
+    );
+    expect(invalidFormElicitation.status).toBe(400);
+
+    chatViewProvider.submitBrowserFormElicitation.mockReturnValueOnce({
+      ok: false as const,
+      reason: "invalid_values" as const,
+      errors: { project: "Select a project." },
+    });
+    const invalidFormValues = await fetch(`${baseUrl}/api/form-elicitation`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({
+        id: "form-1",
+        action: "accept",
+        values: { project: "" },
+      }),
+    });
+    expect(invalidFormValues.status).toBe(400);
+    expect(await invalidFormValues.json()).toEqual({
+      ok: false,
+      errors: { project: "Select a project." },
+    });
+
+    chatViewProvider.submitBrowserFormElicitation.mockReturnValueOnce({
+      ok: false as const,
+      reason: "stale_request" as const,
+    });
+    const staleFormElicitation = await fetch(
+      `${baseUrl}/api/form-elicitation`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({ id: "stale-form", action: "cancel" }),
+      },
+    );
+    expect(staleFormElicitation.status).toBe(404);
+    expect(await staleFormElicitation.json()).toEqual({ ok: false });
+    expect(
+      chatViewProvider.submitBrowserFormElicitation,
+    ).toHaveBeenLastCalledWith({
+      id: "stale-form",
+      action: "cancel",
+    });
 
     const authorizedUrlElicitation = await fetch(
       `${baseUrl}/api/url-elicitation`,
@@ -1245,6 +1714,7 @@ describe("BrowserGatewayServer", () => {
     expect(chatViewProvider.submitBrowserSend).toHaveBeenCalledWith({
       text: "Ship it",
       sessionId: "session-1",
+      projectId: "project-a",
       mode: "code",
       thinkingEnabled: undefined,
       reasoningEffort: undefined,
@@ -1282,10 +1752,18 @@ describe("BrowserGatewayServer", () => {
         text: "Queue it",
         sessionId: "session-1",
         mode: "code",
+        interject: true,
       }),
     });
     expect(queuedSend.status).toBe(200);
     expect(await queuedSend.json()).toEqual({ ok: true, queued: true });
+    expect(chatViewProvider.submitBrowserSend).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        text: "Queue it",
+        sessionId: "session-1",
+        interject: true,
+      }),
+    );
 
     const authorizedMode = await fetch(`${baseUrl}/api/mode`, {
       method: "POST",
@@ -1304,6 +1782,7 @@ describe("BrowserGatewayServer", () => {
     });
     expect(chatViewProvider.submitBrowserModeSwitch).toHaveBeenCalledWith(
       "architect",
+      "project-a",
     );
 
     const unauthorizedSlash = await fetch(`${baseUrl}/api/slash-commands`);
@@ -1329,7 +1808,9 @@ describe("BrowserGatewayServer", () => {
         },
       ],
     });
-    expect(chatViewProvider.getBrowserSlashCommands).toHaveBeenCalled();
+    expect(chatViewProvider.getBrowserSlashCommands).toHaveBeenCalledWith(
+      "project-a",
+    );
 
     const invalidSearch = await fetch(`${baseUrl}/api/search-files`, {
       headers: { Authorization: "Bearer test-token" },
@@ -1346,7 +1827,10 @@ describe("BrowserGatewayServer", () => {
     expect(await authorizedSearch.json()).toEqual({
       files: [{ path: "src/index.ts", kind: "file" }],
     });
-    expect(chatViewProvider.searchBrowserFiles).toHaveBeenCalledWith("src");
+    expect(chatViewProvider.searchBrowserFiles).toHaveBeenCalledWith(
+      "src",
+      "project-a",
+    );
 
     const authorizedModes = await fetch(`${baseUrl}/api/modes`, {
       headers: { Authorization: "Bearer test-token" },
@@ -1358,7 +1842,7 @@ describe("BrowserGatewayServer", () => {
         { slug: "architect", name: "Architect", icon: "symbol-structure" },
       ],
     });
-    expect(chatViewProvider.getBrowserModes).toHaveBeenCalled();
+    expect(chatViewProvider.getBrowserModes).toHaveBeenCalledWith("project-a");
 
     const authorizedModels = await fetch(`${baseUrl}/api/models`, {
       headers: { Authorization: "Bearer test-token" },
@@ -1479,7 +1963,9 @@ describe("BrowserGatewayServer", () => {
     expect(await authorizedAttach.json()).toEqual({
       files: ["/tmp/from-picker.txt"],
     });
-    expect(chatViewProvider.submitBrowserAttachFile).toHaveBeenCalled();
+    expect(chatViewProvider.submitBrowserAttachFile).toHaveBeenCalledWith(
+      "project-a",
+    );
 
     const authorizedNewSession = await fetch(`${baseUrl}/api/session/new`, {
       method: "POST",
@@ -1502,6 +1988,212 @@ describe("BrowserGatewayServer", () => {
     });
     expect(chatViewProvider.submitBrowserNewSession).toHaveBeenCalledWith(
       "code",
+      "project-a",
+    );
+
+    sessionManager.getWorkspaceProjects.mockReturnValue([
+      {
+        id: "project-a",
+        name: "Project A",
+        uri: "file:///workspace/a",
+        rootPath: "/workspace/a",
+        availability: { status: "available" },
+      },
+      {
+        id: "project-b",
+        name: "Project B",
+        uri: "file:///workspace/b",
+        rootPath: "/workspace/b",
+        availability: { status: "available" },
+      },
+    ]);
+
+    const missingProjectNewSession = await fetch(`${baseUrl}/api/session/new`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ mode: "code" }),
+    });
+    expect(missingProjectNewSession.status).toBe(409);
+    await expect(missingProjectNewSession.json()).resolves.toMatchObject({
+      error: "project_state_mismatch",
+      reason: "project_required",
+      refresh: true,
+    });
+
+    const missingProjectModes = await fetch(`${baseUrl}/api/modes`, {
+      headers: { Authorization: "Bearer test-token" },
+    });
+    expect(missingProjectModes.status).toBe(409);
+    await expect(missingProjectModes.json()).resolves.toMatchObject({
+      error: "project_state_mismatch",
+      reason: "project_required",
+      refresh: true,
+    });
+
+    const projectBModes = await fetch(
+      `${baseUrl}/api/modes?projectId=project-b`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(projectBModes.status).toBe(200);
+    expect(chatViewProvider.getBrowserModes).toHaveBeenLastCalledWith(
+      "project-b",
+    );
+
+    const projectBSlash = await fetch(
+      `${baseUrl}/api/slash-commands?projectId=project-b`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(projectBSlash.status).toBe(200);
+    expect(chatViewProvider.getBrowserSlashCommands).toHaveBeenLastCalledWith(
+      "project-b",
+    );
+
+    const projectBSearch = await fetch(
+      `${baseUrl}/api/search-files?query=src&projectId=project-b`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(projectBSearch.status).toBe(200);
+    expect(chatViewProvider.searchBrowserFiles).toHaveBeenLastCalledWith(
+      "src",
+      "project-b",
+    );
+
+    const projectBAttach = await fetch(`${baseUrl}/api/attach-file`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ projectId: "project-b" }),
+    });
+    expect(projectBAttach.status).toBe(200);
+    expect(chatViewProvider.submitBrowserAttachFile).toHaveBeenLastCalledWith(
+      "project-b",
+    );
+
+    const modeSwitchCalls =
+      chatViewProvider.submitBrowserModeSwitch.mock.calls.length;
+    const mismatchedMode = await fetch(`${baseUrl}/api/mode`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({
+        mode: "architect",
+        sessionId: "session-1",
+        projectId: "project-b",
+      }),
+    });
+    expect(mismatchedMode.status).toBe(409);
+    await expect(mismatchedMode.json()).resolves.toMatchObject({
+      error: "project_state_mismatch",
+      reason: "session_project_mismatch",
+      refresh: true,
+    });
+    expect(chatViewProvider.submitBrowserModeSwitch).toHaveBeenCalledTimes(
+      modeSwitchCalls,
+    );
+
+    for (const route of ["steer", "interject"]) {
+      const mismatchedQueue = await fetch(`${baseUrl}/api/queue/${route}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({
+          sessionId: "session-1",
+          projectId: "project-b",
+          queueId: `queue-${route}`,
+          text: "Wrong project",
+        }),
+      });
+      expect(mismatchedQueue.status).toBe(409);
+      await expect(mismatchedQueue.json()).resolves.toMatchObject({
+        error: "project_state_mismatch",
+        reason: "session_project_mismatch",
+        refresh: true,
+      });
+    }
+    expect(
+      chatViewProvider.submitBrowserSteerQueuedMessage,
+    ).not.toHaveBeenCalled();
+    expect(
+      chatViewProvider.submitBrowserInterjectQueuedMessage,
+    ).not.toHaveBeenCalled();
+
+    const mismatchedSend = await fetch(`${baseUrl}/api/send`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({
+        text: "Wrong project",
+        sessionId: "session-1",
+        projectId: "project-b",
+      }),
+    });
+    expect(mismatchedSend.status).toBe(409);
+    await expect(mismatchedSend.json()).resolves.toMatchObject({
+      error: "project_state_mismatch",
+      reason: "session_project_mismatch",
+      sessionProjectId: "project-a",
+      refresh: true,
+    });
+
+    const mismatchedLoad = await fetch(`${baseUrl}/api/session/load`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({
+        sessionId: "session-1",
+        projectId: "project-b",
+      }),
+    });
+    expect(mismatchedLoad.status).toBe(409);
+    await expect(mismatchedLoad.json()).resolves.toMatchObject({
+      error: "project_state_mismatch",
+      reason: "session_project_mismatch",
+      refresh: true,
+    });
+
+    const unknownDefault = await fetch(`${baseUrl}/api/project/default`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ projectId: "project-missing" }),
+    });
+    expect(unknownDefault.status).toBe(409);
+    await expect(unknownDefault.json()).resolves.toMatchObject({
+      error: "project_state_mismatch",
+      reason: "project_not_found",
+      refresh: true,
+    });
+
+    const selectedDefault = await fetch(`${baseUrl}/api/project/default`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ projectId: "project-b" }),
+    });
+    expect(selectedDefault.status).toBe(200);
+    await expect(selectedDefault.json()).resolves.toMatchObject({
+      ok: true,
+      projectId: "project-b",
+    });
+    expect(sessionManager.setBrowserPreferredProject).toHaveBeenCalledWith(
+      "project-b",
     );
 
     const authorizedStop = await fetch(`${baseUrl}/api/stop`, {

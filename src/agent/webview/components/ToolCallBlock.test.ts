@@ -1,9 +1,129 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+
+import { h } from "preact";
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
+
 import {
+  ToolCallBlock,
   formatToolFileDisplayPath,
   getCommandApprovalBadge,
   getToolCallVisualState,
 } from "./ToolCallBlock";
+
+afterEach(() => {
+  cleanup();
+});
+
+describe("ToolCallBlock", () => {
+  it("shows known input when expanded while the tool call is running", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "running-read",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "src/agent/AgentEngine.ts" }),
+          result: "",
+          complete: false,
+        },
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /read_file/i }));
+
+    expect(screen.getByText("Input")).toBeTruthy();
+    expect(screen.getAllByText(/src\/agent\/AgentEngine\.ts/)).toHaveLength(2);
+  });
+
+  it("shows image results as previews instead of placeholder text when expanded", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "read-image",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "assets/pixel.ppm" }),
+          result: "[image]",
+          resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+          complete: true,
+        },
+      }),
+    );
+
+    expect(
+      screen.queryByRole("img", { name: "read_file result image 1" }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /read_file/i }));
+
+    const preview = screen.getByRole("img", {
+      name: "read_file result image 1",
+    });
+    expect(preview.getAttribute("src")).toBe("data:image/png;base64,YWJjZA==");
+    expect(screen.queryByText("[image]")).toBeNull();
+  });
+
+  it("marks the collapsed header with an image badge when the result contains images", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "read-image",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "assets/pixel.ppm" }),
+          result: "[image]",
+          resultImages: [
+            { mimeType: "image/png", data: "YWJjZA==" },
+            { mimeType: "image/jpeg", data: "ZWZnaA==" },
+          ],
+          complete: true,
+        },
+      }),
+    );
+
+    const badge = screen.getByRole("img", { name: "2 image results" });
+    expect(badge.getAttribute("title")).toBe(
+      "2 image results — expand to view",
+    );
+    expect(badge.textContent).toContain("2");
+  });
+
+  it("does not show an image badge while the tool call is still running", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "read-image",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "assets/pixel.ppm" }),
+          result: "",
+          resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+          complete: false,
+        },
+      }),
+    );
+
+    expect(screen.queryByRole("img", { name: "1 image result" })).toBeNull();
+  });
+
+  it("does not show an image badge for text-only results", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "read-text",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "src/index.ts" }),
+          result: JSON.stringify({ ok: true }),
+          complete: true,
+        },
+      }),
+    );
+
+    expect(document.querySelector(".tool-image-badge")).toBeNull();
+  });
+});
 
 describe("formatToolFileDisplayPath", () => {
   it("returns an empty display for empty paths", () => {

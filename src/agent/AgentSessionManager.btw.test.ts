@@ -35,7 +35,21 @@ vi.mock("vscode", async () => {
     ...actual,
     workspace: {
       ...actual.workspace,
-      getConfiguration: (...args: unknown[]) => mocks.getConfiguration(...args),
+      getConfiguration: (...args: unknown[]) => {
+        const config = mocks.getConfiguration(...args);
+        return {
+          ...config,
+          get: (key: string, ...getArgs: unknown[]) => {
+            if (
+              key === "webAccess.searchBackend" ||
+              key === "webAccess.fetchBackend"
+            ) {
+              return "disabled";
+            }
+            return config.get(key, ...getArgs);
+          },
+        };
+      },
     },
   };
 });
@@ -66,7 +80,9 @@ const config: AgentConfig = {
 
 function makeToolCtx(): ToolDispatchContext {
   return {
-    approvalManager: {} as ToolDispatchContext["approvalManager"],
+    approvalManager: {
+      bindSessionProject: vi.fn(),
+    } as unknown as ToolDispatchContext["approvalManager"],
     approvalPanel: {} as ToolDispatchContext["approvalPanel"],
     extensionUri: {} as ToolDispatchContext["extensionUri"],
     sessionId: "fg",

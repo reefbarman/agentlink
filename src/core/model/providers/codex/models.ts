@@ -22,6 +22,12 @@ export interface CodexModelDef {
   supportsThinking: boolean;
   defaultReasoningEffort: CoreReasoningEffort;
   reasoningEfforts: CoreReasoningEffort[];
+  /**
+   * False for models the ChatGPT/Codex OAuth backend serves but the public
+   * API-key endpoint does not (e.g. gpt-5.3-codex-spark). Absent means
+   * available on both.
+   */
+  apiAvailable?: boolean;
 }
 
 const GPT_5_4_REASONING_EFFORTS = [
@@ -49,6 +55,13 @@ const GPT_5_REASONING_EFFORTS = [
   "high",
 ] as const satisfies readonly CoreReasoningEffort[];
 
+const GPT_5_3_SPARK_REASONING_EFFORTS = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const satisfies readonly CoreReasoningEffort[];
+
 const GPT_5_CODEX_MAX_REASONING_EFFORTS = [
   "none",
   "minimal",
@@ -63,8 +76,9 @@ const GPT_5_CODEX_MAX_REASONING_EFFORTS = [
  *
  * The public OpenAI API (api.openai.com/v1/responses) exposes the full
  * documented Responses feature set. The ChatGPT/Codex backend
- * (chatgpt.com/backend-api/codex/responses) is an internal surface that
- * rejects parameters the public docs describe — so we treat it conservatively.
+ * (chatgpt.com/backend-api/codex/responses) supports native web search but
+ * rejects some other parameters the public docs describe, so each capability
+ * remains explicit.
  */
 export interface ResponsesCaps {
   supportsPreviousResponseId: boolean;
@@ -73,6 +87,7 @@ export interface ResponsesCaps {
   supportsPromptCacheKey: boolean;
   supportsPromptCacheRetention: boolean;
   supportsMaxOutputTokens: boolean;
+  supportsHostedWebSearch: boolean;
 }
 
 /**
@@ -86,15 +101,30 @@ export interface ResponsesCaps {
  * The backend only exposes roughly the current generation and rotates older
  * ones out, so keep this list in sync as models ship. The runtime remap in
  * CodexProvider is the backstop when this drifts.
+ *
+ * Last verified by live probe on 2026-07-19. gpt-5.4 / gpt-5.4-mini still
+ * responded then but are hidden from the official roster with "no longer
+ * available" migration notices (5.4 → Terra, 5.4-mini → Luna), i.e. they are
+ * in a deprecation grace period — treat them as gone.
  */
 export const CODEX_CHATGPT_BACKEND_MODEL_IDS = [
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
   "gpt-5.5",
-  "gpt-5.4",
-  "gpt-5.4-mini",
+  "gpt-5.3-codex-spark",
 ] as const;
+
+/**
+ * Upstream replacements the ChatGPT backend publishes when it rotates a model
+ * out (the models cache "upgrade" entries: gpt-5.4 → Terra, gpt-5.4-mini →
+ * Luna). Preferred over the generic tier remap so we follow the official
+ * migration.
+ */
+const CHATGPT_BACKEND_MODEL_MIGRATIONS: Record<string, string> = {
+  "gpt-5.4": "gpt-5.6-terra",
+  "gpt-5.4-mini": "gpt-5.6-luna",
+};
 
 const CHATGPT_BACKEND_MODEL_SET = new Set<string>(
   CODEX_CHATGPT_BACKEND_MODEL_IDS,
@@ -115,11 +145,16 @@ export function isCodexModelServedOnChatgptBackend(modelId: string): boolean {
 
 /**
  * Map an arbitrary (possibly OAuth-unavailable) Codex model id to one the
- * ChatGPT backend serves, preserving the rough tier: mini/nano collapse to the
- * cheap model, everything else to the default (gpt-5.5).
+ * ChatGPT backend serves: official upstream migrations first, then a rough
+ * tier remap — mini/nano collapse to the cheap model, everything else to the
+ * default.
  */
 export function remapToChatgptBackendModel(modelId: string): string {
   if (isCodexModelServedOnChatgptBackend(modelId)) return modelId;
+  const migration = CHATGPT_BACKEND_MODEL_MIGRATIONS[modelId];
+  if (migration && CHATGPT_BACKEND_MODEL_SET.has(migration)) {
+    return migration;
+  }
   if (
     /mini|nano/.test(modelId) &&
     CHATGPT_BACKEND_MODEL_SET.has(CODEX_OAUTH_CHEAP_MODEL)
@@ -129,16 +164,28 @@ export function remapToChatgptBackendModel(modelId: string): string {
   return CODEX_DEFAULT_MODEL;
 }
 
-/** Stable equivalents used when a limited-preview GPT-5.6 model is unavailable. */
-export function getCodexPreviewModelFallback(
+/**
+ * Older equivalents used when a GPT-5.6 model is unavailable to the account.
+ * gpt-5.5 is the only pre-5.6 model the ChatGPT backend still serves (the
+ * gpt-5.4 generation was rotated out), so every 5.6 model falls back to it.
+ */
+export function getCodexUnavailableModelFallback(
   modelId: string,
 ): string | undefined {
   switch (modelId) {
     case "gpt-5.6-sol":
-      return "gpt-5.5";
     case "gpt-5.6-terra":
-      return "gpt-5.4";
     case "gpt-5.6-luna":
+      return "gpt-5.5";
+    case "gpt-5.3-codex-spark":
+      return "gpt-5.6-luna";
+    // OpenAI-published replacements for the 2026-07-23 API shutdowns.
+    case "gpt-5-codex":
+    case "gpt-5.1-codex":
+    case "gpt-5.1-codex-max":
+    case "gpt-5.2-codex":
+      return "gpt-5.5";
+    case "gpt-5.1-codex-mini":
       return "gpt-5.4-mini";
     default:
       return undefined;
@@ -179,15 +226,13 @@ export const CODEX_CONDENSE_MODEL = CODEX_OAUTH_CHEAP_MODEL;
 
 /**
  * Ordered fallback chain for condensing when account entitlements vary.
- * OAuth-served models first so the ChatGPT backend never wastes a doomed call;
- * API-key-only generations follow for completeness.
+ * OAuth-served models first; gpt-5.4-mini is an API-key-only tail entry (it
+ * remains on the public API and is migration-remapped to Luna over OAuth).
  */
 export const CODEX_CONDENSE_MODEL_FALLBACKS = [
   CODEX_CONDENSE_MODEL,
   "gpt-5.5",
-  "gpt-5.4",
-  "gpt-5.2-codex",
-  "gpt-5.3-codex",
+  "gpt-5.4-mini",
 ] as const;
 
 const CODEX_400K_INPUT_TOKENS = 272_000;
@@ -200,7 +245,7 @@ const CODEX_OAUTH_GPT_5_6_CONTEXT_TOKENS =
 export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.6-sol",
-    displayName: "GPT-5.6 Sol (Preview)",
+    displayName: "GPT-5.6 Sol",
     contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
@@ -210,7 +255,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
   },
   {
     id: "gpt-5.6-terra",
-    displayName: "GPT-5.6 Terra (Preview)",
+    displayName: "GPT-5.6 Terra",
     contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
@@ -220,7 +265,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
   },
   {
     id: "gpt-5.6-luna",
-    displayName: "GPT-5.6 Luna (Preview)",
+    displayName: "GPT-5.6 Luna",
     contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
@@ -292,6 +337,22 @@ export const CODEX_MODELS: CodexModelDef[] = [
     reasoningEfforts: [...GPT_5_REASONING_EFFORTS],
   },
   {
+    // Ultra-fast coding model (~1.5k tok/s). ChatGPT/Codex OAuth backend only
+    // (supported_in_api: false in the backend roster); text-only input; 128k
+    // window. Output/input split is an estimate — the roster doesn't publish a
+    // max output figure.
+    id: "gpt-5.3-codex-spark",
+    displayName: "GPT-5.3 Codex Spark",
+    contextWindow: 128_000,
+    maxInputTokens: 100_000,
+    maxOutputTokens: 28_000,
+    supportsImages: false,
+    supportsThinking: true,
+    defaultReasoningEffort: "high",
+    reasoningEfforts: [...GPT_5_3_SPARK_REASONING_EFFORTS],
+    apiAvailable: false,
+  },
+  {
     id: "gpt-5.2",
     displayName: "GPT-5.2",
     contextWindow: 400_000,
@@ -350,6 +411,7 @@ export function getEndpointCaps(auth: CodexResolvedAuthShape): ResponsesCaps {
       supportsPromptCacheKey: true,
       supportsPromptCacheRetention: true,
       supportsMaxOutputTokens: true,
+      supportsHostedWebSearch: true,
     };
   }
 
@@ -360,6 +422,7 @@ export function getEndpointCaps(auth: CodexResolvedAuthShape): ResponsesCaps {
     supportsPromptCacheKey: false,
     supportsPromptCacheRetention: false,
     supportsMaxOutputTokens: false,
+    supportsHostedWebSearch: true,
   };
 }
 
@@ -418,6 +481,18 @@ export function getCodexModelCapabilities(
     supportsCaching: true,
     supportsImages: def?.supportsImages ?? true,
     supportsToolUse: true,
+    hostedWeb: {
+      search: {
+        supported: true,
+        supportsDomainRestrictions: authMethod === "apiKey",
+        supportsCitations: true,
+        // OpenAI page open/find actions are part of web_search rather than a
+        // separately configurable hosted fetch tool. AgentLink can delegate a
+        // web_fetch wrapper call to this page-access mode.
+        supportsPageAccess: true,
+      },
+      fetch: { supported: false },
+    },
     contextWindow: def?.contextWindow ?? 400_000,
     ...(typeof maxInputTokens === "number" ? { maxInputTokens } : {}),
     maxOutputTokens: def?.maxOutputTokens ?? 128_000,
@@ -435,7 +510,9 @@ export function listCodexModels(
   provider: string;
   capabilities: CoreModelCapabilities;
 }> {
-  return CODEX_MODELS.map((model) => ({
+  return CODEX_MODELS.filter(
+    (model) => authMethod !== "apiKey" || model.apiAvailable !== false,
+  ).map((model) => ({
     id: model.id,
     displayName: model.displayName,
     provider: providerId,

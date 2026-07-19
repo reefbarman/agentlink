@@ -20,6 +20,7 @@ import type { AgentMode } from "./modes.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { SkillEntry } from "./skillLoader.js";
+import type { ProjectActiveFileResolution } from "./configLoader.js";
 import type { McpToolDisclosurePartition } from "./mcpToolDisclosure.js";
 import type {
   PersistedFleetMetadata,
@@ -33,6 +34,18 @@ import {
 import { buildSessionTitleFromUserText } from "./sessionTitle.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import { randomUUID } from "crypto";
+import { pathToFileURL } from "url";
+import {
+  createSessionProjectScope,
+  createWorkspaceProjectId,
+  type SessionProjectScope,
+} from "../core/workspaceProjects.js";
+
+export type SessionProjectAvailabilityStatus =
+  | "available"
+  | "missing"
+  | "unavailable"
+  | "invalid";
 
 export interface PendingInterjection {
   text: string;
@@ -50,7 +63,8 @@ export class AgentSession {
   id: string;
   readonly background: boolean;
   createdAt: number;
-  readonly cwd: string;
+  readonly projectScope: Readonly<SessionProjectScope>;
+  readonly projectAvailability: SessionProjectAvailabilityStatus;
   systemPrompt: string;
   contextBreakdown: RequestContextBreakdown;
   mcpToolDisclosure?: McpToolDisclosurePartition;
@@ -111,6 +125,10 @@ export class AgentSession {
 
   /** Active file path at session creation — used for subfolder AGENTS.md and hot-reload. */
   activeFilePath: string | undefined;
+  /** Durable resource identity corresponding to activeFilePath. */
+  activeContextResourceUri: string | undefined;
+  /** Containment decision used by the current prompt artifacts. */
+  activeFileContext: ProjectActiveFileResolution | undefined;
   /** Workspace folders to surface in the system prompt (multi-root workspaces). */
   private workspaceFolders: WorkspaceFolderInfo[] | undefined;
 
@@ -159,6 +177,10 @@ export class AgentSession {
   private _abortSignal: AbortSignal | undefined;
   private _abortGeneration = 0;
   private _pendingInterjections: PendingInterjection[] = [];
+  // Transient per-surface counts of messages sitting in UI send queues
+  // (VS Code webview / browser remote). Not persisted; used to give queued
+  // user messages priority over the todo auto-continue prompt.
+  private _queuedUiMessageCounts = new Map<string, number>();
   private _pendingModeResume: {
     mode: string;
     reason?: string;
@@ -172,8 +194,11 @@ export class AgentSession {
     systemPrompt: string;
     promptBreakdown: RequestContextBreakdown["prompt"];
     background?: boolean;
-    cwd: string;
+    projectScope: SessionProjectScope;
+    projectAvailability: SessionProjectAvailabilityStatus;
     activeFilePath?: string;
+    activeContextResourceUri?: string;
+    activeFileContext?: ProjectActiveFileResolution;
     providerId?: string;
     workspaceFolders?: WorkspaceFolderInfo[];
     mcpToolDisclosure?: McpToolDisclosurePartition;
@@ -181,7 +206,8 @@ export class AgentSession {
     this.id = randomUUID();
     this.mode = opts.mode;
     this.agentMode = opts.agentMode;
-    this.cwd = opts.cwd;
+    this.projectScope = Object.freeze({ ...opts.projectScope });
+    this.projectAvailability = opts.projectAvailability;
     this.model = opts.config.model;
     this.maxTokens = opts.config.maxTokens;
     this.thinkingBudget = opts.config.thinkingBudget;
@@ -197,6 +223,8 @@ export class AgentSession {
     this.systemPrompt = opts.systemPrompt;
     this.contextBreakdown = { prompt: opts.promptBreakdown };
     this.activeFilePath = opts.activeFilePath;
+    this.activeContextResourceUri = opts.activeContextResourceUri;
+    this.activeFileContext = opts.activeFileContext;
     this.providerId = opts.providerId;
     this.workspaceFolders = opts.workspaceFolders;
     this.mcpToolDisclosure = opts.mcpToolDisclosure;
@@ -206,18 +234,25 @@ export class AgentSession {
     mode: string;
     agentMode?: AgentMode;
     config: AgentConfig;
-    cwd: string;
+    projectScope: SessionProjectScope;
     background?: boolean;
     isBackground?: boolean;
     /** Use lightweight prompt (background review agents). */
     lightweight?: boolean;
     devMode?: boolean;
     activeFilePath?: string;
+    activeContextResourceUri?: string;
     providerId?: string;
     workspaceFolders?: WorkspaceFolderInfo[];
     mcpToolDisclosure?: McpToolDisclosurePartition;
   }): Promise<AgentSession> {
-    const artifacts = await buildPromptArtifacts(opts.mode, opts.cwd, {
+    const cwd = opts.projectScope.rootPath;
+    if (cwd === undefined) {
+      throw new Error(
+        `Project '${opts.projectScope.displayName}' is unavailable for local execution.`,
+      );
+    }
+    const artifacts = await buildPromptArtifacts(opts.mode, cwd, {
       devMode: opts.devMode,
       activeFilePath: opts.activeFilePath,
       providerId: opts.providerId,
@@ -226,6 +261,7 @@ export class AgentSession {
       lightweight: opts.lightweight,
       workspaceFolders: opts.workspaceFolders,
       mcpToolCatalog: opts.mcpToolDisclosure?.catalog,
+      agentMode: opts.agentMode,
     });
     const agentMode =
       opts.agentMode ??
@@ -237,9 +273,12 @@ export class AgentSession {
       config: opts.config,
       systemPrompt: artifacts.systemPrompt,
       promptBreakdown: artifacts.promptBreakdown,
-      cwd: opts.cwd,
+      projectScope: opts.projectScope,
+      projectAvailability: "available",
       background: opts.background,
       activeFilePath: opts.activeFilePath,
+      activeContextResourceUri: opts.activeContextResourceUri,
+      activeFileContext: artifacts.activeFileContext,
       providerId: opts.providerId,
       workspaceFolders: opts.workspaceFolders,
       mcpToolDisclosure: opts.mcpToolDisclosure,
@@ -247,6 +286,66 @@ export class AgentSession {
     session.setAdvertisedSkills(artifacts.skills);
     session.setAdvertisedRules(artifacts.advertisedRules);
     return session;
+  }
+
+  /** Temporary named seam for tests and callers not yet wired to the project catalog. */
+  static createForLegacyCwd(
+    opts: Omit<Parameters<typeof AgentSession.create>[0], "projectScope"> & {
+      cwd: string;
+    },
+  ): Promise<AgentSession> {
+    const rootPath = opts.cwd;
+    const workspaceFolderUri = pathToFileURL(rootPath).toString();
+    const projectScope = createSessionProjectScope({
+      id: createWorkspaceProjectId(workspaceFolderUri),
+      name: rootPath,
+      uri: workspaceFolderUri,
+      rootPath,
+      availability: { status: "available" },
+    });
+    const { cwd: _cwd, ...createOpts } = opts;
+    return AgentSession.create({ ...createOpts, projectScope });
+  }
+
+  /** Restores persisted transcript state without loading project files or a prompt. */
+  static createTranscriptOnly(opts: {
+    mode: string;
+    agentMode?: AgentMode;
+    config: AgentConfig;
+    projectScope: SessionProjectScope;
+    projectAvailability: Exclude<SessionProjectAvailabilityStatus, "available">;
+    background?: boolean;
+    activeContextResourceUri?: string;
+    providerId?: string;
+    workspaceFolders?: WorkspaceFolderInfo[];
+  }): AgentSession {
+    const agentMode =
+      opts.agentMode ??
+      BUILT_IN_MODES.find((mode) => mode.slug === opts.mode) ??
+      BUILT_IN_MODES[0];
+    return new AgentSession({
+      mode: opts.mode,
+      agentMode,
+      config: opts.config,
+      systemPrompt: "",
+      promptBreakdown: { sections: [], totalChars: 0, estimatedTokens: 0 },
+      projectScope: opts.projectScope,
+      projectAvailability: opts.projectAvailability,
+      background: opts.background,
+      activeContextResourceUri: opts.activeContextResourceUri,
+      providerId: opts.providerId,
+      workspaceFolders: opts.workspaceFolders,
+    });
+  }
+
+  requireProjectRoot(): string {
+    const rootPath = this.projectScope.rootPath;
+    if (this.projectAvailability !== "available" || rootPath === undefined) {
+      throw new Error(
+        `Project '${this.projectScope.displayName}' is unavailable for local execution.`,
+      );
+    }
+    return rootPath;
   }
 
   /**
@@ -258,17 +357,23 @@ export class AgentSession {
     workspaceFolders?: WorkspaceFolderInfo[];
   }): Promise<void> {
     if (opts?.workspaceFolders) this.workspaceFolders = opts.workspaceFolders;
-    const artifacts = await buildPromptArtifacts(this.mode, this.cwd, {
-      devMode: opts?.devMode,
-      activeFilePath: this.activeFilePath,
-      providerId: this.providerId,
-      model: this.model,
-      isBackground: this.background,
-      workspaceFolders: this.workspaceFolders,
-      mcpToolCatalog: this.mcpToolDisclosure?.catalog,
-    });
+    const artifacts = await buildPromptArtifacts(
+      this.mode,
+      this.requireProjectRoot(),
+      {
+        devMode: opts?.devMode,
+        activeFilePath: this.activeFilePath,
+        providerId: this.providerId,
+        model: this.model,
+        isBackground: this.background,
+        workspaceFolders: this.workspaceFolders,
+        mcpToolCatalog: this.mcpToolDisclosure?.catalog,
+        agentMode: this.agentMode,
+      },
+    );
     this.systemPrompt = artifacts.systemPrompt;
     this.contextBreakdown = { prompt: artifacts.promptBreakdown };
+    this.activeFileContext = artifacts.activeFileContext;
     this.setAdvertisedSkills(artifacts.skills);
     this.setAdvertisedRules(artifacts.advertisedRules);
     this.resetProviderResponseState();
@@ -281,14 +386,20 @@ export class AgentSession {
     mode: string,
     opts?: { agentMode?: AgentMode; devMode?: boolean },
   ): Promise<void> {
-    const artifacts = await buildPromptArtifacts(mode, this.cwd, {
-      devMode: opts?.devMode,
-      providerId: this.providerId,
-      model: this.model,
-      isBackground: this.background,
-      workspaceFolders: this.workspaceFolders,
-      mcpToolCatalog: this.mcpToolDisclosure?.catalog,
-    });
+    const artifacts = await buildPromptArtifacts(
+      mode,
+      this.requireProjectRoot(),
+      {
+        devMode: opts?.devMode,
+        activeFilePath: this.activeFilePath,
+        providerId: this.providerId,
+        model: this.model,
+        isBackground: this.background,
+        workspaceFolders: this.workspaceFolders,
+        mcpToolCatalog: this.mcpToolDisclosure?.catalog,
+        agentMode: opts?.agentMode,
+      },
+    );
     const agentMode =
       opts?.agentMode ??
       BUILT_IN_MODES.find((m) => m.slug === mode) ??
@@ -298,6 +409,7 @@ export class AgentSession {
     this.agentMode = agentMode;
     this.systemPrompt = artifacts.systemPrompt;
     this.contextBreakdown = { prompt: artifacts.promptBreakdown };
+    this.activeFileContext = artifacts.activeFileContext;
     this.setAdvertisedSkills(artifacts.skills);
     this.setAdvertisedRules(artifacts.advertisedRules);
     this.resetProviderResponseState();
@@ -411,7 +523,14 @@ export class AgentSession {
   }
 
   appendAssistantTurn(content: ContentBlock[]): void {
-    this.messages.push({ role: "assistant", content } as AgentMessage);
+    this.appendAssistantMessage({ role: "assistant", content });
+  }
+
+  appendAssistantMessage(message: AgentMessage): void {
+    if (message.role !== "assistant") {
+      throw new Error("appendAssistantMessage requires an assistant message");
+    }
+    this.messages.push(message);
     this.lastActiveAt = Date.now();
   }
 
@@ -443,6 +562,7 @@ export class AgentSession {
       tool_use_id: string;
       content: string | ContentBlock[];
       mcpApprovalPromotion?: import("../shared/types.js").McpApprovalPromotionMeta;
+      composeTrace?: import("../shared/composeTypes.js").ComposeTrace;
     }>,
   ): void {
     this.messages.push({ role: "user", content: results } as AgentMessage);
@@ -709,6 +829,25 @@ export class AgentSession {
    */
   consumePendingInterjection(): PendingInterjection | null {
     return this._pendingInterjections.shift() ?? null;
+  }
+
+  get hasPendingInterjections(): boolean {
+    return this._pendingInterjections.length > 0;
+  }
+
+  /**
+   * Record how many messages a UI surface currently holds in its send queue.
+   * Queued messages take priority over the todo auto-continue prompt: when any
+   * surface reports a non-zero count at turn end, the manager emits `done`
+   * instead of auto-continuing so the queue can flush.
+   */
+  setQueuedUiMessageCount(surface: "vscode" | "browser", count: number): void {
+    if (count <= 0) this._queuedUiMessageCounts.delete(surface);
+    else this._queuedUiMessageCounts.set(surface, count);
+  }
+
+  get hasQueuedUiMessages(): boolean {
+    return this._queuedUiMessageCounts.size > 0;
   }
 
   /**

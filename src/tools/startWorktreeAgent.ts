@@ -97,7 +97,11 @@ export async function handleStartWorktreeAgent(
       branch,
       repoRoot,
       configuration:
-        deps.configuration ?? vscode.workspace.getConfiguration("agentlink"),
+        deps.configuration ??
+        vscode.workspace.getConfiguration(
+          "agentlink",
+          sourceWorkspace.folder.uri,
+        ),
     });
 
     const dirtyStatus = (
@@ -451,6 +455,7 @@ async function requestWorktreeApproval(args: {
         kind: "command",
         title: `Start worktree agent: ${args.task}`,
         detail,
+        targetPath: args.worktreePath,
         choices,
       },
       args.sessionId,

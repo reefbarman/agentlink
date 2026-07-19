@@ -44,6 +44,12 @@ export type MemoryTier = "instructions" | "skill" | "command" | "memory";
 export type MemoryScope = "global" | "project";
 export type MemoryOperation = "add" | "update" | "remove";
 
+export interface ApprovalProjectContext {
+  projectId: string;
+  displayName: string;
+  availability: "available" | "missing" | "unavailable" | "invalid";
+}
+
 export interface ApprovalRequest {
   kind:
     | "command"
@@ -54,6 +60,12 @@ export interface ApprovalRequest {
     | "mode-switch"
     | "memory";
   id: string;
+  /** Project that initiated this approval. */
+  sourceProject?: ApprovalProjectContext;
+  /** Project containing the requested target, when it differs from the source. */
+  targetProject?: ApprovalProjectContext;
+  /** Exact absolute destination for cross-project or external operations. */
+  targetPath?: string;
   /** For commands: the full compound command */
   command?: string;
   /** For commands: expanded sub-commands with existing rule info */
@@ -91,6 +103,10 @@ export interface ApprovalRequest {
   security?: TerminalExecutionSecuritySummary;
   /** For MCP: detail text (input preview) */
   mcpDetail?: string;
+  /** For MCP: structured server identity (avoids parsing display text). */
+  mcpServerName?: string;
+  /** For MCP: structured bare tool name. */
+  mcpToolName?: string;
   /** For MCP: approval choices */
   mcpChoices?: Array<{
     label: string;

@@ -25,10 +25,32 @@ export interface ToolCapabilityMetadata {
   sideEffect: ToolSideEffect;
   requiresApproval: ToolApprovalRequirement;
   parallelSafe: boolean;
+  /** Explicit opt-in for native read-only composition. */
+  composable?: boolean;
+  /** ToolResult.data/error fields are authoritative on every return path. */
+  canonicalResult?: boolean;
   devOnly?: boolean;
 }
 
 const toolCapabilities = [
+  // External web
+  metadata(
+    "web_search",
+    "search",
+    ["web.search", "network.external"],
+    "external",
+    "never",
+    true,
+  ),
+  metadata(
+    "web_fetch",
+    "read",
+    ["web.fetch", "network.external"],
+    "external",
+    "never",
+    true,
+  ),
+
   // Read/search/context
   metadata(
     "read_file",
@@ -84,6 +106,22 @@ const toolCapabilities = [
     "codebase_search",
     "search",
     ["search.semantic"],
+    "read",
+    "never",
+    true,
+  ),
+  metadata(
+    "search_session_history",
+    "session",
+    ["session.transcript.read", "search.text"],
+    "read",
+    "never",
+    true,
+  ),
+  metadata(
+    "read_session_excerpt",
+    "session",
+    ["session.transcript.read"],
     "read",
     "never",
     true,
@@ -338,6 +376,15 @@ const toolCapabilities = [
 
   // Dev-only tools
   metadata(
+    "compose",
+    "read",
+    ["tools.compose", "sandbox.quickjs"],
+    "read",
+    "never",
+    false,
+    true,
+  ),
+  metadata(
     "send_feedback",
     "dev",
     ["dev.feedback"],
@@ -366,15 +413,51 @@ const toolCapabilities = [
   ),
 ] as const satisfies readonly ToolCapabilityMetadata[];
 
+const COMPOSABLE_NATIVE_TOOL_NAMES = new Set([
+  "get_context",
+  "get_repo_map",
+  "get_module_neighbors",
+  "list_files",
+  "search_files",
+  "get_diagnostics",
+  "go_to_definition",
+  "go_to_implementation",
+  "go_to_type_definition",
+  "get_references",
+  "get_symbols",
+  "get_hover",
+  "get_completions",
+  "get_code_actions",
+  "get_call_hierarchy",
+  "get_type_hierarchy",
+  "get_inlay_hints",
+]);
+
 export const TOOL_CAPABILITIES: Readonly<
   Record<string, ToolCapabilityMetadata>
 > = Object.freeze(
-  Object.fromEntries(toolCapabilities.map((entry) => [entry.name, entry])),
+  Object.fromEntries(
+    toolCapabilities.map((entry) => {
+      const composable = COMPOSABLE_NATIVE_TOOL_NAMES.has(entry.name);
+      return [
+        entry.name,
+        composable
+          ? { ...entry, composable: true, canonicalResult: true }
+          : entry,
+      ];
+    }),
+  ),
 );
 
 export const PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set(
   toolCapabilities
     .filter((entry) => entry.parallelSafe)
+    .map((entry) => entry.name),
+);
+
+export const COMPOSABLE_TOOLS: ReadonlySet<string> = new Set(
+  Object.values(TOOL_CAPABILITIES)
+    .filter((entry) => entry.composable && entry.canonicalResult)
     .map((entry) => entry.name),
 );
 
@@ -392,6 +475,8 @@ function metadata(
   requiresApproval: ToolApprovalRequirement,
   parallelSafe: boolean,
   devOnly?: boolean,
+  composable?: boolean,
+  canonicalResult?: boolean,
 ): ToolCapabilityMetadata {
   return {
     name,
@@ -400,6 +485,8 @@ function metadata(
     sideEffect,
     requiresApproval,
     parallelSafe,
+    composable,
+    canonicalResult,
     devOnly,
   };
 }

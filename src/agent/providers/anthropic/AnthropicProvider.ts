@@ -2,13 +2,15 @@
  * AnthropicProvider — implements ModelProvider for the Anthropic Messages API.
  *
  * This is the only file (alongside clientFactory.ts) that imports @anthropic-ai/sdk.
- * All Anthropic-specific SSE parsing, cache_control injection, and message
- * formatting lives here.
+ * Credential/client lifecycle stays here; provider-neutral request translation and
+ * stream parsing live under src/core/model/providers/anthropic.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { randomUUID } from "crypto";
 import { withAgentLinkHttpActivity } from "../../../util/httpDispatcher.js";
+import { buildAnthropicStreamRequest } from "../../../core/model/providers/anthropic/completionFacade.js";
+import { parseAnthropicStreamEvents } from "../../../core/model/providers/anthropic/streamParser.js";
+import { translateAnthropicMessages } from "../../../core/model/providers/anthropic/translation.js";
 import {
   createAnthropicClient,
   hasAnthropicApiKey,
@@ -23,9 +25,7 @@ import type {
   ProviderStreamEvent,
   ModelCapabilities,
   ModelInfo,
-  ContentBlock,
   MessageParam,
-  ToolDefinition,
 } from "../types.js";
 import {
   AnthropicModelCatalog,
@@ -33,6 +33,7 @@ import {
 } from "../../../core/model/providers/anthropic/anthropicModelCatalog.js";
 import {
   ANTHROPIC_CONDENSE_MODEL,
+  ANTHROPIC_HOSTED_WEB_CAPABILITIES,
   ANTHROPIC_MODEL_CAPABILITIES,
   ANTHROPIC_MODEL_DISPLAY_NAMES,
   ANTHROPIC_STATIC_MODEL_ORDER,
@@ -99,14 +100,13 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   getCapabilities(model: string): ModelCapabilities {
-    if (this.dynamicCapabilitiesEnabled) {
-      const dynamic = this.catalog.getCapabilities(model);
-      if (dynamic) return dynamic;
-    }
-    return copyModelCapabilities(
-      ANTHROPIC_MODEL_CAPABILITIES[model] ??
-        DEFAULT_ANTHROPIC_MODEL_CAPABILITIES,
-    );
+    const capabilities = this.dynamicCapabilitiesEnabled
+      ? (this.catalog.getCapabilities(model) ??
+        ANTHROPIC_MODEL_CAPABILITIES[model] ??
+        DEFAULT_ANTHROPIC_MODEL_CAPABILITIES)
+      : (ANTHROPIC_MODEL_CAPABILITIES[model] ??
+        DEFAULT_ANTHROPIC_MODEL_CAPABILITIES);
+    return copyModelCapabilities(capabilities);
   }
 
   listModels(): ModelInfo[] {
@@ -206,72 +206,23 @@ export class AnthropicProvider implements ModelProvider {
       systemPrompt,
       messages,
       tools,
+      hostedTools,
       maxTokens,
       thinking,
       reasoningEffort,
       signal,
     } = request;
-
-    // Build Anthropic-native request params. Historical extended-thinking
-    // signatures are provider-private replay artifacts; keep them in the local
-    // transcript/UI, but do not send them back to Anthropic.
-    const transformedReplay = getTransformedAnthropicMessages(messages);
-    const { anthropicMessages } = transformedReplay;
-
-    const anthropicTools = tools ? translateAnthropicTools(tools) : undefined;
-
-    const requestParams: Anthropic.MessageCreateParams = {
+    const requestParams = buildAnthropicStreamRequest({
       model,
-      system: [
-        {
-          type: "text",
-          text: systemPrompt,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
-      messages: anthropicMessages,
-      max_tokens: maxTokens,
-      stream: true,
-      ...(anthropicTools && anthropicTools.length > 0
-        ? { tools: anthropicTools }
-        : {}),
-    };
-
-    const requestedEffort = reasoningEffort ?? "high";
-    if (
-      requestedEffort !== "none" &&
-      !transformedReplay.strippedThinkingFromToolUse
-    ) {
-      const params = requestParams as unknown as Record<string, unknown>;
-      if (this.supportsAdaptiveThinking(model)) {
-        params.thinking = { type: "adaptive", display: "summarized" };
-        params.output_config = { effort: requestedEffort };
-      } else if (thinking) {
-        params.thinking = {
-          type: "enabled",
-          budget_tokens: thinking.budgetTokens,
-          display: "summarized",
-        };
-      }
-    }
-
-    const contentBlocks: ContentBlock[] = [];
-    const blockBuffers = new Map<
-      number,
-      {
-        type: string;
-        id?: string;
-        text: string;
-        name?: string;
-        signature?: string;
-        thinkingStarted?: boolean;
-      }
-    >();
-
-    let inputTokens = 0;
-    let outputTokens = 0;
-    let cacheReadTokens = 0;
-    let cacheCreationTokens = 0;
+      systemPrompt,
+      messages,
+      maxTokens,
+      reasoningEffort,
+      supportsAdaptiveThinking: this.supportsAdaptiveThinking(model),
+      thinking,
+      tools,
+      hostedTools,
+    }) as unknown as Anthropic.MessageCreateParams;
 
     const stream = withAgentLinkHttpActivity(request.onTransportActivity, () =>
       client.messages.stream(requestParams, {
@@ -279,160 +230,16 @@ export class AnthropicProvider implements ModelProvider {
         maxRetries: 0,
       }),
     );
-
-    for await (const event of stream) {
-      request.onTransportActivity?.({
-        kind: "provider_event",
-        at: Date.now(),
-      });
-      switch (event.type) {
-        case "content_block_start": {
-          const block = event.content_block;
-          const idx = event.index;
-
-          if (block.type === "thinking") {
-            blockBuffers.set(idx, {
-              type: "thinking",
-              id: randomUUID(),
-              text: "",
-              thinkingStarted: false,
-            });
-          } else if (block.type === "text") {
-            blockBuffers.set(idx, { type: "text", text: "" });
-          } else if (block.type === "tool_use") {
-            blockBuffers.set(idx, {
-              type: "tool_use",
-              id: block.id,
-              name: block.name,
-              text: "",
-            });
-            yield {
-              type: "tool_start",
-              toolCallId: block.id,
-              toolName: block.name,
-            };
-          }
-          break;
-        }
-
-        case "content_block_delta": {
-          const idx = event.index;
-          const buf = blockBuffers.get(idx);
-
-          if (
-            event.delta.type === "thinking_delta" &&
-            buf?.type === "thinking"
-          ) {
-            const delta = event.delta.thinking;
-            if (!delta) break;
-            buf.text += delta;
-            if (!buf.thinkingStarted) {
-              buf.thinkingStarted = true;
-              yield { type: "thinking_start", thinkingId: buf.id! };
-            }
-            yield {
-              type: "thinking_delta",
-              thinkingId: buf.id!,
-              text: delta,
-            };
-          } else if (
-            event.delta.type === "text_delta" &&
-            buf?.type === "text"
-          ) {
-            buf.text += event.delta.text;
-            yield { type: "text_delta", text: event.delta.text };
-          } else if (
-            event.delta.type === "signature_delta" &&
-            buf?.type === "thinking"
-          ) {
-            buf.signature =
-              (buf.signature ?? "") +
-              (event.delta as unknown as { signature: string }).signature;
-          } else if (
-            event.delta.type === "input_json_delta" &&
-            buf?.type === "tool_use"
-          ) {
-            buf.text += event.delta.partial_json;
-            yield {
-              type: "tool_input_delta",
-              toolCallId: buf.id!,
-              partialJson: event.delta.partial_json,
-            };
-          }
-          break;
-        }
-
-        case "content_block_stop": {
-          const idx = event.index;
-          const buf = blockBuffers.get(idx);
-
-          if (buf?.type === "thinking") {
-            if (buf.thinkingStarted) {
-              yield { type: "thinking_end", thinkingId: buf.id! };
-            }
-            if (buf.text.trim()) {
-              contentBlocks.push({
-                type: "thinking",
-                thinking: buf.text,
-                signature: buf.signature ?? "",
-              } satisfies ContentBlock);
-            }
-          } else if (buf?.type === "text") {
-            contentBlocks.push({
-              type: "text",
-              text: buf.text,
-            } satisfies ContentBlock);
-          } else if (buf?.type === "tool_use") {
-            const parsed = buf.text ? JSON.parse(buf.text) : {};
-            contentBlocks.push({
-              type: "tool_use",
-              id: buf.id!,
-              name: buf.name!,
-              input: parsed,
-            } satisfies ContentBlock);
-            yield {
-              type: "tool_done",
-              toolCallId: buf.id!,
-              toolName: buf.name!,
-              input: parsed,
-            };
-          }
-
-          blockBuffers.delete(idx);
-          break;
-        }
-
-        case "message_delta": {
-          if (event.usage) {
-            outputTokens = event.usage.output_tokens;
-          }
-          break;
-        }
-
-        case "message_start": {
-          if (event.message.usage) {
-            inputTokens = event.message.usage.input_tokens;
-            const u = event.message.usage as typeof event.message.usage & {
-              cache_read_input_tokens?: number;
-              cache_creation_input_tokens?: number;
-            };
-            cacheReadTokens = u.cache_read_input_tokens ?? 0;
-            cacheCreationTokens = u.cache_creation_input_tokens ?? 0;
-          }
-          break;
-        }
+    const rawEvents = (async function* () {
+      for await (const event of stream) {
+        request.onTransportActivity?.({
+          kind: "provider_event",
+          at: Date.now(),
+        });
+        yield event as unknown as Record<string, unknown>;
       }
-    }
-
-    yield {
-      type: "usage",
-      inputTokens,
-      outputTokens,
-      cacheReadTokens,
-      cacheCreationTokens,
-    };
-    yield { type: "content_blocks", blocks: contentBlocks };
-    yield { type: "done" };
+    })();
+    yield* parseAnthropicStreamEvents(rawEvents);
   }
 
   async complete(request: CompleteRequest): Promise<CompleteResult> {
@@ -446,20 +253,17 @@ export class AnthropicProvider implements ModelProvider {
       reasoningEffort,
     } = request;
 
-    const requestParams: Anthropic.MessageCreateParams = {
+    const requestParams = {
       model,
       max_tokens: maxTokens,
       ...(temperature !== undefined && !this.supportsAdaptiveThinking(model)
         ? { temperature }
         : {}),
       system: systemPrompt,
-      messages: mergeConsecutiveUserMessages(
-        sanitizeMessagesForAnthropicReplay(messages).messages,
-      ).map(({ role, content }) => ({
-        role,
-        content,
-      })) as Anthropic.MessageParam[],
-    };
+      messages: translateAnthropicMessages(messages, {
+        cacheBreakpoints: false,
+      }).messages,
+    } as unknown as Anthropic.MessageCreateParamsNonStreaming;
 
     const requestedEffort = reasoningEffort ?? "high";
     if (requestedEffort !== "none" && this.supportsAdaptiveThinking(model)) {
@@ -539,6 +343,7 @@ function copyModelCapabilities(
 ): ModelCapabilities {
   return {
     ...capabilities,
+    hostedWeb: ANTHROPIC_HOSTED_WEB_CAPABILITIES,
     ...(capabilities.reasoningEfforts
       ? { reasoningEfforts: [...capabilities.reasoningEfforts] }
       : {}),
@@ -550,176 +355,22 @@ function staticSupportsAdaptiveThinking(model: string): boolean {
   return Boolean(ANTHROPIC_MODEL_CAPABILITIES[model]?.supportsAdaptiveThinking);
 }
 
-interface AnthropicMessageTransformResult extends AnthropicReplaySanitizationResult {
-  anthropicMessages: Anthropic.MessageParam[];
-}
-
 export interface AnthropicReplaySanitizationResult {
   messages: MessageParam[];
   strippedThinking: boolean;
   strippedThinkingFromToolUse: boolean;
 }
 
-let nextMessageContentFingerprintId = 1;
-const messageContentFingerprintIds = new WeakMap<object, number>();
-// Message arrays/content blocks are treated as immutable replay snapshots once
-// passed to the provider. The cache key intentionally uses exact string content
-// and object identity for block arrays to avoid re-walking large media/tool
-// transcripts on every stream attempt.
-const messageTransformCache = new Map<
-  string,
-  AnthropicMessageTransformResult
->();
-const MAX_MESSAGE_TRANSFORM_CACHE_ENTRIES = 8;
-
-function getMessageContentFingerprintId(value: object): number {
-  let id = messageContentFingerprintIds.get(value);
-  if (id === undefined) {
-    id = nextMessageContentFingerprintId++;
-    messageContentFingerprintIds.set(value, id);
-  }
-  return id;
-}
-
-function buildMessageTransformFingerprint(messages: MessageParam[]): string {
-  return messages
-    .map((message, index) => {
-      const content = message.content;
-      const contentFingerprint =
-        typeof content === "string"
-          ? `s:${content}`
-          : Array.isArray(content)
-            ? `a:${getMessageContentFingerprintId(content)}:${content.length}`
-            : `o:${String(content)}`;
-      return `${index}:${message.role}:${contentFingerprint}`;
-    })
-    .join("|");
-}
-
-function getTransformedAnthropicMessages(
-  messages: MessageParam[],
-): AnthropicMessageTransformResult {
-  const fingerprint = buildMessageTransformFingerprint(messages);
-  const cached = messageTransformCache.get(fingerprint);
-  if (cached) return cached;
-
-  const sanitizedReplay = sanitizeMessagesForAnthropicReplay(messages);
-  const anthropicMessages = addMessageCacheBreakpoints(
-    mergeConsecutiveUserMessages(sanitizedReplay.messages),
-  ) as Anthropic.MessageParam[];
-  const result = { ...sanitizedReplay, anthropicMessages };
-  messageTransformCache.set(fingerprint, result);
-  if (messageTransformCache.size > MAX_MESSAGE_TRANSFORM_CACHE_ENTRIES) {
-    const oldestKey = messageTransformCache.keys().next().value;
-    if (oldestKey) messageTransformCache.delete(oldestKey);
-  }
-  return result;
-}
-
+/** Compatibility wrapper retained for existing extension tests and callers. */
 export function sanitizeMessagesForAnthropicReplay(
   messages: MessageParam[],
 ): AnthropicReplaySanitizationResult {
-  const sanitized: MessageParam[] = [];
-  let strippedThinking = false;
-  let strippedThinkingFromToolUse = false;
-
-  for (const msg of messages) {
-    if (!Array.isArray(msg.content)) {
-      sanitized.push({ role: msg.role, content: msg.content });
-      continue;
-    }
-
-    const hadThinking = msg.content.some((block) => block.type === "thinking");
-    const hasToolUse = msg.content.some((block) => block.type === "tool_use");
-    const content = msg.content.filter((block) => block.type !== "thinking");
-    if (hadThinking) {
-      strippedThinking = true;
-      strippedThinkingFromToolUse ||= msg.role === "assistant" && hasToolUse;
-    }
-    if (content.length === 0) continue;
-    sanitized.push({ role: msg.role, content });
-  }
-
-  return { messages: sanitized, strippedThinking, strippedThinkingFromToolUse };
-}
-
-const anthropicToolCache = new WeakMap<ToolDefinition[], Anthropic.Tool[]>();
-
-function toAnthropicTool(tool: ToolDefinition): Anthropic.Tool {
-  return {
-    name: tool.name,
-    description: tool.description,
-    input_schema: tool.input_schema as Anthropic.Tool["input_schema"],
-  };
-}
-
-function translateAnthropicTools(tools: ToolDefinition[]): Anthropic.Tool[] {
-  const cached = anthropicToolCache.get(tools);
-  if (cached) return cached;
-  const translated = tools.map((t, i) =>
-    i === tools.length - 1
-      ? {
-          ...toAnthropicTool(t),
-          cache_control: { type: "ephemeral" as const },
-        }
-      : toAnthropicTool(t),
-  );
-  anthropicToolCache.set(tools, translated);
-  return translated;
-}
-
-/**
- * Merge consecutive user messages before sending to the API.
- * Consecutive user messages can occur after condense (summary message followed
- * by a pending user message) or when the user interjects between tool batches.
- */
-function mergeConsecutiveUserMessages(
-  messages: MessageParam[],
-): MessageParam[] {
-  const result: MessageParam[] = [];
-  for (const msg of messages) {
-    const last = result[result.length - 1];
-    if (last?.role === "user" && msg.role === "user") {
-      const toBlocks = (c: MessageParam["content"]): ContentBlock[] =>
-        Array.isArray(c) ? c : [{ type: "text", text: c as string }];
-      last.content = [...toBlocks(last.content), ...toBlocks(msg.content)];
-    } else {
-      result.push({ role: msg.role, content: msg.content });
-    }
-  }
-  return result;
-}
-
-/**
- * Add cache_control breakpoints to the last 2 user messages.
- * Multi-point caching: the second-to-last breakpoint hits the cache on the next
- * turn (the prefix before it is stable), while the last creates a new cache entry
- * so the turn after that also benefits.
- */
-function addMessageCacheBreakpoints(messages: MessageParam[]): MessageParam[] {
-  const userIndices: number[] = [];
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user") {
-      userIndices.push(i);
-      if (userIndices.length === 2) break;
-    }
-  }
-  if (userIndices.length === 0) return messages;
-
-  return messages.map((msg, idx) => {
-    if (!userIndices.includes(idx)) return msg;
-    const blocks = Array.isArray(msg.content)
-      ? (msg.content as unknown as Array<Record<string, unknown>>)
-      : [{ type: "text", text: msg.content as string }];
-    if (blocks.length === 0) return msg;
-    // Strip any pre-existing cache_control from non-last blocks
-    const patched = [
-      ...blocks.slice(0, -1).map(({ cache_control: _cc, ...rest }) => rest),
-      { ...blocks[blocks.length - 1], cache_control: { type: "ephemeral" } },
-    ];
-    return {
-      role: msg.role,
-      content: patched as unknown as ContentBlock[],
-    };
+  const translated = translateAnthropicMessages(messages, {
+    cacheBreakpoints: false,
   });
+  return {
+    messages: translated.messages as MessageParam[],
+    strippedThinking: translated.strippedThinking,
+    strippedThinkingFromToolUse: translated.strippedThinkingFromToolUse,
+  };
 }

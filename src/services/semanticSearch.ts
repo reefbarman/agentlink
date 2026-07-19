@@ -31,10 +31,20 @@ export { expandQuery, extractKeywords } from "./semanticQueryEnhancement.js";
 
 // --- Configuration helpers (exported for IndexerManager) ---
 
-export function getQdrantUrl(): string {
-  return vscode.workspace
-    .getConfiguration("agentlink")
-    .get<string>("qdrantUrl", DEFAULT_QDRANT_URL);
+function semanticConfiguration(
+  workspacePath?: string,
+): vscode.WorkspaceConfiguration {
+  return vscode.workspace.getConfiguration(
+    "agentlink",
+    workspacePath ? vscode.Uri.file(workspacePath) : undefined,
+  );
+}
+
+export function getQdrantUrl(workspacePath?: string): string {
+  return semanticConfiguration(workspacePath).get<string>(
+    "qdrantUrl",
+    DEFAULT_QDRANT_URL,
+  );
 }
 
 const EMBEDDING_MAX_RETRIES = 3;
@@ -47,10 +57,11 @@ function isRetryableEmbeddingStatus(status: number): boolean {
   return status === 429 || status === 408 || status >= 500;
 }
 
-function isSemanticSearchEnabled(): boolean {
-  return vscode.workspace
-    .getConfiguration("agentlink")
-    .get<boolean>("semanticSearchEnabled", false);
+function isSemanticSearchEnabled(workspacePath?: string): boolean {
+  return semanticConfiguration(workspacePath).get<boolean>(
+    "semanticSearchEnabled",
+    false,
+  );
 }
 
 function semanticErrorPayload(
@@ -699,12 +710,12 @@ export async function semanticFileQuery(
   query: string,
   workspacePath?: string,
 ): Promise<{ startLine: number; endLine: number } | null> {
-  if (!isSemanticSearchEnabled()) return null;
+  if (!isSemanticSearchEnabled(workspacePath)) return null;
 
   const auth = await getEmbeddingAuth();
   if (!auth) return null;
 
-  const qdrantUrl = getQdrantUrl();
+  const qdrantUrl = getQdrantUrl(workspacePath);
   const resolvedWorkspacePath = workspacePath ?? tryGetFirstWorkspaceRoot();
   if (!resolvedWorkspacePath) return null;
 
@@ -763,7 +774,7 @@ export async function semanticFileList(
   files: Array<{ path: string; score: number }>;
   error?: string;
 } | null> {
-  if (!isSemanticSearchEnabled()) {
+  if (!isSemanticSearchEnabled(dirPath)) {
     return {
       files: [],
       ...semanticErrorPayload("disabled"),
@@ -778,7 +789,7 @@ export async function semanticFileList(
     };
   }
 
-  const qdrantUrl = getQdrantUrl();
+  const qdrantUrl = getQdrantUrl(dirPath);
   const workspacePaths = getWorkspaceRootsForSemanticQuery(dirPath, options);
   if (workspacePaths.length === 0) {
     return { files: [], ...semanticErrorPayload("no_workspace") };
@@ -848,7 +859,7 @@ export async function semanticSearch(
   excludeGlobs?: string[],
   options?: { includeAllWorkspaceRoots?: boolean },
 ): Promise<ToolResult> {
-  if (!isSemanticSearchEnabled()) {
+  if (!isSemanticSearchEnabled(dirPath)) {
     return {
       content: [
         {
@@ -871,7 +882,7 @@ export async function semanticSearch(
     };
   }
 
-  const qdrantUrl = getQdrantUrl();
+  const qdrantUrl = getQdrantUrl(dirPath);
   const workspacePaths = getWorkspaceRootsForSemanticQuery(dirPath, options);
   if (workspacePaths.length === 0) {
     return {

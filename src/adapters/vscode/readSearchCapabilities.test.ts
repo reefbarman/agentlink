@@ -28,10 +28,14 @@ vi.mock("../../indexer/collectionName.js", () => ({
 
 const resolveAndValidatePath = vi.hoisted(() => vi.fn());
 const tryGetFirstWorkspaceRoot = vi.hoisted(() => vi.fn());
+const resolveAndOpenDocument = vi.hoisted(() => vi.fn());
 vi.mock("../../util/paths.js", () => ({
   getWorkspaceRootForPath: vi.fn(() => "/workspace"),
   resolveAndValidatePath,
   tryGetFirstWorkspaceRoot,
+}));
+vi.mock("../../tools/languageFeatures.js", () => ({
+  resolveAndOpenDocument,
 }));
 
 describe("createVscodeAdvertisedArtifactProvider", () => {
@@ -92,19 +96,19 @@ describe("createVscodeSemanticSearchProvider", () => {
     });
   });
 
-  it("uses all workspace roots when no path is provided", async () => {
-    const provider = createVscodeSemanticSearchProvider();
+  it("uses only the pinned project root when no path is provided", async () => {
+    const provider = createVscodeSemanticSearchProvider("/workspace/project-b");
 
     await provider.search({ query: "auth flow" });
 
     expect(resolveAndValidatePath).not.toHaveBeenCalled();
-    expect(tryGetFirstWorkspaceRoot).toHaveBeenCalledTimes(1);
+    expect(tryGetFirstWorkspaceRoot).not.toHaveBeenCalled();
     expect(semanticSearch).toHaveBeenCalledWith(
-      "/workspace",
+      "/workspace/project-b",
       "auth flow",
       undefined,
       undefined,
-      { includeAllWorkspaceRoots: true },
+      { includeAllWorkspaceRoots: false },
     );
   });
 });
@@ -123,6 +127,41 @@ describe("createVscodeContext providers", () => {
     expect(enrichmentProvider.getGitStatus).toBeTypeOf("function");
     expect(enrichmentProvider.getDocumentSymbols).toBeTypeOf("function");
     expect(enrichmentProvider.getDiagnosticsSummary).toBeTypeOf("function");
+  });
+
+  it("normalizes VS Code nonexistent-document errors for shared recovery", async () => {
+    resolveAndOpenDocument.mockRejectedValueOnce(
+      new Error(
+        "Unable to resolve nonexistent file '/workspace/src/toolz/executeCommand.ts'",
+      ),
+    );
+    const provider = createVscodeContextDocumentProvider(
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      provider.resolveDocument(
+        "src/toolz/executeCommand.ts",
+        "session-missing",
+      ),
+    ).rejects.toMatchObject({
+      code: "FileNotFound",
+      message: expect.stringContaining("Unable to resolve nonexistent file"),
+    });
+  });
+
+  it("does not normalize unrelated document-resolution errors", async () => {
+    const error = new Error("No workspace folder open and path is relative");
+    resolveAndOpenDocument.mockRejectedValueOnce(error);
+    const provider = createVscodeContextDocumentProvider(
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      provider.resolveDocument("src/file.ts", "session-error"),
+    ).rejects.toBe(error);
   });
 });
 

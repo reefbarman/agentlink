@@ -93,13 +93,23 @@ describe("createVscodeTerminalProvider", () => {
   it("delegates terminal state and control methods to TerminalManager", () => {
     terminalManager.getBackgroundState.mockReturnValue({
       is_running: true,
+      state: "running",
       exit_code: null,
       output: "running",
       output_captured: true,
     });
     terminalManager.interruptTerminal.mockReturnValue(true);
     terminalManager.getRecentlyClosedTerminals.mockReturnValue([
-      { id: "term_1", name: "Server", closedAt: 123 },
+      {
+        id: "term_1",
+        name: "Server",
+        closedAt: 123,
+        is_running: false,
+        state: "completed",
+        exit_code: 0,
+        output: "done",
+        output_captured: true,
+      },
     ]);
     terminalManager.listTerminals.mockReturnValue([
       { id: "term_2", name: "Tests", busy: false },
@@ -110,13 +120,23 @@ describe("createVscodeTerminalProvider", () => {
 
     expect(provider.getBackgroundState("term_1")).toEqual({
       is_running: true,
+      state: "running",
       exit_code: null,
       output: "running",
       output_captured: true,
     });
     expect(provider.interruptTerminal("term_1")).toBe(true);
     expect(provider.getRecentlyClosedTerminals(5)).toEqual([
-      { id: "term_1", name: "Server", closedAt: 123 },
+      {
+        id: "term_1",
+        name: "Server",
+        closedAt: 123,
+        is_running: false,
+        state: "completed",
+        exit_code: 0,
+        output: "done",
+        output_captured: true,
+      },
     ]);
     expect(provider.listTerminals()).toEqual([
       { id: "term_2", name: "Tests", busy: false },

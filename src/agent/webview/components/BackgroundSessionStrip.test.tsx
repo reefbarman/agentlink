@@ -7,7 +7,10 @@ import { h } from "preact";
 import { BackgroundSessionStrip } from "./BackgroundSessionStrip";
 
 describe("BackgroundSessionStrip defaults", () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it("starts collapsed and shows active agents when expanded", () => {
     const { container } = render(
@@ -72,5 +75,124 @@ describe("BackgroundSessionStrip defaults", () => {
         .getByRole("button", { name: "active" })
         .classList.contains("active"),
     ).toBe(true);
+  });
+
+  it("uses the runtime start timestamp after the UI reconnects", () => {
+    vi.spyOn(Date, "now").mockReturnValue(70_000);
+    render(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          {
+            id: "active",
+            task: "Long review",
+            status: "streaming",
+            startedAt: 10_000,
+          },
+        ],
+        onStop: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+
+    expect(screen.getByText("1:00")).toBeTruthy();
+  });
+
+  it("shows the provider phase and request elapsed time", () => {
+    vi.spyOn(Date, "now").mockReturnValue(75_000);
+    render(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          {
+            id: "active",
+            task: "Provider wait",
+            status: "streaming",
+            phase: "waiting_for_provider",
+            requestStartedAt: 10_000,
+          },
+        ],
+        onStop: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+
+    expect(
+      screen.getByText("Waiting for provider · request 1:05"),
+    ).toBeTruthy();
+  });
+
+  it("hides unread event counts and explains every row action", () => {
+    const { container } = render(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          {
+            id: "active",
+            task: "Active review",
+            status: "streaming",
+            parentSessionId: "parent",
+            unreadEventCount: 2,
+          },
+        ],
+        onStop: vi.fn(),
+        onOpenTranscript: vi.fn(),
+        onSteer: vi.fn(),
+        onDetach: vi.fn(),
+        onPause: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+
+    expect(container.querySelector(".bg-session-unread")).toBeNull();
+    expect(
+      screen.getByTitle("Stop this agent and keep its partial output"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle("Send new instructions to this running agent"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle("Pause this agent so it can be resumed later"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle(
+        "Detach this agent and its descendants from the current task",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByTitle("Open this agent's full transcript")).toBeTruthy();
+  });
+
+  it("explains finished and paused agent actions", () => {
+    render(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          { id: "done", task: "Finished review", status: "idle" },
+          {
+            id: "paused",
+            task: "Paused review",
+            status: "idle",
+            lifecycle: "paused",
+          },
+        ],
+        onStop: vi.fn(),
+        onOpenTranscript: vi.fn(),
+        onRetry: vi.fn(),
+        onArchive: vi.fn(),
+        onResume: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+    fireEvent.click(screen.getByRole("button", { name: "completed" }));
+
+    expect(
+      screen.getAllByTitle("Start a new agent with the same task"),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByTitle("Hide this finished agent from the fleet"),
+    ).toHaveLength(2);
+    expect(
+      screen.getByTitle("Restart agent from its saved task and transcript"),
+    ).toBeTruthy();
   });
 });

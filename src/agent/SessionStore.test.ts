@@ -2,6 +2,7 @@ import * as fs from "fs";
 import os from "os";
 import path from "path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { SessionProjectScope } from "../core/workspaceProjects.js";
 import type { AgentMessage } from "./types.js";
 import { SessionStore, type SessionSummary } from "./SessionStore.js";
 import type {
@@ -23,6 +24,20 @@ function createSummary(
     totalOutputTokens: 0,
     createdAt: 1,
     lastActiveAt: 2,
+    ...overrides,
+  };
+}
+
+function createProjectScope(
+  overrides: Partial<SessionProjectScope> = {},
+): SessionProjectScope {
+  return {
+    schemaVersion: 1,
+    kind: "project",
+    projectId: "project-api",
+    workspaceFolderUri: "file:///workspace/api",
+    displayName: "API",
+    rootPath: "/workspace/api",
     ...overrides,
   };
 }
@@ -54,6 +69,47 @@ function createRecord(
       ...overrides.metadata,
     },
   };
+}
+
+function writeLegacySession(
+  workspaceDir: string,
+  sessionId = "legacy-1",
+): void {
+  const historyDir = path.join(workspaceDir, ".agentlink", "history");
+  const sessionDir = path.join(historyDir, sessionId);
+  const summary = createSummary({ id: sessionId });
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(historyDir, "sessions.json"),
+    JSON.stringify([summary], null, 2),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(sessionDir, "messages.json"),
+    JSON.stringify(
+      { schemaVersion: 1, messages: [{ role: "user", content: "legacy" }] },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(sessionDir, "metadata.json"),
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        summary,
+        mode: summary.mode,
+        model: summary.model,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        checkpoints: [],
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
 }
 
 describe("SessionStore", () => {
@@ -249,6 +305,229 @@ describe("SessionStore", () => {
     expect(updateResult).toEqual({ ok: true, revision: "2" });
     expect(store.get("session-1")?.messageCount).toBe(2);
     expect(store.loadMessages("session-1")?.length).toBe(2);
+  });
+
+  it("round-trips project scope through revision-aware metadata and summary writes", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const projectScope = createProjectScope();
+
+    await expect(
+      store.saveSession({
+        session: createRecord({
+          summary: createSummary({ projectScope }),
+          metadata: { projectScope },
+        }),
+        expectedRevision: null,
+      }),
+    ).resolves.toEqual({ ok: true, revision: "1" });
+
+    const loaded = await store.readSession("session-1");
+    expect(loaded).toEqual(
+      expect.objectContaining({
+        ok: true,
+        revision: "1",
+        value: expect.objectContaining({
+          summary: expect.objectContaining({ projectScope }),
+          metadata: expect.objectContaining({ projectScope }),
+        }),
+      }),
+    );
+
+    const historyDir = path.join(tmpDir, ".agentlink", "history");
+    const metadata = JSON.parse(
+      fs.readFileSync(
+        path.join(historyDir, "session-1", "metadata.json"),
+        "utf-8",
+      ),
+    ) as {
+      projectScope?: SessionProjectScope;
+      summary?: SessionSummary;
+    };
+    const index = JSON.parse(
+      fs.readFileSync(path.join(historyDir, "sessions.json"), "utf-8"),
+    ) as SessionSummary[];
+    expect(metadata.projectScope).toEqual(projectScope);
+    expect(metadata.summary?.projectScope).toEqual(projectScope);
+    expect(index[0]?.projectScope).toEqual(projectScope);
+  });
+
+  it("treats metadata project scope as authoritative and normalizes a conflicting index summary", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const logs: string[] = [];
+    const store = new SessionStore(tmpDir, undefined, undefined, {
+      log: (message) => logs.push(message),
+    });
+    const projectScope = createProjectScope();
+    const conflictingScope = createProjectScope({
+      projectId: "project-web",
+      workspaceFolderUri: "file:///workspace/web",
+      displayName: "Web",
+      rootPath: "/workspace/web",
+    });
+
+    await expect(
+      store.saveSession({
+        session: createRecord({
+          summary: createSummary({ projectScope: conflictingScope }),
+          metadata: { projectScope },
+        }),
+        expectedRevision: null,
+      }),
+    ).resolves.toEqual({ ok: true, revision: "1" });
+
+    expect(store.list()[0]?.projectScope).toEqual(projectScope);
+    expect(store.get("session-1")?.projectScope).toEqual(projectScope);
+    const persistedIndex = JSON.parse(
+      fs.readFileSync(
+        path.join(tmpDir, ".agentlink", "history", "sessions.json"),
+        "utf-8",
+      ),
+    ) as SessionSummary[];
+    expect(persistedIndex[0]?.projectScope).toEqual(projectScope);
+    expect(logs.some((message) => message.includes("session-1"))).toBe(true);
+  });
+
+  it("retains authoritative metadata project scope when rebuilding the index", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const projectScope = createProjectScope();
+    await store.saveSession({
+      session: createRecord({
+        summary: createSummary({ projectScope }),
+        metadata: { projectScope },
+      }),
+      expectedRevision: null,
+    });
+
+    const historyDir = path.join(tmpDir, ".agentlink", "history");
+    const metadataFile = path.join(historyDir, "session-1", "metadata.json");
+    const metadata = JSON.parse(fs.readFileSync(metadataFile, "utf-8")) as {
+      projectScope?: SessionProjectScope;
+      summary?: SessionSummary;
+    };
+    expect(metadata.projectScope).toEqual(projectScope);
+    if (!metadata.summary)
+      throw new Error("Expected persisted session summary");
+    delete metadata.summary.projectScope;
+    fs.writeFileSync(metadataFile, JSON.stringify(metadata, null, 2), "utf-8");
+    fs.rmSync(path.join(historyDir, "sessions.json"));
+
+    const reloadedStore = new SessionStore(tmpDir);
+    expect(reloadedStore.list()[0]?.projectScope).toEqual(projectScope);
+    const rebuiltIndex = JSON.parse(
+      fs.readFileSync(path.join(historyDir, "sessions.json"), "utf-8"),
+    ) as SessionSummary[];
+    expect(rebuiltIndex[0]?.projectScope).toEqual(projectScope);
+  });
+
+  it("retains project scope when renaming a revision-aware session", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const projectScope = createProjectScope();
+    const createResult = await store.saveSession({
+      session: createRecord({
+        summary: createSummary({ projectScope }),
+        metadata: { projectScope },
+      }),
+      expectedRevision: null,
+    });
+    expect(createResult).toEqual({ ok: true, revision: "1" });
+
+    await expect(
+      store.renameSession({
+        sessionId: "session-1",
+        title: "Renamed Session",
+        expectedRevision: "1",
+      }),
+    ).resolves.toEqual({ ok: true, revision: "2" });
+
+    const loaded = await store.readSession("session-1");
+    expect(loaded).toEqual(
+      expect.objectContaining({
+        ok: true,
+        revision: "2",
+        value: expect.objectContaining({
+          summary: expect.objectContaining({
+            title: "Renamed Session",
+            projectScope,
+          }),
+          metadata: expect.objectContaining({ projectScope }),
+        }),
+      }),
+    );
+    expect(store.get("session-1")?.projectScope).toEqual(projectScope);
+  });
+
+  it("applies activation-time legacy project scope on read and persists it on the next save", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    writeLegacySession(tmpDir);
+    const projectScope = createProjectScope();
+    const logs: string[] = [];
+    const store = new SessionStore(tmpDir, undefined, undefined, {
+      legacyProjectScope: projectScope,
+      log: (message) => logs.push(message),
+    });
+
+    const loaded = await store.readSession("legacy-1");
+    expect(loaded).toEqual(
+      expect.objectContaining({
+        ok: true,
+        revision: "0",
+        value: expect.objectContaining({
+          summary: expect.objectContaining({ projectScope }),
+          metadata: expect.objectContaining({ projectScope }),
+        }),
+      }),
+    );
+    if (!loaded.ok) return;
+    expect(logs.some((message) => message.includes("legacy-1"))).toBe(true);
+
+    await expect(
+      store.saveSession({
+        session: loaded.value,
+        expectedRevision: loaded.revision,
+      }),
+    ).resolves.toEqual({ ok: true, revision: "1" });
+
+    const historyDir = path.join(tmpDir, ".agentlink", "history");
+    const metadata = JSON.parse(
+      fs.readFileSync(
+        path.join(historyDir, "legacy-1", "metadata.json"),
+        "utf-8",
+      ),
+    ) as {
+      projectScope?: SessionProjectScope;
+      summary?: SessionSummary;
+    };
+    const index = JSON.parse(
+      fs.readFileSync(path.join(historyDir, "sessions.json"), "utf-8"),
+    ) as SessionSummary[];
+    expect(metadata.projectScope).toEqual(projectScope);
+    expect(metadata.summary?.projectScope).toEqual(projectScope);
+    expect(index[0]?.projectScope).toEqual(projectScope);
+  });
+
+  it("leaves legacy sessions scope-unknown when no migration scope is available", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    writeLegacySession(tmpDir);
+    const store = new SessionStore(tmpDir);
+
+    const loaded = await store.readSession("legacy-1");
+    expect(loaded).toEqual(
+      expect.objectContaining({
+        ok: true,
+        value: expect.objectContaining({
+          summary: expect.not.objectContaining({
+            projectScope: expect.anything(),
+          }),
+          metadata: expect.not.objectContaining({
+            projectScope: expect.anything(),
+          }),
+        }),
+      }),
+    );
+    expect(store.get("legacy-1")?.projectScope).toBeUndefined();
   });
 
   it("rejects stale revision-aware saves without changing persisted data", async () => {

@@ -1,4 +1,8 @@
-import type { OnApprovalRequest, ToolResult } from "../shared/types.js";
+import {
+  errorResult,
+  type OnApprovalRequest,
+  type ToolResult,
+} from "../shared/types.js";
 
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import type { RenameSymbolProvider } from "../core/capabilities/editReview.js";
@@ -45,13 +49,12 @@ export async function handleRenameSymbol(
       return err as ToolResult;
     }
     const message = err instanceof Error ? err.message : String(err);
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ error: message, path: params.path }),
-        },
-      ],
-    };
+    return errorResult("Rename symbol failed", {
+      reason: message,
+      path: params.path,
+      line: params.line,
+      column: params.column,
+      new_name: params.new_name,
+    });
   }
 }

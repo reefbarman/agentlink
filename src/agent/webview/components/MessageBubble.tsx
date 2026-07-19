@@ -891,6 +891,8 @@ function UserAttachments({
               class="user-image-lightbox-image"
               src={selectedImage.src}
               alt={selectedImage.name || imageAlt}
+              title="Click to close"
+              onClick={() => setSelectedImage(null)}
             />
           </div>
         </div>

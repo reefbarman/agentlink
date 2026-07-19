@@ -32,7 +32,14 @@ import {
   setCachedCodeActions,
 } from "../../tools/codeActionCache.js";
 import {
+  errorResult,
+  jsonResult,
+  type ToolResult,
+} from "../../shared/types.js";
+import {
+  canonicalizePath,
   getRelativePath,
+  isPathWithinRoot,
   resolveAndValidatePath,
   tryGetFirstWorkspaceRoot,
 } from "../../util/paths.js";
@@ -100,18 +107,11 @@ export function createVscodeReferencesProvider(
       );
 
       if (!locations || locations.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                total_references: 0,
-                truncated: false,
-                references: [],
-              }),
-            },
-          ],
-        };
+        return jsonResult({
+          total_references: 0,
+          truncated: false,
+          references: [],
+        });
       }
 
       let filtered = locations;
@@ -131,18 +131,11 @@ export function createVscodeReferencesProvider(
       const truncated = total > MAX_REFERENCES;
       const capped = truncated ? filtered.slice(0, MAX_REFERENCES) : filtered;
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              total_references: total,
-              truncated,
-              references: capped.map(serializeLocation),
-            }),
-          },
-        ],
-      };
+      return jsonResult({
+        total_references: total,
+        truncated,
+        references: capped.map(serializeLocation),
+      });
     },
   };
 }
@@ -150,21 +143,14 @@ export function createVscodeReferencesProvider(
 export function createVscodeSymbolsProvider(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
+  projectRoot?: string,
 ): LanguageSymbolsProvider {
   return {
     async getSymbols(params) {
       if (!params.path && !params.query) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error:
-                  "Either 'path' (for document symbols) or 'query' (for workspace symbol search) is required",
-              }),
-            },
-          ],
-        };
+        return errorResult(
+          "Either 'path' (for document symbols) or 'query' (for workspace symbol search) is required",
+        );
       }
 
       if (params.path) {
@@ -180,32 +166,18 @@ export function createVscodeSymbolsProvider(
         >("vscode.executeDocumentSymbolProvider", uri);
 
         if (!symbols || symbols.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  mode: "document",
-                  path: relPath,
-                  symbols: [],
-                }),
-              },
-            ],
-          };
+          return jsonResult({
+            mode: "document",
+            path: relPath,
+            symbols: [],
+          });
         }
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                mode: "document",
-                path: relPath,
-                symbols: symbols.map(serializeDocumentSymbol),
-              }),
-            },
-          ],
-        };
+        return jsonResult({
+          mode: "document",
+          path: relPath,
+          symbols: symbols.map(serializeDocumentSymbol),
+        });
       }
 
       const query = params.query!;
@@ -214,23 +186,24 @@ export function createVscodeSymbolsProvider(
       >("vscode.executeWorkspaceSymbolProvider", query);
 
       if (!symbols || symbols.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                mode: "workspace",
-                query,
-                total: 0,
-                symbols: [],
-              }),
-            },
-          ],
-        };
+        return jsonResult({
+          mode: "workspace",
+          query,
+          total: 0,
+          symbols: [],
+        });
       }
 
-      const total = symbols.length;
-      const capped = symbols.slice(0, MAX_WORKSPACE_SYMBOLS);
+      const scopedSymbols = projectRoot
+        ? symbols.filter((symbol) =>
+            isPathWithinRoot(
+              canonicalizePath(symbol.location.uri.fsPath),
+              canonicalizePath(projectRoot),
+            ),
+          )
+        : symbols;
+      const total = scopedSymbols.length;
+      const capped = scopedSymbols.slice(0, MAX_WORKSPACE_SYMBOLS);
 
       const serialized = capped.map((sym) => ({
         name: sym.name,
@@ -240,20 +213,13 @@ export function createVscodeSymbolsProvider(
         containerName: sym.containerName || undefined,
       }));
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              mode: "workspace",
-              query,
-              total,
-              truncated: total > MAX_WORKSPACE_SYMBOLS,
-              symbols: serialized,
-            }),
-          },
-        ],
-      };
+      return jsonResult({
+        mode: "workspace",
+        query,
+        total,
+        truncated: total > MAX_WORKSPACE_SYMBOLS,
+        symbols: serialized,
+      });
     },
   };
 }
@@ -279,17 +245,10 @@ export function createVscodeHoverProvider(
       );
 
       if (!hovers || hovers.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                hover: null,
-                message: "No hover information available at this position",
-              }),
-            },
-          ],
-        };
+        return jsonResult({
+          hover: null,
+          message: "No hover information available at this position",
+        });
       }
 
       const parts: string[] = [];
@@ -300,14 +259,7 @@ export function createVscodeHoverProvider(
         }
       }
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ hover: parts.join("\n---\n") || null }),
-          },
-        ],
-      };
+      return jsonResult({ hover: parts.join("\n---\n") || null });
     },
   };
 }
@@ -335,19 +287,12 @@ export function createVscodeCompletionsProvider(
         );
 
       if (!completionList || completionList.items.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                is_incomplete: false,
-                total_items: 0,
-                showing: 0,
-                items: [],
-              }),
-            },
-          ],
-        };
+        return jsonResult({
+          is_incomplete: false,
+          total_items: 0,
+          showing: 0,
+          items: [],
+        });
       }
 
       const total = completionList.items.length;
@@ -373,19 +318,12 @@ export function createVscodeCompletionsProvider(
         return result;
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              is_incomplete: completionList.isIncomplete,
-              total_items: total,
-              showing: capped.length,
-              items,
-            }),
-          },
-        ],
-      };
+      return jsonResult({
+        is_incomplete: completionList.isIncomplete,
+        total_items: total,
+        showing: capped.length,
+        items,
+      });
     },
   };
 }
@@ -418,17 +356,10 @@ export function createVscodeCodeActionsProvider(
 
       if (!actions || actions.length === 0) {
         clearCachedCodeActions(params.sessionId);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                actions: [],
-                message: "No code actions available",
-              }),
-            },
-          ],
-        };
+        return jsonResult({
+          actions: [],
+          message: "No code actions available",
+        });
       }
 
       if (params.only_preferred) {
@@ -475,14 +406,7 @@ export function createVscodeCodeActionsProvider(
         return result;
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ actions: serialized }, null, 2),
-          },
-        ],
-      };
+      return jsonResult({ actions: serialized }, true);
     },
     async applyCodeAction(params) {
       const cachedActions = getCachedCodeActions(params.sessionId);
@@ -675,17 +599,10 @@ export function createVscodeInlayHintsProvider(
       );
 
       if (!hints || hints.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                hints: [],
-                message: "No inlay hints in this range",
-              }),
-            },
-          ],
-        };
+        return jsonResult({
+          hints: [],
+          message: "No inlay hints in this range",
+        });
       }
 
       const serialized = hints.map((hint) => {
@@ -702,19 +619,14 @@ export function createVscodeInlayHintsProvider(
         return result;
       });
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ hints: serialized }, null, 2),
-          },
-        ],
-      };
+      return jsonResult({ hints: serialized }, true);
     },
   };
 }
 
-export function createVscodeDiagnosticsProvider(): DiagnosticsProvider {
+export function createVscodeDiagnosticsProvider(
+  projectRoot?: string,
+): DiagnosticsProvider {
   return {
     async getDiagnostics(params) {
       let diagnostics: [vscode.Uri, vscode.Diagnostic[]][];
@@ -726,6 +638,12 @@ export function createVscodeDiagnosticsProvider(): DiagnosticsProvider {
         diagnostics = [[uri, fileDiags]];
       } else {
         diagnostics = vscode.languages.getDiagnostics();
+        if (projectRoot) {
+          const canonicalRoot = canonicalizePath(projectRoot);
+          diagnostics = diagnostics.filter(([uri]) =>
+            isPathWithinRoot(canonicalizePath(uri.fsPath), canonicalRoot),
+          );
+        }
       }
 
       const severityFilter = params.severity
@@ -766,7 +684,7 @@ export function createVscodeDiagnosticsProvider(): DiagnosticsProvider {
         if (filteredDiags.length === 0) continue;
 
         const workspaceRoot =
-          vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          projectRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         const filePath = workspaceRoot
           ? path.relative(workspaceRoot, uri.fsPath)
           : uri.fsPath;
@@ -790,22 +708,23 @@ export function createVscodeDiagnosticsProvider(): DiagnosticsProvider {
       }
 
       if (results.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: params.path
-                ? `No diagnostics found for ${params.path}`
-                : "No diagnostics found in workspace",
-            },
-          ],
-        };
+        return textResult(
+          params.path
+            ? `No diagnostics found for ${params.path}`
+            : "No diagnostics found in workspace",
+        );
       }
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
-      };
+      return jsonResult(results, true);
     },
+  };
+}
+
+function textResult(text: string): ToolResult {
+  return {
+    data: text,
+    content: [{ type: "text", text }],
+    isError: false,
   };
 }
 
@@ -827,16 +746,9 @@ async function executeCallHierarchyProvider(
   >("vscode.prepareCallHierarchy", uri, position);
 
   if (!items || items.length === 0) {
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify({
-            message: "No call hierarchy available at this position",
-          }),
-        },
-      ],
-    };
+    return jsonResult({
+      message: "No call hierarchy available at this position",
+    });
   }
 
   const item = items[0];
@@ -855,9 +767,7 @@ async function executeCallHierarchyProvider(
     result.outgoing = await getOutgoingCalls(item, maxDepth, 1);
   }
 
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-  };
+  return jsonResult(result, true);
 }
 
 async function executeTypeHierarchyProvider(
@@ -878,16 +788,9 @@ async function executeTypeHierarchyProvider(
   >("vscode.prepareTypeHierarchy", uri, position);
 
   if (!items || items.length === 0) {
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify({
-            message: "No type hierarchy available at this position",
-          }),
-        },
-      ],
-    };
+    return jsonResult({
+      message: "No type hierarchy available at this position",
+    });
   }
 
   const item = items[0];
@@ -906,9 +809,7 @@ async function executeTypeHierarchyProvider(
     result.subtypes = await getSubtypes(item, maxDepth, 1);
   }
 
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-  };
+  return jsonResult(result, true);
 }
 
 async function getIncomingCalls(
@@ -1075,17 +976,10 @@ async function executeNavigationProvider({
   >(command, uri, position);
 
   if (!results || results.length === 0) {
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify({
-            [resultKey]: [],
-            message: emptyMessage,
-          }),
-        },
-      ],
-    };
+    return jsonResult({
+      [resultKey]: [],
+      message: emptyMessage,
+    });
   }
 
   const locations = results.map((result) => {
@@ -1096,14 +990,7 @@ async function executeNavigationProvider({
     return serializeLocation(result);
   });
 
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify({ [resultKey]: locations }),
-      },
-    ],
-  };
+  return jsonResult({ [resultKey]: locations });
 }
 
 interface SerializedDocumentSymbol {

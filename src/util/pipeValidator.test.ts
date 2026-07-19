@@ -596,6 +596,38 @@ describe("validateCommand", () => {
       expect(result!.strippedCommand).toBe("npm ls");
     });
 
+    it("omits grep suggestions contaminated by command-substitution syntax", () => {
+      const result = validateCommand(
+        "result=$(printf '%s\\n' \"$frame\" | grep -E -C 2 'EDGE|FINAL'); printf '%s\\n' \"$result\"",
+      );
+
+      expect(result?.type).toBe("pipe");
+      expect(result?.message).toContain("output_grep_context: 2");
+      expect(result?.message).toContain("Set output_grep explicitly");
+      expect(result?.message).not.toContain("'EDGE|FINAL');");
+      expect(result?.message).not.toContain("Run this command instead:");
+      expect(result?.strippedCommand).toBeUndefined();
+    });
+
+    it("omits contaminated suggestions after concatenated quoted fragments", () => {
+      const result = validateCommand("result=$(command | grep 'EDGE'')');");
+
+      expect(result?.type).toBe("pipe");
+      expect(result?.message).toContain("Set output_grep explicitly");
+      expect(result?.message).not.toContain(`output_grep: "'EDGE'')');"`);
+      expect(result?.strippedCommand).toBeUndefined();
+    });
+
+    it("preserves valid quoted grep regex punctuation", () => {
+      const result = validateCommand(
+        String.raw`command | grep -E '(EDGE|FINAL);'`,
+      );
+
+      expect(result?.type).toBe("pipe");
+      expect(result?.message).toContain(`output_grep: "(EDGE|FINAL);"`);
+      expect(result?.strippedCommand).toBe("command");
+    });
+
     it("rejects chained pipe filters", () => {
       const result = validateCommand("ps aux | grep node | head -5");
       expect(result).not.toBeNull();

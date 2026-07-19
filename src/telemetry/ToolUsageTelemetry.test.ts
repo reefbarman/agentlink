@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ToolUsageTelemetry } from "./ToolUsageTelemetry.js";
 
@@ -80,6 +81,95 @@ describe("ToolUsageTelemetry", () => {
     });
     expect(JSON.stringify(record)).not.toContain("/secret/project/file.ts");
     expect(JSON.stringify(record)).not.toContain("/other/file.ts");
+    expect(record.tools.read_file).not.toHaveProperty("projects");
+  });
+
+  it("aggregates only opaque project IDs when project scope is available", async () => {
+    const telemetryPath = path.join(tmpDir, "tool-usage.jsonl");
+    const telemetry = new ToolUsageTelemetry({
+      telemetryPath,
+      flushIntervalMs: 0,
+    });
+
+    telemetry.record({
+      toolName: "read_file",
+      params: { path: "/sensitive/root/file.ts" },
+      source: "agent",
+      projectId: "project-0123456789abcdef",
+      outcome: "ok",
+    });
+    telemetry.record({
+      toolName: "read_file",
+      source: "agent",
+      projectId: "project-0123456789abcdef",
+      outcome: "error",
+    });
+    telemetry.record({
+      toolName: "read_file",
+      source: "agent",
+      projectId: "project-fedcba9876543210",
+      outcome: "ok",
+    });
+    await telemetry.flush();
+
+    const [record] = (await readJsonLines(telemetryPath)) as Array<{
+      tools: Record<string, { projects?: Record<string, number> }>;
+    }>;
+    expect(record.tools.read_file.projects).toEqual({
+      "project-0123456789abcdef": 2,
+      "project-fedcba9876543210": 1,
+    });
+    expect(JSON.stringify(record)).not.toContain("/sensitive/root/file.ts");
+  });
+
+  it("aggregates compose metrics without raw script or result values", async () => {
+    const telemetryPath = path.join(tmpDir, "tool-usage.jsonl");
+    const telemetry = new ToolUsageTelemetry({
+      telemetryPath,
+      flushIntervalMs: 0,
+    });
+
+    telemetry.record({
+      toolName: "compose",
+      params: {
+        descriptionProvided: true,
+        script: "SECRET_COMPOSE_SOURCE",
+        result: "SECRET_CHILD_RESULT",
+      },
+      source: "agent",
+      outcome: "error",
+      metrics: {
+        childCount: 3,
+        toolAllBatchCount: 1,
+        bridgedBytes: 2048,
+        errorKind: "child_failed",
+        cancelled: false,
+      },
+    });
+    await telemetry.flush();
+
+    const [record] = (await readJsonLines(telemetryPath)) as Array<{
+      tools: Record<
+        string,
+        {
+          numericMetrics: Record<string, number>;
+          categoricalMetrics: Record<string, number>;
+        }
+      >;
+    }>;
+    expect(record.tools.compose).toMatchObject({
+      numericMetrics: {
+        childCount: 3,
+        toolAllBatchCount: 1,
+        bridgedBytes: 2048,
+      },
+      categoricalMetrics: {
+        "errorKind:child_failed": 1,
+        "cancelled:false": 1,
+      },
+    });
+    expect(JSON.stringify(record)).not.toContain("SECRET_COMPOSE_SOURCE");
+    expect(JSON.stringify(record)).not.toContain("SECRET_CHILD_RESULT");
   });
 
   it("appends a new JSONL record for each non-empty flush", async () => {

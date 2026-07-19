@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.16.107",
+  "version": "1.17.13",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -254,7 +254,86 @@
           "default": "",
           "description": "Optional absolute path to a standalone Node.js executable used by the AgentLink sandbox helper. Leave empty to probe Node.js from VS Code's inherited PATH and standard macOS installation locations. Electron is not supported."
         },
+        "agentlink.webAccess.searchBackend": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "native",
+            "mcp",
+            "disabled"
+          ],
+          "enumDescriptions": [
+            "Expose AgentLink's web_search tool, implemented through the selected model provider's hosted web capability.",
+            "Do not expose AgentLink's web_search tool. The agent may use ordinary connected MCP tools according to their normal disclosure and mode permissions.",
+            "Do not expose AgentLink's web_search tool. This does not disable unrelated MCP tools."
+          ],
+          "default": "native",
+          "description": "Choose whether AgentLink exposes its native web_search tool. Native provider use can incur additional charges and sends queries to the selected provider. Web results are untrusted model input."
+        },
+        "agentlink.webAccess.fetchBackend": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "native",
+            "mcp",
+            "disabled"
+          ],
+          "enumDescriptions": [
+            "Expose AgentLink's web_fetch tool, implemented through the selected model provider's hosted page-access capability.",
+            "Do not expose AgentLink's web_fetch tool. The agent may use ordinary connected MCP tools according to their normal disclosure and mode permissions.",
+            "Do not expose AgentLink's web_fetch tool. This does not disable unrelated MCP tools."
+          ],
+          "default": "native",
+          "description": "Choose whether AgentLink exposes its native web_fetch tool. Native provider use can incur additional charges and sends URLs and fetched content to the selected provider. Web content is untrusted model input."
+        },
+        "agentlink.webAccess.allowedDomains": {
+          "scope": "window",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Optional web-domain allowlist. Mutually exclusive with blockedDomains. Resolution fails closed when the selected backend cannot enforce it."
+        },
+        "agentlink.webAccess.blockedDomains": {
+          "scope": "window",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Optional web-domain denylist. Mutually exclusive with allowedDomains. Resolution fails closed when the selected backend cannot enforce it."
+        },
+        "agentlink.webAccess.maxSearchUsesPerTurn": {
+          "scope": "window",
+          "type": "number",
+          "minimum": 1,
+          "default": 5,
+          "description": "Requested maximum hosted search uses per logical turn. Enforced only by backends that support a hard limit; provider-hosted use may incur additional charges."
+        },
+        "agentlink.webAccess.maxFetchUsesPerTurn": {
+          "scope": "window",
+          "type": "number",
+          "minimum": 1,
+          "default": 3,
+          "description": "Requested maximum hosted page fetches per logical turn. Enforced only by backends that support a hard limit."
+        },
+        "agentlink.webAccess.maxFetchContentTokens": {
+          "scope": "window",
+          "type": "number",
+          "minimum": 1,
+          "default": 25000,
+          "description": "Requested per-page fetched-content token cap. Enforced only by backends that support it; fetched content remains untrusted external input."
+        },
+        "agentlink.webAccess.maxReplayBytesPerTurn": {
+          "scope": "window",
+          "type": "number",
+          "minimum": 1,
+          "default": 5242880,
+          "description": "Maximum private provider replay bytes retained for exact hosted-tool continuation. Oversized replay is discarded rather than truncated and is never exposed in browser or transcript projections."
+        },
         "agentlink.browserGatewayPort": {
+          "scope": "window",
           "type": "number",
           "default": 47137,
           "minimum": 1,
@@ -262,56 +341,67 @@
           "description": "Stable localhost port for the shared AgentLink browser gateway helper. Use a fixed value so the remote UI URL is bookmarkable."
         },
         "agentlink.browserGatewayLanAccess": {
+          "scope": "window",
           "type": "boolean",
           "default": false,
           "description": "Expose the browser gateway on your LAN so phones and other devices can connect (e.g. http://agentlink.local:<port>). Requires per-device pairing (run /pair in the chat, then enter the code on the new device). When disabled the gateway only accepts loopback connections. AgentLink will restart the shared gateway helper automatically the next time it's used after this setting changes."
         },
         "agentlink.browserGatewayMdnsName": {
+          "scope": "window",
           "type": "string",
           "default": "agentlink",
           "description": "Hostname to advertise over mDNS when LAN access is enabled (resolves as <name>.local on the same network). If the name collides on the network, a short suffix is appended automatically."
         },
         "agentlink.masterBypass": {
+          "scope": "resource",
           "type": "boolean",
           "default": false,
           "description": "Skip ALL approval prompts (file writes and commands auto-approved). Use with caution."
         },
         "agentlink.diagnosticDelay": {
+          "scope": "resource",
           "type": "number",
           "default": 1500,
           "description": "Max milliseconds to wait after file save for diagnostics to settle"
         },
         "agentlink.semanticSearchEnabled": {
+          "scope": "resource",
           "type": "boolean",
           "default": false,
           "description": "Enable semantic codebase search via Qdrant vector index. Requires Qdrant running and an OpenAI API key for embeddings."
         },
         "agentlink.qdrantUrl": {
+          "scope": "resource",
           "type": "string",
           "default": "http://localhost:6333",
           "description": "Qdrant vector database URL for semantic codebase search"
         },
         "agentlink.openaiCompatible.baseUrl": {
+          "scope": "window",
           "type": "string",
           "default": "http://127.0.0.1:1234/v1",
           "description": "OpenAI-compatible base URL used by helper-model features (question detection, background-agent summaries). Examples: LM Studio http://127.0.0.1:1234/v1, OpenAI https://api.openai.com/v1, OpenRouter https://openrouter.ai/api/v1."
         },
         "agentlink.openaiCompatible.model": {
+          "scope": "window",
           "type": "string",
           "default": "",
           "description": "Model id for the OpenAI-compatible endpoint. Leave empty to let the server pick (LM Studio uses the loaded model)."
         },
         "agentlink.openaiCompatible.apiKey": {
+          "scope": "window",
           "type": "string",
           "default": "",
           "description": "Optional API key sent as Bearer token. LM Studio ignores it; hosted endpoints (OpenAI, OpenRouter, etc.) require it."
         },
         "agentlink.openaiCompatible.timeoutMs": {
+          "scope": "window",
           "type": "number",
           "default": 5000,
           "description": "Max milliseconds to wait for the OpenAI-compatible endpoint before falling back."
         },
         "agentlink.questionDetection.mode": {
+          "scope": "window",
           "type": "string",
           "enum": [
             "heuristic",
@@ -327,6 +417,7 @@
           "description": "How to detect whether the agent is asking a question before it idles, and generate answer buttons."
         },
         "agentlink.bgSummary.mode": {
+          "scope": "resource",
           "type": "string",
           "enum": [
             "agent",
@@ -338,16 +429,18 @@
             "Use the OpenAI-compatible endpoint configured under agentlink.openaiCompatible.*.",
             "Skip the LLM call and show only the inferred phase status."
           ],
-          "default": "agent",
+          "default": "heuristic",
           "description": "How the tiny status string shown for background agents is summarized."
         },
         "agentlink.background.defaultAgent": {
+          "scope": "resource",
           "type": "string",
           "default": "native:auto",
           "pattern": "^(native:auto|acp:[A-Za-z0-9_.-]+)$",
           "description": "Default backend for spawn_background_agent. Use native:auto for AgentLink's built-in background routing, or acp:<id> to launch a configured ACP stdio agent from agentlink.background.acpAgents."
         },
         "agentlink.background.acpAgents": {
+          "scope": "resource",
           "type": "array",
           "default": [],
           "description": "ACP-compatible stdio agent subprocesses that can be used as background-agent backends for read-only/review work. Reference an entry with agentlink.background.defaultAgent = acp:<id> or spawn_background_agent provider = acp:<id>.",
@@ -415,6 +508,7 @@
           }
         },
         "agentlink.background.maxConcurrent": {
+          "scope": "resource",
           "type": "number",
           "minimum": 1,
           "maximum": 16,
@@ -422,41 +516,48 @@
           "description": "Maximum number of background agents running at once. Launches beyond the limit are queued and start as slots free up. Also caps concurrency per root session and per provider."
         },
         "agentlink.questionDetection.llmEnabled": {
+          "scope": "window",
           "type": "boolean",
           "default": false,
           "description": "Deprecated: use agentlink.questionDetection.mode instead. When true, mapped to mode=\"openai\".",
           "deprecationMessage": "Use agentlink.questionDetection.mode instead."
         },
         "agentlink.questionDetection.baseUrl": {
+          "scope": "window",
           "type": "string",
           "default": "",
           "description": "Deprecated: use agentlink.openaiCompatible.baseUrl instead.",
           "deprecationMessage": "Use agentlink.openaiCompatible.baseUrl instead."
         },
         "agentlink.questionDetection.model": {
+          "scope": "window",
           "type": "string",
           "default": "",
           "description": "Deprecated: use agentlink.openaiCompatible.model instead.",
           "deprecationMessage": "Use agentlink.openaiCompatible.model instead."
         },
         "agentlink.questionDetection.apiKey": {
+          "scope": "window",
           "type": "string",
           "default": "",
           "description": "Deprecated: use agentlink.openaiCompatible.apiKey instead.",
           "deprecationMessage": "Use agentlink.openaiCompatible.apiKey instead."
         },
         "agentlink.questionDetection.timeoutMs": {
+          "scope": "window",
           "type": "number",
           "default": 0,
           "description": "Deprecated: use agentlink.openaiCompatible.timeoutMs instead.",
           "deprecationMessage": "Use agentlink.openaiCompatible.timeoutMs instead."
         },
         "agentlink.autoIndex": {
+          "scope": "resource",
           "type": "boolean",
           "default": true,
           "description": "Automatically index the codebase on startup when semantic search is enabled."
         },
         "agentlink.chunkGranularity": {
+          "scope": "resource",
           "type": "string",
           "enum": [
             "standard",
@@ -470,6 +571,7 @@
           "description": "Chunk granularity for codebase indexing."
         },
         "agentlink.indexExclusions": {
+          "scope": "resource",
           "type": "array",
           "items": {
             "type": "string"
@@ -495,12 +597,14 @@
           "description": "Glob patterns for files to exclude from codebase indexing (in addition to .gitignore)."
         },
         "agentlink.recentApprovalTtl": {
+          "scope": "resource",
           "type": "number",
           "default": 60,
           "minimum": 0,
           "description": "Seconds to remember a single-use command approval (run-once / accept). Repeat identical commands within this window are auto-approved. Set to 0 to disable."
         },
         "agentlink.commandAutoApproveTier": {
+          "scope": "resource",
           "type": "string",
           "enum": [
             "off",
@@ -516,16 +620,19 @@
           "description": "Auto-approve agent terminal commands classified at or below this safety tier. Dangerous commands (rm, sudo, git push, network egress, writes outside the workspace, inline interpreter code) always require approval regardless of this setting. Explicit command rules, recent single-use approvals, and masterBypass take precedence."
         },
         "agentlink.worktreeDirectorySuffix": {
+          "scope": "resource",
           "type": "string",
           "default": "-worktrees",
           "description": "Suffix for the sibling worktree container used by start_worktree_agent when no worktreePath is provided. Default paths are <repo-parent>/<repo-name><suffix>/<sanitized-workstream-name>."
         },
         "agentlink.agentModel": {
+          "scope": "resource",
           "type": "string",
           "default": "claude-sonnet-4-6",
           "description": "Legacy global fallback model for the built-in agent chat. Use agentlink.modeModelPreferences for mode-specific defaults."
         },
         "agentlink.modeModelPreferences": {
+          "scope": "resource",
           "type": "object",
           "default": {
             "code": "gpt-5.3-codex",
@@ -539,6 +646,7 @@
           "description": "Default model per chat mode, keyed by mode slug (e.g. code, architect, ask, debug, review). Manually selecting a model in a mode updates that mode's saved preference."
         },
         "agentlink.modeReasoningEffortPreferences": {
+          "scope": "resource",
           "type": "object",
           "default": {},
           "additionalProperties": {
@@ -556,11 +664,13 @@
           "description": "Default thinking level per chat mode, keyed by mode slug. Manually selecting a thinking level in a mode updates that mode's saved preference."
         },
         "agentlink.agentMaxTokens": {
+          "scope": "resource",
           "type": "number",
           "default": 8192,
           "description": "Maximum output tokens per agent response."
         },
         "agentlink.thinkingBudget": {
+          "scope": "resource",
           "type": "number",
           "default": 10000,
           "minimum": 1024,
@@ -568,21 +678,25 @@
           "description": "Token budget for extended thinking (only used with thinking-capable models like claude-opus-4-8 and claude-sonnet-4-6)."
         },
         "agentlink.showThinking": {
+          "scope": "window",
           "type": "boolean",
           "default": true,
           "description": "Show thinking blocks in the agent chat UI."
         },
         "agentlink.anthropic.dynamicModelCapabilities": {
+          "scope": "window",
           "type": "boolean",
           "default": true,
           "description": "Fetch Anthropic model list and capabilities (context window, output tokens, reasoning efforts) from the Anthropic API and merge them over the built-in defaults. Refreshes lazily (never on activation) and falls back to the built-in static metadata when offline or the API is unavailable. Disable to use only the built-in static metadata."
         },
         "agentlink.autoCondense": {
+          "scope": "resource",
           "type": "boolean",
           "default": true,
           "description": "Automatically condense the conversation context when the context window fills up."
         },
         "agentlink.autoCondenseThreshold": {
+          "scope": "window",
           "type": "number",
           "default": 0.9,
           "minimum": 0.1,
@@ -591,6 +705,7 @@
           "description": "Legacy global auto-condense threshold used for migration. New per-model thresholds are stored in agentlink.modelCondenseThresholds."
         },
         "agentlink.modelCondenseThresholds": {
+          "scope": "resource",
           "type": "object",
           "default": {},
           "additionalProperties": {
@@ -601,6 +716,7 @@
           "description": "Per-model auto-condense thresholds keyed by model ID. Models with 1M+ context windows default to 0.7; other models default to 0.9 when no override is stored."
         },
         "agentlink.writeRules": {
+          "scope": "resource",
           "type": "array",
           "default": [],
           "items": {
@@ -609,6 +725,7 @@
           "description": "Glob patterns for files that are always auto-approved for writes without showing a diff view. Supports workspace-relative paths (e.g. \"**/*.test.ts\") and absolute paths (e.g. \"/tmp/**\")."
         },
         "agentlink.defaultMode": {
+          "scope": "resource",
           "type": "string",
           "default": "code",
           "enum": [
@@ -621,16 +738,19 @@
           "description": "Default mode for new agent chat sessions."
         },
         "agentlink.codexStatefulResponses": {
+          "scope": "resource",
           "type": "boolean",
           "default": true,
           "description": "Enable OpenAI Responses chaining for Codex/API-key sessions using previous_response_id when available. When a prior response cannot be resumed, AgentLink falls back to full local replay for that turn."
         },
         "agentlink.codexStoreResponses": {
+          "scope": "resource",
           "type": "boolean",
           "default": false,
           "description": "When Codex stateful responses are enabled, also set store=true on OpenAI Responses requests so server-side response state can be retained. Disabled by default to preserve existing retention behavior."
         },
         "agentlink.codexProMode": {
+          "scope": "resource",
           "type": "boolean",
           "default": false,
           "description": "Use GPT-5.6 Pro reasoning mode on public OpenAI API-key requests. Pro mode prioritizes reliability over latency and token usage and is not sent to the ChatGPT/Codex OAuth backend or other models."
@@ -660,6 +780,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.1.0",
     "@anthropic-ai/sdk": "^0.111.0",
+    "@jitl/quickjs-wasmfile-release-asyncify": "0.32.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@vscode/codicons": "^0.0.45",
     "@vscode/tree-sitter-wasm": "^0.3.1",
@@ -676,6 +797,7 @@
     "picomatch": "^4.0.5",
     "pngjs": "^7.0.0",
     "preact": "^10.29.7",
+    "quickjs-emscripten-core": "0.32.0",
     "simple-git": "^3.36.0",
     "undici": "^8.7.0",
     "unpdf": "^1.6.2",

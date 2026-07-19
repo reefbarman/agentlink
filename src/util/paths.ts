@@ -2,7 +2,27 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 
+import { AsyncLocalStorage } from "async_hooks";
+
+const workspaceRootScope = new AsyncLocalStorage<readonly string[]>();
+
+/**
+ * Run an operation with a request-bound workspace root set.
+ *
+ * Tool runtimes use this to keep legacy path helpers pinned to the executing
+ * session's immutable project without mutating window-global VS Code state.
+ */
+export function withWorkspaceRoots<T>(
+  roots: readonly string[],
+  operation: () => T,
+): T {
+  return workspaceRootScope.run([...roots], operation);
+}
+
 export function getWorkspaceRoots(): string[] {
+  const scopedRoots = workspaceRootScope.getStore();
+  if (scopedRoots) return [...scopedRoots];
+
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
     return [];
@@ -69,6 +89,31 @@ export interface ResolvedPath {
   inWorkspace: boolean;
 }
 
+/** Canonicalize an existing path, or its nearest existing parent for new files. */
+export function canonicalizePath(inputPath: string): string {
+  const resolved = path.resolve(inputPath);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    const parentDir = path.dirname(resolved);
+    try {
+      return path.join(fs.realpathSync(parentDir), path.basename(resolved));
+    } catch {
+      return resolved;
+    }
+  }
+}
+
+export function isPathWithinRoot(filePath: string, rootPath: string): boolean {
+  const relative = path.relative(rootPath, filePath);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) &&
+      relative !== ".." &&
+      !path.isAbsolute(relative))
+  );
+}
+
 /**
  * Resolve a path and check whether it falls within workspace boundaries.
  * For existing files, resolves symlinks via realpath.
@@ -91,21 +136,8 @@ export function resolveAndValidatePath(inputPath: string): ResolvedPath {
     throw new Error("No workspace folder open and path is relative");
   }
 
-  // Try realpath for existing files (resolves symlinks)
-  let real: string;
-  try {
-    real = fs.realpathSync(resolved);
-  } catch {
-    // File doesn't exist — validate parent directory instead
-    const parentDir = path.dirname(resolved);
-    try {
-      real = fs.realpathSync(parentDir);
-      real = path.join(real, path.basename(resolved));
-    } catch {
-      // Parent doesn't exist either — just use resolved path
-      real = resolved;
-    }
-  }
+  // Resolve symlinks for existing files and canonicalize the parent for new files.
+  const real = canonicalizePath(resolved);
 
   // Check workspace boundary
   const inWorkspace = roots.some(
@@ -142,7 +174,9 @@ function resolveRelativeToWorkspace(
   roots: string[],
 ): string {
   if (roots.length > 1) {
-    const folders = vscode.workspace.workspaceFolders!;
+    const folders = (vscode.workspace.workspaceFolders ?? []).filter((folder) =>
+      roots.some((root) => pathsEqual(root, folder.uri.fsPath)),
+    );
 
     // Check if path starts with a workspace folder name
     for (const folder of folders) {

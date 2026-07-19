@@ -154,6 +154,9 @@ export function WriteCard({ request, submit, followUpRef }: WriteCardProps) {
     <ApprovalLayout
       queuePosition={request.queuePosition}
       queueTotal={request.queueTotal}
+      sourceProject={request.sourceProject}
+      targetProject={request.targetProject}
+      targetPath={request.targetPath}
       purpose={purpose}
       rulesContent={rulesJsx}
       rulesModified={!isSkipped}

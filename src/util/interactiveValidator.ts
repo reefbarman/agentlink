@@ -433,7 +433,11 @@ function checkSingleCommand(command: string): InteractiveViolation | null {
       };
     }
 
-    if (gitSubCmd === "cherry-pick" && opensGitEditorWithoutNoEdit(gitArgs)) {
+    if (
+      gitSubCmd === "cherry-pick" &&
+      !gitArgs.includes("--abort") &&
+      opensGitEditorWithoutNoEdit(gitArgs)
+    ) {
       return {
         command: "git cherry-pick",
         reason:
@@ -453,8 +457,24 @@ function checkSingleCommand(command: string): InteractiveViolation | null {
     }
   }
 
+  if (
+    isVscePackageCommand(cmd, args) &&
+    !args.includes("--allow-star-activation")
+  ) {
+    return {
+      command: "vsce package",
+      reason:
+        '"vsce package" may prompt for confirmation when package.json uses star activation.',
+      suggestion:
+        "Add --allow-star-activation after confirming the extension intentionally uses star activation.",
+    };
+  }
+
   // ── Check remote connection commands ──────────────────────────
-  if (REMOTE_COMMANDS.has(cmd)) {
+  if (
+    REMOTE_COMMANDS.has(cmd) &&
+    !(cmd === "ssh" && isSshConfigInspection(args))
+  ) {
     return {
       command: cmd,
       reason: `"${cmd}" opens an interactive remote connection.`,
@@ -464,9 +484,12 @@ function checkSingleCommand(command: string): InteractiveViolation | null {
 
   // ── Check interactive shells ──────────────────────────────────
   if (SHELL_COMMANDS.has(cmd)) {
+    const universalInfoFlags = ["--version", "--help"];
     const hasCFlag = args.includes("-c");
+    const hasInfoFlag =
+      args.length === 1 && universalInfoFlags.includes(args[0]);
     const hasScript = args.some((a) => !a.startsWith("-"));
-    if (!hasCFlag && !hasScript) {
+    if (!hasCFlag && !hasInfoFlag && !hasScript) {
       return {
         command: cmd,
         reason: `"${cmd}" without -c or a script opens an interactive shell.`,
@@ -525,6 +548,24 @@ function splitOnCompoundOperators(command: string): string[] {
   }
   segments.push(command.slice(segmentStart));
   return segments;
+}
+
+function isVscePackageCommand(cmd: string, args: string[]): boolean {
+  if (cmd === "vsce" || cmd === "vsce.cmd") {
+    return args[0] === "package";
+  }
+  if (cmd !== "npx") return false;
+
+  const packageIndex = args.findIndex((arg) => !arg.startsWith("-"));
+  return (
+    packageIndex >= 0 &&
+    /^@vscode\/vsce(?:@[^/]+)?$/.test(args[packageIndex]) &&
+    args[packageIndex + 1] === "package"
+  );
+}
+
+function isSshConfigInspection(args: string[]): boolean {
+  return args.length === 2 && args[0] === "-G" && !args[1].startsWith("-");
 }
 
 function opensGitEditorWithoutMessage(args: string[]): boolean {

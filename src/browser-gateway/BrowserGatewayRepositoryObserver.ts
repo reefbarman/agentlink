@@ -2,8 +2,14 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 export interface BrowserGatewayRepositoryInfo {
+  projectId: string;
   branch?: string;
   dirty?: boolean;
+}
+
+export interface BrowserGatewayRepositoryProject {
+  projectId: string;
+  rootPath: string;
 }
 
 type GitEvent<T = void> = (
@@ -40,7 +46,7 @@ type GitExtension = Pick<
 >;
 
 export interface BrowserGatewayRepositoryObserverDependencies {
-  getFirstWorkspaceRootPath(): string | undefined;
+  getProject(): BrowserGatewayRepositoryProject | undefined;
   getGitExtension(): GitExtension | undefined;
 }
 
@@ -56,8 +62,7 @@ function containsPath(repositoryRoot: string, workspaceRoot: string): boolean {
 
 function defaultDependencies(): BrowserGatewayRepositoryObserverDependencies {
   return {
-    getFirstWorkspaceRootPath: () =>
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+    getProject: () => undefined,
     getGitExtension: () =>
       vscode.extensions.getExtension<GitExports>("vscode.git"),
   };
@@ -69,6 +74,7 @@ export class BrowserGatewayRepositoryObserver implements vscode.Disposable {
   private repositoryStateDisposable: vscode.Disposable | undefined;
   private api: GitApi | undefined;
   private selectedRepository: GitRepository | undefined;
+  private selectedProjectId: string | undefined;
   private disposed = false;
 
   readonly onDidChange = this.onDidChangeEmitter.event;
@@ -110,7 +116,18 @@ export class BrowserGatewayRepositoryObserver implements vscode.Disposable {
       state.workingTreeChanges?.length ||
       state.untrackedChanges?.length,
     );
-    return { ...(branch ? { branch } : {}), dirty };
+    if (!this.selectedProjectId) return null;
+    return {
+      projectId: this.selectedProjectId,
+      ...(branch ? { branch } : {}),
+      dirty,
+    };
+  }
+
+  rebindProject(): void {
+    if (this.disposed) return;
+    this.rebindSelectedRepository();
+    this.onDidChangeEmitter.fire();
   }
 
   dispose(): void {
@@ -142,11 +159,12 @@ export class BrowserGatewayRepositoryObserver implements vscode.Disposable {
     this.repositoryStateDisposable?.dispose();
     this.repositoryStateDisposable = undefined;
 
-    const workspaceRoot = this.dependencies.getFirstWorkspaceRootPath();
-    this.selectedRepository = workspaceRoot
+    const project = this.dependencies.getProject();
+    this.selectedProjectId = project?.projectId;
+    this.selectedRepository = project
       ? this.api?.repositories
           .filter((repository) =>
-            containsPath(repository.rootUri.fsPath, workspaceRoot),
+            containsPath(repository.rootUri.fsPath, project.rootPath),
           )
           .sort(
             (left, right) =>

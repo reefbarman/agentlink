@@ -8,6 +8,8 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { CommandCard } from "./components/CommandCard.js";
 import { IdleState } from "./components/IdleState.js";
 import { MemoryCard } from "./components/MemoryCard.js";
+import { McpCard } from "./components/McpCard.js";
+import { ModeSwitchCard } from "./components/ModeSwitchCard.js";
 import { PathCard } from "./components/PathCard.js";
 import { RenameCard } from "./components/RenameCard.js";
 import { WriteCard } from "./components/WriteCard.js";
@@ -85,6 +87,18 @@ export function App({ vscodeApi }: AppProps) {
     case "memory":
       return (
         <MemoryCard
+          request={request}
+          submit={submit}
+          followUpRef={followUpRef}
+        />
+      );
+    case "mcp":
+      return (
+        <McpCard request={request} submit={submit} followUpRef={followUpRef} />
+      );
+    case "mode-switch":
+      return (
+        <ModeSwitchCard
           request={request}
           submit={submit}
           followUpRef={followUpRef}

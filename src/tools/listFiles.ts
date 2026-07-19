@@ -14,6 +14,12 @@ import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 import { resolveAndValidatePath } from "../util/paths.js";
 import { semanticFileList } from "../services/semanticSearch.js";
+import {
+  errorResult,
+  handleToolError,
+  jsonResult,
+  type ToolResult,
+} from "../shared/types.js";
 
 const MAX_ENTRIES = 500;
 
@@ -62,7 +68,7 @@ export async function handleListFiles(
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
   providers = createLegacyListFilesProviders(approvalManager, approvalPanel),
-): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+): Promise<ToolResult> {
   try {
     const { absolutePath: dirPath, inWorkspace } =
       providers.workspaceFileProvider.resolvePath(params.path);
@@ -75,35 +81,20 @@ export async function handleListFiles(
       kind: "read",
     });
     if (!access.approved) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              status: "rejected",
-              path: params.path,
-              ...(access.reason && { reason: access.reason }),
-            }),
-          },
-        ],
-      };
+      return jsonResult({
+        status: "rejected",
+        path: params.path,
+        ...(access.reason && { reason: access.reason }),
+      });
     }
 
     // Detect when a file path is passed instead of a directory
     const stat = await fs.stat(dirPath);
     if (!stat.isDirectory()) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error:
-                "Path is a file, not a directory — use read_file to read its contents",
-              path: params.path,
-            }),
-          },
-        ],
-      };
+      return errorResult(
+        "Path is a file, not a directory — use read_file to read its contents",
+        { path: params.path },
+      );
     }
 
     // Semantic file search: query the index and return files ranked by relevance
@@ -172,22 +163,14 @@ export async function handleListFiles(
       return await listShallow(dirPath, params.path);
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ error: message, path: params.path }),
-        },
-      ],
-    };
+    return handleToolError(err, { path: params.path });
   }
 }
 
 async function listShallow(
   dirPath: string,
   inputPath: string,
-): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+): Promise<ToolResult> {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
   const lines: string[] = [];
   let truncated = false;
@@ -208,7 +191,7 @@ async function listShallow(
     truncated,
   };
 
-  return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  return jsonResult(result, true);
 }
 
 async function listRecursive(
@@ -217,7 +200,7 @@ async function listRecursive(
   depth?: number,
   pattern?: string,
   includeIgnored?: boolean,
-): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+): Promise<ToolResult> {
   const rgPath = await getRipgrepBinPath();
   const args = [
     "--files",
@@ -259,5 +242,5 @@ async function listRecursive(
     ...(includeIgnored && { include_ignored: true }),
   };
 
-  return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  return jsonResult(result, true);
 }

@@ -157,7 +157,7 @@ describe("handleProposeMemory", () => {
     expect(requests[0]).toMatchObject({
       tier: "memory",
       scope: "project",
-      targetPath: ".agentlink/memory.md",
+      targetPath: target,
       id: "diff-request-1",
     });
     expect(requests[0]).not.toHaveProperty("content");

@@ -1,10 +1,14 @@
 import type { ComponentChildren, RefObject } from "preact";
 
+import type { ApprovalProjectContext } from "../types";
 import { useState } from "preact/hooks";
 
 export interface ApprovalLayoutProps {
   queuePosition?: number;
   queueTotal?: number;
+  sourceProject?: ApprovalProjectContext;
+  targetProject?: ApprovalProjectContext;
+  targetPath?: string;
   /** Short description of what capability/action needs approval. */
   purpose: string;
   /** Card-specific content (terminal box, file card, rename display, path) */
@@ -21,11 +25,63 @@ export interface ApprovalLayoutProps {
   onSaveAndAccept: () => void;
   onReject: (reason?: string) => void;
   followUpRef: RefObject<string>;
+  followUpLabel?: string;
+  followUpPlaceholder?: string;
+  rejectLabel?: string;
+}
+
+export function ProjectContextBanner({
+  sourceProject,
+  targetProject,
+  targetPath,
+}: Pick<
+  ApprovalLayoutProps,
+  "sourceProject" | "targetProject" | "targetPath"
+>) {
+  if (!sourceProject && !targetProject && !targetPath) return null;
+
+  const projects = [sourceProject, targetProject].filter(
+    (project): project is ApprovalProjectContext => Boolean(project),
+  );
+
+  return (
+    <div class="approval-project-context">
+      {projects.length > 0 && (
+        <div class="approval-project-route">
+          <span class="codicon codicon-root-folder" />
+          {projects.map((project, index) => (
+            <span class="approval-project-route-entry" key={project.projectId}>
+              {index > 0 && (
+                <span
+                  class="codicon codicon-arrow-right approval-project-route-arrow"
+                  aria-hidden="true"
+                />
+              )}
+              <span class="approval-project-name">{project.displayName}</span>
+              {project.availability !== "available" && (
+                <span class="approval-project-status">
+                  {project.availability}
+                </span>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+      {targetPath && (
+        <div class="approval-project-target" title={targetPath}>
+          {targetPath}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ApprovalLayout({
   queuePosition,
   queueTotal,
+  sourceProject,
+  targetProject,
+  targetPath,
   purpose,
   children,
   rulesContent,
@@ -36,6 +92,9 @@ export function ApprovalLayout({
   onSaveAndAccept,
   onReject,
   followUpRef,
+  followUpLabel = "Follow Up / Rejection Reason",
+  followUpPlaceholder = "Add a message to follow up on accept or provide a reason for rejection...",
+  rejectLabel = "Reject",
 }: ApprovalLayoutProps) {
   const [rulesOpen, setRulesOpen] = useState(false);
 
@@ -67,6 +126,12 @@ export function ApprovalLayout({
           {badge && <span class="badge">{badge}</span>}
         </div>
 
+        <ProjectContextBanner
+          sourceProject={sourceProject}
+          targetProject={targetProject}
+          targetPath={targetPath}
+        />
+
         {/* Card-specific content */}
         {children}
 
@@ -93,13 +158,12 @@ export function ApprovalLayout({
         {/* Message textarea (follow-up on accept, rejection reason on reject) */}
         <div class="follow-up-section">
           <div class="follow-up-label">
-            <span class="codicon codicon-comment" /> Follow Up / Rejection
-            Reason
+            <span class="codicon codicon-comment" /> {followUpLabel}
           </div>
           <textarea
             class="text-input textarea follow-up-input"
             rows={2}
-            placeholder="Add a message to follow up on accept or provide a reason for rejection..."
+            placeholder={followUpPlaceholder}
             onInput={(e) => {
               followUpRef.current = (e.target as HTMLTextAreaElement).value;
             }}
@@ -120,7 +184,7 @@ export function ApprovalLayout({
             </button>
           )}
           <button class="btn btn-danger" onClick={handleReject}>
-            Reject
+            {rejectLabel}
           </button>
         </div>
       </div>

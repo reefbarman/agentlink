@@ -4,13 +4,22 @@ import type {
   RevertRecoveryNotice,
 } from "../../shared/types.js";
 import type {
+  McpConfigMutationResult,
   McpConfigSnapshot,
   McpManagerView,
 } from "../../shared/mcpManagerTypes.js";
 
 import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy.js";
+import type { ComposeTrace } from "../../shared/composeTypes.js";
 import type { LoadedInstructionDebugInfo } from "../../shared/chatProjection.js";
+import type { McpFormElicitationRequest } from "../../shared/mcpElicitation.js";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation.js";
+
+export interface ProjectInfo {
+  projectId: string;
+  displayName: string;
+  availability: "available" | "unavailable";
+}
 
 /** A mode available for selection */
 export interface ModeInfo {
@@ -152,6 +161,8 @@ export type ExtensionMessage =
       sessionId: string;
       toolCallId: string;
       toolName: string;
+      parentCallId?: string;
+      input?: unknown;
     }
   | {
       type: "agentToolInputDelta";
@@ -166,9 +177,16 @@ export type ExtensionMessage =
       toolName: string;
       result: string;
       resultImages?: Array<{ mimeType: string; data: string }>;
+      resultDocuments?: Array<{
+        name: string;
+        mimeType: string;
+        data: string;
+      }>;
       durationMs: number;
       input?: unknown;
+      parentCallId?: string;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
+      composeTrace?: ComposeTrace;
     }
   | {
       type: "agentUserAnnotation";
@@ -311,27 +329,8 @@ export type ExtensionMessage =
   | { type: "agentSlashCommandsUpdate"; commands: SlashCommandInfo[] }
   | { type: "agentProviderUsage"; data: ProviderUsageCardData }
   | { type: "agentModeSwitchRequest"; mode: string; reason?: string }
-  | {
-      type: "agentElicitationRequest";
-      id: string;
-      serverName: string;
-      message: string;
-      fields: Record<
-        string,
-        {
-          type: "string" | "number" | "boolean";
-          title?: string;
-          description?: string;
-          enum?: string[];
-          default?: unknown;
-          minimum?: number;
-          maximum?: number;
-          minLength?: number;
-          maxLength?: number;
-        }
-      >;
-      required: string[];
-    }
+  | { type: "agentFormElicitationRequest"; request: McpFormElicitationRequest }
+  | { type: "agentFormElicitationCleared"; id: string }
   | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
   | { type: "agentUrlElicitationCleared"; id: string }
   | {
@@ -349,6 +348,7 @@ export type ExtensionMessage =
       }>;
       configSnapshot?: McpConfigSnapshot;
     }
+  | { type: "agentMcpConfigMutationResult"; result: McpConfigMutationResult }
   | {
       type: "showApproval";
       request: import("../../approvals/webview/types").ApprovalRequest;
@@ -372,8 +372,6 @@ export type ExtensionMessage =
       notes: Record<string, string>;
       origin: string;
     }
-  | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
-  | { type: "agentUrlElicitationCleared"; id: string }
   | { type: "agentDroppedFilesResolved"; files: string[] }
   | {
       type: "agentSessionList";
@@ -388,6 +386,7 @@ export type ExtensionMessage =
       mode: string;
       model: string;
       messages: unknown[];
+      todos: TodoItem[];
       lastInputTokens: number;
       lastOutputTokens: number;
       /** True when this came from automatic startup restore rather than explicit user action. */
@@ -522,6 +521,7 @@ export type ExtensionMessage =
       sessionId: string;
       toolCallId: string;
       toolName: string;
+      input?: unknown;
     }
   | {
       type: "agentBgToolInputDelta";
@@ -536,6 +536,11 @@ export type ExtensionMessage =
       toolName: string;
       result: string;
       resultImages?: Array<{ mimeType: string; data: string }>;
+      resultDocuments?: Array<{
+        name: string;
+        mimeType: string;
+        data: string;
+      }>;
       durationMs: number;
       input?: unknown;
     }
@@ -685,6 +690,9 @@ export type ShowBgTranscriptMessage = {
 
 export interface ChatState {
   sessionId: string | null;
+  projects?: ProjectInfo[];
+  defaultProjectId?: string | null;
+  project?: ProjectInfo | null;
   mode: string;
   model: string;
   streaming: boolean;
@@ -727,6 +735,7 @@ export interface SessionInfo {
 /** Persisted session summary from the SessionStore */
 export interface SessionSummary {
   id: string;
+  project?: ProjectInfo;
   mode: string;
   model: string;
   title: string;
@@ -749,9 +758,15 @@ export type ContentBlock =
       inputJson: string;
       result: string;
       resultImages?: Array<{ mimeType: string; data: string }>;
+      resultDocuments?: Array<{
+        name: string;
+        mimeType: string;
+        data: string;
+      }>;
       complete: boolean;
       durationMs?: number;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
+      composeTrace?: ComposeTrace;
     }
   | {
       type: "skill_load";

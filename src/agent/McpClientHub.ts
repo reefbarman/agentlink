@@ -1,11 +1,18 @@
 import * as vscode from "vscode";
 
 import {
-  CreateMessageRequestSchema,
   ElicitationCompleteNotificationSchema,
   ElicitRequestSchema,
+  ErrorCode,
+  McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { ElicitRequestURLParams } from "@modelcontextprotocol/sdk/types.js";
+import type {
+  CallToolResult,
+  ElicitRequestURLParams,
+  Prompt,
+  Resource,
+  Tool,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { JsonSchema, ToolDefinition } from "./providers/types.js";
 import { McpOAuthError, McpOAuthProvider } from "./McpOAuthProvider.js";
 import {
@@ -26,12 +33,18 @@ import {
   validateMcpElicitationUrl,
   type McpUrlElicitationRequest,
 } from "../shared/mcpUrlElicitation.js";
+import { normalizeMcpToolResult } from "./mcpToolResult.js";
+import {
+  normalizeMcpElicitationSchema,
+  type McpFormElicitationInput,
+} from "../shared/mcpElicitation.js";
 
 export type McpServerStatus =
   | "connecting"
   | "connected"
   | "error"
-  | "disconnected";
+  | "disconnected"
+  | "disabled";
 
 export interface McpToolInfo {
   name: string;
@@ -61,26 +74,6 @@ export interface McpPrompt {
   arguments?: Array<{ name: string; description?: string; required?: boolean }>;
 }
 
-/** Elicitation form field schema (subset of JSON Schema) */
-export interface ElicitField {
-  type: "string" | "number" | "boolean";
-  title?: string;
-  description?: string;
-  enum?: string[];
-  default?: unknown;
-  minimum?: number;
-  maximum?: number;
-  minLength?: number;
-  maxLength?: number;
-}
-
-export interface ElicitRequest {
-  serverName: string;
-  message: string;
-  fields: Record<string, ElicitField>;
-  required: string[];
-}
-
 export type UrlElicitationAction = "accept" | "cancel" | "decline";
 
 type McpConnectAuthMode = "interactive" | "noninteractive";
@@ -91,17 +84,104 @@ interface ConnectServerOptions {
   authMode?: McpConnectAuthMode;
 }
 
+type McpCatalogKind = "tools" | "resources" | "prompts";
+
+type McpOutputValidator = (
+  input: unknown,
+) =>
+  | { valid: true; data: Record<string, unknown>; errorMessage: undefined }
+  | { valid: false; data: undefined; errorMessage: string };
+
+interface McpSchemaValidatorProvider {
+  getValidator<T>(
+    schema: object,
+  ): (
+    input: unknown,
+  ) =>
+    | { valid: true; data: T; errorMessage: undefined }
+    | { valid: false; data: undefined; errorMessage: string };
+}
+
+interface CatalogRefreshState {
+  running: boolean;
+  dirty: boolean;
+  scheduled?: ReturnType<typeof setTimeout>;
+}
+
 interface ConnectedServer {
   name: string;
   config: McpServerConfig;
   client: Client;
   tools: ToolDefinition[];
+  outputValidators: Map<string, McpOutputValidator>;
   resources: McpResource[];
   prompts: McpPrompt[];
+  catalogRefresh: Record<McpCatalogKind, CatalogRefreshState>;
   status: McpServerStatus;
   error?: string;
   retryCount: number;
   retryTimer?: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * OAuth credentials are stored per server identity and shared by every hub in
+ * this extension host, so concurrent connects to the same server (e.g. the Ask
+ * Agent hub and a project hub both hosting a global server) must not race:
+ * a token refresh rotates the refresh token, and a parallel refresh with the
+ * superseded token fails and falls back to interactive auth. Serializing the
+ * connect (which embeds any SDK-driven refresh) per server URL lets the second
+ * connect reuse the tokens the first one just saved.
+ */
+const httpConnectQueues = new Map<string, Promise<unknown>>();
+const MAX_MCP_CATALOG_PAGES = 100;
+const MAX_MCP_CATALOG_ITEMS = 10_000;
+
+function isCallToolResult(value: unknown): value is CallToolResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "content" in value &&
+    Array.isArray(value.content)
+  );
+}
+
+function describeOutputSchemaError(
+  error: unknown,
+  toolName: string,
+): string | undefined {
+  if (!(error instanceof McpError)) return undefined;
+  const message = error.message.replace(/^MCP error -?\d+: /, "");
+  if (
+    error.code === ErrorCode.InvalidRequest &&
+    message ===
+      `Tool ${toolName} has an output schema but did not return structured content`
+  ) {
+    return `MCP tool '${toolName}' declares an output schema but returned no structured content.`;
+  }
+  if (
+    error.code === ErrorCode.InvalidParams &&
+    (message.startsWith(
+      "Structured content does not match the tool's output schema:",
+    ) ||
+      message.startsWith("Failed to validate structured content:"))
+  ) {
+    return `MCP tool '${toolName}' returned structured content that does not match its output schema. ${message}`;
+  }
+  return undefined;
+}
+
+async function withHttpConnectLock<T>(
+  url: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous = httpConnectQueues.get(url) ?? Promise.resolve();
+  const run = previous.then(fn);
+  const tail = run.catch(() => {});
+  httpConnectQueues.set(url, tail);
+  void tail.finally(() => {
+    if (httpConnectQueues.get(url) === tail) httpConnectQueues.delete(url);
+  });
+  return run;
 }
 
 /**
@@ -111,6 +191,7 @@ interface ConnectedServer {
  */
 export class McpClientHub {
   private servers = new Map<string, ConnectedServer>();
+  private disabledServers = new Map<string, McpServerConfig>();
   private oauthProviders = new Map<string, McpOAuthProvider>();
   private globalState?: vscode.Memento;
   private authFailureCounts = new Map<string, number>();
@@ -120,10 +201,11 @@ export class McpClientHub {
   private runtimeReconnectPending = new Set<string>();
   private interactiveAuthUseCounts = new Map<string, number>();
   private static readonly MAX_AUTH_RETRIES = 3;
+  private schemaValidator: McpSchemaValidatorProvider | undefined;
 
   constructor(
     globalState?: vscode.Memento,
-    private readonly storageNamespace?: string,
+    private readonly clientVersion = "unknown",
   ) {
     this.globalState = globalState;
   }
@@ -251,7 +333,7 @@ export class McpClientHub {
    * Resolve with the filled values, or reject/cancel to abort.
    */
   onElicitation?: (
-    request: ElicitRequest,
+    request: McpFormElicitationInput,
     resolve: (values: Record<string, unknown>) => void,
     cancel: () => void,
   ) => void;
@@ -268,38 +350,243 @@ export class McpClientHub {
     elicitationId: string,
   ) => void;
 
-  /**
-   * Called when an MCP server requests sampling (AI inference).
-   * Should call Claude and return the result.
-   */
-  onSampling?: (params: {
-    messages: Array<{ role: "user" | "assistant"; content: string }>;
-    systemPrompt?: string;
-    maxTokens: number;
-    model?: string;
-  }) => Promise<{ role: "assistant"; content: string }>;
-
   /** Connect to all configured servers, replacing existing connections. */
   async connect(
     configs: McpServerConfig[],
     options: { interactiveForNewServers?: boolean } = {},
   ): Promise<void> {
-    const existingNames = new Set(this.servers.keys());
-    const newNames = new Set(configs.map((c) => c.name));
+    const existingNames = new Set([
+      ...this.servers.keys(),
+      ...this.disabledServers.keys(),
+    ]);
+    const newNames = new Set(configs.map((config) => config.name));
     for (const name of this.servers.keys()) {
       if (!newNames.has(name)) await this.disconnectServer(name);
     }
+    for (const name of this.disabledServers.keys()) {
+      if (!newNames.has(name)) this.disabledServers.delete(name);
+    }
     await Promise.all(
-      configs.map((cfg) =>
-        this.connectServer(cfg, {
+      configs.map(async (cfg) => {
+        if (cfg.disabled) {
+          await this.disconnectServer(cfg.name);
+          this.disabledServers.set(cfg.name, cfg);
+          return;
+        }
+        this.disabledServers.delete(cfg.name);
+        await this.connectServer(cfg, {
           authMode:
             options.interactiveForNewServers && !existingNames.has(cfg.name)
               ? "interactive"
               : "noninteractive",
-        }),
-      ),
+        });
+      }),
     );
     this.onStatusChange?.(this.getServerInfos());
+  }
+
+  private createCatalogRefreshState(): Record<
+    McpCatalogKind,
+    CatalogRefreshState
+  > {
+    return {
+      tools: { running: false, dirty: false },
+      resources: { running: false, dirty: false },
+      prompts: { running: false, dirty: false },
+    };
+  }
+
+  private async walkCatalog<T>(
+    entry: ConnectedServer,
+    kind: McpCatalogKind,
+    loadPage: (cursor?: string) => Promise<{ items: T[]; nextCursor?: string }>,
+  ): Promise<T[]> {
+    const items: T[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+
+    for (let page = 0; page < MAX_MCP_CATALOG_PAGES; page += 1) {
+      const result = await loadPage(cursor);
+      const remaining = MAX_MCP_CATALOG_ITEMS - items.length;
+      items.push(...result.items.slice(0, remaining));
+      if (result.items.length > remaining) {
+        this.log(
+          `[mcp:${entry.name}] ${kind} catalog reached ${MAX_MCP_CATALOG_ITEMS} item safety limit; retaining collected items`,
+        );
+        return items;
+      }
+
+      const nextCursor = result.nextCursor;
+      if (!nextCursor) return items;
+      if (seenCursors.has(nextCursor)) {
+        this.log(
+          `[mcp:${entry.name}] ${kind} catalog repeated cursor '${nextCursor.slice(0, 120)}'; retaining collected items`,
+        );
+        return items;
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
+
+    this.log(
+      `[mcp:${entry.name}] ${kind} catalog reached ${MAX_MCP_CATALOG_PAGES} page safety limit; retaining collected items`,
+    );
+    return items;
+  }
+
+  private async getSchemaValidator(): Promise<McpSchemaValidatorProvider> {
+    if (!this.schemaValidator) {
+      const { AjvJsonSchemaValidator } =
+        await import("@modelcontextprotocol/sdk/validation/ajv");
+      this.schemaValidator = new AjvJsonSchemaValidator();
+    }
+    return this.schemaValidator;
+  }
+
+  private async loadCatalog(
+    entry: ConnectedServer,
+    kind: McpCatalogKind,
+  ): Promise<
+    | {
+        tools: ToolDefinition[];
+        outputValidators: Map<string, McpOutputValidator>;
+      }
+    | McpResource[]
+    | McpPrompt[]
+  > {
+    if (kind === "tools") {
+      const tools = await this.walkCatalog<Tool>(
+        entry,
+        kind,
+        async (cursor) => {
+          const result = await entry.client.listTools(
+            cursor ? { cursor } : undefined,
+          );
+          return { items: result.tools, nextCursor: result.nextCursor };
+        },
+      );
+      const outputValidators = new Map<string, McpOutputValidator>();
+      const toolsWithOutputSchema = tools.filter((tool) => tool.outputSchema);
+      const schemaValidator =
+        toolsWithOutputSchema.length > 0
+          ? await this.getSchemaValidator()
+          : undefined;
+      for (const tool of toolsWithOutputSchema) {
+        if (tool.outputSchema && schemaValidator) {
+          outputValidators.set(
+            tool.name,
+            schemaValidator.getValidator<Record<string, unknown>>(
+              tool.outputSchema,
+            ),
+          );
+        }
+      }
+      return {
+        tools: tools.map((tool) => ({
+          name: `${entry.name}__${tool.name}`,
+          description: tool.description ?? tool.name,
+          input_schema: (tool.inputSchema ?? {
+            type: "object",
+            properties: {},
+          }) as JsonSchema,
+        })),
+        outputValidators,
+      };
+    }
+
+    if (kind === "resources") {
+      const resources = await this.walkCatalog<Resource>(
+        entry,
+        kind,
+        async (cursor) => {
+          const result = await entry.client.listResources(
+            cursor ? { cursor } : undefined,
+          );
+          return { items: result.resources, nextCursor: result.nextCursor };
+        },
+      );
+      return resources.map((resource) => ({
+        uri: resource.uri,
+        name: resource.name,
+        description: resource.description,
+        mimeType: resource.mimeType,
+      }));
+    }
+
+    const prompts = await this.walkCatalog<Prompt>(
+      entry,
+      kind,
+      async (cursor) => {
+        const result = await entry.client.listPrompts(
+          cursor ? { cursor } : undefined,
+        );
+        return { items: result.prompts, nextCursor: result.nextCursor };
+      },
+    );
+    return prompts.map((prompt) => ({
+      name: prompt.name,
+      description: prompt.description,
+      arguments: prompt.arguments,
+    }));
+  }
+
+  private async refreshCatalog(
+    entry: ConnectedServer,
+    kind: McpCatalogKind,
+    publish: boolean,
+  ): Promise<boolean> {
+    try {
+      const catalog = await this.loadCatalog(entry, kind);
+      if (this.servers.get(entry.name) !== entry) return false;
+      if (kind === "tools") {
+        const toolCatalog = catalog as {
+          tools: ToolDefinition[];
+          outputValidators: Map<string, McpOutputValidator>;
+        };
+        entry.tools = toolCatalog.tools;
+        entry.outputValidators = toolCatalog.outputValidators;
+      } else if (kind === "resources") {
+        entry.resources = catalog as McpResource[];
+      } else entry.prompts = catalog as McpPrompt[];
+      if (publish) this.onStatusChange?.(this.getServerInfos());
+      return true;
+    } catch (error) {
+      this.log(
+        `[mcp:${entry.name}] failed to refresh ${kind} catalog; retaining previous snapshot: ${this.describeError(error)}`,
+      );
+      return false;
+    }
+  }
+
+  private scheduleCatalogRefresh(
+    entry: ConnectedServer,
+    kind: McpCatalogKind,
+  ): void {
+    if (this.servers.get(entry.name) !== entry) return;
+    const state = entry.catalogRefresh[kind];
+    state.dirty = true;
+    if (state.running || state.scheduled) return;
+    state.scheduled = setTimeout(() => {
+      state.scheduled = undefined;
+      void this.drainCatalogRefresh(entry, kind);
+    }, 0);
+  }
+
+  private async drainCatalogRefresh(
+    entry: ConnectedServer,
+    kind: McpCatalogKind,
+  ): Promise<void> {
+    const state = entry.catalogRefresh[kind];
+    if (state.running) return;
+    state.running = true;
+    try {
+      while (state.dirty && this.servers.get(entry.name) === entry) {
+        state.dirty = false;
+        await this.refreshCatalog(entry, kind, true);
+      }
+    } finally {
+      state.running = false;
+    }
   }
 
   private shouldAllowInteractiveAuth(
@@ -367,7 +654,6 @@ export class McpClientHub {
           cfg.name,
           cfg.url,
           this.globalState,
-          this.storageNamespace,
         );
         oauthProvider.onLog = (message) => this.log(message);
         oauthProvider.onBeforeAuthorizationOpen = () =>
@@ -385,22 +671,37 @@ export class McpClientHub {
     const entry: ConnectedServer = {
       name: cfg.name,
       config: cfg,
-      client: new Client(
-        { name: "agentlink", version: "1.0.0" },
-        {
-          capabilities: {
-            sampling: {},
-            elicitation: { form: {}, url: {} },
-            roots: { listChanged: false },
-          },
-        },
-      ),
+      client: undefined as unknown as Client,
       tools: [],
+      outputValidators: new Map(),
       resources: [],
       prompts: [],
+      catalogRefresh: this.createCatalogRefreshState(),
       status: "connecting",
       retryCount,
     };
+    entry.client = new Client(
+      { name: "agentlink", title: "AgentLink", version: this.clientVersion },
+      {
+        capabilities: {
+          elicitation: { form: { applyDefaults: true }, url: {} },
+        },
+        listChanged: {
+          tools: {
+            autoRefresh: false,
+            onChanged: () => this.scheduleCatalogRefresh(entry, "tools"),
+          },
+          resources: {
+            autoRefresh: false,
+            onChanged: () => this.scheduleCatalogRefresh(entry, "resources"),
+          },
+          prompts: {
+            autoRefresh: false,
+            onChanged: () => this.scheduleCatalogRefresh(entry, "prompts"),
+          },
+        },
+      },
+    );
     this.servers.set(cfg.name, entry);
     this.onStatusChange?.(this.getServerInfos());
 
@@ -464,12 +765,6 @@ export class McpClientHub {
             return { action: "decline" as const };
           }
 
-          const ttlMs =
-            typeof urlParams.task?.ttl === "number" &&
-            Number.isFinite(urlParams.task.ttl) &&
-            urlParams.task.ttl > 0
-              ? urlParams.task.ttl * 1000
-              : undefined;
           const request: McpUrlElicitationRequest = {
             id: `url_elicit_${Date.now()}_${Math.random().toString(36).slice(2)}`,
             serverName: cfg.name,
@@ -479,7 +774,6 @@ export class McpClientHub {
             origin: validated.value.origin,
             host: validated.value.host,
             isLocalAddress: validated.value.isLocalAddress,
-            ...(ttlMs ? { expiresAt: Date.now() + ttlMs } : {}),
           };
 
           return new Promise((resolve) => {
@@ -490,18 +784,21 @@ export class McpClientHub {
         if (!this.onElicitation) {
           return { action: "cancel" as const };
         }
-        const properties = (params.requestedSchema?.properties ?? {}) as Record<
-          string,
-          ElicitField
-        >;
-        const required = params.requestedSchema?.required ?? [];
+        const normalized = normalizeMcpElicitationSchema(
+          params.requestedSchema,
+        );
+        if (!normalized.ok) {
+          this.log(
+            `[mcp:${cfg.name}] declined malformed form elicitation request: ${normalized.error}`,
+          );
+          return { action: "decline" as const };
+        }
         return new Promise((resolve) => {
           this.onElicitation!(
             {
               serverName: cfg.name,
               message: params.message ?? "Please provide the required input.",
-              fields: properties,
-              required,
+              fields: normalized.schema.fields,
             },
             (values) => resolve({ action: "accept" as const, content: values }),
             () => resolve({ action: "cancel" as const }),
@@ -519,67 +816,16 @@ export class McpClientHub {
         },
       );
 
-      // Register sampling handler
-      entry.client.setRequestHandler(
-        CreateMessageRequestSchema,
-        async (req) => {
-          const params = (req as { params: unknown }).params as {
-            messages?: Array<{
-              role: string;
-              content: { type: string; text?: string };
-            }>;
-            systemPrompt?: string;
-            maxTokens?: number;
-            modelPreferences?: { hints?: Array<{ name?: string }> };
-          };
-
-          if (!this.onSampling) {
-            return {
-              role: "assistant" as const,
-              content: {
-                type: "text" as const,
-                text: "Sampling not available.",
-              },
-              model: "unavailable",
-              stopReason: "end_turn" as const,
-            };
-          }
-
-          const messages = (params.messages ?? [])
-            .filter(
-              (
-                m,
-              ): m is {
-                role: "user" | "assistant";
-                content: typeof m.content;
-              } => m.role === "user" || m.role === "assistant",
-            )
-            .map((m) => ({
-              role: m.role,
-              content: m.content.text ?? "",
-            }));
-
-          const modelHint = params.modelPreferences?.hints?.[0]?.name;
-          const result = await this.onSampling({
-            messages,
-            systemPrompt: params.systemPrompt,
-            maxTokens: params.maxTokens ?? 1024,
-            model: modelHint,
-          });
-
-          return {
-            role: "assistant" as const,
-            content: { type: "text" as const, text: result.content },
-            model: modelHint ?? "claude",
-            stopReason: "end_turn" as const,
-          };
-        },
-      );
-
       this.log(
         `[mcp:${cfg.name}] connect start type=${cfg.type ?? "stdio"} retryCount=${retryCount} afterAuth=${afterAuth} authMode=${authMode} allowInteractiveAuth=${oauthProvider?.allowInteractiveAuth ?? false}`,
       );
-      await entry.client.connect(transport);
+      if (isHttpServer && cfg.url) {
+        await withHttpConnectLock(cfg.url, () =>
+          entry.client.connect(transport),
+        );
+      } else {
+        await entry.client.connect(transport);
+      }
       this.log(`[mcp:${cfg.name}] connect succeeded`);
       entry.retryCount = 0;
       this.authFailureCounts.delete(cfg.name);
@@ -588,34 +834,11 @@ export class McpClientHub {
       this.manualReauthRequired.delete(cfg.name);
       this.runtimeReconnectPending.delete(cfg.name);
 
-      // Fetch tools, resources, prompts in parallel
-      const [toolsResult, resourcesResult, promptsResult] = await Promise.all([
-        entry.client.listTools().catch(() => ({ tools: [] })),
-        entry.client.listResources().catch(() => ({ resources: [] })),
-        entry.client.listPrompts().catch(() => ({ prompts: [] })),
-      ]);
-
-      entry.tools = toolsResult.tools.map((t) => ({
-        name: `${cfg.name}__${t.name}`,
-        description: t.description ?? t.name,
-        input_schema: (t.inputSchema ?? {
-          type: "object",
-          properties: {},
-        }) as JsonSchema,
-      }));
-
-      entry.resources = resourcesResult.resources.map((r) => ({
-        uri: r.uri,
-        name: r.name,
-        description: r.description,
-        mimeType: r.mimeType,
-      }));
-
-      entry.prompts = promptsResult.prompts.map((p) => ({
-        name: p.name,
-        description: p.description,
-        arguments: p.arguments,
-      }));
+      await Promise.all(
+        (["tools", "resources", "prompts"] as const).map((kind) =>
+          this.refreshCatalog(entry, kind, false),
+        ),
+      );
 
       if (oauthProvider) {
         oauthProvider.suppressRefreshTokenReauthPrompt = false;
@@ -973,6 +1196,11 @@ export class McpClientHub {
     if (!entry) return;
     this.runtimeReconnectPending.delete(name);
     if (entry.retryTimer) clearTimeout(entry.retryTimer);
+    for (const state of Object.values(entry.catalogRefresh)) {
+      if (state.scheduled) clearTimeout(state.scheduled);
+      state.scheduled = undefined;
+      state.dirty = false;
+    }
     entry.status = "disconnected";
     try {
       await entry.client.close();
@@ -984,11 +1212,14 @@ export class McpClientHub {
     this.oauthProviders.delete(name);
   }
 
-  /** Return the stored config for a server, or undefined if not connected. */
+  /** Return the stored config for a connected or disabled server. */
   getServerConfig(
     serverName: string,
   ): import("./mcpConfig.js").McpServerConfig | undefined {
-    return this.servers.get(serverName)?.config;
+    return (
+      this.servers.get(serverName)?.config ??
+      this.disabledServers.get(serverName)
+    );
   }
 
   /**
@@ -999,9 +1230,11 @@ export class McpClientHub {
     await this.oauthProviders.get(name)?.clearTokens();
   }
 
-  /** Disable (permanently disconnect) a server by name. Does not reconnect. */
+  /** Disable a server in-memory. Callers must persist the config separately. */
   async disableServer(name: string): Promise<void> {
+    const config = this.getServerConfig(name);
     await this.disconnectServer(name);
+    if (config) this.disabledServers.set(name, { ...config, disabled: true });
     this.onStatusChange?.(this.getServerInfos());
   }
 
@@ -1043,14 +1276,13 @@ export class McpClientHub {
         cfg.name,
         cfg.url,
         this.globalState,
-        this.storageNamespace,
       );
       provider.onLog = (message) => this.log(message);
       provider.onBeforeAuthorizationOpen = () =>
         this.onBeforeAuthorizationOpen(cfg.name);
       await provider.start();
       try {
-        await provider.forceReauth();
+        await withHttpConnectLock(cfg.url, () => provider.forceReauth());
       } catch (err) {
         provider.stop();
         throw err;
@@ -1079,6 +1311,7 @@ export class McpClientHub {
     await Promise.all(
       Array.from(this.servers.keys()).map((n) => this.disconnectServer(n)),
     );
+    this.disabledServers.clear();
     this.onStatusChange?.(this.getServerInfos());
   }
 
@@ -1123,18 +1356,28 @@ export class McpClientHub {
   }
 
   getServerInfos(): McpServerInfo[] {
-    return Array.from(this.servers.values()).map((s) => ({
-      name: s.name,
-      status: s.status,
-      error: s.error,
-      toolCount: s.tools.length,
-      resourceCount: s.resources.length,
-      promptCount: s.prompts.length,
-      tools: s.tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
+    return [
+      ...Array.from(this.servers.values()).map((server) => ({
+        name: server.name,
+        status: server.status,
+        error: server.error,
+        toolCount: server.tools.length,
+        resourceCount: server.resources.length,
+        promptCount: server.prompts.length,
+        tools: server.tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+        })),
       })),
-    }));
+      ...Array.from(this.disabledServers.values()).map((config) => ({
+        name: config.name,
+        status: "disabled" as const,
+        toolCount: 0,
+        resourceCount: 0,
+        promptCount: 0,
+        tools: [],
+      })),
+    ];
   }
 
   /**
@@ -1187,60 +1430,84 @@ export class McpClientHub {
           options,
         ),
       );
-      const contentItems = result.content as Array<{
-        type: string;
-        text?: string;
-        data?: string;
-        mimeType?: string;
-        resource?: {
-          uri: string;
-          text?: string;
-          blob?: string;
-          mimeType?: string;
+      if (!isCallToolResult(result)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error:
+                  "MCP server returned a task-based tool result, which AgentLink does not support.",
+              }),
+            },
+          ],
+          isError: true,
+          error: {
+            kind: "mcp_tool_error",
+            message:
+              "MCP server returned an unsupported task-based tool result.",
+          },
         };
-      }>;
-
-      const mapped: ToolResult["content"] = [];
-      for (const item of contentItems) {
-        if (item.type === "text") {
-          mapped.push({ type: "text", text: item.text ?? "" });
-        } else if (item.type === "image" && item.data) {
-          mapped.push({
-            type: "image",
-            data: item.data,
-            mimeType: item.mimeType ?? "image/png",
-          });
-        } else if (item.type === "audio") {
-          mapped.push({
-            type: "text",
-            text: `[Audio: ${item.mimeType ?? "audio"}]`,
-          });
-        } else if (item.type === "resource" && item.resource) {
-          const r = item.resource;
-          if (r.text !== undefined) {
-            mapped.push({ type: "text", text: r.text });
-          } else if (r.blob) {
-            const mime = r.mimeType ?? "";
-            if (mime.startsWith("image/")) {
-              mapped.push({ type: "image", data: r.blob, mimeType: mime });
-            } else {
-              mapped.push({
+      }
+      const outputValidator = server.outputValidators.get(toolName);
+      if (outputValidator && !result.isError) {
+        if (!result.structuredContent) {
+          return {
+            content: [
+              {
                 type: "text",
-                text: `[Binary resource: ${r.uri}]`,
-              });
-            }
-          }
-        } else {
-          mapped.push({ type: "text", text: `[${item.type}]` });
+                text: JSON.stringify({
+                  error: `MCP tool '${toolName}' declares an output schema but returned no structured content.`,
+                }),
+              },
+            ],
+            isError: true,
+            error: {
+              kind: "mcp_protocol_error",
+              message: `MCP tool '${toolName}' returned no structured content.`,
+            },
+          };
+        }
+        const validation = outputValidator(result.structuredContent);
+        if (!validation.valid) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error: `MCP tool '${toolName}' returned structured content that does not match its output schema.`,
+                  details: validation.errorMessage,
+                }),
+              },
+            ],
+            isError: true,
+            error: {
+              kind: "mcp_protocol_error",
+              message: `MCP tool '${toolName}' returned invalid structured content.`,
+            },
+          };
         }
       }
-
-      if (mapped.length === 0) {
-        mapped.push({ type: "text", text: "" });
-      }
-
-      return { content: mapped };
+      return normalizeMcpToolResult(result, (message) =>
+        this.log(`[mcp:${serverName}] ${message}`),
+      );
     } catch (err) {
+      const outputSchemaError = describeOutputSchemaError(err, toolName);
+      if (outputSchemaError) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: outputSchemaError }),
+            },
+          ],
+          isError: true,
+          error: {
+            kind: "mcp_protocol_error",
+            message: outputSchemaError,
+          },
+        };
+      }
       const msg = await this.handleRuntimeAuthFailure(serverName, err);
       return {
         content: [{ type: "text", text: JSON.stringify({ error: msg }) }],

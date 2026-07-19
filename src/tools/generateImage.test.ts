@@ -13,10 +13,16 @@ vi.mock("../util/paths.js", () => ({
     absolutePath.replace(`${process.cwd()}/`, "").replace(/\\/g, "/"),
 }));
 
+import { openAiCodexAuthManager } from "../agent/providers/codex/OpenAiCodexAuthManager.js";
 import type { OnApprovalRequest } from "../shared/types.js";
+import {
+  codexImageGenerationErrorMetadata,
+  createCodexImageGenerationResultError,
+} from "../core/model/providers/codex/imageGeneration.js";
 
 import {
   buildRequestBodyForTest,
+  handleGenerateImage,
   parseCodexImageSseForTest,
   requestImageGenerationApprovalForTest,
   resolveReferenceImagesForTest,
@@ -79,6 +85,7 @@ describe("requestImageGenerationApprovalForTest", () => {
     expect(approvalRequest).toEqual(
       expect.objectContaining({
         kind: "write",
+        targetPath: "generated-icons/gemini.png",
         choices: expect.arrayContaining([
           expect.objectContaining({ value: "accept" }),
           expect.objectContaining({ value: "reject" }),
@@ -118,6 +125,79 @@ describe("requestImageGenerationApprovalForTest", () => {
   });
 });
 
+describe("handleGenerateImage", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("preserves classified metadata when the post-refresh attempt fails", async () => {
+    vi.spyOn(openAiCodexAuthManager, "resolveModelAuth").mockResolvedValue({
+      method: "oauth",
+      bearerToken: "expired-token",
+      accountId: "account-1",
+      oauthAccountPoolId: "pool-1",
+      oauthAccountLabel: "Test account",
+      canRefresh: true,
+    });
+    const forceRefresh = vi
+      .spyOn(openAiCodexAuthManager, "forceRefreshModelAuth")
+      .mockResolvedValue({
+        method: "oauth",
+        bearerToken: "refreshed-token",
+        accountId: "account-1",
+        oauthAccountPoolId: "pool-1",
+        oauthAccountLabel: "Test account",
+        canRefresh: true,
+      });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("unauthorized", { status: 401 }))
+      .mockResolvedValueOnce(
+        sseResponse([
+          {
+            type: "response.refusal.done",
+            refusal: "Provider refused the image request.",
+          },
+          {
+            type: "response.error",
+            error: { code: "server_unavailable", message: "late error" },
+          },
+        ]),
+      );
+    const onApprovalRequest = vi.fn<OnApprovalRequest>(async () => ({
+      decision: "accept",
+      followUp: "Use a different prompt.",
+    }));
+
+    const result = await handleGenerateImage(
+      { prompt: "Create a test image", count: 1 },
+      {} as never,
+      "session-1",
+      onApprovalRequest,
+    );
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(text)).toMatchObject({
+      error:
+        "Codex image generation returned no image (refusal): Provider refused the image request.",
+      failure_category: "refusal",
+      retryable: false,
+      quota_consumed: "unknown",
+      generated_count: 0,
+      event_types: ["response.refusal.done", "response.error"],
+      provider_event_type: "response.refusal.done",
+      provider_message: "Provider refused the image request.",
+      follow_up: "Use a different prompt.",
+    });
+    expect(forceRefresh).toHaveBeenCalledWith("oauth", {
+      oauthAccountPoolId: "pool-1",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("reference images", () => {
   const tempDirs: string[] = [];
 
@@ -130,7 +210,7 @@ describe("reference images", () => {
 
   it("resolves workspace file references as base64 input images", async () => {
     const dir = await fs.mkdtemp(
-      path.join(process.cwd(), "tmp", "generate-image-ref-test-"),
+      path.join(process.cwd(), ".generate-image-ref-test-"),
     );
     tempDirs.push(dir);
     const imagePath = path.join(dir, "reference.png");
@@ -472,6 +552,118 @@ describe("parseCodexImageSseForTest", () => {
     );
     expect(result.images[0].path).toBeUndefined();
     expect(generatedImages).toBe(result.images);
+  });
+
+  it("classifies an explicit refusal without inferring quota use", async () => {
+    const result = await parseCodexImageSseForTest({
+      response: sseResponse([
+        {
+          type: "response.refusal.done",
+          refusal: "This image request was refused.",
+        },
+      ]),
+      maxImages: 1,
+      generatedImages: [],
+    });
+
+    const error = createCodexImageGenerationResultError(result);
+    expect(error).toMatchObject({
+      name: "CodexImageGenerationError",
+      message:
+        "Codex image generation returned no image (refusal): This image request was refused.",
+      failure: {
+        category: "refusal",
+        eventType: "response.refusal.done",
+        message: "This image request was refused.",
+        retryable: false,
+        quotaConsumed: "unknown",
+        eventTypes: ["response.refusal.done"],
+      },
+    });
+    expect(codexImageGenerationErrorMetadata(error)).toEqual({
+      failure_category: "refusal",
+      retryable: false,
+      quota_consumed: "unknown",
+      generated_count: 0,
+      event_types: ["response.refusal.done"],
+      provider_event_type: "response.refusal.done",
+      provider_message: "This image request was refused.",
+    });
+  });
+
+  it("preserves provider failure code and explicit quota evidence", async () => {
+    const result = await parseCodexImageSseForTest({
+      response: sseResponse([
+        {
+          type: "response.failed",
+          quota_consumed: false,
+          error: {
+            code: "server_unavailable",
+            message: "Image backend unavailable",
+          },
+        },
+      ]),
+      maxImages: 1,
+      generatedImages: [],
+    });
+
+    expect(
+      codexImageGenerationErrorMetadata(
+        createCodexImageGenerationResultError(result),
+      ),
+    ).toEqual({
+      failure_category: "provider_error",
+      retryable: true,
+      quota_consumed: false,
+      generated_count: 0,
+      event_types: ["response.failed"],
+      provider_event_type: "response.failed",
+      provider_code: "server_unavailable",
+      provider_message: "Image backend unavailable",
+    });
+  });
+
+  it("distinguishes incomplete and generic no-image completion", async () => {
+    const incomplete = await parseCodexImageSseForTest({
+      response: sseResponse([
+        {
+          type: "response.completed",
+          response: {
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+          },
+        },
+      ]),
+      maxImages: 1,
+      generatedImages: [],
+    });
+    expect(
+      codexImageGenerationErrorMetadata(
+        createCodexImageGenerationResultError(incomplete),
+      ),
+    ).toMatchObject({
+      failure_category: "incomplete",
+      retryable: true,
+      quota_consumed: "unknown",
+      provider_code: "max_output_tokens",
+    });
+
+    const noImage = await parseCodexImageSseForTest({
+      response: sseResponse([{ type: "response.completed", response: {} }]),
+      maxImages: 1,
+      generatedImages: [],
+    });
+    expect(
+      codexImageGenerationErrorMetadata(
+        createCodexImageGenerationResultError(noImage),
+      ),
+    ).toEqual({
+      failure_category: "no_image",
+      retryable: false,
+      quota_consumed: "unknown",
+      generated_count: 0,
+      event_types: ["response.completed"],
+    });
   });
 
   it("records partial files in the shared writtenImages array", async () => {

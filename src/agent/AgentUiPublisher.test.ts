@@ -174,6 +174,8 @@ describe("FanoutAgentUiPublisher", () => {
       publishQuestionRequest: vi.fn(),
       publishQuestionCleared: vi.fn(),
       publishQuestionProgress: vi.fn(),
+      publishFormElicitationRequest: vi.fn(),
+      publishFormElicitationCleared: vi.fn(),
       publishUrlElicitationRequest: vi.fn(),
       publishUrlElicitationCleared: vi.fn(),
     };
@@ -183,6 +185,8 @@ describe("FanoutAgentUiPublisher", () => {
       publishQuestionRequest: vi.fn(),
       publishQuestionCleared: vi.fn(),
       publishQuestionProgress: vi.fn(),
+      publishFormElicitationRequest: vi.fn(),
+      publishFormElicitationCleared: vi.fn(),
       publishUrlElicitationRequest: vi.fn(),
       publishUrlElicitationCleared: vi.fn(),
     };
@@ -205,6 +209,13 @@ describe("FanoutAgentUiPublisher", () => {
       notes: { note: "hello" },
       origin: "test-origin",
     });
+    publisher.publishFormElicitationRequest({
+      id: "form-1",
+      serverName: "payments",
+      message: "Choose an account",
+      fields: [],
+    });
+    publisher.publishFormElicitationCleared("form-1");
     publisher.publishUrlElicitationRequest({
       id: "url-1",
       serverName: "payments",
@@ -239,6 +250,15 @@ describe("FanoutAgentUiPublisher", () => {
         notes: { note: "hello" },
         origin: "test-origin",
       });
+      expect(target.publishFormElicitationRequest).toHaveBeenCalledWith({
+        id: "form-1",
+        serverName: "payments",
+        message: "Choose an account",
+        fields: [],
+      });
+      expect(target.publishFormElicitationCleared).toHaveBeenCalledWith(
+        "form-1",
+      );
       expect(target.publishUrlElicitationRequest).toHaveBeenCalledWith({
         id: "url-1",
         serverName: "payments",

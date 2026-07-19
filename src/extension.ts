@@ -1,9 +1,11 @@
 import * as vscode from "vscode";
+import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "crypto";
 
 import { StatusBarManager } from "./util/StatusBarManager.js";
+import { canonicalizePath, isPathWithinRoot } from "./util/paths.js";
 import { sleep } from "./util/sleep.js";
 import {
   disposeTerminalManager,
@@ -14,6 +16,7 @@ import { registerDiffViewContentProvider } from "./integrations/diffViewContentP
 import { SidebarProvider } from "./sidebar/SidebarProvider.js";
 import { ApprovalManager } from "./approvals/ApprovalManager.js";
 import { ApprovalPanelProvider } from "./approvals/ApprovalPanelProvider.js";
+import type { ApprovalProjectContext } from "./approvals/webview/types.js";
 import { ConfigStore } from "./approvals/ConfigStore.js";
 import {
   buildCommandReviewContext,
@@ -39,6 +42,7 @@ import { IndexerManager } from "./indexer/IndexerManager.js";
 import { registerIndexCommands } from "./indexer/indexCommands.js";
 import { ChatViewProvider } from "./agent/ChatViewProvider.js";
 import { AgentSessionManager } from "./agent/AgentSessionManager.js";
+import { ProjectCustomizationRegistry } from "./agent/ProjectCustomizationRegistry.js";
 import {
   getConfiguredBaseThresholdForModel,
   getMigratedModelCondenseThresholdMap,
@@ -82,6 +86,8 @@ import { FleetAutomationStore } from "./agent/FleetAutomationStore.js";
 import { createFleetAutomationLifecycle } from "./agent/fleetAutomationLifecycle.js";
 import { installAgentLinkHttpDispatcher } from "./util/httpDispatcher.js";
 import { resolveWorkspaceSessionLocation } from "./agent/workspaceSessionIdentity.js";
+import { createSessionProjectScope } from "./core/workspaceProjects.js";
+import { createWorkspaceProjectCatalog } from "./adapters/vscode/workspaceProjectCapabilities.js";
 import {
   createToolUsageTelemetry,
   type ToolUsageTelemetry,
@@ -115,6 +121,7 @@ import {
   readVscodeTerminalSurfaceConfiguration,
   resolveVscodeTerminalCreateRequest,
 } from "./terminal/vscodeTerminalConfiguration.js";
+import { showWebAccessDisclosureOnce } from "./util/webAccessDisclosure.js";
 
 const BROWSER_GATEWAY_HEALTH_CHECK_INTERVAL_MS = 30_000;
 
@@ -153,6 +160,66 @@ function log(message: string): void {
 
 function getConfig<T>(key: string): T {
   return vscode.workspace.getConfiguration("agentlink").get(key) as T;
+}
+
+function resolveApprovalProjectContext(input: {
+  sessionId?: string;
+  targetPath?: string;
+}): {
+  sourceProject?: ApprovalProjectContext;
+  targetProject?: ApprovalProjectContext;
+  targetPath?: string;
+  projectResourceUri?: string;
+} {
+  const session = input.sessionId
+    ? agentSessionManager?.getSession(input.sessionId)
+    : undefined;
+  const sourceScope = session?.projectScope;
+  const sourceProject = sourceScope
+    ? {
+        projectId: sourceScope.projectId,
+        displayName: sourceScope.displayName,
+        availability: session.projectAvailability,
+      }
+    : undefined;
+  const targetPath = input.targetPath
+    ? canonicalizePath(
+        path.isAbsolute(input.targetPath)
+          ? input.targetPath
+          : sourceScope?.rootPath
+            ? path.resolve(sourceScope.rootPath, input.targetPath)
+            : input.targetPath,
+      )
+    : undefined;
+  const target = targetPath
+    ? agentSessionManager
+        ?.getWorkspaceProjects()
+        .filter((project) => project.rootPath)
+        .sort(
+          (left, right) =>
+            (right.rootPath?.length ?? 0) - (left.rootPath?.length ?? 0),
+        )
+        .find((project) =>
+          isPathWithinRoot(targetPath, canonicalizePath(project.rootPath!)),
+        )
+    : undefined;
+  const targetProject: ApprovalProjectContext | undefined =
+    target && target.id !== sourceProject?.projectId
+      ? {
+          projectId: target.id,
+          displayName: target.name,
+          availability:
+            target.availability.status === "available"
+              ? "available"
+              : "unavailable",
+        }
+      : undefined;
+  return {
+    sourceProject,
+    targetProject,
+    targetPath,
+    projectResourceUri: sourceScope?.workspaceFolderUri,
+  };
 }
 
 function getExplicitAgentModel(
@@ -472,6 +539,16 @@ export function activate(context: vscode.ExtensionContext): void {
 
   log("Activating AgentLink extension");
 
+  void showWebAccessDisclosureOnce({
+    state: context.globalState,
+    showInformationMessage: (message, action) =>
+      vscode.window.showInformationMessage(message, action),
+    openSettings: (query) =>
+      vscode.commands.executeCommand("workbench.action.openSettings", query),
+  }).catch((error) => {
+    log(`Web access disclosure failed: ${String(error)}`);
+  });
+
   void runLegacyAgentIntegrationCleanup({
     homeDir: os.homedir(),
     workspaceRoots:
@@ -524,6 +601,7 @@ export function activate(context: vscode.ExtensionContext): void {
   approvalPanel = new ApprovalPanelProvider(
     context.extensionUri,
     statusBarManager,
+    resolveApprovalProjectContext,
   );
   context.subscriptions.push(approvalPanel);
 
@@ -547,7 +625,6 @@ export function activate(context: vscode.ExtensionContext): void {
     workspaceFile: vscode.workspace.workspaceFile,
     fallbackCwd: process.cwd(),
   });
-  const workspaceCwd = workspaceSessionLocation.cwd;
   agentTerminalProvider = new AgentTerminalProviderRouter({
     isEnabled: () =>
       vscode.workspace
@@ -684,9 +761,63 @@ export function activate(context: vscode.ExtensionContext): void {
       agentTerminalProvider.refresh(),
     ),
   );
-  const sessionStore = new SessionStore(workspaceCwd, undefined, undefined, {
-    historyNamespace: workspaceSessionLocation.historyNamespace,
+  const projectCatalog = createWorkspaceProjectCatalog({
+    workspaceFolders: vscode.workspace.workspaceFolders,
+    canonicalizeFileRoot: (rootPath) => {
+      try {
+        return fs.realpathSync.native(rootPath);
+      } catch {
+        return undefined;
+      }
+    },
   });
+  const legacyPrimaryRootPath = workspaceSessionLocation.legacyPrimaryRootPath;
+  const canonicalLegacyPrimaryRootPath = legacyPrimaryRootPath
+    ? (() => {
+        try {
+          return fs.realpathSync.native(legacyPrimaryRootPath);
+        } catch {
+          return undefined;
+        }
+      })()
+    : undefined;
+  const legacyProject = projectCatalog
+    .listProjects()
+    .find(
+      (project) =>
+        canonicalLegacyPrimaryRootPath !== undefined &&
+        project.rootPath === canonicalLegacyPrimaryRootPath,
+    );
+  const legacyProjectScope = legacyProject
+    ? createSessionProjectScope(legacyProject)
+    : undefined;
+  const workspaceCwd =
+    workspaceSessionLocation.stateAnchor?.rootPath ??
+    workspaceSessionLocation.legacyPrimaryRootPath ??
+    workspaceSessionLocation.cwd;
+  const sessionStore =
+    workspaceSessionLocation.status === "ready" &&
+    workspaceSessionLocation.stateAnchor
+      ? new SessionStore(
+          workspaceSessionLocation.stateAnchor.rootPath,
+          undefined,
+          undefined,
+          {
+            historyNamespace: workspaceSessionLocation.historyNamespace,
+            legacyProjectScope,
+            log,
+          },
+        )
+      : undefined;
+  if (workspaceSessionLocation.status === "legacy_conflict") {
+    log(
+      `[history] Multiple legacy history namespaces found for workspace ${workspaceSessionLocation.workspaceIdentity}; persistence disabled until explicit resolution.`,
+    );
+  } else if (workspaceSessionLocation.status === "unavailable") {
+    log(
+      `[history] No supported workspace state anchor is available; persistence and local execution will remain unavailable until a folder is opened.`,
+    );
+  }
   const explicitAgentModel = getExplicitAgentModel(agentConfiguration);
   const configuredMode =
     agentConfiguration.get<string>("defaultMode")?.trim() || "code";
@@ -698,7 +829,7 @@ export function activate(context: vscode.ExtensionContext): void {
       FALLBACK_AGENT_MODEL,
     );
   const startupModel =
-    explicitAgentModel ?? sessionStore.list()[0]?.model ?? configuredModel;
+    explicitAgentModel ?? sessionStore?.list()[0]?.model ?? configuredModel;
   const migratedThresholds = getMigratedModelCondenseThresholdMap(
     agentConfiguration,
     startupModel,
@@ -723,9 +854,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // so they must also get the dev-mode system prompt — not just F5 sessions.
   const isDevMode =
     __DEV_BUILD__ || context.extensionMode === vscode.ExtensionMode.Development;
+  const projectCustomizationRegistry = new ProjectCustomizationRegistry();
   chatViewProvider = new ChatViewProvider(
     context.extensionUri,
     context.globalState,
+    projectCustomizationRegistry,
+    extVersion,
   );
 
   // Register providers after chatViewProvider is created so all auth logs
@@ -846,6 +980,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const bgMaxConcurrent = normalizeBackgroundMaxConcurrent(
     getConfig<number>("background.maxConcurrent"),
   );
+  const browserPreferredProjectId = context.workspaceState.get<string>(
+    "browserPreferredProjectId",
+  );
   agentSessionManager = new AgentSessionManager(
     agentConfig,
     workspaceCwd,
@@ -854,6 +991,23 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionStore,
     log,
     { maxConcurrent: bgMaxConcurrent },
+    {
+      projectCatalog,
+      legacyProjectScope,
+      projectCustomizationRegistry,
+      projectMcpHubRegistry: chatViewProvider.getProjectMcpHubRegistry(),
+      executionUnavailableReason:
+        workspaceSessionLocation.status === "legacy_conflict"
+          ? "Local execution is disabled because multiple legacy session-history locations were found. Resolve the history-storage conflict before starting or continuing a session."
+          : undefined,
+      browserPreferredProjectId,
+      onBrowserPreferredProjectChanged: async (projectId) => {
+        await context.workspaceState.update(
+          "browserPreferredProjectId",
+          projectId,
+        );
+      },
+    },
   );
   browserGatewayService = new BrowserGatewayService(
     chatViewProvider.getUiEventHub(),
@@ -865,8 +1019,18 @@ export function activate(context: vscode.ExtensionContext): void {
     () => chatViewProvider.getBrowserProjectedForegroundState(),
     () => chatViewProvider.getBrowserMcpStatusInfos(),
   );
-  const browserGatewayRepositoryObserver =
-    new BrowserGatewayRepositoryObserver();
+  const browserGatewayRepositoryObserver = new BrowserGatewayRepositoryObserver(
+    {
+      getProject: () => {
+        const scope = agentSessionManager?.getForegroundSession()?.projectScope;
+        return scope?.rootPath
+          ? { projectId: scope.projectId, rootPath: scope.rootPath }
+          : undefined;
+      },
+      getGitExtension: () =>
+        vscode.extensions.getExtension("vscode.git") as never,
+    },
+  );
   browserGatewayService.setRepositoryInfoProvider(() =>
     browserGatewayRepositoryObserver.getRepositoryInfo(),
   );
@@ -883,7 +1047,10 @@ export function activate(context: vscode.ExtensionContext): void {
     chatViewProvider.onDidChangeBrowserProjectedForeground(listener),
   );
   browserGatewayService.subscribeToSessionChanges((listener) =>
-    agentSessionManager!.onDidChangeSessions(listener),
+    agentSessionManager!.onDidChangeSessions(() => {
+      browserGatewayRepositoryObserver.rebindProject();
+      listener();
+    }),
   );
   browserGatewayService.subscribeToSurfaceChanges((listener) =>
     chatViewProvider.onDidChangeBrowserGatewaySurface(listener),
@@ -891,6 +1058,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     browserGatewayService,
     approvalManager.onDidChange(() => {
+      agentSessionManager?.refreshBackgroundApprovalInheritance();
       browserGatewayService?.invalidateBrowserSnapshot();
     }),
     vscode.window.onDidChangeActiveColorTheme(() => {
@@ -945,6 +1113,8 @@ export function activate(context: vscode.ExtensionContext): void {
     browserWorkspaceName,
     browserWorkspacePath,
     log,
+    undefined,
+    () => browserGatewayHelperDiscovery?.clientSharedSecret ?? null,
   );
   context.subscriptions.push(browserGatewayServer);
   const browserGatewayPort = getConfig<number>("browserGatewayPort") || 47137;
@@ -1352,6 +1522,7 @@ export function activate(context: vscode.ExtensionContext): void {
   builtinApprovalPanel = new ApprovalPanelProvider(
     context.extensionUri,
     statusBarManager,
+    resolveApprovalProjectContext,
   );
   context.subscriptions.push(builtinApprovalPanel);
   builtinApprovalPanel.onForwardApproval = (req, respond) =>
@@ -1378,21 +1549,23 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   });
 
-  // Wire up tool dispatch context (mcpHub provided by ChatViewProvider after initialize)
+  // Wire up window-level capabilities. MCP is captured from the session project registry.
   agentSessionManager.setToolContext({
     approvalManager,
     approvalPanel: builtinApprovalPanel,
     sessionId: "agent", // synthetic session ID for the built-in agent
     extensionUri: context.extensionUri,
     globalStorageUri: context.globalStorageUri,
-    mcpHub: chatViewProvider.getMcpHub(),
     getCommandApprovalPolicy: (sessionId) =>
       agentSessionManager.getCommandApprovalPolicy(
         sessionId,
         chatViewProvider.getConfiguredCommandApprovalPolicy(),
       ),
-    inheritSessionWriteState: (parentSessionId, childSessionId) =>
-      approvalManager.inheritSessionWriteState(parentSessionId, childSessionId),
+    inheritSessionApprovalState: (parentSessionId, childSessionId) =>
+      approvalManager.inheritSessionApprovalState(
+        parentSessionId,
+        childSessionId,
+      ),
     commandApprovalReviewer,
     isSessionActive: (sessionId) => {
       const session = agentSessionManager.getSession(sessionId);
@@ -1439,7 +1612,7 @@ export function activate(context: vscode.ExtensionContext): void {
         sessionId,
       ),
     onGetBackgroundResult: (callerSessionId, sessionId) =>
-      agentSessionManager.waitForAuthorizedBackground(
+      agentSessionManager.waitForAuthorizedBackgroundContent(
         callerSessionId,
         sessionId,
       ),
@@ -1519,7 +1692,16 @@ export function activate(context: vscode.ExtensionContext): void {
         e.affectsConfiguration("agentlink.codexStoreResponses") ||
         e.affectsConfiguration("agentlink.codexProMode")
       ) {
-        const config = vscode.workspace.getConfiguration("agentlink");
+        const activeScope =
+          agentSessionManager.getForegroundSession()?.projectScope ??
+          agentSessionManager.getDefaultProjectScope();
+        const config = vscode.workspace.getConfiguration(
+          "agentlink",
+          activeScope
+            ? vscode.Uri.parse(activeScope.workspaceFolderUri)
+            : undefined,
+        );
+        const windowConfig = vscode.workspace.getConfiguration("agentlink");
         const fgMode = agentSessionManager.getForegroundSession()?.mode;
         const effectiveMode =
           fgMode ?? config.get<string>("defaultMode")?.trim() ?? "code";
@@ -1532,7 +1714,7 @@ export function activate(context: vscode.ExtensionContext): void {
           model,
           maxTokens: config.get<number>("agentMaxTokens") ?? 8192,
           thinkingBudget: config.get<number>("thinkingBudget") ?? 10000,
-          showThinking: config.get<boolean>("showThinking") ?? true,
+          showThinking: windowConfig.get<boolean>("showThinking") ?? true,
           autoCondense: config.get<boolean>("autoCondense") ?? true,
           autoCondenseThreshold: getConfiguredBaseThresholdForModel(
             config,

@@ -117,6 +117,15 @@ describe("handleGetModuleNeighbors", () => {
         "get_module_neighbors is unavailable without global storage context.",
       path: "src/foo.ts",
     });
+    expect(result).toMatchObject({
+      data: {
+        error:
+          "get_module_neighbors is unavailable without global storage context.",
+        path: "src/foo.ts",
+      },
+      isError: true,
+      error: { kind: "tool_error" },
+    });
   });
 
   it("returns an error result for non-positive max_results", async () => {
@@ -137,6 +146,8 @@ describe("handleGetModuleNeighbors", () => {
       makeProvider(),
     );
 
+    expect(result.isError).toBe(false);
+    expect(result.data).toEqual(parseTextResult(result));
     expect(parseTextResult(result)).toMatchObject({
       path: "src/bar.ts",
       workspace_root: "/workspace",

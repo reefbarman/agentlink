@@ -1,7 +1,28 @@
 import * as crypto from "crypto";
+import { fileURLToPath, pathToFileURL } from "url";
 
 import type { AgentConfig, AgentMessage, SessionInfo } from "./types.js";
-import type { PendingQuestionRecoveryContext } from "../core/tools/types.js";
+import type {
+  AgentToolRuntime,
+  PendingQuestionRecoveryContext,
+} from "../core/tools/types.js";
+import {
+  normalizeCoreWebAccessSettings,
+  resolveCoreWebAccessPolicy,
+  type CoreResolvedWebAccessPolicy,
+} from "../core/webAccess.js";
+import {
+  buildNativeWebDelegationPrompt,
+  collectNativeWebToolResult,
+  continueNativeWebProviderStream,
+} from "../core/nativeWebTools.js";
+import type {
+  BackgroundAgentBudgetUsage,
+  BackgroundAgentResultContent,
+  BackgroundAgentRuntimePhase,
+  BackgroundResultState,
+} from "../core/capabilities/background.js";
+import type { NativeWebToolExecutionRequest } from "../core/capabilities/web.js";
 import type {
   PendingQuestionRecoveryState,
   PersistedFleetMetadata,
@@ -15,8 +36,14 @@ import { AgentSession } from "./AgentSession.js";
 import type { WorkspaceFolderInfo } from "./systemPrompt.js";
 import { AgentEngine } from "./AgentEngine.js";
 import type { AgentEvent } from "./types.js";
-import type { AgentMode } from "./modes.js";
-import type { ReasoningEffort } from "./providers/types.js";
+import { resolveMode, type AgentMode } from "./modes.js";
+import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
+import type { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
+import type {
+  ContentBlock,
+  ImageBlock,
+  ReasoningEffort,
+} from "./providers/types.js";
 import type { Question } from "./webview/types.js";
 import {
   buildAskUserToolResult,
@@ -29,7 +56,6 @@ import type { SessionStore, SessionSummary } from "./SessionStore.js";
 import type { BgSessionInfo } from "../shared/types.js";
 import type { Checkpoint, RevertPreview } from "./CheckpointManager.js";
 import type {
-  ContentBlock as AcpContentBlock,
   PromptResponse,
   RequestPermissionRequest,
   RequestPermissionResponse,
@@ -70,6 +96,15 @@ import {
 } from "./AgentSessionManagerHost.js";
 import { FleetAdmissionError, FleetScheduler } from "./FleetScheduler.js";
 import {
+  createSessionProjectScope,
+  createWorkspaceProjectId,
+  type ProjectScopeResolver,
+  type SessionProjectResolution,
+  type SessionProjectScope,
+  type WorkspaceProject,
+} from "../core/workspaceProjects.js";
+import { selectNewSessionProject } from "../adapters/vscode/workspaceProjectCapabilities.js";
+import {
   inferBackgroundDisplayStatus,
   pickBackgroundDisplayStatus,
 } from "./backgroundDisplayStatus.js";
@@ -86,9 +121,20 @@ import {
 } from "./FleetWorkflows.js";
 import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeStore.js";
 import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import { convertAcpContentBlock } from "./acpContent.js";
 
 const FLEET_VISIBILITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const MAX_BACKGROUND_HANDOFF_IMAGES = 8;
+const MAX_BACKGROUND_PARTIAL_RESULT_CHARS = 40 * 1024;
+const MAX_ACP_OUTPUT_IMAGES = 8;
+
+interface AcpOutputState {
+  assistantTextParts: string[];
+  directImages: ImageBlock[];
+  toolImages: Map<string, ImageBlock[]>;
+  warnings: Set<string>;
+}
 
 /**
  * Per-turn budget for auto-continuing after a mode switch. Kept separate from
@@ -146,6 +192,23 @@ const BTW_DEFAULT_TIMEOUT_MS = 120_000;
 /** Hard-stop backstop after the nominal budget has triggered a wrap-up. */
 const BUDGET_HARD_LIMIT_RATIO = 3;
 
+interface PreparedTurnExecution {
+  context: Readonly<ToolDispatchContext> | undefined;
+  policy: Readonly<CoreResolvedWebAccessPolicy>;
+  mcpToolDisclosure: Readonly<McpToolDisclosurePartition>;
+  mcpToolDefinitions: readonly import("./providers/types.js").ToolDefinition[];
+}
+
+function deepFreeze<T>(value: T): Readonly<T> {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      deepFreeze(nested);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
+
 function getEngineHardLimit(limit: number | undefined): number | undefined {
   return limit === undefined
     ? undefined
@@ -171,6 +234,7 @@ function formatBudgetKind(kind: string): string {
 }
 
 export interface CheckpointRevertPreviewResult {
+  projectId: string;
   checkpointId: string;
   sessionRevision: PersistenceRevision;
   persistenceRevision?: PersistenceRevision;
@@ -212,6 +276,17 @@ export class AgentSessionManager {
   private cwd: string;
   private apiKey?: string;
   private toolCtx?: ToolDispatchContext;
+  private activeRequestToolContexts = new Map<
+    string,
+    Readonly<ToolDispatchContext>
+  >();
+  private readonly releasedToolContexts = new WeakSet<
+    Readonly<ToolDispatchContext>
+  >();
+  private foregroundEngineRequest?: {
+    sessionId: string;
+    context: Readonly<ToolDispatchContext>;
+  };
   private devMode: boolean;
   private persistence?: SessionStore;
   private sessionRevisions = new Map<string, PersistenceRevision>();
@@ -221,11 +296,25 @@ export class AgentSessionManager {
   private sessionSendQueues = new Map<string, Promise<void>>();
   private log?: (msg: string) => void;
   private readonly host: AgentSessionManagerHost;
+  private readonly projectCatalog: ProjectScopeResolver;
+  private readonly projectCustomizationRegistry: ProjectCustomizationRegistry;
+  private readonly projectMcpHubRegistry: ProjectMcpHubRegistry | undefined;
+  private readonly legacyProjectScope: SessionProjectScope | undefined;
+  private readonly executionUnavailableReason: string | undefined;
+  private browserPreferredProjectId: string | undefined;
+  private readonly onBrowserPreferredProjectChanged:
+    | ((projectId: string) => void | Promise<void>)
+    | undefined;
   private activityTraceRecorder: ActivityTraceRecorderLike;
 
-  /** CheckpointManager shared across sessions (one shadow repo per workspace) */
+  /** Single-project compatibility override retained for focused tests. */
   private checkpointManager: CheckpointManagerLike | null = null;
-  /** Checkpoints per session: sessionId → Checkpoint[] */
+  /** Project-keyed shadow repositories. Never route by state-anchor cwd. */
+  private readonly checkpointManagers = new Map<
+    string,
+    CheckpointManagerLike
+  >();
+  /** Checkpoints per session: sessionId → logical multi-project checkpoints. */
   private checkpoints = new Map<string, Checkpoint[]>();
   /** Pending waiters for background session completion: sessionId → resolvers */
   private bgResultWaiters = new Map<string, Array<(result: string) => void>>();
@@ -240,6 +329,12 @@ export class AgentSessionManager {
   private bgBudgetWrapUps = new Map<string, { kind: string }>();
   /** Accumulated streaming text for background sessions (for UI preview). */
   private bgStreamingText = new Map<string, string>();
+  /** Bounded substantive output retained for terminal failure and reload recovery. */
+  private bgPartialResults = new Map<string, string>();
+  /** Provider/engine retryability for terminal background failures. */
+  private bgAgentRetryable = new Map<string, boolean>();
+  /** Background sessions loaded from persistence rather than launched in this process. */
+  private restoredBackgroundSessionIds = new Set<string>();
   /** Completion timestamps for background sessions (for auto-dismiss). */
   private bgCompletedAt = new Map<string, number>();
   /** Error messages for background sessions. */
@@ -256,8 +351,6 @@ export class AgentSessionManager {
       task: string;
     }
   >();
-  /** Background sessions already used to auto-resume a foreground session. */
-  private bgAutoResumed = new Set<string>();
   /** Routing metadata per background session. */
   private bgMeta = new Map<
     string,
@@ -272,6 +365,11 @@ export class AgentSessionManager {
       tokenUsage: number;
       apiTurns: number;
       startedAt: number;
+      lastProgressAt: number;
+      phase: BackgroundAgentRuntimePhase;
+      phaseStartedAt?: number;
+      requestStartedAt?: number;
+      retryAt?: number;
     }
   >();
   private readonly bgSummaryScheduler = new BackgroundSummaryScheduler();
@@ -453,6 +551,19 @@ export class AgentSessionManager {
       store,
     });
     this.host = mergeAgentSessionManagerHost(defaultHost, opts?.host);
+    this.projectCatalog =
+      opts?.projectCatalog ?? this.createLegacyProjectCatalog(cwd);
+    this.projectCustomizationRegistry =
+      opts?.projectCustomizationRegistry ?? new ProjectCustomizationRegistry();
+    this.projectMcpHubRegistry = opts?.projectMcpHubRegistry;
+    this.executionUnavailableReason = opts?.executionUnavailableReason;
+    this.browserPreferredProjectId = opts?.browserPreferredProjectId;
+    this.onBrowserPreferredProjectChanged =
+      opts?.onBrowserPreferredProjectChanged;
+    const firstProject = this.projectCatalog.listProjects()[0];
+    this.legacyProjectScope =
+      opts?.legacyProjectScope ??
+      (firstProject ? createSessionProjectScope(firstProject) : undefined);
     this.persistence = this.host.persistence;
     this.activityTraceRecorder = this.host.createActivityTraceRecorder({
       workspaceDir: cwd,
@@ -467,15 +578,140 @@ export class AgentSessionManager {
       maxDepth: this.bgDefaults.maxDepth ?? 2,
       maxChildrenPerParent: this.bgDefaults.maxChildrenPerParent ?? 4,
     });
+  }
 
-    // Initialize checkpoint manager asynchronously — failures are non-fatal
-    this.checkpointManager = this.host.createCheckpointManager({
-      workspaceDir: cwd,
-      taskId: "agent",
-      log: (msg: string) => log?.(msg),
+  private createLegacyProjectCatalog(cwd: string): ProjectScopeResolver {
+    const workspaceFolderUri = pathToFileURL(cwd).toString();
+    const project: WorkspaceProject = {
+      id: createWorkspaceProjectId(workspaceFolderUri),
+      name: cwd,
+      uri: workspaceFolderUri,
+      rootPath: cwd,
+      availability: { status: "available" },
+    };
+    return {
+      listProjects: () => [project],
+      resolveProjectForResource: () => project,
+      resolvePersistedScope: (scope): SessionProjectResolution =>
+        scope.projectId === project.id &&
+        scope.workspaceFolderUri === project.uri
+          ? {
+              status: "available",
+              project,
+              scope: createSessionProjectScope(project),
+            }
+          : { status: "missing", scope },
+    };
+  }
+
+  private selectProjectScope(input?: {
+    explicitProjectId?: string;
+    activeFilePath?: string;
+  }): SessionProjectScope {
+    this.requireWorkspaceExecution();
+    const selection = selectNewSessionProject(this.projectCatalog, {
+      explicitProjectId: input?.explicitProjectId,
+      activeResourceUri: input?.activeFilePath
+        ? pathToFileURL(input.activeFilePath).toString()
+        : undefined,
+      browserPreferredProjectId: this.browserPreferredProjectId,
     });
-    this.checkpointManager.initialize().catch((err: unknown) => {
-      log?.(`[checkpoint] Init error: ${err}`);
+    if (selection.status !== "selected") {
+      throw new Error("Open an available workspace folder to start a session.");
+    }
+    return selection.scope;
+  }
+
+  private async createBoundSession(
+    opts: Parameters<AgentSessionManagerHost["createSession"]>[0],
+  ): Promise<AgentSession> {
+    const allModes = await this.projectCustomizationRegistry.getModes(
+      opts.projectScope,
+    );
+    const agentMode = opts.agentMode ?? resolveMode(opts.mode, allModes);
+    const session = await this.host.createSession({ ...opts, agentMode });
+    const existingScope = session.projectScope;
+    if (existingScope === undefined) {
+      Object.defineProperty(session, "projectScope", {
+        value: Object.freeze({ ...opts.projectScope }),
+        enumerable: true,
+        configurable: false,
+        writable: false,
+      });
+
+      Object.defineProperty(session, "projectAvailability", {
+        value: "available",
+        enumerable: true,
+        configurable: false,
+        writable: false,
+      });
+      return session;
+    }
+    if (
+      existingScope.projectId !== opts.projectScope.projectId ||
+      existingScope.workspaceFolderUri !== opts.projectScope.workspaceFolderUri
+    ) {
+      throw new Error("Session factory returned a mismatched project scope.");
+    }
+    return session;
+  }
+
+  private async createRestoredSession(args: {
+    summary: SessionSummary;
+    metadata: PersistedSessionRecord["metadata"];
+    background?: boolean;
+  }): Promise<AgentSession> {
+    const persistedScope =
+      args.metadata.projectScope ??
+      args.summary.projectScope ??
+      this.legacyProjectScope;
+    if (persistedScope === undefined) {
+      throw new Error(
+        `Persisted session ${args.summary.id} has no project scope and no legacy migration project is available.`,
+      );
+    }
+    const resolution =
+      this.projectCatalog.resolvePersistedScope(persistedScope);
+    const providerId = this.host.providers.tryResolveProvider(
+      args.summary.model,
+    )?.id;
+    const activeContextProject = args.metadata.activeContextResourceUri
+      ? this.projectCatalog.resolveProjectForResource(
+          args.metadata.activeContextResourceUri,
+        )
+      : undefined;
+    let activeFilePath: string | undefined;
+    if (
+      activeContextProject?.id === persistedScope.projectId &&
+      args.metadata.activeContextResourceUri?.startsWith("file:")
+    ) {
+      try {
+        activeFilePath = fileURLToPath(args.metadata.activeContextResourceUri);
+      } catch {
+        activeFilePath = undefined;
+      }
+    }
+    const common = {
+      mode: args.summary.mode,
+      config: this.buildConfigForModel(args.summary.model),
+      background: args.background,
+      activeFilePath,
+      activeContextResourceUri: args.metadata.activeContextResourceUri,
+      workspaceFolders: this.getWorkspaceFolders(),
+      providerId,
+    };
+    if (resolution.status === "available") {
+      return this.createBoundSession({
+        ...common,
+        projectScope: resolution.scope,
+        devMode: this.devMode,
+        isBackground: args.background,
+      });
+    }
+    return AgentSession.createTranscriptOnly({
+      ...common,
+      projectScope: persistedScope,
+      projectAvailability: resolution.status,
     });
   }
 
@@ -488,35 +724,490 @@ export class AgentSessionManager {
     return this.host.workspace.getWorkspaceFolders();
   }
 
-  setToolContext(ctx: ToolDispatchContext): void {
-    this.toolCtx = ctx;
-    if (this.engine) {
-      this.engine.setToolRuntime(this.host.createToolRuntime(ctx));
+  private requireWorkspaceExecution(): void {
+    if (this.executionUnavailableReason) {
+      throw new Error(this.executionUnavailableReason);
     }
   }
 
-  private getBackgroundAgentSettings() {
+  private requireSessionExecution(session: AgentSession): string {
+    this.requireWorkspaceExecution();
+    const resolution = this.projectCatalog.resolvePersistedScope(
+      session.projectScope,
+    );
+    if (
+      session.projectAvailability !== "available" ||
+      resolution.status !== "available" ||
+      resolution.scope.projectId !== session.projectScope.projectId ||
+      resolution.scope.workspaceFolderUri !==
+        session.projectScope.workspaceFolderUri ||
+      resolution.scope.rootPath === undefined ||
+      resolution.scope.rootPath !== session.projectScope.rootPath
+    ) {
+      throw new Error(
+        `Project '${session.projectScope.displayName}' is unavailable for local execution.`,
+      );
+    }
+    return resolution.scope.rootPath;
+  }
+
+  private getCheckpointManagerForProject(
+    project: WorkspaceProject,
+  ): CheckpointManagerLike {
+    const projectRoot = project.rootPath;
+    if (project.availability.status !== "available" || !projectRoot) {
+      throw new Error(
+        `Project '${project.name}' is unavailable for checkpointing.`,
+      );
+    }
+    const projectId = project.id;
+    if (
+      this.projectCatalog.listProjects().length === 1 &&
+      this.checkpointManager
+    ) {
+      this.checkpointManagers.set(projectId, this.checkpointManager);
+      return this.checkpointManager;
+    }
+    const existing = this.checkpointManagers.get(projectId);
+    if (existing) return existing;
+
+    const manager = this.host.createCheckpointManager({
+      workspaceDir: projectRoot,
+      taskId: "agent",
+      log: (message) => this.log?.(message),
+    });
+    this.checkpointManagers.set(projectId, manager);
+    manager.initialize?.().catch((error: unknown) => {
+      this.log?.(`[checkpoint] Init error for project ${projectId}: ${error}`);
+    });
+    return manager;
+  }
+
+  private getCheckpointManagerForSession(
+    session: AgentSession,
+  ): CheckpointManagerLike {
+    this.requireSessionExecution(session);
+    const project = this.projectCatalog
+      .listProjects()
+      .find((candidate) => candidate.id === session.projectScope.projectId);
+    if (!project) {
+      throw new Error(
+        `Project '${session.projectScope.displayName}' is unavailable for checkpointing.`,
+      );
+    }
+    return this.getCheckpointManagerForProject(project);
+  }
+
+  private peekCheckpointManagerForSession(
+    session: AgentSession,
+  ): CheckpointManagerLike | undefined {
+    return this.projectCatalog.listProjects().length === 1 &&
+      this.checkpointManager
+      ? this.checkpointManager
+      : this.checkpointManagers.get(session.projectScope.projectId);
+  }
+
+  private async getInitializedCheckpointManagerForSession(
+    session: AgentSession,
+  ): Promise<CheckpointManagerLike | null> {
+    const manager = this.getCheckpointManagerForSession(session);
+    if (typeof manager.initialize !== "function") return manager;
+    return (await manager.initialize()) === false ? null : manager;
+  }
+
+  private async prepareSessionProjectMutation(
+    session: AgentSession,
+  ): Promise<void> {
+    const availableProjects = this.projectCatalog
+      .listProjects()
+      .filter(
+        (project): project is WorkspaceProject & { rootPath: string } =>
+          project.availability.status === "available" &&
+          project.rootPath !== undefined,
+      );
+    if (availableProjects.length === 0) return;
+
+    for (const project of availableProjects) {
+      const manager = this.getCheckpointManagerForProject(project);
+      const initialized =
+        typeof manager.initialize === "function"
+          ? await manager.initialize()
+          : true;
+      if (initialized === false) {
+        this.log?.(
+          `[checkpoint] Skipping unavailable checkpoint protection for project '${project.name}'.`,
+        );
+      }
+    }
+
+    const currentTurnIndex = session
+      .getAllMessages()
+      .filter(
+        (message) =>
+          message.role === "user" && typeof message.content === "string",
+      ).length;
+    const previousBoundary = currentTurnIndex - 1;
+    if (previousBoundary > 0) {
+      await this.ensureCheckpointForTurn(session, previousBoundary);
+    }
+  }
+
+  private captureSessionToolContext(
+    session: AgentSession,
+    overrides?: Partial<ToolDispatchContext>,
+    inheritedContext?: Readonly<ToolDispatchContext>,
+  ): Readonly<ToolDispatchContext> | undefined {
+    const projectRoot = this.requireSessionExecution(session);
+    const baseContext = inheritedContext ?? this.toolCtx;
+    if (!baseContext) return undefined;
+    baseContext.approvalManager.bindSessionProject(
+      session.id,
+      session.projectScope,
+    );
+    if (!inheritedContext) {
+      this.projectMcpHubRegistry?.ensure(session.projectScope);
+    }
+    const mcpHubLease = inheritedContext?.mcpHubLease
+      ? inheritedContext.mcpHubLease.retain()
+      : this.projectMcpHubRegistry?.acquire(session.projectScope);
+    try {
+      const captured = inheritedContext
+        ? { ...baseContext, ...overrides }
+        : this.host.captureProjectToolContext(
+            { ...baseContext, ...overrides },
+            session.projectScope,
+          );
+      if (
+        captured.projectScope !== undefined &&
+        (captured.projectScope.projectId !== session.projectScope.projectId ||
+          captured.projectScope.workspaceFolderUri !==
+            session.projectScope.workspaceFolderUri)
+      ) {
+        throw new Error("Tool runtime returned a mismatched project scope.");
+      }
+      if (
+        captured.projectRoot !== undefined &&
+        captured.projectRoot !== projectRoot
+      ) {
+        throw new Error("Tool runtime returned a mismatched project root.");
+      }
+      return Object.freeze({
+        ...captured,
+        sessionId: session.id,
+        mode: session.mode,
+        projectScope: session.projectScope,
+        projectRoot,
+        workspaceProjectRoots: this.projectCatalog
+          .listProjects()
+          .flatMap((project) => (project.rootPath ? [project.rootPath] : [])),
+        prepareWorkspaceMutation: () =>
+          this.prepareSessionProjectMutation(session),
+        ...(mcpHubLease ? { mcpHub: mcpHubLease.hub, mcpHubLease } : {}),
+        onFileRead: (filePath: string) => session.trackFileRead(filePath),
+        getAdvertisedSkills: () => session.getAdvertisedSkills(),
+        getAdvertisedRules: () => session.getAdvertisedRules(),
+        onSkillLoad: (skillName: string) => session.trackLoadedSkill(skillName),
+      });
+    } catch (error) {
+      mcpHubLease?.release();
+      throw error;
+    }
+  }
+
+  private bindCapturedEngineToSession(
+    engine: AgentEngine,
+    session: AgentSession,
+    context: Readonly<ToolDispatchContext> | undefined,
+    runtime?: AgentToolRuntime,
+  ): Readonly<ToolDispatchContext> | undefined {
+    if (!context) return undefined;
+    try {
+      this.refreshMcpToolDisclosure(session, context);
+      engine.setToolRuntime(runtime ?? this.host.createToolRuntime(context));
+      this.activeRequestToolContexts.set(session.id, context);
+      if (engine === this.engine) {
+        this.foregroundEngineRequest = { sessionId: session.id, context };
+      }
+      return context;
+    } catch (error) {
+      context.mcpHubLease?.release();
+      throw error;
+    }
+  }
+
+  private bindEngineToSession(
+    engine: AgentEngine,
+    session: AgentSession,
+    overrides?: Partial<ToolDispatchContext>,
+    inheritedContext?: Readonly<ToolDispatchContext>,
+  ): Readonly<ToolDispatchContext> | undefined {
+    if (engine === this.engine && this.foregroundEngineRequest) {
+      throw new Error(
+        `Foreground engine is already bound to session '${this.foregroundEngineRequest.sessionId}'.`,
+      );
+    }
+    const context = this.captureSessionToolContext(
+      session,
+      overrides,
+      inheritedContext,
+    );
+    if (!context) return undefined;
+    return this.bindCapturedEngineToSession(engine, session, context);
+  }
+
+  private releaseSessionToolContext(
+    sessionId: string,
+    context: Readonly<ToolDispatchContext> | undefined,
+  ): void {
+    if (!context || this.releasedToolContexts.has(context)) return;
+    this.releasedToolContexts.add(context);
+    if (this.activeRequestToolContexts.get(sessionId) === context) {
+      this.activeRequestToolContexts.delete(sessionId);
+    }
+    if (this.foregroundEngineRequest?.context === context) {
+      this.foregroundEngineRequest = undefined;
+    }
+    context.mcpHubLease?.release();
+  }
+
+  setToolContext(ctx: ToolDispatchContext): void {
+    // This is a window-level capability source only. Active requests capture a
+    // project-bound snapshot and must not be mutated when the source changes.
+    this.toolCtx = ctx;
+  }
+
+  private getBackgroundAgentSettings(scope?: Readonly<SessionProjectScope>) {
     return normalizeBackgroundAgentSettings(
-      this.host.config.getBackgroundAgentSettings(),
+      this.host.config.getBackgroundAgentSettings(scope),
     );
   }
 
-  private getAcpAdditionalDirectories(): string[] {
-    return this.getWorkspaceFolders()
-      .map((folder) => folder.path)
-      .filter((folderPath) => folderPath && folderPath !== this.cwd);
+  private cloneMcpToolDefinitions(
+    context: Readonly<ToolDispatchContext> | undefined,
+  ): import("./providers/types.js").ToolDefinition[] {
+    return context?.mcpHub ? structuredClone(context.mcpHub.getToolDefs()) : [];
   }
 
-  private acpTextFromContentBlock(block: AcpContentBlock): string {
-    if (block.type === "text") return block.text;
-    if (block.type === "resource_link") return block.uri;
-    if (block.type === "resource") {
-      const resource = block.resource;
-      if ("text" in resource && typeof resource.text === "string") {
-        return resource.text;
+  private async prepareTurnExecution(
+    session: AgentSession,
+    options: {
+      overrides?: Partial<ToolDispatchContext>;
+      inheritedContext?: Readonly<ToolDispatchContext>;
+    } = {},
+  ): Promise<PreparedTurnExecution> {
+    const context = this.captureSessionToolContext(
+      session,
+      options.overrides,
+      options.inheritedContext,
+    );
+    try {
+      const settings = normalizeCoreWebAccessSettings(
+        this.host.config.getWebAccessSettings?.(),
+      );
+      const provider = this.host.providers.tryResolveProvider(session.model);
+      const capabilities = provider?.getRequestCapabilities
+        ? await provider.getRequestCapabilities(session.model)
+        : provider?.getCapabilities(session.model);
+      const mcpTools = this.cloneMcpToolDefinitions(context);
+      const policy = resolveCoreWebAccessPolicy({
+        settings,
+        providerCapabilities: capabilities?.hostedWeb,
+      });
+      const unavailableNativeRoute = [
+        policy.routes.search,
+        policy.routes.fetch,
+      ].find(
+        (route) =>
+          settings[
+            route.kind === "search" ? "searchBackend" : "fetchBackend"
+          ] === "native" && !route.available,
+      );
+      if (unavailableNativeRoute) {
+        throw new Error(
+          `Native web ${unavailableNativeRoute.kind} is unavailable (${unavailableNativeRoute.reason}).`,
+        );
       }
+
+      const serverNames = new Set(
+        mcpTools
+          .map((tool) => parseMcpToolName(tool.name)?.serverName)
+          .filter((name): name is string => Boolean(name)),
+      );
+      const mcpToolDisclosure = partitionMcpToolsForDisclosure(mcpTools, {
+        serverConfigs: [...serverNames].map((serverName) => ({
+          serverName,
+          mode: context?.mcpHub?.getServerConfig(serverName)?.toolDisclosure,
+        })),
+      });
+      const requestContext =
+        context && provider
+          ? Object.freeze({
+              ...context,
+              nativeWebToolKinds: [...policy.enabledKinds],
+              nativeWebToolProvider: {
+                execute: async (request: NativeWebToolExecutionRequest) => {
+                  const route = policy.routes[request.kind];
+                  if (!route.available || !route.hostedTool) {
+                    throw new Error(
+                      `Native web ${request.kind} is not available for this request.`,
+                    );
+                  }
+                  const hostedTool = route.hostedTool;
+                  const prompt = buildNativeWebDelegationPrompt(
+                    request.kind,
+                    request.input,
+                  );
+                  const permit =
+                    await this.host.providers.requestScheduler.acquire(
+                      provider.id,
+                      session.background ? "background" : "interactive",
+                      request.signal,
+                    );
+                  try {
+                    return await collectNativeWebToolResult({
+                      provider: provider.id,
+                      operation: request.kind,
+                      input: request.input,
+                      events: continueNativeWebProviderStream({
+                        initialMessages: [
+                          { role: "user", content: prompt.userPrompt },
+                        ],
+                        stream: (messages) =>
+                          provider.stream({
+                            model: session.model,
+                            systemPrompt: prompt.systemPrompt,
+                            messages,
+                            tools: [],
+                            hostedTools: [hostedTool],
+                            maxTokens: Math.min(session.maxTokens, 16_384),
+                            reasoningEffort: "low",
+                            state: { store: false },
+                            providerHints: {
+                              codex: {
+                                sessionId: `${session.id}:web:${request.kind}`,
+                              },
+                            },
+                            signal: request.signal,
+                          }),
+                      }),
+                    });
+                  } finally {
+                    permit.release();
+                  }
+                },
+              },
+            })
+          : context;
+
+      return Object.freeze({
+        context: requestContext,
+        policy: deepFreeze(policy),
+        mcpToolDisclosure: deepFreeze(mcpToolDisclosure),
+        mcpToolDefinitions: deepFreeze(mcpTools),
+      });
+    } catch (error) {
+      context?.mcpHubLease?.release();
+      throw error;
     }
-    return "";
+  }
+
+  private async prepareInteractiveTurnExecution(
+    session: AgentSession,
+  ): Promise<PreparedTurnExecution> {
+    try {
+      return await this.prepareTurnExecution(session);
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err.message : String(err);
+      session.status = "error";
+      if (!session.background) {
+        session.runState = undefined;
+      }
+      this.recordAndEmitEvent(session.id, {
+        type: "error",
+        error,
+        retryable: false,
+      });
+      await this.saveSessionNow(session.id);
+      this.recordAndEmitEvent(session.id, {
+        type: "done",
+        totalInputTokens: session.totalInputTokens,
+        totalOutputTokens: session.totalOutputTokens,
+        totalCacheReadTokens: session.totalCacheReadTokens,
+        totalCacheCreationTokens: session.totalCacheCreationTokens,
+      });
+      this.notifySessionsChanged();
+      throw err;
+    }
+  }
+
+  private getAcpAdditionalDirectories(projectRoot: string): string[] {
+    return this.getWorkspaceFolders()
+      .map((folder) => folder.path)
+      .filter((folderPath) => folderPath && folderPath !== projectRoot);
+  }
+
+  private acpOutputImageCount(
+    state: AcpOutputState,
+    excludingToolCallId?: string,
+  ): number {
+    let count = state.directImages.length;
+    for (const [toolCallId, images] of state.toolImages) {
+      if (toolCallId !== excludingToolCallId) count += images.length;
+    }
+    return count;
+  }
+
+  private setAcpToolImages(
+    state: AcpOutputState,
+    update: Extract<SessionUpdate, { sessionUpdate: "tool_call_update" }>,
+  ): void {
+    if (!update.content) return;
+    const images: ImageBlock[] = [];
+    const available = Math.max(
+      0,
+      MAX_ACP_OUTPUT_IMAGES -
+        this.acpOutputImageCount(state, update.toolCallId),
+    );
+    let validImageCount = 0;
+    for (const item of update.content) {
+      if (item.type !== "content" || item.content.type !== "image") continue;
+      const converted = convertAcpContentBlock(item.content);
+      if (converted.warning) state.warnings.add(converted.warning);
+      if (converted.content?.type !== "image") continue;
+      validImageCount += 1;
+      if (images.length < available) images.push(converted.content);
+    }
+    if (validImageCount > images.length) {
+      state.warnings.add(
+        `[ACP images truncated: showing at most ${MAX_ACP_OUTPUT_IMAGES} images]`,
+      );
+    }
+    state.toolImages.set(update.toolCallId, images);
+  }
+
+  private buildAcpAssistantContent(
+    state: AcpOutputState,
+    extraText?: string,
+  ): ContentBlock[] {
+    const responseText = state.assistantTextParts.join("").trim();
+    const warningText = Array.from(state.warnings).join("\n").trim();
+    const toolImages = Array.from(state.toolImages.values()).flat();
+    const imageCount = state.directImages.length + toolImages.length;
+    const text = [
+      responseText ||
+        (imageCount > 0
+          ? `ACP agent returned ${imageCount} image${imageCount === 1 ? "" : "s"}.`
+          : ""),
+      warningText,
+      extraText?.trim(),
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    return [
+      ...(text ? ([{ type: "text", text }] as ContentBlock[]) : []),
+      ...state.directImages,
+      ...toolImages,
+    ];
   }
 
   private applyAcpPromptResponseUsage(
@@ -591,6 +1282,7 @@ export class AgentSessionManager {
     sessionId: string;
     task: string;
     readonlyOnly: boolean;
+    requestContext: Readonly<ToolDispatchContext> | undefined;
     request: RequestPermissionRequest;
   }): Promise<RequestPermissionResponse> {
     const toolKind = args.request.toolCall.kind;
@@ -605,7 +1297,9 @@ export class AgentSessionManager {
       return { outcome: { outcome: "cancelled" } };
     }
 
-    const selected = await this.toolCtx?.onApprovalRequest?.(
+    this.noteBackgroundProgress(args.sessionId, "awaiting_approval");
+
+    const selected = await args.requestContext?.onApprovalRequest?.(
       {
         kind: this.acpToolKindToApprovalKind(toolKind),
         title:
@@ -643,21 +1337,35 @@ export class AgentSessionManager {
 
   private applyAcpSessionUpdate(args: {
     session: AgentSession;
-    assistantTextParts: string[];
+    output: AcpOutputState;
     update: SessionUpdate;
   }): void {
     const { session, update } = args;
     if (update.sessionUpdate === "agent_message_chunk") {
-      const text = this.acpTextFromContentBlock(update.content);
-      if (text) {
-        args.assistantTextParts.push(text);
-        this.appendBgStreamingText(session.id, text);
-        this.recordAndEmitEvent(session.id, { type: "text_delta", text });
+      this.noteBackgroundProgress(session.id, "responding");
+      const converted = convertAcpContentBlock(update.content);
+      if (converted.warning) args.output.warnings.add(converted.warning);
+      if (converted.content?.type === "text") {
+        args.output.assistantTextParts.push(converted.content.text);
+        this.appendBgStreamingText(session.id, converted.content.text);
+        this.recordAndEmitEvent(session.id, {
+          type: "text_delta",
+          text: converted.content.text,
+        });
+      } else if (converted.content?.type === "image") {
+        if (this.acpOutputImageCount(args.output) < MAX_ACP_OUTPUT_IMAGES) {
+          args.output.directImages.push(converted.content);
+        } else {
+          args.output.warnings.add(
+            `[ACP images truncated: showing at most ${MAX_ACP_OUTPUT_IMAGES} images]`,
+          );
+        }
       }
       return;
     }
 
     if (update.sessionUpdate === "tool_call") {
+      this.noteBackgroundProgress(session.id, "executing_tool");
       session.currentTool = update.title;
       session.status = "tool_executing";
       this.bgStatusDetail.set(session.id, update.title);
@@ -673,6 +1381,13 @@ export class AgentSessionManager {
     }
 
     if (update.sessionUpdate === "tool_call_update") {
+      this.setAcpToolImages(args.output, update);
+      this.noteBackgroundProgress(
+        session.id,
+        update.status === "completed" || update.status === "failed"
+          ? "waiting_for_provider"
+          : "executing_tool",
+      );
       if (update.title) {
         session.currentTool = update.title;
         this.bgStatusDetail.set(session.id, update.title);
@@ -684,6 +1399,7 @@ export class AgentSessionManager {
     }
 
     if (update.sessionUpdate === "usage_update") {
+      this.noteBackgroundProgress(session.id, "waiting_for_provider");
       // update.used is context-window occupancy ("tokens currently in
       // context"), not cumulative spend — it must not count against the
       // token budget, or an agent that loads a large diff would exhaust a
@@ -710,17 +1426,21 @@ export class AgentSessionManager {
           model: event.modelFallback.effectiveModel,
           autoCondenseThreshold: this.getCondenseThresholdForModel(
             event.modelFallback.effectiveModel,
+            session.projectScope,
           ),
         });
       }
       this.saveSession(sessionId);
       this.notifySessionsChanged();
     }
-    this.activityTraceRecorder.appendAgentEvent(
-      sessionId,
-      event,
-      session?.background ? "background_agent" : "foreground_agent",
-    );
+    if (session) {
+      this.activityTraceRecorder.appendAgentEvent(
+        sessionId,
+        session.projectScope.projectId,
+        event,
+        session.background ? "background_agent" : "foreground_agent",
+      );
+    }
     this.onEvent?.(sessionId, event);
     for (const listener of this.agentEventListeners) {
       listener(sessionId, event);
@@ -755,41 +1475,100 @@ export class AgentSessionManager {
     turnIndex: number,
     opts?: { refreshExisting?: boolean },
   ): Promise<Checkpoint | null> {
-    if (turnIndex <= 0 || !this.checkpointManager) return null;
+    if (turnIndex <= 0) return null;
 
-    const existingBefore = this.checkpoints.get(session.id) ?? [];
-    const existingMatch = existingBefore.find(
+    const primaryProjectId = session.projectScope.projectId;
+    const projectIds = new Set(
+      this.projectCatalog
+        .listProjects()
+        .filter(
+          (project) =>
+            project.availability.status === "available" && project.rootPath,
+        )
+        .map((project) => project.id),
+    );
+
+    const existing = this.checkpoints.get(session.id) ?? [];
+    const existingIndex = existing.findIndex(
       (checkpoint) => checkpoint.turnIndex === turnIndex,
     );
-    if (existingMatch && !opts?.refreshExisting) {
-      return null;
+    const existingCheckpoint = existing[existingIndex];
+    const existingSnapshots = new Map(
+      (existingCheckpoint?.projectSnapshots ?? []).map((snapshot) => [
+        snapshot.projectId,
+        snapshot,
+      ]),
+    );
+    if (
+      existingCheckpoint?.projectId &&
+      !existingSnapshots.has(existingCheckpoint.projectId)
+    ) {
+      existingSnapshots.set(existingCheckpoint.projectId, {
+        projectId: existingCheckpoint.projectId,
+        commitHash: existingCheckpoint.commitHash,
+        createdAt: existingCheckpoint.createdAt,
+      });
     }
 
-    const checkpoint = await this.checkpointManager.createCheckpoint(turnIndex);
-    if (!checkpoint) return null;
+    let changed = false;
+    let createdCheckpointId: string | undefined;
+    for (const projectId of projectIds) {
+      if (existingSnapshots.has(projectId) && !opts?.refreshExisting) continue;
+      const project = this.projectCatalog
+        .listProjects()
+        .find((candidate) => candidate.id === projectId);
+      if (!project) continue;
+      const manager = this.getCheckpointManagerForProject(project);
+      const initialized =
+        typeof manager.initialize === "function"
+          ? await manager.initialize()
+          : true;
+      if (initialized === false) {
+        this.log?.(
+          `[checkpoint] Skipping unavailable checkpoint protection for project '${project.name}'.`,
+        );
+        continue;
+      }
+      const created = await manager.createCheckpoint(turnIndex);
+      if (!created) {
+        this.log?.(
+          `[checkpoint] Failed to capture project '${project.name}'; continuing without checkpoint coverage for that root.`,
+        );
+        continue;
+      }
+      if (projectId === primaryProjectId || createdCheckpointId === undefined) {
+        createdCheckpointId = created.id;
+      }
+      existingSnapshots.set(projectId, {
+        projectId,
+        commitHash: created.commitHash,
+        createdAt: created.createdAt,
+      });
+      changed = true;
+    }
 
-    const existingAfter = this.checkpoints.get(session.id) ?? [];
-    const existingIndex = existingAfter.findIndex(
-      (candidate) => candidate.turnIndex === turnIndex,
-    );
+    if (!changed && existingCheckpoint) return null;
+    const snapshots = [...existingSnapshots.values()];
+    const primarySnapshot =
+      existingSnapshots.get(primaryProjectId) ?? snapshots[0];
+    if (!primarySnapshot) return null;
+    const checkpoint: Checkpoint = {
+      id: existingCheckpoint?.id ?? createdCheckpointId ?? crypto.randomUUID(),
+      projectId: primaryProjectId,
+      commitHash: primarySnapshot.commitHash,
+      turnIndex,
+      createdAt: Math.max(...snapshots.map((snapshot) => snapshot.createdAt)),
+      projectSnapshots: snapshots,
+    };
 
     if (existingIndex !== -1) {
-      if (!opts?.refreshExisting) {
-        return null;
-      }
-      const refreshed: Checkpoint = {
-        ...existingAfter[existingIndex],
-        commitHash: checkpoint.commitHash,
-        createdAt: checkpoint.createdAt,
-      };
-      const next = [...existingAfter];
-      next[existingIndex] = refreshed;
+      const next = [...existing];
+      next[existingIndex] = checkpoint;
       this.checkpoints.set(session.id, next);
-      return refreshed;
+      return checkpoint;
     }
 
-    const next = [...existingAfter, checkpoint];
-    this.checkpoints.set(session.id, next);
+    this.checkpoints.set(session.id, [...existing, checkpoint]);
     this.recordAndEmitEvent(session.id, {
       type: "checkpoint_created",
       checkpointId: checkpoint.id,
@@ -801,9 +1580,6 @@ export class AgentSessionManager {
   private getEngine(): AgentEngine {
     if (!this.engine) {
       this.engine = this.host.createEngine(this.host.providers, this.log);
-      if (this.toolCtx) {
-        this.engine.setToolRuntime(this.host.createToolRuntime(this.toolCtx));
-      }
     }
     return this.engine;
   }
@@ -812,9 +1588,12 @@ export class AgentSessionManager {
     Object.assign(this.config, config);
   }
 
-  private getCondenseThresholdForModel(model: string): number {
+  private getCondenseThresholdForModel(
+    model: string,
+    scope?: Readonly<SessionProjectScope>,
+  ): number {
     try {
-      return this.host.config.getCondenseThresholdForModel(model);
+      return this.host.config.getCondenseThresholdForModel(model, scope);
     } catch (err) {
       this.log?.(
         `[agent] Failed to resolve configured condense threshold for ${model}: ${err instanceof Error ? err.message : String(err)}`,
@@ -827,17 +1606,36 @@ export class AgentSessionManager {
     }
   }
 
-  private buildConfigForModel(model: string): AgentConfig {
-    return {
+  private buildConfigForModel(
+    model: string,
+    scope?: Readonly<SessionProjectScope>,
+  ): AgentConfig {
+    const base = {
       ...this.config,
       model,
-      autoCondenseThreshold: this.getCondenseThresholdForModel(model),
+      autoCondenseThreshold: this.getCondenseThresholdForModel(model, scope),
     };
+    if (!scope || !this.host.config.resolveAgentConfig) return base;
+    try {
+      return this.host.config.resolveAgentConfig(base, scope);
+    } catch (err) {
+      this.log?.(
+        `[agent] Failed to resolve project agent config: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return base;
+    }
   }
 
-  private getModelForMode(mode: string): string {
+  private getModelForMode(
+    mode: string,
+    scope?: Readonly<SessionProjectScope>,
+  ): string {
     try {
-      return this.host.config.resolveModelForMode(mode, this.config.model);
+      return this.host.config.resolveModelForMode(
+        mode,
+        this.config.model,
+        scope,
+      );
     } catch (err) {
       this.log?.(
         `[agent] Failed to resolve configured model for mode ${mode}: ${err instanceof Error ? err.message : String(err)}`,
@@ -846,9 +1644,14 @@ export class AgentSessionManager {
     }
   }
 
-  private getReasoningEffortForMode(mode: string): ReasoningEffort {
+  private getReasoningEffortForMode(
+    mode: string,
+    scope?: Readonly<SessionProjectScope>,
+  ): ReasoningEffort {
     try {
-      return this.host.config.resolveReasoningEffortForMode?.(mode) ?? "high";
+      return (
+        this.host.config.resolveReasoningEffortForMode?.(mode, scope) ?? "high"
+      );
     } catch (err) {
       this.log?.(
         `[agent] Failed to resolve configured reasoning effort for mode ${mode}: ${err instanceof Error ? err.message : String(err)}`,
@@ -872,11 +1675,14 @@ export class AgentSessionManager {
   private applyThresholdToSession(session: AgentSession): void {
     session.autoCondenseThreshold = this.getCondenseThresholdForModel(
       session.model,
+      session.projectScope,
     );
   }
 
-  private buildMcpToolDisclosure(): McpToolDisclosurePartition | undefined {
-    const mcpHub = this.toolCtx?.mcpHub;
+  private buildMcpToolDisclosure(
+    context: Pick<ToolDispatchContext, "mcpHub"> | undefined = this.toolCtx,
+  ): McpToolDisclosurePartition | undefined {
+    const mcpHub = context?.mcpHub;
     if (!mcpHub) return undefined;
     const tools = mcpHub.getToolDefs();
     if (tools.length === 0) return undefined;
@@ -892,17 +1698,68 @@ export class AgentSessionManager {
     return partitionMcpToolsForDisclosure(tools, { serverConfigs });
   }
 
-  private refreshMcpToolDisclosure(session: AgentSession): void {
-    session.mcpToolDisclosure = this.buildMcpToolDisclosure();
+  private refreshMcpToolDisclosure(
+    session: AgentSession,
+    context?: Pick<ToolDispatchContext, "mcpHub">,
+  ): void {
+    const currentContext =
+      context ??
+      (() => {
+        const generation = this.projectMcpHubRegistry?.getCurrent(
+          session.projectScope,
+        );
+        return generation ? { mcpHub: generation.hub } : undefined;
+      })();
+    session.mcpToolDisclosure = this.buildMcpToolDisclosure(currentContext);
   }
 
   getConfig(): AgentConfig {
     return this.config;
   }
 
+  getWorkspaceProjects(): readonly WorkspaceProject[] {
+    if (!this.executionUnavailableReason)
+      return this.projectCatalog.listProjects();
+    return this.projectCatalog.listProjects().map((project) => ({
+      ...project,
+      rootPath: undefined,
+      availability: {
+        status: "unavailable" as const,
+        reason: "root_unavailable" as const,
+        message: this.executionUnavailableReason!,
+      },
+    }));
+  }
+
+  getDefaultProjectScope(): SessionProjectScope | undefined {
+    if (this.executionUnavailableReason) return undefined;
+    const selection = selectNewSessionProject(this.projectCatalog, {
+      browserPreferredProjectId: this.browserPreferredProjectId,
+    });
+    return selection.status === "selected" ? selection.scope : undefined;
+  }
+
+  setBrowserPreferredProject(projectId: string): boolean {
+    const project = this.projectCatalog
+      .listProjects()
+      .find((candidate) => candidate.id === projectId);
+    if (!project || project.availability.status !== "available") return false;
+    if (this.browserPreferredProjectId === projectId) return true;
+    this.browserPreferredProjectId = projectId;
+    this.notifySessionsChanged();
+    Promise.resolve(this.onBrowserPreferredProjectChanged?.(projectId)).catch(
+      (error: unknown) => {
+        this.log?.(
+          `[browser] failed to persist preferred project ${projectId}: ${error}`,
+        );
+      },
+    );
+    return true;
+  }
+
   async createForegroundSession(
     mode: string,
-    opts?: { activeFilePath?: string },
+    opts?: { activeFilePath?: string; projectId?: string },
   ): Promise<AgentSession> {
     await this.discardEmptyForegroundSession();
     return this.createSession(mode, opts);
@@ -910,30 +1767,42 @@ export class AgentSessionManager {
 
   async createSession(
     mode: string,
-    opts?: { activeFilePath?: string },
+    opts?: { activeFilePath?: string; projectId?: string },
   ): Promise<AgentSession> {
-    const model = this.getModelForMode(mode);
-    const config = this.buildConfigForModel(model);
+    const projectScope = this.selectProjectScope({
+      explicitProjectId: opts?.projectId,
+      activeFilePath: opts?.activeFilePath,
+    });
+    const model = this.getModelForMode(mode, projectScope);
+    const config = this.buildConfigForModel(model, projectScope);
     const providerId = this.host.providers.tryResolveProvider(config.model)?.id;
     this.updateConfig({
       model,
       autoCondenseThreshold: config.autoCondenseThreshold,
     });
-    const session = await this.host.createSession({
+    const projectMcpGeneration =
+      this.projectMcpHubRegistry?.getCurrent(projectScope);
+    const session = await this.createBoundSession({
       mode,
       config,
-      cwd: this.cwd,
+      projectScope,
       workspaceFolders: this.getWorkspaceFolders(),
       devMode: this.devMode,
       activeFilePath: opts?.activeFilePath,
+      activeContextResourceUri: opts?.activeFilePath
+        ? pathToFileURL(opts.activeFilePath).toString()
+        : undefined,
       providerId,
-      mcpToolDisclosure: this.buildMcpToolDisclosure(),
+      mcpToolDisclosure: this.buildMcpToolDisclosure(
+        projectMcpGeneration ? { mcpHub: projectMcpGeneration.hub } : undefined,
+      ),
     });
     this.applyReasoningEffortToSession(
       session,
-      this.getReasoningEffortForMode(mode),
+      this.getReasoningEffortForMode(mode, projectScope),
     );
     this.sessions.set(session.id, session);
+    this.getCheckpointManagerForSession(session);
     const pendingPolicy = this.commandApprovalPolicies.get("agent");
     if (pendingPolicy) {
       this.commandApprovalPolicies.set(session.id, pendingPolicy);
@@ -948,9 +1817,10 @@ export class AgentSessionManager {
    * Rebuild the system prompt for all active foreground sessions.
    * Called when instruction files (AGENTS.md, CLAUDE.md, etc.) change on disk.
    */
-  async rebuildSystemPrompts(): Promise<void> {
+  async rebuildSystemPrompts(projectId?: string): Promise<void> {
     const fg = this.getForegroundSession();
-    if (!fg) return;
+    if (!fg || (projectId && fg.projectScope.projectId !== projectId)) return;
+    this.requireSessionExecution(fg);
     this.refreshMcpToolDisclosure(fg);
     await fg.rebuildSystemPrompt({
       devMode: this.devMode,
@@ -965,11 +1835,15 @@ export class AgentSessionManager {
    * provider-specific behavioral tuning takes effect.
    */
   async setModel(model: string): Promise<void> {
+    const fg = this.getForegroundSession();
+    if (fg) this.requireSessionExecution(fg);
     this.updateConfig({
       model,
-      autoCondenseThreshold: this.getCondenseThresholdForModel(model),
+      autoCondenseThreshold: this.getCondenseThresholdForModel(
+        model,
+        fg?.projectScope,
+      ),
     });
-    const fg = this.getForegroundSession();
     if (!fg) return;
 
     fg.model = model;
@@ -1092,6 +1966,8 @@ export class AgentSessionManager {
       lastCacheReadTokens: session.lastCacheReadTokens,
       reasoningEffort: session.reasoningEffort,
       background: session.background,
+      projectScope: session.projectScope,
+      activeContextResourceUri: session.activeContextResourceUri,
       getLoadedSkills: () => session.getLoadedSkills?.() ?? [],
       getAllMessages: () => session.getAllMessages(),
       checkpoints: this.checkpoints.get(session.id) ?? [],
@@ -1174,6 +2050,10 @@ export class AgentSessionManager {
     },
   ): PersistedSessionRecord {
     const messages = opts?.messages ?? session.getAllMessages();
+    const revertPending =
+      opts?.revertPending === null
+        ? undefined
+        : (opts?.revertPending ?? this.sessionRevertPending.get(session.id));
     return {
       summary: {
         schemaVersion: 1,
@@ -1187,9 +2067,12 @@ export class AgentSessionManager {
         createdAt: session.createdAt,
         lastActiveAt: session.lastActiveAt,
         background: session.background,
+        projectScope: session.projectScope,
       },
       messages,
       metadata: {
+        projectScope: session.projectScope,
+        activeContextResourceUri: session.activeContextResourceUri,
         mode: session.mode,
         model: session.model,
         totalInputTokens: session.totalInputTokens,
@@ -1200,20 +2083,28 @@ export class AgentSessionManager {
         lastCacheReadTokens: session.lastCacheReadTokens,
         reasoningEffort: session.reasoningEffort,
         loadedSkills: session.getLoadedSkills?.() ?? [],
-        runState: session.runState ? { ...session.runState } : undefined,
+        runState: session.runState
+          ? { ...session.runState, projectId: session.projectScope.projectId }
+          : undefined,
         fleet: session.fleetMetadata
-          ? structuredClone(session.fleetMetadata)
+          ? {
+              ...structuredClone(session.fleetMetadata),
+              projectId: session.projectScope.projectId,
+            }
           : undefined,
         checkpointState: {
-          baseCommit: this.checkpointManager?.baseCommit ?? null,
+          projectId: session.projectScope.projectId,
+          baseCommit:
+            this.peekCheckpointManagerForSession(session)?.baseCommit ?? null,
           checkpoints:
             opts?.checkpoints ?? this.checkpoints.get(session.id) ?? [],
         },
-        revertPending:
-          opts?.revertPending === null
-            ? undefined
-            : (opts?.revertPending ??
-              this.sessionRevertPending.get(session.id)),
+        revertPending: revertPending
+          ? {
+              ...revertPending,
+              projectId: session.projectScope.projectId,
+            }
+          : undefined,
       },
     };
   }
@@ -1235,6 +2126,8 @@ export class AgentSessionManager {
       background: s.background,
       createdAt: s.createdAt,
       lastActiveAt: s.lastActiveAt,
+      projectScope: s.projectScope,
+      projectAvailability: s.projectAvailability,
     }));
   }
 
@@ -1268,6 +2161,7 @@ export class AgentSessionManager {
     }
 
     const fg = this.getForegroundSession();
+    if (fg) this.requireSessionExecution(fg);
 
     const mode = fg?.mode ?? "code";
     const model = fg?.model ?? this.config.model;
@@ -1286,14 +2180,16 @@ export class AgentSessionManager {
         }
       : this.buildConfigForModel(model);
 
-    const session = await this.host.createSession({
+    const projectScope = fg?.projectScope ?? this.selectProjectScope();
+    const session = await this.createBoundSession({
       mode,
       agentMode: fg?.agentMode,
       config,
-      cwd: this.cwd,
+      projectScope,
       workspaceFolders: this.getWorkspaceFolders(),
       devMode: this.devMode,
       activeFilePath: fg?.activeFilePath,
+      activeContextResourceUri: fg?.activeContextResourceUri,
       providerId,
     });
 
@@ -1305,35 +2201,34 @@ export class AgentSessionManager {
         structuredClone(fg.getMessages()) as AgentMessage[],
       );
     }
+    const engine = this.host.createEngine(this.host.providers, this.log);
+    const preparedTurn = await this.prepareTurnExecution(session, {
+      overrides: {
+        onModeSwitch: undefined,
+        onApprovalRequest: undefined,
+        onQuestion: undefined,
+        onSpawnBackground: undefined,
+        onGetBackgroundStatus: undefined,
+        onGetBackgroundResult: undefined,
+        onKillBackground: undefined,
+        onFinalStatus: undefined,
+      },
+      inheritedContext: fg
+        ? this.activeRequestToolContexts.get(fg.id)
+        : undefined,
+    });
+    const sideCtx = this.bindCapturedEngineToSession(
+      engine,
+      session,
+      preparedTurn.context,
+    );
+
     session.addUserMessage(trimmed, {
       displayText: `/btw ${trimmed}`,
       isSlashCommand: true,
       slashCommandLabel: "/btw",
     });
     session.status = "streaming";
-
-    const sideCtx: ToolDispatchContext = {
-      ...this.toolCtx,
-      sessionId: session.id,
-      mode: session.agentMode.slug,
-      onModeSwitch: undefined,
-      onApprovalRequest: undefined,
-      onQuestion: undefined,
-      onSpawnBackground: undefined,
-      onGetBackgroundStatus: undefined,
-      onGetBackgroundResult: undefined,
-      onKillBackground: undefined,
-      onFinalStatus: undefined,
-      onFileRead: (filePath) => {
-        session.trackFileRead(filePath);
-      },
-      getAdvertisedSkills: () => session.getAdvertisedSkills(),
-      getAdvertisedRules: () => session.getAdvertisedRules(),
-      onSkillLoad: (skillName) => session.trackLoadedSkill(skillName),
-    };
-
-    const engine = this.host.createEngine(this.host.providers, this.log);
-    engine.setToolRuntime(this.host.createToolRuntime(sideCtx));
 
     let answer = "";
     const toolCalls: BtwQuestionResult["toolCalls"] = [];
@@ -1377,6 +2272,9 @@ export class AgentSessionManager {
         toolProfile: "btw",
         maxApiTurns: BTW_MAX_API_TURNS,
         maxToolCalls: BTW_MAX_TOOL_CALLS,
+        webAccessPolicy: preparedTurn.policy,
+        mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
+        mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
       })) {
         switch (event.type) {
           case "text_delta":
@@ -1404,6 +2302,7 @@ export class AgentSessionManager {
         }
       }
     } finally {
+      this.releaseSessionToolContext(session.id, sideCtx);
       this.btwInFlight = false;
       if (deadline) this.host.timers.clearTimeout(deadline);
       externalSignal?.removeEventListener("abort", onExternalAbort);
@@ -1459,235 +2358,295 @@ export class AgentSessionManager {
     }
 
     return this.withSessionSendQueue(session.id, async () => {
+      this.requireSessionExecution(session);
       const previousRunSettled = this.sessionRunSettled.get(session.id);
       if (previousRunSettled) {
         await previousRunSettled;
       }
 
-      // Update reasoning effort. Legacy callers can still send thinkingEnabled.
-      if (opts?.reasoningEffort) {
-        session.reasoningEffort = opts.reasoningEffort;
-      } else if (opts?.thinkingEnabled === false) {
-        session.reasoningEffort = "none";
-      } else if (session.reasoningEffort === "none") {
-        session.reasoningEffort = "high";
-      }
-
-      // Keep the legacy budget field in sync for budget-based providers.
-      if (session.reasoningEffort === "none") {
-        session.thinkingBudget = 0;
-      } else if (session.thinkingBudget === 0) {
-        session.thinkingBudget = this.config.thinkingBudget;
-      }
-
-      // Create checkpoint before adding the next user message, but only after the
-      // first turn — the initial message has no prior state worth restoring to.
-      // `turnIndex` here means "how many visible user turns already exist at this
-      // snapshot". Example: immediately before the second user message, turnIndex=1.
-      // In the UI that checkpoint is displayed on the first user message.
-      const turnIndex = session
-        .getAllMessages()
-        .filter(
-          (m) => m.role === "user" && typeof m.content === "string",
-        ).length;
-      await this.ensureCheckpointForTurn(session, turnIndex, {
-        refreshExisting: true,
-      });
-
-      // Clear any stale pending interjections from the previous run — if the
-      // webview already drained the queue and sent this message via agentSend,
-      // the old interjections would otherwise be re-emitted mid-turn as duplicates.
-      while (session.consumePendingInterjection() !== null) {
-        // drain
-      }
-      // Pasted images/PDFs are stored on the message itself so they're injected
-      // into every API call (the API is stateless) and survive session restore.
-      const priorUserTexts = session
-        .getAllMessages()
-        .filter(
-          (message): message is AgentMessage & { content: string } =>
-            message.role === "user" && typeof message.content === "string",
-        )
-        .map((message) => message.content);
-      const messagesToAdd = [
-        {
-          text,
-          displayText: opts?.displayText,
-          isSlashCommand: opts?.isSlashCommand,
-          slashCommandLabel: opts?.slashCommandLabel,
-          origin: opts?.origin,
-          images: opts?.images,
-          documents: opts?.documents,
-        },
-        ...(opts?.additionalMessages ?? []),
-      ].filter(
-        (message) =>
-          message.text.trim().length > 0 ||
-          (message.images?.length ?? 0) > 0 ||
-          (message.documents?.length ?? 0) > 0,
-      );
-      if (messagesToAdd.length === 0) return;
-
-      const previousMessageCount = session.messageCount;
-      for (const message of messagesToAdd) {
-        const memoryNudge =
-          message.isSlashCommand === true || message.text.trim().length === 0
-            ? { text: message.text, nudged: false }
-            : applyMemoryCandidateNudge(
-                message.text,
-                priorUserTexts,
-                countMemoryNudges(priorUserTexts),
-              );
-        session.addUserMessage(memoryNudge.text, {
-          displayText:
-            message.displayText ??
-            (memoryNudge.nudged ? message.text : undefined),
-          isSlashCommand: message.isSlashCommand === true,
-          slashCommandLabel: message.slashCommandLabel,
-          origin: message.origin,
-          images: message.images,
-          documents: message.documents,
-        });
-        priorUserTexts.push(memoryNudge.text);
-        if (message.images?.length || message.documents?.length) {
-          this.log?.(
-            `[media] attached media to user message: images=${message.images?.length ?? 0} documents=${message.documents?.length ?? 0} totalRawMessages=${session.messageCount}`,
-          );
-        }
-      }
-
-      session.status = "streaming";
-      if (!session.background) {
-        session.runState = { phase: "running", startedAt: Date.now() };
-      }
-
-      if (previousMessageCount === 0) {
-        session.autoTitle();
-      }
-
-      // Persist immediately so the session appears in history even if the
-      // API call fails (e.g. network error, auth failure on the first message).
-      await this.saveSessionNow(session.id);
-      let lastPersistedActiveAt = session.lastActiveAt;
-
-      const persistIfHistoryChanged = () => {
-        if (session.lastActiveAt !== lastPersistedActiveAt) {
-          this.saveSession(session.id);
-          lastPersistedActiveAt = session.lastActiveAt;
-        }
-      };
-
-      // Keep checkpointing in-flight turns so reloads don't drop recent transcript
-      // progress. The guard above avoids writes unless message history changed.
-      const inFlightPersistTimer = this.host.timers.setInterval(
-        persistIfHistoryChanged,
-        1000,
+      const engine = this.getEngine();
+      const preparedTurn = await this.prepareInteractiveTurnExecution(session);
+      let requestToolContext = preparedTurn.context;
+      requestToolContext = this.bindCapturedEngineToSession(
+        engine,
+        session,
+        requestToolContext,
       );
 
-      this.notifySessionsChanged();
-
-      const MAX_AUTO_CONTINUE = 5;
-      let autoContinueCount = 0;
-      let modeSwitchResumeCount = 0;
-      let lastTodos: TodoItem[] = [];
-
-      let resolveRunSettled!: () => void;
-      const runSettled = new Promise<void>((resolve) => {
-        resolveRunSettled = resolve;
-      });
-      this.sessionRunSettled.set(session.id, runSettled);
-
-      let runAbortGeneration = session.abortGeneration;
       try {
-        while (true) {
-          let naturalDone = false;
-          runAbortGeneration = session.abortGeneration;
+        // Update reasoning effort. Legacy callers can still send thinkingEnabled.
+        if (opts?.reasoningEffort) {
+          session.reasoningEffort = opts.reasoningEffort;
+        } else if (opts?.thinkingEnabled === false) {
+          session.reasoningEffort = "none";
+        } else if (session.reasoningEffort === "none") {
+          session.reasoningEffort = "high";
+        }
 
-          for await (const event of this.getEngine().run(session)) {
+        // Keep the legacy budget field in sync for budget-based providers.
+        if (session.reasoningEffort === "none") {
+          session.thinkingBudget = 0;
+        } else if (session.thinkingBudget === 0) {
+          session.thinkingBudget = this.config.thinkingBudget;
+        }
+
+        // Create checkpoint before adding the next user message, but only after the
+        // first turn — the initial message has no prior state worth restoring to.
+        // `turnIndex` here means "how many visible user turns already exist at this
+        // snapshot". Example: immediately before the second user message, turnIndex=1.
+        // In the UI that checkpoint is displayed on the first user message.
+        const turnIndex = session
+          .getAllMessages()
+          .filter(
+            (m) => m.role === "user" && typeof m.content === "string",
+          ).length;
+        await this.ensureCheckpointForTurn(session, turnIndex, {
+          refreshExisting: true,
+        });
+
+        // Clear any stale pending interjections from the previous run — if the
+        // webview already drained the queue and sent this message via agentSend,
+        // the old interjections would otherwise be re-emitted mid-turn as duplicates.
+        while (session.consumePendingInterjection() !== null) {
+          // drain
+        }
+        // Pasted images/PDFs are stored on the message itself so they're injected
+        // into every API call (the API is stateless) and survive session restore.
+        const priorUserTexts = session
+          .getAllMessages()
+          .filter(
+            (message): message is AgentMessage & { content: string } =>
+              message.role === "user" && typeof message.content === "string",
+          )
+          .map((message) => message.content);
+        const messagesToAdd = [
+          {
+            text,
+            displayText: opts?.displayText,
+            isSlashCommand: opts?.isSlashCommand,
+            slashCommandLabel: opts?.slashCommandLabel,
+            origin: opts?.origin,
+            images: opts?.images,
+            documents: opts?.documents,
+          },
+          ...(opts?.additionalMessages ?? []),
+        ].filter(
+          (message) =>
+            message.text.trim().length > 0 ||
+            (message.images?.length ?? 0) > 0 ||
+            (message.documents?.length ?? 0) > 0,
+        );
+        if (messagesToAdd.length === 0) return;
+
+        const previousMessageCount = session.messageCount;
+        for (const message of messagesToAdd) {
+          const memoryNudge =
+            message.isSlashCommand === true || message.text.trim().length === 0
+              ? { text: message.text, nudged: false }
+              : applyMemoryCandidateNudge(
+                  message.text,
+                  priorUserTexts,
+                  countMemoryNudges(priorUserTexts),
+                );
+          session.addUserMessage(memoryNudge.text, {
+            displayText:
+              message.displayText ??
+              (memoryNudge.nudged ? message.text : undefined),
+            isSlashCommand: message.isSlashCommand === true,
+            slashCommandLabel: message.slashCommandLabel,
+            origin: message.origin,
+            images: message.images,
+            documents: message.documents,
+          });
+          priorUserTexts.push(memoryNudge.text);
+          if (message.images?.length || message.documents?.length) {
+            this.log?.(
+              `[media] attached media to user message: images=${message.images?.length ?? 0} documents=${message.documents?.length ?? 0} totalRawMessages=${session.messageCount}`,
+            );
+          }
+        }
+
+        session.status = "streaming";
+        if (!session.background) {
+          session.runState = { phase: "running", startedAt: Date.now() };
+        }
+
+        if (previousMessageCount === 0) {
+          session.autoTitle();
+        }
+
+        // Persist immediately so the session appears in history even if the
+        // API call fails (e.g. network error, auth failure on the first message).
+        await this.saveSessionNow(session.id);
+        let lastPersistedActiveAt = session.lastActiveAt;
+
+        const persistIfHistoryChanged = () => {
+          if (session.lastActiveAt !== lastPersistedActiveAt) {
+            this.saveSession(session.id);
+            lastPersistedActiveAt = session.lastActiveAt;
+          }
+        };
+
+        // Keep checkpointing in-flight turns so reloads don't drop recent transcript
+        // progress. The guard above avoids writes unless message history changed.
+        const inFlightPersistTimer = this.host.timers.setInterval(
+          persistIfHistoryChanged,
+          1000,
+        );
+
+        this.notifySessionsChanged();
+
+        const MAX_AUTO_CONTINUE = 5;
+        let autoContinueCount = 0;
+        let modeSwitchResumeCount = 0;
+        let lastTodos: TodoItem[] = [];
+
+        let resolveRunSettled!: () => void;
+        const runSettled = new Promise<void>((resolve) => {
+          resolveRunSettled = resolve;
+        });
+        this.sessionRunSettled.set(session.id, runSettled);
+
+        let runAbortGeneration = session.abortGeneration;
+        try {
+          while (true) {
+            let naturalDone = false;
+            runAbortGeneration = session.abortGeneration;
+
+            for await (const event of engine.run(session, {
+              webAccessPolicy: preparedTurn.policy,
+              mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
+              mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+            })) {
+              if (
+                session.isAborted ||
+                session.abortGeneration !== runAbortGeneration
+              ) {
+                break;
+              }
+              if (event.type === "todo_update") {
+                lastTodos = event.todos;
+              }
+              if (event.type === "done") {
+                this.saveSession(session.id);
+                naturalDone = true;
+                // Don't forward yet — check for pending todos first
+                continue;
+              }
+              this.recordAndEmitEvent(session.id, event);
+
+              // After forwarding a user_interjection event, create a checkpoint so
+              // the user can revert to the state immediately before that injected
+              // turn. Because the message already exists in webview state at this
+              // point, the checkpoint will render on the preceding user message.
+              if (event.type === "user_interjection") {
+                // The interjection is already present in the transcript here, so
+                // length - 1 gives the index of that injected user turn.
+                const interjectionTurnIndex =
+                  session
+                    .getAllMessages()
+                    .filter(
+                      (m) => m.role === "user" && typeof m.content === "string",
+                    ).length - 1;
+                await this.ensureCheckpointForTurn(
+                  session,
+                  interjectionTurnIndex,
+                );
+              }
+            }
+
+            // Aborted — let ChatViewProvider handle the done notification
             if (
               session.isAborted ||
               session.abortGeneration !== runAbortGeneration
             ) {
               break;
             }
-            if (event.type === "todo_update") {
-              lastTodos = event.todos;
-            }
-            if (event.type === "done") {
-              this.saveSession(session.id);
-              naturalDone = true;
-              // Don't forward yet — check for pending todos first
+
+            const modeResumePrompt = naturalDone
+              ? this.takeModeSwitchResumePrompt(session, modeSwitchResumeCount)
+              : null;
+            if (modeResumePrompt) {
+              modeSwitchResumeCount++;
+              session.addUserMessage(modeResumePrompt);
+              session.status = "streaming";
               continue;
             }
-            this.recordAndEmitEvent(session.id, event);
 
-            // After forwarding a user_interjection event, create a checkpoint so
-            // the user can revert to the state immediately before that injected
-            // turn. Because the message already exists in webview state at this
-            // point, the checkpoint will render on the preceding user message.
-            if (event.type === "user_interjection") {
-              // The interjection is already present in the transcript here, so
-              // length - 1 gives the index of that injected user turn.
-              const interjectionTurnIndex =
-                session
-                  .getAllMessages()
-                  .filter(
-                    (m) => m.role === "user" && typeof m.content === "string",
-                  ).length - 1;
-              await this.ensureCheckpointForTurn(
-                session,
-                interjectionTurnIndex,
+            // Queued user messages take priority over auto-continue: emit the
+            // deferred done instead so the UI surfaces flush their queues (and
+            // any not-yet-drained interjection is sent on the next run).
+            const hasQueuedUserMessages =
+              session.hasPendingInterjections === true ||
+              session.hasQueuedUiMessages === true;
+            if (
+              naturalDone &&
+              hasQueuedUserMessages &&
+              hasPendingTodos(lastTodos)
+            ) {
+              this.log?.(
+                "[agent] skipping auto-continue: a queued user message takes priority",
               );
             }
-          }
 
-          // Aborted — let ChatViewProvider handle the done notification
+            // Check if we should auto-continue due to pending todos
+            if (
+              naturalDone &&
+              !hasQueuedUserMessages &&
+              autoContinueCount < MAX_AUTO_CONTINUE &&
+              hasPendingTodos(lastTodos)
+            ) {
+              autoContinueCount++;
+              this.log?.(
+                `[agent] auto-continuing (${autoContinueCount}/${MAX_AUTO_CONTINUE}): pending todos remain`,
+              );
+              session.addUserMessage(
+                "You stopped but there are still pending tasks. Continue with the remaining items.",
+              );
+              session.status = "streaming";
+              continue;
+            }
+
+            const completedTurnIndex = session
+              .getAllMessages()
+              .filter(
+                (m) => m.role === "user" && typeof m.content === "string",
+              ).length;
+            await this.ensureCheckpointForTurn(session, completedTurnIndex);
+            if (!session.background) {
+              session.runState = undefined;
+            }
+            await this.saveSessionNow(session.id);
+
+            // Emit the deferred done
+            this.recordAndEmitEvent(session.id, {
+              type: "done",
+              totalInputTokens: session.totalInputTokens,
+              totalOutputTokens: session.totalOutputTokens,
+              totalCacheReadTokens: session.totalCacheReadTokens,
+              totalCacheCreationTokens: session.totalCacheCreationTokens,
+            });
+            break;
+          }
+        } catch (err: unknown) {
           if (
             session.isAborted ||
             session.abortGeneration !== runAbortGeneration
           ) {
-            break;
+            return;
           }
-
-          const modeResumePrompt = naturalDone
-            ? this.takeModeSwitchResumePrompt(session, modeSwitchResumeCount)
-            : null;
-          if (modeResumePrompt) {
-            modeSwitchResumeCount++;
-            session.addUserMessage(modeResumePrompt);
-            session.status = "streaming";
-            continue;
-          }
-
-          // Check if we should auto-continue due to pending todos
-          if (
-            naturalDone &&
-            autoContinueCount < MAX_AUTO_CONTINUE &&
-            hasPendingTodos(lastTodos)
-          ) {
-            autoContinueCount++;
-            this.log?.(
-              `[agent] auto-continuing (${autoContinueCount}/${MAX_AUTO_CONTINUE}): pending todos remain`,
-            );
-            session.addUserMessage(
-              "You stopped but there are still pending tasks. Continue with the remaining items.",
-            );
-            session.status = "streaming";
-            continue;
-          }
-
-          const completedTurnIndex = session
-            .getAllMessages()
-            .filter(
-              (m) => m.role === "user" && typeof m.content === "string",
-            ).length;
-          await this.ensureCheckpointForTurn(session, completedTurnIndex);
+          const error = err instanceof Error ? err.message : String(err);
+          session.status = "error";
+          this.recordAndEmitEvent(session.id, {
+            type: "error",
+            error,
+            retryable: false,
+          });
+          // Persist before emitting done so sendSessionList sees the saved session
           if (!session.background) {
             session.runState = undefined;
           }
           await this.saveSessionNow(session.id);
-
-          // Emit the deferred done
           this.recordAndEmitEvent(session.id, {
             type: "done",
             totalInputTokens: session.totalInputTokens,
@@ -1695,42 +2654,17 @@ export class AgentSessionManager {
             totalCacheReadTokens: session.totalCacheReadTokens,
             totalCacheCreationTokens: session.totalCacheCreationTokens,
           });
-          break;
+        } finally {
+          this.host.timers.clearInterval(inFlightPersistTimer);
+          persistIfHistoryChanged();
+          if (this.sessionRunSettled.get(session.id) === runSettled) {
+            this.sessionRunSettled.delete(session.id);
+          }
+          resolveRunSettled();
+          this.notifySessionsChanged();
         }
-      } catch (err: unknown) {
-        if (
-          session.isAborted ||
-          session.abortGeneration !== runAbortGeneration
-        ) {
-          return;
-        }
-        const error = err instanceof Error ? err.message : String(err);
-        session.status = "error";
-        this.recordAndEmitEvent(session.id, {
-          type: "error",
-          error,
-          retryable: false,
-        });
-        // Persist before emitting done so sendSessionList sees the saved session
-        if (!session.background) {
-          session.runState = undefined;
-        }
-        await this.saveSessionNow(session.id);
-        this.recordAndEmitEvent(session.id, {
-          type: "done",
-          totalInputTokens: session.totalInputTokens,
-          totalOutputTokens: session.totalOutputTokens,
-          totalCacheReadTokens: session.totalCacheReadTokens,
-          totalCacheCreationTokens: session.totalCacheCreationTokens,
-        });
       } finally {
-        this.host.timers.clearInterval(inFlightPersistTimer);
-        persistIfHistoryChanged();
-        if (this.sessionRunSettled.get(session.id) === runSettled) {
-          this.sessionRunSettled.delete(session.id);
-        }
-        resolveRunSettled();
-        this.notifySessionsChanged();
+        this.releaseSessionToolContext(session.id, requestToolContext);
       }
     });
   }
@@ -1963,9 +2897,18 @@ export class AgentSessionManager {
   async retrySession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
+    this.requireSessionExecution(session);
 
     // Force re-creation of the engine so it picks up refreshed credentials
     this.engine = null;
+
+    const engine = this.getEngine();
+    const preparedTurn = await this.prepareInteractiveTurnExecution(session);
+    const requestToolContext = this.bindCapturedEngineToSession(
+      engine,
+      session,
+      preparedTurn.context,
+    );
 
     session.status = "streaming";
     if (!session.background) {
@@ -1991,7 +2934,11 @@ export class AgentSessionManager {
     try {
       while (true) {
         let naturalDone = false;
-        for await (const event of this.getEngine().run(session)) {
+        for await (const event of engine.run(session, {
+          webAccessPolicy: preparedTurn.policy,
+          mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
+          mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+        })) {
           if (event.type === "done") {
             // Defer done — a queued mode-switch resume may continue this turn.
             this.saveSession(session.id);
@@ -2048,6 +2995,7 @@ export class AgentSessionManager {
         totalCacheCreationTokens: session.totalCacheCreationTokens,
       });
     } finally {
+      this.releaseSessionToolContext(session.id, requestToolContext);
       this.host.timers.clearInterval(inFlightPersistTimer);
       persistIfHistoryChanged();
       this.notifySessionsChanged();
@@ -2069,19 +3017,26 @@ export class AgentSessionManager {
   ): Promise<AgentSession | null> {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
+    this.requireSessionExecution(session);
 
-    const model = this.getModelForMode(mode);
+    const model = this.getModelForMode(mode, session.projectScope);
     const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
 
     session.model = model;
     session.providerId = newProviderId;
     this.applyReasoningEffortToSession(
       session,
-      this.getReasoningEffortForMode(mode),
+      this.getReasoningEffortForMode(mode, session.projectScope),
     );
     this.applyThresholdToSession(session);
     this.refreshMcpToolDisclosure(session);
-    await session.setMode(mode, opts);
+    const agentMode =
+      opts?.agentMode ??
+      resolveMode(
+        mode,
+        await this.projectCustomizationRegistry.getModes(session.projectScope),
+      );
+    await session.setMode(mode, { ...opts, agentMode });
 
     if (!session.background && this.foregroundId === session.id) {
       this.updateConfig({
@@ -2155,16 +3110,19 @@ export class AgentSessionManager {
    * Manually condense the foreground session's context.
    * Emits condense or condense_error events via onEvent.
    */
-  private buildPreservedContext(session: AgentSession): {
+  private buildPreservedContext(
+    session: AgentSession,
+    context: Readonly<ToolDispatchContext> | undefined,
+  ): {
     toolNames: string[];
     mcpServerNames: string[];
     activeSkills: string[];
   } {
-    this.refreshMcpToolDisclosure(session);
-    const connectedMcpToolDefs = this.toolCtx?.mcpHub?.getToolDefs() ?? [];
+    this.refreshMcpToolDisclosure(session, context);
+    const connectedMcpToolDefs = context?.mcpHub?.getToolDefs() ?? [];
     const providerMcpToolDefs =
       session.mcpToolDisclosure?.inlineTools ?? connectedMcpToolDefs;
-    const rawTools = this.toolCtx
+    const rawTools = context
       ? [
           ...getAgentTools(session.agentMode, providerMcpToolDefs, false),
           todoTool,
@@ -2187,12 +3145,15 @@ export class AgentSessionManager {
     session: AgentSession,
     isAutomatic: boolean,
   ): Promise<void> {
+    this.requireSessionExecution(session);
     const engine = this.getEngine();
-    const preservedContext = this.buildPreservedContext(session);
+    const requestToolContext = this.bindEngineToSession(engine, session);
+    const preservedContext = this.buildPreservedContext(
+      session,
+      requestToolContext,
+    );
     session.status = "streaming";
     this.notifySessionsChanged();
-
-    let condenseSucceeded = false;
 
     try {
       for await (const event of engine.condenseSession(
@@ -2201,73 +3162,14 @@ export class AgentSessionManager {
         undefined,
         preservedContext,
       )) {
-        if (event.type === "condense") {
-          condenseSucceeded = true;
-        }
         this.recordAndEmitEvent(session.id, event);
       }
       this.saveSession(session.id);
-
-      if (!isAutomatic && condenseSucceeded) {
-        let modeSwitchResumeCount = 0;
-        try {
-          while (true) {
-            let naturalDone = false;
-            for await (const event of engine.run(session)) {
-              if (event.type === "done") {
-                // Defer done — a queued mode-switch resume may continue this turn.
-                this.saveSession(session.id);
-                naturalDone = true;
-                continue;
-              }
-              this.recordAndEmitEvent(session.id, event);
-            }
-
-            if (!naturalDone) break;
-
-            const modeResumePrompt = this.takeModeSwitchResumePrompt(
-              session,
-              modeSwitchResumeCount,
-            );
-            if (modeResumePrompt) {
-              modeSwitchResumeCount++;
-              session.addUserMessage(modeResumePrompt);
-              session.status = "streaming";
-              continue;
-            }
-
-            this.recordAndEmitEvent(session.id, {
-              type: "done",
-              totalInputTokens: session.totalInputTokens,
-              totalOutputTokens: session.totalOutputTokens,
-              totalCacheReadTokens: session.totalCacheReadTokens,
-              totalCacheCreationTokens: session.totalCacheCreationTokens,
-            });
-            break;
-          }
-        } catch (err: unknown) {
-          const error = err instanceof Error ? err.message : String(err);
-          session.status = "error";
-          this.recordAndEmitEvent(session.id, {
-            type: "error",
-            error,
-            retryable: false,
-          });
-          this.saveSession(session.id);
-          this.recordAndEmitEvent(session.id, {
-            type: "done",
-            totalInputTokens: session.totalInputTokens,
-            totalOutputTokens: session.totalOutputTokens,
-            totalCacheReadTokens: session.totalCacheReadTokens,
-            totalCacheCreationTokens: session.totalCacheCreationTokens,
-          });
-          return;
-        }
-      }
     } catch (err: unknown) {
       const error = err instanceof Error ? err.message : String(err);
       this.recordAndEmitEvent(session.id, { type: "condense_error", error });
     } finally {
+      this.releaseSessionToolContext(session.id, requestToolContext);
       session.status = "idle";
       this.notifySessionsChanged();
     }
@@ -2276,7 +3178,9 @@ export class AgentSessionManager {
   async condenseCurrentSession(): Promise<void> {
     const session = this.getForegroundSession();
     if (!session) return;
-    await this.condenseSession(session, false);
+    await this.withSessionSendQueue(session.id, () =>
+      this.condenseSession(session, false),
+    );
   }
 
   async maybeAutoCondenseForegroundSession(): Promise<void> {
@@ -2302,7 +3206,8 @@ export class AgentSessionManager {
    */
   async createManualCheckpoint(): Promise<Checkpoint | null> {
     const session = this.getForegroundSession();
-    if (!session || !this.checkpointManager) return null;
+    if (!session) return null;
+    this.requireSessionExecution(session);
 
     const turnIndex = session
       .getAllMessages()
@@ -2314,6 +3219,49 @@ export class AgentSessionManager {
     });
   }
 
+  private getCheckpointProjectSnapshots(checkpoint: Checkpoint): Array<{
+    project: WorkspaceProject & { rootPath: string };
+    snapshot: { projectId: string; commitHash: string; createdAt: number };
+  }> {
+    const snapshots = checkpoint.projectSnapshots?.length
+      ? checkpoint.projectSnapshots
+      : checkpoint.projectId
+        ? [
+            {
+              projectId: checkpoint.projectId,
+              commitHash: checkpoint.commitHash,
+              createdAt: checkpoint.createdAt,
+            },
+          ]
+        : [];
+    const projects = new Map(
+      this.projectCatalog
+        .listProjects()
+        .filter(
+          (project): project is WorkspaceProject & { rootPath: string } =>
+            project.availability.status === "available" &&
+            project.rootPath !== undefined,
+        )
+        .map((project) => [project.id, project]),
+    );
+    return snapshots.flatMap((snapshot) => {
+      const project = projects.get(snapshot.projectId);
+      return project ? [{ project, snapshot }] : [];
+    });
+  }
+
+  private prefixRevertPreview(
+    projectName: string,
+    preview: RevertPreview,
+  ): RevertPreview {
+    const prefix = (filePath: string) => `${projectName}/${filePath}`;
+    return {
+      modified: preview.modified.map(prefix),
+      deleted: preview.deleted.map(prefix),
+      restored: preview.restored.map(prefix),
+    };
+  }
+
   /**
    * Preview the files that would be affected by reverting to a checkpoint.
    */
@@ -2321,11 +3269,37 @@ export class AgentSessionManager {
     sessionId: string,
     checkpointId: string,
   ): Promise<CheckpointRevertPreviewResult | null> {
+    const session = this.sessions.get(sessionId);
     const checkpoint = this.findCheckpoint(sessionId, checkpointId);
-    if (!checkpoint || !this.checkpointManager) return null;
-    const preview = await this.checkpointManager.previewRevert(checkpoint);
-    if (!preview) return null;
+    if (!session || !checkpoint) return null;
+    this.requireSessionExecution(session);
+    const preview: RevertPreview = { modified: [], deleted: [], restored: [] };
+    const projectSnapshots = this.getCheckpointProjectSnapshots(checkpoint);
+    const labelProjects = projectSnapshots.length > 1;
+    for (const { project, snapshot } of projectSnapshots) {
+      const manager = this.getCheckpointManagerForProject(project);
+      if (
+        typeof manager.initialize === "function" &&
+        (await manager.initialize()) === false
+      ) {
+        return null;
+      }
+      const projectPreview = await manager.previewRevert({
+        ...checkpoint,
+        projectId: project.id,
+        commitHash: snapshot.commitHash,
+        createdAt: snapshot.createdAt,
+      });
+      if (!projectPreview) return null;
+      const visiblePreview = labelProjects
+        ? this.prefixRevertPreview(project.name, projectPreview)
+        : projectPreview;
+      preview.modified.push(...visiblePreview.modified);
+      preview.deleted.push(...visiblePreview.deleted);
+      preview.restored.push(...visiblePreview.restored);
+    }
     return {
+      projectId: session.projectScope.projectId,
       checkpointId,
       sessionRevision: this.currentSessionRevisionToken(sessionId),
       persistenceRevision: this.sessionRevisions.get(sessionId),
@@ -2343,20 +3317,32 @@ export class AgentSessionManager {
     checkpointId: string,
     expectedSessionRevision?: PersistenceRevision,
     expectedPersistenceRevision?: PersistenceRevision,
+    expectedProjectId?: string,
   ): Promise<CheckpointRevertResult> {
+    const session = this.sessions.get(sessionId);
     const checkpoint = this.findCheckpoint(sessionId, checkpointId);
-    if (!checkpoint || !this.checkpointManager) {
+    if (!session || !checkpoint) {
       return { ok: false, reason: "not_found" };
+    }
+    try {
+      this.requireSessionExecution(session);
+    } catch {
+      return { ok: false, reason: "not_found" };
+    }
+    if (
+      expectedProjectId !== undefined &&
+      expectedProjectId !== session.projectScope.projectId
+    ) {
+      return {
+        ok: false,
+        reason: "session_conflict",
+        currentRevision: this.currentSessionRevisionToken(sessionId),
+      };
     }
 
     const pendingSave = this.sessionSaveQueues.get(sessionId);
     if (pendingSave) {
       await pendingSave.catch(() => undefined);
-    }
-
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      return { ok: false, reason: "not_found" };
     }
 
     if (
@@ -2412,10 +3398,25 @@ export class AgentSessionManager {
       };
     }
 
-    const workspaceReverted =
-      await this.checkpointManager.revertToCheckpoint(checkpoint);
-    if (!workspaceReverted) {
-      return { ok: false, reason: "workspace_revert_failed" };
+    for (const { project, snapshot } of this.getCheckpointProjectSnapshots(
+      checkpoint,
+    )) {
+      const manager = this.getCheckpointManagerForProject(project);
+      if (
+        typeof manager.initialize === "function" &&
+        (await manager.initialize()) === false
+      ) {
+        return { ok: false, reason: "workspace_revert_failed" };
+      }
+      const workspaceReverted = await manager.revertToCheckpoint({
+        ...checkpoint,
+        projectId: project.id,
+        commitHash: snapshot.commitHash,
+        createdAt: snapshot.createdAt,
+      });
+      if (!workspaceReverted) {
+        return { ok: false, reason: "workspace_revert_failed" };
+      }
     }
 
     const saveResult = await this.saveCheckpointRevertResult(
@@ -2451,7 +3452,13 @@ export class AgentSessionManager {
     const checkpoints = this.checkpoints.get(sessionId) ?? [];
     return crypto
       .createHash("sha256")
-      .update(JSON.stringify({ checkpoints, messages }))
+      .update(
+        JSON.stringify({
+          projectId: session?.projectScope.projectId,
+          checkpoints,
+          messages,
+        }),
+      )
       .digest("hex");
   }
 
@@ -2526,6 +3533,7 @@ export class AgentSessionManager {
     failedSaveResult: PersistResult,
   ): Promise<void> {
     const pending: RevertRecoveryState = {
+      projectId: session.projectScope.projectId,
       checkpointId: checkpoint.id,
       sessionRevision:
         "currentRevision" in failedSaveResult
@@ -2547,6 +3555,11 @@ export class AgentSessionManager {
     try {
       const readResult = await this.persistence.readSession(session.id);
       if (!readResult.ok) return;
+      const persistedProjectId =
+        readResult.value.metadata.projectScope?.projectId ??
+        readResult.value.summary.projectScope?.projectId ??
+        this.legacyProjectScope?.projectId;
+      if (persistedProjectId !== session.projectScope.projectId) return;
       const result = await this.persistence.saveSession({
         session: {
           ...readResult.value,
@@ -2576,34 +3589,66 @@ export class AgentSessionManager {
     checkpointId: string,
     scope: "turn" | "all",
   ): Promise<string> {
+    const session = this.sessions.get(sessionId);
     const checkpoint = this.findCheckpoint(sessionId, checkpointId);
-    if (!checkpoint || !this.checkpointManager) return "";
-
-    const baseHash = this.checkpointManager.baseCommit;
-    if (!baseHash) return "";
-
-    if (scope === "all") {
-      return this.checkpointManager.getDiffBetween(
-        baseHash,
-        checkpoint.commitHash,
-      );
-    }
-
-    // "turn" scope: diff from the previous checkpoint to this one
+    if (!session || !checkpoint) return "";
     const all = this.checkpoints.get(sessionId) ?? [];
-    const idx = all.findIndex((c) => c.id === checkpointId);
-    const fromHash = idx > 0 ? all[idx - 1].commitHash : baseHash;
-    return this.checkpointManager.getDiffBetween(
-      fromHash,
-      checkpoint.commitHash,
+    const idx = all.findIndex((candidate) => candidate.id === checkpointId);
+    const previous = idx > 0 ? all[idx - 1] : undefined;
+    const previousSnapshots = new Map(
+      (previous?.projectSnapshots ?? []).map((snapshot) => [
+        snapshot.projectId,
+        snapshot,
+      ]),
     );
+    const sections: string[] = [];
+    const projectSnapshots = this.getCheckpointProjectSnapshots(checkpoint);
+    const labelProjects = projectSnapshots.length > 1;
+    for (const { project, snapshot } of projectSnapshots) {
+      const manager = this.getCheckpointManagerForProject(project);
+      if (
+        typeof manager.initialize === "function" &&
+        (await manager.initialize()) === false
+      ) {
+        continue;
+      }
+      const fromHash =
+        scope === "all"
+          ? manager.baseCommit
+          : (previousSnapshots.get(project.id)?.commitHash ??
+            manager.baseCommit);
+      if (!fromHash) continue;
+      const diff = await manager.getDiffBetween(fromHash, snapshot.commitHash);
+      if (diff.trim()) {
+        sections.push(labelProjects ? `## ${project.name}\n\n${diff}` : diff);
+      }
+    }
+    return sections.join("\n\n");
   }
 
   private findCheckpoint(
     sessionId: string,
     checkpointId: string,
   ): Checkpoint | undefined {
-    return this.checkpoints.get(sessionId)?.find((c) => c.id === checkpointId);
+    const session = this.sessions.get(sessionId);
+    const checkpoints = this.checkpoints.get(sessionId);
+    const checkpoint = checkpoints?.find(
+      (candidate) => candidate.id === checkpointId,
+    );
+    if (!session || !checkpoint) return undefined;
+    const projectId = session.projectScope.projectId;
+    if (checkpoint.projectId !== undefined) {
+      return checkpoint.projectId === projectId ? checkpoint : undefined;
+    }
+
+    const pinnedCheckpoint = { ...checkpoint, projectId };
+    this.checkpoints.set(
+      sessionId,
+      checkpoints!.map((candidate) =>
+        candidate === checkpoint ? pinnedCheckpoint : candidate,
+      ),
+    );
+    return pinnedCheckpoint;
   }
 
   // ---------------------------------------------------------------------------
@@ -2632,8 +3677,21 @@ export class AgentSessionManager {
     return this.persistence?.loadMessages(sessionId) ?? null;
   }
 
-  getRevertRecoveryState(sessionId: string): RevertRecoveryState | null {
-    return this.sessionRevertPending.get(sessionId) ?? null;
+  getRevertRecoveryState(
+    sessionId: string,
+  ): (RevertRecoveryState & { projectId: string }) | null {
+    const session = this.sessions.get(sessionId);
+    const recovery = this.sessionRevertPending.get(sessionId);
+    if (!session || !recovery) return null;
+    const projectId = session.projectScope.projectId;
+    if (recovery.projectId !== undefined && recovery.projectId !== projectId) {
+      return null;
+    }
+    const attributedRecovery = { ...recovery, projectId };
+    if (recovery.projectId !== projectId) {
+      this.sessionRevertPending.set(sessionId, attributedRecovery);
+    }
+    return attributedRecovery;
   }
 
   /**
@@ -2659,33 +3717,36 @@ export class AgentSessionManager {
       }
       if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
       this.foregroundId = sessionId;
+      await this.restorePersistedBackgroundSessions(sessionId);
       this.notifySessionsChanged();
       return this.sessions.get(sessionId)!;
     }
 
     this.sessionRevisions.set(sessionId, readResult.revision);
-    this.checkpoints.set(
-      sessionId,
-      metadata.checkpointState?.checkpoints ?? [],
-    );
-    if (metadata.revertPending) {
-      this.sessionRevertPending.set(sessionId, metadata.revertPending);
+    const session = await this.createRestoredSession({ summary, metadata });
+    const projectId = session.projectScope.projectId;
+    const checkpointState = metadata.checkpointState;
+    const restoredCheckpoints =
+      checkpointState?.projectId !== undefined &&
+      checkpointState.projectId !== projectId
+        ? []
+        : (checkpointState?.checkpoints ?? []).map((checkpoint) => ({
+            ...checkpoint,
+            projectId: checkpoint.projectId ?? projectId,
+          }));
+    this.checkpoints.set(sessionId, restoredCheckpoints);
+    if (
+      metadata.revertPending &&
+      (metadata.revertPending.projectId === undefined ||
+        metadata.revertPending.projectId === projectId)
+    ) {
+      this.sessionRevertPending.set(sessionId, {
+        ...metadata.revertPending,
+        projectId,
+      });
     } else {
       this.sessionRevertPending.delete(sessionId);
     }
-
-    // Reconstruct session from persisted data
-    const providerId = this.host.providers.tryResolveProvider(
-      summary.model,
-    )?.id;
-    const session = await this.host.createSession({
-      mode: summary.mode,
-      config: this.buildConfigForModel(summary.model),
-      cwd: this.cwd,
-      workspaceFolders: this.getWorkspaceFolders(),
-      devMode: this.devMode,
-      providerId,
-    });
 
     // Restore persisted state
     session.restoreFromStore({
@@ -2705,14 +3766,11 @@ export class AgentSessionManager {
       runState: metadata.runState,
       messages,
     });
-    await session.rebuildSystemPrompt({
-      devMode: this.devMode,
-      workspaceFolders: this.getWorkspaceFolders(),
-    });
 
     if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
     this.sessions.set(sessionId, session);
     this.foregroundId = sessionId;
+    await this.restorePersistedBackgroundSessions(sessionId);
     this.notifySessionsChanged();
     return session;
   }
@@ -2740,11 +3798,50 @@ export class AgentSessionManager {
     return session;
   }
 
+  /** Remove inactive restored trees before loading another foreground's children. */
+  private pruneRestoredBackgroundSessions(rootSessionId?: string): void {
+    if (!rootSessionId) return;
+    for (const sessionId of this.restoredBackgroundSessionIds) {
+      const session = this.sessions.get(sessionId);
+      if (!session) {
+        this.restoredBackgroundSessionIds.delete(sessionId);
+        continue;
+      }
+      const fleet = session.fleetMetadata;
+      if (
+        fleet?.rootSessionId === rootSessionId ||
+        fleet?.parentSessionId === rootSessionId ||
+        !this.getProjectedBgStatus(session).done
+      ) {
+        continue;
+      }
+      this.sessions.delete(sessionId);
+      this.sessionRevisions.delete(sessionId);
+      this.sessionSaveQueues.delete(sessionId);
+      this.commandApprovalPolicies.delete(sessionId);
+      this.bgFinalResults.delete(sessionId);
+      this.bgStreamingText.delete(sessionId);
+      this.bgPartialResults.delete(sessionId);
+      this.bgAgentRetryable.delete(sessionId);
+      this.bgCompletedAt.delete(sessionId);
+      this.bgErrors.delete(sessionId);
+      this.bgStatusDetail.delete(sessionId);
+      this.bgCancelled.delete(sessionId);
+      this.bgParents.delete(sessionId);
+      this.bgMeta.delete(sessionId);
+      this.bgSummary.delete(sessionId);
+      this.restoredBackgroundSessionIds.delete(sessionId);
+    }
+  }
+
   /** Restore durable background records belonging to one foreground session. */
   async restorePersistedBackgroundSessions(
     rootSessionId?: string,
   ): Promise<AgentSession[]> {
-    if (!this.persistence) return [];
+    if (!this.persistence || typeof this.persistence.listAll !== "function") {
+      return [];
+    }
+    this.pruneRestoredBackgroundSessions(rootSessionId);
     const restored: AgentSession[] = [];
     for (const summary of this.persistence
       .listAll()
@@ -2760,18 +3857,10 @@ export class AgentSessionManager {
       ) {
         continue;
       }
-      const providerId = this.host.providers.tryResolveProvider(
-        summary.model,
-      )?.id;
-      const session = await this.host.createSession({
-        mode: summary.mode,
-        config: this.buildConfigForModel(summary.model),
-        cwd: this.cwd,
-        workspaceFolders: this.getWorkspaceFolders(),
-        devMode: this.devMode,
+      const session = await this.createRestoredSession({
+        summary,
+        metadata,
         background: true,
-        isBackground: true,
-        providerId,
       });
       session.restoreFromStore({
         id: summary.id,
@@ -2789,14 +3878,11 @@ export class AgentSessionManager {
         messages,
         fleetMetadata: metadata.fleet,
       });
-      await session.rebuildSystemPrompt({
-        devMode: this.devMode,
-        workspaceFolders: this.getWorkspaceFolders(),
-      });
 
       const fleet = session.fleetMetadata;
       if (fleet?.lifecycle === "running") {
         fleet.lifecycle = "interrupted";
+        fleet.resultState = "interrupted";
         fleet.terminalReason = "extension_reloaded_during_run";
         fleet.completedAt = Date.now();
       }
@@ -2837,6 +3923,13 @@ export class AgentSessionManager {
             fleet.completedAt && fleet.budgetUsage
               ? fleet.completedAt - fleet.budgetUsage.elapsedMs
               : session.createdAt,
+          lastProgressAt:
+            fleet.completedAt ?? session.lastActiveAt ?? session.createdAt,
+          phase: this.bgCancelled.has(session.id)
+            ? "cancelled"
+            : session.status === "error"
+              ? "failed"
+              : "completed",
         });
         if (fleet.completedAt) {
           this.bgCompletedAt.set(session.id, fleet.completedAt);
@@ -2844,8 +3937,16 @@ export class AgentSessionManager {
         if (fleet.finalResult) {
           this.bgFinalResults.set(session.id, fleet.finalResult);
         }
+        if (fleet.partialResult) {
+          this.bgPartialResults.set(session.id, fleet.partialResult);
+          this.bgStreamingText.set(session.id, fleet.partialResult.slice(-500));
+        }
+        if (fleet.agentRetryable !== undefined) {
+          this.bgAgentRetryable.set(session.id, fleet.agentRetryable);
+        }
       }
       this.sessions.set(session.id, session);
+      this.restoredBackgroundSessionIds.add(session.id);
       this.sessionRevisions.set(session.id, readResult.revision);
       restored.push(session);
       if (fleet?.lifecycle === "interrupted") {
@@ -3054,7 +4155,58 @@ export class AgentSessionManager {
       childSessionId,
       this.toolCtx?.getCommandApprovalPolicy?.(parentSessionId) ?? "safe",
     );
-    this.toolCtx?.inheritSessionWriteState?.(parentSessionId, childSessionId);
+    this.toolCtx?.inheritSessionApprovalState?.(
+      parentSessionId,
+      childSessionId,
+    );
+  }
+
+  private refreshingBackgroundApprovalInheritance = false;
+
+  /**
+   * Add newly granted session approvals to existing background descendants.
+   *
+   * Spawn-time inheritance remains an independent snapshot: revoking trust on
+   * a parent does not silently revoke a child that is already working. This
+   * refresh only fills in approvals the parent gained after the child spawned
+   * (and restores inherited trust after a background-only mode switch).
+   */
+  refreshBackgroundApprovalInheritance(): void {
+    if (
+      this.refreshingBackgroundApprovalInheritance ||
+      !this.toolCtx?.inheritSessionApprovalState
+    ) {
+      return;
+    }
+
+    this.refreshingBackgroundApprovalInheritance = true;
+    try {
+      const children = Array.from(this.sessions.values())
+        .filter((session) => {
+          const lifecycle = session.fleetMetadata?.lifecycle;
+          return (
+            session.background &&
+            (lifecycle === "queued" ||
+              lifecycle === "running" ||
+              lifecycle === "paused" ||
+              session.status === "streaming" ||
+              session.status === "tool_executing" ||
+              session.status === "awaiting_approval")
+          );
+        })
+        .sort(
+          (left, right) =>
+            (left.fleetMetadata?.depth ?? 0) -
+            (right.fleetMetadata?.depth ?? 0),
+        );
+      for (const child of children) {
+        const parentSessionId = this.getBackgroundParentSessionId(child.id);
+        if (!parentSessionId || !this.sessions.has(parentSessionId)) continue;
+        this.toolCtx.inheritSessionApprovalState(parentSessionId, child.id);
+      }
+    } finally {
+      this.refreshingBackgroundApprovalInheritance = false;
+    }
   }
 
   private activeBackgroundCount(): number {
@@ -3108,7 +4260,13 @@ export class AgentSessionManager {
   ): void {
     const launch = async (): Promise<void> => {
       const meta = this.bgMeta.get(session.id);
-      if (meta) meta.startedAt = Date.now();
+      if (meta) {
+        const now = Date.now();
+        meta.startedAt = now;
+        meta.lastProgressAt = now;
+        meta.phase = "waiting_for_provider";
+        meta.phaseStartedAt = now;
+      }
       const maxElapsedMs = session.fleetMetadata?.budget?.maxElapsedMs;
       if (maxElapsedMs !== undefined && maxElapsedMs > 0) {
         const timers = [
@@ -3179,9 +4337,37 @@ export class AgentSessionManager {
         "spawn_background_agent requires non-empty task and message",
       );
     }
+    if ((request.images?.length ?? 0) > MAX_BACKGROUND_HANDOFF_IMAGES) {
+      throw new Error(
+        `spawn_background_agent supports at most ${MAX_BACKGROUND_HANDOFF_IMAGES} inherited images`,
+      );
+    }
+    if (
+      request.images?.some(
+        (image) =>
+          !image.name.trim() || !image.mimeType.trim() || !image.base64.trim(),
+      )
+    ) {
+      throw new Error("spawn_background_agent received an invalid image");
+    }
     const parent = parentSessionId
       ? this.sessions.get(parentSessionId)
       : this.getForegroundSession();
+    const inheritedScope =
+      parent?.projectScope ??
+      this.getForegroundSession()?.projectScope ??
+      this.selectProjectScope();
+    const executionRoot = parent
+      ? this.requireSessionExecution(parent)
+      : inheritedScope.rootPath;
+    if (!executionRoot) {
+      throw new Error(
+        `Project '${inheritedScope.displayName}' is unavailable for local execution.`,
+      );
+    }
+    const parentRequestContext = parent
+      ? this.activeRequestToolContexts.get(parent.id)
+      : undefined;
     const parentDepth = parent?.fleetMetadata?.depth ?? 0;
     const childCount = parent
       ? Array.from(this.sessions.values()).filter(
@@ -3206,10 +4392,23 @@ export class AgentSessionManager {
     this.ensureChildBudgetAdmission(parent, request);
     this.ensureSharedWorkspaceScopeAvailable(request);
     const executionMessage = request.reviewScope
-      ? `${message}\n\n${await captureReviewScope(this.cwd, request.reviewScope)}`
+      ? `${message}\n\n${await captureReviewScope(
+          executionRoot,
+          request.reviewScope,
+          {
+            workspaceRoots: this.getWorkspaceFolders().map(
+              (folder) => folder.path,
+            ),
+          },
+        )}`
       : message;
 
     if (request.worktree === "isolated") {
+      if (request.images?.length) {
+        throw new Error(
+          "Image handoff is not supported for isolated-worktree background agents; use a native shared background agent or save the images in the workspace and reference their paths.",
+        );
+      }
       return this.spawnIsolatedWorktree(
         { ...request, message: executionMessage },
         parent,
@@ -3217,13 +4416,18 @@ export class AgentSessionManager {
     }
 
     const backendRoute = resolveBackgroundBackendRoute(
-      this.getBackgroundAgentSettings(),
+      this.getBackgroundAgentSettings(inheritedScope),
       request,
     );
     const fg = this.getForegroundSession();
     parentSessionId = parent?.id;
 
     if (backendRoute.backend === "acp") {
+      if (request.images?.length) {
+        throw new Error(
+          "Image handoff is not supported by ACP background agents; use a native background agent or save the images in the workspace and reference their paths.",
+        );
+      }
       // ACP agents do not use AgentLink's set_task_status tool, so keep the
       // serialized-envelope fallback at that external boundary only.
       const acpExecutionMessage = withFleetResultInstruction(
@@ -3232,14 +4436,14 @@ export class AgentSessionManager {
       );
       const resolvedMode = request.mode?.trim() || "review";
       const taskClass = request.taskClass?.trim() || "review";
-      const session = await this.host.createSession({
+      const session = await this.createBoundSession({
         mode: resolvedMode,
         config: {
           ...this.config,
           model: `acp:${backendRoute.agent.id}`,
           thinkingBudget: 0,
         },
-        cwd: this.cwd,
+        projectScope: inheritedScope,
         workspaceFolders: this.getWorkspaceFolders(),
         devMode: this.devMode,
         background: true,
@@ -3271,6 +4475,9 @@ export class AgentSessionManager {
         tokenUsage: 0,
         apiTurns: 0,
         startedAt: Date.now(),
+        lastProgressAt: Date.now(),
+        phase: "queued",
+        phaseStartedAt: Date.now(),
       });
       session.fleetMetadata = this.createFleetMetadata(session, {
         task,
@@ -3301,14 +4508,40 @@ export class AgentSessionManager {
       this.saveSession(session.id);
       this.notifySessionsChanged();
 
-      const assistantTextParts: string[] = [];
+      const acpRequestContext = this.captureSessionToolContext(
+        session,
+        undefined,
+        parentRequestContext,
+      );
+      if (acpRequestContext) {
+        this.activeRequestToolContexts.set(session.id, acpRequestContext);
+      }
+      const acpOutput: AcpOutputState = {
+        assistantTextParts: [],
+        directImages: [],
+        toolImages: new Map(),
+        warnings: new Set(),
+      };
       let promptResponse: PromptResponse | undefined;
       const runAcpBackground = async () => {
+        let lastPersistedPartialResult = session.fleetMetadata?.partialResult;
+        const persistPartialResult = () => {
+          const partialResult = session.fleetMetadata?.partialResult;
+          if (partialResult === lastPersistedPartialResult) return;
+          this.saveSession(session.id);
+          lastPersistedPartialResult = partialResult;
+        };
+        const inFlightPersistTimer = this.host.timers.setInterval(
+          persistPartialResult,
+          1000,
+        );
         try {
           await this.host.acpBackgroundRunner.run({
             agent: backendRoute.agent,
-            cwd: this.cwd,
-            additionalDirectories: this.getAcpAdditionalDirectories(),
+            cwd: session.requireProjectRoot(),
+            additionalDirectories: this.getAcpAdditionalDirectories(
+              session.requireProjectRoot(),
+            ),
             prompt: acpExecutionMessage,
             signal: session.abortSignal,
             onEvent: (event) => {
@@ -3319,6 +4552,7 @@ export class AgentSessionManager {
                 return;
               }
               if (event.type === "stop") {
+                this.noteBackgroundProgress(session.id, "waiting_for_provider");
                 promptResponse = event.response;
                 this.applyAcpPromptResponseUsage(session, event.response);
                 this.notifySessionChangeListeners();
@@ -3326,7 +4560,7 @@ export class AgentSessionManager {
               }
               this.applyAcpSessionUpdate({
                 session,
-                assistantTextParts,
+                output: acpOutput,
                 update: event.update,
               });
               const { status } = this.getProjectedBgStatus(session);
@@ -3348,25 +4582,24 @@ export class AgentSessionManager {
                 sessionId: session.id,
                 task,
                 readonlyOnly: backendRoute.agent.readonlyOnly,
+                requestContext: acpRequestContext,
                 request: permissionRequest,
               }),
           });
           if (!this.bgCancelled.has(session.id)) {
-            const finalText = assistantTextParts.join("").trim();
             const stopReasonMessage = promptResponse
               ? this.acpStopReasonMessage(promptResponse)
               : undefined;
-            const assistantText = [finalText, stopReasonMessage]
-              .filter(Boolean)
-              .join("\n\n");
-            if (assistantText) {
-              session.appendAssistantTurn([
-                { type: "text", text: assistantText },
-              ]);
+            const assistantContent = this.buildAcpAssistantContent(
+              acpOutput,
+              stopReasonMessage,
+            );
+            if (assistantContent.length > 0) {
+              session.appendAssistantTurn(assistantContent);
             }
             if (stopReasonMessage) {
               session.status = "error";
-              this.setBgError(session.id, stopReasonMessage);
+              this.setBgError(session.id, stopReasonMessage, false);
               this.recordAndEmitEvent(session.id, {
                 type: "error",
                 error: stopReasonMessage,
@@ -3388,14 +4621,12 @@ export class AgentSessionManager {
           if (this.bgCancelled.has(session.id) || session.isAborted) {
             this.bgCancelled.add(session.id);
           } else {
-            const partialText = assistantTextParts.join("").trim();
-            if (partialText) {
-              session.appendAssistantTurn([
-                { type: "text", text: partialText },
-              ]);
+            const partialContent = this.buildAcpAssistantContent(acpOutput);
+            if (partialContent.length > 0) {
+              session.appendAssistantTurn(partialContent);
             }
             session.status = "error";
-            this.setBgError(session.id, error);
+            this.setBgError(session.id, error, false);
             this.recordAndEmitEvent(session.id, {
               type: "error",
               error,
@@ -3403,6 +4634,9 @@ export class AgentSessionManager {
             });
           }
         } finally {
+          this.host.timers.clearInterval(inFlightPersistTimer);
+          persistPartialResult();
+          this.releaseSessionToolContext(session.id, acpRequestContext);
           if (session.fleetMetadata?.lifecycle === "paused") {
             this.saveSession(session.id);
             this.notifySessionsChanged();
@@ -3412,30 +4646,27 @@ export class AgentSessionManager {
             const fallbackMsg = this.bgErrors.get(session.id)
               ? `ACP background agent stopped: ${this.bgErrors.get(session.id)}`
               : "(ACP background agent completed without output)";
-            const { resultText, structuredResult } =
-              this.resolveBackgroundResult(session, fallbackMsg);
+            const resolution = this.resolveBackgroundResult(
+              session,
+              fallbackMsg,
+            );
             this.cancelOwnedChildrenOnCompletion(session.id);
-            this.finalizeFleetMetadata(session, resultText, structuredResult);
-            this.saveSession(session.id);
-            this.bgFinalResults.set(session.id, resultText);
+            this.finalizeFleetMetadata(session, resolution);
+            await this.saveSessionNow(session.id);
+            this.bgFinalResults.set(session.id, resolution.resultText);
             for (const t of this.bgSafetyTimers.get(session.id) ?? []) {
               this.host.timers.clearTimeout(t);
             }
             this.bgSafetyTimers.delete(session.id);
             for (const resolve of this.bgResultWaiters.get(session.id) ?? []) {
-              resolve(resultText);
+              resolve(resolution.resultText);
             }
             this.bgResultWaiters.delete(session.id);
             this.notifySessionsChanged();
-            void this.resumeParentAfterBackgroundCompletion(
-              session.id,
-              resultText,
-            );
             this.host.timers.setTimeout(
               () => {
                 this.bgFinalResults.delete(session.id);
                 this.bgParents.delete(session.id);
-                this.bgAutoResumed.delete(session.id);
               },
               5 * 60 * 1000,
             );
@@ -3488,10 +4719,10 @@ export class AgentSessionManager {
       this.host.providers.tryResolveProvider(route.resolvedModel)?.id ??
       route.resolvedProvider;
 
-    const session = await this.host.createSession({
+    const session = await this.createBoundSession({
       mode: route.resolvedMode,
       config: bgConfig,
-      cwd: this.cwd,
+      projectScope: inheritedScope,
       workspaceFolders: this.getWorkspaceFolders(),
       devMode: this.devMode,
       background: true,
@@ -3527,6 +4758,9 @@ export class AgentSessionManager {
       tokenUsage: 0,
       apiTurns: 0,
       startedAt: Date.now(),
+      lastProgressAt: Date.now(),
+      phase: "queued",
+      phaseStartedAt: Date.now(),
     });
     session.fleetMetadata = this.createFleetMetadata(session, {
       task,
@@ -3559,10 +4793,8 @@ export class AgentSessionManager {
       effectivePermissionProfile === "review-only"
         ? "review"
         : route.toolProfile;
-    const baseCtx = this.toolCtx;
-    const bgCtx: ToolDispatchContext = {
-      ...baseCtx,
-      sessionId: session.id,
+    const baseCtx = parentRequestContext ?? this.toolCtx;
+    const bgContextOverrides: Partial<ToolDispatchContext> = {
       commandExecutionPolicy:
         effectiveToolProfile === "review" ||
         effectiveToolProfile === "readonly-research"
@@ -3575,6 +4807,7 @@ export class AgentSessionManager {
       },
       onApprovalRequest: baseCtx.onApprovalRequest
         ? (req) => {
+            this.noteBackgroundProgress(session.id, "awaiting_approval");
             this.appendPolicyAudit(session, {
               decision: "approval_requested",
               operation: req.kind,
@@ -3590,6 +4823,7 @@ export class AgentSessionManager {
         : undefined,
       onQuestion: baseCtx.onQuestion
         ? (context, questions, bgSessionId) => {
+            this.noteBackgroundProgress(session.id, "awaiting_approval");
             this.appendFleetEvent(
               session,
               "question",
@@ -3601,20 +4835,38 @@ export class AgentSessionManager {
     };
 
     const bgEngine = this.host.createEngine(this.host.providers, this.log);
-    bgEngine.setToolRuntime(this.host.createToolRuntime(bgCtx));
+    const preparedTurn = await this.prepareTurnExecution(session, {
+      overrides: bgContextOverrides,
+      inheritedContext: parentRequestContext,
+    });
+    const bgCtx = this.bindCapturedEngineToSession(
+      bgEngine,
+      session,
+      preparedTurn.context,
+    );
 
-    session.addUserMessage(executionMessage);
+    if (request.images?.length) {
+      session.addUserMessage(executionMessage, { images: request.images });
+    } else {
+      session.addUserMessage(executionMessage);
+    }
 
     // Fire-and-forget — runs concurrently alongside the foreground session.
     // Reviews receive an automatic bounded budget unless the caller supplies
     // one; other task classes retain foreground-style open-ended execution.
     const runNativeBackground = async () => {
       let lastPersistedActiveAt = session.lastActiveAt;
-      let terminalEngineError: string | undefined;
+      let lastPersistedPartialResult = session.fleetMetadata?.partialResult;
+      let terminalEngineError: (AgentEvent & { type: "error" }) | undefined;
       const persistIfHistoryChanged = () => {
-        if (session.lastActiveAt !== lastPersistedActiveAt) {
+        const partialResult = session.fleetMetadata?.partialResult;
+        if (
+          session.lastActiveAt !== lastPersistedActiveAt ||
+          partialResult !== lastPersistedPartialResult
+        ) {
           this.saveSession(session.id);
           lastPersistedActiveAt = session.lastActiveAt;
+          lastPersistedPartialResult = partialResult;
         }
       };
       const inFlightPersistTimer = this.host.timers.setInterval(
@@ -3638,7 +4890,11 @@ export class AgentSessionManager {
           toolProfile: effectiveToolProfile,
           maxToolCalls: getEngineHardLimit(engineBudget?.maxToolCalls),
           maxApiTurns: getEngineHardLimit(engineBudget?.maxApiTurns),
+          webAccessPolicy: preparedTurn.policy,
+          mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
+          mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
         })) {
+          this.noteBackgroundAgentEvent(session.id, event);
           if (event.type === "text_delta") {
             this.appendBgStreamingText(session.id, event.text);
           }
@@ -3654,9 +4910,10 @@ export class AgentSessionManager {
             if (detail) {
               this.bgStatusDetail.set(session.id, detail);
             }
+            session.currentTool = undefined;
           }
           if (event.type === "error") {
-            terminalEngineError = event.error;
+            terminalEngineError = event;
           }
 
           // Track tool calls and token usage for observability
@@ -3696,14 +4953,18 @@ export class AgentSessionManager {
         }
         if (terminalEngineError) {
           session.status = "error";
-          this.setBgError(session.id, terminalEngineError);
+          this.setBgError(
+            session.id,
+            terminalEngineError.error,
+            terminalEngineError.retryable,
+          );
         } else if (session.status === "streaming") {
           session.status = "idle";
         }
       } catch (err: unknown) {
         const error = err instanceof Error ? err.message : String(err);
         session.status = "error";
-        this.setBgError(session.id, error);
+        this.setBgError(session.id, error, false);
         this.recordAndEmitEvent(session.id, {
           type: "error",
           error,
@@ -3717,6 +4978,7 @@ export class AgentSessionManager {
           totalCacheCreationTokens: session.totalCacheCreationTokens,
         });
       } finally {
+        this.releaseSessionToolContext(session.id, bgCtx);
         this.host.timers.clearInterval(inFlightPersistTimer);
         persistIfHistoryChanged();
       }
@@ -3737,16 +4999,13 @@ export class AgentSessionManager {
       const fallbackMsg = this.bgErrors.get(session.id)
         ? `Background agent stopped: ${this.bgErrors.get(session.id)}`
         : "(background agent completed without output)";
-      const { resultText, structuredResult } = this.resolveBackgroundResult(
-        session,
-        fallbackMsg,
-      );
+      const resolution = this.resolveBackgroundResult(session, fallbackMsg);
       this.cancelOwnedChildrenOnCompletion(session.id);
-      this.finalizeFleetMetadata(session, resultText, structuredResult);
-      this.saveSession(session.id);
+      this.finalizeFleetMetadata(session, resolution);
+      await this.saveSessionNow(session.id);
 
       // Store result BEFORE resolving waiters to close the race window
-      this.bgFinalResults.set(session.id, resultText);
+      this.bgFinalResults.set(session.id, resolution.resultText);
 
       // Clear all safety timers for this session
       for (const t of this.bgSafetyTimers.get(session.id) ?? [])
@@ -3754,18 +5013,15 @@ export class AgentSessionManager {
       this.bgSafetyTimers.delete(session.id);
 
       for (const resolve of this.bgResultWaiters.get(session.id) ?? []) {
-        resolve(resultText);
+        resolve(resolution.resultText);
       }
       this.bgResultWaiters.delete(session.id);
       this.notifySessionsChanged();
-      void this.resumeParentAfterBackgroundCompletion(session.id, resultText);
-
       // Cleanup stored result after 5 minutes to prevent unbounded memory growth
       this.host.timers.setTimeout(
         () => {
           this.bgFinalResults.delete(session.id);
           this.bgParents.delete(session.id);
-          this.bgAutoResumed.delete(session.id);
         },
         5 * 60 * 1000,
       );
@@ -3907,7 +5163,9 @@ export class AgentSessionManager {
     resultText?: string;
     errorMessage?: string;
   }): Promise<void> {
-    const mode = this.host.config.getBgSummaryMode();
+    const mode = this.host.config.getBgSummaryMode(
+      this.sessions.get(args.sessionId)?.projectScope,
+    );
     if (mode === "heuristic") return;
 
     const summary = this.getOrInitBgSummary(args.sessionId);
@@ -3962,6 +5220,19 @@ export class AgentSessionManager {
 
       if (mode === "openai") {
         const endpoint = getOpenAiCompatibleEndpoint();
+        const model = endpoint.model || "openai-compatible";
+        const startedAt = Date.now();
+        this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
+          session.id,
+          session.projectScope.projectId,
+          {
+            type: "start",
+            provider: "openai-compatible",
+            model,
+            startedAt,
+            schedulerQueued: false,
+          },
+        );
         try {
           const result = await callOpenAiCompatibleChat({
             endpoint,
@@ -3971,9 +5242,32 @@ export class AgentSessionManager {
             temperature: 0,
           });
           text = result.content;
-          selectedModel = endpoint.model || "openai-compatible";
+          selectedModel = model;
+          this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
+            session.id,
+            session.projectScope.projectId,
+            {
+              type: "complete",
+              provider: "openai-compatible",
+              model,
+              startedAt,
+              durationMs: Date.now() - startedAt,
+            },
+          );
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
+          this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
+            session.id,
+            session.projectScope.projectId,
+            {
+              type: "error",
+              provider: "openai-compatible",
+              model,
+              startedAt,
+              durationMs: Date.now() - startedAt,
+              error: lastError,
+            },
+          );
         }
       } else {
         const provider = this.host.providers.tryResolveProvider(session.model);
@@ -3986,13 +5280,40 @@ export class AgentSessionManager {
 
         const modelCandidates =
           provider.id === "codex"
-            ? ["gpt-5.4-mini", ...CODEX_CONDENSE_MODEL_FALLBACKS]
+            ? [...CODEX_CONDENSE_MODEL_FALLBACKS]
             : [provider.condenseModel];
         const uniqueModels = [...new Set(modelCandidates)];
 
         for (let i = 0; i < uniqueModels.length; i++) {
           const model = uniqueModels[i];
+          const startedAt = Date.now();
+          const schedulerQueued =
+            !this.host.providers.requestScheduler.hasCapacity(
+              provider.id,
+              "maintenance",
+            );
+          this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
+            session.id,
+            session.projectScope.projectId,
+            {
+              type: "start",
+              provider: provider.id,
+              model,
+              startedAt,
+              schedulerQueued,
+            },
+          );
+          let providerQueueWaitMs = 0;
+          let permit:
+            | import("../core/modelRequestScheduler.js").ModelRequestPermit
+            | undefined;
           try {
+            permit = await this.host.providers.requestScheduler.acquire(
+              provider.id,
+              "maintenance",
+              session.abortSignal,
+            );
+            providerQueueWaitMs = permit.waitMs;
             const result = await provider.complete({
               model,
               systemPrompt,
@@ -4003,9 +5324,38 @@ export class AgentSessionManager {
             selectedModel = model;
             fallbackUsed = i > 0;
             text = result.text;
+            this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
+              session.id,
+              session.projectScope.projectId,
+              {
+                type: "complete",
+                provider: provider.id,
+                model,
+                startedAt,
+                schedulerQueued,
+                providerQueueWaitMs,
+                durationMs: Date.now() - startedAt,
+              },
+            );
             break;
           } catch (err) {
             lastError = err instanceof Error ? err.message : String(err);
+            this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
+              session.id,
+              session.projectScope.projectId,
+              {
+                type: "error",
+                provider: provider.id,
+                model,
+                startedAt,
+                schedulerQueued,
+                providerQueueWaitMs,
+                durationMs: Date.now() - startedAt,
+                error: lastError,
+              },
+            );
+          } finally {
+            permit?.release();
           }
         }
       }
@@ -4090,6 +5440,29 @@ export class AgentSessionManager {
     });
   }
 
+  private getBackgroundResultState(
+    session: AgentSession,
+    done: boolean,
+  ): BackgroundResultState | undefined {
+    const fleet = session.fleetMetadata;
+    if (fleet?.resultState) return fleet.resultState;
+    if (!done) return "running";
+    switch (fleet?.lifecycle) {
+      case "completed":
+        return "completed";
+      case "failed":
+        return "failed";
+      case "cancelled":
+        return "cancelled";
+      case "budget_exhausted":
+        return "budget_exhausted";
+      case "interrupted":
+        return "interrupted";
+      default:
+        return session.status === "error" ? "failed" : "completed";
+    }
+  }
+
   private getProjectedBgStatus(session: AgentSession): {
     status: BgSessionInfo["status"];
     done: boolean;
@@ -4104,6 +5477,144 @@ export class AgentSessionManager {
     };
   }
 
+  private noteBackgroundProgress(
+    sessionId: string,
+    phase?: BackgroundAgentRuntimePhase,
+  ): void {
+    const meta = this.bgMeta.get(sessionId);
+    if (!meta) return;
+    const now = Date.now();
+    meta.lastProgressAt = now;
+    if (phase && phase !== meta.phase) {
+      meta.phase = phase;
+      meta.phaseStartedAt = now;
+    }
+  }
+
+  private noteBackgroundAgentEvent(sessionId: string, event: AgentEvent): void {
+    let phase: BackgroundAgentRuntimePhase | undefined;
+    switch (event.type) {
+      case "api_request_start": {
+        const meta = this.bgMeta.get(sessionId);
+        if (meta) {
+          meta.requestStartedAt = event.startedAt;
+          meta.retryAt = undefined;
+        }
+        phase = "waiting_for_provider";
+        break;
+      }
+      case "thinking_start":
+      case "thinking_delta":
+      case "condense_start":
+      case "condense":
+        phase = "thinking";
+        break;
+      case "text_delta":
+        phase = "responding";
+        break;
+      case "tool_start":
+      case "tool_input_delta":
+        phase = "executing_tool";
+        break;
+      case "warning":
+        if (event.retryDelayMs) {
+          const meta = this.bgMeta.get(sessionId);
+          if (meta) meta.retryAt = event.retryAt;
+          phase = "retrying_provider";
+        }
+        break;
+      case "api_request": {
+        const meta = this.bgMeta.get(sessionId);
+        if (meta) {
+          meta.requestStartedAt = undefined;
+          meta.retryAt = undefined;
+        }
+        break;
+      }
+      case "error":
+      case "condense_error":
+        phase = "failed";
+        break;
+      case "done":
+        phase = "completed";
+        break;
+      default:
+        break;
+    }
+    this.noteBackgroundProgress(sessionId, phase);
+  }
+
+  private getBackgroundRuntimeTelemetry(session: AgentSession): {
+    phase: BackgroundAgentRuntimePhase;
+    startedAt?: number;
+    lastProgressAt?: number;
+    phaseStartedAt?: number;
+    requestStartedAt?: number;
+    requestElapsedMs?: number;
+    retryAt?: number;
+    elapsedMs: number;
+    idleMs?: number;
+    budgetUsage: BackgroundAgentBudgetUsage;
+    canSteer: boolean;
+    canKill: boolean;
+  } {
+    const meta = this.bgMeta.get(session.id);
+    const { status, done } = this.getProjectedBgStatus(session);
+    const now = Date.now();
+    const isQueued = status === "queued";
+    const startedAt = isQueued
+      ? undefined
+      : (meta?.startedAt ?? session.createdAt);
+    const lastProgressAt =
+      meta?.lastProgressAt ?? session.lastActiveAt ?? startedAt;
+    const completedAt =
+      session.fleetMetadata?.completedAt ?? this.bgCompletedAt.get(session.id);
+    const endAt = done ? (completedAt ?? lastProgressAt ?? now) : now;
+    const elapsedMs =
+      startedAt !== undefined ? Math.max(0, endAt - startedAt) : 0;
+    const canSteer =
+      status === "streaming" ||
+      status === "tool_executing" ||
+      status === "awaiting_approval";
+    const canKill = status === "queued" || canSteer;
+    const phase = this.bgCancelled.has(session.id)
+      ? "cancelled"
+      : status === "error"
+        ? "failed"
+        : done
+          ? "completed"
+          : isQueued
+            ? "queued"
+            : status === "awaiting_approval"
+              ? "awaiting_approval"
+              : status === "tool_executing"
+                ? "executing_tool"
+                : (meta?.phase ?? "waiting_for_provider");
+
+    return {
+      phase,
+      startedAt,
+      lastProgressAt,
+      phaseStartedAt: meta?.phaseStartedAt,
+      requestStartedAt: meta?.requestStartedAt,
+      requestElapsedMs: meta?.requestStartedAt
+        ? Math.max(0, now - meta.requestStartedAt)
+        : undefined,
+      retryAt: meta?.retryAt,
+      elapsedMs,
+      idleMs:
+        !done && lastProgressAt ? Math.max(0, now - lastProgressAt) : undefined,
+      budgetUsage: {
+        tokens: meta?.tokenUsage ?? 0,
+        toolCalls: meta?.toolCalls ?? 0,
+        apiTurns: meta?.apiTurns ?? 0,
+        elapsedMs,
+      },
+      canSteer,
+      canKill,
+    };
+  }
+
   /**
    * Non-blocking status check for a background session.
    */
@@ -4115,6 +5626,9 @@ export class AgentSessionManager {
         done: true,
         partialOutput: "Session not found",
         displayStatus: "Error",
+        phase: "failed",
+        canSteer: false,
+        canKill: false,
       };
     }
     const { status, done } = this.getProjectedBgStatus(session);
@@ -4123,7 +5637,12 @@ export class AgentSessionManager {
       status: status as BgSessionInfo["status"],
       currentTool: session.currentTool,
       streamingText,
-      resultText: done ? session.getLastAssistantText() : undefined,
+      resultText: done
+        ? (session.getLastAssistantText() ??
+          session.fleetMetadata?.finalResult ??
+          session.fleetMetadata?.partialResult ??
+          this.bgPartialResults.get(sessionId))
+        : undefined,
       errorMessage: this.bgErrors.get(sessionId),
       statusDetail: this.bgStatusDetail.get(sessionId),
     });
@@ -4135,13 +5654,20 @@ export class AgentSessionManager {
     });
 
     const meta = this.bgMeta.get(sessionId);
+    const telemetry = this.getBackgroundRuntimeTelemetry(session);
     const progressSummary = summary.shortStatus?.trim() || picked.displayStatus;
+    const fleet = session.fleetMetadata;
+    const partialOutput = done
+      ? (fleet?.partialResult ??
+        this.bgPartialResults.get(sessionId) ??
+        session.getLastAssistantText())
+      : undefined;
 
     return {
       status,
       currentTool: session.currentTool,
       done,
-      partialOutput: done ? session.getLastAssistantText() : undefined,
+      partialOutput,
       displayStatus: picked.displayStatus,
       streamingPreview: streamingText,
       progressSummary,
@@ -4151,6 +5677,24 @@ export class AgentSessionManager {
       taskClass: meta?.taskClass,
       toolCalls: meta?.toolCalls,
       tokenUsage: meta?.tokenUsage,
+      apiTurns: meta?.apiTurns,
+      resultState: this.getBackgroundResultState(session, done),
+      terminalReason: fleet?.terminalReason,
+      retrySafe: done ? true : undefined,
+      agentRetryable: fleet?.agentRetryable,
+      phase: telemetry.phase,
+      startedAt: telemetry.startedAt,
+      lastProgressAt: telemetry.lastProgressAt,
+      phaseStartedAt: telemetry.phaseStartedAt,
+      requestStartedAt: telemetry.requestStartedAt,
+      requestElapsedMs: telemetry.requestElapsedMs,
+      retryAt: telemetry.retryAt,
+      elapsedMs: telemetry.elapsedMs,
+      idleMs: telemetry.idleMs,
+      budget: session.fleetMetadata?.budget,
+      budgetUsage: telemetry.budgetUsage,
+      canSteer: telemetry.canSteer,
+      canKill: telemetry.canKill,
     };
   }
 
@@ -4180,6 +5724,12 @@ export class AgentSessionManager {
         done: true,
         partialOutput: "Background session is outside the caller's subtree",
         displayStatus: "Unauthorized",
+        resultState: "authorization_lost",
+        terminalReason: "outside_caller_subtree",
+        retrySafe: false,
+        phase: "failed",
+        canSteer: false,
+        canKill: false,
       };
     }
     return this.getBackgroundStatus(sessionId);
@@ -4192,11 +5742,43 @@ export class AgentSessionManager {
     if (!this.canManageBackground(callerSessionId, sessionId)) {
       return Promise.resolve(
         JSON.stringify({
+          status: "authorization_lost",
+          terminalReason: "outside_caller_subtree",
+          retrySafe: false,
+          agentRetryable: false,
           error: "Background session is outside the caller's subtree",
         }),
       );
     }
     return this.waitForBackground(sessionId);
+  }
+
+  async waitForAuthorizedBackgroundContent(
+    callerSessionId: string,
+    sessionId: string,
+  ): Promise<string | BackgroundAgentResultContent> {
+    const text = await this.waitForAuthorizedBackground(
+      callerSessionId,
+      sessionId,
+    );
+    if (!this.canManageBackground(callerSessionId, sessionId)) return text;
+
+    const session = this.sessions.get(sessionId);
+    if (!session) return text;
+    const images = session
+      .getAllMessages()
+      .flatMap((message) =>
+        message.role === "assistant" && Array.isArray(message.content)
+          ? message.content
+              .filter((block): block is ImageBlock => block.type === "image")
+              .map((block) => ({
+                data: block.source.data,
+                mimeType: block.source.media_type,
+              }))
+          : [],
+      )
+      .slice(0, MAX_ACP_OUTPUT_IMAGES);
+    return images.length > 0 ? { text, images } : text;
   }
 
   killAuthorizedBackground(
@@ -4370,6 +5952,7 @@ export class AgentSessionManager {
           typeof firstUserMessage?.content === "string"
             ? firstUserMessage.content
             : `Retry the task: ${fleet.task}`,
+        images: firstUserMessage?.media?.images,
         mode: fleet.resolvedMode,
         model: fleet.resolvedModel,
         provider: fleet.resolvedProvider,
@@ -4417,8 +6000,10 @@ export class AgentSessionManager {
     if (this.getProjectedBgStatus(session).done) {
       return Promise.resolve(
         session.fleetMetadata?.finalResult ??
-          session.getLastAssistantText() ??
-          "(no result)",
+          this.resolveBackgroundResult(
+            session,
+            "(background agent completed without output)",
+          ).resultText,
       );
     }
 
@@ -4452,23 +6037,26 @@ export class AgentSessionManager {
     });
   }
 
-  /**
-   * Append streaming text from a background agent (for UI preview).
-   * Only keeps the last ~500 characters to avoid unbounded growth.
-   */
+  /** Append bounded streaming evidence while keeping a compact UI preview. */
   appendBgStreamingText(sessionId: string, text: string): void {
-    const existing = this.bgStreamingText.get(sessionId) ?? "";
+    const existing = this.bgPartialResults.get(sessionId) ?? "";
     const updated = existing + text;
-    // Keep last 500 chars
-    this.bgStreamingText.set(
-      sessionId,
-      updated.length > 500 ? updated.slice(-500) : updated,
-    );
+    const partialResult =
+      updated.length > MAX_BACKGROUND_PARTIAL_RESULT_CHARS
+        ? updated.slice(-MAX_BACKGROUND_PARTIAL_RESULT_CHARS)
+        : updated;
+    this.bgPartialResults.set(sessionId, partialResult);
+    this.bgStreamingText.set(sessionId, partialResult.slice(-500));
+    const fleet = this.sessions.get(sessionId)?.fleetMetadata;
+    if (fleet) fleet.partialResult = partialResult;
   }
 
-  /** Record a bg session error message. */
-  setBgError(sessionId: string, error: string): void {
+  /** Record a bg session error message and provider retryability. */
+  setBgError(sessionId: string, error: string, retryable = false): void {
     this.bgErrors.set(sessionId, error);
+    this.bgAgentRetryable.set(sessionId, retryable);
+    const fleet = this.sessions.get(sessionId)?.fleetMetadata;
+    if (fleet) fleet.agentRetryable = retryable;
   }
 
   /** Mark a bg session as completed with a timestamp. */
@@ -4476,6 +6064,15 @@ export class AgentSessionManager {
     const completedAt = Date.now();
     this.bgCompletedAt.set(sessionId, completedAt);
     const session = this.sessions.get(sessionId);
+    const meta = this.bgMeta.get(sessionId);
+    if (meta) {
+      meta.lastProgressAt = completedAt;
+      meta.phase = this.bgCancelled.has(sessionId)
+        ? "cancelled"
+        : session?.status === "error"
+          ? "failed"
+          : "completed";
+    }
     if (session?.fleetMetadata) {
       session.fleetMetadata.completedAt = completedAt;
     }
@@ -4570,26 +6167,28 @@ export class AgentSessionManager {
         session.id,
       depth: parent?.fleetMetadata ? parent.fleetMetadata.depth + 1 : 1,
       lifecycle: "running",
+      resultState: "running",
     };
   }
 
   private finalizeFleetMetadata(
     session: AgentSession,
-    resultText: string,
-    structuredResult?: import("./FleetWorkflows.js").FleetResultEnvelope,
+    resolution: {
+      resultText: string;
+      structuredResult: import("./FleetWorkflows.js").FleetResultEnvelope;
+      resultState: BackgroundResultState;
+      partialResult?: string;
+    },
   ): void {
     const fleet = session.fleetMetadata;
     if (!fleet) return;
     this.bgBudgetWrapUps.delete(session.id);
     fleet.completedAt = this.bgCompletedAt.get(session.id) ?? Date.now();
-    fleet.finalResult = resultText;
-    fleet.structuredResult =
-      structuredResult ??
-      parseFleetResultEnvelope(
-        fleet.delegation
-          ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
-        resultText,
-      );
+    fleet.finalResult = resolution.resultText;
+    fleet.structuredResult = resolution.structuredResult;
+    fleet.resultState = resolution.resultState;
+    fleet.partialResult = resolution.partialResult;
+    fleet.agentRetryable = this.bgAgentRetryable.get(session.id);
     const meta = this.bgMeta.get(session.id);
     if (meta) {
       fleet.budgetUsage = {
@@ -4603,21 +6202,36 @@ export class AgentSessionManager {
           : undefined,
       };
     }
-    if (this.bgCancelled.has(session.id)) {
+    if (resolution.resultState === "completed") {
+      fleet.lifecycle = "completed";
+      fleet.terminalReason = undefined;
+      fleet.agentRetryable = undefined;
+      session.status = "idle";
+      this.bgErrors.delete(session.id);
+      this.bgAgentRetryable.delete(session.id);
+      this.appendFleetEvent(session, "completed", "Agent completed");
+    } else if (resolution.resultState === "cancelled") {
       fleet.lifecycle = "cancelled";
       fleet.terminalReason ??= "cancelled_by_user";
       this.appendFleetEvent(session, "cancelled", "Agent cancelled");
-    } else if (fleet.terminalReason?.startsWith("budget_exhausted:")) {
+    } else if (resolution.resultState === "budget_exhausted") {
       fleet.lifecycle = "budget_exhausted";
-      this.appendFleetEvent(session, "failed", fleet.terminalReason);
-    } else if (session.status === "error") {
-      fleet.lifecycle = "failed";
-      fleet.terminalReason = this.bgErrors.get(session.id) ?? "agent_error";
+      this.appendFleetEvent(
+        session,
+        "failed",
+        fleet.terminalReason ?? "budget_exhausted",
+      );
+    } else if (resolution.resultState === "interrupted") {
+      fleet.lifecycle = "interrupted";
+      fleet.terminalReason ??= "background_agent_interrupted";
       this.appendFleetEvent(session, "failed", fleet.terminalReason);
     } else {
-      fleet.lifecycle = "completed";
-      fleet.terminalReason = undefined;
-      this.appendFleetEvent(session, "completed", "Agent completed");
+      fleet.lifecycle = "failed";
+      fleet.terminalReason =
+        resolution.resultState === "incomplete_expected_result"
+          ? "incomplete_expected_result"
+          : (this.bgErrors.get(session.id) ?? "agent_error");
+      this.appendFleetEvent(session, "failed", fleet.terminalReason);
     }
   }
 
@@ -4627,30 +6241,91 @@ export class AgentSessionManager {
   ): {
     resultText: string;
     structuredResult: import("./FleetWorkflows.js").FleetResultEnvelope;
+    resultState: BackgroundResultState;
+    partialResult?: string;
   } {
-    // Some host/test session adapters predate getLastFinalMarker; keep text
-    // completion compatible while native AgentSession exposes structured data.
+    // A valid final marker is authoritative even if the provider disconnects
+    // immediately afterward. The marker is already persisted in session history.
     const marker = session.getLastFinalMarker?.();
     if (marker?.result) {
       return {
         resultText: formatFleetResultEnvelope(marker.result),
         structuredResult: marker.result,
+        resultState: "completed",
       };
     }
 
-    const rawText =
-      session.getLastAssistantText() ?? marker?.summary ?? fallbackText;
-    const structuredResult = parseFleetResultEnvelope(
-      session.fleetMetadata?.delegation
-        ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
-      rawText,
-    );
+    const durablePartialResult =
+      this.bgPartialResults.get(session.id) ??
+      session.fleetMetadata?.partialResult;
+    const partialResult =
+      session.fleetMetadata?.placement === "worktree"
+        ? (durablePartialResult ??
+          session.getLastAssistantText() ??
+          marker?.summary)
+        : (session.getLastAssistantText() ??
+          marker?.summary ??
+          durablePartialResult);
+    const rawText = partialResult ?? fallbackText;
+    const expected = session.fleetMetadata?.delegation
+      ?.expectedResult as SpawnBackgroundRequest["expectedResult"];
+    const structuredResult = parseFleetResultEnvelope(expected, rawText);
+    let resultState: BackgroundResultState = "completed";
+    if (this.bgCancelled.has(session.id)) {
+      resultState = "cancelled";
+    } else if (
+      session.fleetMetadata?.terminalReason?.startsWith("budget_exhausted:")
+    ) {
+      resultState = "budget_exhausted";
+    } else if (session.fleetMetadata?.lifecycle === "interrupted") {
+      resultState = "interrupted";
+    } else if (
+      expected &&
+      expected !== "text" &&
+      structuredResult.type === expected
+    ) {
+      // A valid expected envelope is authoritative even if a late provider error
+      // changed the transport status after the response was captured.
+      resultState = "completed";
+    } else if (session.status === "error") {
+      resultState = "failed";
+    } else if (
+      expected &&
+      expected !== "text" &&
+      structuredResult.type !== expected
+    ) {
+      resultState = "incomplete_expected_result";
+    }
+
+    if (resultState === "completed") {
+      return {
+        resultText:
+          structuredResult.type === "text"
+            ? structuredResult.text
+            : formatFleetResultEnvelope(structuredResult),
+        structuredResult,
+        resultState,
+      };
+    }
+
+    const terminalReason =
+      resultState === "incomplete_expected_result"
+        ? "incomplete_expected_result"
+        : (this.bgErrors.get(session.id) ??
+          session.fleetMetadata?.terminalReason ??
+          resultState);
+    const failureResult = JSON.stringify({
+      status: resultState,
+      terminalReason,
+      retrySafe: true,
+      agentRetryable: this.bgAgentRetryable.get(session.id) ?? false,
+      ...(partialResult ? { partialOutput: partialResult } : {}),
+    });
     return {
-      resultText:
-        structuredResult.type === "text"
-          ? structuredResult.text
-          : formatFleetResultEnvelope(structuredResult),
-      structuredResult,
+      resultText: failureResult,
+      structuredResult: { type: "text", text: failureResult },
+      resultState,
+      partialResult,
     };
   }
 
@@ -4776,10 +6451,10 @@ export class AgentSessionManager {
     }
     const mode = request.mode?.trim() || parent?.mode || "code";
     const model = request.model?.trim() || parent?.model || this.config.model;
-    const session = await this.host.createSession({
+    const session = await this.createBoundSession({
       mode,
       config: { ...this.config, model },
-      cwd: this.cwd,
+      projectScope: parent?.projectScope ?? this.selectProjectScope(),
       workspaceFolders: this.getWorkspaceFolders(),
       devMode: this.devMode,
       background: true,
@@ -4809,6 +6484,8 @@ export class AgentSessionManager {
       tokenUsage: 0,
       apiTurns: 0,
       startedAt: Date.now(),
+      lastProgressAt: Date.now(),
+      phase: "waiting_for_provider",
     });
     session.fleetMetadata = this.createFleetMetadata(session, {
       task: request.task,
@@ -4834,9 +6511,10 @@ export class AgentSessionManager {
     session.fleetMetadata.placement = "worktree";
     session.fleetMetadata.lifecycle = "running";
     const exchangeStore = new WorktreeFleetExchangeStore(globalStoragePath);
+    const sourceWorkspacePath = this.requireSessionExecution(session);
     const exchange = await exchangeStore.create({
       parentFleetSessionId: session.id,
-      sourceWorkspacePath: this.cwd,
+      sourceWorkspacePath,
     });
     session.fleetMetadata.worktreeExchangeId = exchange.id;
     this.appendFleetEvent(session, "queued", "Worktree agent launch requested");
@@ -4849,7 +6527,7 @@ export class AgentSessionManager {
           request.expectedResult,
           request.message,
         ),
-        sourcePath: this.cwd,
+        sourcePath: sourceWorkspacePath,
         mode: request.mode,
         autoSubmit: true,
         fleetExchangeId: exchange.id,
@@ -4923,42 +6601,36 @@ export class AgentSessionManager {
           record.status === "completed"
             ? undefined
             : (record.error ?? `worktree_${record.status}`);
+        if (record.status === "cancelled") {
+          this.bgCancelled.add(session.id);
+        } else if (record.status === "failed") {
+          this.setBgError(
+            session.id,
+            record.error ?? "Worktree background agent failed",
+            false,
+          );
+        }
         const rawResult =
           record.resultText ??
           record.error ??
           "Worktree agent ended without output";
-        const structuredResult = parseFleetResultEnvelope(
-          session.fleetMetadata.delegation
-            ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
-          rawResult,
-        );
-        session.fleetMetadata.structuredResult = structuredResult;
-        session.fleetMetadata.finalResult =
-          structuredResult.type === "text"
-            ? structuredResult.text
-            : formatFleetResultEnvelope(structuredResult);
-        session.fleetMetadata.completedAt = Date.now();
+        this.bgPartialResults.set(session.id, rawResult);
+        const resolution = this.resolveBackgroundResult(session, rawResult);
         const meta = this.bgMeta.get(session.id);
         if (meta && record.usage) {
           meta.tokenUsage =
             record.usage.inputTokens + record.usage.outputTokens;
         }
-        this.bgFinalResults.set(session.id, session.fleetMetadata.finalResult);
+        this.finalizeFleetMetadata(session, resolution);
+        await this.saveSessionNow(session.id);
+        this.bgFinalResults.set(session.id, resolution.resultText);
         for (const resolve of this.bgResultWaiters.get(session.id) ?? []) {
-          resolve(session.fleetMetadata.finalResult);
+          resolve(resolution.resultText);
         }
         this.bgResultWaiters.delete(session.id);
-        this.appendFleetEvent(
-          session,
-          record.status === "completed"
-            ? "completed"
-            : record.status === "cancelled"
-              ? "cancelled"
-              : "failed",
-          session.fleetMetadata.finalResult,
-        );
+      } else {
+        this.saveSession(session.id);
       }
-      this.saveSession(session.id);
       this.notifySessionsChanged();
     };
     const timer = this.host.timers.setInterval(() => {
@@ -5181,6 +6853,9 @@ export class AgentSessionManager {
   }
 
   getBackgroundResultSummary(sessionId: string): string | undefined {
+    const finalSummary = this.getBackgroundResult(sessionId).summary?.trim();
+    if (finalSummary) return finalSummary;
+
     const summary = this.bgSummary.get(sessionId)?.shortStatus?.trim();
     if (summary) return summary;
 
@@ -5198,41 +6873,6 @@ export class AgentSessionManager {
         minSentenceLength: 20,
       },
     );
-  }
-
-  private async resumeParentAfterBackgroundCompletion(
-    bgSessionId: string,
-    resultText: string,
-  ): Promise<void> {
-    if (this.bgAutoResumed.has(bgSessionId)) return;
-    const parent = this.bgParents.get(bgSessionId);
-    if (!parent) return;
-
-    const session = this.sessions.get(parent.sessionId);
-    if (!session || session.background) return;
-    if (session.status !== "idle") return;
-    if (this.foregroundId !== session.id) return;
-
-    this.bgAutoResumed.add(bgSessionId);
-    try {
-      await this.sendMessage(
-        session.id,
-        [
-          `The background agent for "${parent.task}" has returned while you were stopped.`,
-          "Resume now using the included <background_result> content (do not call get_background_result unless you explicitly need to wait on another session).",
-          "",
-          `<background_result task="${parent.task}" sessionId="${bgSessionId}">`,
-          resultText,
-          "</background_result>",
-        ].join("\n"),
-        session.mode,
-      );
-    } catch (err) {
-      this.bgAutoResumed.delete(bgSessionId);
-      this.log?.(
-        `[bg-resume] failed to resume foreground for ${bgSessionId}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
   }
 
   getBackgroundParentSessionId(sessionId: string): string | undefined {
@@ -5271,8 +6911,14 @@ export class AgentSessionManager {
       .map((s): BgSessionInfo => {
         const { status, done: isDone } = this.getProjectedBgStatus(s);
         const meta = this.bgMeta.get(s.id);
+        const telemetry = this.getBackgroundRuntimeTelemetry(s);
         const streamingText = this.bgStreamingText.get(s.id);
-        const resultText = isDone ? s.getLastAssistantText() : undefined;
+        const resultText = isDone
+          ? (s.getLastAssistantText() ??
+            s.fleetMetadata?.finalResult ??
+            s.fleetMetadata?.partialResult ??
+            this.bgPartialResults.get(s.id))
+          : undefined;
         const errorMessage = this.bgErrors.get(s.id);
         const heuristicStatus = inferBackgroundDisplayStatus({
           status,
@@ -5326,7 +6972,7 @@ export class AgentSessionManager {
           rootSessionId: s.fleetMetadata?.rootSessionId,
           goalId: s.fleetMetadata?.goalId,
           workflowId: s.fleetMetadata?.workflowId,
-          workspace: s.cwd,
+          workspace: s.projectScope.displayName,
           worktreePath: s.fleetMetadata?.worktreePath,
           worktreeBranch: s.fleetMetadata?.worktreeBranch,
           depth: s.fleetMetadata?.depth,
@@ -5364,6 +7010,17 @@ export class AgentSessionManager {
           terminalReason: s.fleetMetadata?.terminalReason,
           createdAt: s.createdAt,
           lastActiveAt: s.lastActiveAt,
+          startedAt: telemetry.startedAt,
+          lastProgressAt: telemetry.lastProgressAt,
+          phaseStartedAt: telemetry.phaseStartedAt,
+          requestStartedAt: telemetry.requestStartedAt,
+          requestElapsedMs: telemetry.requestElapsedMs,
+          retryAt: telemetry.retryAt,
+          elapsedMs: telemetry.elapsedMs,
+          idleMs: telemetry.idleMs,
+          phase: telemetry.phase,
+          canSteer: telemetry.canSteer,
+          canKill: telemetry.canKill,
           totalInputTokens: s.totalInputTokens,
           totalOutputTokens: s.totalOutputTokens,
           toolCalls: meta?.toolCalls,
@@ -5394,6 +7051,9 @@ export class AgentSessionManager {
           events,
           policyAuditCount: s.fleetMetadata?.policyAudit?.length ?? 0,
           structuredResult: s.fleetMetadata?.structuredResult,
+          resultState: this.getBackgroundResultState(s, isDone),
+          partialResult: s.fleetMetadata?.partialResult,
+          agentRetryable: s.fleetMetadata?.agentRetryable,
           streamingText,
           errorMessage,
           completedAt:

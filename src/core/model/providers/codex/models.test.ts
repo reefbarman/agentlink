@@ -2,7 +2,8 @@ import {
   CODEX_DEFAULT_MODEL,
   CODEX_OAUTH_CHEAP_MODEL,
   getCodexModelCapabilities,
-  getCodexPreviewModelFallback,
+  getCodexUnavailableModelFallback,
+  listCodexModels,
   resolveCodexEffectiveModel,
   resolveCodexReasoningEffort,
 } from "./models.js";
@@ -23,10 +24,34 @@ describe("Codex model resolution", () => {
     });
   });
 
-  it("maps limited-preview models to stable equivalents", () => {
-    expect(getCodexPreviewModelFallback("gpt-5.6-sol")).toBe("gpt-5.5");
-    expect(getCodexPreviewModelFallback("gpt-5.6-terra")).toBe("gpt-5.4");
-    expect(getCodexPreviewModelFallback("gpt-5.6-luna")).toBe("gpt-5.4-mini");
+  it("lists GPT-5.6 models without preview labels", () => {
+    const models = listCodexModels("codex");
+    expect(models.find(({ id }) => id === "gpt-5.6-sol")?.displayName).toBe(
+      "GPT-5.6 Sol",
+    );
+    expect(models.find(({ id }) => id === "gpt-5.6-terra")?.displayName).toBe(
+      "GPT-5.6 Terra",
+    );
+    expect(models.find(({ id }) => id === "gpt-5.6-luna")?.displayName).toBe(
+      "GPT-5.6 Luna",
+    );
+  });
+
+  it("maps unavailable GPT-5.6 models to gpt-5.5, the last older backend model", () => {
+    expect(getCodexUnavailableModelFallback("gpt-5.6-sol")).toBe("gpt-5.5");
+    expect(getCodexUnavailableModelFallback("gpt-5.6-terra")).toBe("gpt-5.5");
+    expect(getCodexUnavailableModelFallback("gpt-5.6-luna")).toBe("gpt-5.5");
+  });
+
+  it("follows upstream migrations for rotated-out OAuth models", () => {
+    expect(resolveCodexEffectiveModel("gpt-5.4", "oauth")).toEqual({
+      model: "gpt-5.6-terra",
+      remapped: true,
+    });
+    expect(resolveCodexEffectiveModel("gpt-5.4-mini", "oauth")).toEqual({
+      model: "gpt-5.6-luna",
+      remapped: true,
+    });
   });
 
   it("remaps unavailable OAuth mini/nano models to the cheap OAuth model", () => {
@@ -62,8 +87,33 @@ describe("Codex model resolution", () => {
   });
 
   it("uses the effective model default reasoning effort", () => {
+    expect(
+      resolveCodexReasoningEffort({ modelId: "gpt-5.3-codex-spark" }),
+    ).toBe("high");
     expect(resolveCodexReasoningEffort({ modelId: "gpt-5.4-pro" })).toBe(
       "high",
+    );
+  });
+
+  it("lists Spark for OAuth but hides it on API-key auth", () => {
+    const oauthIds = listCodexModels("codex", "oauth").map(({ id }) => id);
+    const apiKeyIds = listCodexModels("codex", "apiKey").map(({ id }) => id);
+    expect(oauthIds).toContain("gpt-5.3-codex-spark");
+    expect(apiKeyIds).not.toContain("gpt-5.3-codex-spark");
+    expect(apiKeyIds).toContain("gpt-5.4-pro");
+    expect(apiKeyIds).toContain("gpt-5.2-codex");
+    expect(getCodexUnavailableModelFallback("gpt-5.3-codex-spark")).toBe(
+      "gpt-5.6-luna",
+    );
+  });
+
+  it("maps API-retired codex models to their published replacements", () => {
+    expect(getCodexUnavailableModelFallback("gpt-5.2-codex")).toBe("gpt-5.5");
+    expect(getCodexUnavailableModelFallback("gpt-5.1-codex-max")).toBe(
+      "gpt-5.5",
+    );
+    expect(getCodexUnavailableModelFallback("gpt-5.1-codex-mini")).toBe(
+      "gpt-5.4-mini",
     );
   });
 
@@ -79,6 +129,29 @@ describe("Codex model resolution", () => {
     expect(resolveCodexReasoningEffort({ modelId: "unknown-model" })).toBe(
       "medium",
     );
+  });
+});
+
+describe("Codex hosted web capabilities", () => {
+  it("advertises cited hosted search for API-key and OAuth Responses", () => {
+    expect(getCodexModelCapabilities("gpt-5.5", "apiKey").hostedWeb).toEqual({
+      search: {
+        supported: true,
+        supportsDomainRestrictions: true,
+        supportsCitations: true,
+        supportsPageAccess: true,
+      },
+      fetch: { supported: false },
+    });
+    expect(getCodexModelCapabilities("gpt-5.5", "oauth").hostedWeb).toEqual({
+      search: {
+        supported: true,
+        supportsDomainRestrictions: false,
+        supportsCitations: true,
+        supportsPageAccess: true,
+      },
+      fetch: { supported: false },
+    });
   });
 });
 
@@ -98,7 +171,7 @@ describe("Codex OAuth context window clamps", () => {
   });
 
   it("keeps the full advertised window over API-key auth", () => {
-    for (const model of ["gpt-5.5", "gpt-5.6-sol"]) {
+    for (const model of ["gpt-5.4", "gpt-5.5", "gpt-5.6-sol"]) {
       const caps = getCodexModelCapabilities(model, "apiKey");
       expect(caps.contextWindow).toBe(1_050_000);
       expect(caps.maxInputTokens).toBeUndefined();

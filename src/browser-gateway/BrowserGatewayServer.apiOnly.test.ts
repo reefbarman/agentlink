@@ -36,6 +36,8 @@ vi.mock("vscode", () => {
 
 function makeSessionManagerStub() {
   return {
+    getWorkspaceProjects: vi.fn(() => []),
+    getDefaultProjectScope: vi.fn(() => undefined),
     listPersistedSessions: vi.fn(() => []),
     getForegroundSession: vi.fn(() => null),
     getPersistedSessionMessages: vi.fn(() => []),

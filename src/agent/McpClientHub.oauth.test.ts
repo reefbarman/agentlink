@@ -434,6 +434,37 @@ describe("McpClientHub OAuth recovery", () => {
     expect(mocks.providerForceReauth).toHaveBeenCalledTimes(1);
   });
 
+  it("serializes concurrent connects to the same server URL across hubs", async () => {
+    const starts: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    mocks.createTransportConnect
+      .mockImplementationOnce(async () => {
+        starts.push("first");
+        await firstGate;
+      })
+      .mockImplementationOnce(async () => {
+        starts.push("second");
+      });
+
+    const hubA = new McpClientHub(new FakeMemento());
+    const hubB = new McpClientHub(new FakeMemento());
+    const connectA = hubA.connect([notionCfg]);
+    const connectB = hubB.connect([notionCfg]);
+
+    await vi.waitFor(() => expect(starts).toEqual(["first"]));
+    // Second hub's connect must wait for the first to finish so it can reuse
+    // any tokens the first connect refreshed instead of racing the rotation.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(starts).toEqual(["first"]);
+
+    releaseFirst();
+    await Promise.all([connectA, connectB]);
+    expect(starts).toEqual(["first", "second"]);
+  });
+
   it("reconnects automatically on generic runtime auth failure", async () => {
     mocks.createTransportConnect.mockResolvedValue(undefined);
     mocks.createTransportCallTool.mockRejectedValueOnce(

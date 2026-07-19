@@ -1,3 +1,8 @@
+import type {
+  BackgroundAgentRuntimePhase,
+  BackgroundResultState,
+} from "../core/capabilities/background.js";
+
 /**
  * Inline approval request — passed as a callback through the tool dispatch
  * pipeline so tools can request user approval via the chat webview instead
@@ -15,6 +20,9 @@ export interface InlineApprovalRequest {
   title: string;
   detail?: string;
   choices: InlineApprovalChoice[];
+  /** Structured MCP identity used by approval surfaces. */
+  mcpServerName?: string;
+  mcpToolName?: string;
   /**
    * Optional id for approvals that need rich decision payloads
    * (e.g. rejectionReason/followUp), not just a selected choice value.
@@ -22,6 +30,8 @@ export interface InlineApprovalRequest {
   id?: string;
   /** When set, shows attribution for which background task is requesting approval. */
   backgroundTask?: string;
+  /** Optional exact target path for project/cross-project attribution. */
+  targetPath?: string;
 }
 
 /**
@@ -57,13 +67,58 @@ export interface McpApprovalPromotionMeta {
   scopes: Array<"session" | "project" | "global">;
 }
 
+export interface McpContentAnnotations {
+  audience?: Array<"user" | "assistant">;
+  priority?: number;
+  lastModified?: string;
+}
+
+export interface McpResultContentMeta {
+  type: string;
+  annotations?: McpContentAnnotations;
+  meta?: Record<string, unknown>;
+  resourceLink?: {
+    uri: string;
+    name: string;
+    title?: string;
+    description?: string;
+    mimeType?: string;
+    size?: number;
+    icons?: Array<{
+      src: string;
+      mimeType?: string;
+      sizes?: string[];
+      theme?: "light" | "dark";
+    }>;
+  };
+  resource?: {
+    uri: string;
+    mimeType?: string;
+    meta?: Record<string, unknown>;
+  };
+}
+
+export interface McpToolResultMeta {
+  resultMeta?: Record<string, unknown>;
+  content: McpResultContentMeta[];
+}
+
 export type ToolResult = {
+  data?: unknown;
   content: Array<
     | { type: "text"; text: string }
     | { type: "image"; data: string; mimeType: string }
+    | { type: "document"; data: string; mimeType: string; name: string }
   >;
+  isError?: boolean;
+  error?: {
+    kind: string;
+    message: string;
+  };
+  mcpMeta?: McpToolResultMeta;
   uiMeta?: {
     mcpApprovalPromotion?: McpApprovalPromotionMeta;
+    composeTrace?: import("./composeTypes.js").ComposeTrace;
   };
 };
 
@@ -105,6 +160,7 @@ export interface RequestContextBreakdown {
 }
 
 export interface RevertRecoveryNotice {
+  projectId: string;
   checkpointId: string;
   sessionRevision: string;
   workspaceRevision?: string;
@@ -113,20 +169,24 @@ export interface RevertRecoveryNotice {
   message: string;
 }
 
-/** Create a ToolResult containing a JSON-serialized text payload. */
+const TOOL_ERROR_KIND = "tool_error";
+
+/** Create a ToolResult containing a canonical JSON-serialized payload. */
 export function jsonResult(payload: unknown, pretty = false): ToolResult {
   return {
+    data: payload,
     content: [
       {
         type: "text",
         text: JSON.stringify(payload, null, pretty ? 2 : undefined),
       },
     ],
+    isError: false,
   };
 }
 
 /** Create a successful ToolResult from a JSON-serializable payload. */
-export function successResult(payload: Record<string, unknown>): ToolResult {
+export function successResult(payload: unknown): ToolResult {
   return jsonResult(payload, true);
 }
 
@@ -135,7 +195,15 @@ export function errorResult(
   message: string,
   extra?: Record<string, unknown>,
 ): ToolResult {
-  return jsonResult({ error: message, ...extra });
+  const payload = { error: message, ...extra };
+  return {
+    ...jsonResult(payload),
+    isError: true,
+    error: {
+      kind: TOOL_ERROR_KIND,
+      message: typeof payload.error === "string" ? payload.error : message,
+    },
+  };
 }
 
 /** Wrap a caught error into a ToolResult. */
@@ -144,7 +212,13 @@ export function handleToolError(
   context?: Record<string, unknown>,
 ): ToolResult {
   if (typeof err === "object" && err !== null && "content" in err) {
-    return err as ToolResult;
+    const result = err as ToolResult;
+    result.isError = true;
+    result.error ??= {
+      kind: TOOL_ERROR_KIND,
+      message: "Tool execution failed",
+    };
+    return result;
   }
   const message = err instanceof Error ? err.message : String(err);
   return errorResult(message, context);
@@ -223,8 +297,28 @@ export interface BgSessionInfo {
     | "paused"
     | "interrupted";
   terminalReason?: string;
+  resultState?: BackgroundResultState;
+  partialResult?: string;
+  agentRetryable?: boolean;
   createdAt?: number;
   lastActiveAt?: number;
+  /** Timestamp when execution left the fleet queue. */
+  startedAt?: number;
+  /** Timestamp of the latest provider, text, or tool progress event. */
+  lastProgressAt?: number;
+  /** Timestamp when the current runtime phase began. */
+  phaseStartedAt?: number;
+  /** Timestamp when the current provider request began, including scheduler wait. */
+  requestStartedAt?: number;
+  /** Current provider-request wall time at snapshot creation. */
+  requestElapsedMs?: number;
+  /** Scheduled provider retry time when phase is retrying_provider. */
+  retryAt?: number;
+  elapsedMs?: number;
+  idleMs?: number;
+  phase?: BackgroundAgentRuntimePhase;
+  canSteer?: boolean;
+  canKill?: boolean;
   totalInputTokens?: number;
   totalOutputTokens?: number;
   toolCalls?: number;

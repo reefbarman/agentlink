@@ -9,6 +9,8 @@ import type {
 } from "../core/capabilities/editReview.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createHash } from "node:crypto";
+
 vi.mock("vscode", () => ({
   workspace: {
     workspaceFolders: [] as Array<{ uri: { fsPath: string } }>,
@@ -95,6 +97,26 @@ describe("handleApplyDiff", () => {
     expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
   });
 
+  it("returns a post-edit hash for matched no-op replacements", async () => {
+    const filePath = path.join(workspaceDir, "src", "noop.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "same", "utf-8");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/noop.ts", diff: searchReplaceDiff("same", "same") },
+      {} as never,
+      {} as never,
+      "session-1",
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      status: "accepted",
+      note: "No changes resulted from the diff application",
+      post_edit_content_hash: createHash("sha256").update("same").digest("hex"),
+    });
+  });
+
   it("delegates auto-approved diffs to the edit-review provider", async () => {
     const filePath = path.join(workspaceDir, "plans", "existing.md");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -149,6 +171,62 @@ describe("handleApplyDiff", () => {
     );
   });
 
+  it("preserves save-failure recovery diagnostics in the public result", async () => {
+    const filePath = path.join(workspaceDir, "src", "save-failed.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        error: "File save failed",
+        path: "src/save-failed.ts",
+        reason: "save_failed",
+        save_failure: {
+          document_dirty: true,
+          disk_state: "changed" as const,
+          concurrent_change: true,
+          review_state: "diff_snapshot_preserved" as const,
+          vscode_error_detail: "unavailable" as const,
+          retryable: true as const,
+        },
+        next_steps: ["Re-read the changed file before retrying."],
+        finalContent: "must-not-leak",
+      })),
+    };
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "src/save-failed.ts",
+        diff: searchReplaceDiff("old", "new"),
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(false),
+      },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error: "File save failed",
+      path: "src/save-failed.ts",
+      reason: "save_failed",
+      save_failure: {
+        document_dirty: true,
+        disk_state: "changed",
+        concurrent_change: true,
+        review_state: "diff_snapshot_preserved",
+        vscode_error_detail: "unavailable",
+        retryable: true,
+      },
+      next_steps: ["Re-read the changed file before retrying."],
+    });
+    expect(toolJson(result)).not.toHaveProperty("finalContent");
+  });
+
   it("records scoped trust after interactive accept-session decisions", async () => {
     const filePath = path.join(workspaceDir, "src", "example.ts");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -187,6 +265,7 @@ describe("handleApplyDiff", () => {
     expect(policy.recordDecision).toHaveBeenCalledWith({
       decision: "accept-session",
       sessionId: "session-1",
+      absolutePath: expect.any(String),
       relativePath: "src/example.ts",
       inWorkspace: true,
       writeApprovalResponse: { decision: "accept-session" },
@@ -355,6 +434,416 @@ describe("handleApplyDiff", () => {
     });
   });
 
+  it("applies occurrence and replace-all block options before review", async () => {
+    const filePath = path.join(workspaceDir, "src", "controlled.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "one target\ntwo target\nkeep keep", "utf-8");
+    let proposedContent = "";
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => {
+        proposedContent = params.content;
+        return {
+          status: "accepted" as const,
+          path: "src/controlled.ts",
+          operation: "modified" as const,
+          finalContent: params.content,
+        };
+      }),
+    };
+    const diff = [
+      searchReplaceDiff("target", "selected"),
+      searchReplaceDiff("keep", "all"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "src/controlled.ts",
+        diff,
+        block_options: [
+          { index: 0, occurrence: 2 },
+          { index: 1, replace_all: true },
+        ],
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(proposedContent).toBe("one target\ntwo selected\nall all");
+    expect(toolJson(result)).toMatchObject({
+      status: "accepted",
+      block_results: [
+        {
+          index: 0,
+          status: "applied",
+          selection: "occurrence",
+          selected_occurrence: 2,
+          replacement_count: 1,
+          post_edit_range: { start_line: 2, end_line: 2 },
+        },
+        {
+          index: 1,
+          status: "applied",
+          selection: "replace_all",
+          replacement_count: 2,
+          post_edit_ranges: [
+            { start_line: 3, end_line: 3 },
+            { start_line: 3, end_line: 3 },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("validates block options before review", async () => {
+    const filePath = path.join(workspaceDir, "src", "invalid-options.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "target target", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(),
+    };
+    const { handleApplyDiff } = await import("./applyDiff.js");
+
+    for (const testCase of [
+      {
+        block_options: [
+          { index: 0, occurrence: 1 },
+          { index: 0, replace_all: true as const },
+        ],
+        error: "Duplicate block option index",
+      },
+      {
+        block_options: [{ index: 3, occurrence: 1 }],
+        error: "Block option index does not identify a valid block",
+      },
+      {
+        block_options: [{ index: 0 }],
+        error:
+          "Each block option must specify exactly one of occurrence or replace_all",
+      },
+    ]) {
+      const result = await handleApplyDiff(
+        {
+          path: "src/invalid-options.ts",
+          diff: searchReplaceDiff("target", "selected"),
+          block_options: testCase.block_options,
+        },
+        {} as never,
+        {} as never,
+        "session-1",
+        undefined,
+        "code",
+        {
+          editReviewProvider,
+          writeApprovalPolicyProvider: createApprovalPolicy(true),
+        },
+      );
+      expect(toolJson(result)).toMatchObject({ error: testCase.error });
+    }
+    expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
+  });
+
+  it("allows options for valid block indices after a malformed block gap", async () => {
+    const filePath = path.join(workspaceDir, "src", "index-gap.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "target target", "utf-8");
+    let proposedContent = "";
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => {
+        proposedContent = params.content;
+        return {
+          status: "accepted" as const,
+          path: "src/index-gap.ts",
+          operation: "modified" as const,
+          finalContent: params.content,
+        };
+      }),
+    };
+    const malformedThenValid = [
+      "<<<<<<< SEARCH",
+      "missing",
+      "======= DIVIDER =======",
+      "replacement",
+      "======= DIVIDER =======",
+      "<<<<<<< SEARCH",
+      "target",
+      "======= DIVIDER =======",
+      "selected",
+      ">>>>>>> REPLACE",
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "src/index-gap.ts",
+        diff: malformedThenValid,
+        block_options: [{ index: 1, occurrence: 2 }],
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(proposedContent).toBe("target selected");
+    expect(toolJson(result)).toMatchObject({
+      status: "accepted",
+      partial: true,
+      malformed_blocks: 1,
+    });
+  });
+
+  it("reuses occurrence selection while reapplying under the write lock", async () => {
+    const filePath = path.join(workspaceDir, "src", "controlled-reapply.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "target one\ntarget two", "utf-8");
+    let lockedContent = "";
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => {
+        const prepared = await params.prepareContent?.(
+          "header\ntarget one\ntarget two",
+        );
+        expect(prepared?.status).toBe("continue");
+        if (prepared?.status === "continue") lockedContent = prepared.content;
+        return {
+          status: "accepted" as const,
+          path: "src/controlled-reapply.ts",
+          operation: "modified" as const,
+        };
+      }),
+    };
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "src/controlled-reapply.ts",
+        diff: searchReplaceDiff("target", "selected"),
+        block_options: [{ index: 0, occurrence: 2 }],
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(lockedContent).toBe("header\ntarget one\nselected two");
+    expect(toolJson(result)).toMatchObject({ status: "accepted" });
+  });
+
+  it("rejects atomic diffs before review when any block fails", async () => {
+    const filePath = path.join(workspaceDir, "src", "atomic-failure.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(),
+    };
+    const diff = [
+      searchReplaceDiff("old", "new"),
+      searchReplaceDiff("missing", "replacement"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/atomic-failure.ts", diff, atomic: true },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error: "Atomic apply_diff validation failed",
+      atomic: true,
+      no_changes_applied: true,
+      failed_block_details: [
+        expect.objectContaining({ index: 1, status: "failed" }),
+      ],
+    });
+    expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
+    expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
+  });
+
+  it("marks atomic marker-corruption rejection as no-write", async () => {
+    const filePath = path.join(workspaceDir, "src", "atomic-marker.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(),
+    };
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "src/atomic-marker.ts",
+        diff: searchReplaceDiff("old", "<<<<<<< SEARCH"),
+        atomic: true,
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      { editReviewProvider },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error:
+        "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
+      atomic: true,
+      no_changes_applied: true,
+    });
+    expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
+    expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
+  });
+
+  it("rejects malformed blocks in atomic mode", async () => {
+    const filePath = path.join(workspaceDir, "src", "atomic-malformed.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(),
+    };
+    const diff = [
+      searchReplaceDiff("old", "new"),
+      "<<<<<<< SEARCH",
+      "missing",
+      "======= DIVIDER =======",
+      "replacement",
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/atomic-malformed.ts", diff, atomic: true },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error: "Atomic apply_diff validation failed",
+      atomic: true,
+      no_changes_applied: true,
+      malformed_blocks: 1,
+    });
+    expect(editReviewProvider.reviewAndApply).not.toHaveBeenCalled();
+  });
+
+  it("reviews atomic diffs when every block succeeds", async () => {
+    const filePath = path.join(workspaceDir, "src", "atomic-success.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old one\nold two", "utf-8");
+    let proposedContent = "";
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => {
+        proposedContent = params.content;
+        return {
+          status: "accepted" as const,
+          path: "src/atomic-success.ts",
+          operation: "modified" as const,
+          finalContent: params.content,
+        };
+      }),
+    };
+    const diff = [
+      searchReplaceDiff("old one", "new one"),
+      searchReplaceDiff("old two", "new two"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/atomic-success.ts", diff, atomic: true },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(proposedContent).toBe("new one\nnew two");
+    expect(toolJson(result)).toMatchObject({
+      status: "accepted",
+      block_results: [
+        expect.objectContaining({ index: 0, status: "applied" }),
+        expect.objectContaining({ index: 1, status: "applied" }),
+      ],
+    });
+  });
+
+  it("aborts atomic diffs when lock-bound reapplication becomes partial", async () => {
+    const filePath = path.join(workspaceDir, "src", "atomic-reapply.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old one\nold two", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => {
+        const prepared = await params.prepareContent?.("old one\nchanged two");
+        expect(prepared?.status).toBe("abort");
+        return prepared?.status === "abort"
+          ? prepared.result
+          : { error: "Expected abort" };
+      }),
+    };
+    const diff = [
+      searchReplaceDiff("old one", "new one"),
+      searchReplaceDiff("old two", "new two"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/atomic-reapply.ts", diff, atomic: true },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error:
+        "Atomic apply_diff validation failed after re-reading the file under lock",
+      atomic: true,
+      no_changes_applied: true,
+      failed_block_details: [
+        expect.objectContaining({ index: 1, status: "failed" }),
+      ],
+    });
+  });
+
   it("adds partial block metadata to accepted provider results", async () => {
     const filePath = path.join(workspaceDir, "src", "partial.ts");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -364,6 +853,7 @@ describe("handleApplyDiff", () => {
         status: "accepted" as const,
         path: "src/partial.ts",
         operation: "modified" as const,
+        finalContent: "new",
       })),
     };
     const diff = [
@@ -392,10 +882,60 @@ describe("handleApplyDiff", () => {
       failed_block_details: [
         expect.objectContaining({ index: 1, status: "failed" }),
       ],
+      post_edit_content_hash: createHash("sha256").update("new").digest("hex"),
       block_results: [
-        expect.objectContaining({ index: 0, status: "applied" }),
+        expect.objectContaining({
+          index: 0,
+          status: "applied",
+          post_edit_range: { start_line: 1, end_line: 1 },
+        }),
         expect.objectContaining({ index: 1, status: "failed" }),
       ],
     });
+  });
+
+  it("hashes provider final content and omits stale proposed ranges", async () => {
+    const filePath = path.join(workspaceDir, "src", "formatted.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+    const finalContent = "formatted\ncontent";
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: "src/formatted.ts",
+        operation: "modified" as const,
+        finalContent,
+      })),
+    };
+    const diff = [
+      searchReplaceDiff("old", "new"),
+      searchReplaceDiff("missing", "replacement"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/formatted.ts", diff },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+    const payload = toolJson(result);
+
+    expect(payload.post_edit_content_hash).toBe(
+      createHash("sha256").update(finalContent).digest("hex"),
+    );
+    expect(payload.block_results).toEqual([
+      expect.objectContaining({ index: 0, status: "applied" }),
+      expect.objectContaining({ index: 1, status: "failed" }),
+    ]);
+    expect(
+      (payload.block_results as Array<Record<string, unknown>>)[0],
+    ).not.toHaveProperty("post_edit_range");
   });
 });

@@ -153,6 +153,9 @@ export function RenameCard({ request, submit, followUpRef }: RenameCardProps) {
     <ApprovalLayout
       queuePosition={request.queuePosition}
       queueTotal={request.queueTotal}
+      sourceProject={request.sourceProject}
+      targetProject={request.targetProject}
+      targetPath={request.targetPath}
       purpose="Rename a symbol across files"
       rulesContent={rulesJsx}
       rulesModified={!isSkipped}

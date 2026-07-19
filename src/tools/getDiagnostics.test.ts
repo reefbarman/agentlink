@@ -20,6 +20,15 @@ describe("handleGetDiagnostics", () => {
         "Diagnostics are unavailable in this runtime. Provide a DiagnosticsProvider to enable get_diagnostics.",
       path: "src/file.ts",
     });
+    expect(result).toMatchObject({
+      data: {
+        error:
+          "Diagnostics are unavailable in this runtime. Provide a DiagnosticsProvider to enable get_diagnostics.",
+        path: "src/file.ts",
+      },
+      isError: true,
+      error: { kind: "tool_error" },
+    });
   });
 
   it("delegates diagnostics params to the provider", async () => {
@@ -55,5 +64,10 @@ describe("handleGetDiagnostics", () => {
     );
 
     expect(textPayload(result)).toBe("Error: bad path");
+    expect(result).toMatchObject({
+      data: "Error: bad path",
+      isError: true,
+      error: { kind: "tool_error", message: "bad path" },
+    });
   });
 });

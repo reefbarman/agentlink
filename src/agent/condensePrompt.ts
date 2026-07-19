@@ -7,9 +7,18 @@ interface CondensePromptContext {
   userMessages: string[];
   pendingTasks: string[];
   resumeAnchor: CondenseResumeAnchor;
+  priorSummary?: string;
+}
+
+export interface CondenseRecallAnchors {
+  filePaths: string[];
+  errors: string[];
+  commands: string[];
+  toolNames: string[];
 }
 
 export interface DeterministicCondenseSectionsOptions extends CondensePromptContext {
+  recallAnchors?: CondenseRecallAnchors;
   preservedContext?: {
     toolNames: string[];
     mcpServerNames?: string[];
@@ -69,6 +78,7 @@ export function renderDeterministicSections(
     options.preservedContext?.activeSkills ?? [],
     "- None",
   );
+  const anchorLines = renderRecallAnchors(options.recallAnchors);
 
   return [
     "<system-reminder>",
@@ -81,6 +91,12 @@ export function renderDeterministicSections(
     "",
     "## Pending Tasks (deterministic heuristic)",
     pendingLines,
+    "",
+    "## Session Transcript Recall",
+    "The full current-session transcript, including original messages retired by condensing, is searchable with `search_session_history`. Use it to recover exact historical evidence before relying on memory or re-deriving prior work.",
+    "",
+    "### Retired-window recall anchors (deterministic, bounded)",
+    anchorLines,
     "",
     "## Preserved Runtime Context (reattached outside transcript)",
     "### Available tool names",
@@ -95,6 +111,20 @@ export function renderDeterministicSections(
   ].join("\n");
 }
 
+function renderRecallAnchors(anchors?: CondenseRecallAnchors): string {
+  if (!anchors) return "- None extracted";
+  const sections = [
+    ["Files", anchors.filePaths],
+    ["Errors", anchors.errors],
+    ["Commands", anchors.commands],
+    ["Tools", anchors.toolNames],
+  ] as const;
+  const lines = sections.flatMap(([label, items]) =>
+    items.length > 0 ? [`- ${label}: ${items.join("; ")}`] : [],
+  );
+  return lines.length > 0 ? lines.join("\n") : "- None extracted";
+}
+
 export function buildDeterministicFallbackSummary(
   options: CondensePromptContext,
 ): string {
@@ -107,12 +137,16 @@ export function buildDeterministicFallbackSummary(
     "- None explicitly identified",
   );
 
+  const priorCheckpoint = options.priorSummary?.trim()
+    ? ` Preserve and consolidate this prior checkpoint:\n${options.priorSummary.trim()}`
+    : "";
+
   return [
     "1. **Primary Request and Intent**: Continue the active work captured in the latest user message and pending task anchor.",
     "2. **Key Technical Concepts**: Unknown from transcript.",
     "3. **Files and Code Sections**: Unknown from transcript.",
     "4. **Errors and Fixes**: Unknown from transcript.",
-    "5. **Problem Solving**: Use the deterministic resume anchor and canonical user messages below as the source of truth.",
+    `5. **Problem Solving**: Use the deterministic resume anchor and canonical user messages below as the source of truth.${priorCheckpoint}`,
     `6. **All User Messages**:\n${allUserMessages}`,
     "7. **User Corrections & Behavioral Directives**: Unknown from transcript.",
     `8. **Pending Tasks**:\n${pendingTasks}`,

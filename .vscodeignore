@@ -10,6 +10,8 @@
 **/*
 !dist/extension.js
 !dist/extension.js.map
+!dist/compose-runtime.mjs
+!dist/compose-runtime.mjs.map
 !dist/indexer-worker.js
 !dist/browser-gateway-helper.js
 !dist/browser-gateway-helper.js.map

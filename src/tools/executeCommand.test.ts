@@ -40,7 +40,10 @@ vi.mock("vscode", () => ({
 }));
 
 vi.mock("../util/paths.js", () => ({
+  canonicalizePath: (inputPath: string) => inputPath,
   getWorkspaceRoots,
+  isPathWithinRoot: (filePath: string, rootPath: string) =>
+    filePath === rootPath || filePath.startsWith(`${rootPath}/`),
   tryGetFirstWorkspaceRoot,
 }));
 
@@ -81,6 +84,7 @@ describe("handleExecuteCommand", () => {
       output: "ok",
       output_captured: true,
       terminal_id: "term_1",
+      command_sent: true,
     });
   });
 
@@ -381,6 +385,7 @@ describe("handleExecuteCommand", () => {
       error:
         "Command execution is unavailable in this runtime. Provide a TerminalProvider to enable execute_command.",
       command: "go test ./...",
+      command_sent: false,
     });
   });
 
@@ -406,6 +411,7 @@ describe("handleExecuteCommand", () => {
       command: "curl https://example.com",
       reason:
         "Public network capability requests are not available yet. Run without sandbox_permissions.public_network.",
+      command_sent: false,
     });
     expect(prepareExecution).not.toHaveBeenCalled();
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
@@ -433,6 +439,7 @@ describe("handleExecuteCommand", () => {
       command: "curl https://example.com",
       reason:
         "Public network capability requests are not available yet. Run without sandbox_permissions.public_network.",
+      command_sent: false,
     });
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
     expect(executeCommand).not.toHaveBeenCalled();
@@ -478,8 +485,41 @@ describe("handleExecuteCommand", () => {
       command: "pwd",
       reason:
         "Read-only command execution does not allow the sandbox_permissions parameter",
+      command_sent: false,
     });
     expect(executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("allows commands to run from a sibling workspace root", async () => {
+    getWorkspaceRoots.mockReturnValue([
+      "/workspace/project-a",
+      "/workspace/project-b",
+    ]);
+    tryGetFirstWorkspaceRoot.mockReturnValue("/workspace/project-a");
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: "touch output.txt",
+        cwd: "/workspace/project-b",
+      },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-a",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      exit_code: 0,
+      command_sent: true,
+    });
+    expect(executeCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "touch output.txt",
+        cwd: "/workspace/project-b",
+      }),
+    );
   });
 
   it("forwards env map to TerminalProvider.executeCommand", async () => {
@@ -798,7 +838,7 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result)).toMatchObject({ status: "rejected" });
   });
 
-  it("filters terminal raw output with the same output window", async () => {
+  it("omits duplicate terminal raw output from the model-facing result", async () => {
     executeCommand.mockResolvedValue({
       exit_code: 0,
       output: "one\ntwo\nthree",
@@ -823,9 +863,7 @@ describe("handleExecuteCommand", () => {
 
     const payload = textPayload(result);
     expect(payload.output).toBe("two\nthree");
-    expect(payload.terminal_raw_output).toBe(
-      "\u001b[32mtwo\u001b[0m\n\u001b[33mthree\u001b[0m",
-    );
+    expect(payload.terminal_raw_output).toBeUndefined();
   });
 
   it("rejects malformed shell commands before masterBypass and force handling", async () => {
@@ -854,6 +892,7 @@ describe("handleExecuteCommand", () => {
       status: "rejected",
       command,
       reason: expect.stringContaining("malformed shell syntax"),
+      command_sent: false,
     });
   });
 
@@ -971,6 +1010,54 @@ describe("handleExecuteCommand", () => {
     expect(payload.status).toBe("rejected");
     expect(payload.reason).toContain("protected instructions or memory");
     expect(payload.reason).toContain("force=true cannot bypass");
+    expect(payload.command_sent).toBe(false);
+  });
+
+  it("reports pipe-validator rejection before terminal dispatch", async () => {
+    validateCommand.mockReturnValueOnce({
+      type: "pipe",
+      message: "Use output_grep instead",
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test | grep failed" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-pipe-rejected",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "rejected",
+      reason: "Use output_grep instead",
+      command_sent: false,
+    });
+  });
+
+  it("reports interactive-validator rejection before terminal dispatch", async () => {
+    validateInteractiveCommand.mockReturnValueOnce({
+      message: "Command rejected: interactive shell",
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "bash" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-interactive-rejected",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "rejected",
+      reason: "Command rejected: interactive shell",
+      command_sent: false,
+    });
   });
 
   it("auto-approves safe commands when the safe threshold is enabled", async () => {
@@ -1154,7 +1241,7 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result).approval).toEqual({ by: "explicit_rule" });
   });
 
-  it("records recent approval", async () => {
+  it("records an attributed recent approval returned by the panel", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) => {
         if (key === "masterBypass") return false;
@@ -1170,8 +1257,12 @@ describe("handleExecuteCommand", () => {
         findMatchingCommandRule: () => undefined,
       } as never,
       {
-        isRecentlyApproved: () => true,
-        enqueueCommandApproval: vi.fn(),
+        enqueueCommandApproval: vi.fn(() => ({
+          promise: Promise.resolve({
+            decision: "run-once",
+            recentApproval: true,
+          }),
+        })),
       } as never,
       "session-recent",
       undefined,
@@ -1395,6 +1486,7 @@ describe("handleExecuteCommand", () => {
         route: "native",
         confinement: "native-unsandboxed",
       },
+      command_sent: false,
     });
     expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
   });
@@ -1809,6 +1901,7 @@ describe("handleExecuteCommand", () => {
       command: `echo "unterminated`,
       original_command: "echo ok",
       reason: expect.stringContaining("malformed shell syntax"),
+      command_sent: false,
     });
   });
 
@@ -1851,6 +1944,7 @@ describe("handleExecuteCommand", () => {
     expect(payload.command).toBe("echo remember >> .agentlink/memory.md");
     expect(payload.original_command).toBe("echo ok");
     expect(payload.reason).toContain("protected instructions or memory");
+    expect(payload.command_sent).toBe(false);
   });
 
   it("rejects pipe validation violations introduced by approval command edits", async () => {
@@ -1895,6 +1989,7 @@ describe("handleExecuteCommand", () => {
     expect(payload.command).toBe("npm test | grep failed");
     expect(payload.original_command).toBe("npm test");
     expect(payload.reason).toBe("Use output_grep instead");
+    expect(payload.command_sent).toBe(false);
   });
 
   describe("read-only execution policy", () => {
@@ -2080,6 +2175,7 @@ describe("handleExecuteCommand", () => {
         expect(textPayload(result)).toMatchObject({
           status: "rejected",
           reason: expect.stringContaining(reason),
+          command_sent: false,
         });
       },
     );

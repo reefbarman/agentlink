@@ -56,6 +56,12 @@ describe("renderDeterministicSections", () => {
 ## Pending Tasks (deterministic heuristic)
 - Run validation
 
+## Session Transcript Recall
+The full current-session transcript, including original messages retired by condensing, is searchable with \`search_session_history\`. Use it to recover exact historical evidence before relying on memory or re-deriving prior work.
+
+### Retired-window recall anchors (deterministic, bounded)
+- None extracted
+
 ## Preserved Runtime Context (reattached outside transcript)
 ### Available tool names
 - read_file
@@ -89,6 +95,12 @@ describe("renderDeterministicSections", () => {
 
 ## Pending Tasks (deterministic heuristic)
 - None explicitly identified
+
+## Session Transcript Recall
+The full current-session transcript, including original messages retired by condensing, is searchable with \`search_session_history\`. Use it to recover exact historical evidence before relying on memory or re-deriving prior work.
+
+### Retired-window recall anchors (deterministic, bounded)
+- None extracted
 
 ## Preserved Runtime Context (reattached outside transcript)
 ### Available tool names

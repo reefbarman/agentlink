@@ -13,6 +13,7 @@ import type {
   AgentToolExecutionRequest,
   AgentToolRuntime,
 } from "../core/tools/types.js";
+import type { BackgroundAgentStatusResult } from "../core/capabilities/background.js";
 import { PARALLEL_SAFE_TOOLS } from "../core/tools/toolCapabilities.js";
 import type {
   SpawnBackgroundRequest,
@@ -118,6 +119,10 @@ import { handleProposeMemory } from "../tools/proposeMemory.js";
 import { handleReadFile } from "../tools/readFile.js";
 import { handleRenameSymbol } from "../tools/renameSymbol.js";
 import { handleSearchFiles } from "../tools/searchFiles.js";
+import {
+  handleReadSessionExcerpt,
+  handleSearchSessionHistory,
+} from "../tools/sessionTranscriptRecall.js";
 import { handleSendFeedback } from "../tools/sendFeedback.js";
 import { handleShowNotification } from "../tools/showNotification.js";
 
@@ -143,7 +148,11 @@ import type {
 import type { SemanticSearchProvider } from "../core/capabilities/readSearch.js";
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import type { WorktreeAgentLaunchProvider } from "../core/capabilities/worktree.js";
-import type { BackgroundAgentProvider } from "../core/capabilities/background.js";
+import type {
+  BackgroundAgentProvider,
+  BackgroundAgentResultContent,
+} from "../core/capabilities/background.js";
+import type { NativeWebToolExecutionProvider } from "../core/capabilities/web.js";
 import type {
   ModeSwitchProvider,
   SessionStatusProvider,
@@ -162,7 +171,19 @@ import type {
 } from "../telemetry/ToolUsageTelemetry.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import { randomUUID } from "crypto";
+import * as os from "os";
+import * as path from "path";
 import { z } from "zod";
+import {
+  canonicalizePath,
+  isPathWithinRoot,
+  resolveAndValidatePath,
+  withWorkspaceRoots,
+} from "../util/paths.js";
+import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
+import { createComposeExecutionScope } from "./compose/composeScope.js";
+import type { ComposeParams } from "./compose/composeRuntime.js";
+import { loadComposeRuntime } from "./compose/composeRuntimeLoader.js";
 
 // --- Read-only tools (safe to execute in parallel) ---
 
@@ -171,11 +192,6 @@ export const READ_ONLY_TOOLS = new Set(PARALLEL_SAFE_TOOLS);
 // --- Tools excluded from the agent (MCP-only or not applicable) ---
 
 const EXCLUDED_TOOLS = new Set(["handshake", "load_rule", "load_skill"]);
-const DEV_FEEDBACK_TOOLS = new Set([
-  "send_feedback",
-  "get_feedback",
-  "delete_feedback",
-]);
 
 // --- Zod schema record → JSON Schema conversion ---
 
@@ -205,6 +221,8 @@ function cachedJsonSchemaFor(
 // --- Tool name → zod schema mapping ---
 
 const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
+  web_search: schemas.webSearchSchema,
+  web_fetch: schemas.webFetchSchema,
   read_file: schemas.readFileSchema,
   get_context: schemas.getContextSchema,
   get_repo_map: schemas.getRepoMapSchema,
@@ -213,6 +231,8 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   load_skill: schemas.loadSkillSchema,
   list_files: schemas.listFilesSchema,
   search_files: schemas.searchFilesSchema,
+  search_session_history: schemas.searchSessionHistorySchema,
+  read_session_excerpt: schemas.readSessionExcerptSchema,
   get_diagnostics: schemas.getDiagnosticsSchema,
   write_file: schemas.writeFileSchema,
   generate_image: schemas.generateImageSchema,
@@ -239,6 +259,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   get_type_hierarchy: schemas.getTypeHierarchySchema,
   get_inlay_hints: schemas.getInlayHintsSchema,
   codebase_search: schemas.codebaseSearchSchema,
+  compose: schemas.composeSchema,
   ...(__DEV_BUILD__
     ? {
         send_feedback: {
@@ -615,6 +636,73 @@ const AGENT_BUDGET_SCHEMA = {
   },
 };
 
+const DEFAULT_BACKGROUND_IMAGE_COUNT = 4;
+const MAX_BACKGROUND_IMAGES = 8;
+
+function resolveBackgroundImages(params: {
+  imageIds?: unknown;
+  useRecentImages?: unknown;
+  getSessionImages?: () => SessionImageReference[];
+}): Array<{ name: string; mimeType: string; base64: string }> {
+  const sessionImages = params.getSessionImages?.() ?? [];
+  const byId = new Map(sessionImages.map((image) => [image.id, image]));
+  const selected: SessionImageReference[] = [];
+
+  if (params.imageIds != null) {
+    if (!Array.isArray(params.imageIds)) {
+      throw new Error("imageIds must be an array of session image IDs");
+    }
+    for (const rawId of params.imageIds) {
+      if (typeof rawId !== "string" || !rawId.trim()) {
+        throw new Error("imageIds must be an array of session image IDs");
+      }
+      const id = rawId.trim();
+      const image = byId.get(id);
+      if (!image) {
+        const available = sessionImages.map((item) => item.id).join(", ");
+        throw new Error(
+          `No session image found for imageIds entry "${id}"${available ? `. Available image IDs: ${available}` : ""}`,
+        );
+      }
+      selected.push(image);
+    }
+  }
+
+  if (params.useRecentImages != null && params.useRecentImages !== false) {
+    const numeric =
+      params.useRecentImages === true
+        ? DEFAULT_BACKGROUND_IMAGE_COUNT
+        : Number(params.useRecentImages);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      throw new Error("useRecentImages must be true or a positive number");
+    }
+    const count = Math.min(Math.floor(numeric), MAX_BACKGROUND_IMAGES);
+    selected.push(...sessionImages.slice(-count));
+  }
+
+  const unique = Array.from(
+    new Map(selected.map((image) => [image.id, image])).values(),
+  );
+  if (unique.length > MAX_BACKGROUND_IMAGES) {
+    throw new Error(
+      `spawn_background_agent supports at most ${MAX_BACKGROUND_IMAGES} inherited images`,
+    );
+  }
+  if (
+    (params.imageIds != null ||
+      (params.useRecentImages != null && params.useRecentImages !== false)) &&
+    unique.length === 0
+  ) {
+    throw new Error("No images are available in the current session");
+  }
+
+  return unique.map(({ name, mimeType, base64 }) => ({
+    name,
+    mimeType,
+    base64,
+  }));
+}
+
 /** Background agent management tools (only available in foreground sessions). */
 const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
@@ -671,9 +759,20 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           enum: ["review-only", "workspace-safe", "interactive"],
         },
         worktree: { type: "string", enum: ["shared", "isolated"] },
+        imageIds: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Specific image IDs from the current foreground session to copy into the background agent's first message. IDs follow image_1, image_2 attachment/session order. Native in-process backgrounds only; not supported for ACP or isolated-worktree agents.",
+        },
+        useRecentImages: {
+          oneOf: [{ type: "boolean" }, { type: "number" }],
+          description:
+            "Copy recent images from the foreground session into the background agent's first message. Includes user-attached images and screenshot/image tool results. Pass true for up to 4 recent images or a number for that many (maximum 8). Native in-process backgrounds only.",
+        },
         reviewScope: {
           description:
-            "Structured review target captured into an immutable snapshot when the background agent is spawned. working_tree defaults to unstaged tracked changes plus untracked files; use paths to narrow it. files captures the current contents of exact files. commit_range resolves Git diff output immediately. diff accepts already captured content.",
+            "Structured review target captured into an immutable snapshot when the background agent is spawned. Relative paths resolve from the executing project; absolute paths inside any open workspace root are accepted. working_tree defaults to unstaged tracked changes plus untracked files; Git scopes must stay within one root. files captures exact current files and may span roots, including non-Git workspaces. commit_range resolves Git diff output immediately. diff accepts already captured content.",
           oneOf: [
             {
               type: "object",
@@ -737,7 +836,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "get_background_status",
     description:
-      "Non-blocking check on a background agent's progress, including current tool/status and a running preview when available. Use this for coordinator-style progress checks while continuing other work; do not poll in a tight loop. If no push-style completion is available, call get_background_result only when you need the final output.",
+      "Non-blocking health and progress snapshot for a background agent. Returns phase/runtime telemetry, durable resultState/terminalReason/retry guidance when terminal, budget usage, canSteer/canKill controls, and preserved output. Use it while continuing independent work; do not poll tightly or infer a hang from elapsed time alone because a provider request or long tool can be quiet. If progress has gone quiet and the partial result is sufficient, steer it to stop using tools and return now. If steering cannot be delivered at a safe boundary, the idle time keeps growing, and the result is no longer worth waiting for, kill it. Call get_background_result only when ready to block for integration.",
     input_schema: {
       type: "object",
       properties: {
@@ -752,7 +851,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "get_background_result",
     description:
-      "Wait for a background agent to finish and return its final response. Use this for explicit pull/wait flows; skip it when a completion result was already pushed into context.",
+      "Wait for a background agent to finish and return its final response. Successful runs return the expected response; failed, interrupted, cancelled, unauthorized, or incomplete expected-result runs return structured JSON with status, terminalReason, retrySafe, agentRetryable, and preserved partialOutput when available. Use this for explicit pull/wait flows; skip it when a completion result was already pushed into context.",
     input_schema: {
       type: "object",
       properties: {
@@ -767,7 +866,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "kill_background_agent",
     description:
-      "Stop a running background agent and return any partial output collected so far.",
+      "Immediately stop a background agent when get_background_status reports canKill and waiting is no longer worthwhile. Returns any partial output collected so far.",
     input_schema: {
       type: "object",
       properties: {
@@ -787,7 +886,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "steer_background_agent",
     description:
-      "Send a course-correction to a running authorized descendant. It is injected at the next safe tool boundary.",
+      'Send a course-correction to a running authorized descendant. To ask for an early result, say "Stop using tools and return your best findings now." The instruction is queued for the next safe tool boundary, so it cannot interrupt an in-flight provider request or tool; check idleMs later and kill if the instruction cannot be delivered promptly.',
     input_schema: {
       type: "object",
       properties: {
@@ -896,32 +995,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
 ];
 
 /** Return value of get_background_status — non-blocking snapshot. */
-export interface BgStatusResult {
-  status:
-    | "queued"
-    | "streaming"
-    | "tool_executing"
-    | "awaiting_approval"
-    | "idle"
-    | "cancelled"
-    | "error";
-  currentTool?: string;
-  /** UI-ready status label derived from heuristics (and later model enrichment). */
-  displayStatus?: string;
-  /** Running assistant output preview, useful for non-blocking coordination. */
-  streamingPreview?: string;
-  /** Concise running/completed summary when available. */
-  progressSummary?: string;
-  resolvedMode?: string;
-  resolvedModel?: string;
-  resolvedProvider?: string;
-  taskClass?: string;
-  toolCalls?: number;
-  tokenUsage?: number;
-  done: boolean;
-  /** Last assistant message text, only present when done=true. */
-  partialOutput?: string;
-}
+export type BgStatusResult = BackgroundAgentStatusResult;
 
 // --- Tool Profiles ---
 
@@ -950,6 +1024,8 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "go_to_implementation",
     "get_type_hierarchy",
     "execute_command",
+    "search_session_history",
+    "read_session_excerpt",
   ]),
   "readonly-research": new Set([
     "read_file",
@@ -970,6 +1046,8 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "get_type_hierarchy",
     "get_inlay_hints",
     "execute_command",
+    "search_session_history",
+    "read_session_excerpt",
   ]),
   btw: new Set([
     "read_file",
@@ -989,6 +1067,8 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "get_call_hierarchy",
     "get_type_hierarchy",
     "get_inlay_hints",
+    "search_session_history",
+    "read_session_excerpt",
   ]),
 };
 
@@ -1014,6 +1094,7 @@ export function getAgentTools(
   skillAllowedTools?: string[],
   allMcpToolDefsForSkillAllowlist?: ToolDefinition[],
   backgroundExpectedResult?: ExpectedBackgroundResult,
+  nativeWebToolKinds: readonly import("../core/webAccess.js").CoreWebToolKind[] = [],
 ): ToolDefinition[] {
   const mcpToolNames = (mcpToolDefs ?? []).map((t) => t.name);
   const allowed = mode ? getToolsForMode(mode, mcpToolNames) : null;
@@ -1033,13 +1114,19 @@ export function getAgentTools(
   const nativeTools = Object.entries(TOOL_SCHEMAS)
     .sort(([a], [b]) => a.localeCompare(b))
     .filter(([name]) => !EXCLUDED_TOOLS.has(name))
-    .filter(([name]) => (__DEV_BUILD__ ? true : !DEV_FEEDBACK_TOOLS.has(name)))
+    .filter(([name]) => !(isBackground && name === "compose"))
+    .filter(
+      ([name]) =>
+        (name !== "web_search" || nativeWebToolKinds.includes("search")) &&
+        (name !== "web_fetch" || nativeWebToolKinds.includes("fetch")),
+    )
+    .filter(([name]) => __DEV_BUILD__ || !TOOL_REGISTRY[name]?.devOnly)
     .filter(
       ([name]) =>
         Boolean(profileAllowlist) ||
         !allowed ||
         allowed.has(name) ||
-        (__DEV_BUILD__ && DEV_FEEDBACK_TOOLS.has(name)),
+        (__DEV_BUILD__ && TOOL_REGISTRY[name]?.devOnly),
     )
     .filter(([name]) => !profileAllowlist || profileAllowlist.has(name))
     .filter(([name]) => !skillAllowlist || skillAllowlist.has(name))
@@ -1141,12 +1228,21 @@ export async function buildAskUserToolResult(args: {
   const responses = questions.map((q) => {
     const answer = response.answers[q.id];
     const note = response.notes[q.id];
+    const attachments = response.attachments?.[q.id] ?? [];
     const entry: Record<string, unknown> = {
       question: q.question,
       answer: answer ?? null,
     };
     if (q.context) entry.context = q.context;
     if (note) entry.note = note;
+    if (attachments.length > 0) {
+      entry.attachments = attachments.map((attachment) => ({
+        kind: attachment.kind,
+        name: attachment.name,
+        ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+        ...(attachment.path ? { path: attachment.path } : {}),
+      }));
+    }
     return entry;
   });
 
@@ -1185,12 +1281,35 @@ export async function buildAskUserToolResult(args: {
   const payload: Record<string, unknown> = { context, responses };
   if (modeSwitched) payload.modeSwitched = modeSwitched;
   if (modeSwitchFollowUp) payload.follow_up = modeSwitchFollowUp;
+  const media: ToolResult["content"] = [];
+  for (const question of questions) {
+    for (const attachment of response.attachments?.[question.id] ?? []) {
+      if (!attachment.base64 || !attachment.mimeType) continue;
+      if (attachment.kind === "image") {
+        media.push({
+          type: "image",
+          data: attachment.base64,
+          mimeType: attachment.mimeType,
+        });
+      } else if (attachment.kind === "document") {
+        media.push({
+          type: "document",
+          data: attachment.base64,
+          mimeType: attachment.mimeType,
+          name: attachment.name,
+        });
+      }
+    }
+  }
   return {
-    content: [{ type: "text", text: JSON.stringify(payload) }],
+    content: [{ type: "text", text: JSON.stringify(payload) }, ...media],
   };
 }
 
 function getToolUsageOutcomeFromResult(result: ToolResult): ToolUsageOutcome {
+  if (result.isError) {
+    return result.error?.kind === "aborted" ? "cancelled" : "error";
+  }
   const text = result.content.find((item) => item.type === "text")?.text;
   if (!text) return "ok";
   try {
@@ -1493,12 +1612,22 @@ export interface ToolDispatchContext {
   approvalManager: ApprovalManager;
   approvalPanel: ApprovalPanelProvider;
   sessionId: string;
+  /** Immutable project identity captured for this request's tool runtime. */
+  projectScope?: Readonly<
+    import("../core/workspaceProjects.js").SessionProjectScope
+  >;
+  /** Available local root captured with projectScope; absent for projectless runtimes. */
+  projectRoot?: string;
+  /** All available local project roots in the logical workspace. */
+  workspaceProjectRoots?: readonly string[];
+  /** Prepares checkpoint coverage for every workspace root before mutation. */
+  prepareWorkspaceMutation?: () => Promise<void>;
   /** Resolves the active session command policy at dispatch time. */
   getCommandApprovalPolicy?: (sessionId: string) => CommandApprovalPolicy;
   /** Restricts execute_command independently of user approval settings. */
   commandExecutionPolicy?: import("../core/capabilities/terminal.js").CommandExecutionPolicy;
-  /** Snapshots session-scoped write trust from a spawning session into its child. */
-  inheritSessionWriteState?: (
+  /** Snapshots session-scoped approvals from a spawning session into its child. */
+  inheritSessionApprovalState?: (
     parentSessionId: string,
     childSessionId: string,
   ) => void;
@@ -1523,6 +1652,8 @@ export interface ToolDispatchContext {
   trackerCtx?: import("./AgentToolCallTracker.js").TrackerContext;
   toolCallTracker?: import("./AgentToolCallTracker.js").AgentToolCallTracker;
   mcpHub?: McpClientHub;
+  /** Owned stable MCP generation reference for this request. Internal lifecycle metadata. */
+  mcpHubLease?: import("./ProjectMcpHubRegistry.js").ProjectMcpHubLease;
   /** Current agent mode slug (e.g. "architect", "code"). Used for mode-specific approval logic. */
   mode?: string;
   onModeSwitch?: (
@@ -1555,8 +1686,10 @@ export interface ToolDispatchContext {
   ) => Promise<QuestionResponse>;
   /** Called whenever the agent reads a file — used to track files for folded context on condense */
   onFileRead?: (filePath: string) => void;
-  /** Returns recent user-attached images available to this session's model context. */
+  /** Returns images available in this session, including attachments and image tool results. */
   getSessionImages?: () => SessionImageReference[];
+  /** Returns an immutable projection of the executing session's full transcript. */
+  getSessionTranscript?: AgentToolExecutionRequest["context"]["getSessionTranscript"];
   /** Returns the set of skills explicitly advertised to the current session. */
   getAdvertisedSkills?: () => Array<{ name: string; skillPath: string }>;
   /** Returns the set of deferred rules explicitly advertised to the current session. */
@@ -1581,7 +1714,7 @@ export interface ToolDispatchContext {
   onGetBackgroundResult?: (
     callerSessionId: string,
     sessionId: string,
-  ) => Promise<string>;
+  ) => Promise<string | BackgroundAgentResultContent>;
   /** Kill a running background agent and return its partial output. */
   onKillBackground?: (
     callerSessionId: string,
@@ -1671,6 +1804,10 @@ export interface ToolDispatchContext {
   worktreeAgentLaunchProvider?: WorktreeAgentLaunchProvider;
   /** Background-agent lifecycle implementation for runtimes that can spawn/manage agent sessions. */
   backgroundAgentProvider?: BackgroundAgentProvider;
+  /** Provider-hosted implementation for request-scoped AgentLink native web tools. */
+  nativeWebToolProvider?: NativeWebToolExecutionProvider;
+  /** Native web tool kinds exposed by the immutable request policy snapshot. */
+  nativeWebToolKinds?: readonly import("../core/webAccess.js").CoreWebToolKind[];
   /** MCP tool discovery implementation for runtimes with connected MCP clients. */
   mcpToolDiscoveryProvider?: McpToolDiscoveryProvider;
   /** MCP resource/prompt implementation for runtimes with connected MCP clients. */
@@ -1696,52 +1833,130 @@ export function createAgentToolRuntime(
         request.skillAllowedTools,
         request.allMcpToolDefsForSkillAllowlist,
         request.backgroundExpectedResult,
+        request.nativeWebToolKinds ?? ctx.nativeWebToolKinds,
       );
     },
     async executeTool(request: AgentToolExecutionRequest) {
       const startedAt = Date.now();
       try {
-        enforceDelegatedPathPolicy(
+        enforceDelegatedPathPolicy(request.name, request.input, ctx);
+        const mutationTarget = resolveWorkspaceMutationTarget(
           request.name,
           request.input,
-          ctx.delegationPolicy,
+          ctx,
         );
-        const result = await dispatchToolCall(request.name, request.input, {
-          ...ctx,
-          sessionId: request.context.sessionId,
-          mode: request.context.mode,
-          commandExecutionPolicy:
-            request.context.commandExecutionPolicy ??
-            ctx.commandExecutionPolicy,
-          backgroundExpectedResult: request.context.backgroundExpectedResult,
-          trackerCtx: request.context
-            .trackerCtx as ToolDispatchContext["trackerCtx"],
-          toolAbortSignal: request.context.toolAbortSignal,
-          getAdvertisedSkills: request.context.getAdvertisedSkills,
-          getAdvertisedRules: request.context.getAdvertisedRules,
-          onSkillLoad: request.context.onSkillLoad,
-          skillAllowedTools: request.context.skillAllowedTools,
-          onFinalStatus: request.context.onFinalStatus,
-          onCompleteTodos: request.context.onCompleteTodos as
-            | ToolDispatchContext["onCompleteTodos"]
-            | undefined,
-          getSessionImages: request.context.getSessionImages,
-        });
+        if (PATH_MUTATING_TOOLS.has(request.name)) {
+          await ctx.prepareWorkspaceMutation?.();
+        }
+        const operationRoots = mutationTarget
+          ? [
+              mutationTarget.projectRoot,
+              ...(ctx.workspaceProjectRoots ?? []).filter(
+                (root) =>
+                  canonicalizePath(root) !==
+                  canonicalizePath(mutationTarget.projectRoot),
+              ),
+            ]
+          : (ctx.workspaceProjectRoots ??
+            (ctx.projectRoot ? [ctx.projectRoot] : undefined));
+        if (request.context.interactionPolicy === "deny") {
+          const enforceReadPathPolicy = () =>
+            enforceNonInteractiveReadPathPolicy(
+              request.input,
+              request.context.sessionId,
+              ctx.approvalManager,
+            );
+          const denied = operationRoots
+            ? withWorkspaceRoots(operationRoots, enforceReadPathPolicy)
+            : enforceReadPathPolicy();
+          if (denied) return denied;
+        }
+        const execute = async () =>
+          request.name === "compose"
+            ? __DEV_BUILD__
+              ? await (
+                  await loadComposeRuntime(ctx.extensionUri.fsPath)
+                ).handleCompose({
+                  params: request.input as unknown as ComposeParams,
+                  scope: createComposeExecutionScope({
+                    runtime: this,
+                    parentContext: request.context,
+                  }),
+                  signal:
+                    request.context.toolAbortSignal ??
+                    new AbortController().signal,
+                  wasmPath: path.join(
+                    ctx.extensionUri.fsPath,
+                    "dist",
+                    "wasm",
+                    "quickjs-release-asyncify.wasm",
+                  ),
+                })
+              : errorResult("Tool 'compose' is available only in dev builds")
+            : await dispatchToolCall(request.name, request.input, {
+                ...ctx,
+                sessionId: request.context.sessionId,
+                mode: request.context.mode,
+                commandExecutionPolicy:
+                  request.context.commandExecutionPolicy ??
+                  ctx.commandExecutionPolicy,
+                backgroundExpectedResult:
+                  request.context.backgroundExpectedResult,
+                trackerCtx: request.context
+                  .trackerCtx as ToolDispatchContext["trackerCtx"],
+                toolAbortSignal: request.context.toolAbortSignal,
+                getAdvertisedSkills: request.context.getAdvertisedSkills,
+                getAdvertisedRules: request.context.getAdvertisedRules,
+                onSkillLoad: request.context.onSkillLoad,
+                skillAllowedTools: request.context.skillAllowedTools,
+                onFinalStatus: request.context.onFinalStatus,
+                onCompleteTodos: request.context.onCompleteTodos as
+                  | ToolDispatchContext["onCompleteTodos"]
+                  | undefined,
+                getSessionImages: request.context.getSessionImages,
+                getSessionTranscript: request.context.getSessionTranscript,
+              });
+        const result = operationRoots
+          ? await withWorkspaceRoots(operationRoots, execute)
+          : await execute();
+        const composeTrace = result.uiMeta?.composeTrace;
         ctx.toolUsageTelemetry?.record({
           toolName: request.name,
-          params: request.input,
+          params:
+            request.name === "compose"
+              ? {
+                  descriptionProvided:
+                    typeof request.input.description === "string",
+                }
+              : request.input,
           source: "agent",
           mode: request.context.mode,
+          projectId: ctx.projectScope?.projectId,
           outcome: getToolUsageOutcomeFromResult(result),
           durationMs: Date.now() - startedAt,
+          ...(composeTrace
+            ? {
+                metrics: {
+                  childCount: composeTrace.totalChildren,
+                  completedChildCount: composeTrace.completedChildren,
+                  toolAllBatchCount: composeTrace.toolAllBatchCount ?? 0,
+                  bridgedBytes: composeTrace.bridgedBytes ?? 0,
+                  ...(composeTrace.errorKind
+                    ? { errorKind: composeTrace.errorKind }
+                    : {}),
+                  cancelled: composeTrace.status === "cancelled",
+                },
+              }
+            : {}),
         });
         return result;
       } catch (err) {
         ctx.toolUsageTelemetry?.record({
           toolName: request.name,
-          params: request.input,
+          params: request.name === "compose" ? {} : request.input,
           source: "agent",
           mode: request.context.mode,
+          projectId: ctx.projectScope?.projectId,
           outcome: "error",
           durationMs: Date.now() - startedAt,
         });
@@ -1763,69 +1978,200 @@ export function createAgentToolRuntime(
   };
 }
 
+function enforceNonInteractiveReadPathPolicy(
+  input: Record<string, unknown>,
+  sessionId: string,
+  approvalManager: ApprovalManager,
+): ToolResult | undefined {
+  const inputPath = input.path;
+  if (typeof inputPath !== "string" || inputPath.trim() === "")
+    return undefined;
+
+  const { absolutePath, inWorkspace } = resolveAndValidatePath(inputPath);
+  if (
+    inWorkspace ||
+    isAgentlinkTmpArtifact(absolutePath) ||
+    approvalManager.isPathTrusted(sessionId, absolutePath)
+  ) {
+    return undefined;
+  }
+
+  return errorResult(
+    `Compose child path requires interactive approval and was denied: ${absolutePath}`,
+    { status: "rejected", path: absolutePath, reason: "interaction_denied" },
+  );
+}
+
 const PATH_MUTATING_TOOLS = new Set([
   "write_file",
   "apply_diff",
   "find_and_replace",
+  "generate_image",
+  "execute_command",
   "rename_symbol",
   "apply_code_action",
 ]);
 
+function getMutationInputPaths(
+  toolName: string,
+  input: Record<string, unknown>,
+): string[] {
+  const keys =
+    toolName === "generate_image"
+      ? new Set(["output_path"])
+      : toolName === "execute_command"
+        ? new Set(["cwd"])
+        : new Set(["path", "file", "directory"]);
+  return Object.entries(input)
+    .filter(([key]) => keys.has(key))
+    .flatMap(([, value]) =>
+      typeof value === "string"
+        ? [value]
+        : Array.isArray(value)
+          ? value.filter((item): item is string => typeof item === "string")
+          : [],
+    );
+}
+
+function resolveWorkspaceMutationTarget(
+  toolName: string,
+  input: Record<string, unknown>,
+  ctx: ToolDispatchContext,
+): { targetPath: string; projectRoot: string } | undefined {
+  if (!ctx.projectRoot || !PATH_MUTATING_TOOLS.has(toolName)) return undefined;
+  const workspaceRoots = (ctx.workspaceProjectRoots ?? [ctx.projectRoot])
+    .map(canonicalizePath)
+    .sort((left, right) => right.length - left.length);
+
+  for (const inputPath of getMutationInputPaths(toolName, input)) {
+    const targetPath = canonicalizePath(
+      path.isAbsolute(inputPath)
+        ? inputPath
+        : path.resolve(ctx.projectRoot, inputPath),
+    );
+    const projectRoot = workspaceRoots.find((root) =>
+      isPathWithinRoot(targetPath, root),
+    );
+    if (projectRoot) return { targetPath, projectRoot };
+  }
+  return undefined;
+}
+
 function enforceDelegatedPathPolicy(
   toolName: string,
   input: Record<string, unknown>,
-  policy?: ToolDispatchContext["delegationPolicy"],
+  ctx: ToolDispatchContext,
 ): void {
+  const policy = ctx.delegationPolicy;
   if (!policy || !PATH_MUTATING_TOOLS.has(toolName)) return;
-  const normalize = (value: string) =>
-    value.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+  const rawExecutionRoot = path.resolve(ctx.projectRoot ?? process.cwd());
+  const rootKey = (value: string): string =>
+    process.platform === "win32" ? value.toLowerCase() : value;
+  const seenRoots = new Set<string>();
+  const workspaceRoots = [
+    rawExecutionRoot,
+    ...(ctx.workspaceProjectRoots ?? []).map((root) => path.resolve(root)),
+  ]
+    .map((rawRoot) => ({ rawRoot, canonicalRoot: canonicalizePath(rawRoot) }))
+    .filter(({ canonicalRoot }) => {
+      const key = rootKey(canonicalRoot);
+      if (seenRoots.has(key)) return false;
+      seenRoots.add(key);
+      return true;
+    })
+    .sort((left, right) => right.rawRoot.length - left.rawRoot.length);
+  const canonicalizeWorkspacePath = (value: string): string => {
+    const absolutePath = path.resolve(value);
+    const canonicalPath = canonicalizePath(absolutePath);
+    const canonicalOwner = workspaceRoots.find(({ canonicalRoot }) =>
+      isPathWithinRoot(canonicalPath, canonicalRoot),
+    );
+    if (canonicalOwner) return canonicalPath;
+    const lexicalOwner = workspaceRoots.find(({ rawRoot }) =>
+      isPathWithinRoot(absolutePath, rawRoot),
+    );
+    return lexicalOwner
+      ? path.resolve(
+          lexicalOwner.canonicalRoot,
+          path.relative(lexicalOwner.rawRoot, absolutePath),
+        )
+      : canonicalPath;
+  };
+  const canonicalExecutionRoot = canonicalizeWorkspacePath(rawExecutionRoot);
+  const resolveInputPath = (value: string): string =>
+    canonicalizeWorkspacePath(
+      path.isAbsolute(value)
+        ? value
+        : path.resolve(canonicalExecutionRoot, value),
+    );
+  const resolveScopePaths = (value: string): string[] =>
+    path.isAbsolute(value)
+      ? [canonicalizeWorkspacePath(value)]
+      : workspaceRoots.map(({ canonicalRoot }) =>
+          canonicalizeWorkspacePath(path.resolve(canonicalRoot, value)),
+        );
   const paths = Object.entries(input)
     .filter(([key]) => /(^|_)(path|file|directory)$/i.test(key))
     .flatMap(([, value]) =>
       typeof value === "string"
-        ? [normalize(value)]
+        ? [resolveInputPath(value)]
         : Array.isArray(value)
           ? value
               .filter((item): item is string => typeof item === "string")
-              .map(normalize)
+              .map(resolveInputPath)
           : [],
     );
   if (paths.length === 0) return;
-  const contains = (scope: string, path: string) => {
-    const normalizedScope = normalize(scope);
-    return path === normalizedScope || path.startsWith(`${normalizedScope}/`);
-  };
-  for (const path of paths) {
-    if (policy.forbiddenPaths?.some((scope) => contains(scope, path))) {
+  const contains = (scope: string, targetPath: string) =>
+    resolveScopePaths(scope).some((scopePath) =>
+      isPathWithinRoot(targetPath, scopePath),
+    );
+  for (const targetPath of paths) {
+    if (policy.forbiddenPaths?.some((scope) => contains(scope, targetPath))) {
       policy.onDecision?.({
         decision: "denied",
         operation: toolName,
         reason: "forbidden_path",
-        path,
+        path: targetPath,
       });
       throw new Error(
-        `Delegation policy denied ${toolName} for forbidden path: ${path}`,
+        `Delegation policy denied ${toolName} for forbidden path: ${targetPath}`,
+      );
+    }
+    if (
+      !workspaceRoots.some(({ canonicalRoot }) =>
+        isPathWithinRoot(targetPath, canonicalRoot),
+      )
+    ) {
+      policy.onDecision?.({
+        decision: "denied",
+        operation: toolName,
+        reason: "outside_workspace_roots",
+        path: targetPath,
+      });
+      throw new Error(
+        `Delegation policy denied ${toolName} outside workspace roots: ${targetPath}`,
       );
     }
     if (
       policy.ownedPaths?.length &&
-      !policy.ownedPaths.some((scope) => contains(scope, path))
+      !policy.ownedPaths.some((scope) => contains(scope, targetPath))
     ) {
       policy.onDecision?.({
         decision: "denied",
         operation: toolName,
         reason: "outside_owned_paths",
-        path,
+        path: targetPath,
       });
       throw new Error(
-        `Delegation policy denied ${toolName} outside owned paths: ${path}`,
+        `Delegation policy denied ${toolName} outside owned paths: ${targetPath}`,
       );
     }
     policy.onDecision?.({
       decision: "allowed",
       operation: toolName,
       reason: "delegated_path_allowed",
-      path,
+      path: targetPath,
     });
   }
 }
@@ -1839,6 +2185,10 @@ export async function dispatchToolCall(
   input: Record<string, unknown>,
   ctx: ToolDispatchContext,
 ): Promise<ToolResult> {
+  if (!__DEV_BUILD__ && TOOL_REGISTRY[toolName]?.devOnly) {
+    return errorResult(`Tool '${toolName}' is available only in dev builds`);
+  }
+
   const {
     approvalManager,
     approvalPanel,
@@ -1853,6 +2203,25 @@ export async function dispatchToolCall(
   const skillAllowlist = ctx.skillAllowedTools
     ? new Set(ctx.skillAllowedTools)
     : undefined;
+
+  if (toolName === "web_search" || toolName === "web_fetch") {
+    const kind = toolName === "web_search" ? "search" : "fetch";
+    if (!ctx.nativeWebToolKinds?.includes(kind) || !ctx.nativeWebToolProvider) {
+      return errorResult(`Native ${kind} is not available for this request.`);
+    }
+    try {
+      return jsonResult(
+        await ctx.nativeWebToolProvider.execute({
+          kind,
+          input,
+          signal: toolAbortSignal,
+        }),
+        true,
+      );
+    } catch (error) {
+      return handleToolError(error, { tool: toolName, backend: "provider" });
+    }
+  }
 
   // Route MCP tools (prefixed with 'servername__') to the MCP hub
   if (McpClientHub.isMcpTool(toolName)) {
@@ -1907,21 +2276,27 @@ export async function dispatchToolCall(
       let choice: string;
       let rejectionReason: string | undefined;
 
-      const cwd =
-        vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-      const configPaths = getMcpConfigFilePaths(cwd);
-
       if (onApprovalRequest) {
+        const projectConfigPath = ctx.projectRoot
+          ? getMcpConfigFilePaths(ctx.projectRoot).project
+          : undefined;
         const raw = await onApprovalRequest(
           {
             kind: "mcp",
             title: `Allow MCP tool "${bareToolName}" from "${serverName}"?`,
             detail: inputPreview,
+            mcpServerName: serverName,
+            mcpToolName: bareToolName,
+            targetPath: projectConfigPath,
             choices: [
               { label: "Allow once", value: "allow-once", isPrimary: true },
               {
                 label: "Always allow tool (session)",
                 value: "always-tool-session",
+              },
+              {
+                label: `Always allow ${serverName} (session)`,
+                value: "always-server-session",
               },
               {
                 label: "Always allow tool (project)",
@@ -1954,10 +2329,13 @@ export async function dispatchToolCall(
       } else {
         // Fallback VS Code modal (no inline card available)
         const alwaysAllowServer = `Always allow from ${serverName}` as const;
+        const allowServerForSession =
+          `Allow all ${serverName} tools for this session` as const;
         const vsChoice = await vscode.window.showWarningMessage(
           `Allow MCP tool "${bareToolName}" from "${serverName}"?`,
           { modal: true, detail: inputPreview },
           "Allow once",
+          allowServerForSession,
           "Always allow this tool",
           alwaysAllowServer,
           "Deny",
@@ -1965,16 +2343,19 @@ export async function dispatchToolCall(
         choice =
           vsChoice === "Allow once"
             ? "allow-once"
-            : vsChoice === "Always allow this tool"
-              ? "always-tool-project"
-              : vsChoice === alwaysAllowServer
-                ? "always-server-project"
-                : "deny";
+            : vsChoice === allowServerForSession
+              ? "always-server-session"
+              : vsChoice === "Always allow this tool"
+                ? "always-tool-project"
+                : vsChoice === alwaysAllowServer
+                  ? "always-server-project"
+                  : "deny";
       }
 
       const allowChoices = new Set([
         "allow-once",
         "always-tool-session",
+        "always-server-session",
         "always-tool-project",
         "always-tool-global",
         "always-server-project",
@@ -1996,42 +2377,68 @@ export async function dispatchToolCall(
         };
       }
 
+      const projectConfigPath = ctx.projectRoot
+        ? getMcpConfigFilePaths(ctx.projectRoot).project
+        : undefined;
+      const globalConfigPath = path.join(
+        os.homedir(),
+        ".agentlink",
+        "mcp.json",
+      );
+
       switch (choice) {
         case "allow-once":
           promotionMeta = {
             serverName,
             bareToolName,
-            scopes: ["session", "project", "global"],
+            scopes: [
+              "session",
+              ...(projectConfigPath ? (["project"] as const) : []),
+              "global",
+            ],
           };
           break;
         case "always-tool-session":
           approvalManager.approveMcpTool(sessionId, toolName);
           break;
-        case "always-tool-project":
-          approvalManager.approveMcpTool(sessionId, toolName);
-          persistMcpToolApproval(
-            serverName,
-            bareToolName,
-            configPaths.project,
-          ).catch(() => undefined);
+        case "always-server-session":
+          approvalManager.approveMcpServer(sessionId, serverName);
           break;
+        case "always-tool-project": {
+          const filePath = projectConfigPath;
+          if (!filePath) {
+            return errorResult(
+              "MCP project approval is unavailable because this request has no executable project root.",
+            );
+          }
+          approvalManager.approveMcpTool(sessionId, toolName);
+          persistMcpToolApproval(serverName, bareToolName, filePath).catch(
+            () => undefined,
+          );
+          break;
+        }
         case "always-tool-global":
           approvalManager.approveMcpTool(sessionId, toolName);
           persistMcpToolApproval(
             serverName,
             bareToolName,
-            configPaths.global,
+            globalConfigPath,
           ).catch(() => undefined);
           break;
-        case "always-server-project":
+        case "always-server-project": {
+          const filePath = projectConfigPath;
+          if (!filePath) {
+            return errorResult(
+              "MCP project approval is unavailable because this request has no executable project root.",
+            );
+          }
           approvalManager.approveMcpServer(sessionId, serverName);
-          persistMcpServerApproval(serverName, configPaths.project).catch(
-            () => undefined,
-          );
+          persistMcpServerApproval(serverName, filePath).catch(() => undefined);
           break;
+        }
         case "always-server-global":
           approvalManager.approveMcpServer(sessionId, serverName);
-          persistMcpServerApproval(serverName, configPaths.global).catch(
+          persistMcpServerApproval(serverName, globalConfigPath).catch(
             () => undefined,
           );
           break;
@@ -2273,6 +2680,10 @@ export async function dispatchToolCall(
           ),
         },
       );
+    case "search_session_history":
+      return handleSearchSessionHistory(params, ctx.getSessionTranscript);
+    case "read_session_excerpt":
+      return handleReadSessionExcerpt(params, ctx.getSessionTranscript);
 
     // --- File writing ---
     case "write_file":
@@ -2455,7 +2866,8 @@ export async function dispatchToolCall(
     case "get_diagnostics":
       return handleGetDiagnostics(params, {
         diagnosticsProvider:
-          ctx.diagnosticsProvider ?? createVscodeDiagnosticsProvider(),
+          ctx.diagnosticsProvider ??
+          createVscodeDiagnosticsProvider(ctx.projectRoot),
       });
     case "go_to_definition":
       return handleGoToDefinition(params, sessionId, {
@@ -2485,7 +2897,11 @@ export async function dispatchToolCall(
       return handleGetSymbols(params, sessionId, {
         symbolsProvider:
           ctx.symbolsProvider ??
-          createVscodeSymbolsProvider(approvalManager, approvalPanel),
+          createVscodeSymbolsProvider(
+            approvalManager,
+            approvalPanel,
+            ctx.projectRoot,
+          ),
       });
     case "get_hover":
       return handleGetHover(params, sessionId, {
@@ -2902,6 +3318,11 @@ export async function dispatchToolCall(
           ],
         };
       }
+      const images = resolveBackgroundImages({
+        imageIds: params.imageIds,
+        useRecentImages: params.useRecentImages,
+        getSessionImages: ctx.getSessionImages,
+      });
       const result = await spawnBackground({
         task: String(params.task ?? ""),
         message: String(params.message ?? ""),
@@ -2947,6 +3368,7 @@ export async function dispatchToolCall(
           params.worktree === "shared" || params.worktree === "isolated"
             ? params.worktree
             : undefined,
+        ...(images.length ? { images } : {}),
         reviewScope:
           params.reviewScope && typeof params.reviewScope === "object"
             ? (() => {
@@ -3074,6 +3496,18 @@ export async function dispatchToolCall(
       const bgResult = await getBackgroundResult(
         String(params.sessionId ?? ""),
       );
+      if (typeof bgResult !== "string") {
+        return {
+          content: [
+            { type: "text", text: bgResult.text },
+            ...bgResult.images.map((image) => ({
+              type: "image" as const,
+              data: image.data,
+              mimeType: image.mimeType,
+            })),
+          ],
+        };
+      }
       return {
         content: [{ type: "text", text: bgResult }],
       };
@@ -3247,6 +3681,7 @@ export async function dispatchToolCall(
               : undefined,
         },
         sessionId,
+        ctx.projectScope?.projectId,
       );
     }
 

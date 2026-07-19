@@ -71,6 +71,86 @@ describe("getRelativePath", () => {
     );
   });
 
+  it("currently allows an explicit workspace-folder prefix to select a later root", async () => {
+    mockWorkspace.workspaceFolders = [
+      {
+        name: "first-root",
+        uri: { fsPath: "/workspace/first-root" },
+      },
+      {
+        name: "second-root",
+        uri: { fsPath: "/workspace/second-root" },
+      },
+    ];
+
+    const { resolveAndValidatePath } = await import("./paths.js");
+
+    expect(resolveAndValidatePath("second-root/assets/image.png")).toEqual({
+      absolutePath: "/workspace/second-root/assets/image.png",
+      inWorkspace: true,
+    });
+  });
+
+  it("isolates concurrent request-bound workspace roots", async () => {
+    mockWorkspace.workspaceFolders = [
+      {
+        name: "first-root",
+        uri: { fsPath: "/workspace/first-root" },
+      },
+      {
+        name: "second-root",
+        uri: { fsPath: "/workspace/second-root" },
+      },
+    ];
+
+    const { getWorkspaceRoots, resolveAndValidatePath, withWorkspaceRoots } =
+      await import("./paths.js");
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstPaused = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondPaused = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+
+    const first = withWorkspaceRoots(["/workspace/first-root"], async () => {
+      await secondPaused;
+      return {
+        roots: getWorkspaceRoots(),
+        resolved: resolveAndValidatePath("src/index.ts"),
+      };
+    });
+    const second = withWorkspaceRoots(["/workspace/second-root"], async () => {
+      releaseSecond();
+      await firstPaused;
+      return {
+        roots: getWorkspaceRoots(),
+        resolved: resolveAndValidatePath("src/index.ts"),
+      };
+    });
+    releaseFirst();
+
+    await expect(first).resolves.toEqual({
+      roots: ["/workspace/first-root"],
+      resolved: {
+        absolutePath: "/workspace/first-root/src/index.ts",
+        inWorkspace: true,
+      },
+    });
+    await expect(second).resolves.toEqual({
+      roots: ["/workspace/second-root"],
+      resolved: {
+        absolutePath: "/workspace/second-root/src/index.ts",
+        inWorkspace: true,
+      },
+    });
+    expect(getWorkspaceRoots()).toEqual([
+      "/workspace/first-root",
+      "/workspace/second-root",
+    ]);
+  });
+
   it("returns slash-separated workspace-relative paths", async () => {
     mockWorkspace.workspaceFolders = [
       {

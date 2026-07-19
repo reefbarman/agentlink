@@ -168,6 +168,7 @@ describe("handleStartWorktreeAgent", () => {
     const git = makeGit(baseGitOutputs(repoRoot, worktreePath, branch));
     const writeIntent = vi.fn();
     const openFolder = vi.fn();
+    const onApprovalRequest = vi.fn().mockResolvedValue("deny");
 
     const result = await handleStartWorktreeAgent(
       {
@@ -180,13 +181,20 @@ describe("handleStartWorktreeAgent", () => {
         globalStorageUri: vscode.Uri.file("/global"),
         workspaceFolders: [workspaceFolder(repoRoot)],
         runGit: git,
-        onApprovalRequest: vi.fn().mockResolvedValue("deny"),
+        onApprovalRequest,
         intentStore: { writeIntent } as never,
         openFolder,
       },
     );
 
     expect(textPayload(result)).toMatchObject({ status: "rejected" });
+    expect(onApprovalRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "command",
+        targetPath: worktreePath,
+      }),
+      undefined,
+    );
     expect(git.calls.map((call) => call.args.join(" "))).not.toContain(
       `worktree add ${worktreePath} ${branch}`,
     );

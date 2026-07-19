@@ -20,17 +20,30 @@ export interface ToolMeta {
  * only here and nowhere else.
  */
 export const TOOL_REGISTRY: Record<string, ToolMeta> = {
+  // --- Web access ---
+
+  web_search: {
+    label: "Native web search",
+    description:
+      "Search the public web using the selected model provider's hosted web capability. Available only when agentlink.webAccess.searchBackend is native and the authenticated provider supports it. Returns the provider-visible search actions, result text, citations, and usage as an ordinary tool result.",
+  },
+  web_fetch: {
+    label: "Native web fetch",
+    description:
+      "Open and read a public HTTP or HTTPS URL using the selected model provider's hosted web capability. Available only when agentlink.webAccess.fetchBackend is native and the authenticated provider supports page access. Returns provider-visible actions, content, citations, and usage as an ordinary tool result.",
+  },
+
   // --- File operations ---
 
   read_file: {
     label: "Read with line numbers",
     description:
-      "Read the contents of a file with line numbers. Use get_context first for orientation on a known source/config file; use read_file when you need exact file content, local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via query. Returns content in 'line_number | content' format with metadata, git status, and diagnostics summary when available.",
+      "Read the contents of a file with line numbers. Use get_context first for orientation on a known source/config file; use read_file when you need exact file content, local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via query. Returns content in 'line_number | content' format with metadata, git status, and diagnostics summary when available. High-confidence secret values in eligible settings/config JSON/JSONC are automatically redacted; malformed eligible content is withheld.",
   },
   get_context: {
     label: "Context pack",
     description:
-      "Build a compact read-only context pack for an explicit file: metadata, git status, diagnostics summary, symbol outline, bounded numbered content, and working-set status. Prefer this over read_file for first-pass orientation when the file path is already known. Supports opt-in unchanged-content omission via per-session content hashes.",
+      "Build a compact read-only context pack for an explicit file: metadata, git status, diagnostics summary, symbol outline, bounded numbered content, and working-set status. Prefer this over read_file for first-pass orientation when the file path is already known. Supports opt-in unchanged-content omission via per-session content hashes. High-confidence secret values in eligible settings/config JSON/JSONC are automatically redacted; malformed eligible content is withheld.",
   },
   get_module_neighbors: {
     label: "Module neighbors",
@@ -62,6 +75,16 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     description:
       "Search file contents using regex, or perform semantic codebase search. Default: fast ripgrep regex search with context lines. When semantic=true, uses vector similarity search against the codebase index \u2014 'regex' is interpreted as a natural language query in this mode.",
   },
+  search_session_history: {
+    label: "Search current session history",
+    description:
+      "Search the full transcript of the current agent session, including original messages retired by context condensing. Uses case-insensitive literal AND terms by default or an explicit conservative safe-subset regex mode. Returns bounded, non-instructional historical excerpts plus an append-safe snapshot identity for read_session_excerpt.",
+  },
+  read_session_excerpt: {
+    label: "Read current session excerpt",
+    description:
+      "Read a bounded exact excerpt from the current agent session using message indices and the snapshot identity returned by search_session_history. Allows normal append-only continuation but rejects stale ranges after transcript rewrite or revert. Excludes generated summaries, thinking, and media payloads.",
+  },
   write_file: {
     label: "Create/overwrite with diff review",
     description:
@@ -80,7 +103,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   apply_diff: {
     label: "Search/replace with diff review",
     description:
-      "Edit an existing file with exact SEARCH/REPLACE blocks. Opens a diff view for review. Each SEARCH block must match exactly one location. If format_on_save_edits is returned, update your model or re-read before composing more diffs. Format:\n<<<<<<< SEARCH\nexact content to find\n======= DIVIDER =======\nreplacement content\n>>>>>>> REPLACE",
+      "Edit an existing file with SEARCH/REPLACE blocks. Opens a diff view for review. Each block requires a unique match by default; block_options can select a 1-based occurrence or intentionally replace all exact matches, and atomic=true requires every block to validate before review/write. Ambiguous failures include bounded candidate line ranges/snippets, and accepted multi-block results include recovery ranges plus a post-edit content hash when available. If format_on_save_edits is returned, update your model or re-read before composing more diffs. Format:\n<<<<<<< SEARCH\nexact content to find\n======= DIVIDER =======\nreplacement content\n>>>>>>> REPLACE",
   },
   find_and_replace: {
     label: "Bulk find-and-replace across files",
@@ -171,12 +194,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   get_terminal_output: {
     label: "Read background terminal output",
     description:
-      "Read output from a background or timed-out terminal command. Supports the same filtering params as execute_command; use `kill` to send Ctrl+C.",
+      "Read retained output and lifecycle state from a background, timed-out, completed, or recently closed terminal command. Supports the same filtering params as execute_command; use `kill` to send Ctrl+C.",
   },
   close_terminals: {
     label: "Clean up terminals",
     description:
-      "Close managed terminals to clean up clutter. With no arguments, closes all terminals created by agentlink. Pass specific names to close only those (e.g. ['Server'] to close a background dev server terminal).",
+      "Close managed terminals to clean up clutter. With no arguments, closes all terminals created by agentlink. Pass specific names to close only those (e.g. ['Server'] to close a background dev server terminal). Recently closed output and final status remain retrievable by terminal ID.",
   },
   start_worktree_agent: {
     label: "Start worktree agent",
@@ -201,6 +224,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
 
   // --- Dev-only tools ---
 
+  compose: {
+    label: "Compose read-only tools",
+    devOnly: true,
+    description:
+      'Use when you need results from many dependent read-only tool calls and only care about a reduced answer: list references/files/items, fetch details for each, then filter or aggregate. This runs in one model round-trip and intermediate child results never enter model context. Do NOT use for exploratory work where each result changes the next step; call tools directly instead. Use the terminal for pure shell pipelines and direct calls for small one-off operations. The script is a JavaScript function body with synchronous tool(name, input) and toolAll([{ name, input }, ...]) helpers. Example:\nconst refs = tool("get_references", { path: "src/api.ts", line: 20, column: 10 });\nconst hovers = toolAll(refs.references.slice(0, 16).map((ref) => ({\n  name: "get_hover",\n  input: { path: ref.path, line: ref.line, column: ref.column },\n})));\nreturn hovers.filter((hover) => hover.contents?.length).map((hover) => hover.contents);\nComposable tools: get_context, get_repo_map, get_module_neighbors, list_files (non-semantic), search_files (regex only), get_diagnostics, go_to_definition, go_to_implementation, go_to_type_definition, get_references, get_symbols, get_hover, get_completions, get_code_actions, get_call_hierarchy, get_type_hierarchy, and get_inlay_hints. tool() returns each tool\'s canonical data object. Limits: 64 children/script, 16 items/toolAll, concurrency 4, 60 seconds, 64 KiB script, 1 MiB/child bridge data, 8 MiB cumulative bridge data, and 40 KiB final return.',
+  },
   send_feedback: {
     label: "Submit tool feedback",
     devOnly: true,

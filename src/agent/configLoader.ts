@@ -18,11 +18,20 @@ export interface InstructionBlock {
   description?: string;
   /** Optional frontmatter glob hints describing when a rule applies. */
   globs?: string[];
+  /** Workspace root that owns this project instruction or rule. */
+  projectRoot?: string;
 }
 
 export interface MemoryBlock extends InstructionBlock {
   omittedChars: number;
 }
+
+export type ProjectActiveFileResolution =
+  | { status: "accepted"; activeFilePath: string }
+  | {
+      status: "ignored";
+      reason: "outside_project" | "symlink_escape" | "project_root_unavailable";
+    };
 
 const MEMORY_FILE_CHAR_CAP = 12_000;
 
@@ -205,6 +214,66 @@ async function readMdDirectory(dirPath: string): Promise<InstructionBlock[]> {
   } catch {
     return [];
   }
+}
+
+function isPathWithinOrEqual(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+async function canonicalizeParentAware(filePath: string): Promise<string> {
+  const resolved = path.resolve(filePath);
+  let current = resolved;
+  const suffix: string[] = [];
+
+  while (true) {
+    try {
+      const canonical = await fs.realpath(current);
+      return path.join(canonical, ...suffix.reverse());
+    } catch {
+      const parent = path.dirname(current);
+      // If no ancestor exists, there is no live symlink to escape through; the
+      // earlier lexical containment check remains authoritative for this path.
+      if (parent === current) return resolved;
+      suffix.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Validates active editor context against one project root. Lexical containment
+ * rejects sibling/prefix paths before filesystem access; canonical containment
+ * then rejects paths that escape through a symlinked ancestor.
+ */
+export async function resolveProjectActiveFilePath(
+  cwd: string,
+  activeFilePath: string | undefined,
+): Promise<ProjectActiveFileResolution | undefined> {
+  if (!activeFilePath) return undefined;
+
+  const resolvedRoot = path.resolve(cwd);
+  const resolvedActiveFile = path.resolve(activeFilePath);
+  if (!isPathWithinOrEqual(resolvedRoot, resolvedActiveFile)) {
+    return { status: "ignored", reason: "outside_project" };
+  }
+
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = await fs.realpath(resolvedRoot);
+  } catch {
+    return { status: "ignored", reason: "project_root_unavailable" };
+  }
+
+  const canonicalActiveFile = await canonicalizeParentAware(resolvedActiveFile);
+  if (!isPathWithinOrEqual(canonicalRoot, canonicalActiveFile)) {
+    return { status: "ignored", reason: "symlink_escape" };
+  }
+
+  return { status: "accepted", activeFilePath: resolvedActiveFile };
 }
 
 /**
@@ -422,7 +491,14 @@ export async function loadAllInstructionBlocks(
   }
 
   // 8 & 9. Subfolder instruction files (when activeFilePath is within cwd)
-  const activeFilePath = opts?.activeFilePath;
+  const activeFileResolution = await resolveProjectActiveFilePath(
+    cwd,
+    opts?.activeFilePath,
+  );
+  const activeFilePath =
+    activeFileResolution?.status === "accepted"
+      ? activeFileResolution.activeFilePath
+      : undefined;
   if (activeFilePath) {
     const activeDir = path.dirname(activeFilePath);
     const subdirs = getSubdirChain(cwd, activeDir);

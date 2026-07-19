@@ -16,7 +16,11 @@ export type ActivityTraceKind =
   | "user_interjection"
   | "tool_start"
   | "tool_result"
+  | "api_request_start"
   | "api_request"
+  | "background_summary_start"
+  | "background_summary_complete"
+  | "background_summary_error"
   | "condense_start"
   | "condense_complete"
   | "condense_error"
@@ -30,6 +34,7 @@ export type ActivityTraceKind =
 export interface ActivityTraceEvent {
   id: string;
   sessionId: string;
+  projectId?: string;
   timestamp: number;
   sequence: number;
   kind: ActivityTraceKind;
@@ -40,6 +45,7 @@ export interface ActivityTraceEvent {
 
 export interface ActivityTraceSummary {
   sessionId: string;
+  projectId?: string;
   eventCount: number;
   recordedEventCount: number;
   droppedEventCount: number;
@@ -69,6 +75,17 @@ export interface ActivityTraceRecorderOptions {
   maxSummaryChars?: number;
   maxPayloadStringChars?: number;
   maxPayloadArrayItems?: number;
+}
+
+export interface BackgroundSummaryTraceEvent {
+  type: "start" | "complete" | "error";
+  provider: string;
+  model: string;
+  startedAt: number;
+  schedulerQueued?: boolean;
+  providerQueueWaitMs?: number;
+  durationMs?: number;
+  error?: string;
 }
 
 const DEFAULT_MAX_EVENTS_PER_SESSION = 2_000;
@@ -102,16 +119,56 @@ export class ActivityTraceRecorder {
 
   appendAgentEvent(
     sessionId: string,
+    projectId: string,
     event: AgentEvent,
     source: ActivityTraceSource,
   ): ActivityTraceEvent | null {
     const draft = this.convertAgentEvent(sessionId, event, source);
     if (!draft) return null;
-    return this.append(draft);
+    return this.append(projectId, draft);
+  }
+
+  appendBackgroundSummaryEvent(
+    sessionId: string,
+    projectId: string,
+    event: BackgroundSummaryTraceEvent,
+  ): ActivityTraceEvent | null {
+    const kind: ActivityTraceKind =
+      event.type === "start"
+        ? "background_summary_start"
+        : event.type === "complete"
+          ? "background_summary_complete"
+          : "background_summary_error";
+    const outcome =
+      event.type === "start"
+        ? "started"
+        : event.type === "complete"
+          ? "completed"
+          : "failed";
+    return this.append(projectId, {
+      sessionId,
+      kind,
+      source: "system",
+      timestamp: event.type === "start" ? event.startedAt : this.now(),
+      summary: `Background status summary ${outcome} with ${event.model}`,
+      payload: {
+        provider: event.provider,
+        model: event.model,
+        startedAt: event.startedAt,
+        schedulerQueued: event.schedulerQueued,
+        providerQueueWaitMs: event.providerQueueWaitMs,
+        durationMs: event.durationMs,
+        error: event.error,
+      },
+    });
   }
 
   append(
-    event: Omit<ActivityTraceEvent, "id" | "timestamp" | "sequence"> & {
+    projectId: string,
+    event: Omit<
+      ActivityTraceEvent,
+      "id" | "projectId" | "timestamp" | "sequence"
+    > & {
       id?: string;
       timestamp?: number;
       sequence?: number;
@@ -124,6 +181,7 @@ export class ActivityTraceRecorder {
     const normalized: ActivityTraceEvent = {
       id: event.id ?? randomUUID(),
       sessionId: event.sessionId,
+      projectId,
       timestamp: event.timestamp ?? this.now(),
       sequence,
       kind: event.kind,
@@ -137,7 +195,7 @@ export class ActivityTraceRecorder {
         : {}),
     };
 
-    const summary = this.getOrCreateSummary(event.sessionId);
+    const summary = this.getOrCreateSummary(event.sessionId, projectId);
     const shouldRecordEvent =
       summary.recordedEventCount < this.maxEventsPerSession;
 
@@ -180,7 +238,10 @@ export class ActivityTraceRecorder {
     event: AgentEvent,
     source: ActivityTraceSource,
   ):
-    | (Omit<ActivityTraceEvent, "id" | "timestamp" | "sequence"> & {
+    | (Omit<
+        ActivityTraceEvent,
+        "id" | "projectId" | "timestamp" | "sequence"
+      > & {
         id?: string;
         timestamp?: number;
         sequence?: number;
@@ -230,6 +291,20 @@ export class ActivityTraceRecorder {
             mcpServerName: event.mcpApprovalPromotion?.serverName,
           },
         };
+      case "api_request_start":
+        return {
+          sessionId,
+          kind: "api_request_start",
+          source,
+          summary: `API request started for ${event.model}`,
+          timestamp: event.startedAt,
+          payload: {
+            requestId: event.requestId,
+            provider: event.provider,
+            model: event.model,
+            schedulerQueued: event.schedulerQueued,
+          },
+        };
       case "api_request":
         return {
           sessionId,
@@ -247,6 +322,7 @@ export class ActivityTraceRecorder {
             cacheCreationTokens: event.cacheCreationTokens,
             durationMs: event.durationMs,
             timeToFirstToken: event.timeToFirstToken,
+            providerQueueWaitMs: event.providerQueueWaitMs,
             usedPreviousResponseId: event.usedPreviousResponseId,
             previousResponseIdFallback: event.previousResponseIdFallback,
             contextBreakdown: event.contextBreakdown,
@@ -367,18 +443,25 @@ export class ActivityTraceRecorder {
     }
   }
 
-  private getOrCreateSummary(sessionId: string): ActivityTraceSummary {
+  private getOrCreateSummary(
+    sessionId: string,
+    projectId?: string,
+  ): ActivityTraceSummary {
     const existing = this.summaries.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      if (projectId) existing.projectId = projectId;
+      return existing;
+    }
     const loaded = this.loadSummary(sessionId);
     if (loaded) {
-      const normalized = normalizeSummary(loaded);
+      const normalized = normalizeSummary(loaded, projectId);
       this.summaries.set(sessionId, normalized);
       this.sequences.set(sessionId, normalized.eventCount);
       return normalized;
     }
     const summary: ActivityTraceSummary = {
       sessionId,
+      ...(projectId ? { projectId } : {}),
       eventCount: 0,
       recordedEventCount: 0,
       droppedEventCount: 0,
@@ -403,7 +486,7 @@ export class ActivityTraceRecorder {
   }
 
   private updateSummary(event: ActivityTraceEvent, recorded: boolean): void {
-    const summary = this.getOrCreateSummary(event.sessionId);
+    const summary = this.getOrCreateSummary(event.sessionId, event.projectId);
     summary.eventCount += 1;
     if (recorded) {
       summary.recordedEventCount += 1;
@@ -485,9 +568,13 @@ export class ActivityTraceRecorder {
   }
 }
 
-function normalizeSummary(summary: ActivityTraceSummary): ActivityTraceSummary {
+function normalizeSummary(
+  summary: ActivityTraceSummary,
+  projectId?: string,
+): ActivityTraceSummary {
   return {
     ...summary,
+    ...(projectId ? { projectId } : {}),
     toolCallsByName: summary.toolCallsByName ?? {},
     totalToolResultTextChars: summary.totalToolResultTextChars ?? 0,
     toolResultTextCharsByName: summary.toolResultTextCharsByName ?? {},

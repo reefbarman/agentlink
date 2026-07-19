@@ -29,6 +29,12 @@ import {
   readBrowserGatewayThemeCache,
 } from "../browserGatewayThemeCache.js";
 import {
+  applyBrowserGatewayMcpClientCapabilities,
+  buildBrowserGatewayHelperTrustHeaders,
+  classifyBrowserGatewayClientOrigin,
+  hasBrowserGatewayMcpSecretWrite,
+} from "../browserGatewayRequestTrust.js";
+import {
   AskAgentController,
   type AskAgentControllerPublication,
   type AskAgentControllerSnapshot,
@@ -63,6 +69,11 @@ import type {
   ToolResult,
 } from "../../shared/types.js";
 import {
+  getStructuredSecretRedactionMetadata,
+  isStructuredConfigPath,
+  redactStructuredSecrets,
+} from "../../shared/structuredSecretRedaction.js";
+import {
   clearBrowserGatewayHelperDiscovery,
   writeBrowserGatewayHelperDiscovery,
 } from "../browserGatewayHelperDiscovery.js";
@@ -76,7 +87,10 @@ import {
   type BrowserGatewayAskAgentPersistedSession,
   type BrowserGatewayAskAgentProjectHandoff,
 } from "../browserGatewayAskAgentSessionStore.js";
-import { BrowserGatewayAskAgentPreferencesStore } from "../browserGatewayAskAgentPreferences.js";
+import {
+  BrowserGatewayAskAgentPreferencesStore,
+  type BrowserGatewayAskAgentWebPolicyCache,
+} from "../browserGatewayAskAgentPreferences.js";
 import { BrowserGatewayAskAgentHistoryStore } from "../browserGatewayAskAgentHistory.js";
 import type { ChatMessage, Question } from "../../agent/webview/types.js";
 import type {
@@ -87,19 +101,44 @@ import {
   BrowserGatewayModelCredentialCache,
   type BrowserGatewayModelCredentialRecord,
 } from "../browserGatewayModelCredentialCache.js";
-import { BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID } from "../browserGatewayModelProviderIds.js";
+import {
+  BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID,
+  normalizeBrowserGatewayModelCredentialProviderId,
+} from "../browserGatewayModelProviderIds.js";
 import {
   CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
   CODEX_IMAGE_GENERATION_MAX_COUNT,
   codexGeneratedImageMetadata,
+  codexImageGenerationErrorMetadata,
   generateCodexImages,
+  type CodexGeneratedImage,
 } from "../../core/model/providers/codex/imageGeneration.js";
 import {
+  toCoreModelDocumentMediaType,
   toCoreModelImageMediaType,
   type CoreModelContentBlock,
   type CoreModelMessage,
   type CoreModelToolDefinition,
+  type CoreModelUsage,
 } from "../../core/modelRuntime.js";
+import { getCodexModelCapabilities } from "../../core/model/providers/codex/models.js";
+import { normalizeUserQuestionAttachments } from "../../core/capabilities/sessionControl.js";
+import { ANTHROPIC_HOSTED_WEB_CAPABILITIES } from "../../core/model/providers/anthropic/anthropicModels.js";
+import {
+  normalizeCoreWebAccessSettings,
+  resolveCoreWebAccessPolicy,
+  type CoreResolvedWebAccessPolicy,
+  type CoreWebAccessSettings,
+  type CoreWebActivity,
+  type CoreWebCitation,
+} from "../../core/webAccess.js";
+import {
+  buildNativeWebDelegationPrompt,
+  CORE_NATIVE_WEB_MAX_PAUSE_TURNS,
+  CORE_NATIVE_WEB_TOOL_DEFINITIONS,
+  mergeNativeWebUsage,
+  type CoreNativeWebToolResult,
+} from "../../core/nativeWebTools.js";
 import { runAgentToolLoop } from "../../core/agentToolLoop.js";
 import type {
   FinalMessageMarker,
@@ -170,6 +209,22 @@ import type {
   PublicHelperRouteHandler,
 } from "./helperRouteFamilies.js";
 import { HelperHttpRouter } from "./HelperHttpRouter.js";
+
+export interface PreparedAskAgentWebAccess {
+  target: BrowserGatewayInstanceRecord | null;
+  policy: Readonly<CoreResolvedWebAccessPolicy>;
+  tools: readonly CoreModelToolDefinition[];
+}
+
+function freezeAskAgentValue<T>(value: T): Readonly<T> {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      freezeAskAgentValue(nested);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
 
 export interface HelperRuntimeOptions {
   port: number;
@@ -386,13 +441,7 @@ function renderThemeStyleTag(theme: BrowserGatewayThemeSnapshot): string {
 }
 
 function isLoopbackAddress(addr: string | undefined): boolean {
-  if (!addr) return false;
-  const normalized = addr.startsWith("::ffff:") ? addr.slice(7) : addr;
-  return (
-    normalized === "127.0.0.1" ||
-    normalized === "::1" ||
-    normalized.startsWith("127.")
-  );
+  return classifyBrowserGatewayClientOrigin(addr) === "loopback";
 }
 
 function parseAskAgentMediaItems(
@@ -918,15 +967,15 @@ export class BrowserGatewayHelper {
       case "slashCommands":
         return this.handleAskAgentSlashCommandsRequest(res);
       case "mcpConfig":
-        return this.handleAskAgentMcpConfigRequest(res);
+        return this.handleAskAgentMcpConfigRequest(req, res);
       case "mcpConfigServer":
         return this.handleAskAgentMcpConfigServerRequest(req, res);
       case "mcpConfigOpenRaw":
         return this.handleAskAgentMcpConfigOpenRawRequest(req, res);
       case "mcpStatus":
-        return this.handleAskAgentMcpStatusRequest(res);
+        return this.handleAskAgentMcpStatusRequest(req, res);
       case "mcpRefresh":
-        return this.handleAskAgentMcpRefreshRequest(res);
+        return this.handleAskAgentMcpRefreshRequest(req, res);
       case "question":
         return this.handleAskAgentQuestionResponseRequest(req, res);
       case "questionProgress":
@@ -1319,6 +1368,7 @@ export class BrowserGatewayHelper {
         id?: unknown;
         answers?: unknown;
         notes?: unknown;
+        attachments?: unknown;
       } | null;
       const id = typeof body?.id === "string" ? body.id.trim() : "";
       const answers =
@@ -1340,6 +1390,7 @@ export class BrowserGatewayHelper {
           notes[key] = typeof value === "string" ? value : String(value ?? "");
         }
       }
+      const attachments = normalizeUserQuestionAttachments(body?.attachments);
       const now = Date.now();
       const theme = await this.resolveInitialTheme(null);
       const credential = this.getAskAgentModelCredential(now);
@@ -1363,7 +1414,12 @@ export class BrowserGatewayHelper {
       }
 
       const answerResult = id
-        ? this.askAgentSessionStore.answerQuestion(id, answers, notes)
+        ? this.askAgentSessionStore.answerQuestion(
+            id,
+            answers,
+            notes,
+            attachments,
+          )
         : null;
       if (!answerResult) {
         writeJson(res, 404, {
@@ -1377,17 +1433,69 @@ export class BrowserGatewayHelper {
         ok: true,
         responses: answerResult.responses,
       });
+      const modelMedia: CoreModelContentBlock[] = [];
+      for (const attachment of answerResult.media) {
+        if (!attachment.base64 || !attachment.mimeType) continue;
+        if (attachment.kind === "image") {
+          const mediaType = toCoreModelImageMediaType(attachment.mimeType);
+          if (!mediaType) continue;
+          modelMedia.push({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: attachment.base64,
+            },
+          });
+        } else if (attachment.kind === "document") {
+          const mediaType = toCoreModelDocumentMediaType(attachment.mimeType);
+          if (!mediaType) continue;
+          modelMedia.push({
+            type: "document",
+            title: attachment.name,
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: attachment.base64,
+            },
+          });
+        }
+      }
+      const resultImages = answerResult.media.flatMap((attachment) =>
+        attachment.kind === "image" && attachment.base64 && attachment.mimeType
+          ? [{ mimeType: attachment.mimeType, data: attachment.base64 }]
+          : [],
+      );
+      const resultDocuments = answerResult.media.flatMap((attachment) =>
+        attachment.kind === "document" &&
+        attachment.base64 &&
+        attachment.mimeType
+          ? [
+              {
+                name: attachment.name,
+                mimeType: attachment.mimeType,
+                data: attachment.base64,
+              },
+            ]
+          : [],
+      );
       this.askAgentController.completeAssistantToolCall({
         messageId: answerResult.messageId,
         toolCallId: answerResult.toolCallId,
         toolName: "ask_user",
         input: {},
         result: responseContent,
+        ...(resultImages.length > 0 ? { resultImages } : {}),
+        ...(resultDocuments.length > 0 ? { resultDocuments } : {}),
         durationMs: 0,
       });
       const answerToolMessage = this.buildAskAgentToolResultMessage(
         { id: answerResult.toolCallId, name: "ask_user", input: {} },
         responseContent,
+        false,
+        modelMedia.length > 0
+          ? [{ type: "text", text: responseContent }, ...modelMedia]
+          : responseContent,
       );
       this.logAskAgentEvent("ask-agent.question.response", {
         id,
@@ -2209,8 +2317,18 @@ export class BrowserGatewayHelper {
     writeJson(res, 200, { commands });
   }
 
+  private applyAskAgentMcpClientCapabilities(
+    value: unknown,
+    req: http.IncomingMessage,
+  ): unknown {
+    return applyBrowserGatewayMcpClientCapabilities(
+      value,
+      classifyBrowserGatewayClientOrigin(req.socket.remoteAddress),
+    );
+  }
+
   private async proxyAskAgentMcpConfigRequest(
-    req: http.IncomingMessage | null,
+    req: http.IncomingMessage,
     res: http.ServerResponse,
     targetPath: string,
     method: "GET" | "POST" | "DELETE",
@@ -2224,12 +2342,76 @@ export class BrowserGatewayHelper {
       return;
     }
     try {
+      const origin = classifyBrowserGatewayClientOrigin(
+        req.socket.remoteAddress,
+      );
       const headers: Record<string, string> = {
         authorization: `Bearer ${target.authToken}`,
+        ...buildBrowserGatewayHelperTrustHeaders(
+          this.clientSharedSecret,
+          origin,
+        ),
       };
       let body: string | undefined;
-      if (req && method !== "GET") {
+      if (method !== "GET") {
         const parsed = (await readJsonBody(req)) as unknown;
+        if (origin === "non-loopback") {
+          if (method === "DELETE") {
+            writeJson(res, 403, {
+              error: "browser_local_process_requires_loopback",
+            });
+            return;
+          }
+          const operations =
+            parsed &&
+            typeof parsed === "object" &&
+            "operations" in parsed &&
+            Array.isArray((parsed as { operations?: unknown }).operations)
+              ? (
+                  parsed as {
+                    operations: Array<{
+                      kind?: unknown;
+                      server?: unknown;
+                    }>;
+                  }
+                ).operations
+              : undefined;
+          if (operations?.some((operation) => operation.kind === "remove")) {
+            writeJson(res, 403, {
+              error: "browser_local_process_requires_loopback",
+            });
+            return;
+          }
+          const servers = operations
+            ? operations
+                .filter((operation) => operation.kind === "upsert")
+                .map((operation) => operation.server)
+            : [
+                parsed && typeof parsed === "object" && "server" in parsed
+                  ? (parsed as { server?: unknown }).server
+                  : undefined,
+              ];
+          const hasSecretWrite = servers.some(hasBrowserGatewayMcpSecretWrite);
+          if (hasSecretWrite) {
+            writeJson(res, 403, {
+              error: "browser_secret_write_requires_loopback",
+            });
+            return;
+          }
+          const hasLocalProcessWrite = servers.some((server) => {
+            const transport =
+              server && typeof server === "object" && "type" in server
+                ? (server as { type?: unknown }).type
+                : undefined;
+            return transport === undefined || transport === "stdio";
+          });
+          if (hasLocalProcessWrite) {
+            writeJson(res, 403, {
+              error: "browser_local_process_requires_loopback",
+            });
+            return;
+          }
+        }
         body = JSON.stringify(parsed ?? {});
         headers["content-type"] = "application/json";
       }
@@ -2237,7 +2419,10 @@ export class BrowserGatewayHelper {
         `${target.url}${targetPath}`,
         body === undefined ? { method, headers } : { method, headers, body },
       );
-      const responseBody = (await response.json()) as unknown;
+      const responseBody = this.applyAskAgentMcpClientCapabilities(
+        (await response.json()) as unknown,
+        req,
+      );
       writeJson(res, response.ok ? 200 : response.status, responseBody);
     } catch (err) {
       writeJson(res, 500, {
@@ -2248,10 +2433,11 @@ export class BrowserGatewayHelper {
   }
 
   private async handleAskAgentMcpConfigRequest(
+    req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
     await this.proxyAskAgentMcpConfigRequest(
-      null,
+      req,
       res,
       "/internal/ask-agent/mcp-config",
       "GET",
@@ -2271,18 +2457,14 @@ export class BrowserGatewayHelper {
   }
 
   private async handleAskAgentMcpConfigOpenRawRequest(
-    req: http.IncomingMessage,
+    _req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
-    await this.proxyAskAgentMcpConfigRequest(
-      req,
-      res,
-      "/internal/ask-agent/mcp-config/open-raw",
-      "POST",
-    );
+    writeJson(res, 403, { error: "browser_raw_config_unavailable" });
   }
 
   private async handleAskAgentMcpStatusRequest(
+    req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
     const target = await this.getAskAgentMcpBridgeTarget();
@@ -2301,7 +2483,10 @@ export class BrowserGatewayHelper {
           headers: { authorization: `Bearer ${target.authToken}` },
         },
       );
-      const body = (await response.json()) as unknown;
+      const body = this.applyAskAgentMcpClientCapabilities(
+        (await response.json()) as unknown,
+        req,
+      );
       writeJson(res, response.ok ? 200 : response.status, body);
     } catch (err) {
       writeJson(res, 500, {
@@ -2313,6 +2498,7 @@ export class BrowserGatewayHelper {
   }
 
   private async handleAskAgentMcpRefreshRequest(
+    req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
     const target = await this.getAskAgentMcpBridgeTarget();
@@ -2332,7 +2518,10 @@ export class BrowserGatewayHelper {
           headers: { authorization: `Bearer ${target.authToken}` },
         },
       );
-      const body = (await response.json()) as unknown;
+      const body = this.applyAskAgentMcpClientCapabilities(
+        (await response.json()) as unknown,
+        req,
+      );
       writeJson(res, response.ok ? 200 : response.status, body);
     } catch (err) {
       writeJson(res, 500, {
@@ -3161,13 +3350,24 @@ export class BrowserGatewayHelper {
       await this.askAgentController.publishProjectedSnapshot(buildTurnSnapshot);
     };
 
+    const preparedWebAccess = await this.prepareAskAgentWebAccess(
+      params.credential,
+      this.askAgentSessionStore.getModel(),
+      params.signal,
+    );
+    const modelTranscriptMessages =
+      this.askAgentSessionStore.getModelTranscriptMessages(
+        params.assistantMessageId,
+      );
+
     if (!completeWithToolCalls) {
       const assistantText = await this.askAgentModelClient.complete({
         credential: params.credential,
         model: this.askAgentSessionStore.getModel(),
         reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
-        messages: params.transcriptMessages,
+        messages: [],
         memoryContext: params.memoryContext,
+        iterationMessages: modelTranscriptMessages,
         signal: params.signal,
         onDelta: (delta) => {
           if (this.streamingMetrics.enabled) {
@@ -3192,22 +3392,21 @@ export class BrowserGatewayHelper {
       return { outcome: "model_empty", assistantText: "" };
     }
 
-    const mcpBridgeTarget = await this.getAskAgentMcpBridgeTarget();
-    const mcpTools = await this.getAskAgentMcpTools(
-      mcpBridgeTarget,
-      params.signal,
-    );
     return runAgentToolLoop<AskAgentToolLoopResult, AskAgentToolLoopOutcome>({
       initialToolMessages: params.initialToolMessages,
-      callModel: async ({ toolMessages, onText }) => {
+      callModel: async ({ iterationMessages, toolMessages, onText }) => {
         const result = await completeWithToolCalls({
           credential: params.credential,
           model: this.askAgentSessionStore.getModel(),
           reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
-          messages: params.transcriptMessages,
+          messages: [],
           memoryContext: params.memoryContext,
+          iterationMessages: [...modelTranscriptMessages, ...iterationMessages],
           toolMessages,
-          tools: [...ASK_AGENT_SAFE_PROJECTLESS_TOOLS, ...mcpTools],
+          tools: [
+            ...ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
+            ...preparedWebAccess.tools,
+          ],
           signal: params.signal,
           onDelta: (delta) => {
             onText(delta);
@@ -3226,7 +3425,24 @@ export class BrowserGatewayHelper {
             scheduleTurnSnapshot();
           },
         });
-        return { text: result.text, toolCalls: result.toolCalls };
+        return {
+          text: result.text,
+          toolCalls: result.toolCalls,
+          assistantMessage: result.assistantMessage,
+          stopReason: result.stopReason,
+        };
+      },
+      onIterationMessagesComplete: (messages) => {
+        if (
+          messages.some(
+            (message) => message.role === "assistant" && message.providerReplay,
+          )
+        ) {
+          this.askAgentSessionStore.appendPrivateModelTurn(
+            params.assistantMessageId,
+            messages,
+          );
+        }
       },
       runTool: async (toolCall) => {
         const toolStartedAt = Date.now();
@@ -3240,7 +3456,9 @@ export class BrowserGatewayHelper {
         await publishTurnSnapshot();
         const executed = await this.executeAskAgentSafeProjectlessTool(
           toolCall,
-          mcpBridgeTarget,
+          preparedWebAccess,
+          params.credential,
+          this.askAgentSessionStore.getModel(),
           params.signal,
         );
         this.recordAskAgentSemanticDelta();
@@ -3294,9 +3512,107 @@ export class BrowserGatewayHelper {
     });
   }
 
+  private async prepareAskAgentWebAccess(
+    credential: BrowserGatewayModelCredentialRecord,
+    model: string,
+    signal: AbortSignal,
+  ): Promise<PreparedAskAgentWebAccess> {
+    const target = await this.getAskAgentMcpBridgeTarget();
+    const [remotePolicy, mcpTools] = await Promise.all([
+      this.getAskAgentWebPolicy(target, signal),
+      this.getAskAgentMcpTools(target, signal),
+    ]);
+    const preferences = await this.askAgentPreferencesStore.read();
+    const cachedPolicy = preferences.webPolicy;
+    const settings = normalizeCoreWebAccessSettings(
+      remotePolicy?.settings ?? cachedPolicy?.settings,
+    );
+
+    if (remotePolicy && target) {
+      const nextCache: BrowserGatewayAskAgentWebPolicyCache = {
+        settings,
+        sourceInstanceId: target.instanceId,
+        sourceRevision: remotePolicy.revision,
+        updatedAt: Date.now(),
+      };
+      await this.askAgentPreferencesStore.update({ webPolicy: nextCache });
+    }
+
+    const providerId = normalizeBrowserGatewayModelCredentialProviderId(
+      credential.providerId,
+    );
+    const providerCapabilities =
+      providerId === "openai-codex"
+        ? getCodexModelCapabilities(model, credential.method).hostedWeb
+        : providerId === "anthropic"
+          ? ANTHROPIC_HOSTED_WEB_CAPABILITIES
+          : undefined;
+    const policy = resolveCoreWebAccessPolicy({
+      settings,
+      providerCapabilities,
+    });
+    const unavailableNativeRoute = [
+      policy.routes.search,
+      policy.routes.fetch,
+    ].find(
+      (route) =>
+        settings[route.kind === "search" ? "searchBackend" : "fetchBackend"] ===
+          "native" && !route.available,
+    );
+    if (unavailableNativeRoute) {
+      throw new Error(
+        `browser_gateway_native_web_unavailable:${unavailableNativeRoute.kind}:${unavailableNativeRoute.reason}`,
+      );
+    }
+
+    const nativeTools = policy.enabledKinds.map(
+      (kind) => CORE_NATIVE_WEB_TOOL_DEFINITIONS[kind],
+    );
+    const tools = [...mcpTools, ...nativeTools];
+    return Object.freeze({
+      target,
+      policy: freezeAskAgentValue(policy),
+      tools: freezeAskAgentValue(tools),
+    });
+  }
+
   private async getAskAgentMcpBridgeTarget(): Promise<BrowserGatewayInstanceRecord | null> {
     const instances = await listHealthyBrowserGatewayInstances();
     return this.selectInstance(instances, undefined);
+  }
+
+  private async getAskAgentWebPolicy(
+    target: BrowserGatewayInstanceRecord | null,
+    signal: AbortSignal,
+  ): Promise<{ settings: CoreWebAccessSettings; revision?: string } | null> {
+    if (!target) return null;
+    try {
+      const response = await fetch(
+        `${target.url}/internal/ask-agent/web-policy`,
+        {
+          headers: { authorization: `Bearer ${target.authToken}` },
+          signal,
+        },
+      );
+      if (!response.ok) return null;
+      const body = (await response.json()) as {
+        ok?: boolean;
+        settings?: Partial<CoreWebAccessSettings>;
+        revision?: string;
+      };
+      if (!body.ok || !body.settings) return null;
+      return {
+        settings: normalizeCoreWebAccessSettings(body.settings),
+        revision: typeof body.revision === "string" ? body.revision : undefined,
+      };
+    } catch (err) {
+      this.logAskAgentEvent("ask-agent.web.policy_failed", {
+        ok: false,
+        targetInstanceId: target.instanceId,
+        error: String(err),
+      });
+      return null;
+    }
   }
 
   private async getAskAgentMcpTools(
@@ -3491,6 +3807,7 @@ export class BrowserGatewayHelper {
     _target: BrowserGatewayInstanceRecord | null,
     signal: AbortSignal,
   ): Promise<AskAgentToolExecutionResult> {
+    const generatedImages: CodexGeneratedImage[] = [];
     try {
       const input = this.normalizeAskAgentImageInput(toolCall.input);
       const credential = this.modelCredentialCache.getCredential({
@@ -3539,6 +3856,7 @@ export class BrowserGatewayHelper {
         count: input.count,
         size: input.size,
         timeoutMs: input.timeoutMs,
+        generatedImages,
         sessionId: this.askAgentSessionStore.getActiveSessionId(),
         signal,
       });
@@ -3595,6 +3913,13 @@ export class BrowserGatewayHelper {
     } catch (err) {
       const content = JSON.stringify({
         error: err instanceof Error ? err.message : String(err),
+        ...codexImageGenerationErrorMetadata(err),
+        ...(generatedImages.length > 0
+          ? {
+              generated_count: generatedImages.length,
+              partial_images: codexGeneratedImageMetadata(generatedImages),
+            }
+          : {}),
       });
       this.logAskAgentEvent("ask-agent.tool.generate_image", {
         ok: false,
@@ -3612,12 +3937,160 @@ export class BrowserGatewayHelper {
     }
   }
 
+  private async executeAskAgentNativeWebTool(
+    toolCall: BrowserGatewayAskAgentToolCall,
+    policy: Readonly<CoreResolvedWebAccessPolicy>,
+    credential: BrowserGatewayModelCredentialRecord,
+    model: string,
+    signal: AbortSignal,
+  ): Promise<AskAgentToolExecutionResult> {
+    const kind = toolCall.name === "web_search" ? "search" : "fetch";
+    const route = policy.routes[kind];
+    const completeWithToolCalls =
+      this.askAgentModelClient.completeWithToolCalls?.bind(
+        this.askAgentModelClient,
+      );
+    if (!route.available || !route.hostedTool || !completeWithToolCalls) {
+      const content = JSON.stringify({
+        error: `Native web ${kind} is not available for this request.`,
+      });
+      return {
+        content,
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(
+          toolCall,
+          content,
+          true,
+        ),
+      };
+    }
+
+    try {
+      const hostedTool = route.hostedTool;
+      const prompt = buildNativeWebDelegationPrompt(kind, toolCall.input);
+      const activitiesById = new Map<string, CoreWebActivity>();
+      const citations: CoreWebCitation[] = [];
+      const citationKeys = new Set<string>();
+      const appendCitation = (citation: CoreWebCitation) => {
+        const key = JSON.stringify([
+          citation.url,
+          citation.title ?? "",
+          citation.startIndex ?? null,
+          citation.endIndex ?? null,
+          citation.citedText ?? "",
+        ]);
+        if (citationKeys.has(key)) return;
+        citationKeys.add(key);
+        citations.push(structuredClone(citation));
+      };
+      const iterationMessages: CoreModelMessage[] = [
+        { role: "user", content: prompt.userPrompt },
+      ];
+      const textParts: string[] = [];
+      let usage: CoreModelUsage | undefined;
+      for (let pauseTurns = 0; ; pauseTurns += 1) {
+        const result = await completeWithToolCalls({
+          credential,
+          model,
+          reasoningEffort: "low",
+          messages: [],
+          instructions: prompt.systemPrompt,
+          iterationMessages,
+          tools: [],
+          hostedTools: [hostedTool],
+          maxTokens: 16_384,
+          signal,
+          onWebActivity: (activity) => {
+            activitiesById.set(activity.id, structuredClone(activity));
+            for (const citation of activity.citations ?? []) {
+              appendCitation(citation);
+            }
+          },
+          onWebCitations: (nextCitations) => {
+            for (const citation of nextCitations) appendCitation(citation);
+          },
+        });
+        if (result.text.trim()) textParts.push(result.text.trim());
+        usage = mergeNativeWebUsage(usage, result.usage);
+        if (result.stopReason !== "pause_turn") break;
+        if (!result.assistantMessage) {
+          throw new Error(
+            `Provider native web ${kind} paused without replay state.`,
+          );
+        }
+        if (pauseTurns >= CORE_NATIVE_WEB_MAX_PAUSE_TURNS) {
+          throw new Error(
+            `Provider native web continuation exceeded ${CORE_NATIVE_WEB_MAX_PAUSE_TURNS} pause turns.`,
+          );
+        }
+        iterationMessages.push(result.assistantMessage);
+      }
+      const resultText = textParts.join("\n\n").trim();
+      if (!resultText) {
+        throw new Error(`Provider native web ${kind} returned no content.`);
+      }
+      const visibleResult: CoreNativeWebToolResult = {
+        backend: "provider",
+        provider: normalizeBrowserGatewayModelCredentialProviderId(
+          credential.providerId,
+        ),
+        operation: kind,
+        input: structuredClone(toolCall.input),
+        activities: [...activitiesById.values()],
+        content: resultText,
+        citations,
+        ...(usage ? { usage } : {}),
+      };
+      const content = JSON.stringify(visibleResult, null, 2);
+      this.logAskAgentEvent(`ask-agent.tool.web_${kind}`, {
+        ok: true,
+        provider: visibleResult.provider,
+        activities: visibleResult.activities.length,
+        citations: visibleResult.citations.length,
+      });
+      return {
+        content,
+        modelResult: content,
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(toolCall, content),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const content = JSON.stringify({ error: message });
+      this.logAskAgentEvent(`ask-agent.tool.web_${kind}`, {
+        ok: false,
+        error: message,
+      });
+      return {
+        content,
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(
+          toolCall,
+          content,
+          true,
+        ),
+      };
+    }
+  }
+
   private async executeAskAgentSafeProjectlessTool(
     toolCall: BrowserGatewayAskAgentToolCall,
-    mcpBridgeTarget: BrowserGatewayInstanceRecord | null,
+    preparedWebAccess: PreparedAskAgentWebAccess,
+    credential: BrowserGatewayModelCredentialRecord,
+    model: string,
     signal: AbortSignal,
   ): Promise<AskAgentToolExecutionResult> {
     const startedAt = Date.now();
+    if (toolCall.name === "web_search" || toolCall.name === "web_fetch") {
+      return await this.executeAskAgentNativeWebTool(
+        toolCall,
+        preparedWebAccess.policy,
+        credential,
+        model,
+        signal,
+      );
+    }
+    const mcpBridgeTarget = preparedWebAccess.target;
     if (
       MCP_TOOL_BRIDGE_TOOL_NAMES.includes(toolCall.name) ||
       toolCall.name.includes("__")
@@ -3790,6 +4263,10 @@ export class BrowserGatewayHelper {
       };
     }
     const raw = await fs.readFile(resolved.path, "utf-8");
+    const structuredRedaction = isStructuredConfigPath(resolved.path)
+      ? redactStructuredSecrets(raw)
+      : undefined;
+    const visibleRaw = structuredRedaction?.content ?? raw;
     const offset = Math.max(
       1,
       Math.floor(Number(toolCall.input.offset ?? 1)) || 1,
@@ -3798,7 +4275,7 @@ export class BrowserGatewayHelper {
       1,
       Math.min(200, Math.floor(Number(toolCall.input.limit ?? 120)) || 120),
     );
-    const lines = raw.split(/\r?\n/);
+    const lines = visibleRaw.split("\n");
     const selected = lines.slice(offset - 1, offset - 1 + limit);
     const content = JSON.stringify({
       path: resolved.path,
@@ -3809,6 +4286,12 @@ export class BrowserGatewayHelper {
         .map((line, index) => `${offset + index} | ${line}`)
         .join("\n")
         .slice(0, 100_000),
+      ...(getStructuredSecretRedactionMetadata(structuredRedaction)
+        ? {
+            redaction:
+              getStructuredSecretRedactionMetadata(structuredRedaction),
+          }
+        : {}),
     });
     this.logAskAgentEvent("ask-agent.tool.read_file", {
       ok: true,
@@ -4268,11 +4751,11 @@ export class BrowserGatewayHelper {
 
       const { userMessage } = retryableTurn;
       const retryToolResults = retryableTurn.toolResults.map((toolResult) => {
-        const imageBlocks: CoreModelContentBlock[] = [];
+        const mediaBlocks: CoreModelContentBlock[] = [];
         for (const image of toolResult.resultImages ?? []) {
           const mediaType = toCoreModelImageMediaType(image.mimeType);
           if (!mediaType) continue;
-          imageBlocks.push({
+          mediaBlocks.push({
             type: "image",
             source: {
               type: "base64",
@@ -4281,9 +4764,22 @@ export class BrowserGatewayHelper {
             },
           });
         }
+        for (const document of toolResult.resultDocuments ?? []) {
+          const mediaType = toCoreModelDocumentMediaType(document.mimeType);
+          if (!mediaType) continue;
+          mediaBlocks.push({
+            type: "document",
+            title: document.name,
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: document.data,
+            },
+          });
+        }
         const modelContent: CoreModelContentBlock[] | undefined =
-          imageBlocks.length
-            ? [{ type: "text", text: toolResult.result }, ...imageBlocks]
+          mediaBlocks.length
+            ? [{ type: "text", text: toolResult.result }, ...mediaBlocks]
             : undefined;
         return this.buildAskAgentToolResultMessage(
           {

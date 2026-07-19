@@ -1,13 +1,13 @@
 import * as vscode from "vscode";
 
 import type { AgentSessionManager } from "../agent/AgentSessionManager.js";
-import type { SessionSummary } from "../agent/SessionStore.js";
 import type { AgentMessage } from "../agent/types.js";
 
 import type {
   ChatMessage,
   ChatState,
   Question,
+  SessionSummary,
 } from "../agent/webview/types.js";
 import type { TodoItem } from "../agent/webview/types.js";
 import {
@@ -26,6 +26,7 @@ import {
 
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import type { BrowserGatewayInstanceStatusSummary } from "./protocol.js";
+import type { McpFormElicitationRequest } from "../shared/mcpElicitation.js";
 import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
 import type {
   AgentUiEvent,
@@ -74,6 +75,7 @@ export interface BrowserGatewayUiState {
       }
     | undefined;
   questionProgress: QuestionProgressState | undefined;
+  formElicitation: McpFormElicitationRequest | undefined;
   urlElicitation: McpUrlElicitationRequest | undefined;
   recentEvents: AgentUiEvent[];
 }
@@ -87,17 +89,27 @@ export interface BrowserGatewayWireState {
     backgroundTask?: string;
   } | null;
   questionProgress: QuestionProgressState | null;
+  formElicitation: McpFormElicitationRequest | null;
   urlElicitation: McpUrlElicitationRequest | null;
   recentEvents: AgentUiEvent[];
   mcpStatusInfos: ReturnType<ChatViewProvider["getBrowserMcpStatusInfos"]>;
 }
 
+export interface BrowserGatewayProjectInfo {
+  projectId: string;
+  displayName: string;
+  availability: "available" | "unavailable";
+}
+
 export interface BrowserGatewaySessionState {
+  projects: BrowserGatewayProjectInfo[];
+  defaultProjectId: string | null;
   sessions: SessionSummary[];
   repository: BrowserGatewayRepositoryInfo | null;
   foreground:
     | {
         sessionId: string;
+        project: BrowserGatewayProjectInfo;
         title: string;
         mode: string;
         model: string;
@@ -138,10 +150,13 @@ export interface BrowserGatewaySessionState {
 }
 
 export interface BrowserGatewayWireSessionState {
+  projects: BrowserGatewayProjectInfo[];
+  defaultProjectId: string | null;
   sessions: SessionSummary[];
   repository: BrowserGatewayRepositoryInfo | null;
   foreground: {
     sessionId: string;
+    project: BrowserGatewayProjectInfo;
     title: string;
     mode: string;
     model: string;
@@ -227,6 +242,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       }
     | undefined;
   private questionProgress: QuestionProgressState | undefined;
+  private formElicitation: McpFormElicitationRequest | undefined;
   private urlElicitation: McpUrlElicitationRequest | undefined;
   private recentEvents: AgentUiEvent[] = [];
   private modelsVersion = 0;
@@ -314,6 +330,31 @@ export class BrowserGatewayService implements vscode.Disposable {
     );
   }
 
+  setDefaultProject(projectId: string): boolean {
+    return this.sessionManager.setBrowserPreferredProject(projectId);
+  }
+
+  getProjectAvailability(
+    projectId: string,
+  ): "available" | "unavailable" | "unknown" {
+    const project = this.sessionManager
+      .getWorkspaceProjects()
+      .find((candidate) => candidate.id === projectId);
+    if (!project) return "unknown";
+    return project.availability.status === "available"
+      ? "available"
+      : "unavailable";
+  }
+
+  getSessionProjectId(sessionId: string): string | undefined {
+    return (
+      this.sessionManager.getSession(sessionId)?.projectScope.projectId ??
+      this.sessionManager
+        .listPersistedSessions()
+        .find((session) => session.id === sessionId)?.projectScope?.projectId
+    );
+  }
+
   setCommandApprovalPolicyGetters(
     getEffective: () => ReturnType<
       ChatViewProvider["getBrowserCommandApprovalPolicy"]
@@ -349,7 +390,9 @@ export class BrowserGatewayService implements vscode.Disposable {
   }
 
   subscribeToSurfaceChanges(
-    onDidChangeSurface: (listener: (kind: "mcp" | "theme") => void) => {
+    onDidChangeSurface: (
+      listener: (kind: "background" | "mcp" | "theme") => void,
+    ) => {
       dispose(): void;
     },
   ): void {
@@ -401,6 +444,9 @@ export class BrowserGatewayService implements vscode.Disposable {
       approval: this.approval,
       question,
       questionProgress,
+      formElicitation: this.formElicitation
+        ? cloneFormElicitationRequest(this.formElicitation)
+        : undefined,
       urlElicitation: this.urlElicitation
         ? { ...this.urlElicitation }
         : undefined,
@@ -409,10 +455,51 @@ export class BrowserGatewayService implements vscode.Disposable {
   }
 
   getSessionState(): BrowserGatewaySessionState {
-    const sessions = this.sessionManager.listPersistedSessions();
+    const projects = this.sessionManager
+      .getWorkspaceProjects()
+      .map((project) => ({
+        projectId: project.id,
+        displayName: project.name,
+        availability:
+          project.availability.status === "available"
+            ? ("available" as const)
+            : ("unavailable" as const),
+      }));
+    const defaultProjectId =
+      this.sessionManager.getDefaultProjectScope()?.projectId ?? null;
+    const projectsById = new Map(
+      projects.map((project) => [project.projectId, project]),
+    );
+    const sessions = this.sessionManager
+      .listPersistedSessions()
+      .map((session) => {
+        const projectId = session.projectScope?.projectId;
+        const project = projectId
+          ? (projectsById.get(projectId) ?? {
+              projectId,
+              displayName:
+                session.projectScope?.displayName ?? "Project unavailable",
+              availability: "unavailable" as const,
+            })
+          : undefined;
+        return {
+          id: session.id,
+          project,
+          mode: session.mode,
+          model: session.model,
+          title: session.title,
+          messageCount: session.messageCount,
+          totalInputTokens: session.totalInputTokens,
+          totalOutputTokens: session.totalOutputTokens,
+          createdAt: session.createdAt,
+          lastActiveAt: session.lastActiveAt,
+        };
+      });
     const foreground = this.sessionManager.getForegroundSession();
     if (!foreground) {
       return {
+        projects,
+        defaultProjectId,
         sessions,
         repository: this.getRepositoryInfo(),
         foreground: undefined,
@@ -447,11 +534,25 @@ export class BrowserGatewayService implements vscode.Disposable {
       });
     }
 
+    const foregroundProject = projectsById.get(
+      foreground.projectScope.projectId,
+    );
     return {
+      projects,
+      defaultProjectId,
       sessions,
       repository: this.getRepositoryInfo(),
       foreground: {
         sessionId: foreground.id,
+        project: {
+          projectId: foreground.projectScope.projectId,
+          displayName: foreground.projectScope.displayName,
+          availability:
+            foreground.projectAvailability === "available" &&
+            foregroundProject?.availability === "available"
+              ? "available"
+              : "unavailable",
+        },
         title: foreground.title,
         mode: projectedMatchesForeground ? projected.mode : foreground.mode,
         model: projectedMatchesForeground ? projected.model : foreground.model,
@@ -525,6 +626,9 @@ export class BrowserGatewayService implements vscode.Disposable {
       question: question ?? null,
       questionProgress:
         this.getForegroundQuestionProgress(question?.id) ?? null,
+      formElicitation: this.formElicitation
+        ? cloneFormElicitationRequest(this.formElicitation)
+        : null,
       urlElicitation: this.urlElicitation ? { ...this.urlElicitation } : null,
       recentEvents: [...this.recentEvents],
       mcpStatusInfos: this.getMcpStatusInfos(),
@@ -536,11 +640,14 @@ export class BrowserGatewayService implements vscode.Disposable {
     // The browser renders only the projected transcript. Do not also serialize
     // raw AgentMessage[] here: long sessions otherwise cross the wire twice.
     return {
+      projects: sessionState.projects,
+      defaultProjectId: sessionState.defaultProjectId,
       sessions: sessionState.sessions,
       repository: sessionState.repository,
       foreground: sessionState.foreground
         ? {
             sessionId: sessionState.foreground.sessionId,
+            project: sessionState.foreground.project,
             title: sessionState.foreground.title,
             mode: sessionState.foreground.mode,
             model: sessionState.foreground.model,
@@ -591,17 +698,20 @@ export class BrowserGatewayService implements vscode.Disposable {
     if (
       ui.approval ||
       ui.question ||
+      ui.formElicitation ||
       ui.urlElicitation ||
       session?.questionRequest ||
       session?.status === "awaiting_approval"
     ) {
       return {
         kind: "awaiting_approval",
-        label: ui.urlElicitation
-          ? "MCP URL"
-          : ui.question || session?.questionRequest
-            ? "Question"
-            : "Approval",
+        label: ui.formElicitation
+          ? "MCP Form"
+          : ui.urlElicitation
+            ? "MCP URL"
+            : ui.question || session?.questionRequest
+              ? "Question"
+              : "Approval",
         detail: session?.statusOverride ?? "Awaiting response",
         sessionTitle: session?.title,
       };
@@ -665,6 +775,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     this.approval = undefined;
     this.question = undefined;
     this.questionProgress = undefined;
+    this.formElicitation = undefined;
     this.urlElicitation = undefined;
     this.recentEvents = [];
     this.lastSerializedSnapshot = "";
@@ -763,6 +874,14 @@ export class BrowserGatewayService implements vscode.Disposable {
           notes: { ...event.notes },
           origin: event.origin,
         };
+        break;
+      case "agentFormElicitationRequest":
+        this.formElicitation = cloneFormElicitationRequest(event.request);
+        break;
+      case "agentFormElicitationCleared":
+        if (!this.formElicitation || this.formElicitation.id === event.id) {
+          this.formElicitation = undefined;
+        }
         break;
       case "agentUrlElicitationRequest":
         this.urlElicitation = { ...event.request };
@@ -883,4 +1002,28 @@ export class BrowserGatewayService implements vscode.Disposable {
     }
     return bytes;
   }
+}
+
+function cloneFormElicitationRequest(
+  request: McpFormElicitationRequest,
+): McpFormElicitationRequest {
+  return {
+    ...request,
+    fields: request.fields.map((field) => {
+      if (field.kind === "single-select") {
+        return {
+          ...field,
+          options: field.options.map((option) => ({ ...option })),
+        };
+      }
+      if (field.kind === "multi-select") {
+        return {
+          ...field,
+          options: field.options.map((option) => ({ ...option })),
+          ...(field.default ? { default: [...field.default] } : {}),
+        };
+      }
+      return { ...field };
+    }),
+  };
 }

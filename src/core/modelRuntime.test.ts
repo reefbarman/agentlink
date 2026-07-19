@@ -128,6 +128,61 @@ describe("collectCoreModelCompleteResult", () => {
     });
   });
 
+  it("collects server-tool usage and the final assistant continuation message", async () => {
+    const assistantMessage = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "web_activity" as const,
+          activity: {
+            id: "web-1",
+            kind: "search" as const,
+            status: "completed" as const,
+            backend: "provider" as const,
+            query: "current docs",
+          },
+        },
+        {
+          type: "text" as const,
+          text: "Current answer",
+          citations: [{ url: "https://example.com", title: "Example" }],
+        },
+      ],
+    };
+
+    await expect(
+      collectCoreModelCompleteResult(
+        streamEvents([
+          { type: "text_delta", text: "Current answer" },
+          {
+            type: "usage",
+            inputTokens: 10,
+            outputTokens: 5,
+            serverToolUsage: { webSearchRequests: 2 },
+          },
+          {
+            type: "model_stop",
+            reason: "pause_turn",
+            assistantMessage,
+          },
+          { type: "done" },
+        ]),
+      ),
+    ).resolves.toEqual({
+      text: "Current answer",
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        serverToolUsage: { webSearchRequests: 2 },
+      },
+      providerResponseId: undefined,
+      assistantMessage,
+      stopReason: "pause_turn",
+    });
+  });
+
   it("returns empty text and zero usage when no text or usage events are emitted", async () => {
     await expect(
       collectCoreModelCompleteResult(streamEvents([{ type: "done" }])),

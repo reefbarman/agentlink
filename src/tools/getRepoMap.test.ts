@@ -143,6 +143,13 @@ describe("handleGetRepoMap", () => {
     expect(parseTextResult(result)).toEqual({
       error: "get_repo_map is unavailable without global storage context.",
     });
+    expect(result).toMatchObject({
+      data: {
+        error: "get_repo_map is unavailable without global storage context.",
+      },
+      isError: true,
+      error: { kind: "tool_error" },
+    });
   });
 
   it("returns an error result for too-small max_chars", async () => {
@@ -159,6 +166,8 @@ describe("handleGetRepoMap", () => {
       makeProvider(),
     );
 
+    expect(result.isError).toBe(false);
+    expect(result.data).toEqual(parseTextResult(result));
     expect(parseTextResult(result)).toMatchObject({
       workspace_root: "/workspace",
       cache: {

@@ -11,17 +11,23 @@ import type {
   CoreOwnerRegistrationDto,
   CoreSessionSummaryDto,
 } from "../core/sessionProtocol.js";
+import type {
+  UserQuestionAttachment,
+  UserQuestionResponse,
+} from "../core/capabilities/sessionControl.js";
 
 import type { ApprovalRequest } from "../approvals/webview/types.js";
 import type { BrowserGatewayAskAgentPreferencesSnapshot } from "./browserGatewayAskAgentPreferences.js";
 import type { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelCredentialCache.js";
 import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
+import type { CoreModelMessage } from "../core/modelRuntime.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { MemoryCandidateKind } from "../shared/memoryCandidates.js";
 import { completeTodos } from "../agent/todoTool.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "./browserGatewayModelProviderIds.js";
 import { randomUUID } from "crypto";
+import { surfaceMessagesToCoreModelMessages } from "../core/surfaceModelMessages.js";
 
 export const BROWSER_GATEWAY_ASK_AGENT_OWNER_ID = "browser-gateway:ask-agent";
 export const BROWSER_GATEWAY_ASK_AGENT_SESSION_ID =
@@ -29,37 +35,37 @@ export const BROWSER_GATEWAY_ASK_AGENT_SESSION_ID =
 export const BROWSER_GATEWAY_ASK_AGENT_OWNER_GENERATION_ID =
   "browser-gateway:ask-agent:default-generation";
 export const BROWSER_GATEWAY_ASK_AGENT_SCOPE_ID = "default-ask-agent";
-export const BROWSER_GATEWAY_ASK_AGENT_DEFAULT_MODEL = "gpt-5.3-codex";
+export const BROWSER_GATEWAY_ASK_AGENT_DEFAULT_MODEL = "gpt-5.6-luna";
 export const BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE = "chat";
 const BROWSER_GATEWAY_ASK_AGENT_FALLBACK_MODELS: WebviewModelInfo[] = [
   {
-    id: "gpt-5.3-codex",
-    displayName: "GPT-5.3 Codex",
+    id: "gpt-5.6-luna",
+    displayName: "GPT-5.6 Luna",
     provider: "browser-gateway",
-    contextWindow: 200_000,
-    maxInputTokens: 200_000,
-    reasoningEfforts: ["none", "minimal", "low", "medium", "high"],
-    defaultReasoningEffort: "low",
+    contextWindow: 481_000,
+    maxInputTokens: 353_000,
+    reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+    defaultReasoningEffort: "medium",
     authenticated: true,
   },
   {
-    id: "gpt-5.2-codex",
-    displayName: "GPT-5.2 Codex",
+    id: "gpt-5.6-terra",
+    displayName: "GPT-5.6 Terra",
     provider: "browser-gateway",
-    contextWindow: 200_000,
-    maxInputTokens: 200_000,
-    reasoningEfforts: ["none", "minimal", "low", "medium", "high"],
-    defaultReasoningEffort: "low",
+    contextWindow: 481_000,
+    maxInputTokens: 353_000,
+    reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+    defaultReasoningEffort: "medium",
     authenticated: true,
   },
   {
-    id: "gpt-5.1-codex",
-    displayName: "GPT-5.1 Codex",
+    id: "gpt-5.5",
+    displayName: "GPT-5.5",
     provider: "browser-gateway",
-    contextWindow: 200_000,
-    maxInputTokens: 200_000,
-    reasoningEfforts: ["none", "minimal", "low", "medium", "high"],
-    defaultReasoningEffort: "low",
+    contextWindow: 400_000,
+    maxInputTokens: 272_000,
+    reasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
+    defaultReasoningEffort: "medium",
     authenticated: true,
   },
 ];
@@ -92,7 +98,9 @@ export interface BrowserGatewayAskAgentQuestionAnswerResult {
     question: string;
     answer: string | string[] | number | boolean | null;
     note?: string;
+    attachments?: Array<Omit<UserQuestionAttachment, "base64">>;
   }>;
+  media: UserQuestionAttachment[];
 }
 
 export interface BrowserGatewayAskAgentRetryToolResult {
@@ -101,6 +109,7 @@ export interface BrowserGatewayAskAgentRetryToolResult {
   input: Record<string, unknown>;
   result: string;
   resultImages?: Array<{ mimeType: string; data: string }>;
+  resultDocuments?: Array<{ name: string; mimeType: string; data: string }>;
 }
 
 export interface BrowserGatewayAskAgentRetryableTurn {
@@ -134,6 +143,7 @@ export interface BrowserGatewayAskAgentSnapshot {
     approval: ApprovalRequest | null;
     question: QuestionRequest | null;
     questionProgress: BrowserGatewayAskAgentQuestionProgress | null;
+    formElicitation: null;
     urlElicitation: null;
     recentEvents: [];
     mcpStatusInfos: [];
@@ -200,6 +210,14 @@ export type BrowserGatewayAskAgentSessionSummary = SessionSummary & {
   mode: "ask";
 };
 
+export interface BrowserGatewayAskAgentPrivateModelHistory {
+  schemaVersion: 1;
+  assistantTurns: Array<{
+    messageId: string;
+    messages: CoreModelMessage[];
+  }>;
+}
+
 export interface BrowserGatewayAskAgentPersistedSession {
   id: string;
   title: string;
@@ -207,6 +225,8 @@ export interface BrowserGatewayAskAgentPersistedSession {
   lastActiveAt: number;
   messages: ChatMessage[];
   nextMessageSequence: number;
+  /** Server-only exact model replay. Never include this in browser snapshots. */
+  privateModelHistory?: BrowserGatewayAskAgentPrivateModelHistory;
 }
 
 export interface BrowserGatewayAskAgentHistorySnapshot {
@@ -499,7 +519,13 @@ export class BrowserGatewayAskAgentSessionStore {
       if (block.type !== "tool_call" || !block.complete || !block.result) {
         continue;
       }
-      if (block.name !== "ask_user" && !block.resultImages?.length) continue;
+      if (
+        block.name !== "ask_user" &&
+        !block.resultImages?.length &&
+        !block.resultDocuments?.length
+      ) {
+        continue;
+      }
       let input: Record<string, unknown> = {};
       if (block.inputJson.trim()) {
         try {
@@ -519,6 +545,9 @@ export class BrowserGatewayAskAgentSessionStore {
         result: block.result,
         ...(block.resultImages?.length
           ? { resultImages: block.resultImages }
+          : {}),
+        ...(block.resultDocuments?.length
+          ? { resultDocuments: block.resultDocuments }
           : {}),
       });
     }
@@ -566,6 +595,47 @@ export class BrowserGatewayAskAgentSessionStore {
 
   getTranscriptMessages(): ChatMessage[] {
     return [...this.getActiveSession().messages];
+  }
+
+  getModelTranscriptMessages(excludeMessageId?: string): CoreModelMessage[] {
+    const session = this.getActiveSession();
+    const privateTurns = new Map(
+      session.privateModelHistory?.assistantTurns.map((turn) => [
+        turn.messageId,
+        turn.messages,
+      ]) ?? [],
+    );
+    return session.messages.flatMap((message): CoreModelMessage[] => {
+      if (message.id === excludeMessageId) return [];
+      if (message.role === "assistant") {
+        const exact = privateTurns.get(message.id);
+        if (exact?.length) return structuredClone(exact);
+      }
+      return surfaceMessagesToCoreModelMessages([message]);
+    });
+  }
+
+  appendPrivateModelTurn(
+    messageId: string,
+    messages: readonly CoreModelMessage[],
+  ): void {
+    if (!messageId || messages.length === 0) return;
+    const session = this.getActiveSession();
+    const history = (session.privateModelHistory ??= {
+      schemaVersion: 1,
+      assistantTurns: [],
+    });
+    const existing = history.assistantTurns.find(
+      (turn) => turn.messageId === messageId,
+    );
+    if (existing) {
+      existing.messages.push(...structuredClone(messages));
+    } else {
+      history.assistantTurns.push({
+        messageId,
+        messages: [...structuredClone(messages)],
+      });
+    }
   }
 
   getProjectedMessages(): ChatMessage[] {
@@ -701,6 +771,7 @@ export class BrowserGatewayAskAgentSessionStore {
       string | string[] | number | boolean | undefined
     > = {},
     notes: Record<string, string> = {},
+    attachments: UserQuestionResponse["attachments"] = {},
   ): BrowserGatewayAskAgentQuestionAnswerResult | null {
     if (!this.questionRequest || this.questionRequest.id !== questionId) {
       return null;
@@ -723,7 +794,17 @@ export class BrowserGatewayAskAgentSessionStore {
       question: question.question,
       answer: answers[question.id] ?? null,
       ...(notes[question.id] ? { note: notes[question.id] } : {}),
+      ...(attachments?.[question.id]?.length
+        ? {
+            attachments: attachments[question.id].map(
+              ({ base64: _base64, ...attachment }) => attachment,
+            ),
+          }
+        : {}),
     }));
+    const media = request.questions.flatMap(
+      (question) => attachments?.[question.id] ?? [],
+    );
     session.messages[messageIndex] = {
       ...message,
       blocks: [
@@ -733,7 +814,7 @@ export class BrowserGatewayAskAgentSessionStore {
     };
     this.questionRequest = null;
     this.questionProgress = null;
-    return { messageId: message.id, toolCallId: request.id, responses };
+    return { messageId: message.id, toolCallId: request.id, responses, media };
   }
 
   setTodos(todos: TodoItem[]): void {
@@ -964,6 +1045,7 @@ export class BrowserGatewayAskAgentSessionStore {
     input: unknown;
     result: string;
     resultImages?: Array<{ mimeType: string; data: string }>;
+    resultDocuments?: Array<{ name: string; mimeType: string; data: string }>;
     durationMs: number;
   }): void {
     const message = this.getAssistantMessage(params.messageId);
@@ -980,6 +1062,9 @@ export class BrowserGatewayAskAgentSessionStore {
         inputJson: block.inputJson || JSON.stringify(params.input),
         result: params.result,
         ...(params.resultImages ? { resultImages: params.resultImages } : {}),
+        ...(params.resultDocuments
+          ? { resultDocuments: params.resultDocuments }
+          : {}),
         complete: true,
         durationMs: params.durationMs,
       };
@@ -992,14 +1077,20 @@ export class BrowserGatewayAskAgentSessionStore {
         inputJson: JSON.stringify(params.input),
         result: params.result,
         ...(params.resultImages ? { resultImages: params.resultImages } : {}),
+        ...(params.resultDocuments
+          ? { resultDocuments: params.resultDocuments }
+          : {}),
         complete: true,
         durationMs: params.durationMs,
       });
     }
-    const generatedDisplayMedia = generatedResultImagesToDisplayMedia(
-      params.resultImages,
-      message.displayMedia?.images.length ?? 0,
-    );
+    const generatedDisplayMedia =
+      params.toolName === "generate_image"
+        ? generatedResultImagesToDisplayMedia(
+            params.resultImages,
+            message.displayMedia?.images.length ?? 0,
+          )
+        : undefined;
     if (generatedDisplayMedia) {
       message.displayMedia = {
         images: [
@@ -1159,6 +1250,7 @@ export class BrowserGatewayAskAgentSessionStore {
           approval,
           question: this.questionRequest,
           questionProgress: this.questionProgress,
+          formElicitation: null,
           urlElicitation: null,
           recentEvents: [],
           mcpStatusInfos: [],

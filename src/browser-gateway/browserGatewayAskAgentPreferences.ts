@@ -4,6 +4,10 @@ import * as path from "path";
 
 import type { ReasoningEffort } from "../agent/webview/types.js";
 import { isCoreReasoningEffort } from "../core/modelCatalog.js";
+import {
+  normalizeCoreWebAccessSettings,
+  type CoreWebAccessSettings,
+} from "../core/webAccess.js";
 import { writeTextFileAtomic } from "./atomicFile.js";
 
 const PREFERENCES_DIR = path.join(os.homedir(), ".agentlink");
@@ -12,9 +16,17 @@ const PREFERENCES_PATH = path.join(
   "browser-gateway-ask-agent-preferences.json",
 );
 
+export interface BrowserGatewayAskAgentWebPolicyCache {
+  settings: CoreWebAccessSettings;
+  sourceInstanceId?: string;
+  sourceRevision?: string;
+  updatedAt: number;
+}
+
 export interface BrowserGatewayAskAgentPreferencesSnapshot {
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  webPolicy?: BrowserGatewayAskAgentWebPolicyCache;
 }
 
 function normalizePreferences(
@@ -24,7 +36,36 @@ function normalizePreferences(
   const candidate = value as {
     model?: unknown;
     reasoningEffort?: unknown;
+    webPolicy?: unknown;
   };
+  let webPolicy: BrowserGatewayAskAgentWebPolicyCache | undefined;
+  if (
+    candidate.webPolicy &&
+    typeof candidate.webPolicy === "object" &&
+    !Array.isArray(candidate.webPolicy)
+  ) {
+    const policy = candidate.webPolicy as Record<string, unknown>;
+    try {
+      if (typeof policy.updatedAt === "number" && policy.updatedAt > 0) {
+        webPolicy = {
+          settings: normalizeCoreWebAccessSettings(
+            policy.settings as Partial<CoreWebAccessSettings>,
+          ),
+          sourceInstanceId:
+            typeof policy.sourceInstanceId === "string"
+              ? policy.sourceInstanceId
+              : undefined,
+          sourceRevision:
+            typeof policy.sourceRevision === "string"
+              ? policy.sourceRevision
+              : undefined,
+          updatedAt: policy.updatedAt,
+        };
+      }
+    } catch {
+      webPolicy = undefined;
+    }
+  }
   return {
     model:
       typeof candidate.model === "string" && candidate.model.trim()
@@ -33,6 +74,7 @@ function normalizePreferences(
     reasoningEffort: isCoreReasoningEffort(candidate.reasoningEffort)
       ? candidate.reasoningEffort
       : undefined,
+    webPolicy,
   };
 }
 

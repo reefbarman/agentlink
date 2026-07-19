@@ -92,6 +92,7 @@ export async function handleWriteFile(
       providers.writeApprovalPolicyProvider?.recordDecision({
         decision: result.decision,
         sessionId,
+        absolutePath: filePath,
         relativePath: relPath,
         inWorkspace,
         writeApprovalResponse: result.writeApprovalResponse,

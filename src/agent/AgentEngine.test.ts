@@ -1,7 +1,7 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import type { AgentConfig, AgentEvent } from "./types.js";
+import type { AgentConfig, AgentEvent, AgentMessage } from "./types.js";
 import type {
   CompleteRequest,
   CompleteResult,
@@ -14,11 +14,16 @@ import type {
 } from "./providers/types.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AgentEngine, truncateToolText } from "./AgentEngine.js";
+import {
+  AgentEngine,
+  buildSessionTranscriptSnapshot,
+  truncateToolText,
+} from "./AgentEngine.js";
 import { AgentSession } from "./AgentSession.js";
 import { ProviderRegistry } from "./providers/index.js";
 import { AgentToolCallTracker } from "./AgentToolCallTracker.js";
 import type { AgentToolExecutionRequest } from "../core/tools/types.js";
+import { CORE_NATIVE_WEB_MAX_PAUSE_TURNS } from "../core/nativeWebTools.js";
 import {
   createAgentToolRuntime,
   type ToolDispatchContext,
@@ -173,7 +178,7 @@ function makeRegistry(provider?: ModelProvider): ProviderRegistry {
 async function makeSession(
   config: AgentConfig = testConfig,
 ): Promise<AgentSession> {
-  return AgentSession.create({
+  return AgentSession.createForLegacyCwd({
     mode: "code",
     config,
     cwd: "/test",
@@ -209,6 +214,53 @@ async function collectEvents(
   }
   return events;
 }
+
+describe("buildSessionTranscriptSnapshot", () => {
+  it("clones raw messages and derives source kinds and condensed flags consistently", () => {
+    const sourceContent = [
+      { type: "text" as const, text: "original evidence" },
+    ];
+    const messages: AgentMessage[] = [
+      { role: "user", content: "task", condenseParent: "summary-1" },
+      {
+        role: "assistant",
+        content: sourceContent,
+        condenseParent: "summary-1",
+      },
+      {
+        role: "user",
+        content: "summary",
+        isSummary: true,
+        condenseId: "summary-1",
+      },
+      { role: "user", content: "resume", isResumeContext: true },
+      { role: "assistant", content: [{ type: "text", text: "current" }] },
+    ];
+
+    const snapshot = buildSessionTranscriptSnapshot(messages);
+    sourceContent[0]!.text = "mutated after projection";
+    messages[0]!.content = "mutated task";
+
+    expect(snapshot.messages.map((message) => message.sourceKind)).toEqual([
+      "source",
+      "source",
+      "summary",
+      "resume",
+      "source",
+    ]);
+    expect(snapshot.messages.map((message) => message.condensed)).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect(snapshot.messages[0]?.content).toBe("task");
+    expect(snapshot.messages[1]?.content).toEqual([
+      { type: "text", text: "original evidence" },
+    ]);
+  });
+});
 
 describe("truncateToolText", () => {
   it("returns pass-through text without scheduling a temp-file write", () => {
@@ -696,6 +748,21 @@ describe("AgentEngine", () => {
       const events = await runPromise;
 
       expect(
+        events
+          .filter(
+            (e): e is Extract<AgentEvent, { type: "tool_start" }> =>
+              e.type === "tool_start",
+          )
+          .map((e) => ({ toolName: e.toolName, input: e.input })),
+      ).toEqual([
+        { toolName: "read_file", input: { path: "src/a.ts" } },
+        {
+          toolName: "write_file",
+          input: { path: "src/x.ts", content: "x" },
+        },
+      ]);
+
+      expect(
         tracker.getActiveCalls().filter((c) => c.status === "active"),
       ).toHaveLength(0);
       expect(
@@ -737,7 +804,7 @@ describe("AgentEngine", () => {
         yield* makeProviderStream({ text: "done" });
       };
 
-      const session = await AgentSession.create({
+      const session = await AgentSession.createForLegacyCwd({
         mode: "code",
         config: testConfig,
         cwd,
@@ -1267,6 +1334,77 @@ describe("AgentEngine", () => {
       });
     });
 
+    it("injects a pending interjection instead of ending the turn at set_task_status", async () => {
+      const requests: StreamRequest[] = [];
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        callCount += 1;
+        if (callCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              { type: "text", text: "All done." },
+              {
+                type: "tool_use",
+                id: "call_final",
+                name: "set_task_status",
+                input: { status: "completed" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "continuing with follow up" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("do the task");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const toolCtx: ToolDispatchContext = {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      };
+      setEngineToolContext(
+        engine,
+        toolCtx,
+        async (request: AgentToolExecutionRequest) => {
+          if (request.name === "set_task_status") {
+            // Simulate a message queued while the final tool was executing.
+            session.setPendingInterjection("also fix the tests", "queue-1");
+            request.context.onFinalStatus?.({
+              status: "completed",
+              source: "tool",
+            });
+          }
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+          };
+        },
+      );
+
+      const events = await collectEvents(engine.run(session));
+
+      // The final marker is still applied, but the turn continues with the
+      // queued user message instead of stopping.
+      expect(events.find((e) => e.type === "final_marker")).toBeDefined();
+      const interjections = events.filter(
+        (e): e is Extract<AgentEvent, { type: "user_interjection" }> =>
+          e.type === "user_interjection",
+      );
+      expect(interjections.map((e) => e.queueId)).toEqual(["queue-1"]);
+      expect(requests).toHaveLength(2);
+      expect(requests[1].messages.at(-1)).toEqual({
+        role: "user",
+        content: "also fix the tests",
+      });
+    });
+
     it("emits completed todos when set_task_status requests todo completion", async () => {
       const provider = makeMockProvider();
       provider.stream = async function* () {
@@ -1793,7 +1931,16 @@ describe("AgentEngine", () => {
       const engine = new AgentEngine(makeRegistry(provider));
 
       const events = await collectEvents(engine.run(session));
+      const apiRequestStart = events.find(
+        (event) => event.type === "api_request_start",
+      );
       const apiRequest = events.find((e) => e.type === "api_request");
+      expect(apiRequestStart).toMatchObject({
+        type: "api_request_start",
+        provider: "mock",
+        model: TEST_MODEL,
+        schedulerQueued: false,
+      });
       expect(apiRequest).toBeDefined();
       if (!apiRequest || apiRequest.type !== "api_request") return;
 
@@ -1802,6 +1949,7 @@ describe("AgentEngine", () => {
       expect(apiRequest.cacheReadTokens).toBe(9000);
       expect(apiRequest.cacheCreationTokens).toBe(1000);
       expect(apiRequest.reasoningEffort).toBe("none");
+      expect(apiRequest.providerQueueWaitMs).toBe(0);
       expect(session.lastInputTokens).toBe(10_050);
       expect(session.totalInputTokens).toBe(50);
       expect(session.totalCacheReadTokens).toBe(9000);
@@ -1863,6 +2011,312 @@ describe("AgentEngine", () => {
         usedPreviousResponseId: false,
         previousResponseIdFallback: false,
       });
+    });
+
+    it("exposes native web tools without passing hosted tools to the main request", async () => {
+      const streamCalls: StreamRequest[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        streamCalls.push(request);
+        yield* makeProviderStream();
+      };
+      const session = await makeSession();
+      session.addUserMessage("search");
+      const engine = new AgentEngine(makeRegistry(provider));
+      setEngineToolContext(engine, {
+        ...({} as ToolDispatchContext),
+        approvalManager: {} as any,
+        approvalPanel: {} as any,
+        sessionId: "agent",
+        extensionUri: {} as any,
+        mcpHub: {
+          getToolDefs: () => [
+            {
+              name: "searxng__search",
+              description: "Search",
+              input_schema: { type: "object", properties: {} },
+            },
+          ],
+          getServerConfig: () => ({ toolDisclosure: "inline" }),
+        } as any,
+      });
+
+      await collectEvents(
+        engine.run(session, {
+          webAccessPolicy: {
+            backend: "provider",
+            available: true,
+            routes: {
+              search: {
+                kind: "search",
+                backend: "provider",
+                available: true,
+                reason: "native_selected",
+                hostedTool: { type: "web_search" },
+              },
+              fetch: {
+                kind: "fetch",
+                backend: "disabled",
+                available: false,
+                reason: "disabled",
+              },
+            },
+            settings: {
+              searchBackend: "native",
+              fetchBackend: "disabled",
+              allowedDomains: [],
+              blockedDomains: [],
+              maxSearchUsesPerTurn: 5,
+              maxFetchUsesPerTurn: 3,
+              maxFetchContentTokens: 25_000,
+              maxReplayBytesPerTurn: 5_242_880,
+            },
+            hostedTools: [{ type: "web_search" }],
+            enabledKinds: ["search"],
+            diagnostics: {
+              providerSearchSupported: true,
+              providerFetchSupported: false,
+              domainRestrictionsRequested: false,
+              maxSearchUsesEnforced: false,
+              maxFetchUsesEnforced: false,
+              maxFetchContentTokensEnforced: false,
+            },
+          },
+          mcpToolDefinitions: [],
+          mcpToolDisclosure: {
+            inlineTools: [],
+            deferredTools: [],
+            catalog: [],
+          },
+        }),
+      );
+
+      expect(streamCalls).toHaveLength(1);
+      expect(streamCalls[0]?.hostedTools).toBeUndefined();
+      expect(streamCalls[0]?.tools?.map((tool) => tool.name)).toContain(
+        "web_search",
+      );
+      expect(streamCalls[0]?.tools?.map((tool) => tool.name)).not.toContain(
+        "searxng__search",
+      );
+    });
+
+    it("keeps hosted web details out of public events while preserving assistant content", async () => {
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        yield {
+          type: "web_activity",
+          activity: {
+            id: "search-1",
+            kind: "search",
+            status: "started",
+            backend: "provider",
+            query: "AgentLink docs",
+          },
+        };
+        yield {
+          type: "web_activity",
+          activity: {
+            id: "search-1",
+            kind: "search",
+            status: "completed",
+            backend: "provider",
+            query: "AgentLink docs",
+          },
+        };
+        yield { type: "text_delta", text: "Found it." };
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "text",
+              text: "Found it.",
+              citations: [
+                {
+                  url: "https://example.com/agentlink",
+                  title: "AgentLink docs",
+                  citedText: "Found it.",
+                  startIndex: 0,
+                  endIndex: 9,
+                },
+              ],
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        yield { type: "done" };
+      };
+      const session = await makeSession();
+      session.addUserMessage("search");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+
+      const publicEventTypes = events.map((event) => String(event.type));
+      expect(publicEventTypes).not.toContain("web_activity");
+      expect(publicEventTypes).not.toContain("web_citations");
+      expect(session.getMessages().at(-1)).toMatchObject({
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Found it.",
+            citations: [
+              expect.objectContaining({
+                url: "https://example.com/agentlink",
+                startIndex: 0,
+                endIndex: 9,
+              }),
+            ],
+          },
+        ],
+      });
+    });
+
+    it("preserves exact assistant replay and immediately continues pause_turn", async () => {
+      const streamCalls: StreamRequest[] = [];
+      const pausedMessage: AgentMessage = {
+        role: "assistant",
+        content: [
+          {
+            type: "web_activity",
+            activity: {
+              id: "srvtoolu_search",
+              kind: "search",
+              status: "started",
+              backend: "provider",
+              query: "AgentLink",
+            },
+          },
+        ],
+        providerReplay: {
+          providerId: "anthropic",
+          codecVersion: 1,
+          payload: {
+            content: [
+              {
+                type: "server_tool_use",
+                id: "srvtoolu_search",
+                name: "web_search",
+                input: { query: "AgentLink" },
+              },
+            ],
+          },
+          serializedBytes: 1,
+        },
+      };
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        streamCalls.push(request);
+        if (streamCalls.length === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: pausedMessage.content as Exclude<
+              AgentMessage["content"],
+              string
+            >,
+          };
+          yield {
+            type: "model_stop",
+            reason: "pause_turn",
+            assistantMessage: pausedMessage,
+          };
+        } else {
+          yield { type: "text_delta", text: "done" };
+          yield {
+            type: "content_blocks",
+            blocks: [{ type: "text", text: "done" }],
+          };
+          yield {
+            type: "model_stop",
+            reason: "end_turn",
+            assistantMessage: {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+            },
+          };
+        }
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        yield { type: "done" };
+      };
+      const session = await makeSession();
+      session.addUserMessage("search");
+      const engine = new AgentEngine(makeRegistry(provider));
+      await collectEvents(engine.run(session));
+
+      expect(streamCalls).toHaveLength(2);
+      expect(streamCalls[1].messages).toEqual([
+        { role: "user", content: "search" },
+        pausedMessage,
+      ]);
+      expect(session.getAllMessages()).toEqual([
+        { role: "user", content: "search" },
+        pausedMessage,
+        { role: "assistant", content: [{ type: "text", text: "done" }] },
+      ]);
+    });
+
+    it("caps consecutive provider pause_turn continuations", async () => {
+      const pausedMessage: AgentMessage = {
+        role: "assistant",
+        content: [
+          {
+            type: "web_activity",
+            activity: {
+              id: "srvtoolu_search",
+              kind: "search",
+              status: "started",
+              backend: "provider",
+              query: "AgentLink",
+            },
+          },
+        ],
+        providerReplay: {
+          providerId: "anthropic",
+          codecVersion: 1,
+          payload: { encrypted_content: "private" },
+          serializedBytes: 1,
+        },
+      };
+      let streamCalls = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCalls += 1;
+        yield {
+          type: "content_blocks",
+          blocks: pausedMessage.content as Exclude<
+            AgentMessage["content"],
+            string
+          >,
+        };
+        yield {
+          type: "model_stop",
+          reason: "pause_turn",
+          assistantMessage: pausedMessage,
+        };
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        yield { type: "done" };
+      };
+      const session = await makeSession();
+      session.addUserMessage("search");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+
+      expect(streamCalls).toBe(CORE_NATIVE_WEB_MAX_PAUSE_TURNS + 1);
+      expect(
+        session
+          .getAllMessages()
+          .filter((message) => message.role === "assistant"),
+      ).toHaveLength(CORE_NATIVE_WEB_MAX_PAUSE_TURNS);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          error: `Provider native web continuation exceeded ${CORE_NATIVE_WEB_MAX_PAUSE_TURNS} pause turns.`,
+          retryable: false,
+        }),
+      );
+      expect(events.some((event) => event.type === "done")).toBe(false);
     });
 
     it("surfaces model fallback and records the effective model", async () => {

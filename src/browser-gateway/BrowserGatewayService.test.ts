@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BrowserGatewayService } from "./BrowserGatewayService.js";
 import { InMemoryAgentUiEventHub } from "../agent/AgentUiPublisher.js";
+import type { SessionSummary } from "../agent/SessionStore.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
 
 vi.mock("vscode", () => {
@@ -38,7 +39,26 @@ vi.mock("vscode", () => {
 
 function makeSessionManagerStub() {
   return {
-    listPersistedSessions: vi.fn(() => [
+    getWorkspaceProjects: vi.fn(() => [
+      {
+        id: "project-a",
+        name: "Project A",
+        uri: "file:///workspace/a",
+        rootPath: "/workspace/a",
+        availability: { status: "available" },
+      },
+      {
+        id: "project-b",
+        name: "Project B",
+        uri: "file:///workspace/b",
+        rootPath: "/workspace/b",
+        availability: { status: "available" },
+      },
+    ]),
+    getDefaultProjectScope: vi.fn(() => ({
+      projectId: "project-a",
+    })),
+    listPersistedSessions: vi.fn<() => SessionSummary[]>(() => [
       {
         schemaVersion: 1,
         id: "session-1",
@@ -50,6 +70,14 @@ function makeSessionManagerStub() {
         totalOutputTokens: 20,
         createdAt: 1,
         lastActiveAt: 2,
+        projectScope: {
+          schemaVersion: 1,
+          kind: "project",
+          projectId: "project-a",
+          workspaceFolderUri: "file:///workspace/a",
+          displayName: "Project A",
+          rootPath: "/workspace/a",
+        },
       },
     ]),
     getForegroundSession: vi.fn(() => ({
@@ -62,6 +90,11 @@ function makeSessionManagerStub() {
       lastOutputTokens: 20,
       lastCacheReadTokens: 3,
       estimatedTotalUsed: 33,
+      projectScope: {
+        projectId: "project-a",
+        displayName: "Project A",
+      },
+      projectAvailability: "available",
       getAllMessages: vi.fn(() => [
         { role: "user", content: "hello" },
         { role: "assistant", content: [{ type: "text", text: "world" }] },
@@ -138,6 +171,81 @@ function makeService(hub: InMemoryAgentUiEventHub): BrowserGatewayService {
 }
 
 describe("BrowserGatewayService", () => {
+  it("serializes project catalog and foreground identity without local roots", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const service = makeService(hub);
+
+    const snapshot = service.getSerializableSnapshotState();
+
+    expect(snapshot.session.projects).toEqual([
+      {
+        projectId: "project-a",
+        displayName: "Project A",
+        availability: "available",
+      },
+      {
+        projectId: "project-b",
+        displayName: "Project B",
+        availability: "available",
+      },
+    ]);
+    expect(snapshot.session.defaultProjectId).toBe("project-a");
+    expect(snapshot.session.foreground?.project).toEqual({
+      projectId: "project-a",
+      displayName: "Project A",
+      availability: "available",
+    });
+    expect(snapshot.session.sessions[0]?.project).toEqual({
+      projectId: "project-a",
+      displayName: "Project A",
+      availability: "available",
+    });
+    const serializedSession = JSON.stringify(snapshot.session);
+    expect(serializedSession).not.toContain("/workspace/");
+    expect(serializedSession).not.toContain("file://");
+    expect(serializedSession).not.toContain("workspaceFolderUri");
+    expect(serializedSession).not.toContain("rootPath");
+
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("projects form elicitation request and clear events into browser state", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const service = makeService(hub);
+    const request = {
+      id: "form-1",
+      serverName: "linear",
+      message: "Choose a project",
+      fields: [
+        {
+          name: "project",
+          title: "Project",
+          required: true,
+          kind: "single-select" as const,
+          options: [{ value: "agentlink", title: "AgentLink" }],
+        },
+      ],
+    };
+
+    hub.publishFormElicitationRequest(request);
+
+    expect(service.getSerializableState().formElicitation).toEqual(request);
+    expect(service.getInstanceStatusSummary()).toMatchObject({
+      kind: "awaiting_approval",
+      label: "MCP Form",
+    });
+
+    hub.publishFormElicitationCleared("another-form");
+    expect(service.getSerializableState().formElicitation?.id).toBe("form-1");
+
+    hub.publishFormElicitationCleared("form-1");
+    expect(service.getSerializableState().formElicitation).toBeNull();
+
+    service.dispose();
+    hub.dispose();
+  });
+
   it("publishes monotonic snapshots with their prebuilt wire payload", () => {
     const hub = new InMemoryAgentUiEventHub();
     const service = makeService(hub);
@@ -246,6 +354,7 @@ describe("BrowserGatewayService", () => {
         loadedInstructions: null,
         restoringSession: false,
         revertRecoveryNotice: {
+          projectId: "project-test",
           checkpointId: "checkpoint-1",
           sessionRevision: "revision-2",
           workspaceRevision: "abcdef1234567890",
@@ -285,7 +394,7 @@ describe("BrowserGatewayService", () => {
       },
       question: undefined,
     });
-    expect(service.getSerializableSessionState()).toEqual({
+    expect(service.getSerializableSessionState()).toMatchObject({
       sessions: [
         expect.objectContaining({
           id: "session-1",
@@ -325,6 +434,7 @@ describe("BrowserGatewayService", () => {
         loadedInstructions: null,
         restoringSession: false,
         revertRecoveryNotice: {
+          projectId: "project-test",
           checkpointId: "checkpoint-1",
           sessionRevision: "revision-2",
           workspaceRevision: "abcdef1234567890",
@@ -715,7 +825,9 @@ describe("BrowserGatewayService", () => {
       let theme = themeSnapshotStub;
       let effectivePolicy: "safe" | "approve-for-me" = "safe";
       let configuredPolicy: "safe" | "sensitive" = "safe";
-      let surfaceListener: ((kind: "mcp" | "theme") => void) | undefined;
+      let surfaceListener:
+        | ((kind: "background" | "mcp" | "theme") => void)
+        | undefined;
       const service = new BrowserGatewayService(
         hub,
         sessionManager as never,
@@ -763,20 +875,40 @@ describe("BrowserGatewayService", () => {
         configuredCommandApprovalPolicy: "sensitive",
       });
 
+      sessionManager.getBgSessionInfos.mockReturnValue([
+        {
+          id: "bg-web",
+          task: "Search the web",
+          status: "streaming",
+          displayStatus: "Searching the web",
+          lastProgressAt: 2,
+        },
+      ] as never);
+      surfaceListener?.("background");
+      vi.advanceTimersByTime(150);
+      expect(onDidChange).toHaveBeenCalledTimes(2);
+      expect(onDidChange.mock.calls[1][0].snapshot.background).toEqual([
+        expect.objectContaining({
+          id: "bg-web",
+          displayStatus: "Searching the web",
+          lastProgressAt: 2,
+        }),
+      ]);
+
       theme = {
         ...themeSnapshotStub,
         themeLabel: "Updated Dark",
       };
       surfaceListener?.("theme");
       vi.advanceTimersByTime(150);
-      expect(onDidChange).toHaveBeenCalledTimes(2);
-      expect(onDidChange.mock.calls[1][0].snapshot.theme.themeLabel).toBe(
+      expect(onDidChange).toHaveBeenCalledTimes(3);
+      expect(onDidChange.mock.calls[2][0].snapshot.theme.themeLabel).toBe(
         "Updated Dark",
       );
 
       surfaceListener?.("mcp");
       vi.advanceTimersByTime(150);
-      expect(onDidChange).toHaveBeenCalledTimes(2);
+      expect(onDidChange).toHaveBeenCalledTimes(3);
 
       subscription.dispose();
       service.dispose();
@@ -796,7 +928,9 @@ describe("BrowserGatewayService", () => {
         themeLabel: string;
         source: "vscode-theme-api";
       } = themeSnapshotStub;
-      let surfaceListener: ((kind: "mcp" | "theme") => void) | undefined;
+      let surfaceListener:
+        | ((kind: "background" | "mcp" | "theme") => void)
+        | undefined;
       const service = new BrowserGatewayService(
         hub,
         makeSessionManagerStub() as never,
@@ -996,7 +1130,11 @@ describe("BrowserGatewayService", () => {
     vi.useFakeTimers();
     try {
       const hub = new InMemoryAgentUiEventHub();
-      let repository = { branch: "main", dirty: false };
+      let repository = {
+        projectId: "project-a",
+        branch: "main",
+        dirty: false,
+      };
       let repositoryListener: (() => void) | undefined;
       const repositorySubscriptionDispose = vi.fn();
       const service = new BrowserGatewayService(
@@ -1026,7 +1164,11 @@ describe("BrowserGatewayService", () => {
       const onDidChange = vi.fn();
       const subscription = service.onDidChange(onDidChange);
 
-      repository = { branch: "feature/a4e", dirty: true };
+      repository = {
+        projectId: "project-a",
+        branch: "feature/a4e",
+        dirty: true,
+      };
       repositoryListener?.();
       vi.advanceTimersByTime(150);
 
@@ -1055,7 +1197,11 @@ describe("BrowserGatewayService", () => {
     vi.useFakeTimers();
     try {
       const hub = new InMemoryAgentUiEventHub();
-      let repository = { branch: "main", dirty: false };
+      let repository = {
+        projectId: "project-a",
+        branch: "main",
+        dirty: false,
+      };
       let repositoryListener: (() => void) | undefined;
       const service = new BrowserGatewayService(
         hub,
@@ -1084,7 +1230,7 @@ describe("BrowserGatewayService", () => {
       const onDidChange = vi.fn();
       service.onDidChange(onDidChange);
 
-      repository = { branch: "main", dirty: true };
+      repository = { projectId: "project-a", branch: "main", dirty: true };
       repositoryListener?.();
       vi.advanceTimersByTime(150);
 
@@ -1151,6 +1297,87 @@ describe("BrowserGatewayService", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("rebuilds reconnect snapshots with started and completed web tool calls", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const webMessage = (complete: boolean) => ({
+      id: "chat-web",
+      role: "assistant",
+      content: "Answer with a source.",
+      timestamp: 1,
+      blocks: [
+        {
+          type: "tool_call",
+          id: "search-1",
+          name: "web_search",
+          inputJson: JSON.stringify({ query: "AgentLink docs" }),
+          result: complete
+            ? JSON.stringify({
+                results: [
+                  {
+                    url: "https://example.com/agentlink",
+                    title: "AgentLink docs",
+                  },
+                ],
+              })
+            : "",
+          complete,
+        },
+      ],
+    });
+    let projected = projectedForeground({
+      streaming: true,
+      projectedMessages: [webMessage(false)],
+    });
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => themeSnapshotStub,
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => projected as never,
+      () => [],
+    );
+
+    const midSearchReconnect = service.createSnapshotPublication();
+    expect(
+      midSearchReconnect.snapshot.session.foreground?.projectedMessages[0]
+        ?.blocks,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          name: "web_search",
+          complete: false,
+        }),
+      ]),
+    );
+
+    projected = projectedForeground({
+      streaming: false,
+      projectedMessages: [webMessage(true)],
+    });
+    const completedReconnect = service.createSnapshotPublication();
+    expect(
+      completedReconnect.snapshot.session.foreground?.projectedMessages[0]
+        ?.blocks,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          name: "web_search",
+          complete: true,
+          result: expect.stringContaining("https://example.com/agentlink"),
+        }),
+      ]),
+    );
+    expect(completedReconnect.serialized).not.toContain("providerReplay");
+
+    service.dispose();
+    hub.dispose();
   });
 
   it("uses a fixed coalescing window that does not starve under continuous foreground invalidation", () => {
@@ -1415,13 +1642,19 @@ describe("BrowserGatewayService", () => {
       const hub = new InMemoryAgentUiEventHub();
       const sessionManager = makeSessionManagerStub();
       let projected = projectedForeground();
-      let repository = { branch: "main", dirty: false };
+      let repository = {
+        projectId: "project-a",
+        branch: "main",
+        dirty: false,
+      };
       let theme = themeSnapshotStub;
       let mcpStatusInfos: unknown[] = [];
       let sessionListener: (() => void) | undefined;
       let foregroundListener: (() => void) | undefined;
       let repositoryListener: (() => void) | undefined;
-      let surfaceListener: ((kind: "mcp" | "theme") => void) | undefined;
+      let surfaceListener:
+        | ((kind: "background" | "mcp" | "theme") => void)
+        | undefined;
       const service = new BrowserGatewayService(
         hub,
         sessionManager as never,
@@ -1497,6 +1730,12 @@ describe("BrowserGatewayService", () => {
             notes: {},
             origin: "test",
           });
+          hub.publishFormElicitationRequest({
+            id: "matrix-form",
+            serverName: "matrix",
+            message: "Provide input",
+            fields: [],
+          });
           hub.publishUrlElicitationRequest({
             id: "matrix-url",
             serverName: "matrix",
@@ -1512,11 +1751,12 @@ describe("BrowserGatewayService", () => {
           expect(snapshot.ui).toMatchObject({
             approval: { id: "matrix-approval" },
             questionProgress: { id: "matrix-question", step: 1 },
+            formElicitation: { id: "matrix-form" },
             urlElicitation: { id: "matrix-url" },
           });
           expect(snapshot.ui.recentEvents).not.toHaveLength(0);
         },
-        { coalesced: false, count: 4 },
+        { coalesced: false, count: 5 },
       );
 
       expectPublication(
@@ -1561,14 +1801,18 @@ describe("BrowserGatewayService", () => {
               displayStatusSource: "heuristic",
             },
           ] as never);
-          sessionListener?.();
+          surfaceListener?.("background");
         },
         (snapshot) => expect(snapshot.background[0].id).toBe("matrix-bg"),
       );
 
       expectPublication(
         () => {
-          repository = { branch: "matrix-branch", dirty: true };
+          repository = {
+            projectId: "project-a",
+            branch: "matrix-branch",
+            dirty: true,
+          };
           repositoryListener?.();
         },
         (snapshot) => expect(snapshot.session.repository).toEqual(repository),

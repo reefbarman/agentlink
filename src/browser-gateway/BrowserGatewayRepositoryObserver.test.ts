@@ -70,7 +70,10 @@ describe("BrowserGatewayRepositoryObserver", () => {
     });
     const api = { repositories: [repo] };
     const observer = new BrowserGatewayRepositoryObserver({
-      getFirstWorkspaceRootPath: () => "/workspace/project",
+      getProject: () => ({
+        projectId: "project-a",
+        rootPath: "/workspace/project",
+      }),
       getGitExtension: () => ({
         isActive: true,
         exports: { getAPI: () => api },
@@ -80,6 +83,7 @@ describe("BrowserGatewayRepositoryObserver", () => {
 
     await observer.initialize();
     expect(observer.getRepositoryInfo()).toEqual({
+      projectId: "project-a",
       branch: "main",
       dirty: true,
     });
@@ -87,6 +91,7 @@ describe("BrowserGatewayRepositoryObserver", () => {
     repo.state.HEAD = { commit: "fedcba9876543210" };
     repo.state.untrackedChanges = [];
     expect(observer.getRepositoryInfo()).toEqual({
+      projectId: "project-a",
       branch: "fedcba98",
       dirty: false,
     });
@@ -111,7 +116,10 @@ describe("BrowserGatewayRepositoryObserver", () => {
     const nested = repository("/workspace/project");
     const api = { repositories: [unrelated, parent, nested] };
     const observer = new BrowserGatewayRepositoryObserver({
-      getFirstWorkspaceRootPath: () => "/workspace/project/packages/app",
+      getProject: () => ({
+        projectId: "project-a",
+        rootPath: "/workspace/project/packages/app",
+      }),
       getGitExtension: () => ({
         isActive: true,
         exports: { getAPI: () => api },
@@ -125,7 +133,7 @@ describe("BrowserGatewayRepositoryObserver", () => {
     expect(observer.getRepositoryInfo()?.branch).toBe("main");
 
     const unmatched = new BrowserGatewayRepositoryObserver({
-      getFirstWorkspaceRootPath: () => "/missing",
+      getProject: () => ({ projectId: "project-a", rootPath: "/missing" }),
       getGitExtension: () => ({
         isActive: true,
         exports: { getAPI: () => api },
@@ -139,6 +147,37 @@ describe("BrowserGatewayRepositoryObserver", () => {
     unmatched.dispose();
   });
 
+  it("rebinds selected state when the foreground project changes", async () => {
+    const first = repository("/workspace/a");
+    const second = repository("/workspace/b");
+    const api = { repositories: [first, second] };
+    let project = { projectId: "project-a", rootPath: "/workspace/a" };
+    const observer = new BrowserGatewayRepositoryObserver({
+      getProject: () => project,
+      getGitExtension: () => ({
+        isActive: true,
+        exports: { getAPI: () => api },
+        activate: vi.fn(),
+      }),
+    });
+    const listener = vi.fn();
+    observer.onDidChange(listener);
+
+    await observer.initialize();
+    expect(observer.getRepositoryInfo()?.projectId).toBe("project-a");
+    expect(first.stateChange.listenerCount()).toBe(1);
+
+    project = { projectId: "project-b", rootPath: "/workspace/b" };
+    observer.rebindProject();
+
+    expect(observer.getRepositoryInfo()?.projectId).toBe("project-b");
+    expect(first.stateChange.listenerCount()).toBe(0);
+    expect(second.stateChange.listenerCount()).toBe(1);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    observer.dispose();
+  });
+
   it("rebinds selected state on repository open and close events", async () => {
     const opened = eventHarness<any>();
     const closed = eventHarness<any>();
@@ -149,7 +188,10 @@ describe("BrowserGatewayRepositoryObserver", () => {
       onDidCloseRepository: closed.event,
     };
     const observer = new BrowserGatewayRepositoryObserver({
-      getFirstWorkspaceRootPath: () => "/workspace/project",
+      getProject: () => ({
+        projectId: "project-a",
+        rootPath: "/workspace/project",
+      }),
       getGitExtension: () => ({
         isActive: true,
         exports: { getAPI: () => api },
@@ -185,7 +227,7 @@ describe("BrowserGatewayRepositoryObserver", () => {
     const api = { repositories: [repo] };
     const activate = vi.fn().mockResolvedValue({ getAPI: () => api });
     const observer = new BrowserGatewayRepositoryObserver({
-      getFirstWorkspaceRootPath: () => "/workspace",
+      getProject: () => ({ projectId: "project-a", rootPath: "/workspace" }),
       getGitExtension: () => ({
         isActive: false,
         exports: undefined as never,
@@ -196,12 +238,13 @@ describe("BrowserGatewayRepositoryObserver", () => {
     await observer.initialize();
     expect(activate).toHaveBeenCalledTimes(1);
     expect(observer.getRepositoryInfo()).toEqual({
+      projectId: "project-a",
       branch: "main",
       dirty: false,
     });
 
     const unavailable = new BrowserGatewayRepositoryObserver({
-      getFirstWorkspaceRootPath: () => "/workspace",
+      getProject: () => ({ projectId: "project-a", rootPath: "/workspace" }),
       getGitExtension: () => undefined,
     });
     await unavailable.initialize();
@@ -214,7 +257,7 @@ describe("BrowserGatewayRepositoryObserver", () => {
   it("contains activation and rebinding failures while publishing null state", async () => {
     const listener = vi.fn();
     const activationFailure = new BrowserGatewayRepositoryObserver({
-      getFirstWorkspaceRootPath: () => "/workspace",
+      getProject: () => ({ projectId: "project-a", rootPath: "/workspace" }),
       getGitExtension: () => ({
         isActive: false,
         exports: undefined as never,
@@ -240,7 +283,7 @@ describe("BrowserGatewayRepositoryObserver", () => {
       onDidCloseRepository: closed.event,
     };
     const observer = new BrowserGatewayRepositoryObserver({
-      getFirstWorkspaceRootPath: () => "/workspace",
+      getProject: () => ({ projectId: "project-a", rootPath: "/workspace" }),
       getGitExtension: () => ({
         isActive: true,
         exports: { getAPI: () => api },

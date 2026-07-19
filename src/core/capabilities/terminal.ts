@@ -168,15 +168,23 @@ export interface TerminalExecuteOptions {
   onCommandFinalized?: () => void;
 }
 
+export type TerminalLifecycleState =
+  | "running"
+  | "detached"
+  | "timed_out"
+  | "completed"
+  | "unknown_termination";
+
 export interface TerminalBackgroundState {
   is_running: boolean;
+  state: TerminalLifecycleState;
   exit_code: number | null;
   output: string;
   output_captured: boolean;
   terminal_raw_output?: string;
 }
 
-export interface ClosedTerminalSnapshot {
+export interface ClosedTerminalSnapshot extends TerminalBackgroundState {
   id: string;
   name: string;
   closedAt: number;

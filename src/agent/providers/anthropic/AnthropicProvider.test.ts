@@ -26,6 +26,24 @@ describe("AnthropicProvider capabilities", () => {
     ).toBe(200_000);
   });
 
+  it("advertises hosted search and fetch capabilities", () => {
+    expect(provider.getCapabilities("claude-sonnet-5").hostedWeb).toEqual({
+      search: {
+        supported: true,
+        supportsDomainRestrictions: true,
+        supportsMaxUses: true,
+        supportsCitations: true,
+      },
+      fetch: {
+        supported: true,
+        supportsDomainRestrictions: true,
+        supportsMaxUses: true,
+        supportsContentTokenLimit: true,
+        supportsCitations: true,
+      },
+    });
+  });
+
   it("reports max output tokens for exposed models", () => {
     expect(provider.getCapabilities("claude-sonnet-5").maxOutputTokens).toBe(
       128_000,
@@ -98,6 +116,80 @@ describe("AnthropicProvider capabilities", () => {
     expect(events.some((event) => event.type === "thinking_start")).toBe(false);
     expect(events.some((event) => event.type === "thinking_end")).toBe(false);
     expect(events).toContainEqual({ type: "content_blocks", blocks: [] });
+  });
+
+  it("passes hosted tools through the portable codec without local dispatch", async () => {
+    const stream = vi.fn(async function* () {
+      yield {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "server_tool_use",
+          id: "srvtoolu_1",
+          name: "web_search",
+          input: { query: "AgentLink" },
+        },
+      };
+      yield { type: "content_block_stop", index: 0 };
+      yield {
+        type: "message_delta",
+        delta: { stop_reason: "pause_turn" },
+        usage: { output_tokens: 1 },
+      };
+    });
+    const testProvider = new AnthropicProvider();
+    (testProvider as unknown as { client: unknown }).client = {
+      messages: { stream },
+    };
+
+    const events: ProviderStreamEvent[] = [];
+    for await (const event of testProvider.stream({
+      model: "claude-sonnet-5",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "search" }],
+      hostedTools: [
+        {
+          type: "web_search",
+          allowedDomains: ["example.com"],
+          maxUses: 2,
+        },
+        {
+          type: "web_fetch",
+          maxUses: 1,
+          maxContentTokens: 1_000,
+          citationsEnabled: true,
+        },
+      ],
+      maxTokens: 64,
+    })) {
+      events.push(event);
+    }
+
+    expect(stream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: [
+          {
+            type: "web_search_20250305",
+            name: "web_search",
+            allowed_domains: ["example.com"],
+            max_uses: 2,
+          },
+          {
+            type: "web_fetch_20250910",
+            name: "web_fetch",
+            max_uses: 1,
+            max_content_tokens: 1_000,
+            citations: { enabled: true },
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+      }),
+      expect.objectContaining({ maxRetries: 0 }),
+    );
+    expect(events.some((event) => event.type === "tool_start")).toBe(false);
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "model_stop", reason: "pause_turn" }),
+    );
   });
 
   it("requests summarized adaptive thinking for streaming calls", async () => {
@@ -202,6 +294,14 @@ describe("AnthropicProvider capabilities", () => {
       {
         type: "content_blocks",
         blocks: [{ type: "thinking", thinking: "plan", signature: "sig" }],
+      },
+      {
+        type: "model_stop",
+        reason: "end_turn",
+        assistantMessage: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "plan", signature: "sig" }],
+        },
       },
       { type: "done" },
     ]);

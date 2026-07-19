@@ -11,9 +11,9 @@ export async function handleSendFeedback(
     tool_result_summary?: string;
   },
   sessionId: string,
+  projectId?: string,
 ): Promise<ToolResult> {
   try {
-    const workspace = vscode.workspace.workspaceFolders?.[0]?.name ?? "unknown";
     const ext = vscode.extensions.getExtension("agentlink.agentlink");
     const version =
       (ext?.packageJSON as { version?: string })?.version ?? "unknown";
@@ -23,7 +23,8 @@ export async function handleSendFeedback(
       tool_name: params.tool_name,
       feedback: params.feedback,
       session_id: sessionId,
-      workspace,
+      // Keep the legacy storage key, but scoped records carry only opaque project identity.
+      workspace: projectId,
       extension_version: version,
       tool_params: params.tool_params,
       tool_result_summary: params.tool_result_summary,

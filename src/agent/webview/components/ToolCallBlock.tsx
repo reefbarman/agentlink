@@ -24,6 +24,39 @@ export function fmtDuration(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** Number of viewable images in a completed tool call's result. */
+export function countResultImages(toolCall: ToolCallData): number {
+  return toolCall.complete ? (toolCall.resultImages?.length ?? 0) : 0;
+}
+
+export function formatResultImageLabel(count: number): string {
+  return count === 1 ? "1 image result" : `${count} image results`;
+}
+
+export function countResultDocuments(toolCall: ToolCallData): number {
+  return toolCall.complete ? (toolCall.resultDocuments?.length ?? 0) : 0;
+}
+
+export function formatResultMediaLabel(
+  imageCount: number,
+  documentCount: number,
+): string {
+  if (documentCount === 0) return formatResultImageLabel(imageCount);
+  const parts = [
+    imageCount > 0
+      ? imageCount === 1
+        ? "1 image"
+        : `${imageCount} images`
+      : "",
+    documentCount > 0
+      ? documentCount === 1
+        ? "1 document"
+        : `${documentCount} documents`
+      : "",
+  ].filter(Boolean);
+  return `${parts.join(" and ")} attached`;
+}
+
 /** Parse partial/full JSON safely. */
 function tryParseJson(json: string): Record<string, unknown> | null {
   try {
@@ -39,6 +72,14 @@ type SummaryPart =
   | { type: "file"; display: string; path: string; line?: number }
   | { type: "badge"; text: string; title?: string };
 
+function stripMediaPlaceholderLines(result: string): string {
+  return result
+    .split(/\r?\n/)
+    .filter((line) => !/^\[(?:image|document)\]$/i.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
 /** Generate a smart one-liner summary for known tools. */
 function getToolSummary(
   name: string,
@@ -53,7 +94,12 @@ function getToolSummary(
 
   // Completed tool — summarize based on tool name
   const p = input ?? {};
+  const displayResult = stripMediaPlaceholderLines(result);
   switch (name) {
+    case "web_search":
+      return [{ type: "text", text: String(p.query ?? "").slice(0, 100) }];
+    case "web_fetch":
+      return [{ type: "text", text: String(p.url ?? "").slice(0, 140) }];
     case "read_file": {
       const path = String(p.path ?? "");
       const lines = extractField(result, "total_lines");
@@ -185,7 +231,10 @@ function getToolSummary(
     case "todo_write":
       return [{ type: "text", text: result || "updated" }];
     default: {
-      const t = result.length > 60 ? result.slice(0, 57) + "..." : result || "";
+      const t =
+        displayResult.length > 60
+          ? displayResult.slice(0, 57) + "..."
+          : displayResult || "";
       return [{ type: "text", text: t }];
     }
   }
@@ -618,6 +667,7 @@ export function ToolCallBlock({
       p.type === "file" || p.type === "badge" || (p.type === "text" && p.text),
   );
   const mcpApprovalPromotion = toolCall.mcpApprovalPromotion;
+  const composeTrace = toolCall.composeTrace;
   const availablePromotionScopes =
     mcpApprovalPromotion?.scopes.filter(
       (scope) => !promotedScopes.has(scope),
@@ -630,6 +680,13 @@ export function ToolCallBlock({
     (onContinueToolCallInBackground || onCompleteToolCall || onCancelToolCall);
   const resultImages =
     complete && toolCall.resultImages ? toolCall.resultImages : [];
+  const resultDocuments =
+    complete && toolCall.resultDocuments ? toolCall.resultDocuments : [];
+  const resultMediaCount = resultImages.length + resultDocuments.length;
+  const displayedResult =
+    resultMediaCount > 0
+      ? stripMediaPlaceholderLines(toolCall.result)
+      : toolCall.result;
   const revealsRunningTerminal =
     !complete &&
     toolCall.name === "execute_command" &&
@@ -694,6 +751,20 @@ export function ToolCallBlock({
                 )}
             </span>
           )}
+          {resultMediaCount > 0 && (
+            <span
+              class="tool-image-badge"
+              role="img"
+              aria-label={formatResultMediaLabel(
+                resultImages.length,
+                resultDocuments.length,
+              )}
+              title={`${formatResultMediaLabel(resultImages.length, resultDocuments.length)} — expand to view`}
+            >
+              <i class="codicon codicon-file-media" aria-hidden="true" />
+              {resultMediaCount > 1 && resultMediaCount}
+            </span>
+          )}
           {complete && toolCall.durationMs != null && (
             <span class="tool-call-duration">
               {fmtDuration(toolCall.durationMs)}
@@ -755,23 +826,89 @@ export function ToolCallBlock({
               <JsonHighlight json={formattedInput} />
             </div>
           )}
-          {toolCall.result && (
-            <div class="tool-call-section">
-              <div class="tool-call-section-label">Result</div>
-              {isJson(toolCall.result) ? (
-                <JsonHighlight json={formatJson(toolCall.result)} />
-              ) : (
-                <pre class="tool-call-code">{toolCall.result}</pre>
+          {composeTrace && (
+            <div class="tool-call-section compose-trace">
+              <div class="tool-call-section-label">
+                Child tools ({composeTrace.completedChildren}/
+                {composeTrace.totalChildren})
+              </div>
+              {composeTrace.description && (
+                <div class="compose-trace-description">
+                  {composeTrace.description}
+                </div>
               )}
+              <div class="compose-trace-children">
+                {composeTrace.children.map((child) => (
+                  <div class="compose-trace-child" key={child.id}>
+                    <i
+                      class={`codicon ${
+                        child.status === "running"
+                          ? "codicon-loading codicon-modifier-spin"
+                          : child.status === "completed"
+                            ? "codicon-pass-filled"
+                            : child.status === "cancelled"
+                              ? "codicon-circle-slash"
+                              : "codicon-error"
+                      }`}
+                    />
+                    <span class="compose-trace-child-name">{child.name}</span>
+                    {child.inputSummary && (
+                      <span class="compose-trace-child-input">
+                        {child.inputSummary}
+                      </span>
+                    )}
+                    {child.durationMs != null && (
+                      <span class="compose-trace-child-duration">
+                        {fmtDuration(child.durationMs)}
+                      </span>
+                    )}
+                    {child.errorSummary && (
+                      <span class="compose-trace-child-error">
+                        {child.errorSummary}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
-          {resultImages.length > 0 && (
+          {(displayedResult || resultMediaCount > 0) && (
             <div class="tool-call-section">
-              <div class="tool-call-section-label">Generated images</div>
-              <div class="tool-result-image-count">
-                {resultImages.length} image
-                {resultImages.length === 1 ? "" : "s"} shown above.
-              </div>
+              <div class="tool-call-section-label">Result</div>
+              {displayedResult &&
+                (isJson(displayedResult) ? (
+                  <JsonHighlight json={formatJson(displayedResult)} />
+                ) : (
+                  <pre class="tool-call-code">{displayedResult}</pre>
+                ))}
+              {resultImages.length > 0 && (
+                <div class="tool-result-image-previews">
+                  {resultImages.map((image, index) => (
+                    <img
+                      key={`${image.mimeType}-${index}`}
+                      class="tool-result-image-preview"
+                      src={`data:${image.mimeType};base64,${image.data}`}
+                      alt={`${toolCall.name} result image ${index + 1}`}
+                      loading="lazy"
+                    />
+                  ))}
+                </div>
+              )}
+              {resultDocuments.length > 0 && (
+                <div class="tool-result-documents">
+                  {resultDocuments.map((document, index) => (
+                    <div
+                      class="tool-result-document"
+                      key={`${document.name}-${document.mimeType}-${index}`}
+                      title={document.mimeType}
+                    >
+                      <i class="codicon codicon-file-pdf" aria-hidden="true" />
+                      <span>{document.name}</span>
+                      <code>{document.mimeType}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           {complete &&

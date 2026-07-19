@@ -22,12 +22,36 @@ describe("BrowserGatewayAskAgentPreferencesStore", () => {
     await store.update({
       model: " claude-sonnet-4-5 ",
       reasoningEffort: "high",
+      webPolicy: {
+        settings: {
+          searchBackend: "native",
+          fetchBackend: "native",
+          allowedDomains: [],
+          blockedDomains: [],
+          maxSearchUsesPerTurn: 5,
+          maxFetchUsesPerTurn: 3,
+          maxFetchContentTokens: 25_000,
+          maxReplayBytesPerTurn: 5_242_880,
+        },
+        sourceInstanceId: "window-1",
+        sourceRevision: "revision-1",
+        updatedAt: 123,
+      },
     });
 
     const reloaded = new BrowserGatewayAskAgentPreferencesStore({ filePath });
     expect(await reloaded.read()).toEqual({
       model: "claude-sonnet-4-5",
       reasoningEffort: "high",
+      webPolicy: {
+        settings: expect.objectContaining({
+          searchBackend: "native",
+          fetchBackend: "native",
+        }),
+        sourceInstanceId: "window-1",
+        sourceRevision: "revision-1",
+        updatedAt: 123,
+      },
     });
 
     await fs.writeFile(

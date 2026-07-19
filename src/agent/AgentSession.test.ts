@@ -1,9 +1,10 @@
+import type { AgentConfig, AgentMessage } from "./types.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildPromptArtifacts, buildSystemPrompt } from "./systemPrompt.js";
 
-import type { AgentConfig } from "./types.js";
 import { AgentSession } from "./AgentSession.js";
 import type { ContentBlock } from "./providers/types.js";
+import type { SessionProjectScope } from "../core/workspaceProjects.js";
 
 function makePromptArtifacts(systemPrompt: string) {
   return {
@@ -35,6 +36,15 @@ vi.mock("./systemPrompt.js", () => {
 const mockedBuildSystemPrompt = vi.mocked(buildSystemPrompt);
 const mockedBuildPromptArtifacts = vi.mocked(buildPromptArtifacts);
 
+const testProjectScope: SessionProjectScope = {
+  schemaVersion: 1,
+  kind: "project",
+  projectId: "project-test",
+  workspaceFolderUri: "file:///test",
+  displayName: "test",
+  rootPath: "/test",
+};
+
 const testConfig: AgentConfig = {
   model: "claude-sonnet-4-6",
   maxTokens: 8192,
@@ -45,9 +55,9 @@ const testConfig: AgentConfig = {
 };
 
 async function makeSession(
-  opts: Partial<Parameters<typeof AgentSession.create>[0]> = {},
+  opts: Partial<Parameters<typeof AgentSession.createForLegacyCwd>[0]> = {},
 ): Promise<AgentSession> {
-  return AgentSession.create({
+  return AgentSession.createForLegacyCwd({
     mode: "code",
     config: testConfig,
     cwd: "/test",
@@ -57,6 +67,8 @@ async function makeSession(
 
 describe("AgentSession", () => {
   beforeEach(() => {
+    mockedBuildSystemPrompt.mockClear();
+    mockedBuildPromptArtifacts.mockClear();
     mockedBuildSystemPrompt.mockResolvedValue("mock system prompt");
     mockedBuildPromptArtifacts.mockResolvedValue(
       makePromptArtifacts("mock system prompt"),
@@ -77,6 +89,53 @@ describe("AgentSession", () => {
       expect(a.id).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
       );
+    });
+
+    it("owns an immutable project scope and derives its root from that scope", async () => {
+      const session = await AgentSession.create({
+        mode: "code",
+        config: testConfig,
+        projectScope: testProjectScope,
+      });
+
+      expect(session.projectScope).toEqual(testProjectScope);
+      expect(session.requireProjectRoot()).toBe("/test");
+      expect(Object.isFrozen(session.projectScope)).toBe(true);
+      expect(() => {
+        (session.projectScope as { displayName: string }).displayName =
+          "changed";
+      }).toThrow();
+    });
+
+    it("restores unavailable transcripts without assembling a prompt or inventing a root", () => {
+      const unavailableScope: SessionProjectScope = {
+        ...testProjectScope,
+        rootPath: undefined,
+      };
+      const session = AgentSession.createTranscriptOnly({
+        mode: "code",
+        config: testConfig,
+        projectScope: unavailableScope,
+        projectAvailability: "missing",
+      });
+
+      expect(session.systemPrompt).toBe("");
+      expect(session.contextBreakdown.prompt.sections).toEqual([]);
+      expect(mockedBuildPromptArtifacts).not.toHaveBeenCalled();
+      expect(() => session.requireProjectRoot()).toThrow(
+        "Project 'test' is unavailable for local execution.",
+      );
+    });
+
+    it("refuses executable construction for a scope without an available root", async () => {
+      await expect(
+        AgentSession.create({
+          mode: "code",
+          config: testConfig,
+          projectScope: { ...testProjectScope, rootPath: undefined },
+        }),
+      ).rejects.toThrow("Project 'test' is unavailable for local execution.");
+      expect(mockedBuildPromptArtifacts).not.toHaveBeenCalled();
     });
 
     it("stores the mode and model", async () => {
@@ -160,7 +219,7 @@ describe("AgentSession", () => {
         ...testConfig,
         autoCondenseThreshold: undefined as unknown as number,
       };
-      const session = await AgentSession.create({
+      const session = await AgentSession.createForLegacyCwd({
         mode: "code",
         config: configWithoutThreshold,
         cwd: "/test",
@@ -240,6 +299,34 @@ describe("AgentSession", () => {
       const messages = session.getMessages();
       expect(messages).toHaveLength(1);
       expect(messages[0]).toEqual({ role: "assistant", content: blocks });
+    });
+
+    it("appendAssistantMessage preserves provider-private replay", async () => {
+      const session = await makeSession();
+      const message: AgentMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "response" }],
+        providerReplay: {
+          providerId: "anthropic",
+          codecVersion: 1,
+          payload: {
+            content: [
+              {
+                type: "server_tool_use",
+                id: "srvtoolu_1",
+                name: "web_search",
+                input: { query: "AgentLink" },
+              },
+            ],
+          },
+          serializedBytes: 1,
+        },
+      };
+
+      session.appendAssistantMessage(message);
+
+      expect(session.getMessages()).toEqual([message]);
+      expect(session.getMessages()[0]).toBe(message);
     });
 
     it("appendToolResults appends tool results as a user message", async () => {
@@ -532,6 +619,31 @@ describe("AgentSession", () => {
       });
     });
 
+    it("setMode preserves pinned active-file context and its diagnostic", async () => {
+      const activeFilePath = "/test/src/index.ts";
+      const session = await makeSession({ activeFilePath });
+      mockedBuildPromptArtifacts.mockClear();
+      mockedBuildPromptArtifacts.mockResolvedValueOnce({
+        ...makePromptArtifacts("mock ask prompt"),
+        activeFileContext: {
+          status: "accepted",
+          activeFilePath,
+        },
+      });
+
+      await session.setMode("ask");
+
+      expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
+        "ask",
+        "/test",
+        expect.objectContaining({ activeFilePath }),
+      );
+      expect(session.activeFileContext).toEqual({
+        status: "accepted",
+        activeFilePath,
+      });
+    });
+
     it("setMode passes stored providerId to buildPromptArtifacts", async () => {
       const session = await makeSession({ providerId: "codex" });
       mockedBuildPromptArtifacts.mockClear();
@@ -684,6 +796,32 @@ describe("AgentSession", () => {
       expect(session.consumePendingInterjection()?.queueId).toBe("q1");
       expect(session.consumePendingInterjection()?.queueId).toBe("q3");
       expect(session.consumePendingInterjection()).toBeNull();
+    });
+
+    it("hasPendingInterjections reflects the queue state", async () => {
+      const session = await makeSession();
+      expect(session.hasPendingInterjections).toBe(false);
+      session.setPendingInterjection("first", "q1");
+      expect(session.hasPendingInterjections).toBe(true);
+      session.consumePendingInterjection();
+      expect(session.hasPendingInterjections).toBe(false);
+    });
+  });
+
+  describe("queued UI messages", () => {
+    it("tracks per-surface counts and clears on zero", async () => {
+      const session = await makeSession();
+      expect(session.hasQueuedUiMessages).toBe(false);
+
+      session.setQueuedUiMessageCount("vscode", 2);
+      expect(session.hasQueuedUiMessages).toBe(true);
+
+      session.setQueuedUiMessageCount("browser", 1);
+      session.setQueuedUiMessageCount("vscode", 0);
+      expect(session.hasQueuedUiMessages).toBe(true);
+
+      session.setQueuedUiMessageCount("browser", 0);
+      expect(session.hasQueuedUiMessages).toBe(false);
     });
   });
 });

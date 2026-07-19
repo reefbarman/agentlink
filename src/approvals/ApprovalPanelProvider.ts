@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import type {
+  ApprovalProjectContext,
   ApprovalRequest,
   CommandReviewSummary,
   DecisionMessage,
@@ -18,12 +19,13 @@ import path from "path";
 import picomatch from "picomatch";
 import { randomUUID } from "crypto";
 import { renderWebviewShell } from "../adapters/vscode/webviewShell.js";
-import { tryGetFirstWorkspaceRoot } from "../util/paths.js";
 
 // ── Response types ──────────────────────────────────────────────────────────
 
 export interface CommandApprovalResponse {
   decision: "run-once" | "edit" | "session" | "project" | "global" | "reject";
+  /** True when the provider resolved this request from its attributed recent cache. */
+  recentApproval?: boolean;
   editedCommand?: string;
   rejectionReason?: string;
   rulePattern?: string;
@@ -99,6 +101,11 @@ export interface MemoryApprovalResponse {
 interface InternalRequest {
   kind: "command" | "path" | "write" | "rename" | "memory";
   id: string;
+  sessionId?: string;
+  sourceProject?: ApprovalProjectContext;
+  targetProject?: ApprovalProjectContext;
+  targetPath?: string;
+  projectResourceUri?: string;
   command?: string;
   fullCommand?: string;
   filePath?: string;
@@ -153,6 +160,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     path: string;
     mode: "glob" | "prefix" | "exact";
     timestamp: number;
+    projectId?: string;
+    projectResourceUri?: string;
   }> = [];
 
   // Alert
@@ -173,6 +182,15 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly statusBarManager: StatusBarManager,
+    private readonly resolveProjectContext?: (input: {
+      sessionId?: string;
+      targetPath?: string;
+    }) => {
+      sourceProject?: ApprovalProjectContext;
+      targetProject?: ApprovalProjectContext;
+      targetPath?: string;
+      projectResourceUri?: string;
+    },
   ) {}
 
   // ── Public API ──────────────────────────────────────────────────────────
@@ -188,6 +206,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       commandReview?: CommandReviewSummary;
       humanOnlyReason?: string;
       security?: TerminalExecutionSecuritySummary;
+      sessionId?: string;
     },
   ): { promise: Promise<CommandApprovalResponse>; id: string } {
     const id = randomUUID();
@@ -203,11 +222,15 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       commandReview: options?.commandReview,
       humanOnlyReason: options?.humanOnlyReason,
       security: options?.security,
+      sessionId: options?.sessionId,
     }) as Promise<CommandApprovalResponse>;
     return { promise, id };
   }
 
-  enqueuePathApproval(filePath: string): {
+  enqueuePathApproval(
+    filePath: string,
+    sessionId?: string,
+  ): {
     promise: Promise<PathApprovalResponse>;
     id: string;
   } {
@@ -216,6 +239,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       kind: "path",
       id,
       filePath,
+      sessionId,
+      targetPath: filePath,
     }) as Promise<PathApprovalResponse>;
     return { promise, id };
   }
@@ -226,6 +251,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       operation: "create" | "modify";
       outsideWorkspace: boolean;
       id?: string;
+      sessionId?: string;
+      targetPath?: string;
     },
   ): { promise: Promise<WriteApprovalResponse>; id: string } {
     const id = options.id ?? randomUUID();
@@ -235,6 +262,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       filePath: relPath,
       writeOperation: options.operation,
       outsideWorkspace: options.outsideWorkspace,
+      sessionId: options.sessionId,
+      targetPath: options.targetPath ?? relPath,
     }) as Promise<WriteApprovalResponse>;
     return { promise, id };
   }
@@ -244,6 +273,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     newName: string,
     affectedFiles: Array<{ path: string; changes: number }>,
     totalChanges: number,
+    options?: { sessionId?: string; targetPath?: string },
   ): { promise: Promise<RenameApprovalResponse>; id: string } {
     const id = randomUUID();
     const promise = this.enqueue({
@@ -253,6 +283,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       newName,
       affectedFiles,
       totalChanges,
+      sessionId: options?.sessionId,
+      targetPath: options?.targetPath ?? affectedFiles[0]?.path,
     }) as Promise<RenameApprovalResponse>;
     return { promise, id };
   }
@@ -267,6 +299,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     targetPath: string;
     content?: string;
     id?: string;
+    sessionId?: string;
   }): { promise: Promise<MemoryApprovalResponse>; id: string } {
     const id = options.id ?? randomUUID();
     const promise = this.enqueue({
@@ -280,6 +313,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       memoryRationale: options.rationale,
       memoryTargetPath: options.targetPath,
       memoryContent: options.content,
+      sessionId: options.sessionId,
+      targetPath: options.targetPath,
     }) as Promise<MemoryApprovalResponse>;
     return { promise, id };
   }
@@ -320,16 +355,29 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   // ── Queue management ────────────────────────────────────────────────────
 
   private enqueue(request: InternalRequest): Promise<unknown> {
+    const projectContext = this.resolveProjectContext?.({
+      sessionId: request.sessionId,
+      targetPath: request.targetPath,
+    });
+    const attributedRequest: InternalRequest = {
+      ...request,
+      ...projectContext,
+    };
     // Auto-resolve command repeats immediately if a matching approval was
     // granted recently. Path approvals are intentionally checked only while
     // draining the existing queue so "Allow Once" applies to the current
     // parallel batch, not future requests within the TTL window.
-    if (request.kind !== "path" && this.isRecentlyApprovedRequest(request)) {
-      return Promise.resolve(this.makeAutoApproveResponse(request.kind));
+    if (
+      attributedRequest.kind !== "path" &&
+      this.isRecentlyApprovedRequest(attributedRequest)
+    ) {
+      return Promise.resolve(
+        this.makeAutoApproveResponse(attributedRequest.kind),
+      );
     }
 
     return new Promise((resolve) => {
-      this.queue.push({ request, resolve });
+      this.queue.push({ request: attributedRequest, resolve });
       this.updatePendingCount();
       this.processQueue();
     });
@@ -379,6 +427,9 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       const msg: ApprovalRequest = {
         kind: request.kind,
         id: request.id,
+        sourceProject: request.sourceProject,
+        targetProject: request.targetProject,
+        targetPath: request.targetPath,
         command: request.command,
         subCommands: request.subCommands,
         inlineFiles: request.inlineFiles,
@@ -439,6 +490,9 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     const msg: ApprovalRequest = {
       kind: request.kind,
       id: request.id,
+      sourceProject: request.sourceProject,
+      targetProject: request.targetProject,
+      targetPath: request.targetPath,
       command: request.command,
       subCommands: request.subCommands,
       inlineFiles: request.inlineFiles,
@@ -446,6 +500,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       cwd: request.cwd,
       commandReview: request.commandReview,
       humanOnlyReason: request.humanOnlyReason,
+      security: request.security,
       filePath: request.filePath,
       writeOperation: request.writeOperation,
       outsideWorkspace: request.outsideWorkspace,
@@ -701,66 +756,56 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   isRecentlyApproved(
     kind: InternalRequest["kind"],
     identifier: string,
+    projectId = "unscoped",
   ): boolean {
-    const ttl = this.getRecentApprovalTtl();
-    if (ttl <= 0) return false;
-
     if (kind !== "command") return false;
-    const key = this.buildKey(kind, identifier);
-    if (!key) return false;
-    return this.hasRecentApproval(key);
+    return this.hasRecentApproval(`${projectId}:cmd:${identifier}`);
   }
 
-  private getRecentApprovalTtl(): number {
+  private getRecentApprovalTtl(request?: InternalRequest): number {
+    const resource = request?.projectResourceUri
+      ? vscode.Uri.parse(request.projectResourceUri)
+      : undefined;
     return (
       vscode.workspace
-        .getConfiguration("agentlink")
+        .getConfiguration("agentlink", resource)
         .get<number>("recentApprovalTtl", 60) * 1000
     );
   }
 
-  private buildKey(
-    kind: InternalRequest["kind"],
-    identifier: string,
-  ): string | undefined {
-    switch (kind) {
-      case "command":
-        return `cmd:${identifier}`;
-      case "write":
-        return `write:${identifier}`;
-      case "path":
-        return `path:${identifier}`;
-      case "rename":
-        return `rename:${identifier}`;
-      case "memory":
-        return undefined;
-      default:
-        return undefined;
-    }
-  }
-
   private isProtectedWriteRequest(request: InternalRequest): boolean {
-    if (request.kind !== "write" || !request.filePath) return false;
-    const filePath = path.isAbsolute(request.filePath)
-      ? request.filePath
-      : path.resolve(
-          tryGetFirstWorkspaceRoot() ?? process.cwd(),
-          request.filePath,
-        );
-    return isMemoryProtectedPath(filePath);
+    if (request.kind !== "write") return false;
+    const targetPath = request.targetPath ?? request.filePath;
+    if (!targetPath) return false;
+    const filePath = path.isAbsolute(targetPath)
+      ? targetPath
+      : request.projectResourceUri
+        ? path.resolve(
+            vscode.Uri.parse(request.projectResourceUri).fsPath,
+            targetPath,
+          )
+        : undefined;
+    return filePath ? isMemoryProtectedPath(filePath) : true;
   }
 
   private approvalKeyForRequest(request: InternalRequest): string | undefined {
+    const projectPrefix = request.sourceProject?.projectId ?? "unscoped";
     switch (request.kind) {
       case "command":
-        return request.fullCommand ? `cmd:${request.fullCommand}` : undefined;
+        return request.fullCommand
+          ? `${projectPrefix}:cmd:${request.fullCommand}`
+          : undefined;
       case "write":
-        return request.filePath ? `write:${request.filePath}` : undefined;
+        return request.filePath
+          ? `${projectPrefix}:write:${request.filePath}`
+          : undefined;
       case "path":
-        return request.filePath ? `path:${request.filePath}` : undefined;
+        return request.filePath
+          ? `${projectPrefix}:path:${request.filePath}`
+          : undefined;
       case "rename":
         return request.oldName && request.newName
-          ? `rename:${request.oldName}\u2192${request.newName}`
+          ? `${projectPrefix}:rename:${request.oldName}\u2192${request.newName}`
           : undefined;
       case "memory":
         return undefined;
@@ -769,8 +814,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     }
   }
 
-  private hasRecentApproval(key: string): boolean {
-    const ttl = this.getRecentApprovalTtl();
+  private hasRecentApproval(key: string, request?: InternalRequest): boolean {
+    const ttl = this.getRecentApprovalTtl(request);
     if (ttl <= 0) return false;
     const ts = this.recentApprovals.get(key);
     if (ts === undefined) return false;
@@ -781,10 +826,13 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     return true;
   }
 
-  private hasRecentPathApproval(filePath: string): boolean {
-    this.pruneRecentPathApprovals();
-    return this.recentPathApprovals.some((approval) =>
-      this.matchesPathApproval(filePath, approval),
+  private hasRecentPathApproval(request: InternalRequest): boolean {
+    if (!request.filePath) return false;
+    this.pruneRecentPathApprovals(request);
+    return this.recentPathApprovals.some(
+      (approval) =>
+        approval.projectId === request.sourceProject?.projectId &&
+        this.matchesPathApproval(request.filePath!, approval),
     );
   }
 
@@ -810,7 +858,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     this.recentApprovals.set(key, Date.now());
     // Prune expired entries when the map grows large
     if (this.recentApprovals.size > 100) {
-      const ttl = this.getRecentApprovalTtl();
+      const ttl = this.getRecentApprovalTtl(request);
       const now = Date.now();
       for (const [k, ts] of this.recentApprovals) {
         if (now - ts > ttl) this.recentApprovals.delete(k);
@@ -832,16 +880,26 @@ export class ApprovalPanelProvider implements vscode.Disposable {
             mode: "prefix" as const,
           };
 
-    this.recentPathApprovals.push({ ...rule, timestamp: Date.now() });
-    this.pruneRecentPathApprovals();
+    this.recentPathApprovals.push({
+      ...rule,
+      timestamp: Date.now(),
+      projectId: request.sourceProject?.projectId,
+      projectResourceUri: request.projectResourceUri,
+    });
+    this.pruneRecentPathApprovals(request);
   }
 
-  private pruneRecentPathApprovals(): void {
-    const ttl = this.getRecentApprovalTtl();
+  private pruneRecentPathApprovals(request?: InternalRequest): void {
     const now = Date.now();
-    this.recentPathApprovals = this.recentPathApprovals.filter(
-      (approval) => now - approval.timestamp <= ttl,
-    );
+    this.recentPathApprovals = this.recentPathApprovals.filter((approval) => {
+      const ttl = this.getRecentApprovalTtl({
+        kind: "path",
+        id: "recent-path",
+        projectResourceUri:
+          approval.projectResourceUri ?? request?.projectResourceUri,
+      });
+      return now - approval.timestamp <= ttl;
+    });
 
     if (this.recentPathApprovals.length > 100) {
       this.recentPathApprovals.splice(0, this.recentPathApprovals.length - 100);
@@ -928,20 +986,16 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   ): boolean {
     if (this.isProtectedWriteRequest(request)) return false;
     if (request.kind === "command" && request.inlineFiles?.length) return false;
-    const identifier =
-      request.kind === "command"
-        ? request.fullCommand
-        : request.kind === "path"
-          ? request.filePath
-          : undefined;
-    if (!identifier) return false;
     if (request.kind === "path") {
       return options?.allowPathApprovals
-        ? this.hasRecentPathApproval(identifier)
+        ? this.hasRecentPathApproval(request)
         : false;
     }
-
-    return this.isRecentlyApproved(request.kind, identifier);
+    if (request.kind === "command") {
+      const key = this.approvalKeyForRequest(request);
+      return key ? this.hasRecentApproval(key, request) : false;
+    }
+    return false;
   }
 
   private makeAutoApproveResponse(
@@ -954,7 +1008,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     | MemoryApprovalResponse {
     switch (kind) {
       case "command":
-        return { decision: "run-once" };
+        return { decision: "run-once", recentApproval: true };
       case "write":
         return { decision: "accept" };
       case "path":

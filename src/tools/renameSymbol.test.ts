@@ -48,4 +48,30 @@ describe("handleRenameSymbol", () => {
       onApprovalRequest,
     });
   });
+
+  it("preserves the full rename request when the provider throws", async () => {
+    const result = await handleRenameSymbol(
+      { path: "src/file.ts", line: 8, column: 13, new_name: "nextName" },
+      {} as never,
+      "session-1",
+      undefined,
+      {
+        renameSymbolProvider: {
+          rename: vi.fn(async () => {
+            throw new Error("The element can't be renamed.");
+          }),
+        },
+      },
+    );
+
+    expect(textPayload(result)).toEqual({
+      error: "Rename symbol failed",
+      reason: "The element can't be renamed.",
+      path: "src/file.ts",
+      line: 8,
+      column: 13,
+      new_name: "nextName",
+    });
+    expect(result.isError).toBe(true);
+  });
 });

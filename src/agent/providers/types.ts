@@ -69,6 +69,12 @@ export interface ModelProvider {
   getCapabilities(model: string): ModelCapabilities;
 
   /**
+   * Resolve capabilities for the authenticated transport that will own the next
+   * request. Providers whose capabilities do not vary by auth may omit this.
+   */
+  getRequestCapabilities?(model: string): Promise<ModelCapabilities>;
+
+  /**
    * Models this provider owns. Used as source of truth for model→provider routing.
    * Returns a hardcoded superset — runtime failures (model not available for account)
    * are handled gracefully at request time, not filtered here.

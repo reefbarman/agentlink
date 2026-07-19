@@ -3,9 +3,10 @@ import type {
   RequestContextBreakdown,
   ToolResult,
 } from "../shared/types.js";
+import type { MessageParam, ReasoningEffort } from "./providers/types.js";
 
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
-import type { MessageParam, ReasoningEffort } from "./providers/types.js";
+import type { SessionProjectScope } from "../core/workspaceProjects.js";
 import type { TodoItem } from "./todoTool.js";
 
 // --- Agent Message (conversation history with condense metadata) ---
@@ -78,7 +79,13 @@ export type AgentEvent =
   | { type: "thinking_delta"; thinkingId: string; text: string }
   | { type: "thinking_end"; thinkingId: string }
   | { type: "text_delta"; text: string }
-  | { type: "tool_start"; toolCallId: string; toolName: string }
+  | {
+      type: "tool_start";
+      toolCallId: string;
+      toolName: string;
+      parentCallId?: string;
+      input?: unknown;
+    }
   | {
       type: "tool_input_delta";
       toolCallId: string;
@@ -91,7 +98,9 @@ export type AgentEvent =
       result: ToolResult["content"];
       durationMs: number;
       input?: unknown;
+      parentCallId?: string;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
+      composeTrace?: import("../shared/composeTypes.js").ComposeTrace;
     }
   | { type: "todo_update"; todos: TodoItem[] }
   | { type: "final_marker"; marker: FinalMessageMarker | null }
@@ -140,6 +149,14 @@ export type AgentEvent =
       actions?: AgentErrorActions;
     }
   | {
+      type: "api_request_start";
+      requestId: string;
+      provider: string;
+      model: string;
+      startedAt: number;
+      schedulerQueued: boolean;
+    }
+  | {
       type: "api_request";
       requestId: string;
       model: string;
@@ -151,6 +168,7 @@ export type AgentEvent =
       cacheCreationTokens: number;
       durationMs: number;
       timeToFirstToken: number;
+      providerQueueWaitMs?: number;
       usedPreviousResponseId?: boolean;
       previousResponseIdFallback?: boolean;
       promptCacheKey?: string;
@@ -221,6 +239,8 @@ export interface SessionInfo {
   background: boolean;
   createdAt: number;
   lastActiveAt: number;
+  projectScope: SessionProjectScope;
+  projectAvailability: import("./AgentSession.js").SessionProjectAvailabilityStatus;
 }
 
 // --- Configuration ---

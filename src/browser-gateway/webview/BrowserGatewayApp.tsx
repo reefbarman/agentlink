@@ -4,14 +4,25 @@ import type {
   ModeInfo,
   Question,
   ReasoningEffort,
+  ProjectInfo,
   SessionSummary,
   SlashCommandInfo,
   TodoItem,
   WebviewModelInfo,
 } from "../../agent/webview/types";
 
+import {
+  createMcpElicitationInitialValues,
+  validateAndCoerceMcpElicitationValues,
+  type McpElicitationFieldErrors,
+  type McpElicitationValues,
+  type McpFormElicitationRequest,
+  type McpFormElicitationResponse,
+} from "../../shared/mcpElicitation";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
 import type {
+  McpConfigBatchMutation,
+  McpConfigMutationResult,
   McpConfigSnapshot,
   McpManagerScope,
   McpManagerServerDraft,
@@ -37,9 +48,16 @@ import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow"
 import { DebugInfo } from "../../agent/webview/components/DebugInfo";
 import { BackgroundSessionStrip } from "../../agent/webview/components/BackgroundSessionStrip";
 import { BrowserDiffViewer } from "./components/BrowserDiffViewer";
-import { InputArea } from "../../agent/webview/components/InputArea";
+import {
+  InputArea,
+  type ComposerContextMode,
+  type ComposerMedia,
+} from "../../agent/webview/components/InputArea";
 import { MessageQueuePanel } from "../../agent/webview/components/MessageQueuePanel";
-import { QuestionCard } from "../../agent/webview/components/QuestionCard";
+import {
+  QuestionCard,
+  type QuestionOtherContext,
+} from "../../agent/webview/components/QuestionCard";
 import { SessionHistory } from "../../agent/webview/components/SessionHistory";
 import { StreamingStatusBar } from "../../agent/webview/components/StreamingStatusBar";
 import { TodoPanel } from "../../agent/webview/components/TodoPanel";
@@ -73,6 +91,8 @@ import {
 import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
+import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
+import { McpElicitationFormControls } from "../../shared/ui/McpElicitationFormControls";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
 
 import type {
@@ -297,6 +317,7 @@ type GatewaySnapshot = {
       notes: Record<string, string>;
       origin: string;
     } | null;
+    formElicitation: McpFormElicitationRequest | null;
     urlElicitation: McpUrlElicitationRequest | null;
     recentEvents: Array<{ type: string }>;
     memoryCandidateNudge?: AskAgentMemoryCandidateNudge | null;
@@ -313,7 +334,10 @@ type GatewaySnapshot = {
     }>;
   };
   session: {
+    projects: ProjectInfo[];
+    defaultProjectId: string | null;
     repository: {
+      projectId: string;
       branch?: string;
       dirty?: boolean;
     } | null;
@@ -327,9 +351,11 @@ type GatewaySnapshot = {
       totalOutputTokens: number;
       createdAt: number;
       lastActiveAt: number;
+      project?: ProjectInfo;
     }>;
     foreground: {
       sessionId: string;
+      project: ProjectInfo;
       title: string;
       mode: string;
       model: string;
@@ -454,6 +480,103 @@ function buildAskAgentStatusNotice(params: {
   }
 
   return null;
+}
+
+function FormElicitationPanel({
+  request,
+  onRespond,
+}: {
+  request: McpFormElicitationRequest;
+  onRespond: (response: McpFormElicitationResponse) => Promise<{
+    ok: boolean;
+    errors?: McpElicitationFieldErrors;
+    error?: string;
+  }>;
+}) {
+  const [values, setValues] = useState<McpElicitationValues>(() =>
+    createMcpElicitationInitialValues(request.fields),
+  );
+  const [errors, setErrors] = useState<McpElicitationFieldErrors>({});
+  const [submitError, setSubmitError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const respond = async (response: McpFormElicitationResponse) => {
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      const result = await onRespond(response);
+      if (!result.ok) {
+        setErrors(result.errors ?? {});
+        setSubmitError(result.error ?? "The response could not be submitted.");
+      }
+    } catch {
+      setSubmitError("The response could not be submitted.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const accept = () => {
+    const validation = validateAndCoerceMcpElicitationValues(
+      request.fields,
+      values,
+    );
+    if (!validation.ok) {
+      setErrors(validation.errors);
+      setSubmitError("Check the highlighted fields and try again.");
+      return;
+    }
+    setErrors({});
+    void respond({
+      id: request.id,
+      action: "accept",
+      values: validation.values,
+    });
+  };
+
+  return (
+    <div class="approval-panel-embed mcp-elicitation-panel">
+      <div class="url-elicitation-header">
+        <i class="codicon codicon-list-selection" />
+        <span>MCP input requested by {request.serverName}</span>
+      </div>
+      <p>{request.message}</p>
+      <McpElicitationFormControls
+        fields={request.fields}
+        values={values}
+        errors={errors}
+        disabled={submitting}
+        idPrefix={`browser-mcp-elicitation-${request.id}`}
+        onChange={(name, value) => {
+          setValues((current) => ({ ...current, [name]: value }));
+          setErrors((current) => {
+            if (!current[name]) return current;
+            const next = { ...current };
+            delete next[name];
+            return next;
+          });
+          setSubmitError("");
+        }}
+      />
+      {submitError && (
+        <p class="mcp-elicitation-error" role="alert">
+          {submitError}
+        </p>
+      )}
+      <div class="url-elicitation-actions">
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={() => void respond({ id: request.id, action: "cancel" })}
+        >
+          Cancel
+        </button>
+        <button type="button" disabled={submitting} onClick={accept}>
+          {submitting ? "Submitting…" : "Submit"}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function UrlElicitationPanel({
@@ -645,17 +768,22 @@ function formatTranscriptTimestamp(timestamp: number): string {
 }
 
 function messageTextForExport(message: ChatMessage): string {
-  if (message.content.trim()) return message.content.trim();
-  return message.blocks
+  const content = message.content.trim();
+  const blockText = message.blocks
     .map((block) => {
       if (block.type === "text" || block.type === "thinking") {
-        return block.text;
+        return content ? "" : block.text;
       }
       if (block.type === "tool_call") {
-        return [`[Tool: ${block.name}]`, block.result]
+        return [
+          `[Tool: ${block.name}]`,
+          block.inputJson ? `Input:\n${block.inputJson}` : "",
+          block.result ? `Result:\n${block.result}` : "",
+        ]
           .filter(Boolean)
           .join("\n");
       }
+      if (content) return "";
       if (block.type === "skill_load") {
         return [
           `[Skill: ${block.skillName ?? block.path ?? "unknown"}]`,
@@ -677,6 +805,7 @@ function messageTextForExport(message: ChatMessage): string {
     .filter(Boolean)
     .join("\n\n")
     .trim();
+  return [content, blockText].filter(Boolean).join("\n\n");
 }
 
 function buildAskAgentTranscriptMarkdown(params: {
@@ -819,6 +948,8 @@ export function BrowserGatewayApp({
     }
     setLocalDismissedApprovalId(null);
     setLocalDismissedQuestionId(null);
+    setQuestionContextMode(null);
+    setQuestionAttachments({});
     setSelectedDiffId(null);
     setTranscriptView(null);
     forwardedFollowUpRef.current = "";
@@ -889,6 +1020,11 @@ export function BrowserGatewayApp({
     [],
   );
   const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
+  const [questionContextMode, setQuestionContextMode] =
+    useState<QuestionOtherContext | null>(null);
+  const [questionAttachments, setQuestionAttachments] = useState<
+    Record<string, { paths: string[]; media: ComposerMedia[] }>
+  >({});
   const [sendStatus, setSendStatus] = useState<string>("");
   const [modeStatus, setModeStatus] = useState<string>("");
   const [status, setStatus] = useState("Connecting…");
@@ -1120,6 +1256,67 @@ export function BrowserGatewayApp({
     () => dedupeBackgroundSessions(snapshotBackground ?? []),
     [snapshotBackground],
   );
+  const openTranscriptBackground = useMemo(
+    () =>
+      transcriptView
+        ? background.find((session) => session.id === transcriptView.sessionId)
+        : undefined,
+    [background, transcriptView],
+  );
+  useEffect(() => {
+    if (!transcriptView || !openTranscriptBackground) return;
+    let cancelled = false;
+    const sessionId = transcriptView.sessionId;
+    void (async () => {
+      try {
+        const response = await fetch(
+          buildApiPath("/api/background/open-transcript"),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({ sessionId }),
+          },
+        );
+        const body = (await response.json()) as {
+          ok?: boolean;
+          transcript?: {
+            sessionId: string;
+            task: string;
+            messages: unknown[];
+          };
+        };
+        if (cancelled || !body.ok || !body.transcript) return;
+        const converted = agentMessagesToChatMessages(body.transcript.messages);
+        setTranscriptView((current) =>
+          current?.sessionId === sessionId
+            ? {
+                ...current,
+                task: body.transcript!.task,
+                messages: converted,
+              }
+            : current,
+        );
+      } catch {
+        // Keep the last transcript snapshot; a later background update can retry.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    authToken,
+    buildApiPath,
+    openTranscriptBackground?.completedAt,
+    openTranscriptBackground?.errorMessage,
+    openTranscriptBackground?.lastActiveAt,
+    openTranscriptBackground?.lastProgressAt,
+    openTranscriptBackground?.status,
+    openTranscriptBackground?.streamingText,
+    transcriptView?.sessionId,
+  ]);
   useEffect(() => {
     const currentIds = new Set(
       background.flatMap(
@@ -1147,6 +1344,7 @@ export function BrowserGatewayApp({
   const pendingApproval = snapshot?.ui.approval ?? null;
   const pendingQuestion =
     foreground?.questionRequest ?? snapshot?.ui.question ?? null;
+  const pendingFormElicitation = snapshot?.ui.formElicitation ?? null;
   const pendingUrlElicitation = snapshot?.ui.urlElicitation ?? null;
   const visibleApproval =
     pendingApproval && pendingApproval.id !== localDismissedApprovalId
@@ -1160,6 +1358,12 @@ export function BrowserGatewayApp({
     pendingQuestion && pendingQuestion.id !== localDismissedQuestionId
       ? pendingQuestion
       : null;
+
+  useEffect(() => {
+    setQuestionContextMode(null);
+    setQuestionAttachments({});
+  }, [visibleQuestion?.id]);
+
   const mobileReviewOpen = mobileLayout && mobilePane === "review";
   const visibleApprovalDiff =
     visibleApproval?.kind === "write"
@@ -1174,6 +1378,7 @@ export function BrowserGatewayApp({
   const awaitingUserInput = Boolean(
     visibleApproval ||
     visibleQuestion ||
+    pendingFormElicitation ||
     pendingUrlElicitation ||
     foreground?.status === "awaiting_approval" ||
     instanceOptions.some(
@@ -1333,15 +1538,19 @@ export function BrowserGatewayApp({
     if (
       pendingApproval ||
       pendingQuestion ||
+      pendingFormElicitation ||
+      pendingUrlElicitation ||
       foreground?.status === "awaiting_approval"
     ) {
       return {
         kind: "awaiting_approval",
-        label: pendingUrlElicitation
-          ? "MCP URL"
-          : pendingQuestion
-            ? "Question"
-            : "Approval",
+        label: pendingFormElicitation
+          ? "MCP Form"
+          : pendingUrlElicitation
+            ? "MCP URL"
+            : pendingQuestion
+              ? "Question"
+              : "Approval",
         detail: foreground?.statusOverride ?? "Awaiting response",
         sessionTitle: foreground?.title,
       };
@@ -1557,10 +1766,16 @@ export function BrowserGatewayApp({
     generation = selectedTabGenerationRef.current,
   ): Promise<void> {
     try {
+      const projectId =
+        snapshot?.session.foreground?.project.projectId ??
+        snapshot?.session.defaultProjectId;
       const response = await fetch(
         askAgentSelected
           ? "/api/ask-agent/slash-commands"
-          : buildApiPathForInstance("/api/slash-commands", instanceId),
+          : buildApiPathForInstance(
+              `/api/slash-commands${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
+              instanceId,
+            ),
         {
           credentials: "same-origin",
           headers: {
@@ -1590,11 +1805,20 @@ export function BrowserGatewayApp({
     generation = selectedTabGenerationRef.current,
   ): Promise<void> {
     try {
-      const response = await fetch(buildApiPath("/api/modes", instanceId), {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
+      const projectId =
+        snapshot?.session.foreground?.project.projectId ??
+        snapshot?.session.defaultProjectId;
+      const response = await fetch(
+        buildApiPath(
+          `/api/modes${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
+          instanceId,
+        ),
+        {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
         },
-      });
+      );
       if (!response.ok) {
         setModeStatus(`Mode list unavailable (${response.status})`);
         return;
@@ -2161,6 +2385,7 @@ export function BrowserGatewayApp({
     }>,
     origin: "user" | "autoContinue" = "user",
     targetForeground?: GatewaySnapshot["session"]["foreground"],
+    interject = false,
   ): Promise<boolean> {
     const activeForeground =
       targetForeground ?? (await ensureAskAgentForeground());
@@ -2292,6 +2517,7 @@ export function BrowserGatewayApp({
         model: activeForeground.model,
         reasoningEffort: effectiveReasoningEffort,
         origin,
+        interject,
       });
       const sendPath = isAskAgentSelected
         ? "/api/ask-agent/send"
@@ -2307,6 +2533,9 @@ export function BrowserGatewayApp({
           text: trimmed,
           id: userMessageId,
           sessionId: activeForeground.sessionId,
+          projectId: isAskAgentSelected
+            ? undefined
+            : snapshot?.session.foreground?.project.projectId,
           mode: activeForeground.mode,
           reasoningEffort: effectiveReasoningEffort,
           thinkingEnabled: effectiveReasoningEffort !== "none",
@@ -2316,11 +2545,13 @@ export function BrowserGatewayApp({
           displayText: displayWithMedia,
           slashCommandLabel,
           isSlashCommand: Boolean(slashCommandLabel),
+          interject,
         }),
       });
       const body = (await response.json()) as {
         ok?: boolean;
         queued?: boolean;
+        interjected?: boolean;
         error?: string;
         snapshot?: GatewaySnapshot;
       };
@@ -2332,6 +2563,7 @@ export function BrowserGatewayApp({
         sessionId: activeForeground.sessionId,
         ok: Boolean(body.ok),
         queued: Boolean(body.queued),
+        interjected: Boolean(body.interjected),
         status: response.status,
         error: body.error ?? null,
         messageCount:
@@ -2339,9 +2571,11 @@ export function BrowserGatewayApp({
       });
       setSendStatus(
         body.ok
-          ? body.queued
-            ? "Queued."
-            : "Sent"
+          ? body.interjected
+            ? "Ready to interject at the next break."
+            : body.queued
+              ? "Queued."
+              : "Sent"
           : body.error === "queue_full"
             ? "A message is already queued. Wait for it to send or remove it first."
             : `Send failed: ${body.error ?? response.status}`,
@@ -2357,6 +2591,30 @@ export function BrowserGatewayApp({
       return false;
     }
   }
+
+  const handleInterject = (
+    text: string,
+    attachments: string[],
+    displayText?: string,
+    slashCommandLabel?: string,
+    media?: Array<{
+      name: string;
+      mimeType: string;
+      base64: string;
+      kind: "image" | "document";
+    }>,
+  ): void => {
+    void handleSend(
+      text,
+      attachments,
+      displayText,
+      slashCommandLabel,
+      media,
+      "user",
+      foreground ?? undefined,
+      true,
+    );
+  };
 
   const handleStop = (): void => {
     if (!foreground?.sessionId) return;
@@ -2552,7 +2810,9 @@ export function BrowserGatewayApp({
     });
   };
 
-  async function createNewSession(): Promise<GatewaySnapshot | null> {
+  async function createNewSession(
+    projectId?: string,
+  ): Promise<GatewaySnapshot | null> {
     try {
       const response = await fetch(
         isAskAgentSelected
@@ -2567,6 +2827,9 @@ export function BrowserGatewayApp({
           },
           body: JSON.stringify({
             mode: isAskAgentSelected ? "ask" : (foreground?.mode ?? "code"),
+            projectId: isAskAgentSelected
+              ? undefined
+              : (projectId ?? snapshot?.session.defaultProjectId),
           }),
         },
       );
@@ -2622,7 +2885,14 @@ export function BrowserGatewayApp({
             "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
           },
-          body: JSON.stringify({ sessionId }),
+          body: JSON.stringify({
+            sessionId,
+            projectId: isAskAgentSelected
+              ? undefined
+              : snapshot?.session.sessions.find(
+                  (session) => session.id === sessionId,
+                )?.project?.projectId,
+          }),
         },
       );
       const body = (await response.json().catch(() => ({}))) as {
@@ -2749,13 +3019,18 @@ export function BrowserGatewayApp({
           type: "mode",
           mode: slug,
         });
+        const projectId = foreground?.project.projectId;
         const response = await fetch(buildApiPath(selectionRequest.path), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
           },
-          body: JSON.stringify(selectionRequest.body),
+          body: JSON.stringify({
+            ...selectionRequest.body,
+            projectId,
+            sessionId: foreground?.sessionId,
+          }),
         });
         const body = (await response.json()) as {
           approved?: boolean;
@@ -2938,6 +3213,32 @@ export function BrowserGatewayApp({
       setMcpManagerSnapshot(null);
       setModeStatus(`Ask Agent MCP status error: ${String(err)}`);
     }
+  };
+
+  const mutateAskAgentMcpConfig = async (
+    mutation: McpConfigBatchMutation,
+  ): Promise<McpConfigMutationResult> => {
+    const response = await fetch("/api/ask-agent/mcp-config/server", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify(mutation),
+    });
+    const result = (await response.json()) as McpConfigMutationResult;
+    if (result.configSnapshot) setMcpManagerSnapshot(result.configSnapshot);
+    setModeStatus(
+      result.ok
+        ? result.connectionOutcomes?.some(
+            (outcome) => outcome.status === "failed",
+          )
+          ? "MCP config saved, but one or more servers failed to connect."
+          : "Ask Agent MCP config saved."
+        : `MCP save failed: ${result.errors?.[0]?.message ?? response.status}`,
+    );
+    return result;
   };
 
   const saveAskAgentMcpServer = async (
@@ -3324,10 +3625,7 @@ export function BrowserGatewayApp({
           sessionId,
           task: body.transcript.task,
           messages: converted,
-          // Browser transcript opens from a gateway snapshot. Unlike the VS Code
-          // webview, it does not receive background-agent stream deltas, so avoid
-          // showing a live spinner for frozen content.
-          streaming: false,
+          streaming: true,
         });
         const assistantBlocks = converted
           .filter((message) => message.role === "assistant")
@@ -3618,8 +3916,10 @@ export function BrowserGatewayApp({
           });
           return;
         }
+        const projectId =
+          foreground?.project.projectId ?? snapshot?.session.defaultProjectId;
         const url = buildApiPath(
-          `/api/search-files?query=${encodeURIComponent(query)}`,
+          `/api/search-files?query=${encodeURIComponent(query)}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""}`,
         );
         void fetch(url, {
           headers: {
@@ -3666,8 +3966,14 @@ export function BrowserGatewayApp({
         void fetch(buildApiPath("/api/attach-file"), {
           method: "POST",
           headers: {
+            "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
           },
+          body: JSON.stringify({
+            projectId:
+              foreground?.project.projectId ??
+              snapshot?.session.defaultProjectId,
+          }),
         })
           .then(async (response) => {
             if (!response.ok) {
@@ -3769,6 +4075,10 @@ export function BrowserGatewayApp({
           data.notes && typeof data.notes === "object"
             ? (data.notes as Record<string, string>)
             : {};
+        const attachments =
+          data.attachments && typeof data.attachments === "object"
+            ? data.attachments
+            : {};
         if (id) {
           void fetch(
             buildApiPathForTab(
@@ -3783,7 +4093,7 @@ export function BrowserGatewayApp({
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${authToken}`,
               },
-              body: JSON.stringify({ id, answers, notes }),
+              body: JSON.stringify({ id, answers, notes, attachments }),
             },
           );
         }
@@ -3907,6 +4217,7 @@ export function BrowserGatewayApp({
             },
             body: JSON.stringify({
               sessionId,
+              projectId: foreground?.project.projectId,
               queueId,
               text: typeof data.text === "string" ? data.text : "",
               displayText:
@@ -4095,8 +4406,18 @@ export function BrowserGatewayApp({
               {transcriptView && (
                 <TranscriptView
                   task={transcriptView.task}
+                  sessionId={transcriptView.sessionId}
                   messages={transcriptView.messages}
-                  streaming={transcriptView.streaming}
+                  streaming={background.some(
+                    (session) =>
+                      session.id === transcriptView.sessionId &&
+                      (session.status === "streaming" ||
+                        session.status === "tool_executing" ||
+                        session.status === "awaiting_approval"),
+                  )}
+                  runtimeStatus={background.find(
+                    (session) => session.id === transcriptView.sessionId,
+                  )}
                   onClose={() => setTranscriptView(null)}
                 />
               )}
@@ -4720,290 +5041,410 @@ export function BrowserGatewayApp({
                   />
                 )}
               </div>
-              {!isAskAgentSelected &&
-                foreground &&
-                foreground.messageQueue.length > 0 &&
-                !mobileReviewOpen && (
-                  <MessageQueuePanel
-                    queue={foreground.messageQueue}
-                    onSteer={(item) => {
-                      browserVscodeApi.postMessage({
-                        command: "agentSteerQueuedMessage",
-                        sessionId: foreground.sessionId,
-                        queueId: item.id,
-                        text: item.fullText ?? item.text,
-                        displayText: item.text,
-                        isSlashCommand: item.isSlashCommand === true,
-                        slashCommandLabel: item.slashCommandLabel,
-                        attachments: item.attachments,
-                        images: item.images,
-                        documents: item.documents,
-                      });
-                    }}
-                    onInterject={(item) => {
-                      browserVscodeApi.postMessage({
-                        command: "agentInterjectQueuedMessage",
-                        sessionId: foreground.sessionId,
-                        queueId: item.id,
-                        text: item.fullText ?? item.text,
-                        displayText: item.text,
-                        isSlashCommand: item.isSlashCommand === true,
-                        slashCommandLabel: item.slashCommandLabel,
-                        attachments: item.attachments,
-                        images: item.images,
-                        documents: item.documents,
-                      });
-                    }}
+              <ChatActivityShelf>
+                {!isAskAgentSelected &&
+                  foreground &&
+                  foreground.messageQueue.length > 0 &&
+                  !mobileReviewOpen && (
+                    <MessageQueuePanel
+                      queue={foreground.messageQueue}
+                      onSteer={(item) => {
+                        browserVscodeApi.postMessage({
+                          command: "agentSteerQueuedMessage",
+                          sessionId: foreground.sessionId,
+                          queueId: item.id,
+                          text: item.fullText ?? item.text,
+                          displayText: item.text,
+                          isSlashCommand: item.isSlashCommand === true,
+                          slashCommandLabel: item.slashCommandLabel,
+                          attachments: item.attachments,
+                          images: item.images,
+                          documents: item.documents,
+                        });
+                      }}
+                      onInterject={(item) => {
+                        browserVscodeApi.postMessage({
+                          command: "agentInterjectQueuedMessage",
+                          sessionId: foreground.sessionId,
+                          queueId: item.id,
+                          text: item.fullText ?? item.text,
+                          displayText: item.text,
+                          isSlashCommand: item.isSlashCommand === true,
+                          slashCommandLabel: item.slashCommandLabel,
+                          attachments: item.attachments,
+                          images: item.images,
+                          documents: item.documents,
+                        });
+                      }}
+                    />
+                  )}
+                {!isAskAgentSelected && !mobileReviewOpen && foreground && (
+                  <ContextUsageRow
+                    inputTokens={foreground.lastInputTokens}
+                    outputTokens={foreground.lastOutputTokens}
+                    cacheReadTokens={foreground.lastCacheReadTokens}
+                    estimatedTotalUsed={foreground.estimatedTotalUsed}
+                    models={composerModels}
+                    modelId={foreground.model}
+                    contextBudget={foreground.contextBudget}
+                    condenseThreshold={foreground.condenseThreshold}
+                    defaultMaxTokens={DEFAULT_MAX_TOKENS}
+                    className="browser-context-row"
                   />
                 )}
-              {!isAskAgentSelected && !mobileReviewOpen && foreground && (
-                <ContextUsageRow
-                  inputTokens={foreground.lastInputTokens}
-                  outputTokens={foreground.lastOutputTokens}
-                  cacheReadTokens={foreground.lastCacheReadTokens}
-                  estimatedTotalUsed={foreground.estimatedTotalUsed}
-                  models={composerModels}
-                  modelId={foreground.model}
-                  contextBudget={foreground.contextBudget}
-                  condenseThreshold={foreground.condenseThreshold}
-                  defaultMaxTokens={DEFAULT_MAX_TOKENS}
-                  className="browser-context-row"
-                />
-              )}
-              {!mobileReviewOpen &&
-                showMcpStatus &&
-                (mcpManagerSnapshot ||
-                  (!isAskAgentSelected && snapshot?.ui.mcpStatusInfos)) &&
-                (() => {
-                  const renderedMcpSnapshot =
-                    mcpManagerSnapshot ??
-                    ({
-                      profile: "main",
-                      version: 0,
-                      sources: [],
-                      entries: [],
-                      statusInfos: snapshot?.ui.mcpStatusInfos ?? [],
-                      capabilities: {
-                        canEditConfig: false,
-                        canOpenRawConfig: false,
-                        canReconnect: true,
-                        canReauthenticate: true,
-                        canDisable: true,
-                        canUseProjectConfig: true,
-                      },
-                    } satisfies McpConfigSnapshot);
-                  const panelSnapshot = isAskAgentSelected
-                    ? ({
-                        ...renderedMcpSnapshot,
+                {!mobileReviewOpen &&
+                  showMcpStatus &&
+                  (mcpManagerSnapshot ||
+                    (!isAskAgentSelected && snapshot?.ui.mcpStatusInfos)) &&
+                  (() => {
+                    const renderedMcpSnapshot =
+                      mcpManagerSnapshot ??
+                      ({
+                        profile: "main",
+                        version: 0,
+                        sources: [],
+                        entries: [],
+                        statusInfos: snapshot?.ui.mcpStatusInfos ?? [],
                         capabilities: {
-                          ...renderedMcpSnapshot.capabilities,
+                          canEditConfig: false,
                           canOpenRawConfig: false,
+                          canReconnect: true,
+                          canReauthenticate: true,
+                          canDisable: false,
+                          canUseProjectConfig: true,
                         },
-                      } satisfies McpConfigSnapshot)
-                    : renderedMcpSnapshot;
-                  return (
-                    <McpManagerPanel
-                      snapshot={panelSnapshot}
-                      initialView={mcpManagerView}
-                      error={
-                        askAgentMcpStatusError === "mcp_host_unavailable"
-                          ? "No VS Code MCP host is available for Ask Agent."
-                          : askAgentMcpStatusError
-                      }
-                      onClose={() => setShowMcpStatus(false)}
-                      onRefresh={() => {
-                        if (isAskAgentSelected) {
-                          void refreshAskAgentMcpStatus({ reconnect: true });
-                        } else {
-                          setModeStatus(
-                            "Use the VS Code window to refresh workspace MCP servers.",
-                          );
+                      } satisfies McpConfigSnapshot);
+                    const panelSnapshot = isAskAgentSelected
+                      ? ({
+                          ...renderedMcpSnapshot,
+                          capabilities: {
+                            ...renderedMcpSnapshot.capabilities,
+                            canOpenRawConfig: false,
+                          },
+                        } satisfies McpConfigSnapshot)
+                      : renderedMcpSnapshot;
+                    return (
+                      <McpManagerPanel
+                        snapshot={panelSnapshot}
+                        initialView={mcpManagerView}
+                        error={
+                          askAgentMcpStatusError === "mcp_host_unavailable"
+                            ? "No VS Code MCP host is available for Ask Agent."
+                            : askAgentMcpStatusError
                         }
-                      }}
-                      onServerAction={(serverName, action) => {
-                        if (isAskAgentSelected) {
-                          if (
-                            action === "reconnect" ||
-                            action === "reauthenticate"
-                          ) {
+                        onClose={() => setShowMcpStatus(false)}
+                        onRefresh={() => {
+                          if (isAskAgentSelected) {
                             void refreshAskAgentMcpStatus({ reconnect: true });
                           } else {
                             setModeStatus(
-                              "Ask Agent MCP disable is not available in the browser yet.",
+                              "Use the VS Code window to refresh workspace MCP servers.",
                             );
                           }
-                        } else {
-                          handleMcpAction(serverName, action);
+                        }}
+                        onServerAction={(serverName, action) => {
+                          if (isAskAgentSelected) {
+                            if (
+                              action === "reconnect" ||
+                              action === "reauthenticate"
+                            ) {
+                              void refreshAskAgentMcpStatus({
+                                reconnect: true,
+                              });
+                            }
+                          } else {
+                            handleMcpAction(serverName, action);
+                          }
+                        }}
+                        onOpenRawConfig={(scope) => {
+                          if (isAskAgentSelected) {
+                            void openAskAgentRawMcpConfig(scope);
+                          }
+                        }}
+                        onMutateConfig={
+                          isAskAgentSelected
+                            ? (mutation) => mutateAskAgentMcpConfig(mutation)
+                            : undefined
                         }
+                        onSaveServer={(scope, server) => {
+                          if (isAskAgentSelected) {
+                            void saveAskAgentMcpServer(scope, server);
+                          }
+                        }}
+                        onRemoveServer={(scope, serverName) => {
+                          if (isAskAgentSelected) {
+                            void removeAskAgentMcpServer(scope, serverName);
+                          }
+                        }}
+                      />
+                    );
+                  })()}
+                {!mobileReviewOpen && (foreground?.todos?.length ?? 0) > 0 && (
+                  <TodoPanel todos={foreground?.todos ?? []} />
+                )}
+                {!isAskAgentSelected &&
+                  pendingFormElicitation &&
+                  !mobileReviewOpen &&
+                  (() => {
+                    const originTabId = snapshotOriginRef.current.tabId;
+                    return (
+                      <FormElicitationPanel
+                        key={`${originTabId}:${pendingFormElicitation.id}`}
+                        request={pendingFormElicitation}
+                        onRespond={async (response) => {
+                          const result = await fetch(
+                            buildApiPathForTab(
+                              "/api/form-elicitation",
+                              originTabId,
+                            ),
+                            {
+                              method: "POST",
+                              headers: {
+                                "Content-Type": "application/json",
+                                Authorization: `Bearer ${authToken}`,
+                              },
+                              body: JSON.stringify(response),
+                            },
+                          );
+                          const body = (await result
+                            .json()
+                            .catch(() => ({}))) as {
+                            ok?: boolean;
+                            errors?: McpElicitationFieldErrors;
+                          };
+                          if (result.ok && body.ok === true)
+                            return { ok: true };
+                          return {
+                            ok: false,
+                            errors: body.errors,
+                            error:
+                              result.status === 404
+                                ? "This request is no longer active."
+                                : "The response could not be submitted.",
+                          };
+                        }}
+                      />
+                    );
+                  })()}
+                {!isAskAgentSelected &&
+                  pendingUrlElicitation &&
+                  !mobileReviewOpen && (
+                    <UrlElicitationPanel
+                      request={pendingUrlElicitation}
+                      onAccept={(id, url) => {
+                        window.open(url, "_blank", "noopener,noreferrer");
+                        browserVscodeApi.postMessage({
+                          command: "agentUrlElicitationResponse",
+                          id,
+                          action: "accept",
+                          originTabId: snapshotOriginRef.current.tabId,
+                        });
                       }}
-                      onOpenRawConfig={(scope) => {
-                        if (isAskAgentSelected) {
-                          void openAskAgentRawMcpConfig(scope);
-                        }
+                      onDecline={(id) => {
+                        browserVscodeApi.postMessage({
+                          command: "agentUrlElicitationResponse",
+                          id,
+                          action: "decline",
+                          originTabId: snapshotOriginRef.current.tabId,
+                        });
                       }}
-                      onSaveServer={(scope, server) => {
-                        if (isAskAgentSelected) {
-                          void saveAskAgentMcpServer(scope, server);
-                        }
-                      }}
-                      onRemoveServer={(scope, serverName) => {
-                        if (isAskAgentSelected) {
-                          void removeAskAgentMcpServer(scope, serverName);
-                        }
+                      onCancel={(id) => {
+                        browserVscodeApi.postMessage({
+                          command: "agentUrlElicitationResponse",
+                          id,
+                          action: "cancel",
+                          originTabId: snapshotOriginRef.current.tabId,
+                        });
                       }}
                     />
-                  );
-                })()}
-              {!mobileReviewOpen && (foreground?.todos?.length ?? 0) > 0 && (
-                <TodoPanel todos={foreground?.todos ?? []} />
-              )}
-              {!isAskAgentSelected &&
-                pendingUrlElicitation &&
-                !mobileReviewOpen && (
-                  <UrlElicitationPanel
-                    request={pendingUrlElicitation}
-                    onAccept={(id, url) => {
-                      window.open(url, "_blank", "noopener,noreferrer");
+                  )}
+                {visibleQuestion && !mobileReviewOpen && (
+                  <QuestionCard
+                    key={`${snapshotOriginRef.current.tabId}:${visibleQuestion.id}`}
+                    id={visibleQuestion.id}
+                    context={visibleQuestion.context}
+                    questions={visibleQuestion.questions}
+                    backgroundTask={visibleQuestion.backgroundTask}
+                    modes={modes}
+                    attachmentCounts={Object.fromEntries(
+                      Object.entries(questionAttachments).map(
+                        ([questionId, value]) => [
+                          questionId,
+                          value.paths.length + value.media.length,
+                        ],
+                      ),
+                    )}
+                    onEditOtherContext={setQuestionContextMode}
+                    remoteProgress={
+                      remoteQuestionProgress &&
+                      remoteQuestionProgress.id === visibleQuestion.id
+                        ? {
+                            step: remoteQuestionProgress.step,
+                            answers: remoteQuestionProgress.answers,
+                            notes: remoteQuestionProgress.notes,
+                          }
+                        : null
+                    }
+                    onProgressChange={(progress) => {
                       browserVscodeApi.postMessage({
-                        command: "agentUrlElicitationResponse",
-                        id,
-                        action: "accept",
+                        command: "agentQuestionProgress",
+                        id: visibleQuestion.id,
+                        step: progress.step,
+                        answers: progress.answers,
+                        notes: progress.notes,
+                        origin: questionProgressOriginRef.current,
                         originTabId: snapshotOriginRef.current.tabId,
                       });
                     }}
-                    onDecline={(id) => {
+                    onSubmit={(id, answers, notes) => {
+                      const attachments = Object.fromEntries(
+                        Object.entries(questionAttachments).flatMap(
+                          ([questionId, value]) => {
+                            const items = [
+                              ...value.paths.map((path) => ({
+                                kind: "file" as const,
+                                name: path.split(/[\\/]/).pop() || path,
+                                path,
+                              })),
+                              ...value.media.map((media) => ({
+                                kind: media.kind,
+                                name: media.name,
+                                mimeType: media.mimeType,
+                                base64: media.base64,
+                              })),
+                            ];
+                            return items.length > 0
+                              ? [[questionId, items]]
+                              : [];
+                          },
+                        ),
+                      );
+                      setLocalDismissedQuestionId(id);
+                      setQuestionContextMode(null);
+                      setQuestionAttachments({});
                       browserVscodeApi.postMessage({
-                        command: "agentUrlElicitationResponse",
+                        command: "agentQuestionResponse",
                         id,
-                        action: "decline",
-                        originTabId: snapshotOriginRef.current.tabId,
-                      });
-                    }}
-                    onCancel={(id) => {
-                      browserVscodeApi.postMessage({
-                        command: "agentUrlElicitationResponse",
-                        id,
-                        action: "cancel",
+                        answers,
+                        notes,
+                        attachments,
                         originTabId: snapshotOriginRef.current.tabId,
                       });
                     }}
                   />
                 )}
-              {visibleQuestion && !mobileReviewOpen && (
-                <QuestionCard
-                  key={`${snapshotOriginRef.current.tabId}:${visibleQuestion.id}`}
-                  id={visibleQuestion.id}
-                  context={visibleQuestion.context}
-                  questions={visibleQuestion.questions}
-                  backgroundTask={visibleQuestion.backgroundTask}
-                  modes={modes}
-                  remoteProgress={
-                    remoteQuestionProgress &&
-                    remoteQuestionProgress.id === visibleQuestion.id
-                      ? {
-                          step: remoteQuestionProgress.step,
-                          answers: remoteQuestionProgress.answers,
-                          notes: remoteQuestionProgress.notes,
-                        }
-                      : null
-                  }
-                  onProgressChange={(progress) => {
-                    browserVscodeApi.postMessage({
-                      command: "agentQuestionProgress",
-                      id: visibleQuestion.id,
-                      step: progress.step,
-                      answers: progress.answers,
-                      notes: progress.notes,
-                      origin: questionProgressOriginRef.current,
-                      originTabId: snapshotOriginRef.current.tabId,
-                    });
-                  }}
-                  onSubmit={(id, answers, notes) => {
-                    setLocalDismissedQuestionId(id);
-                    browserVscodeApi.postMessage({
-                      command: "agentQuestionResponse",
-                      id,
-                      answers,
-                      notes,
-                      originTabId: snapshotOriginRef.current.tabId,
-                    });
-                  }}
-                />
-              )}
-              {visibleApproval && (
-                <ApprovalPanelEmbed
-                  key={`${snapshotOriginRef.current.tabId}:${visibleApproval.id}`}
-                  request={visibleApproval}
-                  height={approvalPanelHeight}
-                  resizing={approvalResizing}
-                  followUpRef={forwardedFollowUpRef}
-                  submit={handleForwardedApprovalSubmit}
-                  onResizeStart={handleApprovalResizeStart}
-                  onSuggestRegex={handleSuggestRegex}
-                  actions={
-                    canOpenMobileReview && (
-                      <div class="approval-mobile-review-actions">
-                        <button
-                          class={`secondary mobile-review-button${mobileReviewOpen ? " active" : ""}`}
-                          aria-expanded={mobileReviewOpen}
-                          onClick={() =>
-                            setMobilePane((current) =>
-                              current === "review" ? null : "review",
-                            )
-                          }
-                          type="button"
-                        >
-                          <i
-                            class={`codicon ${mobileReviewOpen ? "codicon-comment-discussion" : "codicon-diff"}`}
-                          />
-                          <span>
-                            {mobileReviewOpen ? "Back to chat" : "View diff"}
-                          </span>
-                        </button>
-                      </div>
-                    )
-                  }
-                />
-              )}
-              {streaming && !mobileReviewOpen ? (
-                <StreamingStatusBar
-                  messages={messages}
-                  statusOverride={statusOverride}
-                  className="browser-streaming-row"
-                />
-              ) : null}
-              {!isAskAgentSelected && !mobileReviewOpen && (
-                <BackgroundSessionStrip
-                  sessions={background}
-                  onStop={handleStopBackground}
-                  onOpenTranscript={handleOpenBgTranscript}
-                  onSteer={(sessionId, message) =>
-                    handleBackgroundAction("steer", sessionId, message)
-                  }
-                  onDetach={(sessionId) =>
-                    handleBackgroundAction("detach", sessionId)
-                  }
-                  onRetry={(sessionId) =>
-                    handleBackgroundAction("retry", sessionId)
-                  }
-                  onArchive={(sessionId) =>
-                    handleBackgroundAction("archive", sessionId)
-                  }
-                  onPause={(sessionId) =>
-                    handleBackgroundAction("pause", sessionId)
-                  }
-                  onResume={(sessionId) =>
-                    handleBackgroundAction("resume", sessionId)
-                  }
-                  onMarkRead={(sessionId) =>
-                    handleBackgroundAction("mark_read", sessionId)
-                  }
-                />
-              )}
+                {visibleApproval && (
+                  <ApprovalPanelEmbed
+                    key={`${snapshotOriginRef.current.tabId}:${visibleApproval.id}`}
+                    request={visibleApproval}
+                    height={approvalPanelHeight}
+                    resizing={approvalResizing}
+                    followUpRef={forwardedFollowUpRef}
+                    submit={handleForwardedApprovalSubmit}
+                    onResizeStart={handleApprovalResizeStart}
+                    onSuggestRegex={handleSuggestRegex}
+                    actions={
+                      canOpenMobileReview && (
+                        <div class="approval-mobile-review-actions">
+                          <button
+                            class={`secondary mobile-review-button${mobileReviewOpen ? " active" : ""}`}
+                            aria-expanded={mobileReviewOpen}
+                            onClick={() =>
+                              setMobilePane((current) =>
+                                current === "review" ? null : "review",
+                              )
+                            }
+                            type="button"
+                          >
+                            <i
+                              class={`codicon ${mobileReviewOpen ? "codicon-comment-discussion" : "codicon-diff"}`}
+                            />
+                            <span>
+                              {mobileReviewOpen ? "Back to chat" : "View diff"}
+                            </span>
+                          </button>
+                        </div>
+                      )
+                    }
+                  />
+                )}
+                {streaming && !mobileReviewOpen ? (
+                  <StreamingStatusBar
+                    messages={messages}
+                    statusOverride={statusOverride}
+                    className="browser-streaming-row"
+                  />
+                ) : null}
+                {!isAskAgentSelected && !mobileReviewOpen && (
+                  <BackgroundSessionStrip
+                    sessions={background}
+                    onStop={handleStopBackground}
+                    onOpenTranscript={handleOpenBgTranscript}
+                    onSteer={(sessionId, message) =>
+                      handleBackgroundAction("steer", sessionId, message)
+                    }
+                    onDetach={(sessionId) =>
+                      handleBackgroundAction("detach", sessionId)
+                    }
+                    onRetry={(sessionId) =>
+                      handleBackgroundAction("retry", sessionId)
+                    }
+                    onArchive={(sessionId) =>
+                      handleBackgroundAction("archive", sessionId)
+                    }
+                    onPause={(sessionId) =>
+                      handleBackgroundAction("pause", sessionId)
+                    }
+                    onResume={(sessionId) =>
+                      handleBackgroundAction("resume", sessionId)
+                    }
+                  />
+                )}
+              </ChatActivityShelf>
               {!mobileReviewOpen && (
                 <div class="browser-chat-composer">
                   <InputArea
                     onSend={handleSend}
+                    contextMode={
+                      questionContextMode
+                        ? ({
+                            key: `${visibleQuestion?.id ?? "question"}:${questionContextMode.questionId}`,
+                            title: "Adding context to agent question",
+                            placeholder:
+                              "Add details, paste a screenshot, or attach supporting files…",
+                            initialText: questionContextMode.initialText,
+                            initialAttachments:
+                              questionAttachments[
+                                questionContextMode.questionId
+                              ]?.paths,
+                            initialMedia:
+                              questionAttachments[
+                                questionContextMode.questionId
+                              ]?.media,
+                            onSubmit: (
+                              text,
+                              paths,
+                              _displayText,
+                              _slashLabel,
+                              media,
+                            ) => {
+                              questionContextMode.onCommit(text);
+                              setQuestionAttachments((current) => ({
+                                ...current,
+                                [questionContextMode.questionId]: {
+                                  paths,
+                                  media: media ?? [],
+                                },
+                              }));
+                              setQuestionContextMode(null);
+                            },
+                            onCancel: () => setQuestionContextMode(null),
+                          } satisfies ComposerContextMode)
+                        : null
+                    }
+                    onInterject={
+                      isAskAgentSelected ? undefined : handleInterject
+                    }
                     onComposerEvent={
                       isAskAgentSelected
                         ? (event, fields) =>
@@ -5079,6 +5520,20 @@ export function BrowserGatewayApp({
                     allowThinkingToggle={true}
                     allowExportTranscript={isAskAgentSelected}
                     allowFileMentions={!isAskAgentSelected}
+                    disabled={
+                      !isAskAgentSelected &&
+                      (snapshot?.session.projects.length === 0 ||
+                        foreground?.project.availability === "unavailable")
+                    }
+                    disabledReason={
+                      !isAskAgentSelected &&
+                      snapshot?.session.projects.length === 0
+                        ? "Open a folder to enable local execution."
+                        : !isAskAgentSelected &&
+                            foreground?.project.availability === "unavailable"
+                          ? `Project unavailable: ${foreground.project.displayName}`
+                          : undefined
+                    }
                   />
                 </div>
               )}

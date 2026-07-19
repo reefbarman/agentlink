@@ -439,6 +439,7 @@ describe("SandboxTerminalCoordinator", () => {
     expect(process.interrupt).toHaveBeenCalledTimes(1);
     expect(test.coordinator.getBackgroundState("sandbox-1")).toMatchObject({
       is_running: true,
+      state: "running",
       output: "waiting",
       output_captured: true,
     });
@@ -451,6 +452,7 @@ describe("SandboxTerminalCoordinator", () => {
     await flush();
     expect(test.coordinator.getBackgroundState("sandbox-1")).toMatchObject({
       is_running: false,
+      state: "completed",
       exit_code: 130,
     });
   });
@@ -518,7 +520,17 @@ describe("SandboxTerminalCoordinator", () => {
       { id: "sandbox-2", name: "Tests", busy: true },
     ]);
     expect(test.coordinator.getRecentlyClosedTerminals()).toEqual([
-      { id: "sandbox-1", name: "Server", closedAt: 500 },
+      {
+        id: "sandbox-1",
+        name: "Server",
+        closedAt: 500,
+        is_running: false,
+        state: "unknown_termination",
+        exit_code: null,
+        output: "",
+        output_captured: true,
+        terminal_raw_output: "",
+      },
     ]);
   });
 

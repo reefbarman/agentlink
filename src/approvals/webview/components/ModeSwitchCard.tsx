@@ -45,6 +45,9 @@ export function ModeSwitchCard({
     <ApprovalLayout
       queuePosition={request.queuePosition}
       queueTotal={request.queueTotal}
+      sourceProject={request.sourceProject}
+      targetProject={request.targetProject}
+      targetPath={request.targetPath}
       purpose="Switch the agent mode"
       rulesContent={null}
       rulesModified={false}

@@ -1,10 +1,12 @@
 import type { AgentMessage } from "./types.js";
+import type { BackgroundResultState } from "../core/capabilities/background.js";
 import type { Checkpoint } from "./CheckpointManager.js";
+import type { FleetResultEnvelope } from "./FleetWorkflows.js";
 import type { PendingQuestionRecoveryContext } from "../core/tools/types.js";
 import type { Question } from "./webview/types.js";
 import type { ReasoningEffort } from "./providers/types.js";
+import type { SessionProjectScope } from "../core/workspaceProjects.js";
 import type { SessionSummary } from "./SessionStore.js";
-import type { FleetResultEnvelope } from "./FleetWorkflows.js";
 
 export type PersistenceRevision = string;
 
@@ -32,11 +34,14 @@ export type SessionReadResult<T> =
   | { ok: false; reason: "corrupt" | "io_error"; message: string };
 
 export interface CheckpointState {
+  /** Project that owns both the checkpoint manager and every checkpoint entry. */
+  projectId?: string;
   baseCommit: string | null;
   checkpoints: Checkpoint[];
 }
 
 export interface RevertRecoveryState {
+  projectId?: string;
   checkpointId: string;
   sessionRevision: PersistenceRevision;
   workspaceRevision?: string;
@@ -53,10 +58,12 @@ export interface PendingQuestionRecoveryState extends PendingQuestionRecoveryCon
 export type PersistedSessionRunState =
   | {
       phase: "running";
+      projectId?: string;
       startedAt: number;
     }
   | {
       phase: "awaiting_question";
+      projectId?: string;
       startedAt: number;
       question: PendingQuestionRecoveryState;
     };
@@ -74,6 +81,7 @@ export type PersistedFleetLifecycle =
 /** Durable execution identity for non-foreground fleet sessions. */
 export interface PersistedFleetMetadata {
   schemaVersion: 1;
+  projectId?: string;
   placement: "background" | "worktree" | "remote";
   parentSessionId?: string;
   rootSessionId: string;
@@ -91,6 +99,12 @@ export interface PersistedFleetMetadata {
   terminalReason?: string;
   completedAt?: number;
   finalResult?: string;
+  /** Durable classification of the final result or active run. */
+  resultState?: BackgroundResultState;
+  /** Bounded useful output retained when final structured output is unavailable. */
+  partialResult?: string;
+  /** Whether the provider/engine classified a failed run as retryable. */
+  agentRetryable?: boolean;
   goalId?: string;
   workflowId?: string;
   delegation?: {
@@ -156,6 +170,13 @@ export interface PersistedFleetMetadata {
 }
 
 export interface PersistedSessionMetadata {
+  /**
+   * Authoritative durable project identity. Optional only while reading records
+   * created before project-scoped sessions were introduced.
+   */
+  projectScope?: SessionProjectScope;
+  /** Persisted editor/resource context, validated against projectScope on restore. */
+  activeContextResourceUri?: string;
   mode: string;
   model: string;
   totalInputTokens: number;

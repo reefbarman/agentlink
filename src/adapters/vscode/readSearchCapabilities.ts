@@ -82,18 +82,20 @@ export function createVscodeReadFileEnrichmentProvider(): ReadFileEnrichmentProv
   };
 }
 
-export function createVscodeSemanticSearchProvider(): SemanticSearchProvider {
+export function createVscodeSemanticSearchProvider(
+  projectRoot?: string,
+): SemanticSearchProvider {
   return {
     search(params) {
       const dirPath = params.path
         ? resolveAndValidatePath(params.path).absolutePath
-        : (tryGetFirstWorkspaceRoot() ?? ".");
+        : (projectRoot ?? tryGetFirstWorkspaceRoot() ?? ".");
       return semanticSearch(
         dirPath,
         params.query,
         params.limit,
         params.exclude_globs,
-        { includeAllWorkspaceRoots: !params.path },
+        { includeAllWorkspaceRoots: false },
       );
     },
   };
@@ -105,19 +107,31 @@ export function createVscodeContextDocumentProvider(
 ): ContextDocumentProvider {
   return {
     async resolveDocument(inputPath, sessionId) {
-      const { uri, document, absolutePath, relPath } =
-        await resolveAndOpenDocument(
-          inputPath,
-          approvalManager,
-          approvalPanel,
-          sessionId,
-        );
-      return {
-        absolutePath,
-        relPath,
-        languageId: document.languageId,
-        hostDocument: { uri, document },
-      };
+      try {
+        const { uri, document, absolutePath, relPath } =
+          await resolveAndOpenDocument(
+            inputPath,
+            approvalManager,
+            approvalPanel,
+            sessionId,
+          );
+        return {
+          absolutePath,
+          relPath,
+          languageId: document.languageId,
+          hostDocument: { uri, document },
+        };
+      } catch (err) {
+        // VS Code's openTextDocument missing-file error has no stable error code.
+        // Keep this host-specific message coupling at the adapter boundary.
+        if (
+          err instanceof Error &&
+          err.message.includes("Unable to resolve nonexistent file")
+        ) {
+          throw Object.assign(new Error(err.message), { code: "FileNotFound" });
+        }
+        throw err;
+      }
     },
   };
 }

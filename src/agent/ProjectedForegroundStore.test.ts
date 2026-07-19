@@ -3,7 +3,17 @@ import { describe, expect, it, vi } from "vitest";
 import { ProjectedForegroundStore } from "./ProjectedForegroundStore.js";
 import { initialState } from "../shared/chatProjection.js";
 
-function loadSession(sessionId = "session-1") {
+function loadSession(
+  sessionId = "session-1",
+  todos = [
+    {
+      id: "restored",
+      content: "Restore todo",
+      activeForm: "Restoring todo",
+      status: "in_progress" as const,
+    },
+  ],
+) {
   return {
     type: "LOAD_SESSION" as const,
     sessionId,
@@ -11,6 +21,7 @@ function loadSession(sessionId = "session-1") {
     mode: "code",
     model: "claude-sonnet-4-6",
     messages: [],
+    todos,
     lastInputTokens: 12,
     lastOutputTokens: 34,
     checkpoints: [],
@@ -106,7 +117,9 @@ describe("ProjectedForegroundStore", () => {
     const listener = vi.fn(() => {
       expect(store.state.chatState.sessionId).toBe("session-1");
       expect(store.state.estimatedTotalUsed).toBe(56);
-      expect(store.state.todos).toEqual([]);
+      expect(store.state.todos).toEqual([
+        expect.objectContaining({ id: "restored", status: "in_progress" }),
+      ]);
       expect(store.isStreaming).toBe(false);
     });
     store.onDidChange(listener);
@@ -122,7 +135,9 @@ describe("ProjectedForegroundStore", () => {
     expect(store.state.lastInputTokens).toBe(12);
     expect(store.state.lastOutputTokens).toBe(34);
     expect(store.state.estimatedTotalUsed).toBe(56);
-    expect(store.state.todos).toEqual([]);
+    expect(store.state.todos).toEqual([
+      expect.objectContaining({ id: "restored", status: "in_progress" }),
+    ]);
     expect(store.isStreaming).toBe(false);
     expect(listener).toHaveBeenCalledTimes(1);
   });

@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppState } from "../../shared/chatProjection";
 import type { ApprovalRequest } from "../../approvals/webview/types";
+import type { BgSessionInfo } from "../../shared/types";
 import { BrowserGatewayApp } from "./BrowserGatewayApp";
 import { h } from "preact";
 import { within } from "@testing-library/preact";
@@ -23,6 +24,7 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     availableModels,
     onExecuteBuiltinCommand,
     onExportTranscript,
+    onInterject,
     onSelectModel,
     onSend,
     onSetReasoningEffort,
@@ -34,6 +36,7 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     availableModels?: Array<{ id: string; displayName?: string }>;
     onExecuteBuiltinCommand?: (name: string, args: string) => void;
     onExportTranscript?: () => void;
+    onInterject?: (text: string, attachments: string[]) => void;
     onSelectModel?: (modelId: string) => void;
     onSend?: (text: string, attachments: string[]) => void;
     onSetReasoningEffort?: (effort: "none" | "low" | "medium" | "high") => void;
@@ -78,6 +81,17 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
         },
         "Trigger send",
       ),
+      onInterject
+        ? h(
+            "button",
+            {
+              type: "button",
+              "data-testid": "trigger-interject",
+              onClick: () => onInterject("Change course", []),
+            },
+            "Trigger interject",
+          )
+        : null,
       h(
         "button",
         {
@@ -87,6 +101,7 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
         },
         "Trigger model",
       ),
+
       h(
         "button",
         {
@@ -259,9 +274,20 @@ type TestSnapshot = {
     mcpStatusInfos: never[];
   };
   session: {
-    repository: { branch?: string; dirty?: boolean } | null;
+    projects: Array<{
+      projectId: string;
+      displayName: string;
+      availability: "available" | "unavailable";
+    }>;
+    defaultProjectId: string | null;
+    repository: { projectId: string; branch?: string; dirty?: boolean } | null;
     sessions: never[];
     foreground: {
+      project: {
+        projectId: string;
+        displayName: string;
+        availability: "available" | "unavailable";
+      };
       sessionId: string;
       title: string;
       mode: string;
@@ -304,7 +330,7 @@ type TestSnapshot = {
       agentWriteApproval: string;
     };
   };
-  background: never[];
+  background: BgSessionInfo[];
   diffs: Array<{
     requestId: string;
     filePath: string;
@@ -370,9 +396,22 @@ function createSnapshot(): TestSnapshot {
       mcpStatusInfos: [],
     },
     session: {
+      projects: [
+        {
+          projectId: "project-1",
+          displayName: "Workspace",
+          availability: "available",
+        },
+      ],
+      defaultProjectId: "project-1",
       repository: null,
       sessions: [],
       foreground: {
+        project: {
+          projectId: "project-1",
+          displayName: "Workspace",
+          availability: "available",
+        },
         sessionId: "session-1",
         title: "Test Session",
         mode: "code",
@@ -736,6 +775,68 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
+  it("marks a message from the browser composer as an interjection", async () => {
+    const snapshot = createSnapshot();
+    snapshot.session.foreground.status = "streaming";
+    snapshot.session.foreground.streaming = true;
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/send")) {
+        return jsonResponse({ ok: true, queued: true, interjected: true });
+      }
+      if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "streaming", label: "Streaming" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands")) {
+        return jsonResponse({ commands: [] });
+      }
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    await screen.findByText("Waiting for response…");
+    fireEvent.click(await screen.findByTestId("trigger-interject"));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input, init]) => {
+          if (!String(input).includes("/api/send")) return false;
+          const body = JSON.parse(String((init as RequestInit).body ?? "{}"));
+          return body.text === "Change course" && body.interject === true;
+        }),
+      ).toBe(true);
+      expect(
+        screen.getByText("Ready to interject at the next break."),
+      ).toBeTruthy();
+    });
+  });
+
   it("renders browser queue steering controls and posts queue actions", async () => {
     const queuedSnapshot = createSnapshot();
     queuedSnapshot.session.foreground.status = "streaming";
@@ -911,7 +1012,8 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           const body = JSON.parse(String((init as RequestInit).body ?? "{}"));
           return (
             body.text === "Please continue the next slice." &&
-            body.sessionId === "session-1"
+            body.sessionId === "session-1" &&
+            body.projectId === "project-1"
           );
         }),
       ).toBe(true);
@@ -1588,10 +1690,50 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         ],
       },
       {
+        id: "ask-agent-assistant-web",
+        role: "assistant",
+        content: "Web-backed answer.",
+        timestamp: 202,
+        blocks: [
+          {
+            type: "tool_call",
+            id: "search-export",
+            name: "web_search",
+            inputJson: JSON.stringify({ query: "AgentLink export" }),
+            result: JSON.stringify({
+              backend: "provider",
+              provider: "openai-codex",
+              operation: "search",
+              input: { query: "AgentLink export" },
+              activities: [
+                {
+                  id: "hosted-search-export",
+                  kind: "search",
+                  status: "completed",
+                  backend: "provider",
+                  query: "AgentLink export",
+                },
+              ],
+              content: "Web-backed answer.",
+              citations: [
+                {
+                  url: "https://example.com/export-source",
+                  title: "Export source",
+                  citedText: "Web-backed",
+                  startIndex: 0,
+                  endIndex: 10,
+                },
+              ],
+            }),
+            complete: true,
+          },
+        ],
+      },
+      {
         id: "ask-agent-assistant-export-error",
         role: "assistant",
         content: "",
-        timestamp: 202,
+        timestamp: 203,
         blocks: [],
         error: {
           message: "Codex API error 500: backend failed",
@@ -1675,6 +1817,15 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(exportedText).toContain(
       "I received your message, but Ask Agent model turns are not connected yet.",
     );
+    expect(exportedText).toContain("Web-backed answer.");
+    expect(exportedText).toContain("[Tool: web_search]");
+    expect(exportedText).toContain("Input:");
+    expect(exportedText).toContain('"query":"AgentLink export"');
+    expect(exportedText).toContain("Result:");
+    expect(exportedText).toContain("https://example.com/export-source");
+    expect(exportedText).toContain("Export source");
+    expect(exportedText).not.toContain("PRIVATE_REPLAY_SENTINEL");
+    expect(exportedText).not.toContain("providerReplay");
     expect(exportedText).toContain(
       "> Error: Codex API error 500: backend failed",
     );
@@ -3454,6 +3605,169 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     }
   });
 
+  it("refreshes an open background transcript when a later snapshot reports tool progress", async () => {
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const startedSnapshot = createSnapshot();
+    startedSnapshot.background = [
+      {
+        id: "bg-web-1",
+        task: "Research AgentLink",
+        status: "streaming",
+        lifecycle: "running",
+        phase: "responding",
+        lastProgressAt: 1,
+      },
+    ];
+    let webCompleted = false;
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/ui-state")) return jsonResponse(startedSnapshot);
+      if (url.includes("/api/background/open-transcript")) {
+        return jsonResponse({
+          ok: true,
+          transcript: {
+            sessionId: "bg-web-1",
+            task: "Research AgentLink",
+            messages: [
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool_use",
+                    id: "search-live",
+                    name: "web_search",
+                    input: { query: "AgentLink live transcript" },
+                  },
+                ],
+              },
+              ...(webCompleted
+                ? [
+                    {
+                      role: "user",
+                      content: [
+                        {
+                          type: "tool_result",
+                          tool_use_id: "search-live",
+                          content: JSON.stringify({
+                            results: [
+                              {
+                                url: "https://example.com/live-source",
+                                title: "Live source",
+                              },
+                            ],
+                          }),
+                        },
+                      ],
+                    },
+                    {
+                      role: "assistant",
+                      content: [
+                        {
+                          type: "text",
+                          text: "The search completed.",
+                        },
+                      ],
+                    },
+                  ]
+                : []),
+            ],
+          },
+        });
+      }
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "working", label: "Working" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands"))
+        return jsonResponse({ commands: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ ok: true });
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    fireEvent.click(await screen.findByText(/Agent Fleet/));
+    fireEvent.click(
+      await screen.findByTitle("Open this agent's full transcript"),
+    );
+    await screen.findByText("web_search");
+
+    const unrelatedSnapshot = createSnapshot();
+    unrelatedSnapshot.session.foreground.statusOverride = "Unrelated update";
+    unrelatedSnapshot.background = [{ ...startedSnapshot.background[0]! }];
+    const emitSnapshot = async (nextSnapshot: TestSnapshot) => {
+      await act(async () => {
+        MockEventSource.instances
+          .at(-1)
+          ?.addEventListener.mock.calls.find(
+            ([eventName]) => eventName === "snapshot",
+          )?.[1]?.({ data: JSON.stringify(nextSnapshot) });
+      });
+    };
+
+    await emitSnapshot(unrelatedSnapshot);
+    const transcriptRequestsBeforeUpdate = fetchMock.mock.calls.filter(
+      ([input]) => String(input).includes("/api/background/open-transcript"),
+    ).length;
+
+    await emitSnapshot({
+      ...unrelatedSnapshot,
+      background: [{ ...startedSnapshot.background[0]! }],
+    });
+
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes("/api/background/open-transcript"),
+      ),
+    ).toHaveLength(transcriptRequestsBeforeUpdate);
+
+    const completedSnapshot = createSnapshot();
+    completedSnapshot.background = [
+      {
+        ...startedSnapshot.background[0]!,
+        status: "idle",
+        lifecycle: "completed",
+        phase: "completed",
+        lastProgressAt: 2,
+        completedAt: 2,
+      },
+    ];
+    webCompleted = true;
+
+    await emitSnapshot(completedSnapshot);
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.filter(([input]) =>
+          String(input).includes("/api/background/open-transcript"),
+        ).length,
+      ).toBeGreaterThan(transcriptRequestsBeforeUpdate);
+    });
+    expect(await screen.findByText("The search completed.")).toBeTruthy();
+  });
+
   it("falls back to snapshot polling when the realtime stream errors", async () => {
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     const recoveredSnapshot = createSnapshot();
@@ -3651,7 +3965,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
     fireEvent.click(screen.getByTestId("trigger-mcp-config"));
     await waitFor(() => {
-      expect(screen.getByText("Config sources")).toBeTruthy();
+      expect(screen.getByText("Configuration sources")).toBeTruthy();
       expect(
         fetchMock.mock.calls.filter(([input]) =>
           String(input).includes("/api/ask-agent/mcp-config"),

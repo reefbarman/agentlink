@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import { formatBackgroundRuntimeStatus } from "./backgroundRuntimeStatus";
 
 export interface BgSessionInfoProps {
   id: string;
@@ -58,6 +59,27 @@ export interface BgSessionInfoProps {
   terminalReason?: string;
   createdAt?: number;
   lastActiveAt?: number;
+  startedAt?: number;
+  lastProgressAt?: number;
+  phaseStartedAt?: number;
+  requestStartedAt?: number;
+  requestElapsedMs?: number;
+  retryAt?: number;
+  elapsedMs?: number;
+  idleMs?: number;
+  phase?:
+    | "queued"
+    | "waiting_for_provider"
+    | "thinking"
+    | "responding"
+    | "executing_tool"
+    | "awaiting_approval"
+    | "retrying_provider"
+    | "completed"
+    | "failed"
+    | "cancelled";
+  canSteer?: boolean;
+  canKill?: boolean;
   totalInputTokens?: number;
   totalOutputTokens?: number;
   toolCalls?: number;
@@ -129,7 +151,6 @@ interface Props {
   onArchive?: (sessionId: string) => void;
   onPause?: (sessionId: string) => void;
   onResume?: (sessionId: string) => void;
-  onMarkRead?: (sessionId: string) => void;
 }
 
 const ACTIVE_STATUSES = new Set<BgSessionInfoProps["status"]>([
@@ -169,7 +190,19 @@ function statusText(
   status: BgSessionInfoProps["status"],
   currentTool?: string,
   displayStatus?: string,
+  runtime?: Pick<BgSessionInfoProps, "phase" | "requestStartedAt" | "retryAt">,
+  now = Date.now(),
 ): string {
+  if (
+    status === "streaming" &&
+    (runtime?.phase === "waiting_for_provider" ||
+      runtime?.phase === "thinking" ||
+      runtime?.phase === "responding" ||
+      runtime?.phase === "retrying_provider")
+  ) {
+    const runtimeStatus = formatBackgroundRuntimeStatus(runtime, now);
+    if (runtimeStatus) return runtimeStatus;
+  }
   switch (status) {
     case "queued":
       return "Queued";
@@ -201,7 +234,6 @@ export function BackgroundSessionStrip({
   onArchive,
   onPause,
   onResume,
-  onMarkRead,
 }: Props) {
   const [collapsed, setCollapsed] = useState(true);
   const [filter, setFilter] = useState<
@@ -222,7 +254,8 @@ export function BackgroundSessionStrip({
     setFilter("active");
   }, [openToActiveRequest]);
 
-  // Record start time the first time we see each active session
+  // Prefer the authoritative runtime start so reconnecting browser/webview
+  // clients do not reset the elapsed clock to zero.
   useEffect(() => {
     const active = sessions.filter((s) => ACTIVE_STATUSES.has(s.status));
     if (active.length === 0) return;
@@ -230,8 +263,11 @@ export function BackgroundSessionStrip({
       const next = new Map(prev);
       let changed = false;
       for (const s of active) {
-        if (!next.has(s.id)) {
-          next.set(s.id, Date.now());
+        const authoritativeStart = s.startedAt ?? s.createdAt;
+        if (!next.has(s.id) || authoritativeStart !== undefined) {
+          const start = authoritativeStart ?? Date.now();
+          if (next.get(s.id) === start) continue;
+          next.set(s.id, start);
           changed = true;
         }
       }
@@ -284,8 +320,10 @@ export function BackgroundSessionStrip({
   return (
     <div class="bg-session-strip">
       <button
+        type="button"
         class="bg-session-strip-header"
         onClick={() => setCollapsed(!collapsed)}
+        title={`${collapsed ? "Expand" : "Collapse"} agent fleet`}
       >
         <i class="codicon codicon-server-process" />
         <span class="bg-session-strip-title">
@@ -309,17 +347,20 @@ export function BackgroundSessionStrip({
               ["all", "active", "attention", "completed", "archived"] as const
             ).map((value) => (
               <button
+                type="button"
                 key={value}
                 class={`bg-session-filter${filter === value ? " active" : ""}`}
                 onClick={() => setFilter(value)}
+                title={`Show ${value} agents`}
               >
                 {value}
               </button>
             ))}
             <button
+              type="button"
               class="bg-session-filter"
               onClick={() => setViewMode(viewMode === "tree" ? "flat" : "tree")}
-              title="Toggle tree or flat view"
+              title={`Switch to ${viewMode === "tree" ? "flat" : "tree"} view`}
             >
               {viewMode}
             </button>
@@ -409,6 +450,13 @@ export function BackgroundSessionStrip({
                 s.resolvedProvider ? `provider: ${s.resolvedProvider}` : null,
                 s.resolvedModel ? `model: ${s.resolvedModel}` : null,
                 s.lifecycle ? `lifecycle: ${s.lifecycle}` : null,
+                s.phase ? `phase: ${s.phase}` : null,
+                s.elapsedMs !== undefined
+                  ? `elapsed: ${Math.round(s.elapsedMs / 1000)}s`
+                  : null,
+                s.idleMs !== undefined
+                  ? `quiet for: ${Math.round(s.idleMs / 1000)}s`
+                  : null,
                 s.goalId ? `goal: ${s.goalId}` : null,
                 s.workflowId ? `workflow: ${s.workflowId}` : null,
                 s.workspace ? `workspace: ${s.workspace}` : null,
@@ -439,19 +487,10 @@ export function BackgroundSessionStrip({
               <span class="bg-session-task" title={s.task}>
                 {s.task}
               </span>
-              {(s.unreadEventCount ?? 0) > 0 && (
-                <button
-                  class="bg-session-unread"
-                  onClick={() => onMarkRead?.(s.id)}
-                  title="Mark fleet events read"
-                >
-                  {s.unreadEventCount}
-                </button>
-              )}
               <span
                 class="bg-session-status"
                 title={[
-                  statusText(s.status, s.currentTool, s.displayStatus),
+                  statusText(s.status, s.currentTool, s.displayStatus, s, now),
                   s.displayStatusSource
                     ? `source: ${s.displayStatusSource}`
                     : null,
@@ -468,7 +507,7 @@ export function BackgroundSessionStrip({
                   .filter((v): v is string => Boolean(v))
                   .join("\n")}
               >
-                {statusText(s.status, s.currentTool, s.displayStatus)}
+                {statusText(s.status, s.currentTool, s.displayStatus, s, now)}
                 {s.summaryMeta?.inFlight && (
                   <i
                     class="codicon codicon-sync codicon-modifier-spin"
@@ -482,76 +521,96 @@ export function BackgroundSessionStrip({
                   {formatElapsed(startedAt.get(s.id)!, now)}
                 </span>
               )}
-              {ACTIVE_STATUSES.has(s.status) && (
+              {(s.canKill ?? ACTIVE_STATUSES.has(s.status)) && (
                 <button
+                  type="button"
                   class="icon-button bg-session-stop"
                   onClick={() => onStop(s.id)}
-                  title="Stop background agent"
+                  title="Stop this agent and keep its partial output"
+                  aria-label="Stop this agent and keep its partial output"
                 >
                   <i class="codicon codicon-close" />
                 </button>
               )}
-              {ACTIVE_STATUSES.has(s.status) && onSteer && (
-                <button
-                  class="icon-button bg-session-action"
-                  onClick={() => {
-                    const message = window.prompt("Steer this agent:");
-                    if (message?.trim()) onSteer(s.id, message.trim());
-                  }}
-                  title="Steer agent"
-                >
-                  <i class="codicon codicon-debug-step-over" />
-                </button>
-              )}
+              {(s.canSteer ??
+                (s.status === "streaming" ||
+                  s.status === "tool_executing" ||
+                  s.status === "awaiting_approval")) &&
+                onSteer && (
+                  <button
+                    type="button"
+                    class="icon-button bg-session-action"
+                    onClick={() => {
+                      const message = window.prompt("Steer this agent:");
+                      if (message?.trim()) onSteer(s.id, message.trim());
+                    }}
+                    title="Send new instructions to this running agent"
+                    aria-label="Send new instructions to this running agent"
+                  >
+                    <i class="codicon codicon-debug-step-over" />
+                  </button>
+                )}
               {ACTIVE_STATUSES.has(s.status) && onPause && (
                 <button
+                  type="button"
                   class="icon-button bg-session-action"
                   onClick={() => onPause(s.id)}
-                  title="Pause agent"
+                  title="Pause this agent so it can be resumed later"
+                  aria-label="Pause this agent so it can be resumed later"
                 >
                   <i class="codicon codicon-debug-pause" />
                 </button>
               )}
               {s.lifecycle === "paused" && onResume && (
                 <button
+                  type="button"
                   class="icon-button bg-session-action"
                   onClick={() => onResume(s.id)}
                   title="Restart agent from its saved task and transcript"
+                  aria-label="Restart agent from its saved task and transcript"
                 >
                   <i class="codicon codicon-debug-start" />
                 </button>
               )}
               {s.parentSessionId && onDetach && (
                 <button
+                  type="button"
                   class="icon-button bg-session-action"
                   onClick={() => onDetach(s.id)}
-                  title="Detach subtree"
+                  title="Detach this agent and its descendants from the current task"
+                  aria-label="Detach this agent and its descendants from the current task"
                 >
                   <i class="codicon codicon-link" />
                 </button>
               )}
               {!ACTIVE_STATUSES.has(s.status) && onRetry && (
                 <button
+                  type="button"
                   class="icon-button bg-session-action"
                   onClick={() => onRetry(s.id)}
-                  title="Retry agent"
+                  title="Start a new agent with the same task"
+                  aria-label="Start a new agent with the same task"
                 >
                   <i class="codicon codicon-refresh" />
                 </button>
               )}
               {!ACTIVE_STATUSES.has(s.status) && !s.archivedAt && onArchive && (
                 <button
+                  type="button"
                   class="icon-button bg-session-action"
                   onClick={() => onArchive(s.id)}
-                  title="Archive agent"
+                  title="Hide this finished agent from the fleet"
+                  aria-label="Hide this finished agent from the fleet"
                 >
                   <i class="codicon codicon-archive" />
                 </button>
               )}
               <button
+                type="button"
                 class="icon-button bg-session-transcript"
                 onClick={() => onOpenTranscript?.(s.id)}
-                title="View transcript"
+                title="Open this agent's full transcript"
+                aria-label="Open this agent's full transcript"
               >
                 <i class="codicon codicon-open-preview" />
               </button>

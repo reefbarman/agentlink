@@ -57,6 +57,14 @@ When adding a new tool or changing tool parameters:
 6. Update `README.md` — add a full tool section with parameter table and response details
 7. Run `npm run release -- --install` to rebuild and reinstall the extension. (Not when developing the agent, though)
 
+## Tool Usage and Feedback Review
+
+- Run `npm run telemetry:tools -- --top 60` to inspect the local aggregate tool-usage report before changing an existing tool because of anecdotal friction, apparent underuse, or a suspected failure pattern.
+- Use `npm run telemetry:tools:csv` when a sortable export is useful. Generated files under `telemetry-reports/` are ignored and must not be committed.
+- In dev builds, inspect relevant entries with `get_feedback` before changing tool behavior. Do not delete feedback until the issue has been addressed or deliberately declined; delete only the reviewed indices.
+- Treat raw call counts as directional, not as an availability-normalized adoption rate. The current telemetry does not yet say how often a tool was advertised, and legacy outcome aggregates may classify structured rejections as successful calls. See [plans/tool-usage-observability-and-adoption-plan.md](plans/tool-usage-observability-and-adoption-plan.md).
+- After adding or materially changing a tool, dogfood it and rerun the report to check that it appears under the expected name/mode, records the intended outcome, does not introduce unknown parameters, and has corresponding feedback reviewed.
+
 ## Project Structure Boundaries
 
 - `src/core/**` is for portable, surface-neutral runtime contracts and logic only. Do not put VS Code, browser gateway, webview, CLI, or product-surface-specific names/behavior there.
@@ -79,6 +87,10 @@ When adding a new tool or changing tool parameters:
 
 AgentLink ships a browser-based remote control surface for the built-in agent. A shared helper process serves the browser UI on a stable port (`agentlink.browserGatewayPort`) and routes to per-VS-Code-window API/SSE bridge servers by instance ID, so one URL can switch between all open windows. Full architecture snapshot: [plans/browser-remote-session-status-handoff.md](plans/browser-remote-session-status-handoff.md).
 
+### Chat Activity Shelf
+
+The **Chat Activity Shelf** is the resizable region between the chat transcript and the composer. It is the shared home for session activity and controls that should remain visible near the input without becoming transcript messages: context/progress indicators, queued messages, TODOs, questions and approval cards, MCP/provider status, interrupted/running state, and Agent Fleet. The composer is not part of the Chat Activity Shelf. New components in this region must preserve its bounded, internally scrollable layout and remain in parity between the VS Code and browser chat surfaces.
+
 **Any change to chat state, session state, agent events, or UI surfaces must be considered against the browser remote view** — it is a first-class surface, not a debug page, and regressions there are easy to miss because the VS Code webview keeps working.
 
 When touching these areas, keep the browser in sync:
@@ -97,3 +109,9 @@ If a new feature genuinely cannot work over the browser gateway (e.g. requires a
 ## Browser/Webview ID Generation
 
 Browser gateway pages may run over LAN HTTP, where `crypto.randomUUID()` is unavailable because the page is an insecure browser context. In browser/webview code, use `randomId()` from `src/shared/randomId.ts` instead of calling `crypto.randomUUID()` directly. This matters for Ask Agent/browser gateway flows because failures can happen before request/logging paths and look like the UI silently does nothing.
+
+## Local planning files
+
+- Files under `plans/` are local-only working documents and are intentionally Git-ignored.
+- Do not force-add, stage, or commit any `plans/` path.
+- Before committing all changes, verify that no `plans/` path is staged or tracked.

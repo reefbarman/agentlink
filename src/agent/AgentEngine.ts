@@ -6,7 +6,7 @@ import {
   setTimeout as setNodeTimeout,
 } from "timers";
 import type { AgentSession } from "./AgentSession.js";
-import type { AgentEvent } from "./types.js";
+import type { AgentEvent, AgentMessage } from "./types.js";
 import {
   buildAgentErrorMessage,
   getAgentErrorActions,
@@ -19,11 +19,13 @@ import {
 import type {
   AgentToolRuntime,
   AgentToolExecutionContext,
-  SessionImageReference,
 } from "../core/tools/types.js";
+import { ToolCallBudget } from "../core/tools/toolCallBudget.js";
 import { buildToolContextBreakdown } from "./contextBreakdown.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import { partitionMcpToolsForDisclosure } from "./mcpToolDisclosure.js";
+import type { CoreResolvedWebAccessPolicy } from "../core/webAccess.js";
+import { CORE_NATIVE_WEB_MAX_PAUSE_TURNS } from "../core/nativeWebTools.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { handleToolError } from "../shared/types.js";
 import type { McpApprovalPromotionMeta, ToolResult } from "../shared/types.js";
@@ -53,13 +55,58 @@ import type {
 import { toSupportedImageMediaType } from "./providers/types.js";
 import {
   toCoreModelDocumentMediaType,
+  type CoreModelMessage,
+  type CoreModelStopReason,
   type CoreModelTransportActivity,
 } from "../core/modelRuntime.js";
 import { sleep } from "../util/sleep.js";
+import type {
+  SessionTranscriptMessage,
+  SessionTranscriptSnapshot,
+} from "../core/sessionTranscriptRecall.js";
 import { truncateMiddle } from "../util/truncateMiddle.js";
 import { getAgentLinkHttpDiagnostics } from "../util/httpDispatcher.js";
+import { collectSessionImages } from "./sessionImages.js";
 import type { ProviderRegistry } from "./providers/index.js";
+import type { ModelRequestPermit } from "../core/modelRequestScheduler.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
+export function buildSessionTranscriptSnapshot(
+  messages: readonly AgentMessage[],
+): SessionTranscriptSnapshot {
+  let latestSummaryIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.isSummary) {
+      latestSummaryIndex = index;
+      break;
+    }
+  }
+
+  const projected: SessionTranscriptMessage[] = messages.map(
+    (message, sourceIndex) => ({
+      sourceIndex,
+      role: message.role,
+      sourceKind: message.isSummary
+        ? "summary"
+        : message.isResumeContext
+          ? "resume"
+          : "source",
+      condensed: latestSummaryIndex >= 0 && sourceIndex < latestSummaryIndex,
+      content:
+        typeof message.content === "string"
+          ? message.content
+          : structuredClone(message.content),
+      runtimeError: message.runtimeError
+        ? {
+            message: message.runtimeError.message,
+            retryable: message.runtimeError.retryable,
+            code: message.runtimeError.code,
+          }
+        : undefined,
+    }),
+  );
+  return { messages: projected };
+}
+
 const MAX_REQUEST_RETRIES = 4;
 // Provider-side transient failures (5xx/429/529) get a much larger budget:
 // they resolve on their own, and exhausting retries fails background tasks
@@ -182,11 +229,11 @@ function extractAgentDisplayArgs(
 }
 
 function buildProviderCacheKey(session: AgentSession): string {
-  const workspaceHash = createHash("sha1")
-    .update(session.cwd)
+  const projectHash = createHash("sha1")
+    .update(session.projectScope.projectId)
     .digest("hex")
     .slice(0, 12);
-  return `codex:${workspaceHash}:${session.id}:${session.model}`;
+  return `codex:${projectHash}:${session.id}:${session.model}`;
 }
 
 /** Custom error for auth failures, so the outer catch can mark them specially. */
@@ -364,6 +411,7 @@ interface ToolCallResult {
   result: ToolResult;
   durationMs: number;
   mcpApprovalPromotion?: McpApprovalPromotionMeta;
+  composeTrace?: import("../shared/composeTypes.js").ComposeTrace;
 }
 
 function parseToolResultPayload(
@@ -524,8 +572,10 @@ function toolResultToContent(
 ): string | ContentBlock[] {
   const maxChars =
     TOOL_RESULT_CHAR_LIMITS[toolName] ?? DEFAULT_TOOL_RESULT_CHARS;
-  const hasImage = result.content.some((c) => c.type === "image");
-  if (!hasImage) {
+  const hasMedia = result.content.some(
+    (content) => content.type === "image" || content.type === "document",
+  );
+  if (!hasMedia) {
     // Simple case: all text — join into a single string, then cap size.
     const joined = result.content
       .filter((c) => c.type === "text")
@@ -533,22 +583,38 @@ function toolResultToContent(
       .join("\n");
     return truncateToolText(joined, maxChars, toolUseId);
   }
-  // Mixed content: pass blocks so images are preserved; cap text blocks.
+  // Mixed content: pass blocks so media is preserved; cap text blocks.
   return result.content
-    .map((c): ContentBlock | null => {
-      if (c.type === "text")
+    .map((content): ContentBlock | null => {
+      if (content.type === "text") {
         return {
           type: "text" as const,
-          text: truncateToolText(c.text, maxChars, toolUseId),
+          text: truncateToolText(content.text, maxChars, toolUseId),
         };
-      // image — validate media_type before sending to the API
-      const raw = (c as { type: "image"; data: string; mimeType: string })
-        .mimeType;
-      const mediaType = toSupportedImageMediaType(raw);
+      }
+      if (content.type === "document") {
+        const mediaType = toCoreModelDocumentMediaType(content.mimeType);
+        if (!mediaType) {
+          return {
+            type: "text" as const,
+            text: `[Document with unsupported format: ${content.mimeType}]`,
+          };
+        }
+        return {
+          type: "document" as const,
+          title: content.name,
+          source: {
+            type: "base64" as const,
+            media_type: mediaType,
+            data: content.data,
+          },
+        };
+      }
+      const mediaType = toSupportedImageMediaType(content.mimeType);
       if (!mediaType) {
         return {
           type: "text" as const,
-          text: `[Image with unsupported format: ${raw}]`,
+          text: `[Image with unsupported format: ${content.mimeType}]`,
         };
       }
       return {
@@ -556,7 +622,7 @@ function toolResultToContent(
         source: {
           type: "base64" as const,
           media_type: mediaType,
-          data: (c as { type: "image"; data: string; mimeType: string }).data,
+          data: content.data,
         },
       };
     })
@@ -584,6 +650,14 @@ export class AgentEngine {
       toolProfile?: string;
       maxApiTurns?: number;
       maxToolCalls?: number;
+      /** Immutable web backend/tool selection prepared at the logical turn boundary. */
+      webAccessPolicy?: Readonly<CoreResolvedWebAccessPolicy>;
+      /** MCP disclosure prepared from the same immutable tool-catalog snapshot. */
+      mcpToolDisclosure?: Readonly<
+        ReturnType<typeof partitionMcpToolsForDisclosure>
+      >;
+      /** Exact cloned MCP catalog used to build the prepared disclosure/policy. */
+      mcpToolDefinitions?: readonly ToolDefinition[];
       /** Time to first raw transport activity (normally response headers). */
       providerFirstEventTimeoutMs?: number;
       /** Maximum silence between raw response body chunks/provider events. */
@@ -608,8 +682,9 @@ export class AgentEngine {
 
     const maxApiTurns = opts?.maxApiTurns ?? 0; // 0 = unlimited
     const maxToolCalls = opts?.maxToolCalls ?? 0; // 0 = unlimited
+    const toolCallBudget = new ToolCallBudget(maxToolCalls);
     let apiTurnCount = 0;
-    let totalToolCalls = 0;
+    let providerPauseTurnCount = 0;
     let wrapUpAttempts = 0; // Track wrap-up injections to prevent infinite loops
     const MAX_WRAP_UP_ATTEMPTS = 2;
     let pendingFinalMarker: FinalMessageMarker | null = null;
@@ -645,9 +720,16 @@ export class AgentEngine {
         // Include tools when dispatch context is available, filtered by mode.
         // Compute this before any condense path so both automatic and retry-triggered
         // condenses see the same preserved runtime context that future requests will use.
-        const connectedMcpToolDefs =
-          this.toolRuntime?.getConnectedMcpToolDefs?.() ?? [];
-        if (this.toolRuntime && connectedMcpToolDefs.length > 0) {
+        const connectedMcpToolDefs = opts?.mcpToolDefinitions
+          ? [...opts.mcpToolDefinitions]
+          : (this.toolRuntime?.getConnectedMcpToolDefs?.() ?? []);
+        if (opts?.mcpToolDisclosure) {
+          session.mcpToolDisclosure = {
+            inlineTools: [...opts.mcpToolDisclosure.inlineTools],
+            deferredTools: [...opts.mcpToolDisclosure.deferredTools],
+            catalog: [...opts.mcpToolDisclosure.catalog],
+          };
+        } else if (this.toolRuntime && connectedMcpToolDefs.length > 0) {
           const serverNames = new Set(
             connectedMcpToolDefs
               .map((tool) => parseMcpToolName(tool.name)?.serverName)
@@ -675,6 +757,7 @@ export class AgentEngine {
               ...this.toolRuntime.listTools({
                 mode: session.agentMode,
                 mcpToolDefs: providerMcpToolDefs,
+                nativeWebToolKinds: opts?.webAccessPolicy?.enabledKinds,
                 isBackground: opts?.isBackground,
                 toolProfile: opts?.toolProfile,
                 skillAllowedTools: session.getActiveSkillAllowedTools(),
@@ -719,7 +802,7 @@ export class AgentEngine {
               try {
                 const absPath = path.isAbsolute(filePath)
                   ? filePath
-                  : path.join(session.cwd, filePath);
+                  : path.join(session.requireProjectRoot(), filePath);
                 const content = await fs.readFile(absPath, "utf-8");
                 const ext = path.extname(filePath).slice(1) || "";
                 return `<file path="${filePath}">\n\`\`\`${ext}\n${content}\n\`\`\`\n</file>`;
@@ -781,6 +864,7 @@ export class AgentEngine {
         const requestId = randomUUID();
         const startTime = Date.now();
         let timeToFirstToken = 0;
+        let providerQueueWaitMs = 0;
 
         const capabilities = provider.getCapabilities(session.model);
         const reasoningEffort = normalizeReasoningEffort(
@@ -820,6 +904,8 @@ export class AgentEngine {
         let cacheReadTokens = 0;
         let cacheCreationTokens = 0;
         let providerResponseId: string | undefined;
+        let assistantMessage: CoreModelMessage | undefined;
+        let modelStopReason: CoreModelStopReason | undefined;
         let firstTokenReceived = false;
         let usedPreviousResponseId = false;
         let promptCacheKey: string | undefined;
@@ -834,6 +920,7 @@ export class AgentEngine {
         const retryTextPrefix = visibleTextFromRetriedStream;
         let retryTextOffset = 0;
         let retryTextDiverged = false;
+        let requestPermit: ModelRequestPermit | undefined;
 
         try {
           // Build a copy of messages for the API call, injecting any attached
@@ -854,7 +941,7 @@ export class AgentEngine {
 
           const apiMessages: MessageParam[] = effectiveMessages.map(
             (msg, effectiveIdx) => {
-              const { role, content, media } = msg;
+              const { role, content, media, providerReplay } = msg;
               if (media) {
                 this.log?.(
                   `[media] found attached media at effectiveIdx=${effectiveIdx} role=${role} contentType=${typeof content === "string" ? "string" : Array.isArray(content) ? `array(${content.length})` : "other"} images=${media.images.length} documents=${media.documents.length}`,
@@ -952,7 +1039,13 @@ export class AgentEngine {
                 );
                 return { role, content: blocks };
               }
-              return { role, content };
+              return {
+                role,
+                content,
+                ...(role === "assistant" && providerReplay
+                  ? { providerReplay }
+                  : {}),
+              };
             },
           );
           // Empty-response recovery input is request-local. It must reach the
@@ -1011,6 +1104,24 @@ export class AgentEngine {
             messageAssemblyStartedAt,
             `apiMessages=${apiMessages.length}`,
           );
+          const schedulerQueued = !this.registry.requestScheduler.hasCapacity(
+            provider.id,
+          );
+          const requestPermitPromise = this.registry.requestScheduler.acquire(
+            provider.id,
+            opts?.isBackground ? "background" : "interactive",
+            signal,
+          );
+          yield {
+            type: "api_request_start",
+            requestId,
+            provider: provider.id,
+            model: session.model,
+            startedAt: startTime,
+            schedulerQueued,
+          };
+          requestPermit = await requestPermitPromise;
+          providerQueueWaitMs += requestPermit.waitMs;
           const requestController = new AbortController();
           const abortRequest = () => requestController.abort();
           signal.addEventListener("abort", abortRequest, { once: true });
@@ -1117,6 +1228,12 @@ export class AgentEngine {
                     }
                   }
                   break;
+                case "web_activity":
+                  // Provider-hosted web activity is collected by delegated native
+                  // tool execution or retained in private replay. It is not a
+                  // separate public UI event; web tools render through ordinary
+                  // tool_start/tool_result events.
+                  break;
                 case "tool_start":
                   pendingToolInputDeltas.set(event.toolCallId, []);
                   break;
@@ -1130,6 +1247,10 @@ export class AgentEngine {
                   break;
                 case "content_blocks":
                   contentBlocks = event.blocks;
+                  break;
+                case "model_stop":
+                  assistantMessage = event.assistantMessage;
+                  modelStopReason = event.reason;
                   break;
                 case "usage":
                   inputTokens = event.inputTokens;
@@ -1326,6 +1447,9 @@ export class AgentEngine {
           }
 
           throw streamErr;
+        } finally {
+          requestPermit?.release();
+          requestPermit = undefined;
         }
 
         // Successful API response resets both independently budgeted layers.
@@ -1363,6 +1487,7 @@ export class AgentEngine {
           cacheCreationTokens,
           durationMs,
           timeToFirstToken,
+          providerQueueWaitMs,
           usedPreviousResponseId,
           previousResponseIdFallback,
           promptCacheKey,
@@ -1372,6 +1497,29 @@ export class AgentEngine {
           contextBreakdown,
         };
 
+        const committedAssistantMessage: CoreModelMessage =
+          assistantMessage ?? {
+            role: "assistant",
+            content: contentBlocks,
+          };
+        const appendCommittedAssistantMessage = () => {
+          session.appendAssistantMessage(
+            committedAssistantMessage as AgentMessage,
+          );
+        };
+
+        if (modelStopReason === "pause_turn") {
+          providerPauseTurnCount += 1;
+          if (providerPauseTurnCount > CORE_NATIVE_WEB_MAX_PAUSE_TURNS) {
+            throw new Error(
+              `Provider native web continuation exceeded ${CORE_NATIVE_WEB_MAX_PAUSE_TURNS} pause turns.`,
+            );
+          }
+          appendCommittedAssistantMessage();
+          continue;
+        }
+        providerPauseTurnCount = 0;
+
         // Enforce maxApiTurns: when the limit is reached and the model wants
         // more tool calls, inject a "wrap up" message to force a final response.
         if (maxApiTurns > 0 && apiTurnCount >= maxApiTurns) {
@@ -1380,7 +1528,7 @@ export class AgentEngine {
             wrapUpAttempts++;
             // Hard stop after too many wrap-up attempts to prevent infinite loops
             if (wrapUpAttempts > MAX_WRAP_UP_ATTEMPTS) {
-              session.appendAssistantTurn(contentBlocks);
+              appendCommittedAssistantMessage();
               yield {
                 type: "warning",
                 message: `Background agent exceeded ${MAX_WRAP_UP_ATTEMPTS} wrap-up attempts. Force-stopping.`,
@@ -1389,7 +1537,7 @@ export class AgentEngine {
             }
             // Append the assistant turn with tool calls so history is valid,
             // then add synthetic results asking to wrap up.
-            session.appendAssistantTurn(contentBlocks);
+            appendCommittedAssistantMessage();
             const toolUseBlocksForWrapUp = contentBlocks.filter(
               (b): b is ToolUseBlock => b.type === "tool_use",
             );
@@ -1483,13 +1631,13 @@ export class AgentEngine {
 
         if (toolUseBlocks.length === 0) {
           // No tool calls — append the assistant turn on its own and finish.
-          session.appendAssistantTurn(contentBlocks);
+          appendCommittedAssistantMessage();
           break;
         }
 
         if (!this.toolRuntime) {
           // No dispatch runtime — append and finish without executing tools.
-          session.appendAssistantTurn(contentBlocks);
+          appendCommittedAssistantMessage();
           break;
         }
 
@@ -1497,20 +1645,21 @@ export class AgentEngine {
         const dispatchableToolCount = toolUseBlocks.filter(
           (b) => b.name !== TODO_TOOL_NAME,
         ).length;
-        if (
-          maxToolCalls > 0 &&
-          totalToolCalls + dispatchableToolCount > maxToolCalls
-        ) {
+        const toolCallReservation =
+          dispatchableToolCount > 0
+            ? toolCallBudget.tryReserve(dispatchableToolCount)
+            : undefined;
+        if (toolCallReservation && !toolCallReservation.ok) {
           wrapUpAttempts++;
           if (wrapUpAttempts > MAX_WRAP_UP_ATTEMPTS) {
-            session.appendAssistantTurn(contentBlocks);
+            appendCommittedAssistantMessage();
             yield {
               type: "warning",
               message: `Background agent exceeded ${MAX_WRAP_UP_ATTEMPTS} wrap-up attempts. Force-stopping.`,
             };
             break;
           }
-          session.appendAssistantTurn(contentBlocks);
+          appendCommittedAssistantMessage();
           session.appendToolResults(
             toolUseBlocks.map((b) => ({
               type: "tool_result" as const,
@@ -1525,7 +1674,6 @@ export class AgentEngine {
           };
           continue;
         }
-        totalToolCalls += dispatchableToolCount;
 
         // The response and its budget checks are now committed. Publish only
         // tool calls that will actually dispatch; provisional calls from
@@ -1537,6 +1685,7 @@ export class AgentEngine {
             type: "tool_start",
             toolCallId: block.id,
             toolName: block.name,
+            input: block.input,
           };
           for (const partialJson of pendingToolInputDeltas.get(block.id) ??
             []) {
@@ -1570,6 +1719,8 @@ export class AgentEngine {
           sessionId: session.id,
           mode: session.agentMode.slug,
           toolProfile: opts?.toolProfile,
+          availableToolNames: new Set(rawTools?.map((tool) => tool.name) ?? []),
+          toolCallBudget,
           commandExecutionPolicy:
             session.agentMode.toolGroups.includes("read-only-command") ||
             opts?.toolProfile === "review" ||
@@ -1592,27 +1743,10 @@ export class AgentEngine {
             pendingCompletedTodoUpdate = currentTodos;
             return currentTodos;
           },
-          getSessionImages: () => {
-            const images: SessionImageReference[] = [];
-            for (const [messageIndex, message] of session
-              .getAllMessages()
-              .entries()) {
-              if (message.role !== "user" || !message.media?.images?.length) {
-                continue;
-              }
-              message.media.images.forEach((image, imageIndex) => {
-                images.push({
-                  id: `image_${images.length + 1}`,
-                  name: image.name,
-                  mimeType: image.mimeType,
-                  base64: image.base64,
-                  messageIndex,
-                  imageIndex,
-                });
-              });
-            }
-            return images;
-          },
+          getSessionTranscript: () =>
+            buildSessionTranscriptSnapshot(session.getAllMessages()),
+          getSessionImages: () =>
+            collectSessionImages(session.getAllMessages()),
         };
 
         // Execute tools (parallel for read-only, sequential for write)
@@ -1672,7 +1806,27 @@ export class AgentEngine {
           const dispatchPromise = this.executeToolCalls(
             dispatchBlocks,
             signal,
-            sessionToolContext,
+            {
+              ...sessionToolContext,
+              onNestedToolStart: (nested) =>
+                pushDispatchEvent({
+                  type: "tool_start",
+                  toolCallId: nested.toolCallId,
+                  toolName: nested.toolName,
+                  parentCallId: nested.parentCallId,
+                  input: nested.input,
+                }),
+              onNestedToolComplete: (nested) =>
+                pushDispatchEvent({
+                  type: "tool_result",
+                  toolCallId: nested.toolCallId,
+                  toolName: nested.toolName,
+                  parentCallId: nested.parentCallId,
+                  result: nested.result.content,
+                  durationMs: nested.durationMs,
+                  input: nested.input,
+                }),
+            },
             session,
             (tr) => {
               const toolUseBlock = toolUseBlocksById.get(tr.tool_use_id);
@@ -1684,6 +1838,7 @@ export class AgentEngine {
                 durationMs: tr.durationMs,
                 input: toolUseBlock?.input,
                 mcpApprovalPromotion: tr.mcpApprovalPromotion,
+                composeTrace: tr.composeTrace,
               });
               if (
                 tr.toolName === "set_task_status" &&
@@ -1776,7 +1931,7 @@ export class AgentEngine {
         // Append assistant turn + tool results atomically — no async gap between
         // them so the session is never left with orphaned tool_use blocks.
         const finalMarkerForTurn = pendingFinalMarker;
-        session.appendAssistantTurn(contentBlocks);
+        appendCommittedAssistantMessage();
         if (finalMarkerForTurn) {
           session.applyFinalMarker(finalMarkerForTurn);
           yield { type: "final_marker", marker: finalMarkerForTurn };
@@ -1791,6 +1946,7 @@ export class AgentEngine {
             tool_use_id: tr.tool_use_id,
             content: toolResultContents[index]!,
             mcpApprovalPromotion: tr.mcpApprovalPromotion,
+            composeTrace: tr.composeTrace,
           })),
         );
 
@@ -1821,7 +1977,13 @@ export class AgentEngine {
         const successfulFinalMarker = toolResults.some(
           (tr) => tr.toolName === "set_task_status" && finalMarkerForTurn,
         );
-        if (successfulFinalMarker) {
+        // A queued interjection takes priority over ending the turn: fall
+        // through to the drain below so the user's message is injected and the
+        // model responds to it, instead of stopping at set_task_status.
+        if (
+          successfulFinalMarker &&
+          (signal.aborted || !session.hasPendingInterjections)
+        ) {
           break;
         }
         if (successfulModeSwitch) {
@@ -1977,6 +2139,7 @@ export class AgentEngine {
           forceResolve(result);
         },
         JSON.stringify(call.input, null, 2),
+        ctx.parentCallId,
       );
       trackedCalls.set(call.id, {
         trackerCtx,
@@ -2020,6 +2183,7 @@ export class AgentEngine {
                 context: {
                   ...ctx,
                   sessionId: session.id,
+                  toolCallId: call.id,
                   trackerCtx,
                   toolAbortSignal: controller?.signal,
                   getAdvertisedSkills: () => session.getAdvertisedSkills(),
@@ -2037,6 +2201,7 @@ export class AgentEngine {
               context: {
                 ...ctx,
                 sessionId: session.id,
+                toolCallId: call.id,
                 trackerCtx,
                 toolAbortSignal: controller?.signal,
                 getAdvertisedSkills: () => session.getAdvertisedSkills(),
@@ -2052,6 +2217,7 @@ export class AgentEngine {
           result,
           durationMs: Date.now() - start,
           mcpApprovalPromotion: result.uiMeta?.mcpApprovalPromotion,
+          composeTrace: result.uiMeta?.composeTrace,
         };
       } catch (err) {
         return {
@@ -2182,7 +2348,7 @@ export class AgentEngine {
         systemPrompt: session.systemPrompt,
         isAutomatic,
         filesRead: [...session.filesRead],
-        cwd: session.cwd,
+        cwd: session.requireProjectRoot(),
         preservedContext,
       },
       prevInputTokens,

@@ -12,6 +12,7 @@ import {
   isBinaryFile,
   tryGetFirstWorkspaceRoot,
   getWorkspaceRootForPath,
+  getWorkspaceRoots,
 } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
@@ -23,6 +24,12 @@ import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 import { type ToolResult } from "../shared/types.js";
 import { semanticFileQuery } from "../services/semanticSearch.js";
 import { convertBmpToPng } from "./bmpToPng.js";
+import { convertPpmToPng } from "./ppmToPng.js";
+import {
+  getStructuredSecretRedactionMetadata,
+  isStructuredConfigPath,
+  redactStructuredSecrets,
+} from "../shared/structuredSecretRedaction.js";
 
 // --- Image support ---
 
@@ -35,7 +42,10 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   ".webp": "image/webp",
 };
 
-const BMP_EXTENSION = ".bmp";
+const IMAGE_CONVERTERS: Record<string, (data: Buffer) => Buffer> = {
+  ".bmp": convertBmpToPng,
+  ".ppm": convertPpmToPng,
+};
 
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
 
@@ -332,8 +342,10 @@ export async function findLikelyPathSuggestions(
     typeof optionsOrLimit === "number"
       ? { limit: optionsOrLimit }
       : optionsOrLimit;
-  const workspaceRoot = options.workspaceRoot ?? tryGetFirstWorkspaceRoot();
-  if (!workspaceRoot) return [];
+  const workspaceRoots = options.workspaceRoot
+    ? [options.workspaceRoot]
+    : getWorkspaceRoots();
+  if (workspaceRoots.length === 0) return [];
 
   const limit = Math.max(0, options.limit ?? 5);
   const directoryBudget = Math.max(
@@ -346,7 +358,10 @@ export async function findLikelyPathSuggestions(
     ? normalizedInput.slice(2)
     : normalizedInput;
   const suggestions = new Set<string>();
-  const stack = [workspaceRoot];
+  const stack = workspaceRoots.map((workspaceRoot) => ({
+    current: workspaceRoot,
+    workspaceRoot,
+  }));
   let directoriesRead = 0;
 
   while (
@@ -354,7 +369,7 @@ export async function findLikelyPathSuggestions(
     suggestions.size < limit &&
     directoriesRead < directoryBudget
   ) {
-    const current = stack.pop()!;
+    const { current, workspaceRoot } = stack.pop()!;
     directoriesRead += 1;
     let entries: Dirent<string>[];
     try {
@@ -368,7 +383,7 @@ export async function findLikelyPathSuggestions(
       if (entry.name === "node_modules" || entry.name === ".git") continue;
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        stack.push(fullPath);
+        stack.push({ current: fullPath, workspaceRoot });
         continue;
       }
       const relPath = path
@@ -379,7 +394,9 @@ export async function findLikelyPathSuggestions(
         relPath.endsWith(`/${suffix}`) ||
         entry.name === basename
       ) {
-        suggestions.add(relPath);
+        suggestions.add(
+          workspaceRoots.length === 1 ? relPath : path.resolve(fullPath),
+        );
       }
     }
   }
@@ -686,36 +703,37 @@ export async function handleReadFile(
       return await readPdfFile(filePath, params);
     }
 
-    if (isBinaryFile(filePath)) {
-      if (ext === BMP_EXTENSION) {
-        const stat = await fs.stat(filePath);
-        if (stat.size > MAX_IMAGE_SIZE) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  error: `Image too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Max: ${MAX_IMAGE_SIZE / 1024 / 1024} MB`,
-                  path: params.path,
-                }),
-              },
-            ],
-          };
-        }
-
-        const data = await fs.readFile(filePath);
-        const png = convertBmpToPng(data);
+    const imageConverter = IMAGE_CONVERTERS[ext];
+    if (imageConverter) {
+      const stat = await fs.stat(filePath);
+      if (stat.size > MAX_IMAGE_SIZE) {
         return {
           content: [
             {
-              type: "image",
-              data: png.toString("base64"),
-              mimeType: "image/png",
+              type: "text",
+              text: JSON.stringify({
+                error: `Image too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Max: ${MAX_IMAGE_SIZE / 1024 / 1024} MB`,
+                path: params.path,
+              }),
             },
           ],
         };
       }
 
+      const data = await fs.readFile(filePath);
+      const png = imageConverter(data);
+      return {
+        content: [
+          {
+            type: "image",
+            data: png.toString("base64"),
+            mimeType: "image/png",
+          },
+        ],
+      };
+    }
+
+    if (isBinaryFile(filePath)) {
       // Check if it's a supported binary format we can return.
       const mimeType = IMAGE_EXTENSIONS[ext];
 
@@ -765,7 +783,11 @@ export async function handleReadFile(
       fs.stat(filePath),
     ]);
 
-    const allLines = raw.split("\n");
+    const structuredRedaction = isStructuredConfigPath(filePath)
+      ? redactStructuredSecrets(raw)
+      : undefined;
+    const visibleRaw = structuredRedaction?.content ?? raw;
+    const allLines = visibleRaw.split("\n");
     const totalLines = allLines.length;
 
     let anchorHit:
@@ -809,9 +831,9 @@ export async function handleReadFile(
         };
       }
 
-      const match = raw.match(anchorRegex);
+      const match = visibleRaw.match(anchorRegex);
       if (match && match.index != null) {
-        const prefix = raw.slice(0, match.index);
+        const prefix = visibleRaw.slice(0, match.index);
         const line = prefix.split("\n").length;
         anchorHit = {
           mode: "regex",
@@ -820,9 +842,9 @@ export async function handleReadFile(
         };
       }
     } else if (params.anchor && params.offset == null) {
-      const idx = raw.indexOf(params.anchor);
+      const idx = visibleRaw.indexOf(params.anchor);
       if (idx >= 0) {
-        const prefix = raw.slice(0, idx);
+        const prefix = visibleRaw.slice(0, idx);
         const line = prefix.split("\n").length;
         anchorHit = {
           mode: "literal",
@@ -835,13 +857,41 @@ export async function handleReadFile(
     // Semantic offset: when query is provided and no explicit/manual anchor,
     // use the index to jump to the most relevant section of the file.
     let semanticHit: { startLine: number; endLine: number } | null = null;
-    if (params.query && params.offset == null && !anchorHit) {
-      const wsRoot = getWorkspaceRootForPath(filePath);
-      if (wsRoot) {
-        const relPath = path.relative(wsRoot, filePath);
-        semanticHit = await semanticFileQuery(relPath, params.query, wsRoot);
+    let semanticMatchSkippedForRedaction = false;
+    const semanticLookupRequested = Boolean(
+      params.query && params.offset == null && !anchorHit,
+    );
+    if (semanticLookupRequested && params.query) {
+      if (structuredRedaction) {
+        semanticMatchSkippedForRedaction = true;
+      } else {
+        const wsRoot = getWorkspaceRootForPath(filePath);
+        if (wsRoot) {
+          const relPath = path.relative(wsRoot, filePath);
+          semanticHit = await semanticFileQuery(relPath, params.query, wsRoot);
+        }
       }
     }
+
+    const semanticMatchMetadata = semanticHit
+      ? {
+          query: params.query,
+          startLine: semanticHit.startLine,
+          endLine: semanticHit.endLine,
+        }
+      : semanticMatchSkippedForRedaction
+        ? {
+            query: params.query,
+            status: "not_run_structured_redaction",
+          }
+        : semanticLookupRequested
+          ? {
+              query: params.query,
+              status: "not_found",
+              fallback: "default_offset",
+              hint: "Use anchor or anchor_regex to locate exact text in this file.",
+            }
+          : undefined;
 
     const baseOffset = anchorHit
       ? anchorHit.line
@@ -868,6 +918,12 @@ export async function handleReadFile(
       const gitStatus = enrichmentProvider.getGitStatus(filePath);
       if (gitStatus) emptyResult.git_status = gitStatus;
       emptyResult.language = enrichmentProvider.detectLanguage(filePath);
+      if (semanticMatchMetadata) {
+        emptyResult.semantic_match = semanticMatchMetadata;
+      }
+      const redactionMetadata =
+        getStructuredSecretRedactionMetadata(structuredRedaction);
+      if (redactionMetadata) emptyResult.redaction = redactionMetadata;
       return {
         content: [{ type: "text" as const, text: JSON.stringify(emptyResult) }],
       };
@@ -934,18 +990,16 @@ export async function handleReadFile(
       };
     }
 
-    // Semantic match info
-    if (semanticHit) {
-      result.semantic_match = {
-        query: params.query,
-        startLine: semanticHit.startLine,
-        endLine: semanticHit.endLine,
-      };
+    if (semanticMatchMetadata) {
+      result.semantic_match = semanticMatchMetadata;
     }
 
     // File metadata
     result.size = stat.size;
     result.modified = stat.mtime.toISOString();
+    const redactionMetadata =
+      getStructuredSecretRedactionMetadata(structuredRedaction);
+    if (redactionMetadata) result.redaction = redactionMetadata;
 
     // Git status
     const gitStatus = enrichmentProvider.getGitStatus(filePath);

@@ -42,6 +42,7 @@ import {
   buildDeterministicFallbackSummary,
   extractCondenseResumeAnchor,
   renderDeterministicSections,
+  type CondenseRecallAnchors,
 } from "./condensePrompt.js";
 
 export { renderDeterministicSections } from "./condensePrompt.js";
@@ -137,9 +138,41 @@ function stripMedia(content: string | ContentBlock[]): string | ContentBlock[] {
 }
 
 const MAX_TOOL_RESULT_TEXT_CHARS = 20_000;
+const MAX_CONDENSE_MESSAGE_TEXT_CHARS = 60_000;
+const MAX_CANONICAL_USER_MESSAGES = 48;
+const MAX_CANONICAL_USER_MESSAGE_CHARS = 4_000;
+const MAX_CANONICAL_USER_MESSAGES_CHARS = 32_000;
+const INITIAL_CONDENSE_INPUT_TOKEN_BUDGET = 120_000;
+const RETRY_CONDENSE_INPUT_TOKEN_BUDGETS = [64_000, 32_000] as const;
 
 function normalizeToolResultText(text: string): string {
   return truncateMiddle(text, MAX_TOOL_RESULT_TEXT_CHARS);
+}
+
+function boundCondenseContent(
+  content: string | ContentBlock[],
+): string | ContentBlock[] {
+  if (typeof content === "string") {
+    return truncateMiddle(content, MAX_CONDENSE_MESSAGE_TEXT_CHARS);
+  }
+  const textChars = content.reduce(
+    (total, block) => total + (block.type === "text" ? block.text.length : 16),
+    0,
+  );
+  if (textChars <= MAX_CONDENSE_MESSAGE_TEXT_CHARS) return content;
+  const text = content
+    .map((block) =>
+      block.type === "text"
+        ? block.text
+        : `[${(block as { type: string }).type}]`,
+    )
+    .join("\n\n");
+  return [
+    {
+      type: "text" as const,
+      text: truncateMiddle(text, MAX_CONDENSE_MESSAGE_TEXT_CHARS),
+    },
+  ];
 }
 
 function transformMessagesForCondensing(
@@ -150,10 +183,11 @@ function transformMessagesForCondensing(
     if (typeof transformed === "string") {
       return {
         ...msg,
-        content:
+        content: boundCondenseContent(
           msg.role === "user" && msg.isSummary
             ? transformed
             : normalizeToolResultText(transformed),
+        ),
       };
     }
     const normalizedBlocks = transformed.map((block) =>
@@ -163,7 +197,7 @@ function transformMessagesForCondensing(
     );
     return {
       ...msg,
-      content: normalizedBlocks,
+      content: boundCondenseContent(normalizedBlocks),
     };
   });
 }
@@ -571,7 +605,7 @@ export interface SummarizeResult {
 }
 
 function extractCanonicalUserMessages(messages: AgentMessage[]): string[] {
-  return messages
+  const extracted = messages
     .filter((m) => m.role === "user" && !m.isSummary && !m.isResumeContext)
     .map((m) => {
       if (typeof m.content === "string") {
@@ -587,7 +621,174 @@ function extractCanonicalUserMessages(messages: AgentMessage[]): string[] {
         .join("\n")
         .trim();
     })
-    .filter((t) => t.length > 0);
+    .filter((t) => t.length > 0)
+    .map((text) => truncateMiddle(text, MAX_CANONICAL_USER_MESSAGE_CHARS));
+  if (extracted.length === 0) return extracted;
+
+  const first = extracted[0];
+  const recent: string[] = [];
+  let remainingChars = Math.max(
+    0,
+    MAX_CANONICAL_USER_MESSAGES_CHARS - first.length,
+  );
+  for (
+    let index = extracted.length - 1;
+    index > 0 && recent.length < MAX_CANONICAL_USER_MESSAGES - 2;
+    index -= 1
+  ) {
+    const text = extracted[index];
+    if (text.length > remainingChars) break;
+    recent.unshift(text);
+    remainingChars -= text.length;
+  }
+
+  const selectedCount = 1 + recent.length;
+  if (selectedCount === extracted.length) return [first, ...recent];
+  return [
+    first,
+    `[... ${extracted.length - selectedCount} earlier user messages omitted; use search_session_history for the full transcript ...]`,
+    ...recent,
+  ];
+}
+
+export function extractCondenseRecallAnchors(
+  messages: AgentMessage[],
+): CondenseRecallAnchors {
+  const filePaths: string[] = [];
+  const errors: string[] = [];
+  const toolNames: string[] = [];
+  const commandCalls = new Map<string, { command: string; failed: boolean }>();
+  const commandsInOrder: string[] = [];
+  const seen = {
+    filePaths: new Set<string>(),
+    errors: new Set<string>(),
+    toolNames: new Set<string>(),
+  };
+
+  const addUnique = (
+    target: string[],
+    seenValues: Set<string>,
+    value: string,
+    limit: number,
+  ) => {
+    const normalized = value.replace(/\s+/g, " ").trim().slice(0, 240);
+    if (!normalized || seenValues.has(normalized) || target.length >= limit)
+      return;
+    seenValues.add(normalized);
+    target.push(normalized);
+  };
+  const inspectText = (text: string) => {
+    const bounded = text.slice(0, MAX_TOOL_RESULT_TEXT_CHARS);
+    for (const match of bounded.matchAll(
+      /(?:^|[\s'"`(])((?:\.{0,2}\/|\/)?(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9_-]+)/g,
+    )) {
+      addUnique(filePaths, seen.filePaths, match[1], 8);
+    }
+    for (const line of bounded.split("\n")) {
+      if (
+        /\b(error|failed|failure|exception|non-zero|exit(?:ed)? (?:with )?code [1-9]\d*)\b/i.test(
+          line,
+        )
+      ) {
+        addUnique(errors, seen.errors, line, 6);
+      }
+    }
+  };
+
+  for (const message of messages) {
+    if (message.runtimeError) inspectText(message.runtimeError.message);
+    if (typeof message.content === "string") {
+      inspectText(message.content);
+      continue;
+    }
+    for (const block of message.content) {
+      if (block.type === "text") {
+        inspectText(block.text);
+        continue;
+      }
+      if (block.type === "tool_use") {
+        addUnique(toolNames, seen.toolNames, block.name, 8);
+        inspectText(JSON.stringify(block.input));
+        if (block.name === "execute_command") {
+          const command =
+            typeof block.input.command === "string"
+              ? block.input.command.trim()
+              : "";
+          if (command) {
+            commandCalls.set(block.id, { command, failed: false });
+            commandsInOrder.push(block.id);
+            inspectText(command);
+          }
+        }
+        continue;
+      }
+      if (block.type !== "tool_result") continue;
+      const resultText = toolResultContentText(block.content);
+      inspectText(resultText);
+      const commandCall = commandCalls.get(block.tool_use_id);
+      if (
+        commandCall &&
+        (block.is_error ||
+          /(?:\b(?:non-zero|exit(?:ed)? (?:with )?code [1-9]\d*)\b|"exit_code"\s*:\s*[1-9]\d*)/i.test(
+            resultText,
+          ))
+      ) {
+        commandCall.failed = true;
+      }
+    }
+  }
+
+  const commandStatus = new Map<string, boolean>();
+  for (const id of commandsInOrder) {
+    const entry = commandCalls.get(id);
+    if (!entry) continue;
+    commandStatus.set(
+      entry.command,
+      (commandStatus.get(entry.command) ?? false) || entry.failed,
+    );
+  }
+  const commands = [...commandStatus]
+    .slice(0, 6)
+    .map(([command, failed]) =>
+      `${failed ? "[failed] " : ""}${command}`.slice(0, 240),
+    );
+
+  const anchors: CondenseRecallAnchors = {
+    filePaths,
+    errors,
+    commands,
+    toolNames,
+  };
+  let remaining = 2_000;
+  for (const values of [
+    anchors.filePaths,
+    anchors.errors,
+    anchors.commands,
+    anchors.toolNames,
+  ]) {
+    for (let index = 0; index < values.length; index += 1) {
+      const value = values[index];
+      if (value.length + 2 <= remaining) {
+        remaining -= value.length + 2;
+        continue;
+      }
+      values.splice(index);
+      break;
+    }
+  }
+  return anchors;
+}
+
+function toolResultContentText(content: ToolResultBlock["content"]): string {
+  if (typeof content === "string") return content;
+  return content
+    .flatMap((block) => {
+      if (block.type === "text") return [block.text];
+      if (block.type === "tool_result")
+        return [toolResultContentText(block.content)];
+      return [];
+    })
+    .join("\n");
 }
 
 function extractPendingTasksHeuristic(messages: AgentMessage[]): string[] {
@@ -606,14 +807,41 @@ function extractPendingTasksHeuristic(messages: AgentMessage[]): string[] {
   return [...new Set(candidates)].slice(-6);
 }
 
-function sourceWindowHash(messages: AgentMessage[]): string {
-  const basis = messages
-    .map(
+function sourceWindowHash(
+  messages: AgentMessage[],
+  priorSummary?: string,
+): string {
+  const basis = [
+    priorSummary ? `prior-summary:${priorSummary}` : "prior-summary:none",
+    ...messages.map(
       (m) =>
         `${m.role}:${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`,
-    )
-    .join("\n---\n");
+    ),
+  ].join("\n---\n");
   return createHash("sha256").update(basis).digest("hex").slice(0, 16);
+}
+
+const MAX_PRIOR_SUMMARY_CHARS = 20_000;
+
+function extractPriorConversationSummary(
+  messages: AgentMessage[],
+): string | undefined {
+  const priorSummary = [...messages]
+    .reverse()
+    .find((message) => message.isSummary);
+  if (!priorSummary) return undefined;
+
+  const text =
+    typeof priorSummary.content === "string"
+      ? priorSummary.content
+      : priorSummary.content
+          .filter((block): block is TextBlock => block.type === "text")
+          .map((block) => block.text)
+          .find((blockText) => blockText.startsWith("## Conversation Summary"));
+  if (!text) return undefined;
+
+  const summary = text.replace(/^## Conversation Summary\s*/i, "").trim();
+  return summary ? truncateMiddle(summary, MAX_PRIOR_SUMMARY_CHARS) : undefined;
 }
 
 function extractSummaryText(raw: string): string {
@@ -661,6 +889,24 @@ function estimateMessageTextChars(messages: MessageParam[]): number {
           case "image":
           case "document":
             return acc + 256;
+          case "web_activity": {
+            const activity = block.activity;
+            const citationChars = (activity.citations ?? []).reduce(
+              (citationTotal, citation) =>
+                citationTotal +
+                citation.url.length +
+                (citation.title?.length ?? 0) +
+                (citation.citedText?.length ?? 0),
+              0,
+            );
+            return (
+              acc +
+              (activity.query?.length ?? 0) +
+              (activity.url?.length ?? 0) +
+              citationChars +
+              64
+            );
+          }
         }
       }, 0)
     );
@@ -676,13 +922,45 @@ function estimateCondenseInputTokens(args: {
   );
 }
 
-function shrinkCondenseSourceWindow(
+function fitCondenseSourceWindow(
   messages: AgentMessage[],
-  fraction: number,
-): AgentMessage[] {
-  if (messages.length <= 2) return messages;
-  const keepCount = Math.max(2, Math.ceil(messages.length * fraction));
-  return messages.slice(-keepCount);
+  maxInputTokens: number,
+  buildRequestMessages: (sourceMessages: AgentMessage[]) => MessageParam[],
+  systemPrompt: string,
+): { sourceMessages: AgentMessage[]; requestMessages: MessageParam[] } {
+  if (messages.length <= 1) {
+    return {
+      sourceMessages: messages,
+      requestMessages: buildRequestMessages(messages),
+    };
+  }
+
+  let low = 0;
+  let high = messages.length - 1;
+  let bestStart = messages.length - 1;
+  let bestRequest = buildRequestMessages(messages.slice(bestStart));
+
+  while (low <= high) {
+    const start = Math.floor((low + high) / 2);
+    const sourceMessages = messages.slice(start);
+    const requestMessages = buildRequestMessages(sourceMessages);
+    const estimatedTokens = estimateCondenseInputTokens({
+      systemPrompt,
+      messages: requestMessages,
+    });
+    if (estimatedTokens <= maxInputTokens) {
+      bestStart = start;
+      bestRequest = requestMessages;
+      high = start - 1;
+    } else {
+      low = start + 1;
+    }
+  }
+
+  return {
+    sourceMessages: messages.slice(bestStart),
+    requestMessages: bestRequest,
+  };
 }
 
 function isContextWindowExceededError(message: string): boolean {
@@ -793,23 +1071,29 @@ export async function summarizeConversation(
     );
   }
 
-  const hadPriorSummaryInInput = toSummarize.some((m) => m.isSummary);
+  const priorSummary = extractPriorConversationSummary(messages);
+  const hadPriorSummaryInInput = Boolean(priorSummary);
   const canonicalUserMessages = extractCanonicalUserMessages(toSummarize);
   const pendingTasks = extractPendingTasksHeuristic(toSummarize);
   const resumeAnchor = extractCondenseResumeAnchor({
     userMessages: canonicalUserMessages,
     pendingTasks,
   });
+  const recallAnchors = extractCondenseRecallAnchors(toSummarize);
   const deterministicSections = renderDeterministicSections({
     userMessages: canonicalUserMessages,
     pendingTasks,
     resumeAnchor,
+    recallAnchors,
     preservedContext,
   });
 
+  const priorSummarySection = priorSummary
+    ? `\n\n<prior-checkpoint-summary>\nThis is the previous checkpoint summary. Treat it as source material to preserve and consolidate with the new transcript delta; do not merely append or quote it.\n\n${priorSummary}\n</prior-checkpoint-summary>`
+    : "";
   const finalMsg: MessageParam = {
     role: "user",
-    content: `${CONDENSE_INSTRUCTIONS}\n\n${deterministicSections}`,
+    content: `${CONDENSE_INSTRUCTIONS}${priorSummarySection}\n\n${deterministicSections}`,
   };
 
   const buildRequestMessages = (
@@ -845,11 +1129,26 @@ export async function summarizeConversation(
     return merged;
   };
 
-  let requestMessages: MessageParam[] = buildRequestMessages(toSummarize);
-
   const validationWarnings: string[] = [];
-  let condenseSourceMessages = toSummarize;
+  let {
+    sourceMessages: condenseSourceMessages,
+    requestMessages,
+  }: {
+    sourceMessages: AgentMessage[];
+    requestMessages: MessageParam[];
+  } = fitCondenseSourceWindow(
+    toSummarize,
+    INITIAL_CONDENSE_INPUT_TOKEN_BUDGET,
+    buildRequestMessages,
+    CONDENSE_SYSTEM_PROMPT,
+  );
+  if (condenseSourceMessages.length < toSummarize.length) {
+    validationWarnings.push(
+      `Condense source exceeded the ${INITIAL_CONDENSE_INPUT_TOKEN_BUDGET.toLocaleString()}-token request budget; using the newest ${condenseSourceMessages.length.toLocaleString()} of ${toSummarize.length.toLocaleString()} unsummarized messages. Older messages remain available through search_session_history.`,
+    );
+  }
   let summaryText = "";
+  let deterministicFallbackAfterSizeRejection = false;
   const getModelSelection = (messagesForRequest: MessageParam[]) =>
     provider.id === "codex"
       ? getCodexCondenseModelCandidates({
@@ -892,18 +1191,21 @@ export async function summarizeConversation(
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), CONDENSE_TIMEOUT_MS);
-        const result = await provider.complete({
-          model,
-          systemPrompt: CONDENSE_SYSTEM_PROMPT,
-          messages: requestMessages,
-          maxTokens: 8192,
-          temperature: 0,
-          reasoningEffort: "low",
-          signal: controller.signal,
-        });
-        clearTimeout(timer);
-        selectedModel = model;
-        return { text: result.text };
+        try {
+          const result = await provider.complete({
+            model,
+            systemPrompt: CONDENSE_SYSTEM_PROMPT,
+            messages: requestMessages,
+            maxTokens: 8192,
+            temperature: 0,
+            reasoningEffort: "low",
+            signal: controller.signal,
+          });
+          selectedModel = model;
+          return { text: result.text };
+        } finally {
+          clearTimeout(timer);
+        }
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") {
           return {
@@ -950,22 +1252,42 @@ export async function summarizeConversation(
 
   let first = await completeOnce();
   if (first.error && isShrinkableError(first.error)) {
-    for (const fraction of [0.75, 0.5, 0.33]) {
-      const shrunk = shrinkCondenseSourceWindow(toSummarize, fraction);
-      if (shrunk.length >= condenseSourceMessages.length) continue;
-      condenseSourceMessages = shrunk;
-      requestMessages = buildRequestMessages(condenseSourceMessages);
+    for (const tokenBudget of RETRY_CONDENSE_INPUT_TOKEN_BUDGETS) {
+      const fitted = fitCondenseSourceWindow(
+        toSummarize,
+        tokenBudget,
+        buildRequestMessages,
+        CONDENSE_SYSTEM_PROMPT,
+      );
+      const currentTokens = estimateCondenseInputTokens({
+        systemPrompt: CONDENSE_SYSTEM_PROMPT,
+        messages: requestMessages,
+      });
+      const fittedTokens = estimateCondenseInputTokens({
+        systemPrompt: CONDENSE_SYSTEM_PROMPT,
+        messages: fitted.requestMessages,
+      });
+      if (fittedTokens >= currentTokens) continue;
+      condenseSourceMessages = fitted.sourceMessages;
+      requestMessages = fitted.requestMessages;
       ({ modelCandidates, skippedModelCandidates } =
         getModelSelection(requestMessages));
       selectedModel = modelCandidates[0] ?? provider.condenseModel;
       validationWarnings.push(
-        `Condense request too large (${isBarePayloadError(first.error) ? "payload limit" : "context window"}); retried with newest ${Math.round(fraction * 100)}% of unsummarized messages.`,
+        `Condense request too large (${isBarePayloadError(first.error) ? "payload limit" : "context window"}); retried within a ${tokenBudget.toLocaleString()}-token budget using the newest ${condenseSourceMessages.length.toLocaleString()} unsummarized messages.`,
       );
       first = await completeOnce();
       if (!first.error || !isShrinkableError(first.error)) {
         break;
       }
     }
+  }
+  if (first.error && isShrinkableError(first.error)) {
+    validationWarnings.push(
+      "Condense provider rejected the minimum bounded request; using deterministic handoff sections so the session can continue.",
+    );
+    deterministicFallbackAfterSizeRejection = true;
+    first = { text: "" };
   }
   if (first.error) {
     return errorResult(first.error, {
@@ -981,10 +1303,13 @@ export async function summarizeConversation(
       userMessages: canonicalUserMessages,
       pendingTasks,
       resumeAnchor,
+      priorSummary,
     });
-    validationWarnings.push(
-      "Model returned empty summary; using deterministic fallback.",
-    );
+    if (!deterministicFallbackAfterSizeRejection) {
+      validationWarnings.push(
+        "Model returned empty summary; using deterministic fallback.",
+      );
+    }
   }
 
   const summaryContent: ContentBlock[] = [
@@ -1045,10 +1370,10 @@ export async function summarizeConversation(
     newInputTokens,
     validationWarnings,
     metadata: {
-      inputMessageCount: toSummarize.length,
+      inputMessageCount: condenseSourceMessages.length,
       sourceUserMessageCount: canonicalUserMessages.length,
       hadPriorSummaryInInput,
-      sourceHash: sourceWindowHash(toSummarize),
+      sourceHash: sourceWindowHash(condenseSourceMessages, priorSummary),
       providerId: provider.id,
       condenseModel: provider.condenseModel,
       modelCandidates,

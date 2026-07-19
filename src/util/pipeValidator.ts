@@ -16,6 +16,8 @@ interface PipeViolation {
   segment: string;
   /** Suggested tool parameters */
   suggestions: Record<string, string | number>;
+  /** Parameters whose values could not be inferred safely from shell syntax. */
+  unresolvedSuggestions?: string[];
 }
 
 interface ValidationResult {
@@ -310,8 +312,8 @@ function checkDirectFileCommands(command: string): ValidationResult | null {
         lines.push(`\nUse: ${info.tool} with path: "${file}"`);
       }
     } else if (cmd === "grep" && tokens.length >= 2) {
-      const grepArgs = parseGrepArgs(tokens.slice(1));
-      const pattern = grepArgs.output_grep;
+      const { suggestions: grepSuggestions } = parseGrepArgs(tokens.slice(1));
+      const pattern = grepSuggestions.output_grep;
       const file = findFileArg(tokens.slice(1), true);
       lines.push(
         `\nUse: ${info.tool} with${file ? ` path: "${file}" and` : ""} regex: "${pattern ?? "..."}"`,
@@ -787,10 +789,23 @@ function detectPipedFiltering(command: string): ValidationResult | null {
   const paramList = Object.entries(allSuggestions)
     .map(([k, v]) => `  ${k}: ${typeof v === "string" ? `"${v}"` : v}`)
     .join("\n");
-  lines.push(`Use these tool parameters instead:\n${paramList}`);
-  lines.push("");
-  lines.push(`Run this command instead: ${strippedCommand}`);
-  lines.push("");
+  if (paramList) {
+    lines.push(`Use these tool parameters instead:\n${paramList}`);
+    lines.push("");
+  }
+
+  const unresolvedSuggestions = [
+    ...new Set(violations.flatMap((v) => v.unresolvedSuggestions ?? [])),
+  ];
+  if (unresolvedSuggestions.length > 0) {
+    lines.push(
+      `Set ${unresolvedSuggestions.join(" and ")} explicitly; the exact value could not be safely inferred from nested shell syntax.`,
+    );
+    lines.push("");
+  } else {
+    lines.push(`Run this command instead: ${strippedCommand}`);
+    lines.push("");
+  }
   lines.push(
     `Do NOT retry with force=true — pipe filtering is never a false positive. Use the suggested parameters instead.`,
   );
@@ -798,7 +813,7 @@ function detectPipedFiltering(command: string): ValidationResult | null {
   return {
     type: "pipe",
     message: lines.join("\n"),
-    strippedCommand,
+    ...(unresolvedSuggestions.length === 0 ? { strippedCommand } : {}),
   };
 }
 
@@ -830,8 +845,17 @@ function checkSegment(segment: string): PipeViolation | null {
         segment,
         suggestions: ensurePositive(parseTailArgs(args)),
       };
-    case "grep":
-      return { command: cmd, segment, suggestions: parseGrepArgs(args) };
+    case "grep": {
+      const { suggestions, unresolvedPattern } = parseGrepArgs(args);
+      return {
+        command: cmd,
+        segment,
+        suggestions,
+        ...(unresolvedPattern
+          ? { unresolvedSuggestions: ["output_grep"] }
+          : {}),
+      };
+    }
     default:
       return null;
   }
@@ -936,9 +960,13 @@ function parseTailArgs(args: string[]): Record<string, number> {
  * Parse grep arguments: grep pattern, grep -i pattern, grep -C 3 pattern,
  * grep -E "regex", etc.
  */
-function parseGrepArgs(args: string[]): Record<string, string | number> {
+function parseGrepArgs(args: string[]): {
+  suggestions: Record<string, string | number>;
+  unresolvedPattern: boolean;
+} {
   const suggestions: Record<string, string | number> = {};
   let pattern: string | null = null;
+  let unresolvedPattern = false;
 
   // Flags that consume the next argument
   const valueFlagsSet = new Set([
@@ -992,7 +1020,9 @@ function parseGrepArgs(args: string[]): Record<string, string | number> {
 
     // Explicit pattern flag
     if ((arg === "-e" || arg === "--regexp") && args[i + 1]) {
-      pattern = stripQuotes(args[i + 1]);
+      const parsedPattern = parseGrepPattern(args[i + 1]);
+      pattern = parsedPattern.pattern;
+      unresolvedPattern = parsedPattern.unresolved;
       i++;
       continue;
     }
@@ -1010,8 +1040,10 @@ function parseGrepArgs(args: string[]): Record<string, string | number> {
     }
 
     // First positional argument is the pattern
-    if (pattern === null) {
-      pattern = stripQuotes(arg);
+    if (pattern === null && !unresolvedPattern) {
+      const parsedPattern = parseGrepPattern(arg);
+      pattern = parsedPattern.pattern;
+      unresolvedPattern = parsedPattern.unresolved;
       continue;
     }
   }
@@ -1020,7 +1052,42 @@ function parseGrepArgs(args: string[]): Record<string, string | number> {
     suggestions.output_grep = pattern;
   }
 
-  return suggestions;
+  return { suggestions, unresolvedPattern };
+}
+
+function parseGrepPattern(raw: string): {
+  pattern: string | null;
+  unresolved: boolean;
+} {
+  if (hasAttachedShellCloser(raw)) {
+    return { pattern: null, unresolved: true };
+  }
+  return { pattern: stripQuotes(raw), unresolved: false };
+}
+
+/**
+ * A quoted grep pattern followed by an unquoted closing parenthesis belongs to
+ * surrounding shell syntax (most commonly `$(...)`), not to the regex. Avoid
+ * guessing where that syntax ends: callers can provide output_grep explicitly.
+ */
+function hasAttachedShellCloser(raw: string): boolean {
+  const quote = raw[0];
+  if (quote !== "'" && quote !== '"') return false;
+
+  let escaped = false;
+  for (let i = 1; i < raw.length; i++) {
+    const ch = raw[i];
+    if (quote === '"' && ch === "\\" && !escaped) {
+      escaped = true;
+      continue;
+    }
+    if (ch === quote && !escaped && /^\)+;?$/.test(raw.slice(i + 1))) {
+      return true;
+    }
+    escaped = false;
+  }
+
+  return false;
 }
 
 /**

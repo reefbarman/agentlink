@@ -392,26 +392,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
 
   getBackgroundState(terminalId: string): TerminalBackgroundState | undefined {
     const channel = this.channels.get(terminalId);
-    if (!channel) return undefined;
-    const snapshot = channel.session.snapshot();
-    const command = snapshot.commands.at(-1);
-    if (!command) {
-      return {
-        is_running: false,
-        exit_code: null,
-        output: "",
-        output_captured: true,
-      };
-    }
-    return {
-      is_running:
-        command.status === "launching" || command.status === "running",
-      exit_code:
-        command.status === "exited" ? (command.exitCode ?? null) : null,
-      output: cleanTerminalOutput(command.output),
-      output_captured: true,
-      terminal_raw_output: cleanTerminalRawOutput(command.output),
-    };
+    return channel
+      ? this.backgroundStateFromSnapshot(channel.session.snapshot())
+      : undefined;
   }
 
   interruptTerminal(terminalId: string): boolean {
@@ -455,7 +438,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       channel.session.close();
       channel.active?.finalizer?.();
       this.channels.delete(channelId);
-      this.rememberClosed(channelId, snapshot.title);
+      this.rememberClosed(snapshot);
       closed += 1;
     }
     return {
@@ -632,8 +615,49 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     channel.active = undefined;
   }
 
-  private rememberClosed(id: string, name: string): void {
-    this.recentlyClosed.unshift({ id, name, closedAt: this.now() });
+  private backgroundStateFromSnapshot(
+    snapshot: SandboxTerminalSessionSnapshot,
+    closed = false,
+  ): TerminalBackgroundState {
+    const command = snapshot.commands.at(-1);
+    if (!command) {
+      return {
+        is_running: false,
+        state: "completed",
+        exit_code: null,
+        output: "",
+        output_captured: true,
+      };
+    }
+
+    const running =
+      command.status === "launching" || command.status === "running";
+    return {
+      is_running: !closed && running,
+      state: running
+        ? closed
+          ? "unknown_termination"
+          : "running"
+        : command.status === "exited"
+          ? command.timedOut
+            ? "timed_out"
+            : "completed"
+          : "unknown_termination",
+      exit_code:
+        command.status === "exited" ? (command.exitCode ?? null) : null,
+      output: cleanTerminalOutput(command.output),
+      output_captured: true,
+      terminal_raw_output: cleanTerminalRawOutput(command.output),
+    };
+  }
+
+  private rememberClosed(snapshot: SandboxTerminalSessionSnapshot): void {
+    this.recentlyClosed.unshift({
+      id: snapshot.channelId,
+      name: snapshot.title,
+      closedAt: this.now(),
+      ...this.backgroundStateFromSnapshot(snapshot, true),
+    });
     this.recentlyClosed.splice(DEFAULT_RECENTLY_CLOSED_LIMIT);
   }
 

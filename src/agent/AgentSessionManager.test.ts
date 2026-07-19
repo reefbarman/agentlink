@@ -6,42 +6,52 @@ import type { AgentConfig, AgentMessage } from "./types.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AgentSessionManager } from "./AgentSessionManager.js";
+import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
 import type { PersistedSessionRecord } from "./persistenceContracts.js";
 import { ProviderRegistry } from "./providers/index.js";
 
 const mocks = vi.hoisted(() => {
-  const createSession = vi.fn(async (opts: any) => ({
-    id: "session-1",
-    mode: opts.mode,
-    model: opts.config.model,
-    providerId: opts.providerId,
-    autoCondenseThreshold: opts.config.autoCondenseThreshold,
-    reasoningEffort: "high",
-    thinkingBudget: opts.config.thinkingBudget,
-    title: "New Chat",
-    background: Boolean(opts.background),
-    status: "idle",
-    messageCount: 0,
-    totalInputTokens: 0,
-    totalOutputTokens: 0,
-    totalCacheReadTokens: 0,
-    totalCacheCreationTokens: 0,
-    lastInputTokens: 0,
-    lastOutputTokens: 0,
-    lastCacheReadTokens: 0,
-    currentTool: undefined,
-    addUserMessage: vi.fn(),
-    appendRuntimeError: vi.fn(),
-    consumePendingInterjection: vi.fn(() => null),
-    queuePendingModeResume: vi.fn(),
-    consumePendingModeResume: vi.fn(() => null),
-    autoTitle: vi.fn(),
-    getAllMessages: vi.fn(() => []),
-    rebuildSystemPrompt: vi.fn(async () => {}),
-    setMode: vi.fn(async function (this: { mode: string }, mode: string) {
-      this.mode = mode;
+  const createSession = vi.fn(
+    async (opts: any): Promise<any> => ({
+      id: "session-1",
+      mode: opts.mode,
+      agentMode: opts.agentMode,
+      model: opts.config.model,
+      providerId: opts.providerId,
+      projectScope: opts.projectScope,
+      projectAvailability: opts.projectAvailability ?? "available",
+      activeFilePath: opts.activeFilePath,
+      activeContextResourceUri: opts.activeContextResourceUri,
+      requireProjectRoot: vi.fn(() => opts.projectScope.rootPath),
+      autoCondenseThreshold: opts.config.autoCondenseThreshold,
+      reasoningEffort: "high",
+      thinkingBudget: opts.config.thinkingBudget,
+      title: "New Chat",
+      background: Boolean(opts.background),
+      status: "idle",
+      messageCount: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      currentTool: undefined,
+      addUserMessage: vi.fn(),
+      appendRuntimeError: vi.fn(),
+      consumePendingInterjection: vi.fn(() => null),
+      queuePendingModeResume: vi.fn(),
+      consumePendingModeResume: vi.fn(() => null),
+      autoTitle: vi.fn(),
+      getAllMessages: vi.fn(() => []),
+      restoreFromStore: vi.fn(),
+      rebuildSystemPrompt: vi.fn(async () => {}),
+      setMode: vi.fn(async function (this: { mode: string }, mode: string) {
+        this.mode = mode;
+      }),
     }),
-  }));
+  );
 
   return {
     createSession,
@@ -57,7 +67,21 @@ vi.mock("vscode", async () => {
     ...actual,
     workspace: {
       ...actual.workspace,
-      getConfiguration: (...args: unknown[]) => mocks.getConfiguration(...args),
+      getConfiguration: (...args: unknown[]) => {
+        const config = mocks.getConfiguration(...args);
+        return {
+          ...config,
+          get: (key: string, ...getArgs: unknown[]) => {
+            if (
+              key === "webAccess.searchBackend" ||
+              key === "webAccess.fetchBackend"
+            ) {
+              return "disabled";
+            }
+            return config.get(key, ...getArgs);
+          },
+        };
+      },
     },
   };
 });
@@ -65,6 +89,7 @@ vi.mock("vscode", async () => {
 vi.mock("./AgentSession.js", () => ({
   AgentSession: {
     create: (opts: unknown) => mocks.createSession(opts),
+    createTranscriptOnly: (opts: unknown) => mocks.createSession(opts),
   },
 }));
 
@@ -90,6 +115,282 @@ describe("AgentSessionManager host injection", () => {
       get: () => undefined,
       inspect: () => undefined,
     });
+  });
+
+  it("resolves conflicting custom mode definitions from each session project", async () => {
+    const projectA = {
+      id: "project-a",
+      name: "Project A",
+      uri: "file:///project-a",
+      rootPath: "/project-a",
+      availability: { status: "available" as const },
+    };
+    const projectB = {
+      id: "project-b",
+      name: "Project B",
+      uri: "file:///project-b",
+      rootPath: "/project-b",
+      availability: { status: "available" as const },
+    };
+    const projectCatalog = {
+      listProjects: () => [projectA, projectB],
+      resolveProjectForResource: () => projectA,
+      resolvePersistedScope: (scope: {
+        projectId: string;
+        workspaceFolderUri: string;
+      }) => {
+        const project = scope.projectId === projectB.id ? projectB : projectA;
+        return {
+          status: "available" as const,
+          project,
+          scope: {
+            schemaVersion: 1 as const,
+            kind: "project" as const,
+            projectId: project.id,
+            workspaceFolderUri: project.uri,
+            displayName: project.name,
+            rootPath: project.rootPath,
+          },
+        };
+      },
+    };
+    const loadCustomModes = vi.fn(async (rootPath: string) => [
+      {
+        slug: "code",
+        name: rootPath === projectA.rootPath ? "Code A" : "Code B",
+        icon: "code",
+        toolGroups:
+          rootPath === projectA.rootPath ? ["read"] : ["read", "edit"],
+        customInstructions:
+          rootPath === projectA.rootPath ? "PROJECT A MODE" : "PROJECT B MODE",
+      },
+      {
+        slug: "audit",
+        name: rootPath === projectA.rootPath ? "Audit A" : "Audit B",
+        icon: "shield",
+        toolGroups:
+          rootPath === projectA.rootPath ? ["read"] : ["read", "search"],
+      },
+    ]);
+    const projectCustomizationRegistry = new ProjectCustomizationRegistry({
+      loadCustomModes,
+      loadSlashCommands: vi.fn(async () => []),
+    });
+    const onBrowserPreferredProjectChanged = vi.fn(async () => undefined);
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      projectA.rootPath,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        projectCatalog,
+        projectCustomizationRegistry,
+        onBrowserPreferredProjectChanged,
+      },
+    );
+
+    const sessionA = await mgr.createSession("code", {
+      projectId: projectA.id,
+    });
+    const sessionB = await mgr.createSession("code", {
+      projectId: projectB.id,
+    });
+
+    expect(sessionA.agentMode).toMatchObject({
+      name: "Code A",
+      toolGroups: ["read"],
+      customInstructions: "PROJECT A MODE",
+    });
+    expect(sessionB.agentMode).toMatchObject({
+      name: "Code B",
+      toolGroups: ["read", "edit"],
+      customInstructions: "PROJECT B MODE",
+    });
+    await mgr.switchSessionMode(sessionB.id, "audit");
+
+    expect(sessionB.setMode).toHaveBeenCalledWith(
+      "audit",
+      expect.objectContaining({
+        agentMode: expect.objectContaining({
+          name: "Audit B",
+          toolGroups: ["read", "search"],
+        }),
+      }),
+    );
+    expect(loadCustomModes).toHaveBeenCalledTimes(2);
+
+    expect(mgr.setBrowserPreferredProject(projectB.id)).toBe(true);
+    await flushPromises();
+    expect(onBrowserPreferredProjectChanged).toHaveBeenCalledWith(projectB.id);
+    const preferredSession = await mgr.createSession("code");
+    expect(preferredSession.projectScope.projectId).toBe(projectB.id);
+    expect(mgr.getDefaultProjectScope()?.projectId).toBe(projectB.id);
+    expect(mgr.setBrowserPreferredProject("missing-project")).toBe(false);
+
+    const restoredManager = new AgentSessionManager(
+      makeConfig(),
+      projectA.rootPath,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        projectCatalog,
+        projectCustomizationRegistry,
+        browserPreferredProjectId: projectB.id,
+      },
+    );
+    expect(restoredManager.getDefaultProjectScope()?.projectId).toBe(
+      projectB.id,
+    );
+    expect(
+      (await restoredManager.createSession("code")).projectScope.projectId,
+    ).toBe(projectB.id);
+  });
+
+  it("resolves execution settings from each session project scope", async () => {
+    const projects = [
+      {
+        id: "project-a",
+        name: "Project A",
+        uri: "file:///project-a",
+        rootPath: "/project-a",
+        availability: { status: "available" as const },
+      },
+      {
+        id: "project-b",
+        name: "Project B",
+        uri: "file:///project-b",
+        rootPath: "/project-b",
+        availability: { status: "available" as const },
+      },
+    ];
+    const projectCatalog = {
+      listProjects: () => projects,
+      resolveProjectForResource: () => projects[0],
+      resolvePersistedScope: (scope: { projectId: string }) => {
+        const project = projects.find(({ id }) => id === scope.projectId)!;
+        return {
+          status: "available" as const,
+          project,
+          scope: {
+            schemaVersion: 1 as const,
+            kind: "project" as const,
+            projectId: project.id,
+            workspaceFolderUri: project.uri,
+            displayName: project.name,
+            rootPath: project.rootPath,
+          },
+        };
+      },
+    };
+    const resolveModelForMode = vi.fn(
+      (_mode: string, _fallback: string, scope?: { projectId: string }) =>
+        scope?.projectId === "project-b"
+          ? "project-b-model"
+          : "project-a-model",
+    );
+    const resolveReasoningEffortForMode = vi.fn(
+      (_mode: string, scope?: { projectId: string }) =>
+        scope?.projectId === "project-b" ? "xhigh" : "low",
+    );
+    const getCondenseThresholdForModel = vi.fn(
+      (_model: string, scope?: { projectId: string }) =>
+        scope?.projectId === "project-b" ? 0.7 : 0.8,
+    );
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      projects[0].rootPath,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        projectCatalog,
+        host: {
+          config: {
+            resolveAgentConfig: (base, scope) => ({
+              ...base,
+              maxTokens: scope.projectId === "project-b" ? 4096 : 2048,
+              thinkingBudget: scope.projectId === "project-b" ? 3000 : 2000,
+              autoCondense: scope.projectId === "project-b",
+              codexStatefulResponses: scope.projectId !== "project-b",
+              codexStoreResponses: scope.projectId === "project-b",
+              codexProMode: scope.projectId === "project-b",
+            }),
+            resolveModelForMode,
+            resolveReasoningEffortForMode: resolveReasoningEffortForMode as any,
+            getCondenseThresholdForModel,
+            getBgSummaryMode: () => "heuristic",
+            getBackgroundAgentSettings: () => ({}),
+          },
+        },
+      },
+    );
+
+    const sessionA = await mgr.createSession("code", {
+      projectId: "project-a",
+    });
+    const sessionB = await mgr.createSession("code", {
+      projectId: "project-b",
+    });
+
+    expect(sessionA).toMatchObject({
+      model: "project-a-model",
+      reasoningEffort: "low",
+      autoCondenseThreshold: 0.8,
+    });
+    expect(mocks.createSession).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        config: expect.objectContaining({
+          maxTokens: 2048,
+          thinkingBudget: 2000,
+          autoCondense: false,
+          codexStatefulResponses: true,
+          codexStoreResponses: false,
+          codexProMode: false,
+        }),
+      }),
+    );
+    expect(sessionB).toMatchObject({
+      model: "project-b-model",
+      reasoningEffort: "xhigh",
+      autoCondenseThreshold: 0.7,
+    });
+    expect(mocks.createSession).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        config: expect.objectContaining({
+          maxTokens: 4096,
+          thinkingBudget: 3000,
+          autoCondense: true,
+          codexStatefulResponses: false,
+          codexStoreResponses: true,
+          codexProMode: true,
+        }),
+      }),
+    );
+
+    await mgr.switchSessionMode(sessionB.id, "architect");
+    expect(resolveModelForMode).toHaveBeenLastCalledWith(
+      "architect",
+      "project-b-model",
+      sessionB.projectScope,
+    );
+    expect(resolveReasoningEffortForMode).toHaveBeenLastCalledWith(
+      "architect",
+      sessionB.projectScope,
+    );
+    expect(getCondenseThresholdForModel).toHaveBeenLastCalledWith(
+      "project-b-model",
+      sessionB.projectScope,
+    );
   });
 
   it("keeps command approval policy session-scoped and migrates a pre-session choice", async () => {
@@ -162,8 +463,14 @@ describe("AgentSessionManager host injection", () => {
     const createEmptySession = async (opts: any) => ({
       id: `session-${nextSessionNumber++}`,
       mode: opts.mode,
+      agentMode: opts.agentMode,
       model: opts.config.model,
       providerId: opts.providerId,
+      projectScope: opts.projectScope,
+      projectAvailability: opts.projectAvailability ?? "available",
+      activeFilePath: opts.activeFilePath,
+      activeContextResourceUri: opts.activeContextResourceUri,
+      requireProjectRoot: vi.fn(() => opts.projectScope.rootPath),
       autoCondenseThreshold: opts.config.autoCondenseThreshold,
       reasoningEffort: "high",
       thinkingBudget: opts.config.thinkingBudget,
@@ -186,6 +493,7 @@ describe("AgentSessionManager host injection", () => {
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),
       getAllMessages: vi.fn(() => []),
+      restoreFromStore: vi.fn(),
       rebuildSystemPrompt: vi.fn(async () => {}),
       setMode: vi.fn(async function (this: { mode: string }, mode: string) {
         this.mode = mode;
@@ -402,7 +710,7 @@ describe("AgentSessionManager host injection", () => {
     expect(session.thinkingBudget).toBe(2048);
   });
 
-  it("memoizes the foreground engine and updates its runtime when tool context changes", async () => {
+  it("memoizes the foreground engine and captures tool context at request boundaries", async () => {
     const providers = new ProviderRegistry();
     const setToolRuntime = vi.fn();
     const createEngine = vi.fn(() => ({
@@ -435,27 +743,325 @@ describe("AgentSessionManager host injection", () => {
       },
     );
 
+    const mcpHubA = {
+      getToolDefs: vi.fn(() => []),
+      getServerConfig: vi.fn(),
+    } as any;
+    const mcpHubB = {
+      getToolDefs: vi.fn(() => []),
+      getServerConfig: vi.fn(),
+    } as any;
+    const bindSessionProject = vi.fn();
     const ctxA = {
-      approvalManager: {} as any,
+      approvalManager: { bindSessionProject } as any,
       approvalPanel: {} as any,
       sessionId: "agent",
       extensionUri: {} as any,
+      mcpHub: mcpHubA,
     };
-    const ctxB = { ...ctxA, sessionId: "agent-next" };
+    const ctxB = { ...ctxA, sessionId: "agent-next", mcpHub: mcpHubB };
 
     mgr.setToolContext(ctxA);
     const first = (mgr as any).getEngine();
     const second = (mgr as any).getEngine();
+    const session = await mgr.createSession("code");
+    const requestA = (mgr as any).bindEngineToSession(first, session);
     mgr.setToolContext(ctxB);
 
     expect(first).toBe(second);
     expect(createEngine).toHaveBeenCalledTimes(1);
     expect(createEngine).toHaveBeenCalledWith(providers, undefined);
+    expect(bindSessionProject).toHaveBeenCalledWith(
+      session.id,
+      session.projectScope,
+    );
+    expect(createToolRuntime).toHaveBeenCalledTimes(1);
+    expect(createToolRuntime).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        sessionId: session.id,
+        projectScope: session.projectScope,
+        projectRoot: "/tmp",
+        mcpHub: mcpHubA,
+      }),
+    );
+    expect(setToolRuntime).toHaveBeenCalledTimes(1);
+    expect(setToolRuntime).toHaveBeenCalledWith(runtimeA);
+    expect(() => (mgr as any).bindEngineToSession(first, session)).toThrow(
+      "Foreground engine is already bound",
+    );
+
+    (mgr as any).releaseSessionToolContext(session.id, requestA);
+    (mgr as any).bindEngineToSession(first, session);
     expect(createToolRuntime).toHaveBeenCalledTimes(2);
-    expect(createToolRuntime).toHaveBeenNthCalledWith(1, ctxA);
-    expect(createToolRuntime).toHaveBeenNthCalledWith(2, ctxB);
-    expect(setToolRuntime).toHaveBeenNthCalledWith(1, runtimeA);
+    expect(createToolRuntime).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ mcpHub: mcpHubB }),
+    );
     expect(setToolRuntime).toHaveBeenNthCalledWith(2, runtimeB);
+  });
+
+  it("owns stable MCP leases across fresh and inherited request contexts", async () => {
+    const hub = {
+      getToolDefs: vi.fn(() => []),
+      getServerConfig: vi.fn(),
+    } as any;
+    const releaseParent = vi.fn();
+    const releaseChild = vi.fn();
+    const retain = vi.fn(() => ({
+      projectId: "project",
+      generation: 1,
+      hub,
+      retain: vi.fn(),
+      release: releaseChild,
+    }));
+    const acquire = vi.fn(() => ({
+      projectId: "project",
+      generation: 1,
+      hub,
+      retain,
+      release: releaseParent,
+    }));
+    const ensure = vi.fn(() => ({
+      projectId: "project",
+      generation: 0,
+      hub,
+    }));
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        projectMcpHubRegistry: {
+          ensure,
+          acquire,
+          getCurrent: vi.fn(() => ({
+            projectId: "project",
+            generation: 1,
+            hub,
+          })),
+        } as any,
+        host: {
+          createToolRuntime: vi.fn(() => ({ executeTool: vi.fn() })) as any,
+        },
+      },
+    );
+    const bindSessionProject = vi.fn();
+    mgr.setToolContext({
+      approvalManager: { bindSessionProject } as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+    });
+    const session = await mgr.createSession("code");
+    const engine = (mgr as any).getEngine();
+
+    const parentContext = (mgr as any).bindEngineToSession(engine, session);
+    const childContext = (mgr as any).captureSessionToolContext(
+      session,
+      undefined,
+      parentContext,
+    );
+
+    expect(bindSessionProject).toHaveBeenCalledWith(
+      session.id,
+      session.projectScope,
+    );
+    expect(ensure).toHaveBeenCalledOnce();
+    expect(ensure).toHaveBeenCalledWith(session.projectScope);
+    expect(acquire).toHaveBeenCalledOnce();
+    expect(acquire).toHaveBeenCalledWith(session.projectScope);
+    expect(retain).toHaveBeenCalledOnce();
+    expect(parentContext.mcpHub).toBe(hub);
+    expect(childContext.mcpHub).toBe(hub);
+
+    (mgr as any).releaseSessionToolContext(session.id, childContext);
+    (mgr as any).releaseSessionToolContext(session.id, parentContext);
+    (mgr as any).releaseSessionToolContext(session.id, parentContext);
+
+    expect(releaseChild).toHaveBeenCalledOnce();
+    expect(releaseParent).toHaveBeenCalledOnce();
+  });
+
+  it("reports strict web policy failures without storing the rejected turn", async () => {
+    const createCheckpoint = vi.fn(async () => null);
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            getCondenseThresholdForModel: () => 0.9,
+            getBgSummaryMode: () => "heuristic",
+            getBackgroundAgentSettings: () => ({}),
+            getWebAccessSettings: () => ({
+              searchBackend: "native",
+              fetchBackend: "native",
+            }),
+          },
+          createCheckpointManager: vi.fn(() => ({
+            baseCommit: null,
+            initialize: vi.fn(async () => undefined),
+            createCheckpoint,
+            previewRevert: vi.fn(async () => null),
+            revertToCheckpoint: vi.fn(async () => false),
+            getDiffBetween: vi.fn(async () => ""),
+          })),
+        },
+      },
+    );
+    mgr.setToolContext({
+      approvalManager: { bindSessionProject: vi.fn() } as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+    });
+    const session = await mgr.createSession("code");
+    const onEvent = vi.fn();
+    mgr.onEvent = onEvent;
+    const saveSessionNow = vi.spyOn(mgr as any, "saveSessionNow");
+
+    await expect(
+      mgr.sendMessage(session.id, "must not be stored", session.mode),
+    ).rejects.toThrow("Native web search is unavailable (native_unsupported).");
+
+    expect(session.status).toBe("error");
+    expect(saveSessionNow).toHaveBeenCalledWith(session.id);
+    expect(onEvent.mock.calls.map(([, event]) => event.type)).toEqual([
+      "error",
+      "done",
+    ]);
+    expect(onEvent).toHaveBeenNthCalledWith(
+      1,
+      session.id,
+      expect.objectContaining({
+        type: "error",
+        error: expect.stringContaining(
+          "Native web search is unavailable (native_unsupported).",
+        ),
+      }),
+    );
+    expect(session.addUserMessage).not.toHaveBeenCalled();
+    expect(createCheckpoint).not.toHaveBeenCalled();
+
+    onEvent.mockClear();
+    saveSessionNow.mockClear();
+    session.status = "streaming";
+
+    await expect(mgr.retrySession(session.id)).rejects.toThrow(
+      "Native web search is unavailable (native_unsupported).",
+    );
+
+    expect(session.status).toBe("error");
+    expect(saveSessionNow).toHaveBeenCalledWith(session.id);
+    expect(onEvent.mock.calls.map(([, event]) => event.type)).toEqual([
+      "error",
+      "done",
+    ]);
+    expect(session.addUserMessage).not.toHaveBeenCalled();
+    expect(createCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("blocks unavailable sessions at every local execution boundary", async () => {
+    const run = vi.fn(async function* () {});
+    const condenseSession = vi.fn(async function* () {});
+    const createCheckpoint = vi.fn(async () => null);
+    const previewRevert = vi.fn(async () => null);
+    const revertToCheckpoint = vi.fn(async () => false);
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          createEngine: vi.fn(
+            () =>
+              ({
+                setToolRuntime: vi.fn(),
+                run,
+                condenseSession,
+                isOverCondenseThreshold: vi.fn(() => true),
+              }) as any,
+          ),
+        },
+      },
+    );
+    mgr.setToolContext({
+      approvalManager: {} as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+    });
+    const session = await mgr.createSession("code");
+    (session as any).projectAvailability = "missing";
+    (mgr as any).checkpointManager = {
+      baseCommit: null,
+      initialize: vi.fn(),
+      createCheckpoint,
+      previewRevert,
+      revertToCheckpoint,
+      getDiffBetween: vi.fn(),
+    };
+    (mgr as any).checkpoints.set(session.id, [
+      {
+        id: "checkpoint-1",
+        projectId: session.projectScope.projectId,
+        commitHash: "hash-1",
+        turnIndex: 1,
+        createdAt: 1,
+      },
+    ]);
+
+    const unavailable = "unavailable for local execution";
+    await expect(
+      mgr.sendMessage(session.id, "do not send", session.mode),
+    ).rejects.toThrow(unavailable);
+    await expect(mgr.retrySession(session.id)).rejects.toThrow(unavailable);
+    await expect(mgr.rebuildSystemPrompts()).rejects.toThrow(unavailable);
+    await expect(mgr.setModel("gpt-5.4")).rejects.toThrow(unavailable);
+    await expect(
+      mgr.switchSessionMode(session.id, "architect"),
+    ).rejects.toThrow(unavailable);
+    await expect(mgr.condenseCurrentSession()).rejects.toThrow(unavailable);
+    await expect(mgr.runBtwQuestion("inspect this")).rejects.toThrow(
+      unavailable,
+    );
+    await expect(
+      mgr.spawnBackground(
+        { task: "blocked", message: "do not run" },
+        session.id,
+      ),
+    ).rejects.toThrow(unavailable);
+    await expect(mgr.createManualCheckpoint()).rejects.toThrow(unavailable);
+    await expect(mgr.previewRevert(session.id, "checkpoint-1")).rejects.toThrow(
+      unavailable,
+    );
+    await expect(
+      mgr.revertToCheckpoint(session.id, "checkpoint-1"),
+    ).resolves.toEqual({ ok: false, reason: "not_found" });
+
+    expect(session.addUserMessage).not.toHaveBeenCalled();
+    expect(session.rebuildSystemPrompt).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    expect(condenseSession).not.toHaveBeenCalled();
+    expect(createCheckpoint).not.toHaveBeenCalled();
+    expect(previewRevert).not.toHaveBeenCalled();
+    expect(revertToCheckpoint).not.toHaveBeenCalled();
+    expect(mgr.getConfig().model).toBe("claude-sonnet-4-6");
   });
 });
 
@@ -520,7 +1126,12 @@ describe("AgentSessionManager condense thresholds", () => {
     expect(session.autoCondenseThreshold).toBe(0.83);
     expect((session as any).setMode).toHaveBeenCalledWith(
       "architect",
-      undefined,
+      expect.objectContaining({
+        agentMode: expect.objectContaining({
+          slug: "architect",
+          toolGroups: expect.arrayContaining(["read", "plan"]),
+        }),
+      }),
     );
   });
 
@@ -645,7 +1256,33 @@ describe("AgentSessionManager manual condense", () => {
     });
   });
 
-  it("continues the agent turn after a successful manual condense", async () => {
+  it("fails closed when workspace execution is disabled", async () => {
+    const reason = "Resolve the history-storage conflict before continuing.";
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      { executionUnavailableReason: reason },
+    );
+
+    expect(mgr.getDefaultProjectScope()).toBeUndefined();
+    expect(mgr.getWorkspaceProjects()).toEqual([
+      expect.objectContaining({
+        rootPath: undefined,
+        availability: expect.objectContaining({
+          status: "unavailable",
+          message: reason,
+        }),
+      }),
+    ]);
+    await expect(mgr.createSession("code")).rejects.toThrow(reason);
+  });
+
+  it("does not start an agent turn after a successful manual condense", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
     const session = await mgr.createSession("code");
     session.status = "idle";
@@ -683,16 +1320,48 @@ describe("AgentSessionManager manual condense", () => {
     await mgr.condenseCurrentSession();
 
     expect(engine.condenseSession).toHaveBeenCalledTimes(1);
-    expect(engine.run).toHaveBeenCalledTimes(1);
+    expect(engine.run).not.toHaveBeenCalled();
     expect(onEvent).toHaveBeenCalledWith(
       session.id,
       expect.objectContaining({ type: "condense" }),
     );
-    expect(onEvent).toHaveBeenCalledWith(
+    expect(onEvent).not.toHaveBeenCalledWith(
       session.id,
-      expect.objectContaining({ type: "text_delta", text: "continued" }),
+      expect.objectContaining({ type: "text_delta" }),
     );
     expect(session.status).toBe("idle");
+  });
+
+  it("queues manual condense behind active session work", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    session.status = "idle";
+    (session as any).loadedSkills = new Set<string>();
+    (mgr as any).foregroundId = session.id;
+    let releaseActiveWork!: () => void;
+    const activeWork = new Promise<void>((resolve) => {
+      releaseActiveWork = resolve;
+    });
+    const queuedWork = (mgr as any).withSessionSendQueue(
+      session.id,
+      () => activeWork,
+    );
+    const engine = {
+      condenseSession: vi.fn(async function* () {
+        yield { type: "condense_error", error: "stopped" };
+      }),
+      run: vi.fn(async function* () {}),
+      isOverCondenseThreshold: vi.fn(() => false),
+    };
+    (mgr as any).engine = engine;
+
+    const condense = mgr.condenseCurrentSession();
+    await flushPromises();
+    expect(engine.condenseSession).not.toHaveBeenCalled();
+    releaseActiveWork();
+    await queuedWork;
+    await condense;
+    expect(engine.condenseSession).toHaveBeenCalledTimes(1);
   });
 
   it("does not continue the agent turn when manual condense does not succeed", async () => {
@@ -1416,6 +2085,206 @@ describe("AgentSessionManager checkpoints", () => {
     });
   });
 
+  it("creates, previews, diffs, and reverts one checkpoint across all workspace roots", async () => {
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-checkpoint-projects-"),
+    );
+    const rootA = path.join(workspace, "project-a");
+    const rootB = path.join(workspace, "project-b");
+    fs.mkdirSync(rootA);
+    fs.mkdirSync(rootB);
+
+    try {
+      const projectA = {
+        id: "project-a",
+        name: "Project A",
+        uri: `file://${rootA}`,
+        rootPath: rootA,
+        availability: { status: "available" as const },
+      };
+      const projectB = {
+        id: "project-b",
+        name: "Project B",
+        uri: `file://${rootB}`,
+        rootPath: rootB,
+        availability: { status: "available" as const },
+      };
+      const projects = [projectA, projectB];
+      const projectCatalog = {
+        listProjects: () => projects,
+        resolveProjectForResource: () => projectA,
+        resolvePersistedScope: (scope: { projectId: string }) => {
+          const project = [projectA, projectB].find(
+            (candidate) => candidate.id === scope.projectId,
+          )!;
+          return {
+            status: "available" as const,
+            project,
+            scope: {
+              schemaVersion: 1 as const,
+              kind: "project" as const,
+              projectId: project.id,
+              workspaceFolderUri: project.uri,
+              displayName: project.name,
+              rootPath: project.rootPath,
+            },
+          };
+        },
+      };
+      const managers = new Map<
+        string,
+        {
+          baseCommit: string;
+          initialize: ReturnType<typeof vi.fn>;
+          createCheckpoint: ReturnType<typeof vi.fn>;
+          previewRevert: ReturnType<typeof vi.fn>;
+          revertToCheckpoint: ReturnType<typeof vi.fn>;
+          getDiffBetween: ReturnType<typeof vi.fn>;
+        }
+      >();
+      const createCheckpointManager = vi.fn(
+        ({ workspaceDir }: { workspaceDir: string }) => {
+          const label = workspaceDir === rootA ? "a" : "b";
+          const manager = {
+            baseCommit: `base-${label}`,
+            initialize: vi.fn(async () => undefined),
+            createCheckpoint: vi.fn(async (turnIndex: number) => ({
+              id: `checkpoint-${label}`,
+              commitHash: `commit-${label}`,
+              turnIndex,
+              createdAt: label === "a" ? 100 : 200,
+            })),
+            previewRevert: vi.fn(async () => ({
+              modified: [`${label}.ts`],
+              deleted: [],
+              restored: [],
+            })),
+            revertToCheckpoint: vi.fn(async () => true),
+            getDiffBetween: vi.fn(
+              async (fromHash: string, toHash: string) =>
+                `${label}:${fromHash}:${toHash}`,
+            ),
+          };
+          managers.set(workspaceDir, manager);
+          return manager;
+        },
+      );
+      const mgr = new AgentSessionManager(
+        makeConfig(),
+        rootA,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        {
+          projectCatalog,
+          host: { createCheckpointManager },
+        },
+      );
+      const createSession = (project: typeof projectA, id: string) => ({
+        id,
+        projectScope: {
+          schemaVersion: 1 as const,
+          kind: "project" as const,
+          projectId: project.id,
+          workspaceFolderUri: project.uri,
+          displayName: project.name,
+          rootPath: project.rootPath,
+        },
+        projectAvailability: "available" as const,
+        getAllMessages: vi.fn(() => [
+          { role: "user" as const, content: `prompt-${project.id}` },
+        ]),
+        replaceMessages: vi.fn(),
+        status: "idle" as const,
+      });
+      const session = createSession(projectA, "session-a");
+      (mgr as any).sessions.set(session.id, session);
+
+      mgr.switchTo(session.id);
+      const checkpoint = await mgr.createManualCheckpoint();
+
+      expect(
+        createCheckpointManager.mock.calls.map(
+          ([options]) => options.workspaceDir,
+        ),
+      ).toEqual([rootA, rootB]);
+      expect(checkpoint).toMatchObject({
+        projectId: projectA.id,
+        commitHash: "commit-a",
+        createdAt: 200,
+        projectSnapshots: [
+          { projectId: projectA.id, commitHash: "commit-a", createdAt: 100 },
+          { projectId: projectB.id, commitHash: "commit-b", createdAt: 200 },
+        ],
+      });
+      expect(checkpoint?.id).toEqual(expect.any(String));
+
+      await expect(
+        mgr.previewRevert(session.id, checkpoint!.id),
+      ).resolves.toMatchObject({
+        projectId: projectA.id,
+        preview: {
+          modified: ["Project A/a.ts", "Project B/b.ts"],
+          deleted: [],
+          restored: [],
+        },
+      });
+      await expect(
+        mgr.getCheckpointDiff(session.id, checkpoint!.id, "all"),
+      ).resolves.toBe(
+        "## Project A\n\na:base-a:commit-a\n\n## Project B\n\nb:base-b:commit-b",
+      );
+      await expect(
+        mgr.revertToCheckpoint(session.id, checkpoint!.id),
+      ).resolves.toMatchObject({ ok: true });
+
+      const managerA = managers.get(rootA)!;
+      const managerB = managers.get(rootB)!;
+      expect(managerA.createCheckpoint).toHaveBeenCalledWith(1);
+      expect(managerB.createCheckpoint).toHaveBeenCalledWith(1);
+      expect(managerA.previewRevert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: checkpoint!.id,
+          projectId: projectA.id,
+          commitHash: "commit-a",
+        }),
+      );
+      expect(managerB.previewRevert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: checkpoint!.id,
+          projectId: projectB.id,
+          commitHash: "commit-b",
+        }),
+      );
+      expect(managerA.revertToCheckpoint).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: checkpoint!.id,
+          projectId: projectA.id,
+          commitHash: "commit-a",
+        }),
+      );
+      expect(managerB.revertToCheckpoint).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: checkpoint!.id,
+          projectId: projectB.id,
+          commitHash: "commit-b",
+        }),
+      );
+      expect(managerA.getDiffBetween).toHaveBeenCalledWith(
+        "base-a",
+        "commit-a",
+      );
+      expect(managerB.getDiffBetween).toHaveBeenCalledWith(
+        "base-b",
+        "commit-b",
+      );
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("renames unloaded persisted sessions with the current stored revision", async () => {
     const summary = {
       id: "session-1",
@@ -1849,12 +2718,14 @@ describe("AgentSessionManager checkpoints", () => {
     expect(mgr.getCheckpoints(session.id)).toEqual([
       expect.objectContaining({
         id: "cp-turn-1",
+        projectId: session.projectScope.projectId,
         commitHash: "hash-1-refreshed",
         turnIndex: 1,
         createdAt: 222,
       }),
       expect.objectContaining({
         id: "cp-turn-2",
+        projectId: session.projectScope.projectId,
         commitHash: "hash-2",
         turnIndex: 2,
         createdAt: 333,
@@ -2150,6 +3021,7 @@ describe("AgentSessionManager checkpoints", () => {
     const preview = await mgr.previewRevert("session-1", "cp-1");
 
     expect(preview).toEqual({
+      projectId: session.projectScope.projectId,
       checkpointId: "cp-1",
       sessionRevision: expect.any(String),
       persistenceRevision: "persisted-1",
@@ -2301,6 +3173,7 @@ describe("AgentSessionManager checkpoints", () => {
     expect(mgr.getCheckpoints("session-1")).toEqual([
       {
         id: "cp-1",
+        projectId: session.projectScope.projectId,
         commitHash: "hash-1",
         turnIndex: 1,
         createdAt: 111,
@@ -2311,6 +3184,7 @@ describe("AgentSessionManager checkpoints", () => {
     expect(lastSaveArg?.metadata.checkpointState?.checkpoints).toEqual([
       {
         id: "cp-1",
+        projectId: session.projectScope.projectId,
         commitHash: "hash-1",
         turnIndex: 1,
         createdAt: 111,
@@ -2447,6 +3321,7 @@ describe("AgentSessionManager checkpoints", () => {
     expect(saveSession).toHaveBeenCalledTimes(2);
     expect(saveSession.mock.calls[1][0].session.metadata.revertPending).toEqual(
       expect.objectContaining({
+        projectId: session.projectScope.projectId,
         checkpointId: "cp-1",
         reason: "workspace_reverted_session_save_failed",
         sessionRevision: "2",
@@ -2833,6 +3708,211 @@ describe("AgentSessionManager checkpoints", () => {
       { role: "assistant", content: "second answer" },
     ]);
     expect(saveSession).toHaveBeenCalled();
+  });
+
+  it("pins legacy checkpoints to the persisted session project instead of the current root", async () => {
+    const projectA = {
+      id: "project-a",
+      name: "Project A",
+      uri: "file:///workspace/a",
+      rootPath: "/workspace/a",
+      availability: { status: "available" as const },
+    };
+    const projectB = {
+      id: "project-b",
+      name: "Project B",
+      uri: "file:///workspace/b",
+      rootPath: "/workspace/b",
+      availability: { status: "available" as const },
+    };
+    const projectScopeB = {
+      projectId: projectB.id,
+      workspaceFolderUri: projectB.uri,
+      displayName: projectB.name,
+    };
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Project B checkpoint",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+      projectScope: projectScopeB,
+    };
+    const store = {
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "persisted-1",
+        value: {
+          summary,
+          messages: [{ role: "user", content: "persisted" }],
+          metadata: {
+            projectScope: projectScopeB,
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            checkpointState: {
+              baseCommit: null,
+              checkpoints: [
+                {
+                  id: "legacy-checkpoint",
+                  commitHash: "hash-b",
+                  turnIndex: 1,
+                  createdAt: 111,
+                },
+              ],
+            },
+          },
+        },
+      })),
+      get: vi.fn(() => summary),
+      loadMessages: vi.fn(() => []),
+      loadMetadata: vi.fn(() => null),
+      list: vi.fn(() => []),
+    } as any;
+    const projectCatalog = {
+      listProjects: () => [projectA, projectB],
+      resolveProjectForResource: () => projectA,
+      resolvePersistedScope: (scope: typeof projectScopeB) => {
+        const project = scope.projectId === projectB.id ? projectB : projectA;
+        return {
+          status: "available" as const,
+          project,
+          scope: { ...scope, rootPath: project.rootPath },
+        };
+      },
+    };
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      projectA.rootPath,
+      undefined,
+      false,
+      store,
+      undefined,
+      undefined,
+      { projectCatalog } as any,
+    );
+
+    const session = await mgr.loadPersistedSession("session-1");
+
+    expect(session?.projectScope.projectId).toBe(projectB.id);
+    expect(mgr.getCheckpoints("session-1")).toEqual([
+      expect.objectContaining({
+        id: "legacy-checkpoint",
+        projectId: projectB.id,
+      }),
+    ]);
+  });
+
+  it("rejects checkpoints and previews attributed to another project", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    (mgr as any).checkpoints.set(session.id, [
+      {
+        id: "foreign-checkpoint",
+        projectId: "project-other",
+        commitHash: "hash-other",
+        turnIndex: 1,
+        createdAt: 111,
+      },
+    ]);
+    const checkpointManager = {
+      previewRevert: vi.fn(async () => ({
+        modified: [],
+        deleted: [],
+        restored: [],
+      })),
+      revertToCheckpoint: vi.fn(async () => true),
+    };
+    (mgr as any).checkpointManager = checkpointManager;
+
+    await expect(
+      mgr.previewRevert(session.id, "foreign-checkpoint"),
+    ).resolves.toBeNull();
+    await expect(
+      mgr.revertToCheckpoint(session.id, "foreign-checkpoint"),
+    ).resolves.toEqual({ ok: false, reason: "not_found" });
+    expect(checkpointManager.previewRevert).not.toHaveBeenCalled();
+    expect(checkpointManager.revertToCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("rejects a revert preview attributed to another project", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    (mgr as any).checkpoints.set(session.id, [
+      {
+        id: "checkpoint-1",
+        projectId: session.projectScope.projectId,
+        commitHash: "hash-1",
+        turnIndex: 1,
+        createdAt: 111,
+      },
+    ]);
+    const checkpointManager = {
+      revertToCheckpoint: vi.fn(async () => true),
+    };
+    (mgr as any).checkpointManager = checkpointManager;
+
+    const result = await mgr.revertToCheckpoint(
+      session.id,
+      "checkpoint-1",
+      undefined,
+      undefined,
+      "project-other",
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "session_conflict",
+      currentRevision: expect.any(String),
+    });
+    expect(checkpointManager.revertToCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("pins legacy recovery to the loaded session project and rejects mismatches", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    const recovery = {
+      checkpointId: "checkpoint-1",
+      sessionRevision: "revision-1",
+      workspaceRevision: "hash-1",
+      startedAt: 111,
+      reason: "workspace_reverted_session_save_failed" as const,
+    };
+
+    (mgr as any).sessionRevertPending.set(session.id, recovery);
+    expect(mgr.getRevertRecoveryState(session.id)).toEqual({
+      ...recovery,
+      projectId: session.projectScope.projectId,
+    });
+
+    (mgr as any).sessionRevertPending.set(session.id, {
+      ...recovery,
+      projectId: "project-other",
+    });
+    expect(mgr.getRevertRecoveryState(session.id)).toBeNull();
+  });
+
+  it("includes the session project in checkpoint revision tokens", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    const firstRevision = (mgr as any).currentSessionRevisionToken(session.id);
+
+    (mgr as any).sessions.set(session.id, {
+      ...session,
+      projectScope: {
+        ...session.projectScope,
+        projectId: "project-other",
+      },
+    });
+    const secondRevision = (mgr as any).currentSessionRevisionToken(session.id);
+
+    expect(secondRevision).not.toBe(firstRevision);
   });
 });
 

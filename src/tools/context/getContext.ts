@@ -10,8 +10,21 @@ import type {
 } from "../../core/capabilities/readSearch.js";
 
 import { SYMBOL_KIND_NAMES } from "../languageFeatures.js";
-import { jsonResult, type ToolResult } from "../../shared/types.js";
+import {
+  errorResult,
+  handleToolError,
+  jsonResult,
+  type ToolResult,
+} from "../../shared/types.js";
 import path from "node:path";
+import {
+  getStructuredSecretRedactionMetadata,
+  isStructuredConfigPath,
+  redactStructuredSecrets,
+  type StructuredSecretRedactionResult,
+} from "../../shared/structuredSecretRedaction.js";
+import { canonicalizePath } from "../../util/paths.js";
+import { buildReadFileError } from "../readFile.js";
 
 export interface GetContextParams {
   path: string;
@@ -52,23 +65,28 @@ export async function handleGetContext(
 
     const rawLimit = Math.trunc(params.limit ?? DEFAULT_LIMIT);
     if (!Number.isFinite(rawLimit) || rawLimit <= 0) {
-      return jsonResult({
-        error: `Invalid limit: ${params.limit}. Must be a positive number.`,
-        path: params.path,
-      });
+      return errorResult(
+        `Invalid limit: ${params.limit}. Must be a positive number.`,
+        { path: params.path },
+      );
     }
 
     const offset = Math.max(1, Math.trunc(params.offset ?? 1));
     let diskLines: string[] = [];
     let totalLines = 0;
+    let structuredRedaction: StructuredSecretRedactionResult | undefined;
     const workingSet = await providers.workingSetProvider.check({
       sessionId,
       path: absolutePath,
       deriveRange: (contentBytes) => {
-        diskLines = Buffer.from(contentBytes).toString("utf-8").split("\n");
+        const raw = Buffer.from(contentBytes).toString("utf-8");
+        structuredRedaction = isStructuredConfigPath(absolutePath)
+          ? redactStructuredSecrets(raw)
+          : undefined;
+        diskLines = (structuredRedaction?.content ?? raw).split("\n");
         totalLines = diskLines.length;
         if (offset > totalLines) {
-          return { startLine: offset, endLine: offset - 1 };
+          return { startLine: 0, endLine: 0 };
         }
         const limit = Math.min(rawLimit, MAX_LIMIT, totalLines - offset + 1);
         return { startLine: offset, endLine: offset + limit - 1 };
@@ -77,13 +95,15 @@ export async function handleGetContext(
       refresh: params.refresh,
     });
 
-    const range = workingSet.range ?? {
-      startLine: offset,
-      endLine: offset - 1,
-    };
+    const range = workingSet.range ?? { startLine: 0, endLine: 0 };
     if (offset > totalLines) {
+      const redactionMetadata =
+        getStructuredSecretRedactionMetadata(structuredRedaction);
       return jsonResult({
         path: relPath,
+        status: "offset_out_of_range",
+        requested_offset: offset,
+        valid_offset_range: { start: 1, end: totalLines },
         total_lines: totalLines,
         showing: "0-0",
         truncated: true,
@@ -91,6 +111,7 @@ export async function handleGetContext(
         modified: new Date(workingSet.modifiedMs).toISOString(),
         language: document.languageId,
         working_set: buildWorkingSetPayload(workingSet, range),
+        ...(redactionMetadata ? { redaction: redactionMetadata } : {}),
       });
     }
 
@@ -110,6 +131,9 @@ export async function handleGetContext(
       language: document.languageId,
       working_set: buildWorkingSetPayload(workingSet, range),
     };
+    const redactionMetadata =
+      getStructuredSecretRedactionMetadata(structuredRedaction);
+    if (redactionMetadata) result.redaction = redactionMetadata;
 
     const gitStatus = providers.enrichmentProvider.getGitStatus(absolutePath);
     if (gitStatus) result.git_status = gitStatus;
@@ -128,11 +152,15 @@ export async function handleGetContext(
 
     return jsonResult(result, true);
   } catch (err) {
-    if (typeof err === "object" && err !== null && "content" in err) {
-      return err as ToolResult;
+    if (isMissingFileError(err)) {
+      const payload = await buildReadFileError(
+        normalizeMissingFileError(err),
+        params.path,
+      );
+      const { error, ...details } = payload;
+      return errorResult(String(error), details);
     }
-    const message = err instanceof Error ? err.message : String(err);
-    return jsonResult({ error: message, path: params.path });
+    return handleToolError(err, { path: params.path });
   }
 }
 
@@ -259,37 +287,55 @@ export function getContextGitStatus(filePath: string): string | undefined {
     }
 
     const api = gitExtension.exports.getAPI(1);
-    for (const repo of api.repositories) {
-      const repoRoot = repo.rootUri.fsPath;
-      if (!path.relative(repoRoot, filePath).startsWith("..")) {
-        if (
-          repo.state.indexChanges.some(
-            (change) => change.uri.fsPath === filePath,
-          )
-        ) {
-          return "staged";
-        }
-        if (
-          repo.state.workingTreeChanges.some(
-            (change) => change.uri.fsPath === filePath,
-          )
-        ) {
-          return "modified";
-        }
-        if (
-          repo.state.untrackedChanges?.some(
-            (change) => change.uri.fsPath === filePath,
-          )
-        ) {
-          return "untracked";
-        }
-        return "clean";
-      }
-    }
+    const normalizedFilePath = normalizeGitPath(filePath);
+    const repo = api.repositories
+      .filter((candidate) =>
+        isPathInGitRepository(normalizedFilePath, candidate.rootUri.fsPath),
+      )
+      .sort(
+        (left, right) =>
+          normalizeGitPath(right.rootUri.fsPath).length -
+          normalizeGitPath(left.rootUri.fsPath).length,
+      )[0];
+    if (!repo) return undefined;
+
+    const hasChange = (changes: GitChange[] | undefined): boolean =>
+      changes?.some(
+        (change) => normalizeGitPath(change.uri.fsPath) === normalizedFilePath,
+      ) ?? false;
+    if (hasChange(repo.state.indexChanges)) return "staged";
+    if (hasChange(repo.state.workingTreeChanges)) return "modified";
+    if (hasChange(repo.state.untrackedChanges)) return "untracked";
+    return "clean";
   } catch {
     return undefined;
   }
-  return undefined;
+}
+
+function normalizeGitPath(filePath: string): string {
+  const normalized = path.normalize(canonicalizePath(filePath));
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function isPathInGitRepository(filePath: string, repoRoot: string): boolean {
+  const relative = path.relative(normalizeGitPath(repoRoot), filePath);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) &&
+      relative !== ".." &&
+      !path.isAbsolute(relative))
+  );
+}
+
+function isMissingFileError(err: unknown): err is NodeJS.ErrnoException {
+  if (!(err instanceof Error)) return false;
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "FileNotFound";
+}
+
+function normalizeMissingFileError(err: NodeJS.ErrnoException): Error {
+  if ((err as NodeJS.ErrnoException).code === "ENOENT") return err;
+  return Object.assign(new Error(err.message), { code: "ENOENT" });
 }
 
 function getVscodeContextDocument(document: ContextResolvedDocument): {

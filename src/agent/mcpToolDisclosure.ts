@@ -16,6 +16,8 @@ export interface McpToolDisclosureOptions {
   /** Maximum representative tool names to include in a deferred-server catalog entry. */
   representativeToolLimit?: number;
   serverConfigs?: McpToolDisclosureConfig[];
+  /** Exact bound tools that must be advertised directly even when siblings are deferred. */
+  forceInlineToolNames?: ReadonlySet<string> | readonly string[];
 }
 
 export type McpCapabilityClass = "web-search" | "browser-automation";
@@ -159,6 +161,7 @@ export function partitionMcpToolsForDisclosure(
       config.mode ?? "auto",
     ]),
   );
+  const forceInlineToolNames = new Set(options.forceInlineToolNames ?? []);
 
   const byServer = new Map<string, ToolDefinition[]>();
   const inlineTools: ToolDefinition[] = [];
@@ -183,10 +186,16 @@ export function partitionMcpToolsForDisclosure(
   )) {
     const mode = configuredModes.get(serverName) ?? "auto";
     const measurement = measureTools(serverTools);
-    const shouldDefer =
+    const normallyDeferred =
       mode === "deferred" ||
       (mode === "auto" &&
         measurement.estimatedTokens >= perServerTokenThreshold);
+    const forcedInlineTools = normallyDeferred
+      ? serverTools.filter((tool) => forceInlineToolNames.has(tool.name))
+      : [];
+    const remainingDeferredTools = normallyDeferred
+      ? serverTools.filter((tool) => !forceInlineToolNames.has(tool.name))
+      : [];
 
     const allBareToolNames = serverTools
       .map((tool) => parseMcpToolName(tool.name)?.bareToolName ?? tool.name)
@@ -203,15 +212,16 @@ export function partitionMcpToolsForDisclosure(
       estimatedTokens: measurement.estimatedTokens,
       representativeTools,
       capabilities,
-      deferred: shouldDefer,
+      deferred: remainingDeferredTools.length > 0,
     });
 
-    if (!shouldDefer) {
+    if (!normallyDeferred) {
       inlineTools.push(...serverTools);
       continue;
     }
 
-    deferredTools.push(...serverTools);
+    inlineTools.push(...forcedInlineTools);
+    deferredTools.push(...remainingDeferredTools);
   }
 
   return {

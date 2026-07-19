@@ -1,8 +1,11 @@
 import * as vscode from "vscode";
 
 import type {
+  ClosedTerminalSnapshot,
+  TerminalBackgroundState,
   TerminalCommandResult,
   TerminalExecuteOptions,
+  TerminalLifecycleState,
 } from "../core/capabilities/terminal.js";
 import { cleanTerminalOutput, cleanTerminalRawOutput } from "../util/ansi.js";
 import {
@@ -82,18 +85,14 @@ interface ManagedTerminal {
   backgroundExitCode: number | null;
   /** Whether output was captured for the background command */
   backgroundOutputCaptured: boolean;
+  /** Durable lifecycle classification for the latest background-capable command. */
+  backgroundState?: TerminalLifecycleState;
   /** Disposables for background listeners (stream reader, exit listener) */
   backgroundDisposables: vscode.Disposable[];
   /** Resolves the active foreground execution into background mode. */
   detachForeground?: () => void;
   /** Cleanup owned by a command that outlived its foreground tool call. */
   deferredCommandFinalizer?: () => void;
-}
-
-interface ClosedTerminalSnapshot {
-  id: string;
-  name: string;
-  closedAt: number;
 }
 
 export interface ManagedTerminalMetadataEvent {
@@ -147,6 +146,7 @@ export type CommandResult = TerminalCommandResult;
 export type ExecuteOptions = TerminalExecuteOptions;
 
 const SHELL_INTEGRATION_TIMEOUT = 15000; // 15 seconds (WSL2 / heavy shell configs can be slow)
+const UNKNOWN_MARKER_EXIT_GRACE_MS = 500;
 
 let nextTerminalId = 1;
 
@@ -154,6 +154,8 @@ export class TerminalManager {
   private terminals: ManagedTerminal[] = [];
   private disposables: vscode.Disposable[] = [];
   private recentlyClosed: ClosedTerminalSnapshot[] = [];
+  /** Terminal objects requested for disposal but still visible in vscode.window.terminals. */
+  private readonly pendingDisposals = new Set<vscode.Terminal>();
   private readonly eventListeners = new Map<
     ManagedTerminalEventName,
     Set<ManagedTerminalListener<ManagedTerminalEventName>>
@@ -176,6 +178,7 @@ export class TerminalManager {
    */
   private static readonly REUSE_COOLDOWN_MS = 500;
   private static readonly MAX_RECENTLY_CLOSED = 20;
+  private static readonly MAX_CLOSED_OUTPUT_CHARS = 40 * 1024;
 
   onTerminalEvent<T extends ManagedTerminalEventName>(
     eventName: T,
@@ -256,7 +259,12 @@ export class TerminalManager {
     if (!openTerminals) return;
 
     for (const terminal of openTerminals) {
-      if (terminal.name !== "AgentLink") continue;
+      if (
+        terminal.name !== "AgentLink" ||
+        this.pendingDisposals.has(terminal)
+      ) {
+        continue;
+      }
       if (this.terminals.some((managed) => managed.terminal === terminal))
         continue;
       const cwd = terminal.shellIntegration?.cwd?.fsPath ?? "";
@@ -272,6 +280,7 @@ export class TerminalManager {
         backgroundRunning: false,
         backgroundExitCode: null,
         backgroundOutputCaptured: false,
+        backgroundState: "completed",
         backgroundDisposables: [],
       };
       this.terminals.push(managed);
@@ -287,8 +296,12 @@ export class TerminalManager {
   }
 
   private stopTrackingManagedTerminal(managed: ManagedTerminal): void {
-    this.rememberClosedTerminal(managed);
     this.disposeBackgroundTracking(managed);
+    if (managed.backgroundRunning) {
+      managed.backgroundRunning = false;
+      managed.backgroundState = "unknown_termination";
+    }
+    this.rememberClosedTerminal(managed);
     this.finalizeDeferredCommand(managed);
     this.emitTerminalEvent("close", this.terminalMetadataEvent(managed));
   }
@@ -328,6 +341,8 @@ export class TerminalManager {
     if (options?.normalizeOutput) {
       managed.outputBuffer = cleanTerminalRawOutput(managed.outputBuffer);
     }
+    managed.backgroundState =
+      managed.backgroundExitCode === null ? "unknown_termination" : "completed";
     this.emitTerminalEvent("commandEnd", {
       terminalId: managed.id,
       commandId,
@@ -344,6 +359,9 @@ export class TerminalManager {
     if (!openTerminals) return;
 
     const openSet = new Set(openTerminals);
+    for (const terminal of this.pendingDisposals) {
+      if (!openSet.has(terminal)) this.pendingDisposals.delete(terminal);
+    }
     const retained: ManagedTerminal[] = [];
 
     for (const managed of this.terminals) {
@@ -397,6 +415,9 @@ export class TerminalManager {
     // Clean up terminals that get closed
     this.disposables.push(
       vscode.window.onDidCloseTerminal((closedTerminal) => {
+        if (!this.getOpenVscodeTerminals()?.includes(closedTerminal)) {
+          this.pendingDisposals.delete(closedTerminal);
+        }
         const closing = this.terminals.filter(
           (t) => t.terminal === closedTerminal,
         );
@@ -696,6 +717,7 @@ export class TerminalManager {
       backgroundRunning: false,
       backgroundExitCode: null,
       backgroundOutputCaptured: false,
+      backgroundState: "completed",
       backgroundDisposables: [],
     };
     this.terminals.push(managed);
@@ -932,6 +954,7 @@ export class TerminalManager {
     // e.g. if the stream hangs after yielding the marker data).
     let resolveStreamMarker: ((code: number | undefined) => void) | undefined;
     let streamMarkerResolved = false;
+    let markerExitCode: number | undefined;
     const streamMarkerPromise = new Promise<number | undefined>((resolve) => {
       resolveStreamMarker = (code) => {
         if (streamMarkerResolved) return;
@@ -958,7 +981,8 @@ export class TerminalManager {
         logDiag(
           `MARKER_FOUND source=${source} marker=${result.source} exitCode=${result.exitCode ?? "none"}`,
         );
-        resolveStreamMarker!(result.exitCode ?? undefined);
+        markerExitCode = result.exitCode ?? undefined;
+        resolveStreamMarker!(markerExitCode);
         return true;
       }
       lastMarkerCheckPos = managed.outputBuffer.length;
@@ -1010,7 +1034,7 @@ export class TerminalManager {
       diag.raceWinner = "detach";
       logDiag("RACE_RESOLVED");
       this.deferCommandFinalization(managed, options);
-      this.transitionToBackground(managed, commandId, execution);
+      this.transitionToBackground(managed, commandId, execution, "detached");
       clearInterval(markerPoll);
       for (const d of disposables) d.dispose();
 
@@ -1082,13 +1106,24 @@ export class TerminalManager {
     // stream finished but exit event is delayed), give it a short grace
     // period rather than blocking forever.
     const EXIT_CODE_GRACE_MS = 5_000;
-    const exitCode = await Promise.race([
-      exitCodePromise,
-      streamMarkerPromise,
-      new Promise<undefined>((r) =>
-        setTimeout(() => r(undefined), EXIT_CODE_GRACE_MS),
-      ),
-    ]);
+    const exitCode =
+      markerExitCode ??
+      (await Promise.race([
+        exitCodePromise,
+        streamMarkerPromise.then((code) =>
+          code !== undefined
+            ? code
+            : Promise.race([
+                exitCodePromise,
+                new Promise<undefined>((resolve) =>
+                  setTimeout(resolve, UNKNOWN_MARKER_EXIT_GRACE_MS),
+                ),
+              ]),
+        ),
+        new Promise<undefined>((r) =>
+          setTimeout(() => r(undefined), EXIT_CODE_GRACE_MS),
+        ),
+      ]));
 
     logDiag(`EXIT_CODE=${exitCode ?? "null"}`);
     if (!timedOut) {
@@ -1109,8 +1144,13 @@ export class TerminalManager {
       managed.cwd = actualCwd;
     }
 
+    managed.backgroundExitCode = exitCode ?? null;
+    managed.backgroundOutputCaptured = true;
+    managed.backgroundState =
+      timedOut || exitCode === undefined ? "unknown_termination" : "completed";
+
     const result: CommandResult = {
-      exit_code: exitCode ?? null,
+      exit_code: managed.backgroundExitCode,
       output: cleanOutput,
       ...(rawOutput && { terminal_raw_output: rawOutput }),
       ...(actualCwd && { cwd: actualCwd }),
@@ -1123,7 +1163,7 @@ export class TerminalManager {
 
     if (timedOut) {
       this.deferCommandFinalization(managed, options);
-      this.transitionToBackground(managed, commandId, execution);
+      this.transitionToBackground(managed, commandId, execution, "timed_out");
       result.timed_out = true;
       const timeoutMessage = `[Timed out after ${timeout! / 1000}s — command may still be running. Use get_terminal_output with terminal_id "${managed.id}" to check on progress, or add kill: true to stop it.]`;
       result.output += `\n${timeoutMessage}`;
@@ -1148,6 +1188,7 @@ export class TerminalManager {
     managed.backgroundRunning = true;
     managed.backgroundOutputCaptured = false;
     managed.backgroundExitCode = null;
+    managed.backgroundState = "detached";
     const timestamp = Date.now();
     const commandId = `${managed.id}:${timestamp}`;
 
@@ -1203,6 +1244,7 @@ export class TerminalManager {
     managed: ManagedTerminal,
     commandId: string,
     execution: vscode.TerminalShellExecution,
+    state: "detached" | "timed_out",
   ): void {
     // Clean up any stale background state
     this.disposeBackgroundTracking(managed);
@@ -1210,6 +1252,7 @@ export class TerminalManager {
     managed.backgroundRunning = true;
     managed.backgroundOutputCaptured = true;
     managed.backgroundExitCode = null;
+    managed.backgroundState = state;
 
     const execTag = `timeout-bg:${managed.id}:${Date.now()}`;
     const logBg = (event: string) => {
@@ -1229,6 +1272,20 @@ export class TerminalManager {
       logBg(
         `FINALIZED source=${source} exit_code=${managed.backgroundExitCode}`,
       );
+    };
+    let unknownMarkerTimer: ReturnType<typeof setTimeout> | undefined;
+    const deferUnknownMarkerCompletion = () => {
+      if (unknownMarkerTimer) return;
+      unknownMarkerTimer = setTimeout(() => {
+        unknownMarkerTimer = undefined;
+        finalize("unknownMarkerGraceExpired");
+      }, UNKNOWN_MARKER_EXIT_GRACE_MS);
+      managed.backgroundDisposables.push({
+        dispose: () => {
+          if (unknownMarkerTimer) clearTimeout(unknownMarkerTimer);
+          unknownMarkerTimer = undefined;
+        },
+      });
     };
 
     const completionListeners = registerTerminalCompletionListeners({
@@ -1257,8 +1314,12 @@ export class TerminalManager {
         logBg(
           `MARKER_FOUND marker=${marker.source} exitCode=${marker.exitCode ?? "none"}`,
         );
-        managed.backgroundExitCode = marker.exitCode;
-        finalize("marker");
+        if (marker.exitCode === null) {
+          deferUnknownMarkerCompletion();
+        } else {
+          managed.backgroundExitCode = marker.exitCode;
+          finalize("marker");
+        }
       },
     });
     managed.backgroundDisposables.push(...completionListeners, markerTracker);
@@ -1273,6 +1334,7 @@ export class TerminalManager {
     this.disposeBackgroundTracking(managed);
     managed.backgroundRunning = true;
     managed.backgroundExitCode = null;
+    managed.backgroundState = "detached";
     managed.outputBuffer = "";
 
     const execTag = `bg:${managed.id}:${Date.now()}`;
@@ -1296,6 +1358,20 @@ export class TerminalManager {
       logBg(
         `FINALIZED source=${source} exit_code=${managed.backgroundExitCode}`,
       );
+    };
+    let unknownMarkerTimer: ReturnType<typeof setTimeout> | undefined;
+    const deferUnknownMarkerCompletion = () => {
+      if (unknownMarkerTimer) return;
+      unknownMarkerTimer = setTimeout(() => {
+        unknownMarkerTimer = undefined;
+        finalize("unknownMarkerGraceExpired");
+      }, UNKNOWN_MARKER_EXIT_GRACE_MS);
+      managed.backgroundDisposables.push({
+        dispose: () => {
+          if (unknownMarkerTimer) clearTimeout(unknownMarkerTimer);
+          unknownMarkerTimer = undefined;
+        },
+      });
     };
 
     // --- Register listeners BEFORE executing (prevents race for fast commands) ---
@@ -1338,8 +1414,12 @@ export class TerminalManager {
         logBg(
           `MARKER_FOUND marker=${marker.source} exitCode=${marker.exitCode ?? "none"}`,
         );
-        managed.backgroundExitCode = marker.exitCode;
-        finalize("marker");
+        if (marker.exitCode === null) {
+          deferUnknownMarkerCompletion();
+        } else {
+          managed.backgroundExitCode = marker.exitCode;
+          finalize("marker");
+        }
       },
     });
     managed.backgroundDisposables.push(...completionListeners, markerTracker);
@@ -1427,17 +1507,19 @@ export class TerminalManager {
       ? this.terminals.filter((t) => names.includes(t.name))
       : [...this.terminals];
 
-    for (const managed of toClose) {
-      this.rememberClosedTerminal(managed);
-      this.disposeBackgroundTracking(managed);
-      this.finalizeDeferredCommand(managed);
-      managed.terminal.dispose();
-    }
-
-    // The onDidCloseTerminal listener will clean up the array,
-    // but do it eagerly too for immediate consistency.
     const closedIds = new Set(toClose.map((t) => t.id));
     this.terminals = this.terminals.filter((t) => !closedIds.has(t.id));
+    for (const managed of toClose) {
+      this.pendingDisposals.add(managed.terminal);
+      if (managed.backgroundRunning) {
+        managed.backgroundRunning = false;
+        managed.backgroundState = "unknown_termination";
+      }
+      this.rememberClosedTerminal(managed);
+      managed.terminal.dispose();
+      this.disposeBackgroundTracking(managed);
+      this.finalizeDeferredCommand(managed);
+    }
 
     // Report any requested names that weren't found
     const closedNames = new Set(toClose.map((t) => t.name));
@@ -1481,26 +1563,28 @@ export class TerminalManager {
    * Get the background execution state of a terminal.
    * Returns undefined if the terminal is not found.
    */
-  getBackgroundState(terminalId: string):
-    | {
-        is_running: boolean;
-        exit_code: number | null;
-        output: string;
-        output_captured: boolean;
-        terminal_raw_output?: string;
-      }
-    | undefined {
+  getBackgroundState(terminalId: string): TerminalBackgroundState | undefined {
     const managed = this.terminals.find((t) => t.id === terminalId);
-    if (!managed) return undefined;
-    return {
-      is_running: managed.backgroundRunning,
-      exit_code: managed.backgroundExitCode,
-      output: cleanTerminalOutput(managed.outputBuffer),
-      output_captured: managed.backgroundOutputCaptured,
-      ...(managed.backgroundOutputCaptured && {
-        terminal_raw_output: cleanTerminalRawOutput(managed.outputBuffer),
-      }),
-    };
+    if (managed) {
+      return {
+        is_running: managed.backgroundRunning,
+        state: managed.backgroundRunning
+          ? (managed.backgroundState ?? "running")
+          : managed.backgroundExitCode !== null
+            ? "completed"
+            : (managed.backgroundState ?? "unknown_termination"),
+        exit_code: managed.backgroundExitCode,
+        output: cleanTerminalOutput(managed.outputBuffer),
+        output_captured: managed.backgroundOutputCaptured,
+        ...(managed.backgroundOutputCaptured && {
+          terminal_raw_output: cleanTerminalRawOutput(managed.outputBuffer),
+        }),
+      };
+    }
+    const closed = this.recentlyClosed.find(
+      (snapshot) => snapshot.id === terminalId,
+    );
+    return closed ? { ...closed } : undefined;
   }
 
   /**
@@ -1526,6 +1610,7 @@ export class TerminalManager {
     managed.terminal.sendText("\x03", false);
     if (managed.backgroundRunning && !managed.backgroundOutputCaptured) {
       managed.backgroundRunning = false;
+      managed.backgroundState = "unknown_termination";
       managed.lastCommandEndedAt = Date.now();
       this.disposeBackgroundTracking(managed);
       this.finalizeDeferredCommand(managed);
@@ -1557,10 +1642,32 @@ export class TerminalManager {
   }
 
   private rememberClosedTerminal(managed: ManagedTerminal): void {
+    const bound = (value: string): string =>
+      value.slice(-TerminalManager.MAX_CLOSED_OUTPUT_CHARS);
+    const outputCaptured = managed.backgroundOutputCaptured;
+    const exitCode = managed.backgroundExitCode;
+    this.recentlyClosed = this.recentlyClosed.filter(
+      (snapshot) => snapshot.id !== managed.id,
+    );
     this.recentlyClosed.unshift({
       id: managed.id,
       name: managed.name,
       closedAt: Date.now(),
+      is_running: false,
+      state:
+        exitCode !== null
+          ? "completed"
+          : (managed.backgroundState ?? "unknown_termination"),
+      exit_code: exitCode,
+      output: outputCaptured
+        ? bound(cleanTerminalOutput(managed.outputBuffer))
+        : "",
+      output_captured: outputCaptured,
+      ...(outputCaptured && {
+        terminal_raw_output: bound(
+          cleanTerminalRawOutput(managed.outputBuffer),
+        ),
+      }),
     });
     if (this.recentlyClosed.length > TerminalManager.MAX_RECENTLY_CLOSED) {
       this.recentlyClosed = this.recentlyClosed.slice(
@@ -1575,6 +1682,7 @@ export class TerminalManager {
       d.dispose();
     }
     this.disposables = [];
+    this.pendingDisposals.clear();
     // Don't close terminals — let the user keep them
   }
 }

@@ -1,8 +1,13 @@
+import * as path from "path";
+
 import * as vscode from "vscode";
 import picomatch from "picomatch";
 
 import { parseMcpToolName } from "../agent/mcpToolNames.js";
-import { tryGetFirstWorkspaceRoot, getRelativePath } from "../util/paths.js";
+import {
+  createWorkspaceProjectId,
+  type SessionProjectScope,
+} from "../core/workspaceProjects.js";
 import { scanShellLexWords } from "../util/shellLex.js";
 import type { ConfigStore } from "./ConfigStore.js";
 import { CommandRuleStore, type CommandRule } from "./CommandRuleStore.js";
@@ -28,6 +33,12 @@ interface PersistedApprovalSessions {
   sessions: Record<string, SessionState>;
 }
 
+interface SessionProjectBinding {
+  projectId: string;
+  workspaceFolderUri: string;
+  rootPath: string;
+}
+
 const SESSION_TTL = 24 * 60 * 60_000; // 24 hours
 const PRUNE_INTERVAL = 60 * 60_000; // 1 hour
 const APPROVAL_SESSIONS_KEY = "approvalSessions";
@@ -40,8 +51,9 @@ export class ApprovalManager {
   // Session-scoped approvals, keyed by chat session ID.
   // Persisted so restored chat sessions keep their session-level approvals.
   private sessions = new Map<string, SessionState>();
+  private sessionProjects = new Map<string, SessionProjectBinding>();
 
-  // Per-session MCP tool approvals: key is "sessionId:toolName" or "sessionId:server:*"
+  // Per-session MCP approvals, scoped to either one tool or an entire server.
   private mcpApprovals = new Set<string>();
   private configStoreListener: vscode.Disposable;
   private commandRuleStore: CommandRuleStore;
@@ -76,6 +88,33 @@ export class ApprovalManager {
     );
   }
 
+  bindSessionProject(
+    sessionId: string,
+    scope: Readonly<SessionProjectScope>,
+  ): void {
+    if (!scope.rootPath) {
+      throw new Error(
+        `Project '${scope.displayName}' is unavailable for approval routing.`,
+      );
+    }
+    const existing = this.sessionProjects.get(sessionId);
+    if (
+      existing &&
+      (existing.projectId !== scope.projectId ||
+        existing.workspaceFolderUri !== scope.workspaceFolderUri ||
+        existing.rootPath !== scope.rootPath)
+    ) {
+      throw new Error(
+        `Approval session '${sessionId}' cannot be rebound to another project.`,
+      );
+    }
+    this.sessionProjects.set(sessionId, {
+      projectId: scope.projectId,
+      workspaceFolderUri: scope.workspaceFolderUri,
+      rootPath: scope.rootPath,
+    });
+  }
+
   // --- MCP tool approvals (in-memory, session-scoped) ---
 
   /** True if this tool (or its server) has been approved for this session. */
@@ -89,12 +128,18 @@ export class ApprovalManager {
 
   /** Approve a single tool for the rest of this session. */
   approveMcpTool(sessionId: string, toolName: string): void {
-    this.mcpApprovals.add(`${sessionId}:tool:${toolName}`);
+    const key = `${sessionId}:tool:${toolName}`;
+    if (this.mcpApprovals.has(key)) return;
+    this.mcpApprovals.add(key);
+    this._onDidChange.fire();
   }
 
   /** Approve all tools from a server for the rest of this session. */
   approveMcpServer(sessionId: string, serverName: string): void {
-    this.mcpApprovals.add(`${sessionId}:server:${serverName}`);
+    const key = `${sessionId}:server:${serverName}`;
+    if (this.mcpApprovals.has(key)) return;
+    this.mcpApprovals.add(key);
+    this._onDidChange.fire();
   }
 
   dispose(): void {
@@ -171,6 +216,7 @@ export class ApprovalManager {
 
   clearSession(sessionId: string): void {
     this.sessions.delete(sessionId);
+    this.sessionProjects.delete(sessionId);
     this.clearMcpApprovalsForSession(sessionId);
     this.persistSessions();
   }
@@ -181,6 +227,7 @@ export class ApprovalManager {
     for (const [id, session] of this.sessions) {
       if (now - session.lastActivity > SESSION_TTL) {
         this.sessions.delete(id);
+        this.sessionProjects.delete(id);
         this.clearMcpApprovalsForSession(id);
         changed = true;
       }
@@ -197,8 +244,8 @@ export class ApprovalManager {
     if (this.configStore.getGlobalConfig().writeApproved) {
       return true;
     }
-    // Project blanket approval
-    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    // Project blanket approval follows the target file's owning workspace root.
+    const projectConfig = this.getProjectConfig(sessionId, filePath);
     if (projectConfig?.writeApproved) {
       return true;
     }
@@ -220,9 +267,9 @@ export class ApprovalManager {
         c.writeApproved = true;
       });
     } else if (scope === "project") {
-      const folder = tryGetFirstWorkspaceRoot();
-      if (!folder) return;
-      this.configStore.updateProjectConfig(folder, (c) => {
+      const projectRoot = this.getProjectRoot(sessionId);
+      if (!projectRoot) return;
+      this.configStore.updateProjectConfig(projectRoot, (c) => {
         c.writeApproved = true;
       });
     } else {
@@ -240,15 +287,12 @@ export class ApprovalManager {
       c.writeApproved = false;
     });
     // Also reset project-level
-    const folders = vscode.workspace.workspaceFolders;
-    if (folders) {
-      for (const folder of folders) {
-        const config = this.configStore.getProjectConfig(folder.uri.fsPath);
-        if (config.writeApproved) {
-          this.configStore.updateProjectConfig(folder.uri.fsPath, (c) => {
-            c.writeApproved = false;
-          });
-        }
+    for (const projectRoot of this.configStore.getProjectRoots()) {
+      const config = this.configStore.getProjectConfig(projectRoot);
+      if (config.writeApproved) {
+        this.configStore.updateProjectConfig(projectRoot, (c) => {
+          c.writeApproved = false;
+        });
       }
     }
     // Also clear all session write approvals
@@ -265,7 +309,7 @@ export class ApprovalManager {
     if (this.configStore.getGlobalConfig().writeApproved) {
       return "global";
     }
-    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    const projectConfig = this.getProjectConfig(sessionId);
     if (projectConfig?.writeApproved) {
       return "project";
     }
@@ -283,8 +327,8 @@ export class ApprovalManager {
     if (this.configStore.getGlobalConfig().agentWriteApproved) {
       return true;
     }
-    // Project blanket approval
-    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    // Project blanket approval follows the target file's owning workspace root.
+    const projectConfig = this.getProjectConfig(sessionId, filePath);
     if (projectConfig?.agentWriteApproved) {
       return true;
     }
@@ -300,15 +344,19 @@ export class ApprovalManager {
     return false;
   }
 
-  setAgentWriteApproval(sessionId: string, scope: RuleScope): void {
+  setAgentWriteApproval(
+    sessionId: string,
+    scope: RuleScope,
+    targetPath?: string,
+  ): void {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((c) => {
         c.agentWriteApproved = true;
       });
     } else if (scope === "project") {
-      const folder = tryGetFirstWorkspaceRoot();
-      if (!folder) return;
-      this.configStore.updateProjectConfig(folder, (c) => {
+      const projectRoot = this.getProjectRoot(sessionId, targetPath);
+      if (!projectRoot) return;
+      this.configStore.updateProjectConfig(projectRoot, (c) => {
         c.agentWriteApproved = true;
       });
     } else {
@@ -331,6 +379,21 @@ export class ApprovalManager {
 
     const source = this.sessions.get(fromId);
     if (!source) return;
+
+    const sourceProject = this.sessionProjects.get(fromId);
+    const destinationProject = this.sessionProjects.get(toId);
+    if (
+      sourceProject &&
+      destinationProject &&
+      (destinationProject.projectId !== sourceProject.projectId ||
+        destinationProject.workspaceFolderUri !==
+          sourceProject.workspaceFolderUri ||
+        destinationProject.rootPath !== sourceProject.rootPath)
+    ) {
+      throw new Error(
+        `Approval session '${toId}' is already bound to another project.`,
+      );
+    }
 
     const destination = this.sessions.get(toId);
     if (destination) {
@@ -357,38 +420,59 @@ export class ApprovalManager {
       this.sessions.set(toId, { ...source, lastActivity: Date.now() });
     }
 
+    if (sourceProject) {
+      this.sessionProjects.set(toId, sourceProject);
+      this.sessionProjects.delete(fromId);
+    }
     this.sessions.delete(fromId);
     this.persistSessions();
     this._onDidChange.fire();
   }
 
-  /**
-   * Snapshot session-scoped agent write trust into a child session without
-   * moving or broadening unrelated approval state.
-   */
-  inheritSessionWriteState(
+  /** Snapshot all session-scoped approvals into an independently mutable child. */
+  inheritSessionApprovalState(
     parentSessionId: string,
     childSessionId: string,
   ): void {
     if (parentSessionId === childSessionId) return;
 
     const parent = this.sessions.get(parentSessionId);
-    if (!parent) return;
+    if (parent) {
+      const child = this.sessions.get(childSessionId) ?? this.newSession();
+      child.writeApproved ||= parent.writeApproved;
+      child.agentWriteApproved ||= parent.agentWriteApproved;
+      child.commandRules = deduplicateRules([
+        ...child.commandRules,
+        ...parent.commandRules,
+      ]);
+      child.pathRules = deduplicateRules([
+        ...(child.pathRules ?? []),
+        ...(parent.pathRules ?? []),
+      ]);
+      child.writeRules = deduplicateRules([
+        ...(child.writeRules ?? []),
+        ...(parent.writeRules ?? []),
+      ]);
+      child.lastActivity = Date.now();
+      this.sessions.set(childSessionId, child);
+      this.persistSessions();
+    }
 
-    const child = this.sessions.get(childSessionId) ?? this.newSession();
-    child.agentWriteApproved ||= parent.agentWriteApproved;
-    child.pathRules = deduplicateRules([
-      ...(child.pathRules ?? []),
-      ...(parent.pathRules ?? []),
-    ]);
-    child.writeRules = deduplicateRules([
-      ...(child.writeRules ?? []),
-      ...(parent.writeRules ?? []),
-    ]);
-    child.lastActivity = Date.now();
-    this.sessions.set(childSessionId, child);
-    this.persistSessions();
-    this._onDidChange.fire();
+    const parentMcpPrefix = `${parentSessionId}:`;
+    const childMcpPrefix = `${childSessionId}:`;
+    let inheritedMcpApproval = false;
+    for (const approval of Array.from(this.mcpApprovals)) {
+      if (approval.startsWith(parentMcpPrefix)) {
+        this.mcpApprovals.add(
+          `${childMcpPrefix}${approval.slice(parentMcpPrefix.length)}`,
+        );
+        inheritedMcpApproval = true;
+      }
+    }
+
+    if (parent || inheritedMcpApproval) {
+      this._onDidChange.fire();
+    }
   }
 
   /** Reset session-level agent write approval for a single session (e.g. on mode switch). */
@@ -405,15 +489,12 @@ export class ApprovalManager {
     this.configStore.updateGlobalConfig((c) => {
       c.agentWriteApproved = false;
     });
-    const folders = vscode.workspace.workspaceFolders;
-    if (folders) {
-      for (const folder of folders) {
-        const config = this.configStore.getProjectConfig(folder.uri.fsPath);
-        if (config.agentWriteApproved) {
-          this.configStore.updateProjectConfig(folder.uri.fsPath, (c) => {
-            c.agentWriteApproved = false;
-          });
-        }
+    for (const projectRoot of this.configStore.getProjectRoots()) {
+      const config = this.configStore.getProjectConfig(projectRoot);
+      if (config.agentWriteApproved) {
+        this.configStore.updateProjectConfig(projectRoot, (c) => {
+          c.agentWriteApproved = false;
+        });
       }
     }
     for (const session of this.sessions.values()) {
@@ -429,7 +510,7 @@ export class ApprovalManager {
     if (this.configStore.getGlobalConfig().agentWriteApproved) {
       return "global";
     }
-    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    const projectConfig = this.getProjectConfig(sessionId);
     if (projectConfig?.agentWriteApproved) {
       return "project";
     }
@@ -443,20 +524,37 @@ export class ApprovalManager {
   // --- Path trust (outside-workspace access) ---
 
   isPathTrusted(sessionId: string, filePath: string): boolean {
-    const rulesByScope = this.pathRuleStore.get(sessionId);
+    const rulesByScope = this.pathRuleStore.get(
+      sessionId,
+      this.getProjectRoot(sessionId),
+    );
     return (["session", "project", "global"] as const).some((scope) =>
       rulesByScope[scope].some((rule) => this.matchesPathRule(filePath, rule)),
     );
   }
 
   addPathRule(sessionId: string, rule: PathRule, scope: RuleScope): void {
-    if (this.pathRuleStore.add(sessionId, rule, scope)) {
+    if (
+      this.pathRuleStore.add(
+        sessionId,
+        rule,
+        scope,
+        this.getProjectRoot(sessionId),
+      )
+    ) {
       this._onDidChange.fire();
     }
   }
 
   removePathRule(pattern: string, scope: RuleScope, sessionId?: string): void {
-    if (this.pathRuleStore.remove(pattern, scope, sessionId)) {
+    if (
+      this.pathRuleStore.remove(
+        pattern,
+        scope,
+        sessionId,
+        this.getProjectRoot(sessionId),
+      )
+    ) {
       this._onDidChange.fire();
     }
   }
@@ -467,7 +565,15 @@ export class ApprovalManager {
     scope: RuleScope,
     sessionId?: string,
   ): void {
-    if (this.pathRuleStore.edit(oldPattern, newRule, scope, sessionId)) {
+    if (
+      this.pathRuleStore.edit(
+        oldPattern,
+        newRule,
+        scope,
+        sessionId,
+        this.getProjectRoot(sessionId),
+      )
+    ) {
       this._onDidChange.fire();
     }
   }
@@ -477,19 +583,22 @@ export class ApprovalManager {
     project: PathRule[];
     global: PathRule[];
   } {
-    return this.pathRuleStore.get(sessionId);
+    return this.pathRuleStore.get(sessionId, this.getProjectRoot(sessionId));
   }
 
   // --- File-level write approval ---
 
   isFileWriteApproved(sessionId: string, filePath: string): boolean {
-    const relPath = getRelativePath(filePath);
+    const projectBinding = this.getProjectBinding(sessionId, filePath);
+    const relPath = projectBinding
+      ? this.getProjectRelativePath(projectBinding.rootPath, filePath)
+      : filePath;
     const candidates = relPath !== filePath ? [relPath, filePath] : [filePath];
 
     // Settings-based patterns (match against both relative and absolute)
-    const settingsPatterns = vscode.workspace
-      .getConfiguration("agentlink")
-      .get<string[]>("writeRules", []);
+    const settingsPatterns = this.getProjectConfiguration(projectBinding).get<
+      string[]
+    >("writeRules", []);
     if (
       settingsPatterns.some((p) =>
         candidates.some((c) =>
@@ -500,7 +609,10 @@ export class ApprovalManager {
       return true;
     }
 
-    const rulesByScope = this.writeRuleStore.get(sessionId);
+    const rulesByScope = this.writeRuleStore.get(
+      sessionId,
+      projectBinding?.rootPath,
+    );
     return (["session", "project", "global"] as const).some((scope) =>
       rulesByScope[scope].some((rule) =>
         candidates.some((candidate) => this.matchesPathRule(candidate, rule)),
@@ -508,14 +620,33 @@ export class ApprovalManager {
     );
   }
 
-  addWriteRule(sessionId: string, rule: PathRule, scope: RuleScope): void {
-    if (this.writeRuleStore.add(sessionId, rule, scope)) {
+  addWriteRule(
+    sessionId: string,
+    rule: PathRule,
+    scope: RuleScope,
+    targetPath?: string,
+  ): void {
+    if (
+      this.writeRuleStore.add(
+        sessionId,
+        rule,
+        scope,
+        this.getProjectRoot(sessionId, targetPath),
+      )
+    ) {
       this._onDidChange.fire();
     }
   }
 
   removeWriteRule(pattern: string, scope: RuleScope, sessionId?: string): void {
-    if (this.writeRuleStore.remove(pattern, scope, sessionId)) {
+    if (
+      this.writeRuleStore.remove(
+        pattern,
+        scope,
+        sessionId,
+        this.getProjectRoot(sessionId),
+      )
+    ) {
       this._onDidChange.fire();
     }
   }
@@ -526,7 +657,15 @@ export class ApprovalManager {
     scope: RuleScope,
     sessionId?: string,
   ): void {
-    if (this.writeRuleStore.edit(oldPattern, newRule, scope, sessionId)) {
+    if (
+      this.writeRuleStore.edit(
+        oldPattern,
+        newRule,
+        scope,
+        sessionId,
+        this.getProjectRoot(sessionId),
+      )
+    ) {
       this._onDidChange.fire();
     }
   }
@@ -537,18 +676,20 @@ export class ApprovalManager {
     global: PathRule[];
     settings: string[];
   } {
+    const projectBinding = this.getProjectBinding(sessionId);
     return {
-      ...this.writeRuleStore.get(sessionId),
-      settings: vscode.workspace
-        .getConfiguration("agentlink")
-        .get<string[]>("writeRules", []),
+      ...this.writeRuleStore.get(sessionId, projectBinding?.rootPath),
+      settings: this.getProjectConfiguration(projectBinding).get<string[]>(
+        "writeRules",
+        [],
+      ),
     };
   }
 
   // --- Command approval ---
 
-  isCommandApproved(sessionId: string, command: string): boolean {
-    return this.findMatchingCommandRule(sessionId, command) !== null;
+  isCommandApproved(sessionId: string, command: string, cwd?: string): boolean {
+    return this.findMatchingCommandRule(sessionId, command, cwd) !== null;
   }
 
   /**
@@ -559,10 +700,14 @@ export class ApprovalManager {
   findMatchingCommandRule(
     sessionId: string,
     command: string,
+    cwd?: string,
   ): { rule: CommandRule; scope: RuleScope } | null {
     const trimmed = command.trim();
 
-    const rulesByScope = this.commandRuleStore.get(sessionId);
+    const rulesByScope = this.commandRuleStore.get(
+      sessionId,
+      this.getProjectRoot(sessionId, cwd),
+    );
     for (const scope of ["session", "project", "global"] as const) {
       for (const rule of rulesByScope[scope]) {
         if (this.matchesRule(trimmed, rule)) return { rule, scope };
@@ -572,8 +717,20 @@ export class ApprovalManager {
     return null;
   }
 
-  addCommandRule(sessionId: string, rule: CommandRule, scope: RuleScope): void {
-    if (this.commandRuleStore.add(sessionId, rule, scope)) {
+  addCommandRule(
+    sessionId: string,
+    rule: CommandRule,
+    scope: RuleScope,
+    cwd?: string,
+  ): void {
+    if (
+      this.commandRuleStore.add(
+        sessionId,
+        rule,
+        scope,
+        this.getProjectRoot(sessionId, cwd),
+      )
+    ) {
       this._onDidChange.fire();
     }
   }
@@ -584,7 +741,15 @@ export class ApprovalManager {
     scope: RuleScope,
     sessionId?: string,
   ): void {
-    if (this.commandRuleStore.edit(oldPattern, newRule, scope, sessionId)) {
+    if (
+      this.commandRuleStore.edit(
+        oldPattern,
+        newRule,
+        scope,
+        sessionId,
+        this.getProjectRoot(sessionId),
+      )
+    ) {
       this._onDidChange.fire();
     }
   }
@@ -594,7 +759,14 @@ export class ApprovalManager {
     scope: RuleScope,
     sessionId?: string,
   ): void {
-    if (this.commandRuleStore.remove(pattern, scope, sessionId)) {
+    if (
+      this.commandRuleStore.remove(
+        pattern,
+        scope,
+        sessionId,
+        this.getProjectRoot(sessionId),
+      )
+    ) {
       this._onDidChange.fire();
     }
   }
@@ -604,7 +776,7 @@ export class ApprovalManager {
     project: CommandRule[];
     global: CommandRule[];
   } {
-    return this.commandRuleStore.get(sessionId);
+    return this.commandRuleStore.get(sessionId, this.getProjectRoot(sessionId));
   }
 
   clearSessionCommandRules(sessionId: string): void {
@@ -635,6 +807,93 @@ export class ApprovalManager {
   }
 
   // --- Internal ---
+
+  private getProjectBinding(
+    sessionId: string | undefined,
+    targetPath?: string,
+  ): SessionProjectBinding | undefined {
+    if (targetPath && path.isAbsolute(targetPath)) {
+      const resolvedTarget = path.resolve(targetPath);
+      const folder = (vscode.workspace.workspaceFolders ?? [])
+        .filter((candidate) => {
+          const root = path.resolve(candidate.uri.fsPath);
+          const relative = path.relative(root, resolvedTarget);
+          return (
+            relative === "" ||
+            (!relative.startsWith(`..${path.sep}`) &&
+              relative !== ".." &&
+              !path.isAbsolute(relative))
+          );
+        })
+        .sort(
+          (left, right) => right.uri.fsPath.length - left.uri.fsPath.length,
+        )[0];
+      if (folder) {
+        const rootPath = path.resolve(folder.uri.fsPath);
+        const workspaceFolderUri = folder.uri.toString();
+        return {
+          projectId: createWorkspaceProjectId(workspaceFolderUri),
+          workspaceFolderUri,
+          rootPath,
+        };
+      }
+    }
+    if (sessionId) {
+      const binding = this.sessionProjects.get(sessionId);
+      if (binding) return binding;
+    }
+    const roots = this.configStore.getProjectRoots();
+    if (roots.length !== 1) return undefined;
+    const rootPath = roots[0];
+    return {
+      projectId: "single-project-compatibility",
+      workspaceFolderUri: vscode.Uri.file(rootPath).toString(),
+      rootPath,
+    };
+  }
+
+  private getProjectRoot(
+    sessionId: string | undefined,
+    targetPath?: string,
+  ): string | undefined {
+    return this.getProjectBinding(sessionId, targetPath)?.rootPath;
+  }
+
+  private getProjectConfig(
+    sessionId: string,
+    targetPath?: string,
+  ): Readonly<import("./ConfigStore.js").AgentLinkConfig> | undefined {
+    const projectRoot = this.getProjectRoot(sessionId, targetPath);
+    return projectRoot
+      ? this.configStore.getProjectConfig(projectRoot)
+      : undefined;
+  }
+
+  private getProjectConfiguration(
+    binding: SessionProjectBinding | undefined,
+  ): vscode.WorkspaceConfiguration {
+    const resource = binding
+      ? vscode.Uri.parse(binding.workspaceFolderUri)
+      : undefined;
+    return vscode.workspace.getConfiguration("agentlink", resource);
+  }
+
+  private getProjectRelativePath(
+    projectRoot: string,
+    filePath: string,
+  ): string {
+    if (!path.isAbsolute(filePath)) return filePath.replace(/\\/g, "/");
+    const relative = path.relative(projectRoot, filePath);
+    if (
+      relative === "" ||
+      (!relative.startsWith(`..${path.sep}`) &&
+        relative !== ".." &&
+        !path.isAbsolute(relative))
+    ) {
+      return relative.replace(/\\/g, "/");
+    }
+    return filePath;
+  }
 
   private matchesPathRule(filePath: string, rule: PathRule): boolean {
     try {

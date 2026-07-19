@@ -21,6 +21,19 @@ describe("handleGetSymbols", () => {
       path: "src/file.ts",
     });
     expect(textResult(result)).not.toContain("query");
+    expect(result).toMatchObject({
+      data: {
+        error:
+          "Language symbols are unavailable in this runtime. Provide a LanguageSymbolsProvider to enable get_symbols.",
+        path: "src/file.ts",
+      },
+      isError: true,
+      error: {
+        kind: "tool_error",
+        message:
+          "Language symbols are unavailable in this runtime. Provide a LanguageSymbolsProvider to enable get_symbols.",
+      },
+    });
   });
 
   it("delegates symbols params to the provider", async () => {
@@ -58,7 +71,11 @@ describe("handleGetSymbols", () => {
       { symbolsProvider: { getSymbols } },
     );
 
-    expect(result).toBe(rejectedResult);
+    expect(result.content).toBe(rejectedResult.content);
+    expect(result).toMatchObject({
+      isError: true,
+      error: { kind: "tool_error", message: "Tool execution failed" },
+    });
   });
 
   it("wraps provider errors in the legacy JSON error shape", async () => {
@@ -71,5 +88,10 @@ describe("handleGetSymbols", () => {
     });
 
     expect(textPayload(result)).toEqual({ error: "symbol failure" });
+    expect(result).toMatchObject({
+      data: { error: "symbol failure" },
+      isError: true,
+      error: { kind: "tool_error", message: "symbol failure" },
+    });
   });
 });

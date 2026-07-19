@@ -9,6 +9,12 @@ export interface QuestionProgress {
   notes: Record<string, string>;
 }
 
+export interface QuestionOtherContext {
+  questionId: string;
+  initialText: string;
+  onCommit: (text: string) => void;
+}
+
 interface QuestionCardProps {
   id: string;
   context: string;
@@ -18,6 +24,8 @@ interface QuestionCardProps {
     answers: Record<string, string | string[] | number | boolean | undefined>,
     notes: Record<string, string>,
   ) => void;
+  onEditOtherContext?: (context: QuestionOtherContext) => void;
+  attachmentCounts?: Record<string, number>;
   /** Remote-originated progress snapshot. Applied when its serialized shape differs from local. */
   remoteProgress?: QuestionProgress | null;
   /** Fires when the local user advances/edits state so the other surface can mirror. */
@@ -94,6 +102,8 @@ export function QuestionCard({
   onProgressChange,
   backgroundTask,
   modes,
+  onEditOtherContext,
+  attachmentCounts = {},
 }: QuestionCardProps) {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<
@@ -132,10 +142,12 @@ export function QuestionCard({
   const isLast = step === questions.length - 1;
   const currentAnswer = answers[q.id];
   const currentNote = notes[q.id] ?? "";
+  const attachmentCount = attachmentCounts[q.id] ?? 0;
 
   const isAnswered = useCallback(
-    () => isQuestionAnswered(q, currentAnswer, currentNote),
-    [q, currentAnswer, currentNote],
+    () =>
+      attachmentCount > 0 || isQuestionAnswered(q, currentAnswer, currentNote),
+    [q, currentAnswer, currentNote, attachmentCount],
   );
 
   const setAnswer = useCallback(
@@ -195,8 +207,6 @@ export function QuestionCard({
     }
   }, [q.type, q.id, currentAnswer, isLast, id, answers, notes, onSubmit]);
 
-  const showNoteInput = true;
-
   return (
     <div class="question-card">
       {backgroundTask && (
@@ -235,7 +245,32 @@ export function QuestionCard({
           modes={modes}
         />
 
-        {showNoteInput && (
+        {onEditOtherContext ? (
+          <button
+            type="button"
+            class={`question-other-action${currentNote.trim() || attachmentCount > 0 ? " has-context" : ""}`}
+            onClick={() =>
+              onEditOtherContext({
+                questionId: q.id,
+                initialText: currentNote,
+                onCommit: setNote,
+              })
+            }
+          >
+            <i class="codicon codicon-attach" aria-hidden="true" />
+            <span>
+              {currentNote.trim() || attachmentCount > 0
+                ? "Edit other context"
+                : "Other / attach context…"}
+            </span>
+            {attachmentCount > 0 && (
+              <span class="question-other-count">
+                {attachmentCount}{" "}
+                {attachmentCount === 1 ? "attachment" : "attachments"}
+              </span>
+            )}
+          </button>
+        ) : (
           <textarea
             class="question-other-input"
             placeholder="Other / add context (optional)"

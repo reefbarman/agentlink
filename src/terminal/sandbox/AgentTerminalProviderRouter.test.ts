@@ -349,8 +349,18 @@ describe("AgentTerminalProviderRouter", () => {
       terminals.length = 0;
       return { closed: 1 };
     });
+    const closedTerminal = {
+      id: "sandbox-1",
+      name: "Agent command",
+      closedAt: 500,
+      is_running: false,
+      state: "completed" as const,
+      exit_code: 0,
+      output: "done",
+      output_captured: true,
+    };
     vi.mocked(test.sandbox.getRecentlyClosedTerminals).mockReturnValue([
-      { id: "sandbox-1", name: "Agent command", closedAt: 500 },
+      closedTerminal,
     ]);
     test.setEnabled(true);
     await test.router.executeCommand({ command: "pwd", cwd: "/workspace" });
@@ -360,9 +370,7 @@ describe("AgentTerminalProviderRouter", () => {
 
     expect(test.router.closeTerminals(["sandbox-1"])).toEqual({ closed: 1 });
     expect(test.sandbox.dispose).toHaveBeenCalledTimes(1);
-    expect(test.router.getRecentlyClosedTerminals()).toEqual([
-      { id: "sandbox-1", name: "Agent command", closedAt: 500 },
-    ]);
+    expect(test.router.getRecentlyClosedTerminals()).toEqual([closedTerminal]);
   });
 
   it("disposes the sandbox provider exactly once", async () => {

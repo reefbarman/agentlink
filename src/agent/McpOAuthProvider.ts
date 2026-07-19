@@ -1,3 +1,4 @@
+import * as crypto from "crypto";
 import * as http from "http";
 import * as net from "net";
 import * as vscode from "vscode";
@@ -25,13 +26,60 @@ export class McpOAuthError extends Error {
   }
 }
 
+type StorageSuffix = "client" | "tokens";
+
+/**
+ * OAuth credentials are keyed by server identity (name + URL hash) so they
+ * survive hub reloads/generations and are shared by every hub in this window
+ * (main, Ask Agent, per-project). Earlier releases namespaced these keys per
+ * hub instance — including a per-reload generation counter — which orphaned
+ * refresh tokens on every MCP config reload and forced interactive reauth.
+ */
+function serverUrlHash(serverUrl: string): string {
+  return crypto
+    .createHash("sha256")
+    .update(serverUrl)
+    .digest("hex")
+    .slice(0, 12);
+}
+
 function storageKey(
   serverName: string,
-  suffix: string,
-  namespace?: string,
+  serverUrl: string,
+  suffix: StorageSuffix,
 ): string {
-  const namespacePrefix = namespace ? `${namespace}_` : "";
-  return `mcp_oauth_${namespacePrefix}${serverName}_${suffix}`;
+  return `mcp_oauth_${serverName}_${serverUrlHash(serverUrl)}_${suffix}`;
+}
+
+/**
+ * Storage keys used by earlier releases, in migration-preference order:
+ * the un-namespaced main-hub layout, then the "ask-agent" namespace.
+ * Generation-scoped project keys are unrecoverable (the counter was
+ * in-memory) and are removed by {@link cleanupOrphanedMcpOAuthState}.
+ */
+function legacyStorageKeys(
+  serverName: string,
+  suffix: StorageSuffix,
+): string[] {
+  return [
+    `mcp_oauth_${serverName}_${suffix}`,
+    `mcp_oauth_ask-agent_${serverName}_${suffix}`,
+  ];
+}
+
+const ORPHANED_PROJECT_KEY_PREFIX = "mcp_oauth_project-";
+
+/** Remove credentials orphaned under generation-scoped project namespaces. */
+export async function cleanupOrphanedMcpOAuthState(
+  storage: vscode.Memento,
+): Promise<void> {
+  // Some Memento test doubles omit keys(); cleanup is best-effort.
+  if (typeof storage.keys !== "function") return;
+  for (const key of storage.keys()) {
+    if (key.startsWith(ORPHANED_PROJECT_KEY_PREFIX)) {
+      await storage.update(key, undefined);
+    }
+  }
 }
 
 /**
@@ -90,12 +138,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
   async debugStateSnapshot(label: string): Promise<void> {
     const [clientInfo, tokens] = await Promise.all([
-      this.storage.get<OAuthClientInformationMixed>(
-        storageKey(this.serverName, "client", this.storageNamespace),
-      ),
-      this.storage.get<OAuthTokens>(
-        storageKey(this.serverName, "tokens", this.storageNamespace),
-      ),
+      this.readStored<OAuthClientInformationMixed>("client"),
+      this.readStored<OAuthTokens>("tokens"),
     ]);
     this.onLog?.(
       `[mcp:${this.serverName}] oauth state ${label} redirectUrl=${this.redirectUrl} codeVerifierSet=${Boolean(this._codeVerifier)} client=${this.clientSummary(clientInfo)} tokens=${this.tokenSummary(tokens)}`,
@@ -106,8 +150,40 @@ export class McpOAuthProvider implements OAuthClientProvider {
     private readonly serverName: string,
     private readonly serverUrl: string,
     private readonly storage: vscode.Memento,
-    private readonly storageNamespace?: string,
   ) {}
+
+  private key(suffix: StorageSuffix): string {
+    return storageKey(this.serverName, this.serverUrl, suffix);
+  }
+
+  /**
+   * Read a stored credential, migrating (moving) any legacy-keyed value to
+   * the server-identity key on first access.
+   */
+  private async readStored<T>(suffix: StorageSuffix): Promise<T | undefined> {
+    const current = this.storage.get<T>(this.key(suffix));
+    if (current !== undefined) return current;
+    for (const legacyKey of legacyStorageKeys(this.serverName, suffix)) {
+      const legacy = this.storage.get<T>(legacyKey);
+      if (legacy !== undefined) {
+        await this.storage.update(this.key(suffix), legacy);
+        await this.storage.update(legacyKey, undefined);
+        this.onLog?.(
+          `[mcp:${this.serverName}] migrated legacy oauth ${suffix} storage to server-identity key`,
+        );
+        return legacy;
+      }
+    }
+    return undefined;
+  }
+
+  /** Delete a credential everywhere so a wipe cannot resurrect via migration. */
+  private async deleteStored(suffix: StorageSuffix): Promise<void> {
+    await this.storage.update(this.key(suffix), undefined);
+    for (const legacyKey of legacyStorageKeys(this.serverName, suffix)) {
+      await this.storage.update(legacyKey, undefined);
+    }
+  }
 
   private preferredCallbackPort(
     info: OAuthClientInformationMixed | undefined,
@@ -163,9 +239,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
   async start(): Promise<void> {
     if (this._server) return;
 
-    const clientInfo = this.storage.get<OAuthClientInformationMixed>(
-      storageKey(this.serverName, "client", this.storageNamespace),
-    );
+    const clientInfo =
+      await this.readStored<OAuthClientInformationMixed>("client");
     const preferredPort = this.preferredCallbackPort(clientInfo);
 
     this._server = http.createServer();
@@ -237,9 +312,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
-    const info = this.storage.get<OAuthClientInformationMixed>(
-      storageKey(this.serverName, "client", this.storageNamespace),
-    );
+    const info = await this.readStored<OAuthClientInformationMixed>("client");
 
     const redirectUris = this.redirectUrisForClient(info);
     if (redirectUris && !redirectUris.includes(this.redirectUrl)) {
@@ -257,26 +330,18 @@ export class McpOAuthProvider implements OAuthClientProvider {
     this.onLog?.(
       `[mcp:${this.serverName}] saveClientInformation() ${this.clientSummary(info)}`,
     );
-    await this.storage.update(
-      storageKey(this.serverName, "client", this.storageNamespace),
-      info,
-    );
+    await this.storage.update(this.key("client"), info);
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
-    return this.storage.get<OAuthTokens>(
-      storageKey(this.serverName, "tokens", this.storageNamespace),
-    );
+    return this.readStored<OAuthTokens>("tokens");
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
     this.onLog?.(
       `[mcp:${this.serverName}] saveTokens() ${this.tokenSummary(tokens)}`,
     );
-    await this.storage.update(
-      storageKey(this.serverName, "tokens", this.storageNamespace),
-      tokens,
-    );
+    await this.storage.update(this.key("tokens"), tokens);
   }
 
   saveCodeVerifier(verifier: string): void {
@@ -291,16 +356,10 @@ export class McpOAuthProvider implements OAuthClientProvider {
     scope: "all" | "client" | "tokens" | "verifier" | "discovery",
   ): Promise<void> {
     if (scope === "all" || scope === "tokens") {
-      await this.storage.update(
-        storageKey(this.serverName, "tokens", this.storageNamespace),
-        undefined,
-      );
+      await this.deleteStored("tokens");
     }
     if (scope === "all" || scope === "client") {
-      await this.storage.update(
-        storageKey(this.serverName, "client", this.storageNamespace),
-        undefined,
-      );
+      await this.deleteStored("client");
     }
   }
 
@@ -313,12 +372,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
     const authRedirectUri = authorizationUrl.searchParams.get("redirect_uri");
     const [clientInfo, existingTokens] = await Promise.all([
-      this.storage.get<OAuthClientInformationMixed>(
-        storageKey(this.serverName, "client", this.storageNamespace),
-      ),
-      this.storage.get<OAuthTokens>(
-        storageKey(this.serverName, "tokens", this.storageNamespace),
-      ),
+      this.readStored<OAuthClientInformationMixed>("client"),
+      this.readStored<OAuthTokens>("tokens"),
     ]);
     const hasSavedTokens = Boolean(existingTokens);
     const hasRefreshToken = Boolean(existingTokens?.refresh_token);
@@ -469,10 +524,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
   /** Clear saved tokens (e.g. on /mcp-refresh for a broken server). */
   async clearTokens(): Promise<void> {
-    await this.storage.update(
-      storageKey(this.serverName, "tokens", this.storageNamespace),
-      undefined,
-    );
+    await this.deleteStored("tokens");
   }
 
   /**

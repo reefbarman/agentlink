@@ -1,3 +1,4 @@
+import type { CoreWebActivity, CoreWebCitation } from "../core/webAccess.js";
 import type {
   ChatMessage,
   ChatState,
@@ -10,6 +11,7 @@ import type {
   WebviewModelInfo,
 } from "../agent/webview/types.js";
 
+import type { ComposeChildStatus, ComposeTrace } from "./composeTypes.js";
 import type { DetectedQuestion } from "./questionDetection.js";
 import { randomId } from "./randomId.js";
 import type {
@@ -105,7 +107,85 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
   }
 }
 
+function sanitizeWebUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? url.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeWebCitations(
+  values: readonly CoreWebCitation[],
+): CoreWebCitation[] {
+  const citations: CoreWebCitation[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (!value || typeof value !== "object") continue;
+    const url = sanitizeWebUrl(value.url);
+    if (!url) continue;
+    const startIndex =
+      typeof value.startIndex === "number" && Number.isFinite(value.startIndex)
+        ? value.startIndex
+        : undefined;
+    const endIndex =
+      typeof value.endIndex === "number" && Number.isFinite(value.endIndex)
+        ? value.endIndex
+        : undefined;
+    const key = `${url}:${startIndex ?? ""}:${endIndex ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    citations.push({
+      url,
+      ...(typeof value.title === "string" && value.title.trim()
+        ? { title: value.title.trim() }
+        : {}),
+      ...(typeof value.citedText === "string" && value.citedText.trim()
+        ? { citedText: value.citedText.trim() }
+        : {}),
+      ...(startIndex !== undefined ? { startIndex } : {}),
+      ...(endIndex !== undefined ? { endIndex } : {}),
+    });
+  }
+  return citations;
+}
+
+function sanitizeWebActivity(value: CoreWebActivity): CoreWebActivity {
+  const kind = value.kind === "fetch" ? "fetch" : "search";
+  const status =
+    value.status === "completed" || value.status === "failed"
+      ? value.status
+      : "started";
+  const backend = value.backend === "mcp" ? "mcp" : "provider";
+  const url = sanitizeWebUrl(value.url);
+  return {
+    id:
+      typeof value.id === "string" && value.id
+        ? value.id
+        : `web-activity-${randomId()}`,
+    kind,
+    status,
+    backend,
+    ...(typeof value.query === "string" && value.query.trim()
+      ? { query: value.query.trim() }
+      : {}),
+    ...(url ? { url } : {}),
+    ...(value.citations?.length
+      ? { citations: sanitizeWebCitations(value.citations) }
+      : {}),
+    ...(typeof value.error === "string" && value.error.trim()
+      ? { error: value.error.trim() }
+      : {}),
+  };
+}
+
 const BUILTIN_TOOL_NAMES = new Set([
+  "web_search",
+  "web_fetch",
   "read_file",
   "get_context",
   "open_file",
@@ -391,7 +471,13 @@ export type AppAction =
       providerResponseId?: string;
       contextBreakdown?: RequestContextBreakdown;
     }
-  | { type: "TOOL_START"; toolCallId: string; toolName: string }
+  | {
+      type: "TOOL_START";
+      toolCallId: string;
+      toolName: string;
+      parentCallId?: string;
+      input?: unknown;
+    }
   | { type: "TOOL_INPUT_DELTA"; toolCallId: string; partialJson: string }
   | {
       type: "TOOL_COMPLETE";
@@ -399,9 +485,16 @@ export type AppAction =
       toolName: string;
       result: string;
       resultImages?: Array<{ mimeType: string; data: string }>;
+      resultDocuments?: Array<{
+        name: string;
+        mimeType: string;
+        data: string;
+      }>;
       durationMs: number;
       input?: unknown;
+      parentCallId?: string;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
+      composeTrace?: ComposeTrace;
     }
   | { type: "TODO_UPDATE"; todos: TodoItem[] }
   | { type: "ADD_ANNOTATION"; text: string; badge: "follow-up" | "rejection" }
@@ -512,6 +605,7 @@ export type AppAction =
       mode: string;
       model: string;
       messages: ChatMessage[];
+      todos: TodoItem[];
       lastInputTokens?: number;
       lastOutputTokens?: number;
       /**
@@ -575,9 +669,16 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
     string,
     Array<{ mimeType: string; data: string }>
   >();
+  const toolResultDocuments = new Map<
+    string,
+    Array<{ name: string; mimeType: string; data: string }>
+  >();
   const toolResultUiMeta = new Map<
     string,
-    { mcpApprovalPromotion?: McpApprovalPromotionMeta }
+    {
+      mcpApprovalPromotion?: McpApprovalPromotionMeta;
+      composeTrace?: ComposeTrace;
+    }
   >();
   for (const msg of raw) {
     const m = msg as { role: string; content: unknown };
@@ -587,6 +688,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
         tool_use_id?: string;
         content?: unknown;
         mcpApprovalPromotion?: McpApprovalPromotionMeta;
+        composeTrace?: ComposeTrace;
       }>) {
         if (block.type === "tool_result" && block.tool_use_id) {
           const content = block.content;
@@ -600,29 +702,38 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               : "";
           toolResults.set(block.tool_use_id, text);
           if (Array.isArray(content)) {
-            const images = (
-              content as Array<{
-                type: string;
-                data?: string;
-                mimeType?: string;
-              }>
-            )
-              .filter(
-                (c): c is { type: "image"; data: string; mimeType: string } =>
-                  c.type === "image" &&
-                  typeof c.data === "string" &&
-                  typeof c.mimeType === "string",
-              )
-              .map((image) => ({
-                mimeType: image.mimeType,
-                data: image.data,
-              }));
-            if (images.length > 0)
+            const media = content as Array<{
+              type: string;
+              data?: string;
+              mimeType?: string;
+              name?: string;
+              title?: string;
+              source?: { data?: string; media_type?: string };
+            }>;
+            const images = media.flatMap((item) => {
+              if (item.type !== "image") return [];
+              const data = item.data ?? item.source?.data;
+              const mimeType = item.mimeType ?? item.source?.media_type;
+              return data && mimeType ? [{ data, mimeType }] : [];
+            });
+            if (images.length > 0) {
               toolResultImages.set(block.tool_use_id, images);
+            }
+            const documents = media.flatMap((item) => {
+              if (item.type !== "document") return [];
+              const data = item.data ?? item.source?.data;
+              const mimeType = item.mimeType ?? item.source?.media_type;
+              const name = item.name ?? item.title ?? "document";
+              return data && mimeType ? [{ name, data, mimeType }] : [];
+            });
+            if (documents.length > 0) {
+              toolResultDocuments.set(block.tool_use_id, documents);
+            }
           }
-          if (block.mcpApprovalPromotion) {
+          if (block.mcpApprovalPromotion || block.composeTrace) {
             toolResultUiMeta.set(block.tool_use_id, {
               mcpApprovalPromotion: block.mcpApprovalPromotion,
+              composeTrace: block.composeTrace,
             });
           }
         }
@@ -726,14 +837,23 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
         toolResults,
       );
       const finalMarkerToolId = finalMarker?.toolCall?.id;
-      const messageResultImages: Array<{ mimeType: string; data: string }> = [];
+      const messageGeneratedImages: Array<{ mimeType: string; data: string }> =
+        [];
+      const messageDirectImages: Array<{ mimeType: string; data: string }> = [];
       for (const block of contentArr as Array<{
         type: string;
         text?: string;
+        citations?: CoreWebCitation[];
+        activity?: CoreWebActivity;
         id?: string;
         name?: string;
         input?: unknown;
         thinking?: string;
+        source?: {
+          type?: string;
+          media_type?: string;
+          data?: string;
+        };
       }>) {
         if (block.type === "text" && block.text) {
           if (block.text.includes("<system-reminder>")) {
@@ -744,6 +864,42 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           } else {
             blocks.push({ type: "text", text: block.text });
           }
+          const citations = sanitizeWebCitations(block.citations ?? []);
+          if (citations.length > 0) {
+            for (let index = blocks.length - 1; index >= 0; index -= 1) {
+              const candidate = blocks[index];
+              if (
+                candidate?.type !== "tool_call" ||
+                (candidate.name !== "web_search" &&
+                  candidate.name !== "web_fetch")
+              ) {
+                continue;
+              }
+              const result = parseJsonObject(candidate.result) ?? {};
+              blocks[index] = {
+                ...candidate,
+                result: JSON.stringify({ ...result, citations }, null, 2),
+              };
+              break;
+            }
+          }
+        } else if (block.type === "web_activity" && block.activity) {
+          const activity = sanitizeWebActivity(block.activity);
+          const input =
+            activity.kind === "search"
+              ? { query: activity.query ?? "" }
+              : { url: activity.url ?? "" };
+          blocks.push({
+            type: "tool_call",
+            id: activity.id,
+            name: activity.kind === "search" ? "web_search" : "web_fetch",
+            inputJson: JSON.stringify(input),
+            result:
+              activity.status === "started"
+                ? ""
+                : JSON.stringify(activity, null, 2),
+            complete: activity.status !== "started",
+          });
         } else if (block.type === "thinking" && block.thinking?.trim()) {
           blocks.push({
             type: "thinking",
@@ -751,13 +907,29 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
             text: block.thinking,
             complete: true,
           });
+        } else if (
+          block.type === "image" &&
+          block.source?.type === "base64" &&
+          typeof block.source.media_type === "string" &&
+          typeof block.source.data === "string"
+        ) {
+          messageDirectImages.push({
+            mimeType: block.source.media_type,
+            data: block.source.data,
+          });
         } else if (block.type === "tool_use") {
           const toolId = block.id ?? randomId();
           const toolName = normalizeProjectedToolName(block.name ?? "");
           const toolResult = toolResults.get(toolId) ?? "";
           const resultImages = toolResultImages.get(toolId);
-          if (resultImages) messageResultImages.push(...resultImages);
+          const resultDocuments = toolResultDocuments.get(toolId);
+          if (toolName === "generate_image" && resultImages) {
+            messageGeneratedImages.push(...resultImages);
+          }
           const resultImageProps = resultImages ? { resultImages } : {};
+          const resultDocumentProps = resultDocuments
+            ? { resultDocuments }
+            : {};
           const inputJson = JSON.stringify(block.input ?? {});
           if (toolName === "set_task_status" && toolId === finalMarkerToolId) {
             continue;
@@ -778,6 +950,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               inputJson,
               result: toolResult,
               ...resultImageProps,
+              ...resultDocumentProps,
               complete: true,
               mcpApprovalPromotion:
                 toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
@@ -826,6 +999,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               inputJson,
               result: toolResult,
               ...resultImageProps,
+              ...resultDocumentProps,
               complete: true,
               mcpApprovalPromotion:
                 toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
@@ -878,6 +1052,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               inputJson,
               result: toolResult,
               ...resultImageProps,
+              ...resultDocumentProps,
               complete: true,
               mcpApprovalPromotion:
                 toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
@@ -934,9 +1109,11 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               inputJson,
               result: toolResult,
               ...resultImageProps,
+              ...resultDocumentProps,
               complete: true,
               mcpApprovalPromotion:
                 toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
+              composeTrace: toolResultUiMeta.get(toolId)?.composeTrace,
             });
           }
         }
@@ -953,9 +1130,15 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
                 ),
             )
           : blocks;
-      if (visibleBlocks.length > 0 || hasRuntimeError || finalMarker) {
+      const displayImages = [...messageDirectImages, ...messageGeneratedImages];
+      if (
+        visibleBlocks.length > 0 ||
+        displayImages.length > 0 ||
+        hasRuntimeError ||
+        finalMarker
+      ) {
         const generatedDisplayMedia =
-          generatedImagesToDisplayMedia(messageResultImages);
+          generatedImagesToDisplayMedia(displayImages);
         result.push({
           id: randomId(),
           role: "assistant",
@@ -1253,7 +1436,17 @@ export function reducer(state: AppState, action: AppAction): AppState {
     case "SET_STATE":
       return {
         ...state,
-        chatState: action.state,
+        chatState: {
+          ...state.chatState,
+          ...action.state,
+          projects: action.state.projects ?? state.chatState.projects,
+          defaultProjectId: Object.hasOwn(action.state, "defaultProjectId")
+            ? action.state.defaultProjectId
+            : state.chatState.defaultProjectId,
+          project: Object.hasOwn(action.state, "project")
+            ? action.state.project
+            : state.chatState.project,
+        },
         streaming: action.state.streaming,
         thinkingEnabled: action.state.thinkingEnabled ?? state.thinkingEnabled,
         revertRecoveryNotice: Object.hasOwn(
@@ -1376,14 +1569,58 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "TOOL_START": {
+      if (action.parentCallId) {
+        const messages = state.messages.map((message) => ({
+          ...message,
+          blocks: message.blocks.map((block) => {
+            if (
+              block.type !== "tool_call" ||
+              block.id !== action.parentCallId
+            ) {
+              return block;
+            }
+            const trace = block.composeTrace ?? {
+              status: "running" as const,
+              totalChildren: 0,
+              completedChildren: 0,
+              children: [],
+            };
+            const inputSummary =
+              action.input === undefined
+                ? undefined
+                : JSON.stringify(action.input).slice(0, 240);
+            return {
+              ...block,
+              composeTrace: {
+                ...trace,
+                status: "running" as const,
+                totalChildren: trace.totalChildren + 1,
+                children: [
+                  ...trace.children,
+                  {
+                    id: action.toolCallId,
+                    name: action.toolName,
+                    status: "running" as const,
+                    inputSummary,
+                  },
+                ].slice(-64),
+              },
+            };
+          }),
+        }));
+        return { ...state, messages, statusOverride: null };
+      }
+
       const all = ensureAssistant(state.messages);
       const { msgs, last } = cloneLast(all);
+      const inputJson =
+        action.input === undefined ? "" : JSON.stringify(action.input);
       last.blocks.push(
         action.toolName === "load_skill"
           ? {
               type: "skill_load",
               id: action.toolCallId,
-              inputJson: "",
+              inputJson,
               result: "",
               complete: false,
             }
@@ -1391,9 +1628,19 @@ export function reducer(state: AppState, action: AppAction): AppState {
               type: "tool_call",
               id: action.toolCallId,
               name: action.toolName,
-              inputJson: "",
+              inputJson,
               result: "",
               complete: false,
+              ...(action.toolName === "compose"
+                ? {
+                    composeTrace: {
+                      status: "running" as const,
+                      totalChildren: 0,
+                      completedChildren: 0,
+                      children: [],
+                    },
+                  }
+                : {}),
             },
       );
       return { ...state, messages: msgs, statusOverride: null };
@@ -1420,7 +1667,16 @@ export function reducer(state: AppState, action: AppAction): AppState {
       tiTarget.blocks = tiTarget.blocks.map((b) =>
         (b.type === "tool_call" || b.type === "skill_load") &&
         b.id === action.toolCallId
-          ? { ...b, inputJson: b.inputJson + action.partialJson }
+          ? {
+              ...b,
+              // A confirmed tool start may already carry the complete input.
+              // Retain streamed deltas as a fallback for providers/surfaces
+              // that only know the arguments incrementally.
+              inputJson:
+                parseJsonObject(b.inputJson) === null
+                  ? b.inputJson + action.partialJson
+                  : b.inputJson,
+            }
           : b,
       );
       tiMsgs[tiIdx] = tiTarget;
@@ -1428,6 +1684,50 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "TOOL_COMPLETE": {
+      if (action.parentCallId) {
+        const messages = state.messages.map((message) => ({
+          ...message,
+          blocks: message.blocks.map((block) => {
+            if (
+              block.type !== "tool_call" ||
+              block.id !== action.parentCallId
+            ) {
+              return block;
+            }
+            const trace = block.composeTrace;
+            if (!trace) return block;
+            const childStatus: ComposeChildStatus = parseJsonObject(
+              action.result,
+            )?.error
+              ? "error"
+              : "completed";
+            return {
+              ...block,
+              composeTrace: {
+                ...trace,
+                completedChildren: Math.min(
+                  trace.totalChildren,
+                  trace.completedChildren + 1,
+                ),
+                children: trace.children.map((child) =>
+                  child.id === action.toolCallId
+                    ? {
+                        ...child,
+                        status: childStatus,
+                        durationMs: action.durationMs,
+                        ...(childStatus === "error"
+                          ? { errorSummary: action.result.slice(0, 240) }
+                          : {}),
+                      }
+                    : child,
+                ),
+              },
+            };
+          }),
+        }));
+        return { ...state, messages };
+      }
+
       // Search ALL messages for the matching tool_call — not just the last one.
       // Events like ADD_ANNOTATION, ADD_INTERJECTION, BG_AGENT_DONE, or ADD_CONDENSE
       // can push new messages between TOOL_START and TOOL_COMPLETE, leaving the
@@ -1465,10 +1765,16 @@ export function reducer(state: AppState, action: AppAction): AppState {
             ...(b.type === "tool_call" && action.resultImages?.length
               ? { resultImages: action.resultImages }
               : {}),
+            ...(b.type === "tool_call" && action.resultDocuments?.length
+              ? { resultDocuments: action.resultDocuments }
+              : {}),
             complete: true,
             durationMs: action.durationMs,
             ...(b.type === "tool_call"
-              ? { mcpApprovalPromotion: action.mcpApprovalPromotion }
+              ? {
+                  mcpApprovalPromotion: action.mcpApprovalPromotion,
+                  composeTrace: action.composeTrace ?? b.composeTrace,
+                }
               : {}),
           };
           if (b.type === "skill_load") {
@@ -1485,10 +1791,13 @@ export function reducer(state: AppState, action: AppAction): AppState {
         return b;
       });
       msgs[targetIdx] = target;
-      const generatedDisplayMedia = generatedImagesToDisplayMedia(
-        action.resultImages,
-        target.displayMedia?.images.length ?? 0,
-      );
+      const generatedDisplayMedia =
+        action.toolName === "generate_image"
+          ? generatedImagesToDisplayMedia(
+              action.resultImages,
+              target.displayMedia?.images.length ?? 0,
+            )
+          : undefined;
       if (generatedDisplayMedia) {
         target.displayMedia = {
           images: [
@@ -1819,6 +2128,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
         detectedQuestion: null,
         dismissedDetectedQuestionIds: [],
         statusOverride: null,
+        chatState: {
+          ...state.chatState,
+          sessionId: null,
+          streaming: false,
+        },
       };
 
     case "SET_REASONING_EFFORT":
@@ -2252,42 +2566,49 @@ export function reducer(state: AppState, action: AppAction): AppState {
       const filtered = state.messages.filter(
         (m) => !(m.role === "condense" && m.condenseInfo?.condensing),
       );
-      const withCondenseRow = [
-        ...filtered,
-        {
-          id: randomId(),
-          role: "condense" as const,
-          content: "",
-          timestamp: Date.now(),
-          blocks: [],
-          condenseInfo: {
-            prevInputTokens: 0,
-            newInputTokens: 0,
-            errorMessage: action.errorMessage,
-          },
-        },
-      ];
 
       if (!action.retryable && !action.code && !action.actions) {
         return {
           ...state,
-          messages: withCondenseRow,
+          messages: [
+            ...filtered,
+            {
+              id: randomId(),
+              role: "condense" as const,
+              content: "",
+              timestamp: Date.now(),
+              blocks: [],
+              condenseInfo: {
+                prevInputTokens: 0,
+                newInputTokens: 0,
+                errorMessage: action.errorMessage,
+              },
+            },
+          ],
           statusOverride: null,
         };
       }
 
-      const all = ensureAssistant(withCondenseRow);
-      const { msgs, last } = cloneLast(all);
-      last.error = {
-        message: action.errorMessage,
-        retryable: action.retryable ?? false,
-        code: action.code,
-        actions: action.actions,
-      };
-
+      // Structured failures render through the standard assistant ErrorBlock.
+      // Do not also retain a legacy condense error row for the same event.
       return {
         ...state,
-        messages: msgs,
+        messages: [
+          ...filtered,
+          {
+            id: randomId(),
+            role: "assistant" as const,
+            content: "",
+            timestamp: Date.now(),
+            blocks: [],
+            error: {
+              message: action.errorMessage,
+              retryable: action.retryable ?? false,
+              code: action.code,
+              actions: action.actions,
+            },
+          },
+        ],
         statusOverride: null,
       };
     }
@@ -2309,7 +2630,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         pendingFinalMarker: null,
         lastInputTokens: action.lastInputTokens ?? 0,
         lastOutputTokens: action.lastOutputTokens ?? 0,
-        todos: [],
+        todos: Array.isArray(action.todos) ? action.todos : [],
         messageQueue: [],
         questionRequest: null,
         detectedQuestion: null,

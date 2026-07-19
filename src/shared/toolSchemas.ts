@@ -7,6 +7,49 @@
 
 import { z } from "zod";
 
+// ─── Web tools ───────────────────────────────────────────────────────────────
+
+export const webSearchSchema = {
+  query: z.string().min(1).describe("Web search query"),
+  max_results: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(20)
+    .optional()
+    .describe("Maximum number of search results to request (default: 10)"),
+  language: z
+    .string()
+    .optional()
+    .describe("Optional language code for search results, such as en or fr"),
+  time_range: z
+    .enum(["day", "week", "month", "year"])
+    .optional()
+    .describe("Optional recency window for search results"),
+  safe_search: z
+    .enum(["off", "moderate", "strict"])
+    .optional()
+    .describe("Optional safe-search level"),
+};
+
+export const webFetchSchema = {
+  url: z.string().url().describe("Absolute HTTP or HTTPS URL to open and read"),
+  max_length: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe("Maximum visible content characters to request"),
+  section: z
+    .string()
+    .optional()
+    .describe("Optional heading or section to focus on"),
+  find: z
+    .string()
+    .optional()
+    .describe("Optional text or pattern to locate within the opened page"),
+};
+
 // ─── File tools ──────────────────────────────────────────────────────────────
 
 export const readFileSchema = {
@@ -253,6 +296,63 @@ export const searchFilesSchema = {
     ),
 };
 
+export const searchSessionHistorySchema = {
+  query: z
+    .string()
+    .min(1)
+    .max(500)
+    .describe(
+      "Literal terms or a safe-subset regular expression to search for.",
+    ),
+  mode: z
+    .enum(["terms", "regex"])
+    .optional()
+    .describe(
+      'Search mode. "terms" (default) requires all case-insensitive literal terms in one message; "regex" accepts a conservative linear-time subset.',
+    ),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(5)
+    .optional()
+    .describe("Maximum hits to return (default 5, maximum 5)."),
+  role: z
+    .enum(["user", "assistant"])
+    .optional()
+    .describe("Optionally restrict matches to one message role."),
+  tool_name: z
+    .string()
+    .optional()
+    .describe(
+      "Optionally restrict matches to messages associated with this tool name.",
+    ),
+};
+
+export const readSessionExcerptSchema = {
+  start_message_index: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .describe("Inclusive zero-based start message index from a search hit."),
+  end_message_index: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      "Inclusive zero-based end message index; maximum span is 10 messages.",
+    ),
+  snapshot_message_count: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .describe("Snapshot message count returned by search_session_history."),
+  snapshot_revision: z
+    .string()
+    .min(1)
+    .describe("Snapshot revision returned by search_session_history."),
+};
+
 export const getDiagnosticsSchema = {
   path: z
     .string()
@@ -313,13 +413,13 @@ export const generateImageSchema = {
     .array(z.string())
     .optional()
     .describe(
-      "IDs of prior user-attached images from this session to use as generation references. Prefer use_recent_images when the user says to use an image they just provided; explicit IDs follow image_N attachment order and errors list available IDs.",
+      "IDs of prior images from this session to use as generation references, including user attachments and image tool results. Prefer use_recent_images when the relevant image is recent; explicit IDs follow image_N session order and errors list available IDs.",
     ),
   use_recent_images: z
     .union([z.boolean(), z.coerce.number()])
     .optional()
     .describe(
-      "Use recent user-attached images from this session as references. Prefer this when the user asks to use an image they already provided. Pass true for up to 4 recent images, or a number for that many recent images.",
+      "Use recent images from this session as references, including user attachments and image tool results. Pass true for up to 4 recent images, or a number for that many recent images.",
     ),
   timeout_seconds: z.coerce
     .number()
@@ -364,6 +464,32 @@ export const proposeMemorySchema = {
     ),
 };
 
+const applyDiffBlockOptionSchema = z
+  .object({
+    index: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .describe(
+        "Zero-based positional SEARCH/REPLACE block index, counting malformed block slots before the target",
+      ),
+    occurrence: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe("Select this 1-based matching occurrence for the block"),
+    replace_all: z
+      .literal(true)
+      .optional()
+      .describe("Replace every exact occurrence for this block"),
+  })
+  .refine(
+    (option) =>
+      (option.occurrence === undefined) !== (option.replace_all === undefined),
+    "Each block option must specify exactly one of occurrence or replace_all",
+  );
+
 export const applyDiffSchema = {
   path: z
     .string()
@@ -372,6 +498,19 @@ export const applyDiffSchema = {
     .string()
     .describe(
       "Search/replace blocks in <<<<<<< SEARCH / ======= DIVIDER ======= / >>>>>>> REPLACE format",
+    ),
+  block_options: z
+    .array(applyDiffBlockOptionSchema)
+    .max(64)
+    .optional()
+    .describe(
+      "Optional per-block controls. Use occurrence to select a 1-based exact/flexible/escape-normalized match, or replace_all to replace every exact match. Unlisted blocks retain unique-match safety.",
+    ),
+  atomic: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true, require every parsed block to succeed and no malformed blocks before opening review or applying any change. The same requirement is revalidated under the write lock.",
     ),
 };
 
@@ -818,6 +957,23 @@ export const getInlayHintsSchema = {
 };
 
 // ─── Search tools ────────────────────────────────────────────────────────────
+
+export const composeSchema = {
+  script: z
+    .string()
+    .min(1)
+    .max(64 * 1024)
+    .describe(
+      "Sandboxed JavaScript function body. Use synchronous guest helpers tool(name, input) and toolAll([{ name, input }, ...]); top-level return is supported.",
+    ),
+  description: z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      "Optional one-line intent shown in the transcript header (maximum 200 characters).",
+    ),
+};
 
 export const codebaseSearchSchema = {
   query: z

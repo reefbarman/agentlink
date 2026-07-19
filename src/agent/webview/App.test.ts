@@ -1,4 +1,3 @@
-import { describe, expect, it } from "vitest";
 import {
   bgTranscriptStreamingOverride,
   initialState,
@@ -7,6 +6,41 @@ import {
   shouldDropSessionScopedEvent,
   shouldProjectBackgroundCompletion,
 } from "./App";
+import { describe, expect, it } from "vitest";
+
+describe("webview App reducer tool input", () => {
+  it("shows complete tool input from the start event while the call is running", () => {
+    const input = { path: "src/agent/AgentEngine.ts", line_start: 1640 };
+
+    let state = reducer(initialState, {
+      type: "TOOL_START",
+      toolCallId: "tool-running",
+      toolName: "read_file",
+      input,
+    });
+
+    let toolCall = state.messages.at(-1)?.blocks.at(-1);
+    expect(toolCall).toMatchObject({
+      type: "tool_call",
+      id: "tool-running",
+      inputJson: JSON.stringify(input),
+      complete: false,
+    });
+
+    state = reducer(state, {
+      type: "TOOL_INPUT_DELTA",
+      toolCallId: "tool-running",
+      partialJson: JSON.stringify(input),
+    });
+
+    toolCall = state.messages.at(-1)?.blocks.at(-1);
+    expect(toolCall).toMatchObject({
+      type: "tool_call",
+      inputJson: JSON.stringify(input),
+      complete: false,
+    });
+  });
+});
 
 describe("webview App reducer background agent launch blocks", () => {
   it("uses final tool input to populate the bg_agent message for spawn_background_agent", () => {
@@ -263,6 +297,41 @@ describe("webview App reducer background agent launch blocks", () => {
       ],
       documents: [],
     });
+    expect(assistant?.blocks).toEqual([
+      expect.objectContaining({
+        type: "tool_call",
+        id: toolCallId,
+        resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+      }),
+    ]);
+  });
+
+  it("keeps non-generate_image result images scoped to the tool call", () => {
+    const toolCallId = "tool-read-image";
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "read the screenshot",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId,
+      toolName: "read_file",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId,
+      toolName: "read_file",
+      result: "[image]",
+      resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+      durationMs: 42,
+      input: { path: "Captures/layout-check.png" },
+    });
+
+    const assistant = state.messages[state.messages.length - 1];
+    expect(assistant?.role).toBe("assistant");
+    expect(assistant?.displayMedia).toBeUndefined();
     expect(assistant?.blocks).toEqual([
       expect.objectContaining({
         type: "tool_call",
@@ -662,6 +731,55 @@ describe("webview App reducer background agent launch blocks", () => {
     });
   });
 
+  it("projects nested tool activity into the compose parent without child tool cards", () => {
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "Compose context reads",
+    });
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "compose-parent",
+      toolName: "compose",
+    });
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "compose-child-1",
+      toolName: "get_context",
+      parentCallId: "compose-parent",
+      input: { path: "src/index.ts" },
+    });
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "compose-child-1",
+      toolName: "get_context",
+      parentCallId: "compose-parent",
+      result: JSON.stringify({ ok: true }),
+      durationMs: 12,
+    });
+
+    const assistant = state.messages.at(-1);
+    const toolBlocks = assistant?.blocks.filter(
+      (block) => block.type === "tool_call",
+    );
+    expect(toolBlocks).toHaveLength(1);
+    expect(toolBlocks?.[0]).toMatchObject({
+      id: "compose-parent",
+      composeTrace: {
+        status: "running",
+        totalChildren: 1,
+        completedChildren: 1,
+        children: [
+          {
+            id: "compose-child-1",
+            name: "get_context",
+            status: "completed",
+            durationMs: 12,
+          },
+        ],
+      },
+    });
+  });
+
   it("converts load_skill tool calls into dedicated skill_load blocks", () => {
     const toolCallId = "skill-tool-1";
     const skillPath = "/workspace/.claude/skills/push-to-repo/SKILL.md";
@@ -1000,6 +1118,7 @@ describe("webview App reducer background agent launch blocks", () => {
       messages: state.messages.map(
         ({ checkpointId: _checkpointId, ...message }) => message,
       ),
+      todos: [],
       checkpoints: [{ turnIndex: 1, checkpointId: "cp-restored" }],
       lastInputTokens: 0,
       lastOutputTokens: 0,
@@ -1060,6 +1179,7 @@ describe("webview App reducer background agent launch blocks", () => {
           blocks: [{ type: "text", text: "tail" }],
         },
       ],
+      todos: [],
       checkpoints: [{ turnIndex: 1, checkpointId: "cp-chunk" }],
       userTurnOffset: 1,
       hasMoreBefore: true,
@@ -1863,6 +1983,47 @@ describe("webview App reducer background agent launch blocks", () => {
     });
   });
 
+  it("restores non-generate_image result images only onto the tool call", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "read the screenshot" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "read-image-restore",
+            name: "read_file",
+            input: { path: "Captures/layout-check.png" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "read-image-restore",
+            content: [
+              { type: "image", data: "YWJjZA==", mimeType: "image/png" },
+            ],
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    expect(restored[1]?.blocks).toEqual([
+      expect.objectContaining({
+        type: "tool_call",
+        id: "read-image-restore",
+        name: "read_file",
+        resultImages: [{ data: "YWJjZA==", mimeType: "image/png" }],
+      }),
+    ]);
+    expect(restored[1]?.displayMedia).toBeUndefined();
+  });
+
   it("restores persisted MCP approval promotion metadata onto tool call blocks", async () => {
     const { agentMessagesToChatMessages } = await import("./App");
 
@@ -1910,6 +2071,60 @@ describe("webview App reducer background agent launch blocks", () => {
           scopes: ["session", "project", "global"],
         },
       },
+    ]);
+  });
+
+  it("restores persisted compose traces onto the parent tool call", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+    const composeTrace = {
+      description: "Read two contexts",
+      status: "completed" as const,
+      totalChildren: 1,
+      completedChildren: 1,
+      children: [
+        {
+          id: "compose-child-1",
+          name: "get_context",
+          status: "completed" as const,
+          durationMs: 12,
+          inputSummary: '{"path":"src/index.ts"}',
+        },
+      ],
+    };
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "compose reads" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "compose-restore",
+            name: "compose",
+            input: { script: "return 1" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "compose-restore",
+            content: JSON.stringify({ result: 1 }),
+            composeTrace,
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    expect(restored[1]?.blocks).toEqual([
+      expect.objectContaining({
+        type: "tool_call",
+        id: "compose-restore",
+        name: "compose",
+        composeTrace,
+      }),
     ]);
   });
 
@@ -2182,6 +2397,10 @@ describe("webview App reducer background agent launch blocks", () => {
     });
 
     const last = state.messages[state.messages.length - 1];
+    expect(
+      state.messages.filter((message) => message.role === "condense"),
+    ).toHaveLength(0);
+    expect(state.messages).toHaveLength(1);
     expect(last?.role).toBe("assistant");
     expect(last?.error).toEqual({
       message:
@@ -2381,18 +2600,28 @@ describe("webview App reducer background agent launch blocks", () => {
   });
 
   it("resets detected question state on NEW_SESSION", () => {
-    let state = reducer(initialState, {
-      type: "SET_DETECTED_QUESTION",
-      detectedQuestion: {
-        messageId: "assistant-2",
-        kind: "yes_no",
-        prompt: "Proceed?",
-        options: [
-          { label: "Yes", payload: "Yes" },
-          { label: "No", payload: "No" },
-        ],
+    let state = reducer(
+      {
+        ...initialState,
+        chatState: {
+          ...initialState.chatState,
+          sessionId: "session-old",
+          streaming: true,
+        },
       },
-    });
+      {
+        type: "SET_DETECTED_QUESTION",
+        detectedQuestion: {
+          messageId: "assistant-2",
+          kind: "yes_no",
+          prompt: "Proceed?",
+          options: [
+            { label: "Yes", payload: "Yes" },
+            { label: "No", payload: "No" },
+          ],
+        },
+      },
+    );
 
     state = reducer(state, {
       type: "DISMISS_DETECTED_QUESTION",
@@ -2402,6 +2631,8 @@ describe("webview App reducer background agent launch blocks", () => {
     state = reducer(state, { type: "NEW_SESSION" });
     expect(state.detectedQuestion).toBeNull();
     expect(state.dismissedDetectedQuestionIds).toEqual([]);
+    expect(state.chatState.sessionId).toBeNull();
+    expect(state.chatState.streaming).toBe(false);
   });
 });
 

@@ -186,6 +186,7 @@ function unavailableExecuteCommandResult(command: string): ToolResult {
           error:
             "Command execution is unavailable in this runtime. Provide a TerminalProvider to enable execute_command.",
           command,
+          command_sent: false,
         }),
       },
     ],
@@ -227,7 +228,10 @@ export async function handleExecuteCommand(
         content: [
           {
             type: "text",
-            text: JSON.stringify({ error: "Command cannot be empty" }),
+            text: JSON.stringify({
+              error: "Command cannot be empty",
+              command_sent: false,
+            }),
           },
         ],
       };
@@ -348,6 +352,7 @@ export async function handleExecuteCommand(
                 }),
                 reason: protectedWriteViolation.message,
                 protected_path: protectedWriteViolation.protectedPath,
+                command_sent: false,
               }),
             },
           ],
@@ -385,6 +390,7 @@ export async function handleExecuteCommand(
                     command_template: params.command,
                   }),
                   reason,
+                  command_sent: false,
                 }),
               },
             ],
@@ -406,6 +412,7 @@ export async function handleExecuteCommand(
                   command_template: params.command,
                 }),
                 reason: interactiveViolation.message,
+                command_sent: false,
               }),
             },
           ],
@@ -497,6 +504,7 @@ export async function handleExecuteCommand(
                       reason: approvalResult.reason,
                     }),
                     security: preparedExecution.security,
+                    command_sent: false,
                   }),
                 },
               ],
@@ -590,6 +598,11 @@ export async function handleExecuteCommand(
       const result = await execution.execute();
       result.security = execution.security;
 
+      // Raw shell-integration output duplicates `output` and includes ANSI/control
+      // sequences. Keep it inside the terminal provider instead of sending both
+      // representations through the model-facing tool result.
+      delete result.terminal_raw_output;
+
       // Apply output filtering and temp file saving
       if (result.output_captured && result.output) {
         const filterOptions = {
@@ -618,12 +631,6 @@ export async function handleExecuteCommand(
         }
 
         result.output = filtered;
-        if (result.terminal_raw_output) {
-          result.terminal_raw_output = filterOutput(
-            result.terminal_raw_output,
-            filterOptions,
-          ).filtered;
-        }
       } else if (!result.output_captured && !result.output) {
         result.output =
           "Command execution was sent to the terminal, but no output was captured.";
@@ -742,6 +749,7 @@ function cancelledCommandResult(
           command,
           reason: "Command approval was cancelled before execution",
           ...(security ? { security } : {}),
+          command_sent: false,
         }),
       },
     ],
@@ -753,7 +761,12 @@ function rejectedCommandResult(command: string, reason: string): ToolResult {
     content: [
       {
         type: "text",
-        text: JSON.stringify({ status: "rejected", command, reason }),
+        text: JSON.stringify({
+          status: "rejected",
+          command,
+          reason,
+          command_sent: false,
+        }),
       },
     ],
   };
@@ -797,6 +810,7 @@ function malformedCommandResult(
             original_command: extra.originalCommand,
           }),
           reason,
+          command_sent: false,
         }),
       },
     ],
@@ -841,19 +855,13 @@ async function approveSubCommands(
   // Expand wrappers: ["cd /foo", "sudo npm install"] → ["cd /foo", "sudo", "npm install"]
   const expanded = expandSubCommands(subCommands);
 
-  // Check if all expanded sub-commands are already approved,
-  // or the full command was recently approved within the TTL window
+  // Check if all expanded sub-commands are already approved. Recent one-time
+  // approvals are checked after project attribution is captured by enqueue.
   const allApproved = expanded.every((sub) =>
-    approvalManager.isCommandApproved(sessionId, sub),
+    approvalManager.isCommandApproved(sessionId, sub, cwd),
   );
   if (!options?.requireHumanApproval && allApproved) {
     return { approved: true, approval: { by: "explicit_rule" } };
-  }
-  if (
-    !options?.requireHumanApproval &&
-    approvalPanel.isRecentlyApproved("command", fullCommand)
-  ) {
-    return { approved: true, approval: { by: "recent_approval" } };
   }
 
   const classificationCommand = options?.inlineFiles?.length
@@ -979,7 +987,7 @@ async function approveSubCommands(
 
   // Build enriched entries for ALL sub-commands (even already-approved ones)
   const entries: SubCommandEntry[] = expanded.map((cmd) => {
-    const match = approvalManager.findMatchingCommandRule(sessionId, cmd);
+    const match = approvalManager.findMatchingCommandRule(sessionId, cmd, cwd);
     if (match) {
       return {
         command: cmd,
@@ -1013,6 +1021,7 @@ async function approveSubCommands(
       commandReview,
       humanOnlyReason,
       security: options?.security,
+      sessionId,
     },
   );
   const response = await promise;
@@ -1039,6 +1048,7 @@ async function approveSubCommands(
           mode: rule.mode as "prefix" | "exact" | "regex",
         },
         scope,
+        cwd,
       );
     }
   }
@@ -1053,7 +1063,9 @@ async function approveSubCommands(
   }
   return {
     approved: true,
-    approval: { by: "human" },
+    approval: response.recentApproval
+      ? { by: "recent_approval" }
+      : { by: "human" },
     followUp: response.followUp,
   };
 }
@@ -1092,6 +1104,7 @@ function validateCommandBeforeExecution(
             ...(originalCommand && { original_command: originalCommand }),
             reason: protectedWriteViolation.message,
             protected_path: protectedWriteViolation.protectedPath,
+            command_sent: false,
           }),
         },
       ],
@@ -1109,6 +1122,7 @@ function validateCommandBeforeExecution(
             command,
             ...(originalCommand && { original_command: originalCommand }),
             reason: commandViolation.message,
+            command_sent: false,
           }),
         },
       ],
@@ -1126,6 +1140,7 @@ function validateCommandBeforeExecution(
             command,
             ...(originalCommand && { original_command: originalCommand }),
             reason: interactiveViolation.message,
+            command_sent: false,
           }),
         },
       ],

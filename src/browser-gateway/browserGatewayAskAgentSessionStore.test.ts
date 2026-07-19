@@ -224,6 +224,56 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     );
   });
 
+  it("keeps read_file images scoped to the tool result", () => {
+    const store = createStore();
+    const credentialStatus: BrowserGatewayModelCredentialStatus = {
+      state: "ready",
+      providerId: "openai-codex",
+      method: "oauth",
+      modelScopes: ["chat"],
+      grantedByOwnerId: "vscode-owner",
+      grantedAt: 100,
+    };
+
+    const assistant = store.startAssistantMessage({ now: 100 });
+    store.startAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "read-image-live",
+      toolName: "read_file",
+      input: { path: "Captures/layout-check.png" },
+    });
+    store.completeAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "read-image-live",
+      toolName: "read_file",
+      input: { path: "Captures/layout-check.png" },
+      result: "[image]",
+      resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+      durationMs: 42,
+    });
+
+    const response = store.getOrCreate({
+      now: 200,
+      theme,
+      modelCredentialStatus: credentialStatus,
+    });
+    const assistantMessage =
+      response.snapshot.session.foreground.projectedMessages.find(
+        (message) => message.id === assistant.id,
+      );
+
+    expect(assistantMessage?.displayMedia).toBeUndefined();
+    expect(assistantMessage?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "read-image-live",
+          resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+        }),
+      ]),
+    );
+  });
+
   it("marks assistant model failures with structured error metadata", () => {
     const store = createStore();
     const credentialStatus: BrowserGatewayModelCredentialStatus = {
@@ -271,7 +321,7 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
   it("maps fallback GPT/Codex models to the browser Codex credential family", () => {
     const store = createStore();
 
-    expect(store.getModel()).toBe("gpt-5.3-codex");
+    expect(store.getModel()).toBe("gpt-5.6-luna");
     expect(store.getModelProvider()).toBe("openai-codex");
   });
 
@@ -329,7 +379,7 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
       grantedAt: 100,
     };
 
-    expect(store.getModel()).toBe("gpt-5.3-codex");
+    expect(store.getModel()).toBe("gpt-5.6-luna");
     expect(store.getReasoningEffort()).toBe("high");
 
     store.updateAvailableModels([
@@ -425,6 +475,65 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     const reloaded = createStore();
     reloaded.loadHistory(history);
     expect(reloaded.listSessions()).toEqual([]);
+  });
+
+  it("reconstructs exact private model turns without exposing replay in public snapshots", () => {
+    const store = createStore();
+    store.appendUserMessage({
+      id: "ask-user-private-replay",
+      text: "Search privately",
+      now: 100,
+    });
+    const assistant = store.startAssistantMessage({ now: 101 });
+    store.appendAssistantDelta(assistant.id, "Public answer");
+    store.finishAssistantMessage(assistant.id);
+    const exactAssistantMessage = {
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: "Public answer" }],
+      providerReplay: {
+        providerId: "anthropic",
+        codecVersion: 1,
+        payload: {
+          content: [{ type: "encrypted", data: "PRIVATE_REPLAY_SENTINEL" }],
+        },
+        serializedBytes: 64,
+      },
+    };
+    store.appendPrivateModelTurn(assistant.id, [exactAssistantMessage]);
+
+    expect(store.getModelTranscriptMessages()).toEqual([
+      { role: "user", content: "Search privately" },
+      exactAssistantMessage,
+    ]);
+    expect(store.getModelTranscriptMessages(assistant.id)).toEqual([
+      { role: "user", content: "Search privately" },
+    ]);
+
+    const history = store.getHistorySnapshot();
+    expect(JSON.stringify(history)).toContain("PRIVATE_REPLAY_SENTINEL");
+    const reloaded = createStore();
+    reloaded.loadHistory(history);
+    expect(reloaded.getModelTranscriptMessages()).toEqual(
+      store.getModelTranscriptMessages(),
+    );
+
+    const publicResponse = reloaded.getOrCreate({
+      now: 102,
+      theme,
+      modelCredentialStatus: {
+        state: "ready",
+        providerId: "anthropic",
+        method: "apiKey",
+        modelScopes: ["chat"],
+        grantedByOwnerId: "vscode-owner",
+        grantedAt: 100,
+      },
+    });
+    expect(JSON.stringify(publicResponse)).not.toContain("privateModelHistory");
+    expect(JSON.stringify(publicResponse)).not.toContain("providerReplay");
+    expect(JSON.stringify(publicResponse)).not.toContain(
+      "PRIVATE_REPLAY_SENTINEL",
+    );
   });
 
   it("records assistant tool calls using shared transcript block shape", () => {
@@ -639,6 +748,79 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(nextSession.snapshot.ui.projectHandoff).toBeNull();
   });
 
+  it("returns ordered question attachment metadata and media", () => {
+    const store = createStore();
+    store.appendUserMessage({ id: "ask-user-1", text: "Ask me", now: 100 });
+    const assistant = store.startAssistantMessage({ now: 101 });
+    store.startAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "ask-question-media",
+      toolName: "ask_user",
+      input: {},
+    });
+    store.setQuestionRequest({
+      id: "ask-question-media",
+      context: "Need context.",
+      questions: [{ id: "first", type: "text", question: "What happened?" }],
+    });
+
+    const result = store.answerQuestion(
+      "ask-question-media",
+      {},
+      { first: "See attachments" },
+      {
+        first: [
+          {
+            kind: "image",
+            name: "screen.png",
+            mimeType: "image/png",
+            base64: "image-data",
+          },
+          {
+            kind: "document",
+            name: "brief.pdf",
+            mimeType: "application/pdf",
+            base64: "pdf-data",
+          },
+        ],
+      },
+    );
+
+    expect(result).toEqual({
+      messageId: assistant.id,
+      toolCallId: "ask-question-media",
+      responses: [
+        {
+          question: "What happened?",
+          answer: null,
+          note: "See attachments",
+          attachments: [
+            { kind: "image", name: "screen.png", mimeType: "image/png" },
+            {
+              kind: "document",
+              name: "brief.pdf",
+              mimeType: "application/pdf",
+            },
+          ],
+        },
+      ],
+      media: [
+        {
+          kind: "image",
+          name: "screen.png",
+          mimeType: "image/png",
+          base64: "image-data",
+        },
+        {
+          kind: "document",
+          name: "brief.pdf",
+          mimeType: "application/pdf",
+          base64: "pdf-data",
+        },
+      ],
+    });
+  });
+
   it("prepares the latest retryable assistant error without duplicating the user prompt", () => {
     const store = createStore();
     const credentialStatus: BrowserGatewayModelCredentialStatus = {
@@ -748,6 +930,14 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
         ok: true,
         responses: [{ question: "Continue?", answer: true }],
       }),
+      resultImages: [{ mimeType: "image/png", data: "image-data" }],
+      resultDocuments: [
+        {
+          name: "brief.pdf",
+          mimeType: "application/pdf",
+          data: "pdf-data",
+        },
+      ],
       durationMs: 0,
     });
     store.finishAssistantErrorMessage({
@@ -773,6 +963,14 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
           ok: true,
           responses: [{ question: "Continue?", answer: true }],
         }),
+        resultImages: [{ mimeType: "image/png", data: "image-data" }],
+        resultDocuments: [
+          {
+            name: "brief.pdf",
+            mimeType: "application/pdf",
+            data: "pdf-data",
+          },
+        ],
       },
     ]);
   });
@@ -847,15 +1045,15 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
       grantedAt: 100,
     };
 
-    expect(store.getModel()).toBe("gpt-5.3-codex");
+    expect(store.getModel()).toBe("gpt-5.6-luna");
     expect(store.getReasoningEffort()).toBe("low");
     expect(store.getAvailableModels().map((model) => model.id)).toEqual([
-      "gpt-5.3-codex",
-      "gpt-5.2-codex",
-      "gpt-5.1-codex",
+      "gpt-5.6-luna",
+      "gpt-5.6-terra",
+      "gpt-5.5",
     ]);
     expect(store.setReasoningEffort("high")).toBe(true);
-    expect(store.setModel("gpt-5.3-codex")).toBe(true);
+    expect(store.setModel("gpt-5.6-luna")).toBe(true);
 
     const response = store.getOrCreate({
       now: 100,
@@ -863,7 +1061,7 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
       modelCredentialStatus: credentialStatus,
     });
 
-    expect(response.snapshot.session.foreground.model).toBe("gpt-5.3-codex");
+    expect(response.snapshot.session.foreground.model).toBe("gpt-5.6-luna");
     expect(response.snapshot.session.foreground.reasoningEffort).toBe("high");
     expect(response.snapshot.session.foreground.thinkingEnabled).toBe(true);
   });

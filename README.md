@@ -207,7 +207,12 @@ Detected skills are also exposed as slash commands in the built-in chat. Skills 
 
 ### Connect the built-in agent to MCP servers
 
-Use `/mcp-config` in the built-in chat to inspect and edit AgentLink-owned MCP configuration, `/mcp` to inspect connected servers, and `/mcp-refresh` after changing configuration.
+Use `/mcp` to open the shared MCP Manager, `/mcp-config` to open its configuration-oriented view, and `/mcp-refresh` to explicitly reconnect configured servers. Ordinary tool, resource, and prompt catalog changes advertised by a connected server are loaded automatically without `/mcp-refresh`, including every paginated catalog page. The manager is available in both VS Code and Browser Ask Agent with four focused views:
+
+- **Overview** joins saved configuration with connection status, tool/resource/prompt counts, source scope, inherited overrides, secret-key presence, and persistent enabled/disabled state.
+- **Sources** shows every layered file in precedence order, including exact path, read health, editable/read-only state, and raw-open actions where the surface supports them.
+- **Guided setup** supports Local process (`stdio`), HTTP, and legacy SSE servers. Arguments are exact array elements—one row/line per argument or a JSON string array—so quoted values and paths containing spaces are preserved.
+- **Import JSON** parses one or many servers into a review step before writing. Valid rows can be selected and conflicts must explicitly **Skip**, **Replace**, or **Rename**.
 
 The main agent merges MCP server definitions from these files, in ascending priority:
 
@@ -218,7 +223,9 @@ The main agent merges MCP server definitions from these files, in ascending prio
 5. `<workspace>/.claude/mcp.json`
 6. `<workspace>/.agentlink/mcp.json`
 
-Each file uses an `mcpServers` object. For example:
+AgentLink writes structured changes only to editable `.agentlink/mcp.json` sources. Main-profile saves can target the current project or the global AgentLink source; Browser Ask Agent uses its dedicated `~/.agentlink/ask-agent/mcp.json` source. Higher-priority explicit fields override inherited values. An inherited server can be edited by creating an AgentLink-owned override rather than changing `.agents` or `.claude` files.
+
+Each file normally uses an `mcpServers` object. For example:
 
 ```json
 {
@@ -226,13 +233,112 @@ Each file uses an `mcpServers` object. For example:
     "example": {
       "command": "example-mcp-server",
       "args": ["--stdio"],
-      "toolPolicy": "ask"
+      "toolPolicy": "ask",
+      "disabled": false
     }
   }
 }
 ```
 
-AgentLink can progressively disclose large MCP catalogs and applies the same session/project/global approval model to connected servers and tools.
+JSON import also accepts a `servers` wrapper, one named server object, or a bare name-to-server map. JSONC, a UTF-8 BOM, and one complete `json`/`jsonc` Markdown fence are accepted. `serverUrl` is normalized to `url`, `streamable-http` is normalized to `http`, and unambiguous missing transports are inferred. Unknown client-specific fields are reported as **Not imported** instead of being silently written.
+
+Guided and imported writes are revision-checked and committed as one atomic batch. If another process changes a relevant source, AgentLink returns `config_changed` rather than overwriting it. Structured writes preserve unrelated top-level keys and servers, but normalize JSONC comments and trailing commas to formatted JSON; use **Open raw** when comment preservation matters.
+
+Environment variables and HTTP headers are masked in the UI, but masking is visual only: values remain plaintext in the selected configuration file. Prefer `${VAR}` references; AgentLink expands them in env and header values at runtime. Stored secret values are never returned to the manager—only key names and source metadata are shown—and edits require explicit preserve, patch, replace, or remove intent. URL userinfo is rejected. Command arguments and URL query strings are ordinary visible configuration and should not contain credentials.
+
+Saving and connecting are reported separately. A valid configuration remains saved when a server is offline or needs authentication. Disabling a server writes `disabled: true`, removes its tools from the runtime, and survives refresh/reload; enabling writes `disabled: false` and reconnects it.
+
+Browser Ask Agent keeps extension-hosted MCP execution and credentials. Browser main-profile configuration is read-only. Loopback Browser Ask Agent sessions may configure local-process servers and secret-bearing env/header changes; LAN browser sessions may configure only secret-free HTTP/SSE servers. Raw config opening is unavailable from the browser.
+
+AgentLink can progressively disclose large MCP catalogs and applies the same session/project/global approval model to connected servers and tools. Connected tool results preserve server-declared errors, structured content, annotations, protocol metadata, embedded resources, and resource links. Structured-only results are serialized into model-visible text, while unsupported audio/binary payloads remain bounded placeholders rather than unbounded base64 text.
+
+The outbound client identifies itself with the installed AgentLink version and advertises only implemented capabilities. AgentLink does not advertise deprecated MCP roots or server-initiated sampling. Form elicitation supports strings (including email, URI, date, and date-time formats), numbers, integers, booleans, titled or untitled single-selects, and titled or untitled multi-selects. Defaults and field constraints are applied and validated by shared controls in VS Code chat and VS Code-backed browser sessions. Browser Ask Agent's helper-owned MCP session does not currently expose form or URL elicitation.
+
+## Web Access
+
+AgentLink provides native `web_search` and `web_fetch` tools for the built-in VS Code agent and Browser Ask Agent. Search and fetch are configured independently and default to `native`.
+
+The model still decides whether a turn needs web access. Enabling a native tool only makes it available; it does not force a search or fetch on every turn.
+
+### Independent tool selection
+
+Configure each AgentLink-native tool separately:
+
+| Selection  | Behavior                                                                                                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `native`   | Expose the AgentLink `web_search` or `web_fetch` tool. AgentLink executes it through the selected model provider's hosted web capability.                                      |
+| `mcp`      | Hide the corresponding AgentLink-native tool. Ordinary connected MCP tools remain available with their own names, schemas, inputs, outputs, disclosure, and approval behavior. |
+| `disabled` | Hide the corresponding AgentLink-native tool. Unrelated MCP tools are unaffected.                                                                                              |
+
+`mcp` does **not** select a specific MCP tool, wrap an MCP call in `web_search`/`web_fetch`, adapt MCP schemas, or automatically switch backends. It simply removes that AgentLink-native tool from the model's available tool list. If a suitable MCP tool is connected and disclosed, the model can call it normally.
+
+For example, to prefer SearXNG or another MCP tool for discovery while keeping provider-native page access:
+
+```jsonc
+{
+  "agentlink.webAccess.searchBackend": "mcp",
+  "agentlink.webAccess.fetchBackend": "native",
+}
+```
+
+This hides AgentLink's `web_search`, leaves ordinary MCP search tools available, and still exposes AgentLink's provider-backed `web_fetch`.
+
+### Native provider execution
+
+AgentLink's native tools are ordinary function tools from the model's perspective. When one is called, AgentLink performs a constrained delegated provider request with no normal client tools, then returns a normalized result through the standard tool-result path.
+
+- **Anthropic API-key models** can use hosted search and hosted page fetch where the selected model/transport advertises support.
+- **OpenAI public API-key Responses and ChatGPT/Codex OAuth** can use hosted search. OpenAI/Codex page open and find-in-page are actions of the combined hosted search capability, so AgentLink implements native `web_fetch` through a constrained delegated request using that capability rather than a separate provider `web_fetch` definition.
+- Native selections fail closed before the turn when the selected provider transport cannot perform the operation or enforce configured domain restrictions.
+- AgentLink never silently switches a native operation to MCP after a turn starts.
+
+Provider-hosted execution occurs in the runtime that owns the model request: the extension for VS Code sessions and helper/core for Browser Ask Agent. Browser page JavaScript never performs web fetches and never receives provider credentials.
+
+### Transcript behavior
+
+Native web operations render exactly like other tool calls:
+
+- the tool name is `web_search` or `web_fetch`;
+- the complete normalized input is visible in the expandable **Input** section;
+- the complete normalized result is visible in the **Result** section;
+- Browser Ask Agent transcript export includes both input and result;
+- ordinary MCP web tools continue to render under their original MCP tool names with their original inputs and results.
+
+Legacy persisted provider web-activity events are projected into ordinary `web_search`/`web_fetch` tool calls for compatibility. Provider-private replay data, encrypted blocks, and credentials are excluded from chat projections, browser snapshots, SSE, logs, and transcript exports.
+
+### Settings
+
+| Setting                                     | Default   | Purpose                                                                          |
+| ------------------------------------------- | --------- | -------------------------------------------------------------------------------- |
+| `agentlink.webAccess.searchBackend`         | `native`  | Select `native`, `mcp`, or `disabled` for AgentLink's `web_search`.              |
+| `agentlink.webAccess.fetchBackend`          | `native`  | Select `native`, `mcp`, or `disabled` for AgentLink's `web_fetch`.               |
+| `agentlink.webAccess.allowedDomains`        | `[]`      | Optional native-provider domain allowlist; mutually exclusive with the denylist. |
+| `agentlink.webAccess.blockedDomains`        | `[]`      | Optional native-provider domain denylist; mutually exclusive with the allowlist. |
+| `agentlink.webAccess.maxSearchUsesPerTurn`  | `5`       | Requested native-provider search-use limit where supported.                      |
+| `agentlink.webAccess.maxFetchUsesPerTurn`   | `3`       | Requested native-provider fetch-use limit where supported.                       |
+| `agentlink.webAccess.maxFetchContentTokens` | `25000`   | Requested native-provider fetched-content token cap where supported.             |
+| `agentlink.webAccess.maxReplayBytesPerTurn` | `5242880` | Maximum private provider replay retained when exact continuation requires it.    |
+
+Domain restrictions apply only to native provider routes and fail closed when the provider transport cannot represent them. Limits are applied only when the provider advertises enforceable support; diagnostics report effective enforcement.
+
+### Cost, privacy, and trust
+
+- Provider-hosted web requests may incur **additional provider charges**. MCP servers and upstream search services may have their own costs or quotas.
+- Native search queries, URLs, and fetched content are sent to the selected model provider. MCP tool calls are sent according to that MCP server's own implementation and trust boundary.
+- Search results and fetched pages are **untrusted external model input**. AgentLink's delegated executor is instructed not to follow embedded prompts, reveal secrets, modify files, or perform unrelated work.
+- A self-hosted SearXNG server improves control over the AgentLink-to-server hop, but it does not make SearXNG's upstream search-engine requests private by itself.
+- Native result envelopes include normalized provider, operation, input, activity, content, citation, and usage fields when available. They do not include provider-private replay metadata.
+
+To hide both AgentLink-native web tools:
+
+```jsonc
+{
+  "agentlink.webAccess.searchBackend": "disabled",
+  "agentlink.webAccess.fetchBackend": "disabled",
+}
+```
+
+This does not disable unrelated connected MCP tools.
 
 ## Semantic Codebase Search Setup
 
@@ -338,6 +444,95 @@ When a connected MCP server requests URL elicitation, AgentLink shows an explici
 
 The tools below are available to the built-in agent according to its active mode and capability profile. Some development or orchestration tools are intentionally exposed only in specific modes.
 
+### web_search
+
+Search the public web through the selected model provider's hosted web capability. This AgentLink-native tool is exposed only when `agentlink.webAccess.searchBackend` is `native` and the selected provider transport supports hosted search.
+
+| Parameter     | Type                               | Description                                   |
+| ------------- | ---------------------------------- | --------------------------------------------- |
+| `query`       | string                             | Required web search query.                    |
+| `max_results` | number?                            | Optional requested result count from 1 to 20. |
+| `language`    | string?                            | Optional language code such as `en` or `fr`.  |
+| `time_range`  | `day`, `week`, `month`, or `year`? | Optional recency preference.                  |
+| `safe_search` | `off`, `moderate`, or `strict`?    | Optional safe-search preference.              |
+
+Response details:
+
+- `backend` is `provider` for native execution.
+- `provider` identifies the provider used for the delegated request.
+- `operation` is `search`.
+- `input` contains the complete original normalized input.
+- `activities` contains provider-visible search/open/find lifecycle data when available.
+- `content` contains the provider's useful search findings.
+- `citations` contains normalized source metadata when available.
+- `usage` contains provider token/server-tool usage when exposed by the provider client.
+- Provider-private replay/encrypted metadata is never included.
+
+The delegated request is constrained to hosted web execution, receives no normal client tools, and treats retrieved content as untrusted data.
+
+### web_fetch
+
+Open and read a public HTTP or HTTPS URL through the selected model provider's hosted page-access capability. This AgentLink-native tool is exposed only when `agentlink.webAccess.fetchBackend` is `native` and the provider can perform page access.
+
+For OpenAI/Codex, page open and find-in-page are actions of the combined hosted `web_search` capability. AgentLink therefore implements `web_fetch` through a constrained delegated hosted-search request rather than sending a standalone provider `web_fetch` definition.
+
+| Parameter    | Type    | Description                                            |
+| ------------ | ------- | ------------------------------------------------------ |
+| `url`        | string  | Required absolute HTTP or HTTPS URL.                   |
+| `max_length` | number? | Optional requested maximum visible content characters. |
+| `section`    | string? | Optional heading or section to focus on.               |
+| `find`       | string? | Optional text or pattern to locate within the page.    |
+
+Response details:
+
+- `backend` is `provider` for native execution.
+- `provider` identifies the provider used for the delegated request.
+- `operation` is `fetch`.
+- `input` contains the complete original normalized input.
+- `activities` contains provider-visible page-open/find lifecycle data when available.
+- `content` contains the relevant visible page content.
+- `citations` contains normalized source/final-URL metadata when available.
+- `usage` contains provider token/server-tool usage when exposed by the provider client.
+- Provider-private replay/encrypted metadata is never included.
+
+The tool rejects non-HTTP(S) URLs. The delegated request is instructed to open the exact URL and not search for alternatives except when following that URL's redirect is required.
+
+### compose (development builds only)
+
+Run a bounded JavaScript function body that calls native read-only AgentLink tools and returns a reduced JSON-compatible result in one model-visible tool phase. Use it for dependent fan-out/filter/aggregate workflows where intermediate results should stay out of model context. Do not use it for exploratory work where each result changes the next step, pure shell pipelines, or small one-off calls.
+
+| Parameter     | Type    | Description                                                                      |
+| ------------- | ------- | -------------------------------------------------------------------------------- |
+| `script`      | string  | JavaScript function body (1–65,536 bytes). Top-level `return` is supported.      |
+| `description` | string? | Optional one-line intent shown in the parent tool card (maximum 200 characters). |
+
+The isolated QuickJS-WASM context exposes two synchronous guest helpers backed by the async host bridge:
+
+```js
+const refs = tool("get_references", {
+  path: "src/api.ts",
+  line: 20,
+  column: 10,
+});
+const hovers = toolAll(
+  refs.references.slice(0, 16).map((ref) => ({
+    name: "get_hover",
+    input: { path: ref.path, line: ref.line, column: ref.column },
+  })),
+);
+return hovers.filter((hover) => hover.contents?.length);
+```
+
+- `tool(name, input)` returns the child tool's canonical structured `data` value or throws a structured script error.
+- `toolAll([{ name, input }, ...])` performs one host-side batch with concurrency 4 and preserves input order. Guest `Promise.all` over `tool()` calls is not supported.
+- Composable tools are `get_context`, `get_repo_map`, `get_module_neighbors`, non-semantic `list_files`, regex-only `search_files`, `get_diagnostics`, `go_to_definition`, `go_to_implementation`, `go_to_type_definition`, `get_references`, `get_symbols`, `get_hover`, `get_completions`, `get_code_actions`, `get_call_hierarchy`, `get_type_hierarchy`, and `get_inlay_hints`.
+- Child names must also be present in the exact provider request that invoked `compose`. Nested compose, MCP, shell, background/fleet, writes, media, transcript recall, editor UI, semantic search variants, and interactive controls are rejected.
+- Outside-workspace child paths are limited to AgentLink temporary artifacts and paths already trusted before composition. Compose never opens approval, question, diff, mode, or editor UI.
+- Limits: 64 child calls, 16 descriptors per `toolAll`, 32 MiB QuickJS memory, 60 seconds, 1 MiB canonical data per child, 8 MiB cumulative child data, 40 KiB final serialized return, and a bounded UI-only child trace.
+- Failures return `isError: true` with a canonical error kind such as `validation`, `policy`, `budget_exhausted`, `child_failed`, `serialization`, `memory_limit`, `timeout`, `aborted`, `script_error`, or `internal`. The parent trace remains visible after session restore in both VS Code and mirrored browser sessions.
+
+`compose` is available only when the extension is built with `DEV_BUILD=true`. It is foreground-only and is not exposed to background profiles or standalone projectless browser Ask Agent.
+
 ### read_file
 
 Read file contents with line numbers. Returns rich metadata that built-in read tools cannot provide. Supports text files, local images, and PDF text extraction.
@@ -363,12 +558,15 @@ Read file contents with line numbers. Returns rich metadata that built-in read t
 - `diagnostics` — `{ errors: N, warnings: N }` summary from language services
 - `symbols` — top-level symbols grouped by kind (e.g. `{ "function": ["foo (line 1)"], "class": ["Bar (line 20)"] }`). Automatically skipped for JSON/JSONC files.
 - `content` — numbered lines in `line_number | content` format
-- `semantic_match` — when `query` is used: `{ query, startLine, endLine }` showing the matched chunk
+- `semantic_match` — when an eligible `query` is used: successful `{ query, startLine, endLine }` metadata, `status: "not_found"` with default-offset and literal-anchor guidance when lookup produces no match, or `status: "not_run_structured_redaction"` for protected config files
 - `anchor_match` — when `anchor`/`anchor_regex` is used: match metadata (or `status: "not_found"`)
+- `redaction` — present when automatic structured-secret protection redacts values or withholds malformed eligible JSON/JSONC; reports only a count or status, never matched key names
+
+For conservative settings/config paths such as `.vscode/settings.json`, `.agentlink/*.json`, `mcp.json`, and `*.config.json`, high-confidence secret values are replaced before pagination and literal/regex anchor matching. Semantic `query` lookup is not run for these eligible files. Comments, formatting, line positions, and newline sequences are preserved; malformed eligible JSON/JSONC is withheld. Ordinary JSON data, fixtures, and source files are not scanned. File `size` and `modified` metadata still describe the original file bytes. This protection is specific to these read surfaces and does not imply redaction in shell or search-tool output.
 
 Fields like `git_status`, `diagnostics`, and `symbols` are omitted when not available rather than returned as null.
 
-**Image support:** Local image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) are returned as base64-encoded `image` content that the agent can view directly. Max image size: 10 MB.
+**Image support:** Local image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.ppm`) are returned as base64-encoded `image` content that the agent can view directly. BMP and PPM (P3/P6) files are converted to PNG first. Max image size: 10 MB.
 
 **PDF support:** Local `.pdf` files are parsed to extracted text and returned in the same numbered-line JSON shape as text files, with `file_type: "pdf"`. Max PDF size: 50 MB. `offset` and `limit` apply to extracted text lines.
 
@@ -394,6 +592,9 @@ Build a compact read-only context pack for an explicit file. Prefer this over `r
 - `symbols` — compact document symbol outline when language services provide one
 - `working_set` — `status`, `content_hash`, optional `previous_content_hash`, `range`, `should_include_content`, and `last_read_at`
 - `content` — numbered lines, omitted only when `working_set.should_include_content` is false
+- `redaction` — the same targeted settings/config JSON/JSONC protection metadata as `read_file`, when applicable
+
+Structured-secret redaction is applied before content ranges are returned. The working-set hash, file size, and modification metadata remain based on the original bytes, so dedupe and change detection are not weakened by redaction.
 
 Working-set statuses are `new`, `unchanged`, `changed`, and `omitted_unchanged`. Omission is opt-in and exact-range only; overlapping ranges and full-file reads are tracked independently so callers do not lose content they have not explicitly received.
 
@@ -502,6 +703,61 @@ Search file contents using regex, or perform semantic codebase search when `sema
 
 Regex mode is powered by ripgrep with context lines and per-file match counts. Semantic mode uses the same Qdrant-backed codebase index as `codebase_search`.
 
+### search_session_history
+
+Search the full transcript of the current executing agent session, including original source messages that context condensing retired from the active model window. This is current-session recall, not a workspace-wide or cross-session index. A foreground agent searches only its foreground session; a background agent searches only that background agent's local session, not its parent/foreground session or sibling background sessions.
+
+| Parameter   | Type                     | Description                                                                                                                                                  |
+| ----------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `query`     | string                   | Required search query, maximum 500 input characters and non-empty after trimming.                                                                            |
+| `mode`      | `"terms" \| "regex"`?    | Search semantics. Default: `"terms"`.                                                                                                                        |
+| `limit`     | number?                  | Maximum hits to return (default: 5, minimum: 1, maximum: 5).                                                                                                 |
+| `role`      | `"user" \| "assistant"`? | Restrict matches to one message role.                                                                                                                        |
+| `tool_name` | string?                  | Restrict matches to messages associated with this exact tool name. Tool calls and their corresponding tool results are associated with the originating tool. |
+
+**Search semantics:**
+
+- `terms` splits the query on whitespace, removes duplicate terms, and requires every term to occur as a case-insensitive literal substring in the same message. Terms may occur in any order; no regex syntax is interpreted.
+- `regex` performs case-insensitive global matching with a conservative safe subset. Backreferences, lookarounds, named groups, inline modifiers, and quantified groups containing repetition or alternation are rejected. Repetition bounds may not exceed 100, and a pattern may contain at most one variable-width repetition (`*`, `+`, `?`, or a ranged/open `{m,n}`); exact-count repetitions such as `{3}` remain allowed. Invalid syntax returns `invalid_regex`; rejected constructs or limits return `unsafe_regex`.
+- Matches are ranked by an exact full-query substring first, then occurrence count, condensed-message status, and recency. Each message contributes at most 20,000 searchable characters.
+
+**Response includes:**
+
+- `ok` — `true` for a successful search.
+- `snapshot_message_count`, `snapshot_revision` — append-safe snapshot identity to pass unchanged to `read_session_excerpt`.
+- `total_matches` — number of matching messages after `role` and `tool_name` filters, before hit-count or final output-size caps; it may therefore exceed `hits.length`.
+- `truncated` — whether more matches exist than the returned `hits`.
+- `hits[]` — up to `limit` matches with `message_index`, `role`, `tool_names`, `condensed`, `excerpt`, `occurrence_count`, and per-hit `truncated`. Each match-centered `excerpt` is capped at 1,200 characters; `condensed: true` means the original source message predates the latest generated context summary and may no longer be in the active model window.
+
+Search output is capped at 8,000 characters. Searchable source content includes message text, non-recall tool names and inputs, textual tool results, and runtime errors. Generated context-summary messages, resume-context framing, and prior `search_session_history`/`read_session_excerpt` calls and results are excluded entirely so recall cannot match its own query or recursively re-inject recalled output; thinking blocks and image/document payloads are also excluded. The result is wrapped in `<session-transcript-recall>` framing that labels it as bounded historical source material, not instructions, and warns that it may be incomplete or stale relative to the current workspace.
+
+**Errors:** `invalid_query` for an empty or over-500-character query, `invalid_regex` for malformed regex syntax, `unsafe_regex` for unsupported regex constructs/limits, and `session_transcript_unavailable` when the executing runtime does not expose a current-session transcript.
+
+### read_session_excerpt
+
+Read a bounded, rendered excerpt from the same executing agent session using inclusive message indices and the snapshot identity returned by `search_session_history`. Use this after a search hit when the 1,200-character search excerpt is insufficient or nearby messages are needed.
+
+| Parameter                | Type   | Description                                                                                                           |
+| ------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------- |
+| `start_message_index`    | number | Inclusive zero-based start index, normally selected from a search hit.                                                |
+| `end_message_index`      | number | Inclusive zero-based end index. The range must be within the searched snapshot and span at most 10 message positions. |
+| `snapshot_message_count` | number | Pass the exact `snapshot_message_count` returned by `search_session_history`.                                         |
+| `snapshot_revision`      | string | Pass the exact `snapshot_revision` returned by the same `search_session_history` call.                                |
+
+**Snapshot handoff:** `snapshot_message_count` fixes the searched prefix and `snapshot_revision` identifies its canonical content. Normal append-only continuation is safe: messages added after the search do not invalidate a read within that prefix. If the transcript becomes shorter than the searched snapshot or the searched prefix is rewritten, removed, reordered, or reverted, the tool returns `stale_snapshot`; run `search_session_history` again instead of reading against stale indices.
+
+**Response includes:**
+
+- `ok` — `true` for a successful read.
+- `snapshot_message_count`, `snapshot_revision` — the validated search snapshot identity.
+- `start_message_index`, `end_message_index` — the requested inclusive range.
+- `truncated` — whether the 12,000-character excerpt budget stopped the read early or truncated a message.
+- `messages[]` — source messages in range, each with `message_index`, `role`, `tool_names`, `condensed`, `content`, and per-message `truncated`.
+
+The range may span at most 10 message positions, and the formatted output is capped at 12,000 characters. Indices refer to positions in the searched transcript snapshot; generated summary and resume-context positions may therefore occur inside a valid range but are omitted from `messages`. Returned source messages use the same rendering and exclusions as search: text, tool calls/results, and runtime errors are retained, while thinking and image/document payloads are omitted. Output uses the same non-instructional `<session-transcript-recall>` framing and the same current-agent-session/background-agent-local scope as `search_session_history`.
+
+**Errors:** `invalid_range` when indices are negative, reversed, outside the searched snapshot, or span more than 10 positions; `stale_snapshot` when the searched prefix no longer matches; and `session_transcript_unavailable` when the executing runtime does not expose a current-session transcript. Schema validation also rejects missing or incorrectly typed required parameters before execution.
+
 ### get_diagnostics
 
 Get VS Code diagnostics (errors, warnings, etc.) for a file or the entire workspace.
@@ -527,16 +783,16 @@ Response fields may include `user_edits` (proposed content → reviewer-edited c
 
 Generate PNG images through OpenAI/Codex auth and show them inline in chat. With ChatGPT/Codex OAuth, usage consumes the active account's image-generation quota; with an OpenAI API key, usage is billed to the API key. The tool always shows an approval prompt before generation because quota/billing is consumed before images are returned. In VS Code, pass `output_path` to also save generated PNGs into the workspace; browser-initiated generation is display-only.
 
-| Parameter               | Type               | Description                                                                                                                                                                                                          |
-| ----------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `prompt`                | string             | Prompt describing the image or images to generate                                                                                                                                                                    |
-| `output_path`           | string?            | Optional workspace-relative PNG file path or output directory. When omitted, images are shown in chat only and no files are written. When provided in VS Code, images are also saved to this workspace path.         |
-| `size`                  | string?            | Optional requested size/aspect hint, e.g. `1024x1024`, `1536x1024`, or `1024x1536`                                                                                                                                   |
-| `count`                 | number?            | Number of images to generate. Default: 1. Maximum: 4                                                                                                                                                                 |
-| `reference_image_paths` | string[]?          | Workspace-local PNG/JPEG/GIF/WebP files to use as generation references                                                                                                                                              |
-| `reference_image_ids`   | string[]?          | IDs of prior user-attached images in the current built-in agent session. Prefer `use_recent_images` for images the user just provided. Explicit IDs follow `image_N` attachment order and errors list available IDs. |
-| `use_recent_images`     | boolean \| number? | Use recent user-attached images as references. Prefer this when the user asks to use an image they already provided. `true` uses up to 4 recent images; a number uses that many.                                     |
-| `timeout_seconds`       | number?            | Overall timeout in seconds. Default and maximum: 300                                                                                                                                                                 |
+| Parameter               | Type               | Description                                                                                                                                                                                                  |
+| ----------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `prompt`                | string             | Prompt describing the image or images to generate                                                                                                                                                            |
+| `output_path`           | string?            | Optional workspace-relative PNG file path or output directory. When omitted, images are shown in chat only and no files are written. When provided in VS Code, images are also saved to this workspace path. |
+| `size`                  | string?            | Optional requested size/aspect hint, e.g. `1024x1024`, `1536x1024`, or `1024x1536`                                                                                                                           |
+| `count`                 | number?            | Number of images to generate. Default: 1. Maximum: 4                                                                                                                                                         |
+| `reference_image_paths` | string[]?          | Workspace-local PNG/JPEG/GIF/WebP files to use as generation references                                                                                                                                      |
+| `reference_image_ids`   | string[]?          | IDs of prior images in the current built-in agent session, including user attachments and image tool results. Explicit IDs follow `image_N` session order and errors list available IDs.                     |
+| `use_recent_images`     | boolean \| number? | Use recent session images as references, including user attachments and image tool results. `true` uses up to 4 recent images; a number uses that many.                                                      |
+| `timeout_seconds`       | number?            | Overall timeout in seconds. Default and maximum: 300                                                                                                                                                         |
 
 **Approval prompt:** shows the generation prompt, requested size/count, reference image labels, billing/quota note, and either chat-only output or workspace output paths. Approving uses the standard `accept` decision; rejecting returns `User denied image generation` and any planned output paths.
 
@@ -571,10 +827,12 @@ Responses include `status`, `path`, `tier`, `scope`, `operation`, and any new di
 
 Edit an existing file using search/replace blocks. Opens a diff view for review. Supports **multiple hunks** in a single call. Responses include per-block diagnostics for partial matches/failures, format-on-save edits, and pending-edit lock conflicts return a structured recovery hint instead of a bare timeout string.
 
-| Parameter | Type   | Description                              |
-| --------- | ------ | ---------------------------------------- |
-| `path`    | string | File path                                |
-| `diff`    | string | Search/replace blocks (see format below) |
+| Parameter       | Type      | Description                                                                                                                                                                                                                                                                                                          |
+| --------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`          | string    | File path                                                                                                                                                                                                                                                                                                            |
+| `diff`          | string    | Search/replace blocks (see format below)                                                                                                                                                                                                                                                                             |
+| `block_options` | object[]? | Optional per-block controls keyed by zero-based positional block `index` (malformed block slots before the target still count). Specify exactly one of `occurrence` (1-based matching occurrence) or `replace_all: true`. `replace_all` applies only to exact matches; unlisted blocks still require a unique match. |
+| `atomic`        | boolean?  | When true, require every block to succeed and no malformed blocks before review/write. The same all-block requirement is revalidated after re-reading under the write lock. Defaults to false.                                                                                                                       |
 
 ```text
 <<<<<<< SEARCH
@@ -584,7 +842,11 @@ replacement content
 >>>>>>> REPLACE
 ```
 
-Include multiple SEARCH/REPLACE blocks for multiple edits in one call. If a response includes both `user_edits` and `format_on_save_edits`, compose them in order: proposed content → `user_edits` → `format_on_save_edits`. If the format patch is omitted due to size, re-read the file before the next edit.
+Include multiple SEARCH/REPLACE blocks for multiple edits in one call. Without `block_options`, every block retains the safe unique-match requirement. Use `occurrence` to select one reported exact, whitespace-flexible, or escape-normalized candidate in file order. Use `replace_all: true` only for intentional exact bulk replacement; it never bulk-applies fuzzy matches. Set `atomic: true` for dependent edits that must not proceed unless every block validates; failures return `atomic: true` and `no_changes_applied: true` without opening review or writing content.
+
+If a SEARCH is ambiguous, `failed_block_details[].candidate_locations` includes up to 12 candidate 1-based line ranges and compact matching-line snippets; `candidate_locations_omitted` reports additional candidates. Accepted multi-block or partial results include `block_results`; applied blocks report `selection`, `replacement_count`, and `post_edit_range`/`post_edit_ranges` when they still describe the accepted content. Accepted results include `post_edit_content_hash` (SHA-256). If user edits or formatting change the accepted content, the hash follows the final content and stale proposed ranges are omitted.
+
+If a response includes both `user_edits` and `format_on_save_edits`, compose them in order: proposed content → `user_edits` → `format_on_save_edits`. If the format patch is omitted due to size, re-read the file before the next edit.
 
 ### go_to_definition
 
@@ -749,6 +1011,8 @@ Rename a symbol across the workspace using VS Code's language server. Updates al
 | `column`   | number | Column number of the symbol (1-indexed) |
 | `new_name` | string | The new name for the symbol             |
 
+On success, the result reports the old and new names, every modified file, and the total number of changes. If the language service rejects the rename, the error includes its original reason plus the targeted symbol, language, path, line, column, requested name, and suggested next steps. This makes wrong-position errors distinguishable from elements that the active language service cannot rename.
+
 ### find_and_replace
 
 Bulk find-and-replace across **multiple files**. Opens a rich preview panel showing each match in context with inline diffs — users can toggle individual matches on/off before accepting.
@@ -821,7 +1085,7 @@ Example:
 
 Close managed terminals. With no arguments, closes all terminals created by AgentLink.
 
-Use this proactively to clean up dedicated terminals you created for background/parallel work once they are no longer needed.
+Use this proactively to clean up dedicated terminals you created for background/parallel work once they are no longer needed. Recently closed terminals retain bounded output, capture metadata, and final exit status for retrieval through `get_terminal_output`; close results exclude terminals whose disposal is still pending.
 
 | Parameter | Type      | Description                                                                      |
 | --------- | --------- | -------------------------------------------------------------------------------- |
@@ -882,22 +1146,26 @@ Good examples:
 - foreground edits the core change while a background agent checks docs/browser parity/downstream call chains
 - foreground coordinates multiple independent lanes, then integrates completed results
 
-For writable background work, include explicit ownership boundaries in `message`: owned files/directories, files to avoid, allowed commands/tests, and what to do on conflicts.
+For writable background work, include explicit ownership boundaries in `message`: owned files/directories, files to avoid, allowed commands/tests, and what to do on conflicts. Delegated relative `ownedPaths`/`forbiddenPaths` are compared canonically across all open workspace roots; absolute tool paths inside those scopes are accepted, and forbidden scopes retain precedence.
 
-For review delegations, use `reviewScope` to describe the target. AgentLink captures it into an immutable snapshot when the agent is spawned, so queued reviews are not affected by later edits or commits. `working_tree` captures unstaged tracked changes and untracked files by default, with optional state and path filters; `files` captures exact current file contents; `commit_range` resolves a Git range immediately; and `diff` accepts content already captured by the caller. The `review_findings` envelope includes `reviewedScope` (what was actually reviewed) and `emptyDiff` (true when the requested scope was empty or missing).
+For review delegations, use `reviewScope` to describe the target. AgentLink captures it into an immutable snapshot when the agent is spawned, so queued reviews are not affected by later edits or commits. Relative paths resolve from the executing project, while absolute paths inside any open workspace root are accepted. `working_tree` captures unstaged tracked changes and untracked files by default, with optional state and path filters; `commit_range` resolves a Git range immediately. These Git scopes must stay within one workspace/Git root. `files` captures exact current file contents, can span roots, and is the appropriate choice for non-Git workspaces. `diff` accepts content already captured by the caller. Outside-root errors identify allowed roots and show an accepted example. The `review_findings` envelope includes `reviewedScope` (what was actually reviewed) and `emptyDiff` (true when the requested scope was empty or missing).
 
-| Parameter        | Type    | Description                                                                                                                       |
-| ---------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `task`           | string  | Short label shown in UI                                                                                                           |
-| `message`        | string  | Full instruction for the background agent, including scope boundaries for writable work                                           |
-| `mode`           | string? | Optional mode override (`code`, `architect`, `ask`, `debug`, `review`)                                                            |
-| `model`          | string? | Optional explicit model override                                                                                                  |
-| `provider`       | string? | Optional provider preference/constraint                                                                                           |
-| `taskClass`      | string? | Routing profile key (e.g. `review_code`, `review_plan`, `readonly-research`, `research`, `debug`, `explore`, `design`, `general`) |
-| `modelTier`      | string? | Optional routing tier override (`cheap`, `balanced`, `deep_reasoning`)                                                            |
-| `reviewScope`    | object? | Runtime-captured review target (`working_tree`, `files`, `commit_range`, or `diff`)                                               |
-| `expectedResult` | string? | Structured result envelope (`text`, `review_findings`, `patch`, `verification`)                                                   |
-| `budget`         | object? | Optional resource caps (`maxTokens`, `maxToolCalls`, `maxApiTurns`, `maxElapsedMs`, `maxEstimatedCostUsd`, `scope`) - see below   |
+| Parameter         | Type         | Description                                                                                                                       |
+| ----------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `task`            | string       | Short label shown in UI                                                                                                           |
+| `message`         | string       | Full instruction for the background agent, including scope boundaries for writable work                                           |
+| `mode`            | string?      | Optional mode override (`code`, `architect`, `ask`, `debug`, `review`)                                                            |
+| `model`           | string?      | Optional explicit model override                                                                                                  |
+| `provider`        | string?      | Optional provider preference/constraint                                                                                           |
+| `taskClass`       | string?      | Routing profile key (e.g. `review_code`, `review_plan`, `readonly-research`, `research`, `debug`, `explore`, `design`, `general`) |
+| `modelTier`       | string?      | Optional routing tier override (`cheap`, `balanced`, `deep_reasoning`)                                                            |
+| `imageIds`        | array?       | Specific foreground session images (`image_1`, etc.) to copy into a native background agent's first message                       |
+| `useRecentImages` | bool/number? | Copy up to 4 recent foreground images with `true`, or request a count up to 8; includes attachments and image tool results        |
+| `reviewScope`     | object?      | Runtime-captured review target (`working_tree`, `files`, `commit_range`, or `diff`)                                               |
+| `expectedResult`  | string?      | Structured result envelope (`text`, `review_findings`, `patch`, `verification`)                                                   |
+| `budget`          | object?      | Optional resource caps (`maxTokens`, `maxToolCalls`, `maxApiTurns`, `maxElapsedMs`, `maxEstimatedCostUsd`, `scope`) - see below   |
+
+Image handoff is available for native in-process background agents. It copies selected base64 image payloads into the background agent's first user turn so UI screenshots and important user-provided references can be reviewed directly. ACP and isolated-worktree backgrounds do not currently accept inline image handoff; save the image in the workspace and reference its path instead.
 
 Budgets are optional. Review task classes receive automatic complexity-based soft budgets when `budget` is omitted; other task classes run uncapped. `maxTokens` counts uncached input + output tokens summed across all API turns (cache misses charge the full context, so a large diff review typically spends 100k–300k tokens; don't cap reviews below ~100k). At `warningThresholdRatio` (default 0.8) the agent is nudged to prioritize remaining work. Reaching a cap asks the agent to finish promptly but does not block tools that are still needed for a correct result. The manager only force-stops the agent (`budget_exhausted:<kind>`) when observed usage reaches the `3×` safety backstop. Session-scoped `maxToolCalls`/`maxApiTurns` caps are also enforced inside the engine at that same hard boundary. Tool calls are tracked only after a provider response commits successfully, so interrupted or retried partial tool streams do not consume the tool budget; automatic review budgets also allow substantially more tool calls than API turns.
 
@@ -922,12 +1190,29 @@ Returns JSON with:
 - `status`, `currentTool`, `displayStatus`, `done`
 - `streamingPreview` and `progressSummary` for running sessions when available
 - `resolvedMode`, `resolvedModel`, `resolvedProvider`, `taskClass`
-- `toolCalls`, `tokenUsage`
-- `partialOutput` only when `done=true`
+- `phase`, `phaseStartedAt`, `startedAt`, `lastProgressAt`, `elapsedMs`, `idleMs`
+- `resultState` (`running`, `completed`, `incomplete_expected_result`, `failed`, `cancelled`, `budget_exhausted`, `interrupted`, or `authorization_lost`)
+- `terminalReason`, `retrySafe`, and `agentRetryable` for terminal sessions
+- `requestStartedAt`, `requestElapsedMs`, and `retryAt` while a provider request or retry is active
+- `toolCalls`, `tokenUsage`, `apiTurns`, `budget`, and `budgetUsage`
+- `canSteer` and `canKill`, so a coordinator knows which control is currently valid
+- durable `partialOutput` when `done=true` and useful output was captured
+
+`elapsedMs` is total runtime after leaving the queue; `idleMs` is the time since the latest provider, text, or tool progress event. A high elapsed time alone is not a hang. When progress has gone quiet and the partial result is already useful, steer the agent to stop using tools and return its best findings. Steering is delivered only at a safe boundary, so kill the agent if the instruction cannot be delivered and waiting is no longer worthwhile.
 
 ### get_background_result
 
-Block until a background session finishes and return its final assistant output text.
+Block until a background session finishes. Successful runs return the expected final response. Terminal runs that failed, were interrupted/cancelled, lost authorization, or omitted a required structured envelope return JSON containing:
+
+- `status`
+- `terminalReason`
+- `retrySafe` — whether calling `get_background_result` again is safe and stable
+- `agentRetryable` — whether the provider/engine classified the run itself as retryable
+- `partialOutput` when substantive output was captured before termination
+
+A valid `set_task_status` result or parsed expected-result envelope remains authoritative even if the provider disconnects immediately afterward. Required structured output such as `review_findings` cannot be reported as a clean completion when only progress prose was produced. Persisted foreground sessions automatically restore their background tree so the original parent can retrieve durable child results after reload; inactive restored trees are pruned when another foreground is selected.
+
+When a background agent returns images, `get_background_result` includes image content blocks alongside the text result. Generated images render inline in the calling chat and remain available in the background transcript. ACP image output accepts PNG, JPEG, GIF, and WebP payloads up to 10 MB each, with at most 8 images retained per result.
 
 | Parameter   | Type   | Description                             |
 | ----------- | ------ | --------------------------------------- |
@@ -941,6 +1226,15 @@ Stop a running background agent and return any partial output collected so far.
 | ----------- | ------- | ---------------------------------------------- |
 | `sessionId` | string  | Background session id to stop                  |
 | `reason`    | string? | Optional reason recorded with the cancellation |
+
+### steer_background_agent
+
+Queue a course correction for delivery at the next safe tool boundary. This cannot interrupt an in-flight provider request or tool call.
+
+| Parameter   | Type   | Description                                                                     |
+| ----------- | ------ | ------------------------------------------------------------------------------- |
+| `sessionId` | string | Background session id to steer                                                  |
+| `message`   | string | Instruction, for example: `Stop using tools and return your best findings now.` |
 
 ### set_task_status
 
@@ -995,7 +1289,7 @@ Use this for larger tasks that benefit from explicit progress tracking. During o
 
 ## Built-in MCP client tools
 
-These are available to the built-in AgentLink chat when it connects out to other MCP servers from project/global MCP config. Connected MCP servers may also request user input through MCP elicitation; URL-mode elicitations are surfaced as explicit, approval-gated browser-flow prompts in both the VS Code chat and browser gateway.
+These are available to the built-in AgentLink chat when it connects out to other MCP servers from project/global MCP config. Connected MCP servers may also request user input through MCP elicitation. Form requests use the same validated controls in VS Code chat and VS Code-backed browser sessions; URL-mode requests are surfaced as explicit, approval-gated browser-flow prompts in those surfaces. Concurrent form requests are queued and stale responses cannot resolve another request.
 
 ### find_mcp_tools
 
@@ -1022,7 +1316,7 @@ Response details:
 
 Call a tool on a connected MCP server after discovering it with `find_mcp_tools`.
 
-This uses the same approval policy as directly exposed MCP tools, including session/project/global tool or server approvals.
+This uses the same approval policy as directly exposed MCP tools, including session/project/global tool or server approvals. The response preserves MCP `structuredContent` in canonical result data, exposes it to the model when no equivalent text block exists, retains protocol metadata, and marks server-declared `isError` results as tool failures without discarding their corrective content.
 
 | Parameter | Type   | Description                                      |
 | --------- | ------ | ------------------------------------------------ |
@@ -1064,8 +1358,10 @@ Fetch a specific prompt template from an MCP server.
 AgentLink includes static routing policy for background agents (`src/agent/backgroundModelRouting.config.json`) with explainable outcomes.
 
 - **Default behavior**: non-review tasks stay on the foreground model when policy says `useForegroundModelByDefault`.
-- **Coordinator behavior**: background agents are intended for parallel lanes. Use `get_background_status` for non-blocking progress and `get_background_result` only when ready to integrate.
-- **Writable lanes**: background agents may write code/tests/docs when delegated a non-conflicting scope and remain subject to normal approval gates. Use explicit owned/forbidden paths in the spawn message.
+- **Provider admission**: streaming agent turns share a provider-aware scheduler with two active request slots per provider. Foreground requests have queue priority over background requests; status-summary requests run only when that provider is otherwise idle. Active requests are not preempted.
+- **Status summaries**: heuristic summaries are the default and make no model call. The optional `agent` and `openai` modes are traced as background-summary activity; same-provider `agent` summaries use maintenance-priority admission.
+- **Coordinator behavior**: background agents are intended for parallel lanes. Use `get_background_status` for non-blocking progress and health telemetry while continuing foreground work. Judge quiet runs by `phase` and `idleMs`, not elapsed time alone; steer a useful run to return early or kill one that is no longer worth waiting for. Use `get_background_result` only when ready to block and integrate.
+- **Writable lanes**: background agents may write code/tests/docs when delegated a non-conflicting scope and remain subject to normal approval gates. Native and ACP children inherit session-scoped write, path, command-rule, and MCP approvals from their parent at spawn; newly granted parent approvals are also added to active descendants. Child-only grants remain isolated, and revoking parent trust does not interrupt an already-running child. Use explicit owned/forbidden paths in the spawn message.
 - **Read-only lanes**: `readonly-research` routes to ask mode with the `readonly-research` tool profile for pure lookup/exploration. Both `readonly-research` and `review` profiles can run classifier-approved, non-mutating shell commands for workspace inspection.
 - **Review behavior**: review task classes (e.g. `review_code`, `review_plan`) prefer opposite-provider routing when available and use provider-specific model preferences for each tier. Balanced Anthropic reviews prefer Claude Opus 4.8 with a reduced 6,000-token thinking budget, then Sonnet 4.6 and Sonnet 5 as fallbacks; balanced Codex reviews prefer GPT-5.6 Sol. Deep Anthropic reviews use the same model order. Claude Fable 5 is foreground-only and is never routed to a background agent.
 - **Review complexity**: review spawns can explicitly set `modelTier`; otherwise review routing defaults to `balanced` for routine reviews and upgrades to `deep_reasoning` for complex reviews based on task/message heuristics.
@@ -1112,7 +1408,7 @@ Runtime behavior:
 - Additional VS Code workspace folders are passed as ACP `additionalDirectories`.
 - Client capabilities are read-only in this first implementation (`fs.readTextFile=false`, `fs.writeTextFile=false`, `terminal=false`).
 - With `readonlyOnly: true` (default), write/move/delete/execute/unknown permission requests are rejected before showing approval UI.
-- ACP text, tool status, stop reason, and final usage are mapped into AgentLink's existing background status/result UI.
+- ACP text, image content (including tool-result images), tool status, stop reason, and final usage are mapped into AgentLink's existing background status/result UI. Images are persisted in the background transcript and returned to the foreground through `get_background_result`.
 - `kill_background_agent` aborts the ACP request and terminates the subprocess.
 
 #### ACP smoke-test checklist
@@ -1172,7 +1468,7 @@ AgentLink automatically suppresses common `.agentlink` runtime artifacts from se
 
 ### get_terminal_output
 
-Get the output and status of a background or timed-out command. Use after `execute_command` with `background: true`, or after a foreground command that timed out (`timed_out: true` in the response).
+Get retained output and status for a background, detached, timed-out, completed, or recently closed command. Use after `execute_command` with `background: true`, after a foreground command that timed out (`timed_out: true`), or after the terminal UI was closed before you retrieved its final result.
 
 If you pass `kill: true`, AgentLink sends Ctrl+C to the terminal and reports whether the process was killed or had already exited.
 
@@ -1186,6 +1482,8 @@ If you pass `kill: true`, AgentLink sends Ctrl+C to the terminal and reports whe
 | `output_offset`       | number?  | Skip first N lines before applying head/tail                              |
 | `output_grep`         | string?  | Filter output to lines matching this regex                                |
 | `output_grep_context` | number?  | Context lines around each grep match                                      |
+
+Responses include `state` as `running`, `detached`, `timed_out`, `completed`, or `unknown_termination`. `exit_code: null` is reserved for commands still running or cases where VS Code never exposed a final status; numeric shell-end events and completion markers are preserved. Recently closed snapshots retain at most 40 KiB of cleaned and raw output each across the 20 most recent managed terminals.
 
 When a command is still running and the captured tail appears to include an interactive prompt, responses include `blocked_on_prompt: true` with a `prompt_hint` to distinguish likely prompt stalls from active progress.
 
@@ -1307,47 +1605,47 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 - **Workspace-scoped identity** — instance IDs are persisted per workspace window so multiple open windows remain distinct.
 - **Shared browser entry point** — the helper routes browser actions to the selected healthy VS Code instance.
 
-## Settings
+## Extension Settings
 
-| Setting                                        | Default                    | Description                                                                                                      |
-| ---------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `agentlink.browserGatewayPort`                 | `47137`                    | Stable port for the shared browser gateway helper                                                                |
-| `agentlink.browserGatewayLanAccess`            | `false`                    | Expose the browser gateway on the LAN; non-loopback devices must pair first                                      |
-| `agentlink.browserGatewayMdnsName`             | `agentlink`                | mDNS hostname advertised as `<name>.local` when LAN access is enabled                                            |
-| `agentlink.defaultMode`                        | `code`                     | Default mode for new built-in agent sessions                                                                     |
-| `agentlink.agentModel`                         | `claude-sonnet-4-6`        | Legacy fallback model for the built-in agent chat; mode defaults use `agentlink.modeModelPreferences`            |
-| `agentlink.modeModelPreferences`               | per-mode defaults          | Default model by mode slug; changing the picker in a mode updates that mode's preference                         |
-| `agentlink.modeReasoningEffortPreferences`     | `{}`                       | Default thinking level by mode slug; changing the picker in a mode updates that mode's preference                |
-| `agentlink.agentMaxTokens`                     | `8192`                     | Maximum output tokens per built-in agent response                                                                |
-| `agentlink.thinkingBudget`                     | `10000`                    | Extended thinking budget for thinking-capable models                                                             |
-| `agentlink.showThinking`                       | `true`                     | Show thinking blocks in the built-in agent chat UI                                                               |
-| `agentlink.anthropic.dynamicModelCapabilities` | `true`                     | Lazily refresh Anthropic model capabilities and merge them over built-in defaults                                |
-| `agentlink.autoCondense`                       | `true`                     | Automatically condense built-in agent conversation context when it fills up                                      |
-| `agentlink.autoCondenseThreshold`              | `0.9`                      | Legacy global condense threshold retained for migration; prefer `agentlink.modelCondenseThresholds`              |
-| `agentlink.modelCondenseThresholds`            | `{}`                       | Per-model condense thresholds for the built-in agent                                                             |
-| `agentlink.codexStatefulResponses`             | `true`                     | Chain OpenAI/Codex Responses API turns with `previous_response_id` when available                                |
-| `agentlink.codexStoreResponses`                | `false`                    | Opt into OpenAI server-side response storage for stateful Codex/API-key sessions                                 |
-| `agentlink.openaiCompatible.baseUrl`           | `http://127.0.0.1:1234/v1` | OpenAI-compatible helper endpoint for optional question detection/background summaries                           |
-| `agentlink.openaiCompatible.model`             | `""`                       | Helper endpoint model id; empty lets compatible local servers choose                                             |
-| `agentlink.openaiCompatible.apiKey`            | `""`                       | Optional helper endpoint Bearer token                                                                            |
-| `agentlink.openaiCompatible.timeoutMs`         | `5000`                     | Timeout for helper endpoint calls before falling back                                                            |
-| `agentlink.questionDetection.mode`             | `heuristic`                | How AgentLink detects idle agent questions and generates answer buttons (`heuristic`, `agent`, `openai`)         |
-| `agentlink.bgSummary.mode`                     | `agent`                    | How background-agent status snippets are summarized (`agent`, `openai`, `heuristic`)                             |
-| `agentlink.background.defaultAgent`            | `native:auto`              | Background backend: native routing or a configured ACP backend (`acp:<id>`)                                      |
-| `agentlink.background.acpAgents`               | `[]`                       | ACP stdio subprocesses available as background-agent backends                                                    |
-| `agentlink.background.maxConcurrent`           | `3`                        | Max background agents running at once (also caps per-root and per-provider concurrency); extra launches queue    |
-| `agentlink.semanticSearchEnabled`              | `false`                    | Enable semantic codebase search via Qdrant. Requires Qdrant plus OpenAI auth for embeddings                      |
-| `agentlink.qdrantUrl`                          | `http://localhost:6333`    | Qdrant vector database URL used for semantic search and indexing                                                 |
-| `agentlink.autoIndex`                          | `true`                     | Automatically index the workspace on startup when semantic search is enabled                                     |
-| `agentlink.chunkGranularity`                   | `fine`                     | Index chunking mode: `standard` or `fine`                                                                        |
-| `agentlink.indexExclusions`                    | built-in defaults          | Extra glob patterns to exclude from indexing in addition to `.gitignore`                                         |
-| `agentlink.masterBypass`                       | `false`                    | Skip all approval prompts                                                                                        |
-| `agentlink.approvalPosition`                   | `panel`                    | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel)                                |
-| `agentlink.diagnosticDelay`                    | `1500`                     | Max ms to wait for diagnostics after save                                                                        |
-| `agentlink.recentApprovalTtl`                  | `60`                       | Seconds to remember single-use approvals. Repeat identical operations auto-approve within this window. `0` = off |
-| `agentlink.commandAutoApproveTier`             | `safe`                     | Static command safety tier auto-approved when no explicit rule applies (`off`, `safe`, or `sensitive`)           |
-| `agentlink.worktreeDirectorySuffix`            | `-worktrees`               | Suffix for sibling worktree containers used by `start_worktree_agent` default paths                              |
-| `agentlink.writeRules`                         | `[]`                       | Glob patterns for auto-approved file writes (settings-level)                                                     |
+| Setting                                        | Default                    | Description                                                                                                                                 |
+| ---------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agentlink.browserGatewayPort`                 | `47137`                    | Stable port for the shared browser gateway helper                                                                                           |
+| `agentlink.browserGatewayLanAccess`            | `false`                    | Expose the browser gateway on the LAN; non-loopback devices must pair first                                                                 |
+| `agentlink.browserGatewayMdnsName`             | `agentlink`                | mDNS hostname advertised as `<name>.local` when LAN access is enabled                                                                       |
+| `agentlink.defaultMode`                        | `code`                     | Default mode for new built-in agent sessions                                                                                                |
+| `agentlink.agentModel`                         | `claude-sonnet-4-6`        | Legacy fallback model for the built-in agent chat; mode defaults use `agentlink.modeModelPreferences`                                       |
+| `agentlink.modeModelPreferences`               | per-mode defaults          | Default model by mode slug; changing the picker in a mode updates that mode's preference                                                    |
+| `agentlink.modeReasoningEffortPreferences`     | `{}`                       | Default thinking level by mode slug; changing the picker in a mode updates that mode's preference                                           |
+| `agentlink.agentMaxTokens`                     | `8192`                     | Maximum output tokens per built-in agent response                                                                                           |
+| `agentlink.thinkingBudget`                     | `10000`                    | Extended thinking budget for thinking-capable models                                                                                        |
+| `agentlink.showThinking`                       | `true`                     | Show thinking blocks in the built-in agent chat UI                                                                                          |
+| `agentlink.anthropic.dynamicModelCapabilities` | `true`                     | Lazily refresh Anthropic model capabilities and merge them over built-in defaults                                                           |
+| `agentlink.autoCondense`                       | `true`                     | Automatically condense built-in agent conversation context when it fills up                                                                 |
+| `agentlink.autoCondenseThreshold`              | `0.9`                      | Legacy global condense threshold retained for migration; prefer `agentlink.modelCondenseThresholds`                                         |
+| `agentlink.modelCondenseThresholds`            | `{}`                       | Per-model condense thresholds for the built-in agent                                                                                        |
+| `agentlink.codexStatefulResponses`             | `true`                     | Chain OpenAI/Codex Responses API turns with `previous_response_id` when available                                                           |
+| `agentlink.codexStoreResponses`                | `false`                    | Opt into OpenAI server-side response storage for stateful Codex/API-key sessions                                                            |
+| `agentlink.openaiCompatible.baseUrl`           | `http://127.0.0.1:1234/v1` | OpenAI-compatible helper endpoint for optional question detection/background summaries                                                      |
+| `agentlink.openaiCompatible.model`             | `""`                       | Helper endpoint model id; empty lets compatible local servers choose                                                                        |
+| `agentlink.openaiCompatible.apiKey`            | `""`                       | Optional helper endpoint Bearer token                                                                                                       |
+| `agentlink.openaiCompatible.timeoutMs`         | `5000`                     | Timeout for helper endpoint calls before falling back                                                                                       |
+| `agentlink.questionDetection.mode`             | `heuristic`                | How AgentLink detects idle agent questions and generates answer buttons (`heuristic`, `agent`, `openai`)                                    |
+| `agentlink.bgSummary.mode`                     | `heuristic`                | How background-agent status snippets are summarized (`heuristic`, `agent`, `openai`); model-backed modes use low-priority provider requests |
+| `agentlink.background.defaultAgent`            | `native:auto`              | Background backend: native routing or a configured ACP backend (`acp:<id>`)                                                                 |
+| `agentlink.background.acpAgents`               | `[]`                       | ACP stdio subprocesses available as background-agent backends                                                                               |
+| `agentlink.background.maxConcurrent`           | `3`                        | Max background agents running at once (also caps per-root and per-provider concurrency); extra launches queue                               |
+| `agentlink.semanticSearchEnabled`              | `false`                    | Enable semantic codebase search via Qdrant. Requires Qdrant plus OpenAI auth for embeddings                                                 |
+| `agentlink.qdrantUrl`                          | `http://localhost:6333`    | Qdrant vector database URL used for semantic search and indexing                                                                            |
+| `agentlink.autoIndex`                          | `true`                     | Automatically index the workspace on startup when semantic search is enabled                                                                |
+| `agentlink.chunkGranularity`                   | `fine`                     | Index chunking mode: `standard` or `fine`                                                                                                   |
+| `agentlink.indexExclusions`                    | built-in defaults          | Extra glob patterns to exclude from indexing in addition to `.gitignore`                                                                    |
+| `agentlink.masterBypass`                       | `false`                    | Skip all approval prompts                                                                                                                   |
+| `agentlink.approvalPosition`                   | `panel`                    | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel)                                                           |
+| `agentlink.diagnosticDelay`                    | `1500`                     | Max ms to wait for diagnostics after save                                                                                                   |
+| `agentlink.recentApprovalTtl`                  | `60`                       | Seconds to remember single-use approvals. Repeat identical operations auto-approve within this window. `0` = off                            |
+| `agentlink.commandAutoApproveTier`             | `safe`                     | Static command safety tier auto-approved when no explicit rule applies (`off`, `safe`, or `sensitive`)                                      |
+| `agentlink.worktreeDirectorySuffix`            | `-worktrees`               | Suffix for sibling worktree containers used by `start_worktree_agent` default paths                                                         |
+| `agentlink.writeRules`                         | `[]`                       | Glob patterns for auto-approved file writes (settings-level)                                                                                |
 
 ## Platform Notes
 

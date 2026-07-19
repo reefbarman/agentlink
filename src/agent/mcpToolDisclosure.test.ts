@@ -69,6 +69,34 @@ describe("partitionMcpToolsForDisclosure", () => {
     ]);
   });
 
+  it("promotes only exact forced tools from a deferred server", () => {
+    const partition = partitionMcpToolsForDisclosure(
+      [tool("searxng__search"), tool("searxng__fetch"), tool("searxng__admin")],
+      {
+        perServerTokenThreshold: 1,
+        forceInlineToolNames: ["searxng__search", "searxng__fetch"],
+      },
+    );
+
+    expect(partition.inlineTools.map((entry) => entry.name)).toEqual([
+      "searxng__search",
+      "searxng__fetch",
+    ]);
+    expect(partition.deferredTools.map((entry) => entry.name)).toEqual([
+      "searxng__admin",
+    ]);
+    expect(partition.catalog).toEqual([
+      expect.objectContaining({
+        serverName: "searxng",
+        toolCount: 3,
+        deferred: true,
+      }),
+    ]);
+    expect(buildMcpToolCatalogSection(partition.catalog)).toContain(
+      "schema tokens deferred",
+    );
+  });
+
   it("honors explicit inline and deferred server modes", () => {
     const partition = partitionMcpToolsForDisclosure(
       [tool("linear__issue"), tool("notion__page")],

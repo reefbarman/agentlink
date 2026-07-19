@@ -1,5 +1,7 @@
 import type { CoreModelContentBlock } from "../modelRuntime.js";
 import type { FinalMessageMarker } from "../../shared/finalStatus.js";
+import type { SessionTranscriptSnapshot } from "../sessionTranscriptRecall.js";
+import type { ToolCallBudget } from "./toolCallBudget.js";
 import type { ToolResult } from "../../shared/types.js";
 
 export type McpToolDisclosureMode = "inline" | "deferred" | "auto";
@@ -25,6 +27,8 @@ export interface AgentToolMode {
 export interface AgentToolListRequest {
   mode?: AgentToolMode;
   mcpToolDefs?: CoreToolDefinition[];
+  /** Native AgentLink web tools exposed for this immutable request snapshot. */
+  nativeWebToolKinds?: readonly import("../webAccess.js").CoreWebToolKind[];
   isBackground?: boolean;
   backgroundExpectedResult?:
     | "text"
@@ -68,6 +72,30 @@ export interface AgentToolExecutionContext {
   sessionId: string;
   mode?: string;
   toolProfile?: string;
+  /** Exact tool names exposed in the provider request that emitted this call. */
+  availableToolNames?: ReadonlySet<string>;
+  /** Run-scoped accounting shared by top-level and nested tool dispatch. */
+  toolCallBudget?: ToolCallBudget;
+  /** Current tool-call identity, used as the parent for nested activity. */
+  toolCallId?: string;
+  /** Parent tool call for nested activity. Undefined for model-emitted calls. */
+  parentCallId?: string;
+  /** Nested calls must not open approval/question/editor interaction UI. */
+  interactionPolicy?: "allow" | "deny";
+  onNestedToolStart?: (event: {
+    toolCallId: string;
+    parentCallId: string;
+    toolName: string;
+    input: Record<string, unknown>;
+  }) => void;
+  onNestedToolComplete?: (event: {
+    toolCallId: string;
+    parentCallId: string;
+    toolName: string;
+    input: Record<string, unknown>;
+    result: ToolResult;
+    durationMs: number;
+  }) => void;
   commandExecutionPolicy?: import("../capabilities/terminal.js").CommandExecutionPolicy;
   trackerCtx?: unknown;
   toolAbortSignal?: AbortSignal;
@@ -83,6 +111,7 @@ export interface AgentToolExecutionContext {
     | "verification";
   onCompleteTodos?: () => unknown[];
   getSessionImages?: () => SessionImageReference[];
+  getSessionTranscript?: () => SessionTranscriptSnapshot;
   pendingQuestionRecovery?: PendingQuestionRecoveryContext;
 }
 
@@ -100,6 +129,7 @@ export interface AgentToolCallTracker<TTrackerContext = unknown> {
     sessionId: string,
     forceComplete: (result: ToolResult) => void,
     inputJson?: string,
+    parentCallId?: string,
   ): TTrackerContext;
   completeAgentCall(callId: string): void;
 }

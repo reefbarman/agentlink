@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import type { ApprovalRequest } from "../approvals/webview/types.js";
+import type { McpFormElicitationRequest } from "../shared/mcpElicitation.js";
 import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
 import type { Question } from "./webview/types.js";
 
@@ -25,6 +26,8 @@ export type AgentUiEvent =
       notes: Record<string, string>;
       origin: string;
     }
+  | { type: "agentFormElicitationRequest"; request: McpFormElicitationRequest }
+  | { type: "agentFormElicitationCleared"; id: string }
   | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
   | { type: "agentUrlElicitationCleared"; id: string };
 
@@ -45,6 +48,8 @@ export interface AgentUiPublisher {
     notes: Record<string, string>;
     origin: string;
   }): void;
+  publishFormElicitationRequest(request: McpFormElicitationRequest): void;
+  publishFormElicitationCleared(id: string): void;
   publishUrlElicitationRequest(request: McpUrlElicitationRequest): void;
   publishUrlElicitationCleared(id: string): void;
 }
@@ -123,6 +128,26 @@ export class FanoutAgentUiPublisher implements AgentUiPublisher {
     }
   }
 
+  publishFormElicitationRequest(request: McpFormElicitationRequest): void {
+    for (const publisher of this.publishers) {
+      try {
+        publisher.publishFormElicitationRequest(request);
+      } catch {
+        // Keep other sinks alive even if one publisher fails.
+      }
+    }
+  }
+
+  publishFormElicitationCleared(id: string): void {
+    for (const publisher of this.publishers) {
+      try {
+        publisher.publishFormElicitationCleared(id);
+      } catch {
+        // Keep other sinks alive even if one publisher fails.
+      }
+    }
+  }
+
   publishUrlElicitationRequest(request: McpUrlElicitationRequest): void {
     for (const publisher of this.publishers) {
       try {
@@ -186,6 +211,14 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
     this.publishMessage({ type: "agentQuestionProgress", ...progress });
   }
 
+  publishFormElicitationRequest(request: McpFormElicitationRequest): void {
+    this.publishMessage({ type: "agentFormElicitationRequest", request });
+  }
+
+  publishFormElicitationCleared(id: string): void {
+    this.publishMessage({ type: "agentFormElicitationCleared", id });
+  }
+
   publishUrlElicitationRequest(request: McpUrlElicitationRequest): void {
     this.publishMessage({ type: "agentUrlElicitationRequest", request });
   }
@@ -242,6 +275,14 @@ export class InMemoryAgentUiEventHub
     origin: string;
   }): void {
     this.publish({ type: "agentQuestionProgress", ...progress });
+  }
+
+  publishFormElicitationRequest(request: McpFormElicitationRequest): void {
+    this.publish({ type: "agentFormElicitationRequest", request });
+  }
+
+  publishFormElicitationCleared(id: string): void {
+    this.publish({ type: "agentFormElicitationCleared", id });
   }
 
   publishUrlElicitationRequest(request: McpUrlElicitationRequest): void {
