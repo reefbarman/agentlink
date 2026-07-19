@@ -1,13 +1,17 @@
 import {
+  CUSTOM_TERMINAL_AVAILABLE_CONTEXT_KEY,
   CUSTOM_TERMINAL_SUPPORTED_CONTEXT_KEY,
   isCustomTerminalSupported,
 } from "./customTerminalSupport.js";
 import { describe, expect, it } from "vitest";
 
 describe("custom terminal support", () => {
-  it("uses the stable VS Code context key", () => {
+  it("uses stable support and availability context keys", () => {
     expect(CUSTOM_TERMINAL_SUPPORTED_CONTEXT_KEY).toBe(
       "agentLink.customTerminalSupported",
+    );
+    expect(CUSTOM_TERMINAL_AVAILABLE_CONTEXT_KEY).toBe(
+      "agentLink.customTerminalAvailable",
     );
   });
 

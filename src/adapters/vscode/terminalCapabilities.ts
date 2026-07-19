@@ -10,7 +10,12 @@ export function createVscodeTerminalProvider(): TerminalProvider {
     set log(value) {
       terminalManager.log = value;
     },
-    executeCommand(options) {
+    async executeCommand(options) {
+      if (options.sandboxCapabilityRequest || options.sandbox) {
+        throw new Error(
+          "Sandbox capability requests cannot run in the native VS Code terminal provider.",
+        );
+      }
       return terminalManager.executeCommand(options);
     },
     getBackgroundState(terminalId) {

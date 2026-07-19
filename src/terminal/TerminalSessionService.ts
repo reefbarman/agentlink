@@ -260,6 +260,14 @@ export class TerminalSessionService implements HostPtyDisposable {
     return true;
   }
 
+  pauseOutput(terminalId: string): boolean {
+    const managed = this.getRunning(terminalId);
+    if (!managed || managed.outputPaused) return false;
+    managed.pty.pause();
+    managed.outputPaused = true;
+    return true;
+  }
+
   resumeOutput(terminalId: string): boolean {
     const managed = this.getRunning(terminalId);
     if (!managed || !managed.outputPaused) return false;

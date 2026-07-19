@@ -1,9 +1,10 @@
-import { chmod, cp, mkdir, rm, stat } from "node:fs/promises";
+import { chmod, cp, mkdir, readdir, rm, stat } from "node:fs/promises";
 
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const HELPER_FILES = [
+  "sandbox-interactive-helper.mjs",
   "sandbox-network-policy.mjs",
   "sandbox-network-proxy.mjs",
   "sandbox-process-reaper.mjs",
@@ -88,6 +89,39 @@ export const SANDBOX_RUNTIME_STAGE_PATHS = [
   ...PACKAGE_ENTRIES.map((entry) => entry.destination),
 ];
 
+async function pruneNonRuntimeFiles(destinationRoot) {
+  await rm(
+    path.join(
+      destinationRoot,
+      "node_modules/@anthropic-ai/sandbox-runtime/node_modules/zod/src",
+    ),
+    { recursive: true, force: true },
+  );
+
+  const nodePtyLib = path.join(destinationRoot, "node_modules/node-pty/lib");
+  let nodePtyLibMetadata;
+  try {
+    nodePtyLibMetadata = await stat(nodePtyLib);
+  } catch (error) {
+    throw new Error(
+      `staged node-pty runtime directory is missing: ${nodePtyLib}`,
+      {
+        cause: error,
+      },
+    );
+  }
+  if (!nodePtyLibMetadata.isDirectory()) {
+    throw new Error(
+      `staged node-pty runtime path is not a directory: ${nodePtyLib}`,
+    );
+  }
+  for (const entry of await readdir(nodePtyLib)) {
+    if (entry.endsWith(".test.js") || entry.endsWith(".test.js.map")) {
+      await rm(path.join(nodePtyLib, entry), { force: true });
+    }
+  }
+}
+
 async function copyEntry(source, destination) {
   await mkdir(path.dirname(destination), { recursive: true });
   await cp(source, destination, {
@@ -116,6 +150,7 @@ export async function stageSandboxRuntime({
       path.join(destinationRoot, entry.destination),
     );
   }
+  await pruneNonRuntimeFiles(destinationRoot);
 
   const spawnHelpers = ["darwin-arm64", "darwin-x64"].map((architecture) =>
     path.join(

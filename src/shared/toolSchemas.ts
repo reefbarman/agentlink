@@ -474,7 +474,7 @@ export const executeCommandSchema = {
     .string()
     .optional()
     .describe(
-      "Run in a named terminal, creating it if needed. Only set this when you intentionally need a separate terminal (parallel/background work or temporary environment isolation).",
+      "Run in a named terminal, creating it if needed. Use a short purpose-based name (for example, 'Dev server', 'Unit tests', or 'Build') when intentionally creating a separate terminal for parallel/background work or temporary environment isolation.",
     ),
   split_from: z
     .string()
@@ -500,6 +500,7 @@ export const executeCommandSchema = {
     .describe(
       'Environment variables to set for this command (e.g. {"CI":"1"}). Merged with the terminal\'s base execution environment.',
     ),
+
   files: z
     .array(
       z.object({

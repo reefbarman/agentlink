@@ -107,7 +107,7 @@ import {
   createVscodeStructuralGraphProvider,
   createVscodeWorkspaceFileProvider,
 } from "../adapters/vscode/readSearchCapabilities.js";
-import { createVscodeTerminalProvider } from "../adapters/vscode/terminalCapabilities.js";
+
 import { createVscodeWorktreeAgentLaunchProvider } from "../adapters/vscode/worktreeAgentLaunchCapabilities.js";
 import { getConfiguredDiagnosticDelay } from "../adapters/vscode/agentLinkConfig.js";
 import { handleLoadRule } from "../tools/loadRule.js";
@@ -2363,8 +2363,7 @@ export async function dispatchToolCall(
         sessionId,
         trackerCtx,
         {
-          terminalProvider:
-            ctx.terminalProvider ?? createVscodeTerminalProvider(),
+          terminalProvider: ctx.terminalProvider,
           getCommandApprovalPolicy: ctx.getCommandApprovalPolicy,
           commandApprovalReviewer: ctx.commandApprovalReviewer,
           isSessionActive: ctx.isSessionActive,
@@ -2378,13 +2377,11 @@ export async function dispatchToolCall(
       );
     case "get_terminal_output":
       return handleGetTerminalOutput(params, {
-        terminalProvider:
-          ctx.terminalProvider ?? createVscodeTerminalProvider(),
+        terminalProvider: ctx.terminalProvider,
       });
     case "close_terminals":
       return handleCloseTerminals(params, {
-        terminalProvider:
-          ctx.terminalProvider ?? createVscodeTerminalProvider(),
+        terminalProvider: ctx.terminalProvider,
       });
     case "start_worktree_agent": {
       const worktreeAgentLaunchProvider =

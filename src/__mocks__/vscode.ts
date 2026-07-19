@@ -80,6 +80,10 @@ export const extensions = {
 export const Uri = {
   file: (path: string) => ({ fsPath: path, scheme: "file", path }),
   parse: (uri: string) => ({ fsPath: uri, scheme: "file", path: uri }),
+  joinPath: (base: { fsPath: string; path: string }, ...segments: string[]) => {
+    const joined = [base.path.replace(/\/$/, ""), ...segments].join("/");
+    return { fsPath: joined, scheme: "file", path: joined };
+  },
 };
 
 export const ThemeIcon = class {

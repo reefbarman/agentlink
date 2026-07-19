@@ -362,6 +362,7 @@ export function CommandCard({
   const reason = request.reason;
   const commandReview = request.commandReview;
   const humanOnlyReason = request.humanOnlyReason;
+  const security = request.security;
   const inlineFiles = request.inlineFiles ?? [];
 
   return (
@@ -378,6 +379,30 @@ export function CommandCard({
       onReject={handleReject}
       followUpRef={followUpRef}
     >
+      {security && (
+        <div
+          class={`command-security ${security.route === "sandbox" ? "verified" : "native"}`}
+        >
+          <span
+            class={`codicon ${security.route === "sandbox" ? "codicon-shield" : "codicon-warning"}`}
+          />
+          <div>
+            <div class="command-security-heading">
+              {security.route === "sandbox"
+                ? "Verified Sandbox"
+                : "Native Terminal (unsandboxed)"}
+            </div>
+            <div>
+              {security.route === "sandbox"
+                ? `Workspace writes allowed · protected metadata read-only · private HOME/TMP · network blocked${security.sandbox ? ` · ${security.sandbox.backend}/${security.sandbox.profileId}` : ""}`
+                : `Normal terminal permissions · ${security.routeReason.replaceAll("-", " ")}`}
+            </div>
+            {isEdited && (
+              <div>Edited command will be re-prepared before execution.</div>
+            )}
+          </div>
+        </div>
+      )}
       {reason && (
         <div class="command-reason">
           <span class="codicon codicon-info" />

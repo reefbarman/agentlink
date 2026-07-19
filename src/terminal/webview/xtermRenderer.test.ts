@@ -1,0 +1,332 @@
+/** @vitest-environment jsdom */
+
+import {
+  Terminal,
+  type IBufferCell,
+  type IBufferLine,
+  type ILinkProvider,
+  type IMarker,
+} from "@xterm/xterm";
+import { describe, expect, it, vi } from "vitest";
+
+import type { TerminalRendererCallbacks } from "./terminalWebviewController.js";
+import {
+  detectTerminalHttpLinks,
+  interceptTerminalInputTransfer,
+  registerTerminalOscDefenses,
+  SUPPRESSED_TERMINAL_OSC_HANDLERS,
+  XTERM_ADDON_OSC_HANDLERS,
+  XTERM_CORE_OSC_HANDLERS,
+  xtermRendererFactory,
+} from "./xtermRenderer.js";
+import { MAX_TERMINAL_LINK_BYTES } from "../terminalSurfaceProtocol.js";
+
+function bufferLine(
+  cells: readonly { characters: string; width?: number }[],
+): IBufferLine {
+  return {
+    isWrapped: false,
+    length: cells.reduce((length, cell) => length + (cell.width ?? 1), 0),
+    getCell: vi.fn((column: number) => {
+      let cellColumn = 0;
+      for (const cell of cells) {
+        const width = cell.width ?? 1;
+        if (column === cellColumn) {
+          return {
+            getChars: () => cell.characters,
+            getWidth: () => width,
+          } as IBufferCell;
+        }
+        if (column > cellColumn && column < cellColumn + width) {
+          return {
+            getChars: () => "",
+            getWidth: () => 0,
+          } as IBufferCell;
+        }
+        cellColumn += width;
+      }
+      return undefined;
+    }),
+    translateToString: vi.fn(),
+  };
+}
+
+function lineFromText(text: string): IBufferLine {
+  return bufferLine([...text].map((characters) => ({ characters })));
+}
+
+function writeTerminal(terminal: Terminal, data: string): Promise<void> {
+  return new Promise((resolve) => terminal.write(data, resolve));
+}
+
+function callbacks(onBlockAnchorDisposed = vi.fn()): TerminalRendererCallbacks {
+  return {
+    ariaLabel: "Test terminal",
+    onBlockAnchorDisposed,
+    onData: vi.fn(),
+    onLink: vi.fn(),
+    onPaste: vi.fn(),
+  };
+}
+
+describe("detectTerminalHttpLinks", () => {
+  it("finds bounded http links and trims sentence punctuation", () => {
+    const onLink = vi.fn();
+    const links = detectTerminalHttpLinks(
+      lineFromText(
+        "See https://example.com/path?q=1, then HTTP://example.org/docs).",
+      ),
+      4,
+      80,
+      onLink,
+    );
+
+    expect(links.map(({ text, range }) => ({ text, range }))).toEqual([
+      {
+        text: "https://example.com/path?q=1",
+        range: { start: { x: 5, y: 4 }, end: { x: 32, y: 4 } },
+      },
+      {
+        text: "HTTP://example.org/docs",
+        range: { start: { x: 40, y: 4 }, end: { x: 62, y: 4 } },
+      },
+    ]);
+    links[0].activate(new MouseEvent("click"), links[0].text);
+    expect(onLink).toHaveBeenCalledWith("https://example.com/path?q=1");
+  });
+
+  it("maps string matches to xterm cells after wide and combined characters", () => {
+    const links = detectTerminalHttpLinks(
+      bufferLine([
+        { characters: "界", width: 2 },
+        { characters: "e\u0301" },
+        { characters: " " },
+        ...[..."https://example.com"].map((characters) => ({ characters })),
+      ]),
+      2,
+      80,
+      vi.fn(),
+    );
+
+    expect(links[0].range).toEqual({
+      start: { x: 5, y: 2 },
+      end: { x: 23, y: 2 },
+    });
+  });
+
+  it("rejects unsupported, embedded, malformed, and over-limit candidates", () => {
+    const overLimit = `https://example.com/${"x".repeat(MAX_TERMINAL_LINK_BYTES)}`;
+    const links = detectTerminalHttpLinks(
+      lineFromText(
+        [
+          "file:///etc/passwd",
+          "javascript:https://example.com/embedded",
+          "https://[invalid",
+          overLimit,
+          "https://safe.example/path_(one)",
+        ].join(" "),
+      ),
+      1,
+      20_000,
+      vi.fn(),
+    );
+
+    expect(links.map((link) => link.text)).toEqual([
+      "https://safe.example/path_(one)",
+    ]);
+  });
+});
+
+describe("terminal OSC defenses", () => {
+  it("pins the audited xterm core, addon, and suppressed OSC inventories", () => {
+    expect(XTERM_CORE_OSC_HANDLERS).toEqual([
+      0, 1, 2, 4, 8, 10, 11, 12, 104, 110, 111, 112,
+    ]);
+    expect(XTERM_ADDON_OSC_HANDLERS).toEqual([]);
+    expect(SUPPRESSED_TERMINAL_OSC_HANDLERS).toEqual([9, 52, 697, 777, 1337]);
+  });
+
+  it("consumes host-effect OSC before earlier xterm handlers can act", async () => {
+    const terminal = new Terminal();
+    const privilegedHandlers = new Map<number, ReturnType<typeof vi.fn>>();
+    for (const command of SUPPRESSED_TERMINAL_OSC_HANDLERS) {
+      const handler = vi.fn(() => true);
+      privilegedHandlers.set(command, handler);
+      terminal.parser.registerOscHandler(command, handler);
+    }
+    const defenses = registerTerminalOscDefenses(terminal);
+
+    await writeTerminal(
+      terminal,
+      [
+        "\x1b]9;notification\x07",
+        "\x1b]52;c;c2VjcmV0\x1b\\",
+        "\x1b]697;AgentLink;foreign;A\x07",
+        "\x9d777;notify;title;body\x9c",
+        "\x1b]1337;File=name=test:data\x07",
+      ].join(""),
+    );
+
+    for (const handler of privilegedHandlers.values()) {
+      expect(handler).not.toHaveBeenCalled();
+    }
+    defenses.dispose();
+    terminal.dispose();
+  });
+
+  it("allows non-notification OSC 9 controls to fall through", async () => {
+    const terminal = new Terminal();
+    const earlierHandler = vi.fn(() => true);
+    terminal.parser.registerOscHandler(9, earlierHandler);
+    const defenses = registerTerminalOscDefenses(terminal);
+
+    await writeTerminal(terminal, "\x1b]9;4;1;50\x07\x1b]9;9;/workspace\x1b\\");
+
+    expect(earlierHandler).toHaveBeenNthCalledWith(1, "4;1;50");
+    expect(earlierHandler).toHaveBeenNthCalledWith(2, "9;/workspace");
+    defenses.dispose();
+    terminal.dispose();
+  });
+
+  it("removes all consuming handlers when the renderer defense is disposed", async () => {
+    const terminal = new Terminal();
+    const earlierHandler = vi.fn(() => true);
+    terminal.parser.registerOscHandler(52, earlierHandler);
+    const defenses = registerTerminalOscDefenses(terminal);
+    defenses.dispose();
+
+    await writeTerminal(terminal, "\x1b]52;c;c2VjcmV0\x07");
+
+    expect(earlierHandler).toHaveBeenCalledWith("c;c2VjcmV0");
+    terminal.dispose();
+  });
+});
+
+describe("xtermRendererFactory", () => {
+  it("registers the stable http link provider and disposes it with the renderer", () => {
+    let provider: ILinkProvider | undefined;
+    const dispose = vi.fn();
+    const registerLinkProvider = vi
+      .spyOn(Terminal.prototype, "registerLinkProvider")
+      .mockImplementation((value) => {
+        provider = value;
+        return { dispose };
+      });
+    const rendererCallbacks = callbacks();
+    const renderer = xtermRendererFactory.create(
+      { scrollback: 1000 },
+      rendererCallbacks,
+    );
+
+    expect(registerLinkProvider).toHaveBeenCalledOnce();
+    expect(provider).toBeDefined();
+    renderer.dispose();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("registers stable block markers once and prunes them to host-retained IDs", () => {
+    let disposeListener: (() => void) | undefined;
+    const marker = {
+      id: 1,
+      line: 0,
+      isDisposed: false,
+      onDispose: vi.fn((listener: () => void) => {
+        disposeListener = listener;
+        return { dispose: vi.fn() };
+      }),
+      dispose: vi.fn(() => disposeListener?.()),
+    } as unknown as IMarker;
+    const registerMarker = vi
+      .spyOn(Terminal.prototype, "registerMarker")
+      .mockReturnValue(marker);
+    const onBlockAnchorDisposed = vi.fn();
+    const renderer = xtermRendererFactory.create(
+      { scrollback: 1000 },
+      callbacks(onBlockAnchorDisposed),
+    );
+
+    expect(renderer.registerBlockBoundary("block-1", "command-start")).toBe(
+      true,
+    );
+    expect(renderer.registerBlockBoundary("block-1", "command-end")).toBe(true);
+    expect(registerMarker).toHaveBeenCalledTimes(1);
+
+    renderer.retainBlockAnchors(new Set());
+    expect(marker.dispose).toHaveBeenCalledOnce();
+    expect(onBlockAnchorDisposed).not.toHaveBeenCalled();
+    renderer.dispose();
+  });
+
+  it("notifies the controller when xterm scrollback disposes a live marker", () => {
+    let disposeListener: (() => void) | undefined;
+    const marker = {
+      id: 1,
+      line: 0,
+      isDisposed: false,
+      onDispose: vi.fn((listener: () => void) => {
+        disposeListener = listener;
+        return { dispose: vi.fn() };
+      }),
+      dispose: vi.fn(),
+    } as unknown as IMarker;
+    vi.spyOn(Terminal.prototype, "registerMarker").mockReturnValue(marker);
+    const onBlockAnchorDisposed = vi.fn();
+    const renderer = xtermRendererFactory.create(
+      { scrollback: 1000 },
+      callbacks(onBlockAnchorDisposed),
+    );
+    renderer.registerBlockBoundary("block-1", "command-start");
+
+    disposeListener?.();
+
+    expect(onBlockAnchorDisposed).toHaveBeenCalledWith("block-1");
+    renderer.dispose();
+  });
+});
+
+describe("interceptTerminalInputTransfer", () => {
+  it("stops native paste before later xterm handlers and removes itself on abort", () => {
+    const container = document.createElement("div");
+    const onPaste = vi.fn();
+    const laterHandler = vi.fn();
+    const abortController = new AbortController();
+    interceptTerminalInputTransfer(container, onPaste, abortController.signal);
+    container.addEventListener("paste", laterHandler);
+
+    const intercepted = new Event("paste", { bubbles: true, cancelable: true });
+    container.dispatchEvent(intercepted);
+
+    expect(intercepted.defaultPrevented).toBe(true);
+    expect(onPaste).toHaveBeenCalledTimes(1);
+    expect(laterHandler).not.toHaveBeenCalled();
+
+    abortController.abort();
+    const afterAbort = new Event("paste", { bubbles: true, cancelable: true });
+    container.dispatchEvent(afterAbort);
+    expect(onPaste).toHaveBeenCalledTimes(1);
+    expect(laterHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["dragover", "drop"])(
+    "blocks native %s input without reading clipboard data",
+    (eventType) => {
+      const container = document.createElement("div");
+      const onPaste = vi.fn();
+      const laterHandler = vi.fn();
+      const abortController = new AbortController();
+      interceptTerminalInputTransfer(
+        container,
+        onPaste,
+        abortController.signal,
+      );
+      container.addEventListener(eventType, laterHandler);
+
+      const event = new Event(eventType, { bubbles: true, cancelable: true });
+      container.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(onPaste).not.toHaveBeenCalled();
+      expect(laterHandler).not.toHaveBeenCalled();
+    },
+  );
+});

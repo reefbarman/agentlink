@@ -21,6 +21,10 @@ import {
 } from "./approvals/commandApprovalReview.js";
 import { AgentToolCallTracker } from "./agent/AgentToolCallTracker.js";
 import { registerAgentActivityCommands } from "./agent/agentActivityCommands.js";
+import {
+  openDefaultAgentViewOnce,
+  registerAgentWorkbenchLayout,
+} from "./agent/workbenchLayout.js";
 import { normalizeBackgroundMaxConcurrent } from "./agent/background/backgroundConcurrency.js";
 import { addTrustedCommandViaUi } from "./agent/trustedCommandFlow.js";
 import { registerCodexAuthCommands } from "./agent/codexAuthCommands.js";
@@ -82,10 +86,35 @@ import {
   createToolUsageTelemetry,
   type ToolUsageTelemetry,
 } from "./telemetry/ToolUsageTelemetry.js";
+import { createVscodeTerminalProvider } from "./adapters/vscode/terminalCapabilities.js";
+import { AgentTerminalViewProvider } from "./terminal/AgentTerminalViewProvider.js";
+import { createDeferredNodePtyLoader } from "./terminal/deferredNodePtyLoader.js";
+import { LiveHostTerminalSurfaceController } from "./terminal/LiveHostTerminalSurfaceController.js";
+import { Phase1HostTerminalCoordinator } from "./terminal/Phase1HostTerminalCoordinator.js";
 import {
-  CUSTOM_TERMINAL_SUPPORTED_CONTEXT_KEY,
-  isCustomTerminalSupported,
-} from "./terminal/customTerminalSupport.js";
+  AgentTerminalProviderRouter,
+  type SandboxPreparationAvailability,
+} from "./terminal/sandbox/AgentTerminalProviderRouter.js";
+import { BaselineSandboxLaunchAuthorizer } from "./terminal/sandbox/BaselineSandboxLaunchAuthorizer.js";
+import { SandboxHelperClient } from "./terminal/sandbox/SandboxHelperClient.js";
+import { createNodeSandboxHelperTransportFactory } from "./terminal/sandbox/NodeSandboxHelperTransport.js";
+import { SandboxTerminalChannelHub } from "./terminal/sandbox/SandboxTerminalChannelHub.js";
+import { SandboxTerminalCoordinator } from "./terminal/sandbox/SandboxTerminalCoordinator.js";
+import { SandboxBehaviorAttestationService } from "./terminal/sandbox/SandboxBehaviorAttestationService.js";
+import {
+  createProductionSandboxBehaviorProbe,
+  createProductionSandboxRuntimeFingerprint,
+} from "./terminal/sandbox/ProductionSandboxBehaviorProbe.js";
+import {
+  resolveSandboxNodeRuntime,
+  SandboxNodeRuntimeUnavailableError,
+  type ResolvedSandboxNodeRuntime,
+} from "./terminal/sandbox/sandboxNodeRuntime.js";
+import {
+  readVscodeTerminalConfigurationSnapshot,
+  readVscodeTerminalSurfaceConfiguration,
+  resolveVscodeTerminalCreateRequest,
+} from "./terminal/vscodeTerminalConfiguration.js";
 
 const BROWSER_GATEWAY_HEALTH_CHECK_INTERVAL_MS = 30_000;
 
@@ -240,19 +269,199 @@ export function activate(context: vscode.ExtensionContext): void {
   outputChannel = vscode.window.createOutputChannel("AgentLink");
   context.subscriptions.push(outputChannel);
 
-  const customTerminalSupported = isCustomTerminalSupported({
-    platform: process.platform,
-    remoteName: vscode.env.remoteName,
+  let agentTerminalViewProvider: AgentTerminalViewProvider | undefined;
+  const sandboxTerminalChannelHub = new SandboxTerminalChannelHub({
+    onAgentCommandStarted: () => {
+      if (agentTerminalViewProvider?.isVisible()) return;
+      void vscode.commands
+        .executeCommand(`${AgentTerminalViewProvider.viewType}.focus`)
+        .then(undefined, (error) =>
+          log(`Unable to reveal AgentLink Terminal: ${String(error)}`),
+        );
+    },
+    onCallbackError: (error) =>
+      log(`Unable to reveal AgentLink Terminal: ${String(error)}`),
   });
-  void vscode.commands
-    .executeCommand(
-      "setContext",
-      CUSTOM_TERMINAL_SUPPORTED_CONTEXT_KEY,
-      customTerminalSupported,
-    )
-    .then(undefined, (error: unknown) => {
-      log(`Failed to publish custom terminal support: ${String(error)}`);
-    });
+  let resolvedSandboxNodeRuntime: ResolvedSandboxNodeRuntime | undefined;
+  let sandboxBehaviorAttestationService:
+    | SandboxBehaviorAttestationService
+    | undefined;
+  let sandboxNodeRuntimePromise:
+    | Promise<ResolvedSandboxNodeRuntime>
+    | undefined;
+  let agentTerminalProvider: AgentTerminalProviderRouter | undefined;
+  let hostTerminalCoordinator!: Phase1HostTerminalCoordinator;
+  let sandboxRuntimeWarning: string | undefined;
+  const resetSandboxNodeRuntime = () => {
+    resolvedSandboxNodeRuntime = undefined;
+    sandboxNodeRuntimePromise = undefined;
+    sandboxRuntimeWarning = undefined;
+    sandboxBehaviorAttestationService?.dispose();
+    sandboxBehaviorAttestationService = undefined;
+  };
+  const ensureSandboxNodeRuntime = () => {
+    if (!sandboxNodeRuntimePromise) {
+      sandboxNodeRuntimePromise = resolveSandboxNodeRuntime({
+        extensionRoot: context.extensionPath,
+        configuredPath: vscode.workspace
+          .getConfiguration("agentlink")
+          .get<string>("terminal.nodePath", ""),
+        environmentPath: process.env.PATH,
+      }).then((runtime) => {
+        resolvedSandboxNodeRuntime = runtime;
+        log(
+          `[sandbox-terminal] Using standalone Node runtime ${runtime.executable} (${runtime.source})`,
+        );
+        return runtime;
+      });
+      void sandboxNodeRuntimePromise.catch(() => undefined);
+    }
+    return sandboxNodeRuntimePromise;
+  };
+  const showSandboxRuntimeUnavailable = async (error: Error) => {
+    if (sandboxRuntimeWarning === error.message) return;
+    sandboxRuntimeWarning = error.message;
+    const dependencyFailure =
+      error instanceof SandboxNodeRuntimeUnavailableError;
+    if (dependencyFailure) {
+      for (const attempt of error.attempts) {
+        log(`[sandbox-terminal] Runtime candidate rejected: ${attempt}`);
+      }
+    }
+    const actions = dependencyFailure
+      ? (["Configure Node Path", "Install Node.js", "Retry"] as const)
+      : (["Show Logs", "Retry"] as const);
+    const action = await vscode.window.showWarningMessage(
+      `${error.message} AgentLink Terminal is disabled and agent commands will use VS Code's native terminal.`,
+      ...actions,
+    );
+    if (action === "Configure Node Path") {
+      await vscode.commands.executeCommand(
+        "workbench.action.openSettings",
+        "agentlink.terminal.nodePath",
+      );
+    } else if (action === "Install Node.js") {
+      await vscode.env.openExternal(
+        vscode.Uri.parse("https://nodejs.org/en/download"),
+      );
+    } else if (action === "Show Logs") {
+      outputChannel.show(true);
+    } else if (action === "Retry") {
+      resetSandboxNodeRuntime();
+      agentTerminalProvider?.refresh();
+      void hostTerminalCoordinator.refresh();
+    }
+  };
+  hostTerminalCoordinator = new Phase1HostTerminalCoordinator({
+    getHost: () => ({
+      platform: process.platform,
+      remoteName: vscode.env.remoteName,
+    }),
+    isEnabled: () =>
+      vscode.workspace
+        .getConfiguration("agentlink")
+        .get<boolean>("terminal.enabled", true),
+    setContext: (key, value) =>
+      vscode.commands.executeCommand("setContext", key, value),
+    subscribeEnabledChanges: (listener) =>
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (
+          event.affectsConfiguration("agentlink.terminal.enabled") ||
+          event.affectsConfiguration("agentlink.terminal.nodePath")
+        ) {
+          resetSandboxNodeRuntime();
+          listener();
+        }
+      }),
+    createRuntime: async () => {
+      await ensureSandboxNodeRuntime();
+      const controller = new LiveHostTerminalSurfaceController({
+        host: {
+          platform: process.platform,
+          remoteName: vscode.env.remoteName,
+        },
+        runtimeRoot: path.join(
+          context.globalStorageUri.fsPath,
+          "host-terminal-bootstrap",
+        ),
+        nodePtyLoader: createDeferredNodePtyLoader({
+          extensionRoot: context.extensionPath,
+        }),
+        getConfigurationSnapshot: ({ cwd, profileName }) =>
+          readVscodeTerminalConfigurationSnapshot({
+            requestedCwd: cwd,
+            selectedProfileName: profileName,
+          }),
+        getSurfaceConfiguration: readVscodeTerminalSurfaceConfiguration,
+        isAcceptingRequests: () => hostTerminalCoordinator.isAcceptingRequests,
+        createId: randomUUID,
+        openExternal: (url) => vscode.env.openExternal(vscode.Uri.parse(url)),
+        openNativeTerminal: () => {
+          vscode.window.createTerminal().show();
+        },
+        readClipboard: () => vscode.env.clipboard.readText(),
+        writeClipboard: (text) => vscode.env.clipboard.writeText(text),
+        sandboxChannelHub: sandboxTerminalChannelHub,
+        log,
+      });
+      const provider = new AgentTerminalViewProvider({
+        controller,
+        extensionUri: context.extensionUri,
+        resolveCreateRequest: resolveVscodeTerminalCreateRequest,
+      });
+      agentTerminalViewProvider = provider;
+      try {
+        const registration = vscode.window.registerWebviewViewProvider(
+          AgentTerminalViewProvider.viewType,
+          provider,
+          { webviewOptions: { retainContextWhenHidden: true } },
+        );
+        const configurationSubscription =
+          vscode.workspace.onDidChangeConfiguration((event) => {
+            if (
+              [
+                "fontFamily",
+                "fontSize",
+                "lineHeight",
+                "letterSpacing",
+                "cursorStyle",
+                "cursorBlinking",
+                "scrollback",
+              ].some((key) =>
+                event.affectsConfiguration(`terminal.integrated.${key}`),
+              ) ||
+              event.affectsConfiguration("editor.accessibilitySupport")
+            ) {
+              controller.updateConfiguration(
+                readVscodeTerminalSurfaceConfiguration(),
+              );
+            }
+          });
+        return {
+          dispose: () => {
+            if (agentTerminalViewProvider === provider) {
+              agentTerminalViewProvider = undefined;
+            }
+            controller.dispose();
+            configurationSubscription.dispose();
+            registration.dispose();
+            provider.dispose();
+          },
+        };
+      } catch (error) {
+        if (agentTerminalViewProvider === provider) {
+          agentTerminalViewProvider = undefined;
+        }
+        controller.dispose();
+        provider.dispose();
+        throw error;
+      }
+    },
+    onRuntimeUnavailable: showSandboxRuntimeUnavailable,
+    log,
+  });
+  context.subscriptions.push(hostTerminalCoordinator);
+  hostTerminalCoordinator.start();
 
   initializeTerminalManager(context.extensionUri, log);
 
@@ -310,18 +519,13 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBarManager = new StatusBarManager();
   context.subscriptions.push(statusBarManager);
 
-  // Approval panel (WebView-based approval UI for commands and path access)
+  // External-agent approvals use the split-editor presentation. Built-in agent
+  // approvals are forwarded into chat through builtinApprovalPanel below.
   approvalPanel = new ApprovalPanelProvider(
     context.extensionUri,
     statusBarManager,
   );
   context.subscriptions.push(approvalPanel);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(
-      ApprovalPanelProvider.viewType,
-      approvalPanel,
-    ),
-  );
 
   // Sidebar
   sidebarProvider = new SidebarProvider(context.extensionUri, log, () =>
@@ -344,6 +548,142 @@ export function activate(context: vscode.ExtensionContext): void {
     fallbackCwd: process.cwd(),
   });
   const workspaceCwd = workspaceSessionLocation.cwd;
+  agentTerminalProvider = new AgentTerminalProviderRouter({
+    isEnabled: () =>
+      vscode.workspace
+        .getConfiguration("agentlink")
+        .get<boolean>("terminal.enabled", true),
+    getHost: () => ({
+      platform: process.platform,
+      remoteName: vscode.env.remoteName,
+      workspaceTrusted: vscode.workspace.isTrusted,
+    }),
+    createNativeProvider: createVscodeTerminalProvider,
+    getSandboxAvailability:
+      async (): Promise<SandboxPreparationAvailability> => {
+        let runtime: ResolvedSandboxNodeRuntime;
+        try {
+          runtime = await ensureSandboxNodeRuntime();
+        } catch (error) {
+          log(
+            `[sandbox-terminal] Using native terminal fallback before sandbox selection: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return {
+            status: "runtime-unavailable",
+            detail: error instanceof Error ? error.message : String(error),
+          };
+        }
+        try {
+          sandboxBehaviorAttestationService ??=
+            new SandboxBehaviorAttestationService({
+              probe: createProductionSandboxBehaviorProbe({
+                extensionRoot: context.extensionPath,
+                nodeExecutable: runtime.executable,
+              }),
+            });
+          const fingerprint = await createProductionSandboxRuntimeFingerprint({
+            extensionRoot: context.extensionPath,
+            extensionVersion: extVersion,
+            nodeExecutable: runtime.executable,
+          });
+          const attestation =
+            await sandboxBehaviorAttestationService.attest(fingerprint);
+          if (!attestation.verified) {
+            log(
+              `[sandbox-terminal] Behavioral attestation failed closed: ${attestation.failureCode}`,
+            );
+            return { status: "failed", detail: attestation.failureCode };
+          }
+          return {
+            status: "verified",
+            attestation: {
+              attestationId: attestation.summary.attestationId,
+              attestationVersion: attestation.summary.attestationVersion,
+              policyVersion: attestation.summary.metadata.policyVersion,
+              profileId: attestation.summary.metadata.profileId,
+              backend: "seatbelt",
+              architecture: attestation.summary.metadata.architecture,
+              capabilities: {
+                backend: "seatbelt",
+                processTree: true,
+                filesystemRead: "isolated",
+                filesystemWrite: "strict",
+                network: "blocked",
+                privateHome: true,
+                privateTmp: true,
+                hostIpcBlocked: true,
+                resourceLimits: "partial",
+                warnings: [
+                  "CPU, memory, process-count, and disk quotas are not fully enforced.",
+                ],
+              },
+            },
+          };
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          log(
+            `[sandbox-terminal] Behavioral attestation failed closed: ${detail}`,
+          );
+          return { status: "failed", detail };
+        }
+      },
+    recordExecutionAudit: (event) =>
+      log(`[terminal-security-audit] ${JSON.stringify(event)}`),
+    createSandboxProvider: () => {
+      if (!resolvedSandboxNodeRuntime) {
+        throw new Error(
+          "Sandbox Node runtime was not resolved before provider creation",
+        );
+      }
+      const workspaceRoots = (vscode.workspace.workspaceFolders ?? [])
+        .filter((folder) => folder.uri.scheme === "file")
+        .map((folder) => folder.uri.fsPath);
+      const runtime = new SandboxHelperClient(
+        createNodeSandboxHelperTransportFactory({
+          extensionRoot: context.extensionPath,
+          nodeExecutable: resolvedSandboxNodeRuntime.executable,
+        }),
+      );
+      try {
+        const coordinator = new SandboxTerminalCoordinator({
+          runtime,
+          authorizer: new BaselineSandboxLaunchAuthorizer({
+            workspaceRoots,
+            trustedRuntimeRoots: [
+              path.dirname(resolvedSandboxNodeRuntime.executable),
+            ],
+          }),
+          initialCwd: workspaceCwd,
+          createChannelId: randomUUID,
+          createCommandId: randomUUID,
+          log,
+        });
+        sandboxTerminalChannelHub.attach(coordinator);
+        return coordinator;
+      } catch (error) {
+        runtime.dispose();
+        throw error;
+      }
+    },
+    log,
+  });
+  context.subscriptions.push(
+    agentTerminalProvider,
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (
+        event.affectsConfiguration("agentlink.terminal.enabled") ||
+        event.affectsConfiguration("agentlink.terminal.nodePath")
+      ) {
+        agentTerminalProvider.refresh();
+      }
+    }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() =>
+      agentTerminalProvider.refresh(),
+    ),
+    vscode.workspace.onDidGrantWorkspaceTrust(() =>
+      agentTerminalProvider.refresh(),
+    ),
+  );
   const sessionStore = new SessionStore(workspaceCwd, undefined, undefined, {
     historyNamespace: workspaceSessionLocation.historyNamespace,
   });
@@ -1127,6 +1467,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onCollectFleetWorkflow: (workflowId, kind) =>
       agentSessionManager.collectFleetWorkflow(workflowId, kind),
     onManageFleetAutomations: (input) => fleetAutomationLifecycle.manage(input),
+    terminalProvider: agentTerminalProvider,
     worktreeAgentLaunchProvider: createVscodeWorktreeAgentLaunchProvider({
       globalStorageUri: context.globalStorageUri,
       onApprovalRequest: (request, sessionId) =>
@@ -1151,6 +1492,14 @@ export function activate(context: vscode.ExtensionContext): void {
       { webviewOptions: { retainContextWhenHidden: true } },
     ),
   );
+  void openDefaultAgentViewOnce({
+    terminalViewId: AgentTerminalViewProvider.viewType,
+    agentViewId: ChatViewProvider.viewType,
+    workspaceState: context.workspaceState,
+    waitForTerminalReady: () => hostTerminalCoordinator.whenIdle(),
+    isTerminalAvailable: () => hostTerminalCoordinator.isAcceptingRequests,
+    log,
+  });
 
   // Update agent config when settings change
   context.subscriptions.push(
@@ -1214,6 +1563,14 @@ export function activate(context: vscode.ExtensionContext): void {
       approvalPanel,
       toolCallTracker,
       approvalManager,
+    }),
+    ...registerAgentWorkbenchLayout({
+      terminalViewId: AgentTerminalViewProvider.viewType,
+      agentViewId: ChatViewProvider.viewType,
+      workspaceState: context.workspaceState,
+      waitForTerminalReady: () => hostTerminalCoordinator.whenIdle(),
+      isTerminalAvailable: () => hostTerminalCoordinator.isAcceptingRequests,
+      log,
     }),
     ...registerBrowserGatewayCommands({
       ensureRuntimeReady: ensureBrowserGatewayRuntimeReady,

@@ -1,5 +1,7 @@
 // Shared types between ApprovalPanelProvider (Node) and approval webview (browser).
 
+import type { TerminalExecutionSecuritySummary } from "../../core/capabilities/terminal.js";
+
 export type CommandTierLevel = "safe" | "sensitive" | "dangerous";
 
 export interface InlineCommandFilePreview {
@@ -85,6 +87,8 @@ export interface ApprovalRequest {
   commandReview?: CommandReviewSummary;
   /** For commands: concise non-reviewer reason automatic approval was skipped. */
   humanOnlyReason?: string;
+  /** Host-owned token-free route/confinement evidence for this exact command. */
+  security?: TerminalExecutionSecuritySummary;
   /** For MCP: detail text (input preview) */
   mcpDetail?: string;
   /** For MCP: approval choices */

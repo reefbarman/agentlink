@@ -84,6 +84,278 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it("prepares exact execution before master bypass and consumes the same lease", async () => {
+    const order: string[] = [];
+    const execute = vi.fn(async () => {
+      order.push("execute");
+      return {
+        exit_code: 0,
+        output: "prepared",
+        output_captured: true,
+        terminal_id: "prepared-1",
+      };
+    });
+    const dispose = vi.fn(() => order.push("dispose"));
+    const prepareExecution = vi.fn(async () => {
+      order.push("prepare");
+      return {
+        security: {
+          auditId: "audit-1",
+          route: "sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          approvalPolicy: "sandbox-baseline-v1" as const,
+          preparedAt: 100,
+        },
+        execute,
+        dispose,
+      };
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      { isCommandApproved: () => false } as never,
+      { isRecentlyApproved: () => false } as never,
+      "session-prepared-master",
+      undefined,
+      {
+        terminalProvider: {
+          ...terminalProvider,
+          prepareExecution,
+        },
+      },
+    );
+
+    expect(order).toEqual(["prepare", "execute"]);
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "npm test",
+        cwd: "/workspace",
+        sandboxSessionId: "session-prepared-master",
+      }),
+    );
+    expect(dispose).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      output: "prepared",
+      approval: { by: "master_bypass" },
+      security: { auditId: "audit-1", route: "sandbox" },
+    });
+  });
+
+  it("disposes prepared execution when the user rejects approval", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const execute = vi.fn();
+    const dispose = vi.fn();
+    const prepareExecution = vi.fn(async () => ({
+      security: {
+        auditId: "audit-rejected",
+        route: "sandbox" as const,
+        confinement: "verified-baseline" as const,
+        routeReason: "verified-local-macos" as const,
+        approvalPolicy: "sandbox-baseline-v1" as const,
+        preparedAt: 100,
+      },
+      execute,
+      dispose,
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm install package" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval: vi.fn(() => ({
+          promise: Promise.resolve({ decision: "reject" }),
+        })),
+      } as never,
+      "session-prepared-reject",
+      undefined,
+      {
+        terminalProvider: {
+          ...terminalProvider,
+          prepareExecution,
+        },
+        getCommandApprovalPolicy: () => "manual",
+      },
+    );
+
+    expect(textPayload(result)).toMatchObject({ status: "rejected_by_user" });
+    expect(prepareExecution).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposes and re-prepares the exact descriptor after a human edit", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const firstDispose = vi.fn();
+    const secondExecute = vi.fn(async () => ({
+      exit_code: 0,
+      output: "edited",
+      output_captured: true,
+      terminal_id: "edited-1",
+    }));
+    const security = {
+      auditId: "audit-edit",
+      route: "sandbox" as const,
+      confinement: "verified-baseline" as const,
+      routeReason: "verified-local-macos" as const,
+      approvalPolicy: "sandbox-baseline-v1" as const,
+      preparedAt: 100,
+      sandbox: {
+        attestationId: "attestation-1",
+        attestationVersion: "sandbox-behavior-v1",
+        policyVersion: "policy-v1",
+        profileId: "workspace-write",
+        backend: "seatbelt" as const,
+        architecture: "arm64" as const,
+        capabilities: {
+          backend: "seatbelt",
+          processTree: true,
+          filesystemRead: "isolated" as const,
+          filesystemWrite: "strict" as const,
+          network: "blocked" as const,
+          privateHome: true,
+          privateTmp: true,
+          hostIpcBlocked: true,
+          resourceLimits: "partial" as const,
+          warnings: [],
+        },
+      },
+    };
+    const prepareExecution = vi
+      .fn()
+      .mockResolvedValueOnce({
+        security,
+        execute: vi.fn(),
+        dispose: firstDispose,
+      })
+      .mockResolvedValueOnce({
+        security: { ...security, auditId: "audit-edited" },
+        execute: secondExecute,
+        dispose: vi.fn(),
+      });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval: vi.fn(() => ({
+          promise: Promise.resolve({
+            decision: "edit",
+            editedCommand: "npm test -- --runInBand",
+          }),
+        })),
+      } as never,
+      "session-edit-reprepare",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "manual",
+      },
+    );
+
+    expect(prepareExecution).toHaveBeenCalledTimes(2);
+    expect(prepareExecution.mock.calls[0][0].command).toBe("npm test");
+    expect(prepareExecution.mock.calls[1][0].command).toBe(
+      "npm test -- --runInBand",
+    );
+    expect(firstDispose).toHaveBeenCalledTimes(1);
+    expect(secondExecute).toHaveBeenCalledTimes(1);
+    expect(textPayload(result)).toMatchObject({
+      output: "edited",
+      command_modified: true,
+      command: "npm test -- --runInBand",
+      security: { auditId: "audit-edited" },
+    });
+  });
+
+  it("rejects an edited command when its prepared security basis changes", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const firstDispose = vi.fn();
+    const secondDispose = vi.fn();
+    const execute = vi.fn();
+    const prepareExecution = vi
+      .fn()
+      .mockResolvedValueOnce({
+        security: {
+          auditId: "audit-sandbox",
+          route: "sandbox",
+          confinement: "verified-baseline",
+          routeReason: "verified-local-macos",
+          approvalPolicy: "sandbox-baseline-v1",
+          preparedAt: 100,
+        },
+        execute,
+        dispose: firstDispose,
+      })
+      .mockResolvedValueOnce({
+        security: {
+          auditId: "audit-native",
+          route: "native",
+          confinement: "native-unsandboxed",
+          routeReason: "runtime-unavailable",
+          approvalPolicy: "native-legacy-v1",
+          preparedAt: 101,
+        },
+        execute,
+        dispose: secondDispose,
+      });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval: vi.fn(() => ({
+          promise: Promise.resolve({
+            decision: "edit",
+            editedCommand: "npm test -- --runInBand",
+          }),
+        })),
+      } as never,
+      "session-edit-basis-change",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "manual",
+      },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      status: "rejected",
+      reason: expect.stringContaining("security basis changed"),
+    });
+    expect(firstDispose).toHaveBeenCalledTimes(1);
+    expect(secondDispose).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("returns explicit unavailable output before validation or approvals when no terminal provider is supplied", async () => {
     const enqueueCommandApproval = vi.fn();
     const { handleExecuteCommand } = await import("./executeCommand.js");
@@ -110,6 +382,104 @@ describe("handleExecuteCommand", () => {
         "Command execution is unavailable in this runtime. Provide a TerminalProvider to enable execute_command.",
       command: "go test ./...",
     });
+  });
+
+  it("rejects public-network intent before preparation or approval", async () => {
+    const enqueueCommandApproval = vi.fn();
+    const prepareExecution = vi.fn();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: "curl https://example.com",
+        sandbox_permissions: { public_network: true },
+      },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true, enqueueCommandApproval } as never,
+      "session-network",
+      undefined,
+      { terminalProvider: { ...terminalProvider, prepareExecution } },
+    );
+
+    expect(textPayload(result)).toEqual({
+      status: "rejected",
+      command: "curl https://example.com",
+      reason:
+        "Public network capability requests are not available yet. Run without sandbox_permissions.public_network.",
+    });
+    expect(prepareExecution).not.toHaveBeenCalled();
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects public-network intent before approvals in read-only mode", async () => {
+    const enqueueCommandApproval = vi.fn();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: "curl https://example.com",
+        sandbox_permissions: { public_network: true },
+      },
+      { isCommandApproved: () => false } as never,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-readonly-network",
+      undefined,
+      { terminalProvider, commandExecutionPolicy: "read-only" },
+    );
+
+    expect(textPayload(result)).toEqual({
+      status: "rejected",
+      command: "curl https://example.com",
+      reason:
+        "Public network capability requests are not available yet. Run without sandbox_permissions.public_network.",
+    });
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("does not create a capability request when public_network is false", async () => {
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    await handleExecuteCommand(
+      {
+        command: "pwd",
+        sandbox_permissions: { public_network: false },
+      },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-no-network",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(
+      executeCommand.mock.calls[0][0].sandboxCapabilityRequest,
+    ).toBeUndefined();
+  });
+
+  it("rejects inert sandbox permissions in read-only mode", async () => {
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: "pwd",
+        sandbox_permissions: { public_network: false },
+      },
+      { isCommandApproved: () => false } as never,
+      { isRecentlyApproved: () => false } as never,
+      "session-readonly-no-network",
+      undefined,
+      { terminalProvider, commandExecutionPolicy: "read-only" },
+    );
+
+    expect(textPayload(result)).toEqual({
+      status: "rejected",
+      command: "pwd",
+      reason:
+        "Read-only command execution does not allow the sandbox_permissions parameter",
+    });
+    expect(executeCommand).not.toHaveBeenCalled();
   });
 
   it("forwards env map to TerminalProvider.executeCommand", async () => {
@@ -182,8 +552,17 @@ describe("handleExecuteCommand", () => {
       expect.stringMatching(/^gh pr comment 1 --body-file '\/.*\/body\.md'$/),
     );
     expect(executeCommand).toHaveBeenCalledTimes(1);
-    const executed = executeCommand.mock.calls[0][0].command as string;
+    const executedOptions = executeCommand.mock.calls[0][0];
+    const executed = executedOptions.command as string;
     expect(executed).toMatch(/^gh pr comment 1 --body-file '\/.*\/body\.md'$/);
+    expect(executedOptions.sandboxInlineFiles).toEqual([
+      {
+        name: "body",
+        path: expect.stringMatching(/\/agentlink-cmd-[^/]+\/body\.md$/),
+        bytes: Buffer.byteLength("hello `code`", "utf-8"),
+        sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+    ]);
     const tempPath = executed.match(/'([^']+\/body\.md)'/)?.[1];
     expect(tempPath).toBeTruthy();
     expect(fs.existsSync(tempPath!)).toBe(false);
@@ -292,6 +671,95 @@ describe("handleExecuteCommand", () => {
       (approvalCall[2] as { inlineFiles?: unknown[] }).inlineFiles,
     ).toMatchObject([{ name: "body", bytes: 5, preview: "hello" }]);
     expect(textPayload(result).approval).toEqual({ by: "human" });
+  });
+
+  it("lets the reviewer approve a bounded inline-file copy in a verified sandbox", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn();
+    const review = vi.fn(async (input) => {
+      expect(input).toMatchObject({
+        command:
+          "mkdir -p tmp && cp $AL_FILE(input) tmp/approve-for-me-smoke.txt",
+        inlineFiles: [
+          {
+            name: "input",
+            bytes: 14,
+            preview: "sandbox smoke\n",
+            executable: false,
+            truncated: false,
+          },
+        ],
+      });
+      return {
+        decision: "approve" as const,
+        confidence: "high" as const,
+        risk: "medium" as const,
+        reason: "Bounded workspace file creation from immutable input",
+        model: "review-model",
+        status: "reviewed" as const,
+      };
+    });
+    let executedSourcePath = "";
+    const prepareExecution = vi.fn(async (options) => ({
+      security: {
+        auditId: "audit-inline-sandbox",
+        route: "sandbox" as const,
+        confinement: "verified-baseline" as const,
+        routeReason: "verified-local-macos" as const,
+        approvalPolicy: "sandbox-baseline-v1" as const,
+        preparedAt: 100,
+      },
+      execute: async () => {
+        executedSourcePath = options.sandboxInlineFiles?.[0]?.path ?? "";
+        expect(fs.existsSync(executedSourcePath)).toBe(true);
+        expect(fs.realpathSync(executedSourcePath)).toBe(executedSourcePath);
+        return {
+          exit_code: 0,
+          output: "",
+          output_captured: true,
+          terminal_id: "sandbox-inline-1",
+        };
+      },
+      dispose: vi.fn(),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command:
+          "mkdir -p tmp && cp $AL_FILE(input) tmp/approve-for-me-smoke.txt",
+        files: [{ name: "input", content: "sandbox smoke\n", ext: "txt" }],
+      },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval,
+      } as never,
+      "session-inline-reviewer",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(executedSourcePath).toMatch(/\/agentlink-cmd-[^/]+\/input\.txt$/);
+    expect(fs.existsSync(executedSourcePath)).toBe(false);
+    expect(textPayload(result).approval).toMatchObject({
+      by: "model_reviewer",
+      model: "review-model",
+    });
   });
 
   it("rejects edited inline-file commands with unresolved tokens", async () => {
@@ -919,10 +1387,14 @@ describe("handleExecuteCommand", () => {
     controller.abort();
     resolveApproval({ decision: "accept" });
 
-    await expect(execution.then(textPayload)).resolves.toEqual({
+    await expect(execution.then(textPayload)).resolves.toMatchObject({
       status: "cancelled",
       command: "mkdir generated",
       reason: "Command approval was cancelled before execution",
+      security: {
+        route: "native",
+        confinement: "native-unsandboxed",
+      },
     });
     expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
   });

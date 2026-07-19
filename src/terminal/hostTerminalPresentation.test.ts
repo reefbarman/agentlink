@@ -90,11 +90,36 @@ describe("host terminal presentation policy", () => {
         "copy-output",
         "copy-command-and-output",
         "attach-output",
-        "rerun-command",
         "explain-command",
         "fix-command",
       ],
     });
+  });
+
+  it("offers rerun only after an integrated idle prompt follows completion", () => {
+    const exited = blocks(
+      shell({ type: "command-start", command: "npm test" }),
+      shell({ type: "command-end", exitCode: 0 }),
+    );
+    expect(
+      createHostTerminalPresentationState(exited).blocks[0]?.actions,
+    ).not.toContain("rerun-command");
+
+    const idle = reduceHostTerminalBlocks(
+      exited,
+      shell({ type: "prompt-start" }),
+    );
+    expect(
+      createHostTerminalPresentationState(idle).blocks[0]?.actions,
+    ).toContain("rerun-command");
+
+    const runningAgain = reduceHostTerminalBlocks(
+      idle,
+      shell({ type: "command-start", command: "npm test --changed" }),
+    );
+    expect(
+      createHostTerminalPresentationState(runningAgain).blocks[0]?.actions,
+    ).not.toContain("rerun-command");
   });
 
   it("hides stale running blocks and does not offer interrupt after missing markers", () => {
@@ -215,11 +240,28 @@ describe("host terminal presentation policy", () => {
         "copy-output",
         "copy-command-and-output",
         "attach-output",
-        "rerun-command",
         "explain-command",
         "fix-command",
       ],
     });
+  });
+
+  it("removes process-control actions when the terminal exits", () => {
+    const source = blocks(
+      shell({ type: "command-start", command: "sleep 10" }),
+    );
+    const running = createHostTerminalPresentationState(source);
+    expect(running.blocks[0]?.actions).toContain("interrupt-command");
+
+    const exited = reduceHostTerminalPresentation(running, {
+      type: "terminal-exited",
+    });
+    expect(exited.terminalRunning).toBe(false);
+    expect(exited.blocks[0]?.decoration).toBe("undecorated");
+    expect(exited.blocks[0]?.actions).not.toContain("interrupt-command");
+    expect(
+      reduceHostTerminalPresentation(exited, { type: "terminal-exited" }),
+    ).toBe(exited);
   });
 
   it("handles duplicate transitions and unchanged block state as immutable no-ops", () => {
@@ -270,12 +312,7 @@ describe("host terminal presentation policy", () => {
       {
         blockId: "host-block-1",
         decoration: "completed",
-        actions: [
-          "copy-command",
-          "rerun-command",
-          "explain-command",
-          "fix-command",
-        ],
+        actions: ["copy-command", "explain-command", "fix-command"],
       },
     ]);
     expect(

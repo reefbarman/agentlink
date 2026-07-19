@@ -10,6 +10,7 @@ export interface TerminalDimensions {
 export interface HostTerminalTab {
   id: string;
   title: string;
+  channelKind?: TerminalChannelKind;
   cwd: string;
   profileName: string;
   dimensions: TerminalDimensions;

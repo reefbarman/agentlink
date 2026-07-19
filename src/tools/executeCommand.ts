@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import * as path from "path";
 import * as os from "os";
 
@@ -6,8 +7,13 @@ import { getConfiguredMasterBypass } from "../adapters/vscode/agentLinkConfig.js
 import { getWorkspaceRoots, tryGetFirstWorkspaceRoot } from "../util/paths.js";
 import type {
   CommandExecutionPolicy,
+  PreparedTerminalExecution,
+  TerminalExecutionAuditEvent,
+  TerminalExecutionSecuritySummary,
+  TerminalExecuteOptions,
   TerminalProvider,
 } from "../core/capabilities/terminal.js";
+import type { SandboxCapabilityRequest } from "../core/sandboxPolicy.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import type { TrackerContext } from "../agent/AgentToolCallTracker.js";
@@ -84,6 +90,93 @@ export interface ExecuteCommandProviders {
   commandExecutionPolicy?: CommandExecutionPolicy;
 }
 
+function prepareTerminalExecution(
+  provider: TerminalProvider,
+  options: TerminalExecuteOptions,
+): Promise<PreparedTerminalExecution> {
+  if (provider.prepareExecution) return provider.prepareExecution(options);
+  const descriptor = Object.freeze({
+    ...options,
+    ...(options.env ? { env: Object.freeze({ ...options.env }) } : {}),
+    ...(options.sandboxInlineFiles
+      ? {
+          sandboxInlineFiles: Object.freeze(
+            options.sandboxInlineFiles.map((file) =>
+              Object.freeze({ ...file }),
+            ),
+          ),
+        }
+      : {}),
+  });
+  const security: TerminalExecutionSecuritySummary = {
+    auditId: randomUUID(),
+    route: "native",
+    confinement: "native-unsandboxed",
+    routeReason: "unsupported-host",
+    approvalPolicy: "native-legacy-v1",
+    preparedAt: Date.now(),
+  };
+  let available = true;
+  return Promise.resolve({
+    security,
+    execute: async () => {
+      if (!available) {
+        throw new Error("Prepared terminal execution is no longer available");
+      }
+      available = false;
+      const result = await provider.executeCommand(descriptor);
+      return { ...result, security };
+    },
+    dispose: () => {
+      available = false;
+    },
+  });
+}
+
+function sameDisplayedSecurityBasis(
+  left: TerminalExecutionSecuritySummary,
+  right: TerminalExecutionSecuritySummary,
+): boolean {
+  return (
+    left.route === right.route &&
+    left.confinement === right.confinement &&
+    left.routeReason === right.routeReason &&
+    left.approvalPolicy === right.approvalPolicy &&
+    left.sandbox?.attestationId === right.sandbox?.attestationId &&
+    left.sandbox?.attestationVersion === right.sandbox?.attestationVersion &&
+    left.sandbox?.policyVersion === right.sandbox?.policyVersion &&
+    left.sandbox?.profileId === right.sandbox?.profileId &&
+    left.sandbox?.backend === right.sandbox?.backend &&
+    left.sandbox?.architecture === right.sandbox?.architecture
+  );
+}
+
+function recordExecutionAudit(
+  provider: TerminalProvider,
+  type: TerminalExecutionAuditEvent["type"],
+  security: TerminalExecutionSecuritySummary,
+  detail: Pick<
+    TerminalExecutionAuditEvent,
+    "approvalBasis" | "resultStatus"
+  > = {},
+): void {
+  provider.recordExecutionAudit?.({
+    type,
+    occurredAt: Date.now(),
+    auditId: security.auditId,
+    route: security.route,
+    routeReason: security.routeReason,
+    ...(security.sandbox
+      ? {
+          attestationId: security.sandbox.attestationId,
+          policyVersion: security.sandbox.policyVersion,
+          profileId: security.sandbox.profileId,
+        }
+      : {}),
+    ...detail,
+  });
+}
+
 function unavailableExecuteCommandResult(command: string): ToolResult {
   return {
     content: [
@@ -109,6 +202,9 @@ export async function handleExecuteCommand(
     background?: boolean;
     timeout?: number;
     env?: Record<string, string>;
+    sandbox_permissions?: {
+      public_network?: boolean;
+    };
     files?: InlineCommandFileInput[];
     output_head?: number;
     output_tail?: number;
@@ -153,6 +249,16 @@ export async function handleExecuteCommand(
 
     const workspaceRoots = getWorkspaceRoots();
     const readOnlyPolicy = providers.commandExecutionPolicy === "read-only";
+    const sandboxCapabilityRequest: SandboxCapabilityRequest | undefined =
+      params.sandbox_permissions?.public_network === true
+        ? { unrestrictedPublicNetwork: true }
+        : undefined;
+    if (sandboxCapabilityRequest) {
+      return rejectedCommandResult(
+        params.command,
+        "Public network capability requests are not available yet. Run without sandbox_permissions.public_network.",
+      );
+    }
     if (readOnlyPolicy) {
       const rejectionReason = getReadOnlyCommandRejectionReason(
         params,
@@ -172,6 +278,7 @@ export async function handleExecuteCommand(
     let inlineRun: ReturnType<typeof materializeInlineCommandFiles> | undefined;
     let inlineFiles: InlineCommandFilePreview[] | undefined;
     let commandFinalizationDeferred = false;
+    let preparedExecution: PreparedTerminalExecution | undefined;
     let inlineCleanupComplete = false;
     const cleanupInlineRun = () => {
       if (inlineCleanupComplete) return;
@@ -305,6 +412,38 @@ export async function handleExecuteCommand(
         };
       }
 
+      const terminalOptions = (): TerminalExecuteOptions => ({
+        command: commandToRun,
+        cwd,
+        terminal_id: params.terminal_id,
+        terminal_name: params.terminal_name,
+        split_from: params.split_from,
+        background: params.background,
+        timeout: params.timeout ? params.timeout * 1000 : undefined,
+        env: params.env,
+        sandboxSessionId: sessionId,
+        sandboxInlineFiles: inlineFiles?.map((file) => ({
+          name: file.name,
+          path: file.path,
+          bytes: file.bytes,
+          sha256: file.sha256,
+        })),
+        sandboxCapabilityRequest,
+        onTerminalAssigned: trackerCtx
+          ? (tid) => trackerCtx.setTerminalId(tid)
+          : undefined,
+        onCommandFinalizationDeferred: inlineRun
+          ? () => {
+              commandFinalizationDeferred = true;
+            }
+          : undefined,
+        onCommandFinalized: inlineRun ? cleanupInlineRun : undefined,
+      });
+      preparedExecution = await prepareTerminalExecution(
+        providers.terminalProvider,
+        terminalOptions(),
+      );
+
       if (!masterBypass && !readOnlyPolicy) {
         // Gate: only one command goes through approval at a time, so pending
         // dialogs aren't buried by terminals from auto-approved commands.
@@ -329,11 +468,21 @@ export async function handleExecuteCommand(
               ),
               forceRequested: Boolean(params.force || params.force_reason),
               providers,
+              security: preparedExecution.security,
             },
           );
 
           if (approvalResult.cancelled) {
-            return cancelledCommandResult(params.command);
+            recordExecutionAudit(
+              providers.terminalProvider,
+              "execution_cancelled",
+              preparedExecution.security,
+              { resultStatus: "approval_cancelled" },
+            );
+            return cancelledCommandResult(
+              params.command,
+              preparedExecution.security,
+            );
           }
 
           if (!approvalResult.approved) {
@@ -347,6 +496,7 @@ export async function handleExecuteCommand(
                     ...(approvalResult.reason && {
                       reason: approvalResult.reason,
                     }),
+                    security: preparedExecution.security,
                   }),
                 },
               ],
@@ -376,10 +526,38 @@ export async function handleExecuteCommand(
               params.command,
             );
             if (editedValidation) return editedValidation;
+            const displayedSecurity = preparedExecution.security;
+            preparedExecution.dispose();
+            preparedExecution = await prepareTerminalExecution(
+              providers.terminalProvider,
+              terminalOptions(),
+            );
+            if (
+              !sameDisplayedSecurityBasis(
+                displayedSecurity,
+                preparedExecution.security,
+              )
+            ) {
+              return rejectedCommandResult(
+                commandToRun,
+                "The prepared execution security basis changed after the command edit. Review and approve the command again.",
+              );
+            }
           }
 
           approvalFollowUp = approvalResult.followUp;
           approvalAudit = approvalResult.approval;
+          if (approvalAudit) {
+            recordExecutionAudit(
+              providers.terminalProvider,
+              "approval_decided",
+              preparedExecution.security,
+              {
+                approvalBasis: approvalAudit.by,
+                resultStatus: "approved",
+              },
+            );
+          }
           autoApprovedByTier = approvalResult.autoApprovedByTier;
         } finally {
           releaseGate();
@@ -387,28 +565,30 @@ export async function handleExecuteCommand(
       }
 
       if (isCommandApprovalCancelled(sessionId, providers)) {
-        return cancelledCommandResult(commandToRun);
+        recordExecutionAudit(
+          providers.terminalProvider,
+          "execution_cancelled",
+          preparedExecution.security,
+          { resultStatus: "session_cancelled" },
+        );
+        return cancelledCommandResult(commandToRun, preparedExecution.security);
+      }
+      if (approvalAudit && (masterBypass || readOnlyPolicy)) {
+        recordExecutionAudit(
+          providers.terminalProvider,
+          "approval_fast_path_selected",
+          preparedExecution.security,
+          {
+            approvalBasis: approvalAudit.by,
+            resultStatus: "approved",
+          },
+        );
       }
 
-      const result = await providers.terminalProvider.executeCommand({
-        command: commandToRun,
-        cwd,
-        terminal_id: params.terminal_id,
-        terminal_name: params.terminal_name,
-        split_from: params.split_from,
-        background: params.background,
-        timeout: params.timeout ? params.timeout * 1000 : undefined, // seconds → ms
-        env: params.env,
-        onTerminalAssigned: trackerCtx
-          ? (tid) => trackerCtx.setTerminalId(tid)
-          : undefined,
-        onCommandFinalizationDeferred: inlineRun
-          ? () => {
-              commandFinalizationDeferred = true;
-            }
-          : undefined,
-        onCommandFinalized: inlineRun ? cleanupInlineRun : undefined,
-      });
+      const execution = preparedExecution;
+      preparedExecution = undefined;
+      const result = await execution.execute();
+      result.security = execution.security;
 
       // Apply output filtering and temp file saving
       if (result.output_captured && result.output) {
@@ -486,6 +666,7 @@ export async function handleExecuteCommand(
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };
     } finally {
+      preparedExecution?.dispose();
       if (!commandFinalizationDeferred) {
         cleanupInlineRun();
       }
@@ -527,6 +708,7 @@ function getReadOnlyCommandRejectionReason(
     ["timeout", params.timeout],
     ["env", params.env],
     ["files", params.files],
+    ["sandbox_permissions", params.sandbox_permissions],
     ["force", params.force],
     ["force_reason", params.force_reason],
   ].find(([, value]) => value !== undefined);
@@ -547,7 +729,10 @@ function getReadOnlyCommandRejectionReason(
   return undefined;
 }
 
-function cancelledCommandResult(command: string): ToolResult {
+function cancelledCommandResult(
+  command: string,
+  security?: TerminalExecutionSecuritySummary,
+): ToolResult {
   return {
     content: [
       {
@@ -556,6 +741,7 @@ function cancelledCommandResult(command: string): ToolResult {
           status: "cancelled",
           command,
           reason: "Command approval was cancelled before execution",
+          ...(security ? { security } : {}),
         }),
       },
     ],
@@ -641,6 +827,7 @@ async function approveSubCommands(
     hasEnvOverrides?: boolean;
     forceRequested?: boolean;
     providers?: ExecuteCommandProviders;
+    security?: TerminalExecutionSecuritySummary;
   },
 ): Promise<{
   approved: boolean;
@@ -669,7 +856,13 @@ async function approveSubCommands(
     return { approved: true, approval: { by: "recent_approval" } };
   }
 
-  const tierInfo = classifyCommand(fullCommand, { cwd, workspaceRoots });
+  const classificationCommand = options?.inlineFiles?.length
+    ? (options.displayCommand ?? fullCommand)
+    : fullCommand;
+  const tierInfo = classifyCommand(classificationCommand, {
+    cwd,
+    workspaceRoots,
+  });
   const policy =
     options?.providers?.getCommandApprovalPolicy?.(sessionId) ?? "manual";
   const threshold = policy === "sensitive" ? "sensitive" : "safe";
@@ -686,7 +879,7 @@ async function approveSubCommands(
   }
 
   const reviewProviders = options?.providers;
-  const hasInlineFiles = Boolean(options?.inlineFiles);
+  const inlineFiles = options?.inlineFiles;
   const hasEnvOverrides = Boolean(options?.hasEnvOverrides);
   const forceRequested = Boolean(options?.forceRequested);
   let commandReview: CommandReviewSummary | undefined;
@@ -696,7 +889,8 @@ async function approveSubCommands(
       classified: tierInfo,
       cwd,
       workspaceRoots,
-      hasInlineFiles,
+      inlineFiles,
+      security: options?.security,
       hasEnvOverrides,
       forceRequested,
     });
@@ -704,6 +898,13 @@ async function approveSubCommands(
       humanOnlyReason = eligibility.reason;
     } else {
       const reviewedCommand = fullCommand;
+      if (options?.security && reviewProviders.terminalProvider) {
+        recordExecutionAudit(
+          reviewProviders.terminalProvider,
+          "review_started",
+          options.security,
+        );
+      }
       const review = await reviewProviders.commandApprovalReviewer.review({
         sessionId,
         command: reviewedCommand,
@@ -713,8 +914,18 @@ async function approveSubCommands(
         userObjective: reviewProviders.getUserObjective?.(sessionId),
         context: reviewProviders.getReviewContext?.(sessionId),
         classified: tierInfo,
+        security: options?.security,
+        inlineFiles,
         signal: reviewProviders.toolAbortSignal,
       });
+      if (options?.security && reviewProviders.terminalProvider) {
+        recordExecutionAudit(
+          reviewProviders.terminalProvider,
+          "review_completed",
+          options.security,
+          { resultStatus: review.status },
+        );
+      }
       const currentPolicy =
         reviewProviders.getCommandApprovalPolicy?.(sessionId) ?? "safe";
       const sessionActive =
@@ -784,6 +995,13 @@ async function approveSubCommands(
   });
 
   // Show dialog with full command + enriched sub-command entries
+  if (options?.security && options.providers?.terminalProvider) {
+    recordExecutionAudit(
+      options.providers.terminalProvider,
+      "human_approval_requested",
+      options.security,
+    );
+  }
   const { promise } = approvalPanel.enqueueCommandApproval(
     options?.displayCommand ?? fullCommand,
     fullCommand,
@@ -794,6 +1012,7 @@ async function approveSubCommands(
       cwd,
       commandReview,
       humanOnlyReason,
+      security: options?.security,
     },
   );
   const response = await promise;

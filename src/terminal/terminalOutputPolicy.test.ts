@@ -12,6 +12,12 @@ describe("terminal output policy scanner", () => {
       recommendedAction: "suppress",
       reason: "clipboard",
     });
+    expect(evaluateTerminalOsc("697;AgentLink;foreign;D;0")).toEqual({
+      type: "osc",
+      command: 697,
+      recommendedAction: "suppress",
+      reason: "private-shell-integration",
+    });
     expect(evaluateTerminalOsc("8;;https://example.test")).toEqual({
       type: "osc",
       command: 8,

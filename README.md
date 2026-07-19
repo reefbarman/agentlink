@@ -118,6 +118,21 @@ code --install-extension agentlink-*.vsix --force
 
 After installing, reload VS Code and open the AgentLink activity bar.
 
+### AgentLink Terminal requirements
+
+The custom **AgentLink Terminal** currently requires a local macOS extension host and a compatible standalone Node.js runtime. AgentLink probes Node.js from the environment inherited by VS Code and from standard macOS installation paths. The probe starts the packaged PTY module, so incompatible architecture, native ABI, or code-signing combinations are rejected before the terminal is enabled.
+
+If VS Code was launched from Finder and does not inherit the shell path used by a version manager such as fnm, nvm, or Volta, set `agentlink.terminal.nodePath` to the absolute standalone Node.js executable. Do not point it at VS Code's Electron executable.
+
+When the dependency is missing or incompatible, AgentLink:
+
+- does not register or show the custom AgentLink Terminal;
+- shows one warning with **Configure Node Path**, **Install Node.js**, and **Retry** actions;
+- routes built-in agent commands through the native VS Code terminal provider;
+- continues to block command execution in untrusted workspaces.
+
+A failure after a sandbox provider has been selected remains fail-closed; AgentLink never silently reruns that command outside the sandbox.
+
 ## Quick Start
 
 ### Use the built-in agent
@@ -753,7 +768,7 @@ For single-file edits, prefer `apply_diff` — it provides better diff review an
 
 Run a command in VS Code's integrated terminal. Output is captured when shell integration is available.
 
-By default, AgentLink reuses an existing idle terminal for sequential commands. Omit `terminal_name` and `terminal_id` unless you intentionally need a separate terminal (parallel work, long-running background process, or temporary environment isolation).
+By default, AgentLink reuses an existing idle terminal for sequential commands. Omit `terminal_name` and `terminal_id` unless you intentionally need a separate terminal (parallel work, long-running background process, or temporary environment isolation). For a separate terminal, use a short purpose-based `terminal_name` such as `Dev server`, `Unit tests`, or `Build`; sandbox state is shown separately in the terminal UI.
 
 **Interactive command validation:** Commands that require interactive input are automatically rejected with a helpful suggestion.
 
@@ -761,7 +776,7 @@ By default, AgentLink reuses an existing idle terminal for sequential commands. 
 
 Output is capped to the **last 200 lines** by default. Full output is saved to a temp file (returned as `output_file`) for on-demand access via `read_file`. Use `output_head`, `output_tail`, or `output_grep` to customize filtering.
 
-The **Approve for Me** button above the chat input enables a session-only command policy. Safe commands continue to follow the configured static tier. Eligible sensitive commands are sent to a fresh one-shot review using the session model, the exact command and classification, and a bounded window of recent conversation and tool evidence. Workspace paths and operating-system temporary paths are eligible for review; arbitrary paths outside those roots are not. Only a high-confidence, low- or medium-risk reviewer decision runs automatically. Guardrail-triggered commands skip the reviewer and use the normal human approval card with a concise reason such as **Outside workspace** or **Environment overrides**. Reviewer uncertainty, errors, invalid output, timeouts, cancellation, or policy changes also fall back to the human card and show reviewer details only when the reviewer itself deferred the command. The reviewer has no tools and does not provide a command sandbox. The mode consumes model quota, is not persisted across extension-host restarts, creates no approval rules, and does not populate the recent-human-approval cache.
+The **Approve for Me** button above the chat input enables a session-only command policy. Every execution-eligible command is first bound to one exact prepared terminal route. On a trusted local macOS workspace, sandbox-aware review is available only after the packaged production helper passes behavioral attestation; the approval card identifies the verified network-blocked sandbox and the result carries the same opaque audit identity. Native fallback routes remain explicitly unsandboxed and use the conservative legacy reviewer policy. Safe commands continue to follow the configured static tier. Eligible sensitive commands are sent to a fresh one-shot review using the session model, the exact command and classification, the host-owned route summary, and a bounded window of recent conversation and tool evidence. Only a high-confidence, low- or medium-risk reviewer decision runs automatically. Destructive, credential, deployment/publication, privileged, external-effect, inline-file, environment-override, and materially uncertain commands remain human-only. Reviewer uncertainty, errors, invalid output, timeouts, cancellation, policy changes, stale preparation, or sandbox verification failure never silently downgrade to native execution. The reviewer has no tools. The mode consumes model quota, is not persisted across extension-host restarts, creates no approval rules, and does not populate the recent-human-approval cache.
 
 Common response fields include `terminal_id` (for reuse/polling), `output`, and `output_file`. When a foreground command times out, AgentLink returns `timed_out: true` and a `terminal_id` so you can continue with `get_terminal_output` instead of re-running the command. Approved commands include `approval: { by: ... }` in the response (`readonly_policy`, `master_bypass`, `explicit_rule`, `recent_approval`, `tier`, `model_reviewer`, `human`, or `human_edited`) and show an audit badge in the chat transcript. Reviewer approvals include the reviewer model, confidence, risk, and bounded rationale. Tier auto-approvals also include the legacy-compatible `auto_approved: { by: "tier", tier, threshold }` field; reviewer approvals do not.
 
@@ -772,7 +787,7 @@ Common response fields include `terminal_id` (for reuse/polling), `output`, and 
 | `env`                 | object?  | Environment variables to merge into the terminal's base execution environment                                                                           |
 | `files`               | array?   | Throwaway temp files to create for this command. Reference paths with `$AL_FILE(name)`. POSIX shells only; incompatible with `background=true`.         |
 | `terminal_id`         | string?  | Reuse a specific terminal by ID. Usually omit for sequential commands so AgentLink can auto-reuse the default terminal.                                 |
-| `terminal_name`       | string?  | Run in a named terminal (e.g. `Server`, `Tests`). Use only when intentionally creating/reusing a separate terminal.                                     |
+| `terminal_name`       | string?  | Run in a named terminal. Use a short purpose label (e.g. `Dev server`, `Unit tests`, `Build`) when intentionally creating/reusing a separate terminal.  |
 | `split_from`          | string?  | Split alongside an existing terminal, creating a visual group (for intentionally separate terminals).                                                   |
 | `background`          | boolean? | Run without waiting for completion. Returns immediately with `terminal_id`. Use `get_terminal_output` to check progress.                                |
 | `timeout`             | number?  | Timeout in seconds. Timed-out commands transition to background state — use `get_terminal_output` with the returned `terminal_id` to check on progress. |

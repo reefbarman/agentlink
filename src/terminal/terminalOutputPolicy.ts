@@ -7,6 +7,8 @@ export type TerminalOutputPolicyReason =
   | "clipboard"
   | "notification"
   | "proprietary-host-integration"
+  | "private-shell-integration"
+  | "incomplete"
   | "oversized";
 
 export interface TerminalOutputPolicyDecision {
@@ -85,6 +87,14 @@ export function evaluateTerminalOsc(
       command,
       recommendedAction: "suppress",
       reason: "notification",
+    };
+  }
+  if (command === 697) {
+    return {
+      type: "osc",
+      command,
+      recommendedAction: "suppress",
+      reason: "private-shell-integration",
     };
   }
   if (command === 1337) {

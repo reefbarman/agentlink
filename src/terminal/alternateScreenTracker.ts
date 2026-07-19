@@ -1,6 +1,8 @@
 const ALTERNATE_SCREEN_MODES = new Set([47, 1047, 1049]);
 const MAX_CSI_PARAMETER_BYTES = 128;
 
+/** `modes` is the DECSET/DECRST delta that crossed overall active state,
+ * not the complete set of currently active alternate-screen modes. */
 export type AlternateScreenTransition =
   | { type: "enter"; modes: readonly number[] }
   | { type: "exit"; modes: readonly number[] };
@@ -13,6 +15,7 @@ export interface AlternateScreenScanResult {
 
 export interface AlternateScreenTracker {
   readonly alternateScreen: boolean;
+  readonly atGround: boolean;
   push(data: string): AlternateScreenScanResult;
   reset(): void;
 }
@@ -53,10 +56,14 @@ class StreamingAlternateScreenTracker implements AlternateScreenTracker {
   private state: ParserState = "ground";
   private csiParameters = "";
   private csiOverflow = false;
-  private inAlternateScreen = false;
+  private readonly activeModes = new Set<number>();
 
   get alternateScreen(): boolean {
-    return this.inAlternateScreen;
+    return this.activeModes.size > 0;
+  }
+
+  get atGround(): boolean {
+    return this.state === "ground";
   }
 
   push(data: string): AlternateScreenScanResult {
@@ -141,13 +148,15 @@ class StreamingAlternateScreenTracker implements AlternateScreenTracker {
           if (!this.csiOverflow && (character === "h" || character === "l")) {
             const modes = parseAlternateScreenModes(this.csiParameters);
             if (modes.length > 0) {
-              const next = character === "h";
-              if (next !== this.inAlternateScreen) {
-                this.inAlternateScreen = next;
-                transitions.push({
-                  type: next ? "enter" : "exit",
-                  modes,
-                });
+              const wasActive = this.activeModes.size > 0;
+              if (character === "h") {
+                for (const mode of modes) this.activeModes.add(mode);
+              } else {
+                for (const mode of modes) this.activeModes.delete(mode);
+              }
+              const active = this.activeModes.size > 0;
+              if (active !== wasActive) {
+                transitions.push({ type: active ? "enter" : "exit", modes });
               }
             }
           }
@@ -182,7 +191,7 @@ class StreamingAlternateScreenTracker implements AlternateScreenTracker {
 
     return {
       data,
-      alternateScreen: this.inAlternateScreen,
+      alternateScreen: this.alternateScreen,
       transitions,
     };
   }
@@ -191,7 +200,7 @@ class StreamingAlternateScreenTracker implements AlternateScreenTracker {
     this.state = "ground";
     this.csiParameters = "";
     this.csiOverflow = false;
-    this.inAlternateScreen = false;
+    this.activeModes.clear();
   }
 
   private startCsi(): void {

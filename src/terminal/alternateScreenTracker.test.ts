@@ -137,15 +137,27 @@ describe("alternate screen tracker", () => {
     });
   });
 
-  it("emits transitions only when the state changes", () => {
+  it("emits transitions only when overlapping active modes cross empty state", () => {
     const tracker = createAlternateScreenTracker();
 
     expect(tracker.push("\x1b[?1049h\x1b[?47h").transitions).toEqual([
       { type: "enter", modes: [1049] },
     ]);
-    expect(tracker.push("\x1b[?1047l\x1b[?1049l").transitions).toEqual([
-      { type: "exit", modes: [1047] },
+    expect(tracker.push("\x1b[?1047l\x1b[?1049l").transitions).toEqual([]);
+    expect(tracker.alternateScreen).toBe(true);
+    expect(tracker.push("\x1b[?47l").transitions).toEqual([
+      { type: "exit", modes: [47] },
     ]);
+    expect(tracker.alternateScreen).toBe(false);
+  });
+
+  it("exposes parser ground state for safe replay checkpoints", () => {
+    const tracker = createAlternateScreenTracker();
+    expect(tracker.atGround).toBe(true);
+    tracker.push("\x1b[");
+    expect(tracker.atGround).toBe(false);
+    tracker.push("?1049h");
+    expect(tracker.atGround).toBe(true);
   });
 
   it("reset clears parser and alternate-screen state", () => {
