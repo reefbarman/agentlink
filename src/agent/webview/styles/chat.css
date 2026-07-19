@@ -4950,9 +4950,296 @@ body.chat-activity-shelf-resizing * {
   border: 0;
 }
 
+/* Compact density keeps primary status/actions visible and folds secondary detail. */
+.mcp-manager-panel-redesign .mcp-manager-header {
+  min-height: 32px;
+  padding: 4px 8px;
+}
+
+.mcp-manager-title {
+  gap: 6px;
+}
+
+.mcp-manager-profile,
+.mcp-manager-import-new,
+.mcp-manager-source-health {
+  min-height: 16px;
+  padding: 0 5px;
+  line-height: 14px;
+}
+
+.mcp-manager-navigation {
+  gap: 3px;
+  padding: 4px 8px;
+}
+
+.mcp-manager-panel-redesign .mcp-manager-button {
+  min-height: 26px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.mcp-manager-overview,
+.mcp-manager-sources-view,
+.mcp-manager-guided-editor,
+.mcp-manager-import {
+  gap: 7px;
+  padding: 8px;
+}
+
+.mcp-manager-summary-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mcp-manager-summary-card {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 999px;
+}
+
+.mcp-manager-summary-card strong {
+  font-size: 13px;
+  line-height: 16px;
+}
+
+.mcp-manager-summary-card span {
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.mcp-manager-server-list,
+.mcp-manager-sources,
+.mcp-manager-import-review {
+  gap: 4px;
+}
+
+.mcp-manager-server-row,
+.mcp-manager-source-row,
+.mcp-manager-import-row,
+.mcp-manager-empty-state,
+.mcp-manager-secret-editor {
+  border-radius: 4px;
+}
+
+.mcp-manager-server-row .mcp-status-row {
+  align-items: center;
+  min-height: 34px;
+  padding: 4px 6px;
+}
+
+.mcp-manager-server-identity {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.mcp-manager-server-identity .mcp-status-detail {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 14px;
+}
+
+.mcp-manager-server-badges,
+.mcp-manager-source-badges {
+  gap: 3px;
+}
+
+.mcp-manager-server-badges code,
+.mcp-manager-source-badges code {
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.mcp-manager-panel-redesign .mcp-status-actions {
+  gap: 1px;
+}
+
+.mcp-manager-panel-redesign .mcp-status-actions .icon-button {
+  width: 26px;
+  height: 26px;
+}
+
+.mcp-manager-panel-redesign .mcp-tool-list {
+  padding: 1px 8px 5px 34px;
+}
+
+.mcp-manager-empty-state {
+  padding: 12px;
+}
+
+.mcp-manager-empty-state .mcp-manager-button {
+  margin-top: 6px;
+}
+
+.mcp-manager-section-heading,
+.mcp-manager-form-heading,
+.mcp-manager-import-review-header,
+.mcp-manager-source-heading {
+  gap: 8px;
+}
+
+.mcp-manager-section-heading h2,
+.mcp-manager-form-heading h2,
+.mcp-manager-import-review-header h3 {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.mcp-manager-section-heading p,
+.mcp-manager-form-heading p,
+.mcp-manager-import-review-header p {
+  margin-top: 1px;
+  line-height: 15px;
+}
+
+.mcp-manager-source-row {
+  gap: 5px;
+  padding: 7px;
+}
+
+.mcp-manager-form-grid,
+.mcp-manager-secret-grid {
+  gap: 8px;
+}
+
+.mcp-manager-field {
+  gap: 3px;
+}
+
+.mcp-manager-panel-redesign input:not([type="checkbox"]),
+.mcp-manager-panel-redesign select,
+.mcp-manager-panel-redesign textarea {
+  min-height: 28px;
+  padding: 4px 6px;
+}
+
+.mcp-manager-panel-redesign textarea {
+  min-height: 56px;
+}
+
+.mcp-manager-toggle-field {
+  min-height: 28px;
+  gap: 6px;
+}
+
+.mcp-manager-secret-editor {
+  padding: 8px;
+}
+
+.mcp-manager-form-actions {
+  padding: 5px 0 0;
+}
+
+.mcp-manager-import-input {
+  min-height: 108px !important;
+}
+
+.mcp-manager-import-row {
+  gap: 6px 10px;
+  padding: 7px;
+}
+
+.mcp-manager-import-selection {
+  gap: 5px;
+}
+
+.mcp-manager-import-name,
+.mcp-manager-import-conflict,
+.mcp-manager-import-diagnostics {
+  gap: 3px;
+}
+
+.mcp-manager-diagnostic,
+.mcp-manager-feedback {
+  padding: 4px 7px;
+  line-height: 15px;
+}
+
+.mcp-manager-disclosure {
+  min-width: 0;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWidget-background, transparent) 55%,
+    transparent
+  );
+}
+
+.mcp-manager-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 3px 7px;
+  color: var(--vscode-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.mcp-manager-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mcp-manager-disclosure > summary::before {
+  color: var(--vscode-descriptionForeground);
+  font-family: codicon;
+  font-size: 12px;
+  content: "\ea6b";
+}
+
+.mcp-manager-disclosure[open] > summary::before {
+  content: "\eab4";
+}
+
+.mcp-manager-disclosure-count {
+  margin-left: auto;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.mcp-manager-disclosure-content {
+  display: grid;
+  gap: 8px;
+  padding: 7px;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
+.mcp-manager-source-details {
+  background: transparent;
+}
+
+.mcp-manager-source-details .mcp-manager-disclosure-content {
+  justify-items: start;
+}
+
+.mcp-manager-security-note {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.mcp-manager-icon-danger {
+  color: var(--vscode-errorForeground) !important;
+}
+
 @media (max-width: 520px) {
-  .mcp-manager-summary-cards {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .mcp-manager-summary-card {
+    flex: 1 1 calc(50% - 4px);
   }
 
   .mcp-manager-form-grid,
@@ -4973,9 +5260,9 @@ body.chat-activity-shelf-resizing * {
   }
 
   .mcp-manager-panel-redesign .mcp-status-actions {
-    width: 100%;
-    margin-left: 38px;
-    justify-content: flex-start;
+    width: auto;
+    margin-left: auto;
+    justify-content: flex-end;
   }
 
   .mcp-manager-refresh {
@@ -4986,6 +5273,16 @@ body.chat-activity-shelf-resizing * {
 @media (hover: none), (pointer: coarse) {
   .mcp-manager-panel-redesign .mcp-status-actions {
     opacity: 1;
+  }
+
+  .mcp-manager-panel-redesign .mcp-manager-button,
+  .mcp-manager-disclosure > summary {
+    min-height: 32px;
+  }
+
+  .mcp-manager-panel-redesign .mcp-status-actions .icon-button {
+    width: 32px;
+    height: 32px;
   }
 }
 

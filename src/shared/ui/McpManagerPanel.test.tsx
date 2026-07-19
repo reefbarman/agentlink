@@ -158,7 +158,15 @@ describe("McpManagerPanel", () => {
     expect(
       screen.getByRole("button", { name: "Disable inherited-only" }),
     ).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "Remove" })).toHaveLength(2);
+    expect(
+      screen.getByRole("button", { name: "Edit configured-only" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Remove configured-only" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Remove inherited-only" }),
+    ).toBeNull();
   });
 
   it("persists disable and enable through correlated config mutations", async () => {
@@ -228,10 +236,34 @@ describe("McpManagerPanel", () => {
     expect(screen.getByText("Healthy")).toBeTruthy();
     expect(screen.getByText("Not created")).toBeTruthy();
     expect(screen.getByText("Permission denied")).toBeTruthy();
+    fireEvent.click(screen.getAllByText("Path and actions")[1]);
     fireEvent.click(
       screen.getAllByRole("button", { name: "Open raw configuration" })[1],
     );
     expect(onOpenRawConfig).toHaveBeenCalledWith("global");
+  });
+
+  it("summarizes existing credential keys without exposing values", () => {
+    render(
+      <McpManagerPanel
+        snapshot={snapshot({
+          entries: [
+            {
+              ...snapshot().entries[0],
+              envKeys: ["TOKEN"],
+              headerKeys: [],
+              hasSecrets: true,
+            },
+          ],
+        })}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit configured-only" }),
+    );
+    expect(screen.getByText("1 key")).toBeTruthy();
+    expect(screen.queryByText(/TOKEN=/)).toBeNull();
   });
 
   it("preserves spaces in line arguments and submits explicit secret patch mutations", async () => {
@@ -257,6 +289,8 @@ describe("McpManagerPanel", () => {
     fireEvent.input(screen.getByLabelText(/^Arguments/), {
       target: { value: "script with spaces.js\n--flag=value" },
     });
+    expect(screen.getByText("Advanced settings")).toBeTruthy();
+    fireEvent.click(screen.getByText("Credentials"));
     fireEvent.input(
       screen.getByLabelText("Environment variables update mode"),
       {
@@ -469,6 +503,7 @@ describe("McpManagerPanel", () => {
     fireEvent.input(screen.getByLabelText("Command"), {
       target: { value: "node" },
     });
+    fireEvent.click(screen.getByText("Credentials"));
     fireEvent.input(
       screen.getByLabelText("Environment variables update mode"),
       { target: { value: "replace" } },

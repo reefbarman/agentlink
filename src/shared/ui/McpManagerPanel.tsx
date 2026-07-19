@@ -377,6 +377,8 @@ function GuidedEditor({
     type === "sse" || type === "streamable-http" || type === "http";
   const canWriteSecrets =
     Boolean(onMutateConfig) && snapshot.capabilities.canWriteSecrets !== false;
+  const credentialKeyCount =
+    (entry?.envKeys?.length ?? 0) + (entry?.headerKeys?.length ?? 0);
 
   return (
     <form
@@ -486,10 +488,7 @@ function GuidedEditor({
       }}
     >
       <div class="mcp-manager-form-heading">
-        <div>
-          <h2>{entry ? `Edit ${entry.name}` : "Add a server"}</h2>
-          <p>Configure a server without editing the underlying JSON.</p>
-        </div>
+        <h2>{entry ? `Edit ${entry.name}` : "Add a server"}</h2>
       </div>
       <div class="mcp-manager-form-grid">
         <Field label="Save to">
@@ -575,90 +574,98 @@ function GuidedEditor({
           </Field>
         </div>
       )}
-      <p class="mcp-manager-note">
-        Arguments and URL query strings are ordinary visible configuration. Do
-        not place credentials in them; use environment variables or headers with
-        `${"${VAR}"}` references instead.
+      <p class="mcp-manager-note mcp-manager-security-note">
+        <i class="codicon codicon-shield" aria-hidden="true" />
+        Keep credentials out of arguments and URL query strings.
+        {!isHttp &&
+          " Saving launches this executable; only use commands you trust."}
       </p>
-      {!isHttp && (
-        <p class="mcp-manager-note">
-          Saving a local-process server launches the configured executable
-          during connection refresh. Only save commands you trust.
-        </p>
-      )}
-      <div class="mcp-manager-form-grid">
-        <Field label="Timeout (ms)">
-          <input
-            value={timeout}
-            inputMode="numeric"
-            disabled={submission.kind === "pending"}
-            placeholder="60000"
-            onInput={(event) => setTimeoutValue(event.currentTarget.value)}
-          />
-        </Field>
-        <Field label="Tool approval policy">
-          <select
-            value={toolPolicy}
-            disabled={submission.kind === "pending"}
-            onInput={(event) =>
-              setToolPolicy(event.currentTarget.value as "ask" | "allow")
-            }
+      <details class="mcp-manager-disclosure">
+        <summary>Advanced settings</summary>
+        <div class="mcp-manager-disclosure-content mcp-manager-form-grid">
+          <Field label="Timeout (ms)">
+            <input
+              value={timeout}
+              inputMode="numeric"
+              disabled={submission.kind === "pending"}
+              placeholder="60000"
+              onInput={(event) => setTimeoutValue(event.currentTarget.value)}
+            />
+          </Field>
+          <Field label="Tool approval policy">
+            <select
+              value={toolPolicy}
+              disabled={submission.kind === "pending"}
+              onInput={(event) =>
+                setToolPolicy(event.currentTarget.value as "ask" | "allow")
+              }
+            >
+              <option value="ask">Ask before new tools</option>
+              <option value="allow">Allow all tools</option>
+            </select>
+          </Field>
+          <Field label="Tool disclosure">
+            <select
+              value={toolDisclosure}
+              disabled={submission.kind === "pending"}
+              onInput={(event) =>
+                setToolDisclosure(
+                  event.currentTarget.value as "inline" | "deferred" | "auto",
+                )
+              }
+            >
+              <option value="auto">Automatic</option>
+              <option value="inline">Inline</option>
+              <option value="deferred">Deferred</option>
+            </select>
+          </Field>
+          <Field
+            label="Always allowed tools"
+            hint="One tool per line, or a JSON array of strings."
           >
-            <option value="ask">Ask before new tools</option>
-            <option value="allow">Allow all tools</option>
-          </select>
-        </Field>
-        <Field label="Tool disclosure">
-          <select
-            value={toolDisclosure}
-            disabled={submission.kind === "pending"}
-            onInput={(event) =>
-              setToolDisclosure(
-                event.currentTarget.value as "inline" | "deferred" | "auto",
-              )
-            }
-          >
-            <option value="auto">Automatic</option>
-            <option value="inline">Inline</option>
-            <option value="deferred">Deferred</option>
-          </select>
-        </Field>
-        <Field
-          label="Always allowed tools"
-          hint="One tool per line, or a JSON array of strings."
-        >
-          <textarea
-            value={allowedTools}
-            rows={3}
-            disabled={submission.kind === "pending"}
-            onInput={(event) => setAllowedTools(event.currentTarget.value)}
+            <textarea
+              value={allowedTools}
+              rows={2}
+              disabled={submission.kind === "pending"}
+              onInput={(event) => setAllowedTools(event.currentTarget.value)}
+            />
+          </Field>
+        </div>
+      </details>
+      <details class="mcp-manager-disclosure">
+        <summary>
+          Credentials
+          {credentialKeyCount > 0 && (
+            <span class="mcp-manager-disclosure-count">
+              {credentialKeyCount} {credentialKeyCount === 1 ? "key" : "keys"}
+            </span>
+          )}
+        </summary>
+        <div class="mcp-manager-disclosure-content mcp-manager-secret-grid">
+          <SecretEditor
+            label="Environment variables"
+            existingKeys={entry?.envKeys ?? []}
+            mode={envMode}
+            values={envValues}
+            removals={envRemovals}
+            disabled={!canWriteSecrets || submission.kind === "pending"}
+            onModeChange={setEnvMode}
+            onValuesChange={setEnvValues}
+            onRemovalsChange={setEnvRemovals}
           />
-        </Field>
-      </div>
-      <div class="mcp-manager-secret-grid">
-        <SecretEditor
-          label="Environment variables"
-          existingKeys={entry?.envKeys ?? []}
-          mode={envMode}
-          values={envValues}
-          removals={envRemovals}
-          disabled={!canWriteSecrets || submission.kind === "pending"}
-          onModeChange={setEnvMode}
-          onValuesChange={setEnvValues}
-          onRemovalsChange={setEnvRemovals}
-        />
-        <SecretEditor
-          label="Headers"
-          existingKeys={entry?.headerKeys ?? []}
-          mode={headerMode}
-          values={headerValues}
-          removals={headerRemovals}
-          disabled={!canWriteSecrets || submission.kind === "pending"}
-          onModeChange={setHeaderMode}
-          onValuesChange={setHeaderValues}
-          onRemovalsChange={setHeaderRemovals}
-        />
-      </div>
+          <SecretEditor
+            label="Headers"
+            existingKeys={entry?.headerKeys ?? []}
+            mode={headerMode}
+            values={headerValues}
+            removals={headerRemovals}
+            disabled={!canWriteSecrets || submission.kind === "pending"}
+            onModeChange={setHeaderMode}
+            onValuesChange={setHeaderValues}
+            onRemovalsChange={setHeaderRemovals}
+          />
+        </div>
+      </details>
       {!canWriteSecrets && (
         <p class="mcp-manager-note">
           Secret editing requires a host that supports batch config mutations
@@ -788,11 +795,8 @@ function ImportReview({
     <section class="mcp-manager-import" aria-labelledby="mcp-import-heading">
       <div class="mcp-manager-section-heading">
         <div>
-          <h2 id="mcp-import-heading">Import and review JSON</h2>
-          <p>
-            Paste JSON or JSONC. Nothing is written until you review and apply
-            the selected rows.
-          </p>
+          <h2 id="mcp-import-heading">Import JSON</h2>
+          <p>Paste JSON or JSONC, then review before applying.</p>
         </div>
         <Field label="Import into">
           <select
@@ -814,7 +818,7 @@ function ImportReview({
         <textarea
           class="mcp-manager-import-input"
           value={raw}
-          rows={10}
+          rows={6}
           spellcheck={false}
           disabled={submission.kind === "pending"}
           placeholder={
@@ -1258,10 +1262,10 @@ export function McpManagerPanel({
       >
         {(
           [
-            ["overview", "Overview"],
+            ["overview", "Servers"],
             ["sources", "Sources"],
-            ["guided", "Guided editor"],
-            ["import", "JSON Import"],
+            ["guided", "Add / edit"],
+            ["import", "Import"],
           ] as const
         ).map(([item, label]) => (
           <button
@@ -1278,10 +1282,12 @@ export function McpManagerPanel({
         <button
           class="mcp-manager-button mcp-manager-refresh"
           type="button"
+          aria-label="Refresh MCP Manager"
+          title="Refresh"
           onClick={onRefresh}
         >
           <i class="codicon codicon-refresh" aria-hidden="true" />
-          Refresh
+          <span class="mcp-manager-visually-hidden">Refresh</span>
         </button>
       </nav>
       {error && (
@@ -1459,24 +1465,34 @@ export function McpManagerPanel({
                           )}
                         {canEdit && entry && (
                           <button
-                            class="mcp-manager-button"
+                            class="icon-button"
                             type="button"
+                            aria-label={`Edit ${name}`}
+                            title="Edit"
                             onClick={() => {
                               setEditingServer(name);
                               setView("guided");
                             }}
                           >
-                            Edit
+                            <i
+                              class="codicon codicon-edit"
+                              aria-hidden="true"
+                            />
                           </button>
                         )}
                         {canEdit && entry?.preferredEditScope && (
                           <button
-                            class="mcp-manager-button mcp-manager-button-danger"
+                            class="icon-button mcp-manager-icon-danger"
                             type="button"
                             disabled={submission.kind === "pending"}
+                            aria-label={`Remove ${name}`}
+                            title="Remove"
                             onClick={() => removeServer(entry)}
                           >
-                            Remove
+                            <i
+                              class="codicon codicon-trash"
+                              aria-hidden="true"
+                            />
                           </button>
                         )}
                       </span>
@@ -1543,21 +1559,28 @@ export function McpManagerPanel({
                         <code>priority {source.priority}</code>
                       </span>
                     </div>
-                    <small class="mcp-manager-source-path">{source.path}</small>
-                    {source.readError && (
-                      <p class="mcp-manager-diagnostic mcp-manager-diagnostic-error">
-                        Read error: {statusLabel(source.readError)}
-                      </p>
-                    )}
-                    {snapshot.capabilities.canOpenRawConfig && (
-                      <button
-                        class="mcp-manager-button"
-                        type="button"
-                        onClick={() => onOpenRawConfig?.(source.scope)}
-                      >
-                        Open raw configuration
-                      </button>
-                    )}
+                    <details class="mcp-manager-disclosure mcp-manager-source-details">
+                      <summary>Path and actions</summary>
+                      <div class="mcp-manager-disclosure-content">
+                        <small class="mcp-manager-source-path">
+                          {source.path}
+                        </small>
+                        {source.readError && (
+                          <p class="mcp-manager-diagnostic mcp-manager-diagnostic-error">
+                            Read error: {statusLabel(source.readError)}
+                          </p>
+                        )}
+                        {snapshot.capabilities.canOpenRawConfig && (
+                          <button
+                            class="mcp-manager-button"
+                            type="button"
+                            onClick={() => onOpenRawConfig?.(source.scope)}
+                          >
+                            Open raw configuration
+                          </button>
+                        )}
+                      </div>
+                    </details>
                   </li>
                 ))}
             </ul>
