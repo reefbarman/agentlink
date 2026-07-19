@@ -351,6 +351,64 @@ body {
   justify-content: center;
 }
 
+/* ── Chat Activity Shelf ── */
+
+.chat-activity-shelf {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-activity-shelf-handle {
+  position: relative;
+  z-index: 2;
+  height: 9px;
+  flex: 0 0 9px;
+  cursor: ns-resize;
+  touch-action: none;
+  background: var(--vscode-sideBar-background);
+  border-top: 1px solid var(--vscode-panel-border);
+  outline: none;
+}
+
+.chat-activity-shelf-handle::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 36px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--vscode-descriptionForeground);
+  opacity: 0.35;
+  transform: translateX(-50%);
+}
+
+.chat-activity-shelf-handle:hover::after,
+.chat-activity-shelf-handle:focus-visible::after,
+.chat-activity-shelf-active .chat-activity-shelf-handle::after {
+  background: var(--vscode-focusBorder, #4ec9b0);
+  opacity: 1;
+}
+
+.chat-activity-shelf-handle:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--vscode-focusBorder, #4ec9b0);
+}
+
+.chat-activity-shelf-content {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+body.chat-activity-shelf-resizing,
+body.chat-activity-shelf-resizing * {
+  cursor: ns-resize !important;
+  user-select: none !important;
+}
+
 .chat-message-list {
   min-width: 0;
 }
@@ -4420,6 +4478,526 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+/* ── MCP Manager redesign ── */
+
+.mcp-manager-panel-redesign {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  color: var(--vscode-foreground);
+  font-size: 12px;
+}
+
+.mcp-manager-panel-redesign .mcp-manager-header {
+  min-height: 44px;
+  padding: 8px 12px;
+  background: color-mix(
+    in srgb,
+    var(--vscode-textCodeBlock-background) 72%,
+    transparent
+  );
+}
+
+.mcp-manager-title {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  gap: 8px;
+}
+
+.mcp-manager-title > strong {
+  color: var(--vscode-foreground);
+  font-size: 13px;
+}
+
+.mcp-manager-profile,
+.mcp-manager-server-badges > span,
+.mcp-manager-source-badges > span,
+.mcp-manager-import-new,
+.mcp-manager-source-health {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px 7px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 999px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.mcp-manager-navigation {
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+
+.mcp-manager-panel-redesign .mcp-manager-button {
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.mcp-manager-panel-redesign .mcp-manager-button:focus-visible,
+.mcp-manager-panel-redesign input:focus-visible,
+.mcp-manager-panel-redesign select:focus-visible,
+.mcp-manager-panel-redesign textarea:focus-visible,
+.mcp-manager-panel-redesign summary:focus-visible,
+.mcp-manager-panel-redesign .icon-button:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.mcp-manager-overview,
+.mcp-manager-sources-view,
+.mcp-manager-guided-editor,
+.mcp-manager-import {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 12px;
+  padding: 12px;
+}
+
+.mcp-manager-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(72px, 1fr));
+  gap: 8px;
+}
+
+.mcp-manager-summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 7px;
+  background: var(--vscode-editorWidget-background, transparent);
+}
+
+.mcp-manager-summary-card strong {
+  font-size: 18px;
+  line-height: 22px;
+}
+
+.mcp-manager-summary-card span {
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mcp-manager-summary-connected {
+  border-color: color-mix(in srgb, #4ec9b0 45%, var(--vscode-panel-border));
+}
+
+.mcp-manager-summary-attention {
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-errorForeground) 40%,
+    var(--vscode-panel-border)
+  );
+}
+
+.mcp-manager-server-list,
+.mcp-manager-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-manager-server-row,
+.mcp-manager-source-row,
+.mcp-manager-import-row {
+  overflow: hidden;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 7px;
+  background: var(--vscode-editorWidget-background, transparent);
+}
+
+.mcp-manager-server-row .mcp-status-row {
+  align-items: flex-start;
+  min-height: 48px;
+  padding: 10px;
+}
+
+.mcp-manager-server-identity {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.mcp-manager-server-identity .mcp-status-detail {
+  flex: none;
+  white-space: normal;
+  line-height: 16px;
+}
+
+.mcp-manager-server-badges,
+.mcp-manager-source-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mcp-manager-panel-redesign .mcp-status-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  opacity: 1;
+  transition: none;
+}
+
+.mcp-manager-panel-redesign .mcp-status-actions .icon-button {
+  width: 32px;
+  height: 32px;
+}
+
+.mcp-manager-panel-redesign .mcp-tool-list {
+  padding: 0 12px 10px 42px;
+}
+
+.mcp-manager-empty-state {
+  margin: 0;
+  padding: 20px;
+  border: 1px dashed var(--vscode-panel-border);
+  border-radius: 7px;
+  color: var(--vscode-descriptionForeground);
+  text-align: center;
+}
+
+.mcp-manager-empty-state .mcp-manager-button {
+  margin-top: 10px;
+}
+
+.mcp-manager-section-heading,
+.mcp-manager-form-heading,
+.mcp-manager-import-review-header,
+.mcp-manager-source-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mcp-manager-section-heading h2,
+.mcp-manager-form-heading h2,
+.mcp-manager-import-review-header h3 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.mcp-manager-section-heading p,
+.mcp-manager-form-heading p,
+.mcp-manager-import-review-header p {
+  margin: 2px 0 0;
+  color: var(--vscode-descriptionForeground);
+  line-height: 17px;
+}
+
+.mcp-manager-sources {
+  counter-reset: source-priority;
+}
+
+.mcp-manager-source-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  counter-increment: source-priority;
+}
+
+.mcp-manager-source-health::before {
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--vscode-terminal-ansiGreen, #4ec9b0);
+  content: "";
+}
+
+.mcp-manager-source-invalid .mcp-manager-source-health::before,
+.mcp-manager-source-unreadable .mcp-manager-source-health::before {
+  background: var(--vscode-errorForeground);
+}
+
+.mcp-manager-source-missing .mcp-manager-source-health::before {
+  background: var(--vscode-descriptionForeground);
+}
+
+.mcp-manager-source-path {
+  overflow-wrap: anywhere;
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.mcp-manager-form-grid,
+.mcp-manager-secret-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mcp-manager-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 5px;
+}
+
+.mcp-manager-field-label,
+.mcp-manager-toggle-field,
+.mcp-manager-secret-editor > legend {
+  color: var(--vscode-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mcp-manager-field-hint,
+.mcp-manager-secret-summary,
+.mcp-manager-note {
+  margin: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.mcp-manager-panel-redesign input:not([type="checkbox"]),
+.mcp-manager-panel-redesign select,
+.mcp-manager-panel-redesign textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: 5px;
+  outline: none;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+}
+
+.mcp-manager-panel-redesign textarea {
+  min-height: 72px;
+  resize: vertical;
+  font-family: var(--vscode-editor-font-family, monospace);
+  line-height: 17px;
+}
+
+.mcp-manager-panel-redesign [aria-invalid="true"] {
+  border-color: var(
+    --vscode-inputValidation-errorBorder,
+    var(--vscode-errorForeground)
+  );
+}
+
+.mcp-manager-toggle-field {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  gap: 8px;
+}
+
+.mcp-manager-toggle-field input {
+  width: 16px;
+  height: 16px;
+}
+
+.mcp-manager-secret-editor {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 7px;
+}
+
+.mcp-manager-secret-editor > legend {
+  padding: 0 5px;
+}
+
+.mcp-manager-secret-editor:disabled {
+  opacity: 0.65;
+}
+
+.mcp-manager-form-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  flex-wrap: wrap;
+  padding: 10px 0 2px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--vscode-sideBar-background, var(--vscode-editor-background)) 12px
+  );
+}
+
+.mcp-manager-import-input {
+  min-height: 160px !important;
+}
+
+.mcp-manager-import-review {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-manager-import-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(180px, 1.25fr);
+  gap: 10px 14px;
+  padding: 12px;
+}
+
+.mcp-manager-import-row.invalid {
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-errorForeground) 55%,
+    var(--vscode-panel-border)
+  );
+}
+
+.mcp-manager-import-selection {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.mcp-manager-import-name,
+.mcp-manager-import-conflict,
+.mcp-manager-import-diagnostics {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 5px;
+}
+
+.mcp-manager-import-conflict select,
+.mcp-manager-import-conflict input {
+  max-width: 100%;
+}
+
+.mcp-manager-import-diagnostics {
+  grid-column: 1 / -1;
+}
+
+.mcp-manager-diagnostic,
+.mcp-manager-feedback {
+  margin: 0;
+  padding: 7px 9px;
+  border-left: 3px solid var(--vscode-descriptionForeground);
+  border-radius: 3px;
+  background: color-mix(
+    in srgb,
+    var(--vscode-descriptionForeground) 8%,
+    transparent
+  );
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.mcp-manager-diagnostic-error,
+.mcp-manager-feedback-error {
+  border-left-color: var(--vscode-errorForeground);
+  background: color-mix(
+    in srgb,
+    var(--vscode-errorForeground) 10%,
+    transparent
+  );
+  color: var(--vscode-errorForeground);
+}
+
+.mcp-manager-diagnostic-warning {
+  border-left-color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.mcp-manager-diagnostic-info,
+.mcp-manager-feedback-pending {
+  border-left-color: var(--vscode-focusBorder);
+}
+
+.mcp-manager-feedback-success,
+.mcp-manager-diagnostic-ok {
+  border-left-color: var(--vscode-terminal-ansiGreen, #4ec9b0);
+  color: var(--vscode-terminal-ansiGreen, #4ec9b0);
+}
+
+.mcp-manager-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 520px) {
+  .mcp-manager-summary-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mcp-manager-form-grid,
+  .mcp-manager-secret-grid,
+  .mcp-manager-import-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mcp-manager-import-diagnostics {
+    grid-column: auto;
+  }
+
+  .mcp-manager-server-row .mcp-status-row,
+  .mcp-manager-source-heading,
+  .mcp-manager-section-heading,
+  .mcp-manager-form-heading {
+    flex-wrap: wrap;
+  }
+
+  .mcp-manager-panel-redesign .mcp-status-actions {
+    width: 100%;
+    margin-left: 38px;
+    justify-content: flex-start;
+  }
+
+  .mcp-manager-refresh {
+    margin-left: 0;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .mcp-manager-panel-redesign .mcp-status-actions {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mcp-manager-panel-redesign *,
+  .mcp-manager-panel-redesign *::before,
+  .mcp-manager-panel-redesign *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
 
 /* ── Elicitation Modal ── */

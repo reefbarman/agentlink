@@ -87,6 +87,10 @@ When adding a new tool or changing tool parameters:
 
 AgentLink ships a browser-based remote control surface for the built-in agent. A shared helper process serves the browser UI on a stable port (`agentlink.browserGatewayPort`) and routes to per-VS-Code-window API/SSE bridge servers by instance ID, so one URL can switch between all open windows. Full architecture snapshot: [plans/browser-remote-session-status-handoff.md](plans/browser-remote-session-status-handoff.md).
 
+### Chat Activity Shelf
+
+The **Chat Activity Shelf** is the resizable region between the chat transcript and the composer. It is the shared home for session activity and controls that should remain visible near the input without becoming transcript messages: context/progress indicators, queued messages, TODOs, questions and approval cards, MCP/provider status, interrupted/running state, and Agent Fleet. The composer is not part of the Chat Activity Shelf. New components in this region must preserve its bounded, internally scrollable layout and remain in parity between the VS Code and browser chat surfaces.
+
 **Any change to chat state, session state, agent events, or UI surfaces must be considered against the browser remote view** — it is a first-class surface, not a debug page, and regressions there are easy to miss because the VS Code webview keeps working.
 
 When touching these areas, keep the browser in sync:

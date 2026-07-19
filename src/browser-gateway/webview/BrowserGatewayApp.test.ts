@@ -3965,7 +3965,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
     fireEvent.click(screen.getByTestId("trigger-mcp-config"));
     await waitFor(() => {
-      expect(screen.getByText("Config sources")).toBeTruthy();
+      expect(screen.getByText("Configuration sources")).toBeTruthy();
       expect(
         fetchMock.mock.calls.filter(([input]) =>
           String(input).includes("/api/ask-agent/mcp-config"),

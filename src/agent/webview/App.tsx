@@ -13,6 +13,8 @@ import type {
   TodoItem,
 } from "./types";
 import type {
+  McpConfigBatchMutation,
+  McpConfigMutationResult,
   McpConfigSnapshot,
   McpManagerScope,
 } from "../../shared/mcpManagerTypes";
@@ -49,6 +51,7 @@ import { ContextUsageRow } from "./components/ContextUsageRow";
 import { DebugInfo } from "./components/DebugInfo";
 import { ElicitationModal } from "./components/ElicitationModal";
 import { InputArea } from "./components/InputArea";
+import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
 import { MessageQueuePanel } from "./components/MessageQueuePanel";
@@ -72,6 +75,7 @@ import { useWebviewMessageConnection } from "./useWebviewMessageConnection";
 
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
+const MCP_CONFIG_MUTATION_TIMEOUT_MS = 30_000;
 
 interface OpenTranscriptState {
   sessionId: string;
@@ -262,6 +266,16 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const dragCounterRef = useRef(0);
   const [mcpManagerSnapshot, setMcpManagerSnapshot] =
     useState<McpConfigSnapshot | null>(null);
+  const mcpMutationResolversRef = useRef(
+    new Map<
+      string,
+      {
+        resolve: (result: McpConfigMutationResult) => void;
+        reject: (reason: Error) => void;
+        timer: ReturnType<typeof setTimeout>;
+      }
+    >(),
+  );
   const [providerUsage, setProviderUsage] = useState<
     import("./types").ProviderUsageCardData | null
   >(null);
@@ -359,6 +373,19 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
       }
     };
   }, [vscodeApi]);
+
+  useEffect(
+    () => () => {
+      for (const pending of mcpMutationResolversRef.current.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(
+          new Error("The MCP Manager was closed before the save completed."),
+        );
+      }
+      mcpMutationResolversRef.current.clear();
+    },
+    [],
+  );
 
   useWebviewMessageConnection({
     vscodeApi,
@@ -644,6 +671,17 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             current?.id === msg.id ? null : current,
           );
           break;
+        case "agentMcpConfigMutationResult": {
+          const pending = mcpMutationResolversRef.current.get(
+            msg.result.operationId,
+          );
+          if (pending) {
+            mcpMutationResolversRef.current.delete(msg.result.operationId);
+            clearTimeout(pending.timer);
+            pending.resolve(msg.result);
+          }
+          break;
+        }
         case "agentMcpStatus":
           if (msg.configSnapshot) {
             if (msg.open) {
@@ -2500,263 +2538,288 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           streamingMetricsSurface="vscode-webview"
           streamingMetricsScope={state.chatState.sessionId ?? "foreground"}
         />
-        <MessageQueuePanel
-          queue={state.messageQueue}
-          onSteer={(item) => {
-            const nextQueue = messageQueueRef.current.filter(
-              (q) => q.id !== item.id,
-            );
-            messageQueueRef.current = nextQueue;
-            dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
-            vscodeApi.postMessage({
-              command: "agentSteerQueuedMessage",
-              sessionId: stateRef.current.sessionId,
-              queueId: item.id,
-              text: item.fullText ?? item.text,
-              displayText: item.text,
-              isSlashCommand: item.isSlashCommand === true,
-              slashCommandLabel: item.slashCommandLabel,
-              attachments: item.attachments,
-              images: item.images,
-              documents: item.documents,
-            });
-          }}
-          onInterject={(item) => {
-            vscodeApi.postMessage({
-              command: "agentInterjectQueuedMessage",
-              sessionId: stateRef.current.sessionId,
-              queueId: item.id,
-              text: item.fullText ?? item.text,
-              displayText: item.text,
-              isSlashCommand: item.isSlashCommand === true,
-              slashCommandLabel: item.slashCommandLabel,
-              attachments: item.attachments,
-              images: item.images,
-              documents: item.documents,
-            });
-          }}
-          onEdit={(item, text) => {
-            dispatch({
-              type: "EDIT_QUEUE_MESSAGE",
-              id: item.id,
-              text,
-            });
-            vscodeApi.postMessage({
-              command: "agentUpdateQueuedMessage",
-              sessionId: stateRef.current.sessionId,
-              queueId: item.id,
-              text,
-              displayText: text,
-              isSlashCommand: false,
-              attachments: item.attachments,
-              images: item.images,
-              documents: item.documents,
-            });
-          }}
-          onRemove={(item) => {
-            const nextQueue = messageQueueRef.current.filter(
-              (q) => q.id !== item.id,
-            );
-            messageQueueRef.current = nextQueue;
-            dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
-            if (item.source === "browser") {
+        <ChatActivityShelf>
+          <MessageQueuePanel
+            queue={state.messageQueue}
+            onSteer={(item) => {
+              const nextQueue = messageQueueRef.current.filter(
+                (q) => q.id !== item.id,
+              );
+              messageQueueRef.current = nextQueue;
+              dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
               vscodeApi.postMessage({
-                command: "agentRemoveQueuedMessage",
+                command: "agentSteerQueuedMessage",
                 sessionId: stateRef.current.sessionId,
                 queueId: item.id,
-              });
-            }
-          }}
-        />
-        <ContextUsageRow
-          inputTokens={state.lastInputTokens}
-          outputTokens={state.lastOutputTokens}
-          cacheReadTokens={state.lastCacheReadTokens}
-          estimatedTotalUsed={state.estimatedTotalUsed}
-          models={state.availableModels}
-          modelId={state.chatState.model}
-          contextBudget={state.chatState.contextBudget}
-          condenseThreshold={state.chatState.condenseThreshold}
-          defaultMaxTokens={DEFAULT_MAX_TOKENS}
-        />
-        {mcpManagerSnapshot && (
-          <McpManagerPanel
-            snapshot={mcpManagerSnapshot}
-            initialView={mcpManagerView}
-            onClose={() => setMcpManagerSnapshot(null)}
-            onRefresh={() =>
-              vscodeApi.postMessage({
-                command: "agentSlashCommand",
-                name: "mcp-refresh",
-              })
-            }
-            onServerAction={(serverName, action) =>
-              vscodeApi.postMessage({
-                command: "agentMcpAction",
-                serverName,
-                action,
-              })
-            }
-            onOpenRawConfig={(scope: McpManagerScope) =>
-              vscodeApi.postMessage({
-                command: "agentMcpConfigOpenRaw",
-                profile: mcpManagerSnapshot.profile,
-                scope,
-              })
-            }
-            onSaveServer={(scope, server) =>
-              vscodeApi.postMessage({
-                command: "agentMcpConfigSave",
-                profile: mcpManagerSnapshot.profile,
-                scope,
-                server,
-              })
-            }
-            onRemoveServer={(scope, serverName) =>
-              vscodeApi.postMessage({
-                command: "agentMcpConfigRemove",
-                profile: mcpManagerSnapshot.profile,
-                scope,
-                serverName,
-              })
-            }
-          />
-        )}
-        {providerUsage && (
-          <ProviderUsagePanel
-            data={providerUsage}
-            onClose={() => setProviderUsage(null)}
-            onRefresh={() =>
-              vscodeApi.postMessage({
-                command: "agentSlashCommand",
-                name: "usage",
-                args: "",
-              })
-            }
-          />
-        )}
-        {state.todos.length > 0 && <TodoPanel todos={state.todos} />}
-        {state.questionRequest && (
-          <QuestionCard
-            id={state.questionRequest.id}
-            context={state.questionRequest.context}
-            questions={state.questionRequest.questions}
-            backgroundTask={state.questionRequest.backgroundTask}
-            modes={state.modes}
-            remoteProgress={
-              remoteQuestionProgress &&
-              remoteQuestionProgress.id === state.questionRequest.id
-                ? {
-                    step: remoteQuestionProgress.step,
-                    answers: remoteQuestionProgress.answers,
-                    notes: remoteQuestionProgress.notes,
-                  }
-                : null
-            }
-            onProgressChange={(progress) => {
-              if (!state.questionRequest) return;
-              vscodeApi.postMessage({
-                command: "agentQuestionProgress",
-                id: state.questionRequest.id,
-                step: progress.step,
-                answers: progress.answers,
-                notes: progress.notes,
-                origin: questionProgressOriginRef.current,
+                text: item.fullText ?? item.text,
+                displayText: item.text,
+                isSlashCommand: item.isSlashCommand === true,
+                slashCommandLabel: item.slashCommandLabel,
+                attachments: item.attachments,
+                images: item.images,
+                documents: item.documents,
               });
             }}
-            onSubmit={(
-              id: string,
-              answers: Record<
-                string,
-                string | string[] | number | boolean | undefined
-              >,
-              notes: Record<string, string>,
-            ) => {
-              dispatch({ type: "CLEAR_QUESTION" });
-              setRemoteQuestionProgress(null);
+            onInterject={(item) => {
               vscodeApi.postMessage({
-                command: "agentQuestionResponse",
-                id,
-                answers,
-                notes,
+                command: "agentInterjectQueuedMessage",
+                sessionId: stateRef.current.sessionId,
+                queueId: item.id,
+                text: item.fullText ?? item.text,
+                displayText: item.text,
+                isSlashCommand: item.isSlashCommand === true,
+                slashCommandLabel: item.slashCommandLabel,
+                attachments: item.attachments,
+                images: item.images,
+                documents: item.documents,
               });
             }}
-          />
-        )}
-        {forwardedApproval && (
-          <ApprovalPanelEmbed
-            request={forwardedApproval}
-            height={approvalPanelHeight}
-            resizing={approvalResizing}
-            followUpRef={forwardedFollowUpRef}
-            submit={handleForwardedApprovalSubmit}
-            onResizeStart={handleApprovalResizeStart}
-            onSuggestRegex={handleSuggestRegex}
-          />
-        )}
-        {btwState && (
-          <BtwPanel
-            state={btwState}
-            onDismiss={() => {
-              if (btwState && !btwState.done && !btwState.error) {
+            onEdit={(item, text) => {
+              dispatch({
+                type: "EDIT_QUEUE_MESSAGE",
+                id: item.id,
+                text,
+              });
+              vscodeApi.postMessage({
+                command: "agentUpdateQueuedMessage",
+                sessionId: stateRef.current.sessionId,
+                queueId: item.id,
+                text,
+                displayText: text,
+                isSlashCommand: false,
+                attachments: item.attachments,
+                images: item.images,
+                documents: item.documents,
+              });
+            }}
+            onRemove={(item) => {
+              const nextQueue = messageQueueRef.current.filter(
+                (q) => q.id !== item.id,
+              );
+              messageQueueRef.current = nextQueue;
+              dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
+              if (item.source === "browser") {
                 vscodeApi.postMessage({
-                  command: "agentBtwCancel",
-                  requestId: btwState.requestId,
+                  command: "agentRemoveQueuedMessage",
+                  sessionId: stateRef.current.sessionId,
+                  queueId: item.id,
                 });
               }
-              setBtwState(null);
-            }}
-            onCancel={(requestId) =>
-              vscodeApi.postMessage({ command: "agentBtwCancel", requestId })
-            }
-            onPromote={(question, answer) => {
-              vscodeApi.postMessage({
-                command: "agentBtwPromote",
-                question,
-                answer,
-              });
-              setBtwState(null);
             }}
           />
-        )}
-        {state.chatState.interrupted && !state.streaming && (
-          <div class="interrupted-session-banner">
-            <i class="codicon codicon-debug-restart" />
-            <div>
-              <strong>Session interrupted</strong>
-              <span>
-                The previous agent turn stopped before it finished. Resume to
-                let the agent inspect current state and continue safely.
-              </span>
+          <ContextUsageRow
+            inputTokens={state.lastInputTokens}
+            outputTokens={state.lastOutputTokens}
+            cacheReadTokens={state.lastCacheReadTokens}
+            estimatedTotalUsed={state.estimatedTotalUsed}
+            models={state.availableModels}
+            modelId={state.chatState.model}
+            contextBudget={state.chatState.contextBudget}
+            condenseThreshold={state.chatState.condenseThreshold}
+            defaultMaxTokens={DEFAULT_MAX_TOKENS}
+          />
+          {mcpManagerSnapshot && (
+            <McpManagerPanel
+              snapshot={mcpManagerSnapshot}
+              initialView={mcpManagerView}
+              onClose={() => setMcpManagerSnapshot(null)}
+              onRefresh={() =>
+                vscodeApi.postMessage({
+                  command: "agentSlashCommand",
+                  name: "mcp-refresh",
+                })
+              }
+              onServerAction={(serverName, action) =>
+                vscodeApi.postMessage({
+                  command: "agentMcpAction",
+                  serverName,
+                  action,
+                })
+              }
+              onOpenRawConfig={(scope: McpManagerScope) =>
+                vscodeApi.postMessage({
+                  command: "agentMcpConfigOpenRaw",
+                  profile: mcpManagerSnapshot.profile,
+                  scope,
+                })
+              }
+              onMutateConfig={(mutation: McpConfigBatchMutation) =>
+                new Promise<McpConfigMutationResult>((resolve, reject) => {
+                  const timer = setTimeout(() => {
+                    mcpMutationResolversRef.current.delete(
+                      mutation.operationId,
+                    );
+                    reject(
+                      new Error(
+                        "The MCP configuration save timed out. Refresh the manager before retrying.",
+                      ),
+                    );
+                  }, MCP_CONFIG_MUTATION_TIMEOUT_MS);
+                  mcpMutationResolversRef.current.set(mutation.operationId, {
+                    resolve,
+                    reject,
+                    timer,
+                  });
+                  vscodeApi.postMessage({
+                    command: "agentMcpConfigMutate",
+                    mutation,
+                  });
+                })
+              }
+              onSaveServer={(scope, server) =>
+                vscodeApi.postMessage({
+                  command: "agentMcpConfigSave",
+                  profile: mcpManagerSnapshot.profile,
+                  scope,
+                  server,
+                })
+              }
+              onRemoveServer={(scope, serverName) =>
+                vscodeApi.postMessage({
+                  command: "agentMcpConfigRemove",
+                  profile: mcpManagerSnapshot.profile,
+                  scope,
+                  serverName,
+                })
+              }
+            />
+          )}
+          {providerUsage && (
+            <ProviderUsagePanel
+              data={providerUsage}
+              onClose={() => setProviderUsage(null)}
+              onRefresh={() =>
+                vscodeApi.postMessage({
+                  command: "agentSlashCommand",
+                  name: "usage",
+                  args: "",
+                })
+              }
+            />
+          )}
+          {state.todos.length > 0 && <TodoPanel todos={state.todos} />}
+          {state.questionRequest && (
+            <QuestionCard
+              id={state.questionRequest.id}
+              context={state.questionRequest.context}
+              questions={state.questionRequest.questions}
+              backgroundTask={state.questionRequest.backgroundTask}
+              modes={state.modes}
+              remoteProgress={
+                remoteQuestionProgress &&
+                remoteQuestionProgress.id === state.questionRequest.id
+                  ? {
+                      step: remoteQuestionProgress.step,
+                      answers: remoteQuestionProgress.answers,
+                      notes: remoteQuestionProgress.notes,
+                    }
+                  : null
+              }
+              onProgressChange={(progress) => {
+                if (!state.questionRequest) return;
+                vscodeApi.postMessage({
+                  command: "agentQuestionProgress",
+                  id: state.questionRequest.id,
+                  step: progress.step,
+                  answers: progress.answers,
+                  notes: progress.notes,
+                  origin: questionProgressOriginRef.current,
+                });
+              }}
+              onSubmit={(
+                id: string,
+                answers: Record<
+                  string,
+                  string | string[] | number | boolean | undefined
+                >,
+                notes: Record<string, string>,
+              ) => {
+                dispatch({ type: "CLEAR_QUESTION" });
+                setRemoteQuestionProgress(null);
+                vscodeApi.postMessage({
+                  command: "agentQuestionResponse",
+                  id,
+                  answers,
+                  notes,
+                });
+              }}
+            />
+          )}
+          {forwardedApproval && (
+            <ApprovalPanelEmbed
+              request={forwardedApproval}
+              height={approvalPanelHeight}
+              resizing={approvalResizing}
+              followUpRef={forwardedFollowUpRef}
+              submit={handleForwardedApprovalSubmit}
+              onResizeStart={handleApprovalResizeStart}
+              onSuggestRegex={handleSuggestRegex}
+            />
+          )}
+          {btwState && (
+            <BtwPanel
+              state={btwState}
+              onDismiss={() => {
+                if (btwState && !btwState.done && !btwState.error) {
+                  vscodeApi.postMessage({
+                    command: "agentBtwCancel",
+                    requestId: btwState.requestId,
+                  });
+                }
+                setBtwState(null);
+              }}
+              onCancel={(requestId) =>
+                vscodeApi.postMessage({ command: "agentBtwCancel", requestId })
+              }
+              onPromote={(question, answer) => {
+                vscodeApi.postMessage({
+                  command: "agentBtwPromote",
+                  question,
+                  answer,
+                });
+                setBtwState(null);
+              }}
+            />
+          )}
+          {state.chatState.interrupted && !state.streaming && (
+            <div class="interrupted-session-banner">
+              <i class="codicon codicon-debug-restart" />
+              <div>
+                <strong>Session interrupted</strong>
+                <span>
+                  The previous agent turn stopped before it finished. Resume to
+                  let the agent inspect current state and continue safely.
+                </span>
+              </div>
+              <button
+                type="button"
+                class="interrupted-session-resume"
+                onClick={handleResumeInterruptedSession}
+                title="Resume interrupted session"
+              >
+                Resume
+              </button>
             </div>
-            <button
-              type="button"
-              class="interrupted-session-resume"
-              onClick={handleResumeInterruptedSession}
-              title="Resume interrupted session"
-            >
-              Resume
-            </button>
-          </div>
-        )}
-        {state.streaming && (
-          <StreamingStatusBar
-            messages={state.messages}
-            statusOverride={state.statusOverride}
+          )}
+          {state.streaming && (
+            <StreamingStatusBar
+              messages={state.messages}
+              statusOverride={state.statusOverride}
+            />
+          )}
+          <BackgroundSessionStrip
+            sessions={bgSessions}
+            openToActiveRequest={openFleetToActiveRequest}
+            onStop={handleStopBackground}
+            onOpenTranscript={handleOpenBgTranscript}
+            onSteer={handleSteerBackground}
+            onDetach={handleDetachBackground}
+            onRetry={handleRetryBackground}
+            onArchive={handleArchiveBackground}
+            onPause={handlePauseBackground}
+            onResume={handleResumeBackground}
           />
-        )}
-        <BackgroundSessionStrip
-          sessions={bgSessions}
-          openToActiveRequest={openFleetToActiveRequest}
-          onStop={handleStopBackground}
-          onOpenTranscript={handleOpenBgTranscript}
-          onSteer={handleSteerBackground}
-          onDetach={handleDetachBackground}
-          onRetry={handleRetryBackground}
-          onArchive={handleArchiveBackground}
-          onPause={handlePauseBackground}
-          onResume={handleResumeBackground}
-        />
+        </ChatActivityShelf>
         <InputArea
           onSend={handleSend}
           onInterject={handleInterject}

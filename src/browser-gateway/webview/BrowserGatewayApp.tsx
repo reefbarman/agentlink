@@ -13,6 +13,8 @@ import type {
 
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
 import type {
+  McpConfigBatchMutation,
+  McpConfigMutationResult,
   McpConfigSnapshot,
   McpManagerScope,
   McpManagerServerDraft,
@@ -74,6 +76,7 @@ import {
 import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
+import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
 
 import type {
@@ -3079,6 +3082,32 @@ export function BrowserGatewayApp({
     }
   };
 
+  const mutateAskAgentMcpConfig = async (
+    mutation: McpConfigBatchMutation,
+  ): Promise<McpConfigMutationResult> => {
+    const response = await fetch("/api/ask-agent/mcp-config/server", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify(mutation),
+    });
+    const result = (await response.json()) as McpConfigMutationResult;
+    if (result.configSnapshot) setMcpManagerSnapshot(result.configSnapshot);
+    setModeStatus(
+      result.ok
+        ? result.connectionOutcomes?.some(
+            (outcome) => outcome.status === "failed",
+          )
+          ? "MCP config saved, but one or more servers failed to connect."
+          : "Ask Agent MCP config saved."
+        : `MCP save failed: ${result.errors?.[0]?.message ?? response.status}`,
+    );
+    return result;
+  };
+
   const saveAskAgentMcpServer = async (
     scope: McpManagerScope,
     server: McpManagerServerDraft,
@@ -4875,283 +4904,288 @@ export function BrowserGatewayApp({
                   />
                 )}
               </div>
-              {!isAskAgentSelected &&
-                foreground &&
-                foreground.messageQueue.length > 0 &&
-                !mobileReviewOpen && (
-                  <MessageQueuePanel
-                    queue={foreground.messageQueue}
-                    onSteer={(item) => {
-                      browserVscodeApi.postMessage({
-                        command: "agentSteerQueuedMessage",
-                        sessionId: foreground.sessionId,
-                        queueId: item.id,
-                        text: item.fullText ?? item.text,
-                        displayText: item.text,
-                        isSlashCommand: item.isSlashCommand === true,
-                        slashCommandLabel: item.slashCommandLabel,
-                        attachments: item.attachments,
-                        images: item.images,
-                        documents: item.documents,
-                      });
-                    }}
-                    onInterject={(item) => {
-                      browserVscodeApi.postMessage({
-                        command: "agentInterjectQueuedMessage",
-                        sessionId: foreground.sessionId,
-                        queueId: item.id,
-                        text: item.fullText ?? item.text,
-                        displayText: item.text,
-                        isSlashCommand: item.isSlashCommand === true,
-                        slashCommandLabel: item.slashCommandLabel,
-                        attachments: item.attachments,
-                        images: item.images,
-                        documents: item.documents,
-                      });
-                    }}
+              <ChatActivityShelf>
+                {!isAskAgentSelected &&
+                  foreground &&
+                  foreground.messageQueue.length > 0 &&
+                  !mobileReviewOpen && (
+                    <MessageQueuePanel
+                      queue={foreground.messageQueue}
+                      onSteer={(item) => {
+                        browserVscodeApi.postMessage({
+                          command: "agentSteerQueuedMessage",
+                          sessionId: foreground.sessionId,
+                          queueId: item.id,
+                          text: item.fullText ?? item.text,
+                          displayText: item.text,
+                          isSlashCommand: item.isSlashCommand === true,
+                          slashCommandLabel: item.slashCommandLabel,
+                          attachments: item.attachments,
+                          images: item.images,
+                          documents: item.documents,
+                        });
+                      }}
+                      onInterject={(item) => {
+                        browserVscodeApi.postMessage({
+                          command: "agentInterjectQueuedMessage",
+                          sessionId: foreground.sessionId,
+                          queueId: item.id,
+                          text: item.fullText ?? item.text,
+                          displayText: item.text,
+                          isSlashCommand: item.isSlashCommand === true,
+                          slashCommandLabel: item.slashCommandLabel,
+                          attachments: item.attachments,
+                          images: item.images,
+                          documents: item.documents,
+                        });
+                      }}
+                    />
+                  )}
+                {!isAskAgentSelected && !mobileReviewOpen && foreground && (
+                  <ContextUsageRow
+                    inputTokens={foreground.lastInputTokens}
+                    outputTokens={foreground.lastOutputTokens}
+                    cacheReadTokens={foreground.lastCacheReadTokens}
+                    estimatedTotalUsed={foreground.estimatedTotalUsed}
+                    models={composerModels}
+                    modelId={foreground.model}
+                    contextBudget={foreground.contextBudget}
+                    condenseThreshold={foreground.condenseThreshold}
+                    defaultMaxTokens={DEFAULT_MAX_TOKENS}
+                    className="browser-context-row"
                   />
                 )}
-              {!isAskAgentSelected && !mobileReviewOpen && foreground && (
-                <ContextUsageRow
-                  inputTokens={foreground.lastInputTokens}
-                  outputTokens={foreground.lastOutputTokens}
-                  cacheReadTokens={foreground.lastCacheReadTokens}
-                  estimatedTotalUsed={foreground.estimatedTotalUsed}
-                  models={composerModels}
-                  modelId={foreground.model}
-                  contextBudget={foreground.contextBudget}
-                  condenseThreshold={foreground.condenseThreshold}
-                  defaultMaxTokens={DEFAULT_MAX_TOKENS}
-                  className="browser-context-row"
-                />
-              )}
-              {!mobileReviewOpen &&
-                showMcpStatus &&
-                (mcpManagerSnapshot ||
-                  (!isAskAgentSelected && snapshot?.ui.mcpStatusInfos)) &&
-                (() => {
-                  const renderedMcpSnapshot =
-                    mcpManagerSnapshot ??
-                    ({
-                      profile: "main",
-                      version: 0,
-                      sources: [],
-                      entries: [],
-                      statusInfos: snapshot?.ui.mcpStatusInfos ?? [],
-                      capabilities: {
-                        canEditConfig: false,
-                        canOpenRawConfig: false,
-                        canReconnect: true,
-                        canReauthenticate: true,
-                        canDisable: true,
-                        canUseProjectConfig: true,
-                      },
-                    } satisfies McpConfigSnapshot);
-                  const panelSnapshot = isAskAgentSelected
-                    ? ({
-                        ...renderedMcpSnapshot,
+                {!mobileReviewOpen &&
+                  showMcpStatus &&
+                  (mcpManagerSnapshot ||
+                    (!isAskAgentSelected && snapshot?.ui.mcpStatusInfos)) &&
+                  (() => {
+                    const renderedMcpSnapshot =
+                      mcpManagerSnapshot ??
+                      ({
+                        profile: "main",
+                        version: 0,
+                        sources: [],
+                        entries: [],
+                        statusInfos: snapshot?.ui.mcpStatusInfos ?? [],
                         capabilities: {
-                          ...renderedMcpSnapshot.capabilities,
+                          canEditConfig: false,
                           canOpenRawConfig: false,
+                          canReconnect: true,
+                          canReauthenticate: true,
+                          canDisable: false,
+                          canUseProjectConfig: true,
                         },
-                      } satisfies McpConfigSnapshot)
-                    : renderedMcpSnapshot;
-                  return (
-                    <McpManagerPanel
-                      snapshot={panelSnapshot}
-                      initialView={mcpManagerView}
-                      error={
-                        askAgentMcpStatusError === "mcp_host_unavailable"
-                          ? "No VS Code MCP host is available for Ask Agent."
-                          : askAgentMcpStatusError
-                      }
-                      onClose={() => setShowMcpStatus(false)}
-                      onRefresh={() => {
-                        if (isAskAgentSelected) {
-                          void refreshAskAgentMcpStatus({ reconnect: true });
-                        } else {
-                          setModeStatus(
-                            "Use the VS Code window to refresh workspace MCP servers.",
-                          );
+                      } satisfies McpConfigSnapshot);
+                    const panelSnapshot = isAskAgentSelected
+                      ? ({
+                          ...renderedMcpSnapshot,
+                          capabilities: {
+                            ...renderedMcpSnapshot.capabilities,
+                            canOpenRawConfig: false,
+                          },
+                        } satisfies McpConfigSnapshot)
+                      : renderedMcpSnapshot;
+                    return (
+                      <McpManagerPanel
+                        snapshot={panelSnapshot}
+                        initialView={mcpManagerView}
+                        error={
+                          askAgentMcpStatusError === "mcp_host_unavailable"
+                            ? "No VS Code MCP host is available for Ask Agent."
+                            : askAgentMcpStatusError
                         }
-                      }}
-                      onServerAction={(serverName, action) => {
-                        if (isAskAgentSelected) {
-                          if (
-                            action === "reconnect" ||
-                            action === "reauthenticate"
-                          ) {
+                        onClose={() => setShowMcpStatus(false)}
+                        onRefresh={() => {
+                          if (isAskAgentSelected) {
                             void refreshAskAgentMcpStatus({ reconnect: true });
                           } else {
                             setModeStatus(
-                              "Ask Agent MCP disable is not available in the browser yet.",
+                              "Use the VS Code window to refresh workspace MCP servers.",
                             );
                           }
-                        } else {
-                          handleMcpAction(serverName, action);
+                        }}
+                        onServerAction={(serverName, action) => {
+                          if (isAskAgentSelected) {
+                            if (
+                              action === "reconnect" ||
+                              action === "reauthenticate"
+                            ) {
+                              void refreshAskAgentMcpStatus({
+                                reconnect: true,
+                              });
+                            }
+                          } else {
+                            handleMcpAction(serverName, action);
+                          }
+                        }}
+                        onOpenRawConfig={(scope) => {
+                          if (isAskAgentSelected) {
+                            void openAskAgentRawMcpConfig(scope);
+                          }
+                        }}
+                        onMutateConfig={
+                          isAskAgentSelected
+                            ? (mutation) => mutateAskAgentMcpConfig(mutation)
+                            : undefined
                         }
+                        onSaveServer={(scope, server) => {
+                          if (isAskAgentSelected) {
+                            void saveAskAgentMcpServer(scope, server);
+                          }
+                        }}
+                        onRemoveServer={(scope, serverName) => {
+                          if (isAskAgentSelected) {
+                            void removeAskAgentMcpServer(scope, serverName);
+                          }
+                        }}
+                      />
+                    );
+                  })()}
+                {!mobileReviewOpen && (foreground?.todos?.length ?? 0) > 0 && (
+                  <TodoPanel todos={foreground?.todos ?? []} />
+                )}
+                {!isAskAgentSelected &&
+                  pendingUrlElicitation &&
+                  !mobileReviewOpen && (
+                    <UrlElicitationPanel
+                      request={pendingUrlElicitation}
+                      onAccept={(id, url) => {
+                        window.open(url, "_blank", "noopener,noreferrer");
+                        browserVscodeApi.postMessage({
+                          command: "agentUrlElicitationResponse",
+                          id,
+                          action: "accept",
+                          originTabId: snapshotOriginRef.current.tabId,
+                        });
                       }}
-                      onOpenRawConfig={(scope) => {
-                        if (isAskAgentSelected) {
-                          void openAskAgentRawMcpConfig(scope);
-                        }
+                      onDecline={(id) => {
+                        browserVscodeApi.postMessage({
+                          command: "agentUrlElicitationResponse",
+                          id,
+                          action: "decline",
+                          originTabId: snapshotOriginRef.current.tabId,
+                        });
                       }}
-                      onSaveServer={(scope, server) => {
-                        if (isAskAgentSelected) {
-                          void saveAskAgentMcpServer(scope, server);
-                        }
-                      }}
-                      onRemoveServer={(scope, serverName) => {
-                        if (isAskAgentSelected) {
-                          void removeAskAgentMcpServer(scope, serverName);
-                        }
+                      onCancel={(id) => {
+                        browserVscodeApi.postMessage({
+                          command: "agentUrlElicitationResponse",
+                          id,
+                          action: "cancel",
+                          originTabId: snapshotOriginRef.current.tabId,
+                        });
                       }}
                     />
-                  );
-                })()}
-              {!mobileReviewOpen && (foreground?.todos?.length ?? 0) > 0 && (
-                <TodoPanel todos={foreground?.todos ?? []} />
-              )}
-              {!isAskAgentSelected &&
-                pendingUrlElicitation &&
-                !mobileReviewOpen && (
-                  <UrlElicitationPanel
-                    request={pendingUrlElicitation}
-                    onAccept={(id, url) => {
-                      window.open(url, "_blank", "noopener,noreferrer");
+                  )}
+                {visibleQuestion && !mobileReviewOpen && (
+                  <QuestionCard
+                    key={`${snapshotOriginRef.current.tabId}:${visibleQuestion.id}`}
+                    id={visibleQuestion.id}
+                    context={visibleQuestion.context}
+                    questions={visibleQuestion.questions}
+                    backgroundTask={visibleQuestion.backgroundTask}
+                    modes={modes}
+                    remoteProgress={
+                      remoteQuestionProgress &&
+                      remoteQuestionProgress.id === visibleQuestion.id
+                        ? {
+                            step: remoteQuestionProgress.step,
+                            answers: remoteQuestionProgress.answers,
+                            notes: remoteQuestionProgress.notes,
+                          }
+                        : null
+                    }
+                    onProgressChange={(progress) => {
                       browserVscodeApi.postMessage({
-                        command: "agentUrlElicitationResponse",
-                        id,
-                        action: "accept",
+                        command: "agentQuestionProgress",
+                        id: visibleQuestion.id,
+                        step: progress.step,
+                        answers: progress.answers,
+                        notes: progress.notes,
+                        origin: questionProgressOriginRef.current,
                         originTabId: snapshotOriginRef.current.tabId,
                       });
                     }}
-                    onDecline={(id) => {
+                    onSubmit={(id, answers, notes) => {
+                      setLocalDismissedQuestionId(id);
                       browserVscodeApi.postMessage({
-                        command: "agentUrlElicitationResponse",
+                        command: "agentQuestionResponse",
                         id,
-                        action: "decline",
-                        originTabId: snapshotOriginRef.current.tabId,
-                      });
-                    }}
-                    onCancel={(id) => {
-                      browserVscodeApi.postMessage({
-                        command: "agentUrlElicitationResponse",
-                        id,
-                        action: "cancel",
+                        answers,
+                        notes,
                         originTabId: snapshotOriginRef.current.tabId,
                       });
                     }}
                   />
                 )}
-              {visibleQuestion && !mobileReviewOpen && (
-                <QuestionCard
-                  key={`${snapshotOriginRef.current.tabId}:${visibleQuestion.id}`}
-                  id={visibleQuestion.id}
-                  context={visibleQuestion.context}
-                  questions={visibleQuestion.questions}
-                  backgroundTask={visibleQuestion.backgroundTask}
-                  modes={modes}
-                  remoteProgress={
-                    remoteQuestionProgress &&
-                    remoteQuestionProgress.id === visibleQuestion.id
-                      ? {
-                          step: remoteQuestionProgress.step,
-                          answers: remoteQuestionProgress.answers,
-                          notes: remoteQuestionProgress.notes,
-                        }
-                      : null
-                  }
-                  onProgressChange={(progress) => {
-                    browserVscodeApi.postMessage({
-                      command: "agentQuestionProgress",
-                      id: visibleQuestion.id,
-                      step: progress.step,
-                      answers: progress.answers,
-                      notes: progress.notes,
-                      origin: questionProgressOriginRef.current,
-                      originTabId: snapshotOriginRef.current.tabId,
-                    });
-                  }}
-                  onSubmit={(id, answers, notes) => {
-                    setLocalDismissedQuestionId(id);
-                    browserVscodeApi.postMessage({
-                      command: "agentQuestionResponse",
-                      id,
-                      answers,
-                      notes,
-                      originTabId: snapshotOriginRef.current.tabId,
-                    });
-                  }}
-                />
-              )}
-              {visibleApproval && (
-                <ApprovalPanelEmbed
-                  key={`${snapshotOriginRef.current.tabId}:${visibleApproval.id}`}
-                  request={visibleApproval}
-                  height={approvalPanelHeight}
-                  resizing={approvalResizing}
-                  followUpRef={forwardedFollowUpRef}
-                  submit={handleForwardedApprovalSubmit}
-                  onResizeStart={handleApprovalResizeStart}
-                  onSuggestRegex={handleSuggestRegex}
-                  actions={
-                    canOpenMobileReview && (
-                      <div class="approval-mobile-review-actions">
-                        <button
-                          class={`secondary mobile-review-button${mobileReviewOpen ? " active" : ""}`}
-                          aria-expanded={mobileReviewOpen}
-                          onClick={() =>
-                            setMobilePane((current) =>
-                              current === "review" ? null : "review",
-                            )
-                          }
-                          type="button"
-                        >
-                          <i
-                            class={`codicon ${mobileReviewOpen ? "codicon-comment-discussion" : "codicon-diff"}`}
-                          />
-                          <span>
-                            {mobileReviewOpen ? "Back to chat" : "View diff"}
-                          </span>
-                        </button>
-                      </div>
-                    )
-                  }
-                />
-              )}
-              {streaming && !mobileReviewOpen ? (
-                <StreamingStatusBar
-                  messages={messages}
-                  statusOverride={statusOverride}
-                  className="browser-streaming-row"
-                />
-              ) : null}
-              {!isAskAgentSelected && !mobileReviewOpen && (
-                <BackgroundSessionStrip
-                  sessions={background}
-                  onStop={handleStopBackground}
-                  onOpenTranscript={handleOpenBgTranscript}
-                  onSteer={(sessionId, message) =>
-                    handleBackgroundAction("steer", sessionId, message)
-                  }
-                  onDetach={(sessionId) =>
-                    handleBackgroundAction("detach", sessionId)
-                  }
-                  onRetry={(sessionId) =>
-                    handleBackgroundAction("retry", sessionId)
-                  }
-                  onArchive={(sessionId) =>
-                    handleBackgroundAction("archive", sessionId)
-                  }
-                  onPause={(sessionId) =>
-                    handleBackgroundAction("pause", sessionId)
-                  }
-                  onResume={(sessionId) =>
-                    handleBackgroundAction("resume", sessionId)
-                  }
-                />
-              )}
+                {visibleApproval && (
+                  <ApprovalPanelEmbed
+                    key={`${snapshotOriginRef.current.tabId}:${visibleApproval.id}`}
+                    request={visibleApproval}
+                    height={approvalPanelHeight}
+                    resizing={approvalResizing}
+                    followUpRef={forwardedFollowUpRef}
+                    submit={handleForwardedApprovalSubmit}
+                    onResizeStart={handleApprovalResizeStart}
+                    onSuggestRegex={handleSuggestRegex}
+                    actions={
+                      canOpenMobileReview && (
+                        <div class="approval-mobile-review-actions">
+                          <button
+                            class={`secondary mobile-review-button${mobileReviewOpen ? " active" : ""}`}
+                            aria-expanded={mobileReviewOpen}
+                            onClick={() =>
+                              setMobilePane((current) =>
+                                current === "review" ? null : "review",
+                              )
+                            }
+                            type="button"
+                          >
+                            <i
+                              class={`codicon ${mobileReviewOpen ? "codicon-comment-discussion" : "codicon-diff"}`}
+                            />
+                            <span>
+                              {mobileReviewOpen ? "Back to chat" : "View diff"}
+                            </span>
+                          </button>
+                        </div>
+                      )
+                    }
+                  />
+                )}
+                {streaming && !mobileReviewOpen ? (
+                  <StreamingStatusBar
+                    messages={messages}
+                    statusOverride={statusOverride}
+                    className="browser-streaming-row"
+                  />
+                ) : null}
+                {!isAskAgentSelected && !mobileReviewOpen && (
+                  <BackgroundSessionStrip
+                    sessions={background}
+                    onStop={handleStopBackground}
+                    onOpenTranscript={handleOpenBgTranscript}
+                    onSteer={(sessionId, message) =>
+                      handleBackgroundAction("steer", sessionId, message)
+                    }
+                    onDetach={(sessionId) =>
+                      handleBackgroundAction("detach", sessionId)
+                    }
+                    onRetry={(sessionId) =>
+                      handleBackgroundAction("retry", sessionId)
+                    }
+                    onArchive={(sessionId) =>
+                      handleBackgroundAction("archive", sessionId)
+                    }
+                    onPause={(sessionId) =>
+                      handleBackgroundAction("pause", sessionId)
+                    }
+                    onResume={(sessionId) =>
+                      handleBackgroundAction("resume", sessionId)
+                    }
+                  />
+                )}
+              </ChatActivityShelf>
               {!mobileReviewOpen && (
                 <div class="browser-chat-composer">
                   <InputArea

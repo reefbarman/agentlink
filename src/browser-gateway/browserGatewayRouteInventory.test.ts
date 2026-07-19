@@ -12,6 +12,7 @@ describe("browser gateway route auth inventory", () => {
         "instance-bearer",
         "browser-session",
         "helper-shared-secret",
+        "instance-bearer+helper-shared-secret",
       ]),
     );
   });
@@ -35,12 +36,12 @@ describe("browser gateway route auth inventory", () => {
     );
   });
 
-  it("keeps VS Code mutations behind the per-instance bearer token", () => {
+  it("requires dual authentication for sensitive MCP config mutations", () => {
     expect(BROWSER_GATEWAY_ROUTE_FAMILIES).toContainEqual(
       expect.objectContaining({
         surface: "vscode-gateway",
-        pathClass: "/api/* except public reads; /internal/ask-agent/*",
-        auth: "instance-bearer",
+        pathClass: "/internal/ask-agent/mcp-config/server",
+        auth: "instance-bearer+helper-shared-secret",
       }),
     );
   });

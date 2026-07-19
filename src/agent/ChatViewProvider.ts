@@ -43,11 +43,14 @@ import type {
   ToolResult,
 } from "../shared/types.js";
 import type {
+  McpConfigBatchMutation,
+  McpConfigMutationResult,
   McpConfigSnapshot,
   McpManagerProfile,
   McpManagerScope,
   McpManagerServerDraft,
   McpManagerView,
+  McpServerConnectionOutcome,
 } from "../shared/mcpManagerTypes.js";
 import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
@@ -72,15 +75,15 @@ import {
 } from "./AgentUiPublisher.js";
 import {
   buildMcpConfigEntries,
+  buildMcpConfigRevision,
   getAskAgentMcpConfigPaths,
   getAskAgentMcpConfigFilePaths,
   getGlobalMcpConfigPaths,
   getMcpConfigFilePaths,
   getMcpConfigSources,
   loadAskAgentMcpConfigs,
+  mutateMcpConfigBatch,
   persistMcpToolApproval,
-  removeMcpConfigServer,
-  upsertMcpConfigServer,
 } from "./mcpConfig.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import {
@@ -477,6 +480,7 @@ export type ExtensionToWebview =
       }>;
       configSnapshot?: McpConfigSnapshot;
     }
+  | { type: "agentMcpConfigMutationResult"; result: McpConfigMutationResult }
   | { type: "showApproval"; request: ApprovalRequest }
   | { type: "idle" }
   | {
@@ -1853,6 +1857,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           : (this.mcpConfigVersions.get(
               projectScope?.projectId ?? "compatibility",
             ) ?? 0),
+      revision: buildMcpConfigRevision(sources),
       sources,
       entries,
       statusInfos: infos,
@@ -1863,6 +1868,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         canReauthenticate: true,
         canDisable: true,
         canUseProjectConfig: profile === "main",
+        canWriteSecrets: true,
+        canConfigureLocalProcess: true,
       },
     };
   }
@@ -3352,31 +3359,80 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
-  public submitBrowserMcpAction(
+  private async persistMcpServerDisabled(
+    profile: McpManagerProfile,
+    serverName: string,
+  ): Promise<McpConfigMutationResult> {
+    const snapshot = await this.buildMcpConfigSnapshot(profile);
+    const entry = snapshot.entries.find(
+      (candidate) => candidate.name === serverName,
+    );
+    const scope =
+      entry?.preferredEditScope ?? entry?.writableOverrideScopes?.at(-1);
+    if (!entry || !scope || !snapshot.revision) {
+      return {
+        operationId: randomUUID(),
+        ok: false,
+        configSaved: false,
+        errors: [{ code: "scope_not_writable", message: "scope_not_writable" }],
+      };
+    }
+    return this.submitMcpConfigMutation(
+      {
+        operationId: randomUUID(),
+        profile,
+        scope,
+        expectedRevision: snapshot.revision,
+        operations: [
+          {
+            kind: "upsert",
+            conflictAction: "replace",
+            server: { ...entry.config, disabled: true },
+          },
+        ],
+      },
+      { allowMainProfileMutation: true },
+    );
+  }
+
+  public async submitBrowserMcpAction(
     serverName: string,
     action: "disable" | "reconnect" | "reauthenticate",
-  ): {
+  ): Promise<{
     ok: boolean;
     infos?: ReturnType<McpClientHub["getServerInfos"]>;
-  } {
+    configSnapshot?: McpConfigSnapshot;
+    errors?: McpConfigMutationResult["errors"];
+  }> {
     if (!serverName || !action) return { ok: false };
     const projectScope = this.getCurrentProjectScope();
     const hub = this.getCurrentProjectMcpHub(projectScope) ?? this.mcpHub;
-    void (async () => {
-      if (action === "disable") {
-        await hub.disableServer(serverName);
-      } else if (action === "reconnect") {
-        await hub.reconnectServer(serverName);
-      } else if (action === "reauthenticate") {
-        await hub.reauthenticateServer(serverName);
-      }
-      await this.postMcpManagerSnapshot({
-        profile: "main",
-        projectScope,
-        mainHub: hub,
-      });
-    })();
-    return { ok: true, infos: hub.getServerInfos() };
+    if (action === "disable") {
+      const result = await this.persistMcpServerDisabled("main", serverName);
+      return {
+        ok: result.ok,
+        configSnapshot: result.configSnapshot,
+        errors: result.errors,
+        infos: hub.getServerInfos(),
+      };
+    }
+    if (action === "reconnect") {
+      await hub.reconnectServer(serverName);
+    } else {
+      await hub.reauthenticateServer(serverName);
+    }
+    const configSnapshot = await this.buildMcpConfigSnapshot(
+      "main",
+      undefined,
+      projectScope,
+      hub,
+    );
+    await this.postMcpManagerSnapshot({
+      profile: "main",
+      projectScope,
+      mainHub: hub,
+    });
+    return { ok: true, infos: hub.getServerInfos(), configSnapshot };
   }
 
   public async submitBrowserMcpConfigSnapshot(
@@ -3396,109 +3452,152 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
+  private buildMcpConnectionOutcomes(
+    mutation: McpConfigBatchMutation,
+    snapshot: McpConfigSnapshot,
+  ): McpServerConnectionOutcome[] {
+    const statuses = new Map(
+      snapshot.statusInfos.map((info) => [info.name, info] as const),
+    );
+    return mutation.operations
+      .filter((operation) => operation.kind === "upsert")
+      .map((operation) => {
+        const serverName =
+          operation.conflictAction === "rename" && operation.renameTo
+            ? operation.renameTo
+            : operation.server.name;
+        const status = statuses.get(serverName);
+        if (!status) {
+          return { serverName, status: "not_connected" as const };
+        }
+        if (status.status === "connected" || status.status === "connecting") {
+          return { serverName, status: status.status };
+        }
+        if (status.status === "disabled") {
+          return { serverName, status: "disabled" as const };
+        }
+        const authenticationRequired =
+          status.error?.toLowerCase().includes("authentication") ?? false;
+        return {
+          serverName,
+          status: authenticationRequired
+            ? ("authentication_required" as const)
+            : ("failed" as const),
+          ...(status.error ? { error: status.error } : {}),
+        };
+      });
+  }
+
+  public async submitMcpConfigMutation(
+    mutation: McpConfigBatchMutation,
+    options: { allowMainProfileMutation?: boolean } = {},
+  ): Promise<McpConfigMutationResult> {
+    if (mutation.profile !== "ask-agent" && !options.allowMainProfileMutation) {
+      return {
+        operationId: mutation.operationId,
+        ok: false,
+        configSaved: false,
+        errors: [
+          {
+            code: "scope_not_writable",
+            message: "main_profile_read_only_in_browser",
+          },
+        ],
+      };
+    }
+    const projectScope =
+      mutation.profile === "main" ? this.getCurrentProjectScope() : undefined;
+    const projectRoot = projectScope?.rootPath;
+    if (mutation.profile === "main" && !projectRoot) {
+      return {
+        operationId: mutation.operationId,
+        ok: false,
+        configSaved: false,
+        errors: [
+          { code: "scope_not_writable", message: "project_unavailable" },
+        ],
+      };
+    }
+
+    const result = await mutateMcpConfigBatch(mutation, projectRoot);
+    if (!result.ok) return result;
+
+    if (mutation.profile === "ask-agent") {
+      this.askAgentMcpConfigVersion += 1;
+      await this.refreshAskAgentMcpConnections({
+        interactiveForNewServers: false,
+      });
+    } else {
+      this.bumpMcpConfigVersion(projectScope!.projectId);
+      await this.refreshMcpConnections(
+        { interactiveForNewServers: true },
+        projectScope,
+      );
+    }
+    const configSnapshot = await this.buildMcpConfigSnapshot(
+      mutation.profile,
+      undefined,
+      projectScope,
+      this.getCurrentProjectMcpHub(projectScope),
+    );
+    return {
+      ...result,
+      configSnapshot,
+      connectionOutcomes: this.buildMcpConnectionOutcomes(
+        mutation,
+        configSnapshot,
+      ),
+    };
+  }
+
   public async submitBrowserMcpConfigServer(input: {
     profile: McpManagerProfile;
     scope: McpManagerScope;
     server: McpManagerServerDraft;
+    expectedRevision?: string;
+    operationId?: string;
     allowMainProfileMutation?: boolean;
-  }): Promise<{
-    ok: boolean;
-    configSnapshot?: McpConfigSnapshot;
-    error?: string;
-  }> {
-    try {
-      if (input.profile !== "ask-agent" && !input.allowMainProfileMutation) {
-        throw new Error("main_profile_read_only_in_browser");
-      }
-      const projectScope =
-        input.profile === "main" ? this.getCurrentProjectScope() : undefined;
-      const projectRoot = projectScope?.rootPath;
-      if (input.profile === "main" && !projectRoot) {
-        throw new Error("project_unavailable");
-      }
-      await upsertMcpConfigServer(input, projectRoot);
-      if (input.profile === "ask-agent") {
-        this.askAgentMcpConfigVersion += 1;
-        await this.refreshAskAgentMcpConnections({
-          interactiveForNewServers: false,
-        });
-      } else {
-        this.bumpMcpConfigVersion(projectScope!.projectId);
-        await this.refreshMcpConnections(
-          { interactiveForNewServers: true },
-          projectScope,
-        );
-      }
-      return {
-        ok: true,
-        configSnapshot: await this.buildMcpConfigSnapshot(
-          input.profile,
-          undefined,
-          projectScope,
-          this.getCurrentProjectMcpHub(projectScope),
-        ),
-      };
-    } catch (err) {
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
+  }): Promise<McpConfigMutationResult> {
+    const expectedRevision =
+      input.expectedRevision ??
+      (await this.buildMcpConfigSnapshot(input.profile)).revision ??
+      "";
+    return this.submitMcpConfigMutation(
+      {
+        operationId: input.operationId ?? randomUUID(),
+        profile: input.profile,
+        scope: input.scope,
+        expectedRevision,
+        operations: [
+          { kind: "upsert", server: input.server, conflictAction: "replace" },
+        ],
+      },
+      { allowMainProfileMutation: input.allowMainProfileMutation },
+    );
   }
 
   public async submitBrowserMcpConfigRemove(input: {
     profile: McpManagerProfile;
     scope: McpManagerScope;
     serverName: string;
+    expectedRevision?: string;
+    operationId?: string;
     allowMainProfileMutation?: boolean;
-  }): Promise<{
-    ok: boolean;
-    configSnapshot?: McpConfigSnapshot;
-    error?: string;
-  }> {
-    try {
-      if (input.profile !== "ask-agent" && !input.allowMainProfileMutation) {
-        throw new Error("main_profile_read_only_in_browser");
-      }
-      const projectScope =
-        input.profile === "main" ? this.getCurrentProjectScope() : undefined;
-      const projectRoot = projectScope?.rootPath;
-      if (input.profile === "main" && !projectRoot) {
-        throw new Error("project_unavailable");
-      }
-      await removeMcpConfigServer(
-        input.profile,
-        input.scope,
-        input.serverName,
-        input.profile === "main" ? projectRoot : undefined,
-      );
-      if (input.profile === "ask-agent") {
-        this.askAgentMcpConfigVersion += 1;
-        await this.refreshAskAgentMcpConnections({
-          interactiveForNewServers: false,
-        });
-      } else {
-        this.bumpMcpConfigVersion(projectScope!.projectId);
-        await this.refreshMcpConnections(
-          { interactiveForNewServers: true },
-          projectScope,
-        );
-      }
-      return {
-        ok: true,
-        configSnapshot: await this.buildMcpConfigSnapshot(
-          input.profile,
-          undefined,
-          projectScope,
-          this.getCurrentProjectMcpHub(projectScope),
-        ),
-      };
-    } catch (err) {
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
+  }): Promise<McpConfigMutationResult> {
+    const expectedRevision =
+      input.expectedRevision ??
+      (await this.buildMcpConfigSnapshot(input.profile)).revision ??
+      "";
+    return this.submitMcpConfigMutation(
+      {
+        operationId: input.operationId ?? randomUUID(),
+        profile: input.profile,
+        scope: input.scope,
+        expectedRevision,
+        operations: [{ kind: "remove", serverName: input.serverName }],
+      },
+      { allowMainProfileMutation: input.allowMainProfileMutation },
+    );
   }
 
   public async submitBrowserMcpConfigOpenRaw(input: {
@@ -5132,7 +5231,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const projectScope = this.getCurrentProjectScope();
         const hub = this.getCurrentProjectMcpHub(projectScope) ?? this.mcpHub;
         if (action === "disable") {
-          await hub.disableServer(serverName);
+          const result = await this.persistMcpServerDisabled(
+            "main",
+            serverName,
+          );
+          if (!result.ok) {
+            vscode.window.showErrorMessage(
+              `Failed to disable MCP server: ${result.errors[0]?.message ?? "unknown error"}`,
+            );
+          }
         } else if (action === "reconnect") {
           await hub.reconnectServer(serverName);
         } else if (action === "reauthenticate") {
@@ -5146,6 +5253,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "agentMcpConfigMutate": {
+        const result = await this.submitMcpConfigMutation(
+          msg.mutation as McpConfigBatchMutation,
+          { allowMainProfileMutation: true },
+        );
+        this.postMessage({
+          type: "agentMcpConfigMutationResult",
+          result,
+        } as ExtensionToWebview);
+        if (result.configSnapshot) {
+          this.postMessage({
+            type: "agentMcpStatus",
+            infos: result.configSnapshot.statusInfos,
+            open: true,
+            view: "config",
+            configSnapshot: result.configSnapshot,
+          } as ExtensionToWebview);
+        }
+        break;
+      }
+
       case "agentMcpConfigSave": {
         const result = await this.submitBrowserMcpConfigServer({
           profile: (msg.profile as McpManagerProfile) ?? "main",
@@ -5155,7 +5283,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
         if (!result.ok) {
           vscode.window.showErrorMessage(
-            `Failed to save MCP server: ${result.error ?? "unknown error"}`,
+            `Failed to save MCP server: ${result.errors[0]?.message ?? "unknown error"}`,
           );
         } else if (result.configSnapshot) {
           this.postMessage({
@@ -5178,7 +5306,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
         if (!result.ok) {
           vscode.window.showErrorMessage(
-            `Failed to remove MCP server: ${result.error ?? "unknown error"}`,
+            `Failed to remove MCP server: ${result.errors[0]?.message ?? "unknown error"}`,
           );
         } else if (result.configSnapshot) {
           this.postMessage({

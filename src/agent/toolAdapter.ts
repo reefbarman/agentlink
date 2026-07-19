@@ -1597,8 +1597,8 @@ export interface ToolDispatchContext {
   getCommandApprovalPolicy?: (sessionId: string) => CommandApprovalPolicy;
   /** Restricts execute_command independently of user approval settings. */
   commandExecutionPolicy?: import("../core/capabilities/terminal.js").CommandExecutionPolicy;
-  /** Snapshots session-scoped write trust from a spawning session into its child. */
-  inheritSessionWriteState?: (
+  /** Snapshots session-scoped approvals from a spawning session into its child. */
+  inheritSessionApprovalState?: (
     parentSessionId: string,
     childSessionId: string,
   ) => void;

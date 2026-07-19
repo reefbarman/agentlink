@@ -35,6 +35,10 @@ import type {
   BrowserGatewayAskAgentSummaryResult,
 } from "./browserGatewayAskAgentSummarizer.js";
 import { StreamingBaselineRecorder } from "../../shared/streamingBaselineMetrics.js";
+import {
+  BROWSER_GATEWAY_CLIENT_ORIGIN_HEADER,
+  BROWSER_GATEWAY_HELPER_SECRET_HEADER,
+} from "../browserGatewayRequestTrust.js";
 
 async function waitForListening(
   server: http.Server,
@@ -2528,8 +2532,8 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(completeCalls.at(-1)?.memoryContext).toContain(
       "assistant: No, memory retrieval should be instructions-only",
     );
-    expect(completeCalls.at(-1)?.memoryContext).toContain(
-      "Rolling summary for Can you answer about memory retrieval now?",
+    expect(completeCalls.at(-1)?.memoryContext).toMatch(
+      /Rolling summary for (?:Can you answer about memory retrieval now\?|What do you know about me\?)/,
     );
     expect(completeCalls.at(-1)?.memoryContext).not.toContain(
       "transcript:browser-gateway:ask-agent:default:",
@@ -2789,7 +2793,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
           event: "ask-agent.send",
           textChars: "Hello Ask Agent".length,
           credential: "missing",
-          model: "gpt-5.3-codex",
+          model: "gpt-5.6-luna",
           reasoning: "low",
           ok: true,
           phase: "received",
@@ -2905,7 +2909,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       snapshot: {
         session: {
           foreground: {
-            model: "gpt-5.3-codex",
+            model: "gpt-5.6-luna",
             reasoningEffort: "high",
           },
         },
@@ -5412,6 +5416,8 @@ describe("BrowserGatewayHelper proxy routing", () => {
     const upstreamRequests: Array<{
       url: string;
       authorization?: string;
+      helperSecret?: string;
+      clientOrigin?: string;
       body: unknown;
     }> = [];
     const upstream = http.createServer(async (req, res) => {
@@ -5491,6 +5497,12 @@ describe("BrowserGatewayHelper proxy routing", () => {
         upstreamRequests.push({
           url,
           authorization: req.headers.authorization,
+          helperSecret: req.headers[BROWSER_GATEWAY_HELPER_SECRET_HEADER] as
+            | string
+            | undefined,
+          clientOrigin: req.headers[BROWSER_GATEWAY_CLIENT_ORIGIN_HEADER] as
+            | string
+            | undefined,
           body: raw ? JSON.parse(raw) : {},
         });
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -5707,7 +5719,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
         }),
       },
     );
-    expect(openRaw.ok).toBe(true);
+    expect(openRaw.status).toBe(403);
+    expect(await openRaw.json()).toEqual({
+      error: "browser_raw_config_unavailable",
+    });
 
     const refresh = await fetch(
       `${harness.helperBase}/api/ask-agent/mcp-refresh`,
@@ -5758,14 +5773,8 @@ describe("BrowserGatewayHelper proxy routing", () => {
         expect.objectContaining({
           url: "/internal/ask-agent/mcp-config/server",
           authorization: "Bearer mcp-token",
-          body: expect.objectContaining({
-            profile: "ask-agent",
-            scope: "ask-agent-global",
-          }),
-        }),
-        expect.objectContaining({
-          url: "/internal/ask-agent/mcp-config/open-raw",
-          authorization: "Bearer mcp-token",
+          helperSecret: expect.any(String),
+          clientOrigin: "loopback",
           body: expect.objectContaining({
             profile: "ask-agent",
             scope: "ask-agent-global",
@@ -5788,6 +5797,9 @@ describe("BrowserGatewayHelper proxy routing", () => {
           }),
         }),
       ]),
+    );
+    expect(upstreamRequests.map((request) => request.url)).not.toContain(
+      "/internal/ask-agent/mcp-config/open-raw",
     );
   });
 

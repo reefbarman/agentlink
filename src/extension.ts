@@ -753,6 +753,8 @@ export function activate(context: vscode.ExtensionContext): void {
     browserWorkspaceName,
     browserWorkspacePath,
     log,
+    undefined,
+    () => browserGatewayHelperDiscovery?.clientSharedSecret ?? null,
   );
   context.subscriptions.push(browserGatewayServer);
   const browserGatewayPort = getConfig<number>("browserGatewayPort") || 47137;
@@ -1199,8 +1201,11 @@ export function activate(context: vscode.ExtensionContext): void {
         sessionId,
         chatViewProvider.getConfiguredCommandApprovalPolicy(),
       ),
-    inheritSessionWriteState: (parentSessionId, childSessionId) =>
-      approvalManager.inheritSessionWriteState(parentSessionId, childSessionId),
+    inheritSessionApprovalState: (parentSessionId, childSessionId) =>
+      approvalManager.inheritSessionApprovalState(
+        parentSessionId,
+        childSessionId,
+      ),
     commandApprovalReviewer,
     isSessionActive: (sessionId) => {
       const session = agentSessionManager.getSession(sessionId);

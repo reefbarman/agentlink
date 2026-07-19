@@ -126,6 +126,39 @@ const stdioConfig: McpServerConfig = {
   args: ["server.js"],
 };
 
+describe("McpClientHub lifecycle", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.requestHandlers = [];
+    mocks.notificationHandler = undefined;
+  });
+
+  it("projects disabled servers without connecting and reconnects when enabled", async () => {
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([{ ...stdioConfig, disabled: true }]);
+
+    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(hub.getServerInfos()).toEqual([
+      expect.objectContaining({
+        name: stdioConfig.name,
+        status: "disabled",
+        toolCount: 0,
+      }),
+    ]);
+    expect(hub.getServerConfig(stdioConfig.name)?.disabled).toBe(true);
+
+    await hub.connect([{ ...stdioConfig, disabled: false }]);
+
+    expect(mocks.connect).toHaveBeenCalledOnce();
+    expect(hub.getServerInfos()).toEqual([
+      expect.objectContaining({
+        name: stdioConfig.name,
+        status: "connected",
+      }),
+    ]);
+  });
+});
+
 describe("McpClientHub URL elicitation", () => {
   beforeEach(() => {
     vi.clearAllMocks();

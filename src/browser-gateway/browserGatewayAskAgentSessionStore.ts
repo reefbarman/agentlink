@@ -31,37 +31,37 @@ export const BROWSER_GATEWAY_ASK_AGENT_SESSION_ID =
 export const BROWSER_GATEWAY_ASK_AGENT_OWNER_GENERATION_ID =
   "browser-gateway:ask-agent:default-generation";
 export const BROWSER_GATEWAY_ASK_AGENT_SCOPE_ID = "default-ask-agent";
-export const BROWSER_GATEWAY_ASK_AGENT_DEFAULT_MODEL = "gpt-5.3-codex";
+export const BROWSER_GATEWAY_ASK_AGENT_DEFAULT_MODEL = "gpt-5.6-luna";
 export const BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE = "chat";
 const BROWSER_GATEWAY_ASK_AGENT_FALLBACK_MODELS: WebviewModelInfo[] = [
   {
-    id: "gpt-5.3-codex",
-    displayName: "GPT-5.3 Codex",
+    id: "gpt-5.6-luna",
+    displayName: "GPT-5.6 Luna",
     provider: "browser-gateway",
-    contextWindow: 200_000,
-    maxInputTokens: 200_000,
-    reasoningEfforts: ["none", "minimal", "low", "medium", "high"],
-    defaultReasoningEffort: "low",
+    contextWindow: 481_000,
+    maxInputTokens: 353_000,
+    reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+    defaultReasoningEffort: "medium",
     authenticated: true,
   },
   {
-    id: "gpt-5.2-codex",
-    displayName: "GPT-5.2 Codex",
+    id: "gpt-5.6-terra",
+    displayName: "GPT-5.6 Terra",
     provider: "browser-gateway",
-    contextWindow: 200_000,
-    maxInputTokens: 200_000,
-    reasoningEfforts: ["none", "minimal", "low", "medium", "high"],
-    defaultReasoningEffort: "low",
+    contextWindow: 481_000,
+    maxInputTokens: 353_000,
+    reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+    defaultReasoningEffort: "medium",
     authenticated: true,
   },
   {
-    id: "gpt-5.1-codex",
-    displayName: "GPT-5.1 Codex",
+    id: "gpt-5.5",
+    displayName: "GPT-5.5",
     provider: "browser-gateway",
-    contextWindow: 200_000,
-    maxInputTokens: 200_000,
-    reasoningEfforts: ["none", "minimal", "low", "medium", "high"],
-    defaultReasoningEffort: "low",
+    contextWindow: 400_000,
+    maxInputTokens: 272_000,
+    reasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
+    defaultReasoningEffort: "medium",
     authenticated: true,
   },
 ];

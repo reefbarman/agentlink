@@ -3,6 +3,7 @@ import type * as vscode from "vscode";
 
 import { isCoreReasoningEffort } from "../core/modelCatalog.js";
 import type {
+  McpConfigBatchMutation,
   McpManagerProfile,
   McpManagerScope,
   McpManagerServerDraft,
@@ -18,6 +19,10 @@ import {
   removeBrowserGatewayInstance,
   upsertBrowserGatewayInstance,
 } from "./browserGatewayRegistry.js";
+import {
+  hasBrowserGatewayMcpSecretWrite,
+  verifyBrowserGatewayHelperTrust,
+} from "./browserGatewayRequestTrust.js";
 
 import type { BrowserGatewayInstanceStatusSummary } from "./protocol.js";
 import type {
@@ -80,6 +85,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       "vscode-gateway",
       __DEV_BUILD__,
     ),
+    private readonly getHelperSharedSecret: () => string | null = () => null,
   ) {}
 
   async start(port = 0): Promise<number> {
@@ -537,19 +543,19 @@ export class BrowserGatewayServer implements vscode.Disposable {
       route(
         "POST",
         pathExact("/internal/ask-agent/mcp-config/server"),
-        ({ req, res }) => this.handleMcpConfigServer(req, res),
+        ({ req, res }) => this.handleMcpConfigServer(req, res, true),
         json("ask-agent mcp config save failed"),
       ),
       route(
         "DELETE",
         pathExact("/internal/ask-agent/mcp-config/server"),
-        ({ req, res }) => this.handleMcpConfigRemove(req, res),
+        ({ req, res }) => this.handleMcpConfigRemove(req, res, true),
         json("ask-agent mcp config remove failed"),
       ),
       route(
         "POST",
         pathExact("/internal/ask-agent/mcp-config/open-raw"),
-        ({ req, res }) => this.handleMcpConfigOpenRaw(req, res),
+        ({ req, res }) => this.handleBrowserMcpConfigUnavailable(req, res),
         json("ask-agent mcp config raw open failed"),
       ),
       route(
@@ -574,19 +580,19 @@ export class BrowserGatewayServer implements vscode.Disposable {
       route(
         "POST",
         pathExact("/api/mcp/config/server"),
-        ({ req, res }) => this.handleMcpConfigServer(req, res),
+        ({ req, res }) => this.handleBrowserMcpConfigUnavailable(req, res),
         json("mcp config save failed"),
       ),
       route(
         "DELETE",
         pathExact("/api/mcp/config/server"),
-        ({ req, res }) => this.handleMcpConfigRemove(req, res),
+        ({ req, res }) => this.handleBrowserMcpConfigUnavailable(req, res),
         json("mcp config remove failed"),
       ),
       route(
         "POST",
         pathExact("/api/mcp/config/open-raw"),
-        ({ req, res }) => this.handleMcpConfigOpenRaw(req, res),
+        ({ req, res }) => this.handleBrowserMcpConfigUnavailable(req, res),
         json("mcp config raw open failed"),
       ),
       route(
@@ -1853,6 +1859,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
   private async handleMcpConfigServer(
     req: http.IncomingMessage,
     res: http.ServerResponse,
+    requireHelperTrust = false,
   ): Promise<void> {
     if (!this.isAuthorized(req)) {
       this.writeJson(res, 401, { error: "unauthorized" });
@@ -1862,14 +1869,20 @@ export class BrowserGatewayServer implements vscode.Disposable {
       profile?: unknown;
       scope?: unknown;
       server?: unknown;
+      operationId?: unknown;
+      expectedRevision?: unknown;
+      operations?: unknown;
     } | null;
     const profile = this.parseMcpProfile(body?.profile);
     const scope = this.parseMcpScope(body?.scope);
+    const isBatch = Array.isArray(body?.operations);
     if (
       !profile ||
       !scope ||
-      !body?.server ||
-      typeof body.server !== "object"
+      (!isBatch && (!body?.server || typeof body.server !== "object")) ||
+      (isBatch &&
+        (typeof body?.operationId !== "string" ||
+          typeof body?.expectedRevision !== "string"))
     ) {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
@@ -1878,17 +1891,84 @@ export class BrowserGatewayServer implements vscode.Disposable {
       this.writeJson(res, 403, { error: "main_profile_read_only_in_browser" });
       return;
     }
-    const result = await this.chatViewProvider.submitBrowserMcpConfigServer({
-      profile,
-      scope,
-      server: body.server as McpManagerServerDraft,
-    });
+    if (requireHelperTrust) {
+      const origin = verifyBrowserGatewayHelperTrust(
+        req.headers,
+        this.getHelperSharedSecret(),
+      );
+      if (!origin) {
+        this.writeJson(res, 403, { error: "helper_trust_required" });
+        return;
+      }
+      const operations = isBatch
+        ? (body.operations as Array<{
+            kind?: unknown;
+            server?: {
+              type?: unknown;
+              env?: unknown;
+              headers?: unknown;
+            };
+          }>)
+        : undefined;
+      if (
+        origin === "non-loopback" &&
+        operations?.some((operation) => operation.kind === "remove")
+      ) {
+        this.writeJson(res, 403, {
+          error: "browser_local_process_requires_loopback",
+        });
+        return;
+      }
+      const servers = operations
+        ? operations
+            .filter((operation) => operation.kind === "upsert")
+            .map((operation) => operation.server)
+        : [
+            body.server as {
+              type?: unknown;
+              env?: unknown;
+              headers?: unknown;
+            },
+          ];
+      if (
+        origin === "non-loopback" &&
+        servers.some(
+          (server) =>
+            server?.type === undefined ||
+            server.type === "stdio" ||
+            hasBrowserGatewayMcpSecretWrite(server),
+        )
+      ) {
+        this.writeJson(res, 403, {
+          error: servers.some(hasBrowserGatewayMcpSecretWrite)
+            ? "browser_secret_write_requires_loopback"
+            : "browser_local_process_requires_loopback",
+        });
+        return;
+      }
+    }
+    const result = isBatch
+      ? await this.chatViewProvider.submitMcpConfigMutation(
+          body as McpConfigBatchMutation,
+        )
+      : await this.chatViewProvider.submitBrowserMcpConfigServer({
+          profile,
+          scope,
+          server: body.server as McpManagerServerDraft,
+          expectedRevision:
+            typeof body.expectedRevision === "string"
+              ? body.expectedRevision
+              : undefined,
+          operationId:
+            typeof body.operationId === "string" ? body.operationId : undefined,
+        });
     this.writeJson(res, result.ok ? 200 : 400, result);
   }
 
   private async handleMcpConfigRemove(
     req: http.IncomingMessage,
     res: http.ServerResponse,
+    requireHelperTrust = false,
   ): Promise<void> {
     if (!this.isAuthorized(req)) {
       this.writeJson(res, 401, { error: "unauthorized" });
@@ -1909,6 +1989,22 @@ export class BrowserGatewayServer implements vscode.Disposable {
       this.writeJson(res, 403, { error: "main_profile_read_only_in_browser" });
       return;
     }
+    if (requireHelperTrust) {
+      const origin = verifyBrowserGatewayHelperTrust(
+        req.headers,
+        this.getHelperSharedSecret(),
+      );
+      if (!origin) {
+        this.writeJson(res, 403, { error: "helper_trust_required" });
+        return;
+      }
+      if (origin === "non-loopback") {
+        this.writeJson(res, 403, {
+          error: "browser_local_process_requires_loopback",
+        });
+        return;
+      }
+    }
     const result = await this.chatViewProvider.submitBrowserMcpConfigRemove({
       profile,
       scope,
@@ -1917,29 +2013,15 @@ export class BrowserGatewayServer implements vscode.Disposable {
     this.writeJson(res, result.ok ? 200 : 400, result);
   }
 
-  private async handleMcpConfigOpenRaw(
+  private handleBrowserMcpConfigUnavailable(
     req: http.IncomingMessage,
     res: http.ServerResponse,
-  ): Promise<void> {
+  ): void {
     if (!this.isAuthorized(req)) {
       this.writeJson(res, 401, { error: "unauthorized" });
       return;
     }
-    const body = (await readJsonBody(req)) as {
-      profile?: unknown;
-      scope?: unknown;
-    } | null;
-    const profile = this.parseMcpProfile(body?.profile);
-    const scope = this.parseMcpScope(body?.scope);
-    if (!profile || !scope) {
-      this.writeJson(res, 400, { error: "invalid_request" });
-      return;
-    }
-    const result = await this.chatViewProvider.submitBrowserMcpConfigOpenRaw({
-      profile,
-      scope,
-    });
-    this.writeJson(res, result.ok ? 200 : 400, result);
+    this.writeJson(res, 403, { error: "browser_mcp_config_unavailable" });
   }
 
   private async handleMcpAction(
@@ -1966,7 +2048,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const result = this.chatViewProvider.submitBrowserMcpAction(
+    if (body.action === "disable") {
+      this.writeJson(res, 403, { error: "main_profile_read_only_in_browser" });
+      return;
+    }
+
+    const result = await this.chatViewProvider.submitBrowserMcpAction(
       body.serverName,
       body.action,
     );

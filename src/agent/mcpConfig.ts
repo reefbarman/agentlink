@@ -3,13 +3,23 @@ import * as os from "os";
 import * as path from "path";
 
 import type {
+  McpConfigBatchMutation,
   McpConfigEntrySummary,
+  McpConfigMutationError,
+  McpConfigMutationResult,
   McpConfigServerMutation,
   McpConfigSourceSummary,
   McpManagerProfile,
   McpManagerScope,
   McpManagerServerDraft,
+  McpManagerServerWriteDraft,
+  McpSecretRecordMutation,
 } from "../shared/mcpManagerTypes.js";
+import {
+  canonicalDraftToWriteDraft,
+  validateMcpServerDraft,
+} from "../shared/mcpConfigValidation.js";
+import { createHash, randomUUID } from "crypto";
 
 import { parseJsonWithComments } from "../util/jsonc.js";
 
@@ -47,6 +57,8 @@ export interface McpServerConfig {
    * Use the bare tool name (without server prefix), e.g. "search_issues".
    */
   allowedTools?: string[];
+  /** Persistently prevent this server from connecting. */
+  disabled?: boolean;
 }
 
 interface McpConfigFile {
@@ -67,21 +79,84 @@ interface SourceDefinition {
 const BLOCKED_SERVER_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const REDACTED_VALUE = "***";
 
-async function safeReadJson(filePath: string): Promise<McpConfigFile | null> {
+type McpConfigReadResult =
+  | { status: "available"; config: McpConfigFile; raw: string }
+  | { status: "missing" }
+  | {
+      status: "invalid" | "unreadable";
+      error: "invalid_json" | "permission_denied" | "read_failed";
+      raw?: string;
+    };
+
+function revisionFor(parts: string[]): string {
+  return createHash("sha256").update(parts.join("\0")).digest("hex");
+}
+
+function isMcpConfigDocument(value: unknown): value is McpConfigFile {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const servers = (value as McpConfigFile).mcpServers;
+  return (
+    servers === undefined ||
+    (typeof servers === "object" &&
+      servers !== null &&
+      !Array.isArray(servers) &&
+      Object.values(servers).every(
+        (entry) =>
+          typeof entry === "object" && entry !== null && !Array.isArray(entry),
+      ))
+  );
+}
+
+function revisionForRead(read: McpConfigReadResult): string {
+  if (read.status === "available") return revisionFor(["available", read.raw]);
+  if (read.status === "invalid")
+    return revisionFor(["invalid", read.raw ?? ""]);
+  if (read.status === "unreadable")
+    return revisionFor(["unreadable", read.error]);
+  return revisionFor(["missing"]);
+}
+
+function errorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error
+    ? String(error.code)
+    : undefined;
+}
+
+async function readMcpConfig(filePath: string): Promise<McpConfigReadResult> {
+  let raw: string;
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    return parseJsonWithComments<McpConfigFile>(raw);
+    raw = await fs.readFile(filePath, "utf-8");
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "ENOENT") return { status: "missing" };
+    return {
+      status: "unreadable",
+      error:
+        code === "EACCES" || code === "EPERM"
+          ? "permission_denied"
+          : "read_failed",
+    };
+  }
+
+  try {
+    const config = parseJsonWithComments<unknown>(raw);
+    if (!isMcpConfigDocument(config)) {
+      return { status: "invalid", error: "invalid_json", raw };
+    }
+    return { status: "available", config, raw };
   } catch {
-    return null;
+    return { status: "invalid", error: "invalid_json", raw };
   }
 }
 
-function resolveEnvVars(
-  env: Record<string, string> | undefined,
+function resolveConfigVars(
+  values: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
-  if (!env) return undefined;
+  if (!values) return undefined;
   const resolved: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
+  for (const [key, value] of Object.entries(values)) {
     // Interpolate ${VAR} references from process.env
     resolved[key] = value.replace(/\$\{([^}]+)\}/g, (_, name: string) => {
       return process.env[name] ?? "";
@@ -165,15 +240,6 @@ function getAskAgentMcpConfigSources(): string[] {
   return getAskAgentMcpSourceDefinitions().map((source) => source.path);
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function sourceId(profile: McpManagerProfile, index: number): string {
   return `${profile}:${index}`;
 }
@@ -183,17 +249,25 @@ async function summarizeSources(
   definitions: SourceDefinition[],
 ): Promise<McpConfigSourceSummary[]> {
   return Promise.all(
-    definitions.map(async (source, index) => ({
-      id: sourceId(profile, index),
-      profile,
-      scope: source.scope,
-      label: source.label,
-      path: source.path,
-      exists: await fileExists(source.path),
-      editable: source.editable,
-      priority: index,
-      inherited: source.inherited,
-    })),
+    definitions.map(async (source, index) => {
+      const read = await readMcpConfig(source.path);
+      return {
+        id: sourceId(profile, index),
+        profile,
+        scope: source.scope,
+        label: source.label,
+        path: source.path,
+        exists: read.status !== "missing",
+        editable: source.editable,
+        priority: index,
+        inherited: source.inherited,
+        readStatus: read.status,
+        revision: revisionForRead(read),
+        ...(read.status === "invalid" || read.status === "unreadable"
+          ? { readError: read.error }
+          : {}),
+      };
+    }),
   );
 }
 
@@ -203,10 +277,10 @@ async function loadMcpConfigsFromSources(
   const merged = new Map<string, McpServerConfig>();
 
   for (const filePath of sources) {
-    const config = await safeReadJson(filePath);
-    if (!config?.mcpServers) continue;
+    const read = await readMcpConfig(filePath);
+    if (read.status !== "available" || !read.config.mcpServers) continue;
 
-    for (const [name, raw] of Object.entries(config.mcpServers)) {
+    for (const [name, raw] of Object.entries(read.config.mcpServers)) {
       const entry = raw as McpServerConfig & {
         toolPolicy?: string;
         toolDisclosure?: string;
@@ -230,6 +304,7 @@ async function loadMcpConfigsFromSources(
         toolPolicy: existing?.toolPolicy ?? "ask",
         toolDisclosure: existing?.toolDisclosure ?? "auto",
         allowedTools: existing?.allowedTools,
+        disabled: existing?.disabled ?? false,
       };
 
       // Apply each field only if explicitly present in this source
@@ -237,10 +312,11 @@ async function loadMcpConfigsFromSources(
         next.type = raw.type as McpServerConfig["type"];
       if (raw.command !== undefined) next.command = raw.command;
       if (raw.args !== undefined) next.args = raw.args;
-      if (raw.env !== undefined) next.env = resolveEnvVars(raw.env);
+      if (raw.env !== undefined) next.env = resolveConfigVars(raw.env);
       if (raw.url !== undefined) next.url = raw.url;
       if (raw.timeout !== undefined) next.timeout = raw.timeout;
-      if (raw.headers !== undefined) next.headers = raw.headers;
+      if (raw.headers !== undefined)
+        next.headers = resolveConfigVars(raw.headers);
       if (entry.toolPolicy !== undefined)
         next.toolPolicy = entry.toolPolicy === "allow" ? "allow" : "ask";
       if (entry.toolDisclosure !== undefined) {
@@ -251,13 +327,9 @@ async function loadMcpConfigsFromSources(
             ? entry.toolDisclosure
             : "auto";
       }
+      if (raw.disabled !== undefined) next.disabled = raw.disabled === true;
       if (Array.isArray(entry.allowedTools)) {
-        // Merge allowedTools — union of existing + new entries
-        const existing_ = next.allowedTools ?? [];
-        const merged_ = [...existing_, ...entry.allowedTools].filter(
-          (v, i, a) => a.indexOf(v) === i,
-        );
-        next.allowedTools = merged_.length > 0 ? merged_ : undefined;
+        next.allowedTools = [...entry.allowedTools];
       }
 
       merged.set(name, next);
@@ -287,6 +359,7 @@ function redactConfig(config: McpServerConfig): McpManagerServerDraft {
     toolPolicy: config.toolPolicy,
     toolDisclosure: config.toolDisclosure,
     allowedTools: config.allowedTools,
+    disabled: config.disabled,
   };
 }
 
@@ -302,15 +375,20 @@ async function buildConfigEntries(
       editableScopes: McpManagerScope[];
       inherited: boolean;
       hasSecrets: boolean;
+      sourceContributions: NonNullable<
+        McpConfigEntrySummary["sourceContributions"]
+      >;
+      envKeys: string[];
+      headerKeys: string[];
     }
   >();
 
   for (let index = 0; index < definitions.length; index += 1) {
     const definition = definitions[index];
-    const config = await safeReadJson(definition.path);
-    if (!config?.mcpServers) continue;
+    const read = await readMcpConfig(definition.path);
+    if (read.status !== "available" || !read.config.mcpServers) continue;
 
-    for (const [name, raw] of Object.entries(config.mcpServers)) {
+    for (const [name, raw] of Object.entries(read.config.mcpServers)) {
       const entry = raw as McpServerConfig & {
         toolPolicy?: string;
         toolDisclosure?: string;
@@ -329,6 +407,7 @@ async function buildConfigEntries(
         toolPolicy: existing?.config.toolPolicy ?? "ask",
         toolDisclosure: existing?.config.toolDisclosure ?? "auto",
         allowedTools: existing?.config.allowedTools,
+        disabled: existing?.config.disabled ?? false,
       };
 
       if (raw.type !== undefined)
@@ -349,17 +428,19 @@ async function buildConfigEntries(
             ? entry.toolDisclosure
             : "auto";
       }
+      if (raw.disabled !== undefined) next.disabled = raw.disabled === true;
       if (Array.isArray(entry.allowedTools)) {
-        const existingTools = next.allowedTools ?? [];
-        const mergedTools = [...existingTools, ...entry.allowedTools].filter(
-          (v, i, a) => a.indexOf(v) === i,
-        );
-        next.allowedTools = mergedTools.length > 0 ? mergedTools : undefined;
+        next.allowedTools = [...entry.allowedTools];
       }
 
       const source = sources[index];
       const sourceIds = existing?.sourceIds ?? [];
       const editableScopes = existing?.editableScopes ?? [];
+      const fields = Object.keys(raw).filter(
+        (field) => field !== "env" && field !== "headers",
+      );
+      const envKeys = Object.keys(raw.env ?? {});
+      const headerKeys = Object.keys(raw.headers ?? {});
       merged.set(name, {
         config: next,
         sourceIds: source ? [...sourceIds, source.id] : sourceIds,
@@ -373,6 +454,23 @@ async function buildConfigEntries(
           raw.env !== undefined ||
           raw.headers !== undefined,
         ),
+        sourceContributions: source
+          ? [
+              ...(existing?.sourceContributions ?? []),
+              {
+                sourceId: source.id,
+                scope: source.scope,
+                editable: source.editable,
+                fields,
+                envKeys,
+                headerKeys,
+              },
+            ]
+          : (existing?.sourceContributions ?? []),
+        envKeys: [...new Set([...(existing?.envKeys ?? []), ...envKeys])],
+        headerKeys: [
+          ...new Set([...(existing?.headerKeys ?? []), ...headerKeys]),
+        ],
       });
     }
   }
@@ -385,6 +483,16 @@ async function buildConfigEntries(
     preferredEditScope: entry.editableScopes.at(-1),
     inherited: entry.inherited,
     hasSecrets: entry.hasSecrets,
+    sourceContributions: entry.sourceContributions,
+    writableOverrideScopes: [
+      ...new Set(
+        sources
+          .filter((source) => source.editable)
+          .map((source) => source.scope),
+      ),
+    ],
+    envKeys: entry.envKeys,
+    headerKeys: entry.headerKeys,
   }));
 }
 
@@ -502,92 +610,232 @@ export async function persistMcpServerApproval(
   });
 }
 
-function validateServerName(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error("server_name_required");
-  if (BLOCKED_SERVER_NAMES.has(trimmed)) throw new Error("invalid_server_name");
-  if (!/^[\w.-]+$/.test(trimmed)) throw new Error("invalid_server_name");
-  return trimmed;
+type McpJsonDocument = Record<string, unknown> & {
+  mcpServers?: Record<string, Record<string, unknown>>;
+};
+
+type NormalizedBatchOperation =
+  | { kind: "remove"; serverName: string; operationIndex: number }
+  | {
+      kind: "upsert";
+      serverName: string;
+      renameTo?: string;
+      conflictAction: "skip" | "replace" | "rename";
+      entry: Record<string, unknown>;
+      env?: McpSecretRecordMutation;
+      headers?: McpSecretRecordMutation;
+      operationIndex: number;
+    };
+
+function mutationError(
+  code: McpConfigMutationError["code"],
+  message: string,
+  operationIndex?: number,
+  fieldPath?: string,
+): McpConfigMutationError {
+  return {
+    code,
+    message,
+    ...(operationIndex === undefined ? {} : { operationIndex }),
+    ...(fieldPath === undefined ? {} : { path: fieldPath }),
+  };
 }
 
-function normalizeStringArray(
-  value: string[] | undefined,
-  field: string,
-): string[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-    throw new Error(`invalid_${field}`);
+function validateSecretMutation(
+  value: McpSecretRecordMutation | undefined,
+  field: "env" | "headers",
+  operationIndex: number,
+): McpConfigMutationError[] {
+  if (value === undefined) return [];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [
+      mutationError(
+        "invalid_field",
+        `invalid_${field}`,
+        operationIndex,
+        `$.operations[${operationIndex}].server.${field}`,
+      ),
+    ];
   }
-  return value;
-}
 
-function normalizeServerDraft(
-  server: McpManagerServerDraft,
-): Record<string, unknown> {
-  const name = validateServerName(server.name);
-  const type = server.type ?? "stdio";
+  const errors: McpConfigMutationError[] = [];
+  const mode = value.mode;
   if (
-    type !== "stdio" &&
-    type !== "sse" &&
-    type !== "streamable-http" &&
-    type !== "http"
+    mode !== "preserve" &&
+    mode !== "patch" &&
+    mode !== "replace" &&
+    mode !== "remove"
   ) {
-    throw new Error("invalid_transport_type");
+    errors.push(
+      mutationError(
+        "invalid_field",
+        `invalid_${field}_mode`,
+        operationIndex,
+        `$.operations[${operationIndex}].server.${field}.mode`,
+      ),
+    );
+    return errors;
   }
 
-  const entry: Record<string, unknown> = {};
-  if (type !== "stdio") entry.type = type;
+  if (
+    value.set !== undefined &&
+    (typeof value.set !== "object" ||
+      value.set === null ||
+      Array.isArray(value.set) ||
+      Object.entries(value.set).some(
+        ([key, entry]) =>
+          !key ||
+          BLOCKED_SERVER_NAMES.has(key.toLowerCase()) ||
+          typeof entry !== "string",
+      ))
+  ) {
+    errors.push(
+      mutationError(
+        "invalid_field",
+        `invalid_${field}`,
+        operationIndex,
+        `$.operations[${operationIndex}].server.${field}.set`,
+      ),
+    );
+  }
+  if (
+    value.remove !== undefined &&
+    (!Array.isArray(value.remove) ||
+      value.remove.some(
+        (key) =>
+          typeof key !== "string" ||
+          !key ||
+          BLOCKED_SERVER_NAMES.has(key.toLowerCase()),
+      ))
+  ) {
+    errors.push(
+      mutationError(
+        "invalid_field",
+        `invalid_${field}_remove`,
+        operationIndex,
+        `$.operations[${operationIndex}].server.${field}.remove`,
+      ),
+    );
+  }
+  if (
+    (mode === "preserve" || mode === "remove") &&
+    (value.set !== undefined || value.remove !== undefined)
+  ) {
+    errors.push(
+      mutationError(
+        "invalid_field",
+        `invalid_${field}_${mode}`,
+        operationIndex,
+        `$.operations[${operationIndex}].server.${field}`,
+      ),
+    );
+  }
+  if (mode === "replace" && value.remove !== undefined) {
+    errors.push(
+      mutationError(
+        "invalid_field",
+        `invalid_${field}_replace`,
+        operationIndex,
+        `$.operations[${operationIndex}].server.${field}`,
+      ),
+    );
+  }
+  return errors;
+}
 
-  if (type === "stdio") {
-    const command = server.command?.trim();
-    if (!command) throw new Error("command_required");
-    entry.command = command;
-    const args = normalizeStringArray(server.args, "args");
-    if (args && args.length > 0) entry.args = args;
-  } else {
-    const url = server.url?.trim();
-    if (!url) throw new Error("url_required");
-    try {
-      const parsed = new URL(url);
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        throw new Error("invalid_url");
-      }
-    } catch {
-      throw new Error("invalid_url");
+function normalizeServerWriteDraft(
+  server: McpManagerServerWriteDraft,
+  operationIndex: number,
+):
+  | {
+      operation: Omit<
+        Extract<NormalizedBatchOperation, { kind: "upsert" }>,
+        "conflictAction" | "renameTo"
+      >;
     }
-    entry.url = url;
-  }
-
-  if (server.timeout !== undefined) {
-    if (!Number.isFinite(server.timeout) || server.timeout <= 0) {
-      throw new Error("invalid_timeout");
-    }
-    entry.timeout = server.timeout;
-  }
-  if (server.toolPolicy !== undefined) {
-    if (server.toolPolicy !== "ask" && server.toolPolicy !== "allow") {
-      throw new Error("invalid_tool_policy");
-    }
-    entry.toolPolicy = server.toolPolicy;
-  }
-  if (server.toolDisclosure !== undefined) {
-    if (
-      server.toolDisclosure !== "inline" &&
-      server.toolDisclosure !== "deferred" &&
-      server.toolDisclosure !== "auto"
-    ) {
-      throw new Error("invalid_tool_disclosure");
-    }
-    entry.toolDisclosure = server.toolDisclosure;
-  }
-  const allowedTools = normalizeStringArray(
-    server.allowedTools,
-    "allowed_tools",
+  | { errors: McpConfigMutationError[] } {
+  const envErrors = validateSecretMutation(server.env, "env", operationIndex);
+  const headerErrors = validateSecretMutation(
+    server.headers,
+    "headers",
+    operationIndex,
   );
-  if (allowedTools && allowedTools.length > 0)
-    entry.allowedTools = allowedTools;
+  const validationInput = {
+    ...server,
+    env: server.env?.set,
+    headers: server.headers?.set,
+  };
+  const review = validateMcpServerDraft(validationInput, {
+    path: `$.operations[${operationIndex}].server`,
+    warnUnknownFields: false,
+  });
+  const errors = [
+    ...envErrors,
+    ...headerErrors,
+    ...review.diagnostics
+      .filter((diagnostic) => diagnostic.severity === "error")
+      .map((diagnostic) =>
+        mutationError(
+          "invalid_field",
+          diagnostic.code,
+          operationIndex,
+          diagnostic.path,
+        ),
+      ),
+  ];
+  if (!review.valid || !review.draft || errors.length > 0) return { errors };
 
-  return { name, entry };
+  const canonical = canonicalDraftToWriteDraft(review.draft);
+  const {
+    name,
+    type,
+    env: _validatedEnv,
+    headers: _validatedHeaders,
+    ...fields
+  } = canonical;
+  const entry = Object.fromEntries(
+    Object.entries({
+      ...(type === "stdio" ? {} : { type }),
+      ...fields,
+    }).filter(([, value]) => value !== undefined),
+  );
+  if (Array.isArray(entry.args) && entry.args.length === 0) delete entry.args;
+
+  return {
+    operation: {
+      kind: "upsert",
+      serverName: name,
+      entry,
+      env: server.env,
+      headers: server.headers,
+      operationIndex,
+    },
+  };
+}
+
+function normalizeServerName(
+  name: unknown,
+  operationIndex: number,
+  fieldPath: string,
+): { name: string } | { error: McpConfigMutationError } {
+  const review = validateMcpServerDraft(
+    { name, command: "validation-only" },
+    { path: fieldPath, namePath: fieldPath, warnUnknownFields: false },
+  );
+  if (!review.valid || !review.draft) {
+    const diagnostic = review.diagnostics.find(
+      (entry) => entry.severity === "error",
+    );
+    return {
+      error: mutationError(
+        "invalid_field",
+        diagnostic?.code ?? "invalid_server_name",
+        operationIndex,
+        fieldPath,
+      ),
+    };
+  }
+  return { name: review.draft.name };
 }
 
 function resolveWritableMcpConfigPath(
@@ -606,33 +854,341 @@ function resolveWritableMcpConfigPath(
   throw new Error("scope_not_writable");
 }
 
+export function buildMcpConfigRevision(
+  sources: McpConfigSourceSummary[],
+): string {
+  return revisionFor(
+    sources.map(
+      (source) =>
+        `${source.id}:${source.readStatus}:${source.readError ?? ""}:${source.revision ?? ""}`,
+    ),
+  );
+}
+
+export async function getMcpConfigRevision(
+  profile: McpManagerProfile,
+  cwd?: string,
+): Promise<string> {
+  const sources =
+    profile === "ask-agent"
+      ? await getMcpConfigSources("ask-agent")
+      : await getMcpConfigSources("main", cwd ?? process.cwd());
+  return buildMcpConfigRevision(sources);
+}
+
+function applySecretMutation(
+  entry: Record<string, unknown>,
+  field: "env" | "headers",
+  mutation: McpSecretRecordMutation | undefined,
+): void {
+  if (!mutation || mutation.mode === "preserve") return;
+  if (mutation.mode === "remove") {
+    delete entry[field];
+    return;
+  }
+  if (mutation.mode === "replace") {
+    entry[field] = { ...mutation.set };
+    return;
+  }
+
+  const current =
+    entry[field] &&
+    typeof entry[field] === "object" &&
+    !Array.isArray(entry[field])
+      ? { ...(entry[field] as Record<string, unknown>) }
+      : Object.create(null);
+  for (const key of mutation.remove ?? []) delete current[key];
+  Object.assign(current, mutation.set ?? {});
+  entry[field] = current;
+}
+
+function applyNormalizedOperations(
+  doc: McpJsonDocument,
+  operations: NormalizedBatchOperation[],
+): McpConfigMutationError[] {
+  const errors: McpConfigMutationError[] = [];
+  const servers = (doc.mcpServers ??= {});
+  for (const operation of operations) {
+    if (operation.kind === "remove") {
+      delete servers[operation.serverName];
+      continue;
+    }
+
+    const conflict = Object.prototype.hasOwnProperty.call(
+      servers,
+      operation.serverName,
+    );
+    if (conflict && operation.conflictAction === "skip") continue;
+
+    let targetName = operation.serverName;
+    if (conflict && operation.conflictAction === "rename") {
+      targetName = operation.renameTo!;
+      if (Object.prototype.hasOwnProperty.call(servers, targetName)) {
+        errors.push(
+          mutationError(
+            "conflict_unresolved",
+            "rename_target_exists",
+            operation.operationIndex,
+            `$.operations[${operation.operationIndex}].renameTo`,
+          ),
+        );
+        continue;
+      }
+    }
+
+    const existing = servers[targetName] ?? {};
+    const next = { ...operation.entry };
+    if (existing.env !== undefined) next.env = existing.env;
+    if (existing.headers !== undefined) next.headers = existing.headers;
+    applySecretMutation(next, "env", operation.env);
+    applySecretMutation(next, "headers", operation.headers);
+    servers[targetName] = next;
+  }
+  return errors;
+}
+
+async function writeMcpJsonDocumentAtomic(
+  filePath: string,
+  doc: McpJsonDocument,
+  existed: boolean,
+): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  let mode = 0o600;
+  if (existed) {
+    const stat = await fs.stat(filePath);
+    mode = stat.mode & 0o777;
+  }
+  const temporaryPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  try {
+    const handle = await fs.open(temporaryPath, "wx", mode);
+    try {
+      await handle.writeFile(`${JSON.stringify(doc, null, 2)}\n`, "utf-8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fs.rename(temporaryPath, filePath);
+    try {
+      const directory = await fs.open(path.dirname(filePath), "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
+    } catch {
+      // The file rename is complete; some filesystems do not support directory fsync.
+    }
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function mutateMcpConfigBatch(
+  mutation: McpConfigBatchMutation,
+  cwd?: string,
+): Promise<McpConfigMutationResult> {
+  const fail = (
+    ...errors: McpConfigMutationError[]
+  ): McpConfigMutationResult => ({
+    operationId: mutation.operationId,
+    ok: false,
+    configSaved: false,
+    errors,
+  });
+  if (
+    !mutation.operationId ||
+    !mutation.expectedRevision ||
+    !Array.isArray(mutation.operations) ||
+    mutation.operations.length === 0
+  ) {
+    return fail(mutationError("invalid_request", "invalid_batch_mutation"));
+  }
+
+  let filePath: string;
+  try {
+    filePath = resolveWritableMcpConfigPath(
+      mutation.profile,
+      mutation.scope,
+      cwd,
+    );
+  } catch (error) {
+    return fail(
+      mutationError(
+        "scope_not_writable",
+        error instanceof Error ? error.message : "scope_not_writable",
+      ),
+    );
+  }
+
+  const normalized: NormalizedBatchOperation[] = [];
+  const validationErrors: McpConfigMutationError[] = [];
+  for (const [operationIndex, operation] of mutation.operations.entries()) {
+    if (operation.kind === "remove") {
+      const result = normalizeServerName(
+        operation.serverName,
+        operationIndex,
+        `$.operations[${operationIndex}].serverName`,
+      );
+      if ("error" in result) validationErrors.push(result.error);
+      else
+        normalized.push({
+          kind: "remove",
+          serverName: result.name,
+          operationIndex,
+        });
+      continue;
+    }
+    if (operation.kind !== "upsert") {
+      validationErrors.push(
+        mutationError(
+          "invalid_request",
+          "invalid_operation_kind",
+          operationIndex,
+          `$.operations[${operationIndex}].kind`,
+        ),
+      );
+      continue;
+    }
+    if (
+      operation.conflictAction !== "skip" &&
+      operation.conflictAction !== "replace" &&
+      operation.conflictAction !== "rename"
+    ) {
+      validationErrors.push(
+        mutationError(
+          "invalid_field",
+          "invalid_conflict_action",
+          operationIndex,
+          `$.operations[${operationIndex}].conflictAction`,
+        ),
+      );
+      continue;
+    }
+    const result = normalizeServerWriteDraft(operation.server, operationIndex);
+    if ("errors" in result) {
+      validationErrors.push(...result.errors);
+      continue;
+    }
+    let renameTo: string | undefined;
+    if (operation.conflictAction === "rename") {
+      const rename = normalizeServerName(
+        operation.renameTo,
+        operationIndex,
+        `$.operations[${operationIndex}].renameTo`,
+      );
+      if ("error" in rename) {
+        validationErrors.push(rename.error);
+        continue;
+      }
+      renameTo = rename.name;
+    }
+    normalized.push({
+      ...result.operation,
+      conflictAction: operation.conflictAction,
+      renameTo,
+    });
+  }
+  const targetNames = new Set<string>();
+  for (const operation of normalized) {
+    if (operation.kind !== "upsert") continue;
+    const targetName =
+      operation.conflictAction === "rename" && operation.renameTo
+        ? operation.renameTo
+        : operation.serverName;
+    if (targetNames.has(targetName)) {
+      validationErrors.push(
+        mutationError(
+          "conflict_unresolved",
+          "duplicate_operation_name",
+          operation.operationIndex,
+        ),
+      );
+    }
+    targetNames.add(targetName);
+  }
+  if (validationErrors.length > 0) return fail(...validationErrors);
+
+  const sources =
+    mutation.profile === "ask-agent"
+      ? await getMcpConfigSources("ask-agent")
+      : await getMcpConfigSources("main", cwd ?? process.cwd());
+  if (buildMcpConfigRevision(sources) !== mutation.expectedRevision) {
+    return fail(mutationError("config_changed", "config_changed"));
+  }
+
+  const targetSource = sources.find((source) => source.path === filePath);
+  const read = await readMcpConfig(filePath);
+  if (!targetSource || targetSource.revision !== revisionForRead(read)) {
+    return fail(mutationError("config_changed", "config_changed"));
+  }
+  if (read.status === "invalid") {
+    return fail(mutationError("config_invalid", "mcp_config_invalid"));
+  }
+  if (read.status === "unreadable") {
+    return fail(mutationError("config_unreadable", `mcp_config_${read.error}`));
+  }
+  const doc: McpJsonDocument =
+    read.status === "available" ? (read.config as McpJsonDocument) : {};
+  const before = JSON.stringify(doc);
+  const applyErrors = applyNormalizedOperations(doc, normalized);
+  if (applyErrors.length > 0) return fail(...applyErrors);
+  if (JSON.stringify(doc) === before) {
+    return {
+      operationId: mutation.operationId,
+      ok: true,
+      configSaved: false,
+      errors: [],
+    };
+  }
+
+  try {
+    await writeMcpJsonDocumentAtomic(
+      filePath,
+      doc,
+      read.status === "available",
+    );
+  } catch {
+    return fail(mutationError("write_failed", "mcp_config_write_failed"));
+  }
+  return {
+    operationId: mutation.operationId,
+    ok: true,
+    configSaved: true,
+    errors: [],
+  };
+}
+
+function legacyMutationError(result: McpConfigMutationResult): Error {
+  const error = result.errors[0];
+  return new Error(error?.message ?? "mcp_config_write_failed");
+}
+
 export async function upsertMcpConfigServer(
   mutation: McpConfigServerMutation,
   cwd?: string,
 ): Promise<void> {
-  const normalized = normalizeServerDraft(mutation.server) as {
-    name: string;
-    entry: Record<string, unknown>;
-  };
-  const filePath = resolveWritableMcpConfigPath(
-    mutation.profile,
-    mutation.scope,
+  const expectedRevision = await getMcpConfigRevision(mutation.profile, cwd);
+  const result = await mutateMcpConfigBatch(
+    {
+      operationId: randomUUID(),
+      profile: mutation.profile,
+      scope: mutation.scope,
+      expectedRevision,
+      operations: [
+        {
+          kind: "upsert",
+          server: mutation.server,
+          conflictAction: "replace",
+        },
+      ],
+    },
     cwd,
   );
-  await patchMcpJson(filePath, normalized.name, (entry) => {
-    // Structured drafts intentionally omit env/headers; preserve secrets unless
-    // the user edits them through the raw config file.
-    const preservedSecrets: Record<string, unknown> = {};
-    if (normalized.entry.env === undefined && entry.env !== undefined) {
-      preservedSecrets.env = entry.env;
-    }
-    if (normalized.entry.headers === undefined && entry.headers !== undefined) {
-      preservedSecrets.headers = entry.headers;
-    }
-
-    for (const key of Object.keys(entry)) delete entry[key];
-    Object.assign(entry, preservedSecrets, normalized.entry);
-  });
+  if (!result.ok) throw legacyMutationError(result);
 }
 
 export async function removeMcpConfigServer(
@@ -641,32 +1197,40 @@ export async function removeMcpConfigServer(
   serverName: string,
   cwd?: string,
 ): Promise<void> {
-  const name = validateServerName(serverName);
-  const filePath = resolveWritableMcpConfigPath(profile, scope, cwd);
-  await patchMcpJsonDocument(filePath, (doc) => {
-    delete doc.mcpServers?.[name];
-  });
+  const expectedRevision = await getMcpConfigRevision(profile, cwd);
+  const result = await mutateMcpConfigBatch(
+    {
+      operationId: randomUUID(),
+      profile,
+      scope,
+      expectedRevision,
+      operations: [{ kind: "remove", serverName }],
+    },
+    cwd,
+  );
+  if (!result.ok) throw legacyMutationError(result);
 }
 
 async function patchMcpJsonDocument(
   filePath: string,
-  mutate: (doc: {
-    mcpServers?: Record<string, Record<string, unknown>>;
-  }) => void,
+  mutate: (doc: McpJsonDocument) => void,
 ): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  let doc: { mcpServers?: Record<string, Record<string, unknown>> } = {};
-  try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    doc = parseJsonWithComments(raw);
-  } catch {
-    // File doesn't exist or invalid — start fresh
+  const read = await readMcpConfig(filePath);
+  let doc: McpJsonDocument;
+  if (read.status === "missing") {
+    doc = {};
+  } else if (read.status === "available") {
+    doc = read.config as McpJsonDocument;
+  } else {
+    throw new Error(
+      read.status === "invalid"
+        ? "mcp_config_invalid"
+        : `mcp_config_${read.error}`,
+    );
   }
   if (!doc.mcpServers) doc.mcpServers = {};
   mutate(doc);
-  const tmp = filePath + ".tmp";
-  await fs.writeFile(tmp, JSON.stringify(doc, null, 2) + "\n", "utf-8");
-  await fs.rename(tmp, filePath);
+  await writeMcpJsonDocumentAtomic(filePath, doc, read.status === "available");
 }
 
 /** Read–modify–write a single server entry in a mcp.json file. */

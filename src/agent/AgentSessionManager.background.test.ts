@@ -210,13 +210,13 @@ describe("AgentSessionManager background agents", () => {
   it("snapshots the parent approval state for a background child", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     const parent = await mgr.createSession("code");
-    const inheritSessionWriteState = vi.fn();
+    const inheritSessionApprovalState = vi.fn();
     mgr.setCommandApprovalPolicy(parent.id, "approve-for-me");
     mgr.setToolContext({
       ...toolCtx,
       getCommandApprovalPolicy: (sessionId) =>
         mgr.getCommandApprovalPolicy(sessionId),
-      inheritSessionWriteState,
+      inheritSessionApprovalState,
     });
 
     const child = await mgr.spawnBackground(
@@ -226,7 +226,7 @@ describe("AgentSessionManager background agents", () => {
     expect(mgr.getCommandApprovalPolicy(child.sessionId)).toBe(
       "approve-for-me",
     );
-    expect(inheritSessionWriteState).toHaveBeenCalledWith(
+    expect(inheritSessionApprovalState).toHaveBeenCalledWith(
       parent.id,
       child.sessionId,
     );
@@ -504,8 +504,8 @@ describe("AgentSessionManager background agents", () => {
       { host: { config: configHost, acpBackgroundRunner } },
     );
     const parent = await mgr.createSession("code");
-    const inheritSessionWriteState = vi.fn();
-    mgr.setToolContext({ ...toolCtx, inheritSessionWriteState });
+    const inheritSessionApprovalState = vi.fn();
+    mgr.setToolContext({ ...toolCtx, inheritSessionApprovalState });
 
     const spawned = await mgr.spawnBackground(
       {
@@ -535,7 +535,7 @@ describe("AgentSessionManager background agents", () => {
     expect(session.totalCacheReadTokens).toBe(5);
     expect(session.totalCacheCreationTokens).toBe(2);
     expect(session.lastInputTokens).toBe(37);
-    expect(inheritSessionWriteState).toHaveBeenCalledWith(
+    expect(inheritSessionApprovalState).toHaveBeenCalledWith(
       parent.id,
       spawned.sessionId,
     );

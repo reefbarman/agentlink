@@ -321,7 +321,7 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
   it("maps fallback GPT/Codex models to the browser Codex credential family", () => {
     const store = createStore();
 
-    expect(store.getModel()).toBe("gpt-5.3-codex");
+    expect(store.getModel()).toBe("gpt-5.6-luna");
     expect(store.getModelProvider()).toBe("openai-codex");
   });
 
@@ -379,7 +379,7 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
       grantedAt: 100,
     };
 
-    expect(store.getModel()).toBe("gpt-5.3-codex");
+    expect(store.getModel()).toBe("gpt-5.6-luna");
     expect(store.getReasoningEffort()).toBe("high");
 
     store.updateAvailableModels([
@@ -956,15 +956,15 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
       grantedAt: 100,
     };
 
-    expect(store.getModel()).toBe("gpt-5.3-codex");
+    expect(store.getModel()).toBe("gpt-5.6-luna");
     expect(store.getReasoningEffort()).toBe("low");
     expect(store.getAvailableModels().map((model) => model.id)).toEqual([
-      "gpt-5.3-codex",
-      "gpt-5.2-codex",
-      "gpt-5.1-codex",
+      "gpt-5.6-luna",
+      "gpt-5.6-terra",
+      "gpt-5.5",
     ]);
     expect(store.setReasoningEffort("high")).toBe(true);
-    expect(store.setModel("gpt-5.3-codex")).toBe(true);
+    expect(store.setModel("gpt-5.6-luna")).toBe(true);
 
     const response = store.getOrCreate({
       now: 100,
@@ -972,7 +972,7 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
       modelCredentialStatus: credentialStatus,
     });
 
-    expect(response.snapshot.session.foreground.model).toBe("gpt-5.3-codex");
+    expect(response.snapshot.session.foreground.model).toBe("gpt-5.6-luna");
     expect(response.snapshot.session.foreground.reasoningEffort).toBe("high");
     expect(response.snapshot.session.foreground.thinkingEnabled).toBe(true);
   });

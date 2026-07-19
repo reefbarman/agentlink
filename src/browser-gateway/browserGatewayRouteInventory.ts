@@ -2,7 +2,8 @@ export type BrowserGatewayAuthPolicy =
   | "public"
   | "instance-bearer"
   | "browser-session"
-  | "helper-shared-secret";
+  | "helper-shared-secret"
+  | "instance-bearer+helper-shared-secret";
 
 export interface BrowserGatewayRouteFamily {
   surface: "vscode-gateway" | "helper";
@@ -23,8 +24,17 @@ export const BROWSER_GATEWAY_ROUTE_FAMILIES = [
   {
     surface: "vscode-gateway",
     methods: ["GET", "POST", "DELETE"],
-    pathClass: "/api/* except public reads; /internal/ask-agent/*",
+    pathClass:
+      "/api/* except public reads; /internal/ask-agent/* except sensitive MCP mutations",
     auth: "instance-bearer",
+  },
+  {
+    surface: "vscode-gateway",
+    methods: ["POST", "DELETE"],
+    pathClass: "/internal/ask-agent/mcp-config/server",
+    auth: "instance-bearer+helper-shared-secret",
+    notes:
+      "The helper also supplies its socket-derived loopback/non-loopback classification; public browser mutation routes are rejected.",
   },
   {
     surface: "helper",

@@ -423,33 +423,50 @@ export class ApprovalManager {
     this._onDidChange.fire();
   }
 
-  /**
-   * Snapshot session-scoped agent write trust into a child session without
-   * moving or broadening unrelated approval state.
-   */
-  inheritSessionWriteState(
+  /** Snapshot all session-scoped approvals into an independently mutable child. */
+  inheritSessionApprovalState(
     parentSessionId: string,
     childSessionId: string,
   ): void {
     if (parentSessionId === childSessionId) return;
 
     const parent = this.sessions.get(parentSessionId);
-    if (!parent) return;
+    if (parent) {
+      const child = this.sessions.get(childSessionId) ?? this.newSession();
+      child.writeApproved ||= parent.writeApproved;
+      child.agentWriteApproved ||= parent.agentWriteApproved;
+      child.commandRules = deduplicateRules([
+        ...child.commandRules,
+        ...parent.commandRules,
+      ]);
+      child.pathRules = deduplicateRules([
+        ...(child.pathRules ?? []),
+        ...(parent.pathRules ?? []),
+      ]);
+      child.writeRules = deduplicateRules([
+        ...(child.writeRules ?? []),
+        ...(parent.writeRules ?? []),
+      ]);
+      child.lastActivity = Date.now();
+      this.sessions.set(childSessionId, child);
+      this.persistSessions();
+    }
 
-    const child = this.sessions.get(childSessionId) ?? this.newSession();
-    child.agentWriteApproved ||= parent.agentWriteApproved;
-    child.pathRules = deduplicateRules([
-      ...(child.pathRules ?? []),
-      ...(parent.pathRules ?? []),
-    ]);
-    child.writeRules = deduplicateRules([
-      ...(child.writeRules ?? []),
-      ...(parent.writeRules ?? []),
-    ]);
-    child.lastActivity = Date.now();
-    this.sessions.set(childSessionId, child);
-    this.persistSessions();
-    this._onDidChange.fire();
+    const parentMcpPrefix = `${parentSessionId}:`;
+    const childMcpPrefix = `${childSessionId}:`;
+    let inheritedMcpApproval = false;
+    for (const approval of Array.from(this.mcpApprovals)) {
+      if (approval.startsWith(parentMcpPrefix)) {
+        this.mcpApprovals.add(
+          `${childMcpPrefix}${approval.slice(parentMcpPrefix.length)}`,
+        );
+        inheritedMcpApproval = true;
+      }
+    }
+
+    if (parent || inheritedMcpApproval) {
+      this._onDidChange.fire();
+    }
   }
 
   /** Reset session-level agent write approval for a single session (e.g. on mode switch). */

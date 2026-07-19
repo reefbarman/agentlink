@@ -4,6 +4,7 @@ import type {
   RevertRecoveryNotice,
 } from "../../shared/types.js";
 import type {
+  McpConfigMutationResult,
   McpConfigSnapshot,
   McpManagerView,
 } from "../../shared/mcpManagerTypes.js";
@@ -360,6 +361,7 @@ export type ExtensionMessage =
       }>;
       configSnapshot?: McpConfigSnapshot;
     }
+  | { type: "agentMcpConfigMutationResult"; result: McpConfigMutationResult }
   | {
       type: "showApproval";
       request: import("../../approvals/webview/types").ApprovalRequest;

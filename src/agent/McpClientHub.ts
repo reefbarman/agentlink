@@ -31,7 +31,8 @@ export type McpServerStatus =
   | "connecting"
   | "connected"
   | "error"
-  | "disconnected";
+  | "disconnected"
+  | "disabled";
 
 export interface McpToolInfo {
   name: string;
@@ -136,6 +137,7 @@ async function withHttpConnectLock<T>(
  */
 export class McpClientHub {
   private servers = new Map<string, ConnectedServer>();
+  private disabledServers = new Map<string, McpServerConfig>();
   private oauthProviders = new Map<string, McpOAuthProvider>();
   private globalState?: vscode.Memento;
   private authFailureCounts = new Map<string, number>();
@@ -306,20 +308,32 @@ export class McpClientHub {
     configs: McpServerConfig[],
     options: { interactiveForNewServers?: boolean } = {},
   ): Promise<void> {
-    const existingNames = new Set(this.servers.keys());
-    const newNames = new Set(configs.map((c) => c.name));
+    const existingNames = new Set([
+      ...this.servers.keys(),
+      ...this.disabledServers.keys(),
+    ]);
+    const newNames = new Set(configs.map((config) => config.name));
     for (const name of this.servers.keys()) {
       if (!newNames.has(name)) await this.disconnectServer(name);
     }
+    for (const name of this.disabledServers.keys()) {
+      if (!newNames.has(name)) this.disabledServers.delete(name);
+    }
     await Promise.all(
-      configs.map((cfg) =>
-        this.connectServer(cfg, {
+      configs.map(async (cfg) => {
+        if (cfg.disabled) {
+          await this.disconnectServer(cfg.name);
+          this.disabledServers.set(cfg.name, cfg);
+          return;
+        }
+        this.disabledServers.delete(cfg.name);
+        await this.connectServer(cfg, {
           authMode:
             options.interactiveForNewServers && !existingNames.has(cfg.name)
               ? "interactive"
               : "noninteractive",
-        }),
-      ),
+        });
+      }),
     );
     this.onStatusChange?.(this.getServerInfos());
   }
@@ -1011,11 +1025,14 @@ export class McpClientHub {
     this.oauthProviders.delete(name);
   }
 
-  /** Return the stored config for a server, or undefined if not connected. */
+  /** Return the stored config for a connected or disabled server. */
   getServerConfig(
     serverName: string,
   ): import("./mcpConfig.js").McpServerConfig | undefined {
-    return this.servers.get(serverName)?.config;
+    return (
+      this.servers.get(serverName)?.config ??
+      this.disabledServers.get(serverName)
+    );
   }
 
   /**
@@ -1026,9 +1043,11 @@ export class McpClientHub {
     await this.oauthProviders.get(name)?.clearTokens();
   }
 
-  /** Disable (permanently disconnect) a server by name. Does not reconnect. */
+  /** Disable a server in-memory. Callers must persist the config separately. */
   async disableServer(name: string): Promise<void> {
+    const config = this.getServerConfig(name);
     await this.disconnectServer(name);
+    if (config) this.disabledServers.set(name, { ...config, disabled: true });
     this.onStatusChange?.(this.getServerInfos());
   }
 
@@ -1105,6 +1124,7 @@ export class McpClientHub {
     await Promise.all(
       Array.from(this.servers.keys()).map((n) => this.disconnectServer(n)),
     );
+    this.disabledServers.clear();
     this.onStatusChange?.(this.getServerInfos());
   }
 
@@ -1149,18 +1169,28 @@ export class McpClientHub {
   }
 
   getServerInfos(): McpServerInfo[] {
-    return Array.from(this.servers.values()).map((s) => ({
-      name: s.name,
-      status: s.status,
-      error: s.error,
-      toolCount: s.tools.length,
-      resourceCount: s.resources.length,
-      promptCount: s.prompts.length,
-      tools: s.tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
+    return [
+      ...Array.from(this.servers.values()).map((server) => ({
+        name: server.name,
+        status: server.status,
+        error: server.error,
+        toolCount: server.tools.length,
+        resourceCount: server.resources.length,
+        promptCount: server.prompts.length,
+        tools: server.tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+        })),
       })),
-    }));
+      ...Array.from(this.disabledServers.values()).map((config) => ({
+        name: config.name,
+        status: "disabled" as const,
+        toolCount: 0,
+        resourceCount: 0,
+        promptCount: 0,
+        tools: [],
+      })),
+    ];
   }
 
   /**

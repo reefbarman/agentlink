@@ -1034,7 +1034,7 @@ describe("ApprovalManager session approval persistence", () => {
     disposeManagers({ approvalManager, configStore });
   });
 
-  it("snapshots session write trust into a child without copying command rules", async () => {
+  it("snapshots all session approvals into an independently mutable child", async () => {
     const memento = new MockMemento();
     const { approvalManager, configStore } = await createManagers(memento);
 
@@ -1055,16 +1055,23 @@ describe("ApprovalManager session approval persistence", () => {
       { pattern: "npm test", mode: "prefix" },
       "session",
     );
+    approvalManager.approveMcpTool("parent", "linear__list_issues");
+    approvalManager.approveMcpServer("parent", "github");
     approvalManager.addWriteRule(
       "child",
       { pattern: "src/existing", mode: "prefix" },
       "session",
     );
+    approvalManager.addCommandRule(
+      "child",
+      { pattern: "git status", mode: "exact" },
+      "session",
+    );
 
-    approvalManager.inheritSessionWriteState("parent", "child");
+    approvalManager.inheritSessionApprovalState("parent", "child");
 
     expect(approvalManager.getAgentWriteApprovalState("child")).toBe("session");
-    expect(approvalManager.getWriteApprovalState("child")).toBe("prompt");
+    expect(approvalManager.getWriteApprovalState("child")).toBe("session");
     expect(approvalManager.getWriteRules("child").session).toEqual([
       { pattern: "src/existing", mode: "prefix" },
       { pattern: "src/inherited", mode: "prefix" },
@@ -1072,7 +1079,16 @@ describe("ApprovalManager session approval persistence", () => {
     expect(approvalManager.getPathRules("child").session).toEqual([
       { pattern: "/outside/inherited", mode: "prefix" },
     ]);
-    expect(approvalManager.getCommandRules("child").session).toEqual([]);
+    expect(approvalManager.getCommandRules("child").session).toEqual([
+      { pattern: "git status", mode: "exact" },
+      { pattern: "npm test", mode: "prefix" },
+    ]);
+    expect(approvalManager.isMcpApproved("child", "linear__list_issues")).toBe(
+      true,
+    );
+    expect(approvalManager.isMcpApproved("child", "github__create_issue")).toBe(
+      true,
+    );
     expect(approvalManager.getWriteRules("parent").session).toEqual([
       { pattern: "src/inherited", mode: "prefix" },
     ]);
@@ -1082,10 +1098,14 @@ describe("ApprovalManager session approval persistence", () => {
       { pattern: "src/later", mode: "prefix" },
       "session",
     );
+    approvalManager.approveMcpTool("parent", "linear__create_issue");
     expect(approvalManager.getWriteRules("child").session).not.toContainEqual({
       pattern: "src/later",
       mode: "prefix",
     });
+    expect(approvalManager.isMcpApproved("child", "linear__create_issue")).toBe(
+      false,
+    );
 
     disposeManagers({ approvalManager, configStore });
   });

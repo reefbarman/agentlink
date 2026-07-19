@@ -29,6 +29,12 @@ import {
   readBrowserGatewayThemeCache,
 } from "../browserGatewayThemeCache.js";
 import {
+  applyBrowserGatewayMcpClientCapabilities,
+  buildBrowserGatewayHelperTrustHeaders,
+  classifyBrowserGatewayClientOrigin,
+  hasBrowserGatewayMcpSecretWrite,
+} from "../browserGatewayRequestTrust.js";
+import {
   AskAgentController,
   type AskAgentControllerPublication,
   type AskAgentControllerSnapshot,
@@ -433,13 +439,7 @@ function renderThemeStyleTag(theme: BrowserGatewayThemeSnapshot): string {
 }
 
 function isLoopbackAddress(addr: string | undefined): boolean {
-  if (!addr) return false;
-  const normalized = addr.startsWith("::ffff:") ? addr.slice(7) : addr;
-  return (
-    normalized === "127.0.0.1" ||
-    normalized === "::1" ||
-    normalized.startsWith("127.")
-  );
+  return classifyBrowserGatewayClientOrigin(addr) === "loopback";
 }
 
 function parseAskAgentMediaItems(
@@ -965,15 +965,15 @@ export class BrowserGatewayHelper {
       case "slashCommands":
         return this.handleAskAgentSlashCommandsRequest(res);
       case "mcpConfig":
-        return this.handleAskAgentMcpConfigRequest(res);
+        return this.handleAskAgentMcpConfigRequest(req, res);
       case "mcpConfigServer":
         return this.handleAskAgentMcpConfigServerRequest(req, res);
       case "mcpConfigOpenRaw":
         return this.handleAskAgentMcpConfigOpenRawRequest(req, res);
       case "mcpStatus":
-        return this.handleAskAgentMcpStatusRequest(res);
+        return this.handleAskAgentMcpStatusRequest(req, res);
       case "mcpRefresh":
-        return this.handleAskAgentMcpRefreshRequest(res);
+        return this.handleAskAgentMcpRefreshRequest(req, res);
       case "question":
         return this.handleAskAgentQuestionResponseRequest(req, res);
       case "questionProgress":
@@ -2256,8 +2256,18 @@ export class BrowserGatewayHelper {
     writeJson(res, 200, { commands });
   }
 
+  private applyAskAgentMcpClientCapabilities(
+    value: unknown,
+    req: http.IncomingMessage,
+  ): unknown {
+    return applyBrowserGatewayMcpClientCapabilities(
+      value,
+      classifyBrowserGatewayClientOrigin(req.socket.remoteAddress),
+    );
+  }
+
   private async proxyAskAgentMcpConfigRequest(
-    req: http.IncomingMessage | null,
+    req: http.IncomingMessage,
     res: http.ServerResponse,
     targetPath: string,
     method: "GET" | "POST" | "DELETE",
@@ -2271,12 +2281,76 @@ export class BrowserGatewayHelper {
       return;
     }
     try {
+      const origin = classifyBrowserGatewayClientOrigin(
+        req.socket.remoteAddress,
+      );
       const headers: Record<string, string> = {
         authorization: `Bearer ${target.authToken}`,
+        ...buildBrowserGatewayHelperTrustHeaders(
+          this.clientSharedSecret,
+          origin,
+        ),
       };
       let body: string | undefined;
-      if (req && method !== "GET") {
+      if (method !== "GET") {
         const parsed = (await readJsonBody(req)) as unknown;
+        if (origin === "non-loopback") {
+          if (method === "DELETE") {
+            writeJson(res, 403, {
+              error: "browser_local_process_requires_loopback",
+            });
+            return;
+          }
+          const operations =
+            parsed &&
+            typeof parsed === "object" &&
+            "operations" in parsed &&
+            Array.isArray((parsed as { operations?: unknown }).operations)
+              ? (
+                  parsed as {
+                    operations: Array<{
+                      kind?: unknown;
+                      server?: unknown;
+                    }>;
+                  }
+                ).operations
+              : undefined;
+          if (operations?.some((operation) => operation.kind === "remove")) {
+            writeJson(res, 403, {
+              error: "browser_local_process_requires_loopback",
+            });
+            return;
+          }
+          const servers = operations
+            ? operations
+                .filter((operation) => operation.kind === "upsert")
+                .map((operation) => operation.server)
+            : [
+                parsed && typeof parsed === "object" && "server" in parsed
+                  ? (parsed as { server?: unknown }).server
+                  : undefined,
+              ];
+          const hasSecretWrite = servers.some(hasBrowserGatewayMcpSecretWrite);
+          if (hasSecretWrite) {
+            writeJson(res, 403, {
+              error: "browser_secret_write_requires_loopback",
+            });
+            return;
+          }
+          const hasLocalProcessWrite = servers.some((server) => {
+            const transport =
+              server && typeof server === "object" && "type" in server
+                ? (server as { type?: unknown }).type
+                : undefined;
+            return transport === undefined || transport === "stdio";
+          });
+          if (hasLocalProcessWrite) {
+            writeJson(res, 403, {
+              error: "browser_local_process_requires_loopback",
+            });
+            return;
+          }
+        }
         body = JSON.stringify(parsed ?? {});
         headers["content-type"] = "application/json";
       }
@@ -2284,7 +2358,10 @@ export class BrowserGatewayHelper {
         `${target.url}${targetPath}`,
         body === undefined ? { method, headers } : { method, headers, body },
       );
-      const responseBody = (await response.json()) as unknown;
+      const responseBody = this.applyAskAgentMcpClientCapabilities(
+        (await response.json()) as unknown,
+        req,
+      );
       writeJson(res, response.ok ? 200 : response.status, responseBody);
     } catch (err) {
       writeJson(res, 500, {
@@ -2295,10 +2372,11 @@ export class BrowserGatewayHelper {
   }
 
   private async handleAskAgentMcpConfigRequest(
+    req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
     await this.proxyAskAgentMcpConfigRequest(
-      null,
+      req,
       res,
       "/internal/ask-agent/mcp-config",
       "GET",
@@ -2318,18 +2396,14 @@ export class BrowserGatewayHelper {
   }
 
   private async handleAskAgentMcpConfigOpenRawRequest(
-    req: http.IncomingMessage,
+    _req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
-    await this.proxyAskAgentMcpConfigRequest(
-      req,
-      res,
-      "/internal/ask-agent/mcp-config/open-raw",
-      "POST",
-    );
+    writeJson(res, 403, { error: "browser_raw_config_unavailable" });
   }
 
   private async handleAskAgentMcpStatusRequest(
+    req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
     const target = await this.getAskAgentMcpBridgeTarget();
@@ -2348,7 +2422,10 @@ export class BrowserGatewayHelper {
           headers: { authorization: `Bearer ${target.authToken}` },
         },
       );
-      const body = (await response.json()) as unknown;
+      const body = this.applyAskAgentMcpClientCapabilities(
+        (await response.json()) as unknown,
+        req,
+      );
       writeJson(res, response.ok ? 200 : response.status, body);
     } catch (err) {
       writeJson(res, 500, {
@@ -2360,6 +2437,7 @@ export class BrowserGatewayHelper {
   }
 
   private async handleAskAgentMcpRefreshRequest(
+    req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
     const target = await this.getAskAgentMcpBridgeTarget();
@@ -2379,7 +2457,10 @@ export class BrowserGatewayHelper {
           headers: { authorization: `Bearer ${target.authToken}` },
         },
       );
-      const body = (await response.json()) as unknown;
+      const body = this.applyAskAgentMcpClientCapabilities(
+        (await response.json()) as unknown,
+        req,
+      );
       writeJson(res, response.ok ? 200 : response.status, body);
     } catch (err) {
       writeJson(res, 500, {

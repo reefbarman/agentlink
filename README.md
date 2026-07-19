@@ -192,7 +192,12 @@ Detected skills are also exposed as slash commands in the built-in chat. Skills 
 
 ### Connect the built-in agent to MCP servers
 
-Use `/mcp-config` in the built-in chat to inspect and edit AgentLink-owned MCP configuration, `/mcp` to inspect connected servers, and `/mcp-refresh` after changing configuration.
+Use `/mcp` to open the shared MCP Manager, `/mcp-config` to open its configuration-oriented view, and `/mcp-refresh` to reconnect configured servers. The manager is available in both VS Code and Browser Ask Agent with four focused views:
+
+- **Overview** joins saved configuration with connection status, tool/resource/prompt counts, source scope, inherited overrides, secret-key presence, and persistent enabled/disabled state.
+- **Sources** shows every layered file in precedence order, including exact path, read health, editable/read-only state, and raw-open actions where the surface supports them.
+- **Guided setup** supports Local process (`stdio`), HTTP, and legacy SSE servers. Arguments are exact array elements—one row/line per argument or a JSON string array—so quoted values and paths containing spaces are preserved.
+- **Import JSON** parses one or many servers into a review step before writing. Valid rows can be selected and conflicts must explicitly **Skip**, **Replace**, or **Rename**.
 
 The main agent merges MCP server definitions from these files, in ascending priority:
 
@@ -203,7 +208,9 @@ The main agent merges MCP server definitions from these files, in ascending prio
 5. `<workspace>/.claude/mcp.json`
 6. `<workspace>/.agentlink/mcp.json`
 
-Each file uses an `mcpServers` object. For example:
+AgentLink writes structured changes only to editable `.agentlink/mcp.json` sources. Main-profile saves can target the current project or the global AgentLink source; Browser Ask Agent uses its dedicated `~/.agentlink/ask-agent/mcp.json` source. Higher-priority explicit fields override inherited values. An inherited server can be edited by creating an AgentLink-owned override rather than changing `.agents` or `.claude` files.
+
+Each file normally uses an `mcpServers` object. For example:
 
 ```json
 {
@@ -211,11 +218,22 @@ Each file uses an `mcpServers` object. For example:
     "example": {
       "command": "example-mcp-server",
       "args": ["--stdio"],
-      "toolPolicy": "ask"
+      "toolPolicy": "ask",
+      "disabled": false
     }
   }
 }
 ```
+
+JSON import also accepts a `servers` wrapper, one named server object, or a bare name-to-server map. JSONC, a UTF-8 BOM, and one complete `json`/`jsonc` Markdown fence are accepted. `serverUrl` is normalized to `url`, `streamable-http` is normalized to `http`, and unambiguous missing transports are inferred. Unknown client-specific fields are reported as **Not imported** instead of being silently written.
+
+Guided and imported writes are revision-checked and committed as one atomic batch. If another process changes a relevant source, AgentLink returns `config_changed` rather than overwriting it. Structured writes preserve unrelated top-level keys and servers, but normalize JSONC comments and trailing commas to formatted JSON; use **Open raw** when comment preservation matters.
+
+Environment variables and HTTP headers are masked in the UI, but masking is visual only: values remain plaintext in the selected configuration file. Prefer `${VAR}` references; AgentLink expands them in env and header values at runtime. Stored secret values are never returned to the manager—only key names and source metadata are shown—and edits require explicit preserve, patch, replace, or remove intent. URL userinfo is rejected. Command arguments and URL query strings are ordinary visible configuration and should not contain credentials.
+
+Saving and connecting are reported separately. A valid configuration remains saved when a server is offline or needs authentication. Disabling a server writes `disabled: true`, removes its tools from the runtime, and survives refresh/reload; enabling writes `disabled: false` and reconnects it.
+
+Browser Ask Agent keeps extension-hosted MCP execution and credentials. Browser main-profile configuration is read-only. Loopback Browser Ask Agent sessions may configure local-process servers and secret-bearing env/header changes; LAN browser sessions may configure only secret-free HTTP/SSE servers. Raw config opening is unavailable from the browser.
 
 AgentLink can progressively disclose large MCP catalogs and applies the same session/project/global approval model to connected servers and tools.
 

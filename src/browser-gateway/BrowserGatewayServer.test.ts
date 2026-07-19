@@ -7,6 +7,7 @@ import { BrowserGatewayService } from "./BrowserGatewayService.js";
 import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
 import { InMemoryAgentUiEventHub } from "../agent/AgentUiPublisher.js";
 import { StreamingBaselineRecorder } from "../shared/streamingBaselineMetrics.js";
+import { buildBrowserGatewayHelperTrustHeaders } from "./browserGatewayRequestTrust.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
 
 vi.mock("vscode", () => {
@@ -124,6 +125,7 @@ function makeMcpConfigSnapshot() {
         exists: true,
         editable: true,
         priority: 3,
+        readStatus: "available" as const,
       },
     ],
     entries: [],
@@ -232,6 +234,13 @@ function makeChatViewProviderStub() {
       ok: true,
       configSnapshot: makeMcpConfigSnapshot(),
     })),
+    submitMcpConfigMutation: vi.fn(async (mutation) => ({
+      operationId: mutation.operationId,
+      ok: true,
+      configSaved: true,
+      errors: [],
+      configSnapshot: makeMcpConfigSnapshot(),
+    })),
     submitBrowserMcpConfigServer: vi.fn(async () => ({
       ok: true,
       configSnapshot: makeMcpConfigSnapshot(),
@@ -241,6 +250,7 @@ function makeChatViewProviderStub() {
       configSnapshot: makeMcpConfigSnapshot(),
     })),
     submitBrowserMcpConfigOpenRaw: vi.fn(async () => ({ ok: true })),
+    submitBrowserMcpAction: vi.fn(async () => ({ ok: true, infos: [] })),
     getBrowserBgTranscript: vi.fn((sessionId: string) => ({
       ok: true,
       transcript: {
@@ -678,6 +688,16 @@ describe("BrowserGatewayServer", () => {
       "Workspace One",
       "/workspace/one",
       vi.fn(),
+      undefined,
+      () => "helper-secret",
+    );
+    const helperLoopbackHeaders = buildBrowserGatewayHelperTrustHeaders(
+      "helper-secret",
+      "loopback",
+    );
+    const helperNonLoopbackHeaders = buildBrowserGatewayHelperTrustHeaders(
+      "helper-secret",
+      "non-loopback",
     );
     const port = await server.start(0);
     const baseUrl = `http://127.0.0.1:${port}`;
@@ -840,6 +860,7 @@ describe("BrowserGatewayServer", () => {
         headers: {
           Authorization: "Bearer test-token",
           "Content-Type": "application/json",
+          ...helperLoopbackHeaders,
         },
         body: JSON.stringify({
           profile: "ask-agent",
@@ -872,7 +893,7 @@ describe("BrowserGatewayServer", () => {
     );
     expect(mainMcpConfigSaveResponse.status).toBe(403);
     expect(await mainMcpConfigSaveResponse.json()).toEqual({
-      error: "main_profile_read_only_in_browser",
+      error: "browser_mcp_config_unavailable",
     });
     expect(
       chatViewProvider.submitBrowserMcpConfigServer,
@@ -897,12 +918,254 @@ describe("BrowserGatewayServer", () => {
         }),
       },
     );
-    expect(askMcpConfigOpenRawResponse.ok).toBe(true);
-    expect(chatViewProvider.submitBrowserMcpConfigOpenRaw).toHaveBeenCalledWith(
+    expect(askMcpConfigOpenRawResponse.status).toBe(403);
+    expect(await askMcpConfigOpenRawResponse.json()).toEqual({
+      error: "browser_mcp_config_unavailable",
+    });
+    expect(
+      chatViewProvider.submitBrowserMcpConfigOpenRaw,
+    ).not.toHaveBeenCalled();
+
+    const missingHelperTrustResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
       {
-        profile: "ask-agent",
-        scope: "ask-agent-global",
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          server: { name: "forged", command: "forged-mcp" },
+        }),
       },
+    );
+    expect(missingHelperTrustResponse.status).toBe(403);
+    expect(await missingHelperTrustResponse.json()).toEqual({
+      error: "helper_trust_required",
+    });
+
+    const lanStdioResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          server: { name: "lan-stdio", command: "lan-mcp" },
+        }),
+      },
+    );
+    expect(lanStdioResponse.status).toBe(403);
+    expect(await lanStdioResponse.json()).toEqual({
+      error: "browser_local_process_requires_loopback",
+    });
+
+    const lanHttpResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          server: {
+            name: "lan-http",
+            type: "http",
+            url: "https://example.com/mcp",
+          },
+        }),
+      },
+    );
+    expect(lanHttpResponse.ok).toBe(true);
+
+    const lanBatchRemoveResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          operationId: "lan-remove",
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          expectedRevision: "revision-1",
+          operations: [{ kind: "remove", serverName: "lan-http" }],
+        }),
+      },
+    );
+    expect(lanBatchRemoveResponse.status).toBe(403);
+    expect(await lanBatchRemoveResponse.json()).toEqual({
+      error: "browser_local_process_requires_loopback",
+    });
+
+    const lanBatchSecretResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          operationId: "lan-secret",
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          expectedRevision: "revision-1",
+          operations: [
+            {
+              kind: "upsert",
+              conflictAction: "replace",
+              server: {
+                name: "lan-http",
+                type: "http",
+                url: "https://example.com/mcp",
+                headers: { mode: "patch", set: { Authorization: "secret" } },
+              },
+            },
+          ],
+        }),
+      },
+    );
+    expect(lanBatchSecretResponse.status).toBe(403);
+    expect(await lanBatchSecretResponse.json()).toEqual({
+      error: "browser_secret_write_requires_loopback",
+    });
+
+    const lanBatchPreserveResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          operationId: "lan-preserve",
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          expectedRevision: "revision-1",
+          operations: [
+            {
+              kind: "upsert",
+              conflictAction: "replace",
+              server: {
+                name: "lan-http",
+                type: "http",
+                url: "https://example.com/mcp",
+                env: { mode: "preserve" },
+                headers: { mode: "preserve" },
+              },
+            },
+          ],
+        }),
+      },
+    );
+    expect(lanBatchPreserveResponse.ok).toBe(true);
+    expect(await lanBatchPreserveResponse.json()).toMatchObject({
+      operationId: "lan-preserve",
+      ok: true,
+    });
+
+    const lanBatchHttpResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          operationId: "lan-http-batch",
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          expectedRevision: "revision-1",
+          operations: [
+            {
+              kind: "upsert",
+              conflictAction: "replace",
+              server: {
+                name: "lan-http",
+                type: "http",
+                url: "https://example.com/mcp",
+              },
+            },
+          ],
+        }),
+      },
+    );
+    expect(lanBatchHttpResponse.ok).toBe(true);
+    expect(await lanBatchHttpResponse.json()).toMatchObject({
+      operationId: "lan-http-batch",
+      ok: true,
+    });
+    expect(chatViewProvider.submitMcpConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({ operationId: "lan-http-batch" }),
+    );
+
+    const lanDeleteResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+          ...helperNonLoopbackHeaders,
+        },
+        body: JSON.stringify({
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          serverName: "lan-http",
+        }),
+      },
+    );
+    expect(lanDeleteResponse.status).toBe(403);
+    expect(await lanDeleteResponse.json()).toEqual({
+      error: "browser_local_process_requires_loopback",
+    });
+
+    const browserDisableResponse = await fetch(`${baseUrl}/api/mcp/action`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ serverName: "linear", action: "disable" }),
+    });
+    expect(browserDisableResponse.status).toBe(403);
+    expect(await browserDisableResponse.json()).toEqual({
+      error: "main_profile_read_only_in_browser",
+    });
+    expect(chatViewProvider.submitBrowserMcpAction).not.toHaveBeenCalled();
+
+    const browserReconnectResponse = await fetch(`${baseUrl}/api/mcp/action`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ serverName: "linear", action: "reconnect" }),
+    });
+    expect(browserReconnectResponse.ok).toBe(true);
+    expect(chatViewProvider.submitBrowserMcpAction).toHaveBeenCalledWith(
+      "linear",
+      "reconnect",
     );
 
     const pageResponse = await fetch(`${baseUrl}/`);

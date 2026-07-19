@@ -4155,7 +4155,10 @@ export class AgentSessionManager {
       childSessionId,
       this.toolCtx?.getCommandApprovalPolicy?.(parentSessionId) ?? "safe",
     );
-    this.toolCtx?.inheritSessionWriteState?.(parentSessionId, childSessionId);
+    this.toolCtx?.inheritSessionApprovalState?.(
+      parentSessionId,
+      childSessionId,
+    );
   }
 
   private activeBackgroundCount(): number {
@@ -5229,7 +5232,7 @@ export class AgentSessionManager {
 
         const modelCandidates =
           provider.id === "codex"
-            ? ["gpt-5.4-mini", ...CODEX_CONDENSE_MODEL_FALLBACKS]
+            ? [...CODEX_CONDENSE_MODEL_FALLBACKS]
             : [provider.condenseModel];
         const uniqueModels = [...new Set(modelCandidates)];
 

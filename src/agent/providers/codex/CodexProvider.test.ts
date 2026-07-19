@@ -1197,8 +1197,9 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     expect(oauthIds).toContain("gpt-5.6-terra");
     expect(oauthIds).toContain("gpt-5.6-luna");
     expect(oauthIds).toContain("gpt-5.5");
-    expect(oauthIds).toContain("gpt-5.4-mini");
-    expect(oauthIds).not.toContain("gpt-5.4-pro");
+    expect(oauthIds).toContain("gpt-5.3-codex-spark");
+    expect(oauthIds).not.toContain("gpt-5.4");
+    expect(oauthIds).not.toContain("gpt-5.4-mini");
     expect(oauthIds).not.toContain("gpt-5.2-codex");
 
     const apiKeyProvider = new CodexProvider(
@@ -1208,8 +1209,11 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
     const apiKeyIds = apiKeyProvider.listModels().map((m) => m.id);
+    expect(apiKeyIds).toContain("gpt-5.6-sol");
+    expect(apiKeyIds).toContain("gpt-5.5");
     expect(apiKeyIds).toContain("gpt-5.4-pro");
     expect(apiKeyIds).toContain("gpt-5.2-codex");
+    expect(apiKeyIds).not.toContain("gpt-5.3-codex-spark");
   });
 
   it("retries an unavailable GPT-5.6 model with its older equivalent", async () => {
@@ -1245,11 +1249,11 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
       events.push(event);
     }
 
-    expect(attemptedModels).toEqual(["gpt-5.6-luna", "gpt-5.4-mini"]);
+    expect(attemptedModels).toEqual(["gpt-5.6-luna", "gpt-5.5"]);
     expect(events).toContainEqual({
       type: "model_fallback",
       requestedModel: "gpt-5.6-luna",
-      effectiveModel: "gpt-5.4-mini",
+      effectiveModel: "gpt-5.5",
     });
   });
 
