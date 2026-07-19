@@ -53,7 +53,7 @@ export class ApprovalManager {
   private sessions = new Map<string, SessionState>();
   private sessionProjects = new Map<string, SessionProjectBinding>();
 
-  // Per-session MCP tool approvals: key is "sessionId:toolName" or "sessionId:server:*"
+  // Per-session MCP approvals, scoped to either one tool or an entire server.
   private mcpApprovals = new Set<string>();
   private configStoreListener: vscode.Disposable;
   private commandRuleStore: CommandRuleStore;

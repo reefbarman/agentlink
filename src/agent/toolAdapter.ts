@@ -2256,12 +2256,18 @@ export async function dispatchToolCall(
             kind: "mcp",
             title: `Allow MCP tool "${bareToolName}" from "${serverName}"?`,
             detail: inputPreview,
+            mcpServerName: serverName,
+            mcpToolName: bareToolName,
             targetPath: projectConfigPath,
             choices: [
               { label: "Allow once", value: "allow-once", isPrimary: true },
               {
                 label: "Always allow tool (session)",
                 value: "always-tool-session",
+              },
+              {
+                label: `Always allow ${serverName} (session)`,
+                value: "always-server-session",
               },
               {
                 label: "Always allow tool (project)",
@@ -2294,10 +2300,13 @@ export async function dispatchToolCall(
       } else {
         // Fallback VS Code modal (no inline card available)
         const alwaysAllowServer = `Always allow from ${serverName}` as const;
+        const allowServerForSession =
+          `Allow all ${serverName} tools for this session` as const;
         const vsChoice = await vscode.window.showWarningMessage(
           `Allow MCP tool "${bareToolName}" from "${serverName}"?`,
           { modal: true, detail: inputPreview },
           "Allow once",
+          allowServerForSession,
           "Always allow this tool",
           alwaysAllowServer,
           "Deny",
@@ -2305,16 +2314,19 @@ export async function dispatchToolCall(
         choice =
           vsChoice === "Allow once"
             ? "allow-once"
-            : vsChoice === "Always allow this tool"
-              ? "always-tool-project"
-              : vsChoice === alwaysAllowServer
-                ? "always-server-project"
-                : "deny";
+            : vsChoice === allowServerForSession
+              ? "always-server-session"
+              : vsChoice === "Always allow this tool"
+                ? "always-tool-project"
+                : vsChoice === alwaysAllowServer
+                  ? "always-server-project"
+                  : "deny";
       }
 
       const allowChoices = new Set([
         "allow-once",
         "always-tool-session",
+        "always-server-session",
         "always-tool-project",
         "always-tool-global",
         "always-server-project",
@@ -2359,6 +2371,9 @@ export async function dispatchToolCall(
           break;
         case "always-tool-session":
           approvalManager.approveMcpTool(sessionId, toolName);
+          break;
+        case "always-server-session":
+          approvalManager.approveMcpServer(sessionId, serverName);
           break;
         case "always-tool-project": {
           const filePath = projectConfigPath;

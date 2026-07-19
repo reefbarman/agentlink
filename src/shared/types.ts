@@ -20,6 +20,9 @@ export interface InlineApprovalRequest {
   title: string;
   detail?: string;
   choices: InlineApprovalChoice[];
+  /** Structured MCP identity used by approval surfaces. */
+  mcpServerName?: string;
+  mcpToolName?: string;
   /**
    * Optional id for approvals that need rich decision payloads
    * (e.g. rejectionReason/followUp), not just a selected choice value.

@@ -105,3 +105,9 @@ If a new feature genuinely cannot work over the browser gateway (e.g. requires a
 ## Browser/Webview ID Generation
 
 Browser gateway pages may run over LAN HTTP, where `crypto.randomUUID()` is unavailable because the page is an insecure browser context. In browser/webview code, use `randomId()` from `src/shared/randomId.ts` instead of calling `crypto.randomUUID()` directly. This matters for Ask Agent/browser gateway flows because failures can happen before request/logging paths and look like the UI silently does nothing.
+
+## Local planning files
+
+- Files under `plans/` are local-only working documents and are intentionally Git-ignored.
+- Do not force-add, stage, or commit any `plans/` path.
+- Before committing all changes, verify that no `plans/` path is staged or tracked.

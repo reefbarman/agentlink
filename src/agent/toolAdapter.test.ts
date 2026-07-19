@@ -3712,7 +3712,14 @@ describe("dispatchToolCall", () => {
       expect.objectContaining({
         kind: "mcp",
         title: 'Allow MCP tool "list_issues" from "linear"?',
+        mcpServerName: "linear",
+        mcpToolName: "list_issues",
         targetPath: "/tmp/project/.agentlink/mcp.json",
+        choices: expect.arrayContaining([
+          expect.objectContaining({
+            value: "always-server-session",
+          }),
+        ]),
       }),
       "test-session",
     );
@@ -3728,6 +3735,43 @@ describe("dispatchToolCall", () => {
       bareToolName: "list_issues",
       scopes: ["session", "project", "global"],
     });
+  });
+
+  it("allows every tool from an MCP server for the rest of the session", async () => {
+    const onApprovalRequest = vi
+      .fn()
+      .mockResolvedValue("always-server-session");
+    const approveMcpServer = vi.fn();
+    const approveMcpTool = vi.fn();
+    const mcpHub = {
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+
+    await dispatchToolCall(
+      "linear__list_issues",
+      { query: "bug" },
+      {
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+          approveMcpServer,
+          approveMcpTool,
+        } as any,
+        onApprovalRequest,
+        mcpHub: mcpHub as any,
+      },
+    );
+
+    expect(approveMcpServer).toHaveBeenCalledWith("test-session", "linear");
+    expect(approveMcpTool).not.toHaveBeenCalled();
+    expect(mcpHub.callTool).toHaveBeenCalledWith(
+      "linear__list_issues",
+      { query: "bug" },
+      { signal: undefined },
+    );
   });
 
   it("returns the typed rejection reason and follow-up when the user denies an MCP tool", async () => {

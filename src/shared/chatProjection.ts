@@ -1588,12 +1588,14 @@ export function reducer(state: AppState, action: AppAction): AppState {
 
       const all = ensureAssistant(state.messages);
       const { msgs, last } = cloneLast(all);
+      const inputJson =
+        action.input === undefined ? "" : JSON.stringify(action.input);
       last.blocks.push(
         action.toolName === "load_skill"
           ? {
               type: "skill_load",
               id: action.toolCallId,
-              inputJson: "",
+              inputJson,
               result: "",
               complete: false,
             }
@@ -1601,7 +1603,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
               type: "tool_call",
               id: action.toolCallId,
               name: action.toolName,
-              inputJson: "",
+              inputJson,
               result: "",
               complete: false,
               ...(action.toolName === "compose"
@@ -1640,7 +1642,16 @@ export function reducer(state: AppState, action: AppAction): AppState {
       tiTarget.blocks = tiTarget.blocks.map((b) =>
         (b.type === "tool_call" || b.type === "skill_load") &&
         b.id === action.toolCallId
-          ? { ...b, inputJson: b.inputJson + action.partialJson }
+          ? {
+              ...b,
+              // A confirmed tool start may already carry the complete input.
+              // Retain streamed deltas as a fallback for providers/surfaces
+              // that only know the arguments incrementally.
+              inputJson:
+                parseJsonObject(b.inputJson) === null
+                  ? b.inputJson + action.partialJson
+                  : b.inputJson,
+            }
           : b,
       );
       tiMsgs[tiIdx] = tiTarget;

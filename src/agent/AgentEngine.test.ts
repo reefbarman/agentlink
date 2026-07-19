@@ -748,6 +748,21 @@ describe("AgentEngine", () => {
       const events = await runPromise;
 
       expect(
+        events
+          .filter(
+            (e): e is Extract<AgentEvent, { type: "tool_start" }> =>
+              e.type === "tool_start",
+          )
+          .map((e) => ({ toolName: e.toolName, input: e.input })),
+      ).toEqual([
+        { toolName: "read_file", input: { path: "src/a.ts" } },
+        {
+          toolName: "write_file",
+          input: { path: "src/x.ts", content: "x" },
+        },
+      ]);
+
+      expect(
         tracker.getActiveCalls().filter((c) => c.status === "active"),
       ).toHaveLength(0);
       expect(

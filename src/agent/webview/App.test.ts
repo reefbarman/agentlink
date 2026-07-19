@@ -8,6 +8,40 @@ import {
 } from "./App";
 import { describe, expect, it } from "vitest";
 
+describe("webview App reducer tool input", () => {
+  it("shows complete tool input from the start event while the call is running", () => {
+    const input = { path: "src/agent/AgentEngine.ts", line_start: 1640 };
+
+    let state = reducer(initialState, {
+      type: "TOOL_START",
+      toolCallId: "tool-running",
+      toolName: "read_file",
+      input,
+    });
+
+    let toolCall = state.messages.at(-1)?.blocks.at(-1);
+    expect(toolCall).toMatchObject({
+      type: "tool_call",
+      id: "tool-running",
+      inputJson: JSON.stringify(input),
+      complete: false,
+    });
+
+    state = reducer(state, {
+      type: "TOOL_INPUT_DELTA",
+      toolCallId: "tool-running",
+      partialJson: JSON.stringify(input),
+    });
+
+    toolCall = state.messages.at(-1)?.blocks.at(-1);
+    expect(toolCall).toMatchObject({
+      type: "tool_call",
+      inputJson: JSON.stringify(input),
+      complete: false,
+    });
+  });
+});
+
 describe("webview App reducer background agent launch blocks", () => {
   it("uses final tool input to populate the bg_agent message for spawn_background_agent", () => {
     const toolCallId = "tool-1";

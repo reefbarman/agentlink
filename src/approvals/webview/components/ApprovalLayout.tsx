@@ -25,6 +25,9 @@ export interface ApprovalLayoutProps {
   onSaveAndAccept: () => void;
   onReject: (reason?: string) => void;
   followUpRef: RefObject<string>;
+  followUpLabel?: string;
+  followUpPlaceholder?: string;
+  rejectLabel?: string;
 }
 
 export function ProjectContextBanner({
@@ -89,6 +92,9 @@ export function ApprovalLayout({
   onSaveAndAccept,
   onReject,
   followUpRef,
+  followUpLabel = "Follow Up / Rejection Reason",
+  followUpPlaceholder = "Add a message to follow up on accept or provide a reason for rejection...",
+  rejectLabel = "Reject",
 }: ApprovalLayoutProps) {
   const [rulesOpen, setRulesOpen] = useState(false);
 
@@ -152,13 +158,12 @@ export function ApprovalLayout({
         {/* Message textarea (follow-up on accept, rejection reason on reject) */}
         <div class="follow-up-section">
           <div class="follow-up-label">
-            <span class="codicon codicon-comment" /> Follow Up / Rejection
-            Reason
+            <span class="codicon codicon-comment" /> {followUpLabel}
           </div>
           <textarea
             class="text-input textarea follow-up-input"
             rows={2}
-            placeholder="Add a message to follow up on accept or provide a reason for rejection..."
+            placeholder={followUpPlaceholder}
             onInput={(e) => {
               followUpRef.current = (e.target as HTMLTextAreaElement).value;
             }}
@@ -179,7 +184,7 @@ export function ApprovalLayout({
             </button>
           )}
           <button class="btn btn-danger" onClick={handleReject}>
-            Reject
+            {rejectLabel}
           </button>
         </div>
       </div>

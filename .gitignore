@@ -8,9 +8,5 @@ telemetry-reports/
 releases/
 .env.local
 plans/*
-!plans/tool-feedback-remediation-plan.md
-!plans/acp-foreground-provider-plan.md
-!plans/mcp-client-correctness-plan.md
-!plans/mcp-agent-relay-server-plan.md
 .mcp.json
 /AGENTS.md

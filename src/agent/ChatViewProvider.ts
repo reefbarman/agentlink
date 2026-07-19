@@ -2209,6 +2209,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       kind: "mcp" | "write" | "rename" | "command" | "mode-switch" | "memory";
       title: string;
       detail?: string;
+      mcpServerName?: string;
+      mcpToolName?: string;
       choices: Array<{
         label: string;
         value: string;
@@ -2267,6 +2269,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       kind: string;
       title: string;
       detail?: string;
+      mcpServerName?: string;
+      mcpToolName?: string;
       choices: Array<{
         label: string;
         value: string;
@@ -2400,6 +2404,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ...projectContext,
           command: request.title,
           mcpDetail: request.detail,
+          mcpServerName: request.mcpServerName,
+          mcpToolName: request.mcpToolName,
           mcpChoices: request.choices,
         };
       case "mode-switch":

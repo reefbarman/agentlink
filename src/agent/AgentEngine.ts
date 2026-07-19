@@ -1667,6 +1667,7 @@ export class AgentEngine {
             type: "tool_start",
             toolCallId: block.id,
             toolName: block.name,
+            input: block.input,
           };
           for (const partialJson of pendingToolInputDeltas.get(block.id) ??
             []) {

@@ -994,6 +994,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                 type: "TOOL_START",
                 toolCallId: msg.toolCallId,
                 toolName: msg.toolName,
+                input: msg.input,
               },
               bgTranscriptStreamingOverride(msg.type),
             ),

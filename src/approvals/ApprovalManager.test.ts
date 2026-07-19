@@ -160,6 +160,30 @@ describe("ApprovalManager session approval persistence", () => {
     return resource;
   }
 
+  it("approves an entire MCP server for only the selected session", async () => {
+    const { approvalManager } = await createManagers(new MockMemento());
+
+    approvalManager.approveMcpServer("session-a", "linear");
+
+    expect(
+      approvalManager.isMcpApproved("session-a", "linear__list_issues"),
+    ).toBe(true);
+    expect(
+      approvalManager.isMcpApproved("session-a", "linear__create_issue"),
+    ).toBe(true);
+    expect(
+      approvalManager.isMcpApproved("session-b", "linear__list_issues"),
+    ).toBe(false);
+    expect(
+      approvalManager.isMcpApproved("session-a", "github__list_issues"),
+    ).toBe(false);
+
+    approvalManager.clearSession("session-a");
+    expect(
+      approvalManager.isMcpApproved("session-a", "linear__list_issues"),
+    ).toBe(false);
+  });
+
   it.each([
     {
       mode: "exact" as const,

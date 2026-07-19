@@ -15,6 +15,26 @@ afterEach(() => {
 });
 
 describe("ToolCallBlock", () => {
+  it("shows known input when expanded while the tool call is running", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "running-read",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "src/agent/AgentEngine.ts" }),
+          result: "",
+          complete: false,
+        },
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /read_file/i }));
+
+    expect(screen.getByText("Input")).toBeTruthy();
+    expect(screen.getAllByText(/src\/agent\/AgentEngine\.ts/)).toHaveLength(2);
+  });
+
   it("shows image results as previews instead of placeholder text when expanded", () => {
     render(
       h(ToolCallBlock, {

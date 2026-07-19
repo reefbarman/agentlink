@@ -99,6 +99,10 @@ export interface ApprovalRequest {
   humanOnlyReason?: string;
   /** For MCP: detail text (input preview) */
   mcpDetail?: string;
+  /** For MCP: structured server identity (avoids parsing display text). */
+  mcpServerName?: string;
+  /** For MCP: structured bare tool name. */
+  mcpToolName?: string;
   /** For MCP: approval choices */
   mcpChoices?: Array<{
     label: string;

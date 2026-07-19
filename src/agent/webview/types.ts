@@ -534,6 +534,7 @@ export type ExtensionMessage =
       sessionId: string;
       toolCallId: string;
       toolName: string;
+      input?: unknown;
     }
   | {
       type: "agentBgToolInputDelta";
