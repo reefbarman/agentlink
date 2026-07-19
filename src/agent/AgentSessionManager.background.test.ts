@@ -3362,6 +3362,39 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("does not auto-continue pending todos after an explicit final marker", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const fg = await mgr.createSession("code");
+    const addUserMessageSpy = vi.spyOn(fg, "addUserMessage");
+
+    mocks.runBehavior.mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "todo_update",
+          todos: [{ id: "1", content: "finish it", status: "pending" }],
+        };
+        yield {
+          type: "final_marker",
+          marker: {
+            status: "completed",
+            source: "tool",
+            summary: "Answered the user's question.",
+          },
+        };
+        yield { type: "done" };
+      })(),
+    );
+
+    await mgr.sendMessage(fg.id, "work on the task", fg.mode);
+
+    expect(mocks.runBehavior).toHaveBeenCalledTimes(1);
+    expect(addUserMessageSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("You stopped but there are still pending tasks."),
+    );
+  });
+
   it("skips auto-continue when a UI surface has queued messages", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);

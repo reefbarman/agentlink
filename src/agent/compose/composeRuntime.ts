@@ -27,6 +27,8 @@ export const COMPOSE_MAX_SCRIPT_BYTES = 64 * 1024;
 export const COMPOSE_MAX_CHILD_BYTES = 1024 * 1024;
 export const COMPOSE_MAX_CUMULATIVE_CHILD_BYTES = 8 * 1024 * 1024;
 export const COMPOSE_MAX_FINAL_BYTES = 40 * 1024;
+export const COMPOSE_MAX_RECOVERY_PREVIEW_BYTES = 8 * 1024;
+export const COMPOSE_MAX_RECOVERY_CHILDREN = 16;
 export const COMPOSE_MAX_TRACE_BYTES = 32 * 1024;
 
 const COMPOSE_FILENAME = "compose-script.js";
@@ -103,6 +105,22 @@ function truncate(value: string, maxChars: number): string {
   return value.length <= maxChars
     ? value
     : `${value.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (byteLength(value) <= maxBytes) return value;
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (byteLength(value.slice(0, middle)) <= maxBytes) low = middle;
+    else high = middle - 1;
+  }
+  const truncated = value.slice(0, low);
+  const trailingCodeUnit = truncated.charCodeAt(truncated.length - 1);
+  return trailingCodeUnit >= 0xd800 && trailingCodeUnit <= 0xdbff
+    ? truncated.slice(0, -1)
+    : truncated;
 }
 
 function serializeJson(value: unknown, subject: string): string {
@@ -352,6 +370,50 @@ function createResult(
     ...(error
       ? { error: { kind: error.kind, message: error.message } }
       : undefined),
+    uiMeta: { composeTrace: trace },
+  };
+}
+
+function createOversizedFinalResult(
+  serializedFinal: string,
+  finalBytes: number,
+  trace: ComposeTrace,
+): ComposeToolResult {
+  const error = new ComposeRuntimeError(
+    "serialization",
+    `Compose returned ${finalBytes} bytes; limit is ${COMPOSE_MAX_FINAL_BYTES} bytes. Reduce or aggregate inside the script.`,
+  );
+  const children = trace.children
+    .slice(0, COMPOSE_MAX_RECOVERY_CHILDREN)
+    .map(({ name, status }) => ({ name, status }));
+  const preview = truncateUtf8(
+    serializedFinal,
+    COMPOSE_MAX_RECOVERY_PREVIEW_BYTES,
+  );
+  const payload = {
+    error: error.message,
+    kind: error.kind,
+    recovery: {
+      reason: "final_result_too_large",
+      actual_bytes: finalBytes,
+      limit_bytes: COMPOSE_MAX_FINAL_BYTES,
+      preview,
+      preview_bytes: byteLength(preview),
+      preview_truncated: true,
+      total_children: trace.totalChildren,
+      completed_children: trace.completedChildren,
+      bridged_bytes: trace.bridgedBytes,
+      children,
+      omitted_children: Math.max(0, trace.totalChildren - children.length),
+    },
+  };
+  trace.status = "error";
+  trace.errorKind = error.kind;
+  return {
+    data: payload,
+    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+    isError: true,
+    error: { kind: error.kind, message: error.message },
     uiMeta: { composeTrace: trace },
   };
 }
@@ -799,10 +861,7 @@ export async function handleCompose({
     assertNotAborted(state.abortController.signal);
     const finalBytes = byteLength(serializedFinal);
     if (finalBytes > COMPOSE_MAX_FINAL_BYTES) {
-      throw new ComposeRuntimeError(
-        "serialization",
-        `Compose returned ${finalBytes} bytes; limit is ${COMPOSE_MAX_FINAL_BYTES} bytes. Reduce or aggregate inside the script.`,
-      );
+      return createOversizedFinalResult(serializedFinal, finalBytes, trace);
     }
     return createResult(
       parseJson(serializedFinal, "Compose return value"),

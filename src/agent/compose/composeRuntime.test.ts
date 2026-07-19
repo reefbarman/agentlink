@@ -5,6 +5,7 @@ import {
   COMPOSE_MAX_CONCURRENCY,
   COMPOSE_MAX_CUMULATIVE_CHILD_BYTES,
   COMPOSE_MAX_FINAL_BYTES,
+  COMPOSE_MAX_RECOVERY_PREVIEW_BYTES,
   COMPOSE_MAX_SCRIPT_BYTES,
   COMPOSE_MAX_TRACE_BYTES,
   COMPOSE_MEMORY_LIMIT_BYTES,
@@ -266,11 +267,62 @@ describe("compose runtime", () => {
     expect(result.error?.message).toContain("cumulative limit");
   });
 
-  it("rejects oversized final data with aggregation guidance", async () => {
-    const result = await run(`return "x".repeat(${COMPOSE_MAX_FINAL_BYTES});`);
+  it("returns bounded recovery evidence for oversized final data", async () => {
+    const result = await run(
+      `const value = tool("large", {});
+       return { value, duplicate: value };`,
+      fakeScope(() => success("x".repeat(COMPOSE_MAX_FINAL_BYTES / 2))),
+    );
 
     expect(errorKind(result)).toBe("serialization");
     expect(result.error?.message).toContain("aggregate inside the script");
+    expect(result.uiMeta.composeTrace).toMatchObject({
+      status: "error",
+      errorKind: "serialization",
+      totalChildren: 1,
+      completedChildren: 1,
+    });
+    const data = result.data as {
+      recovery: {
+        reason: string;
+        actual_bytes: number;
+        limit_bytes: number;
+        preview: string;
+        preview_bytes: number;
+        preview_truncated: boolean;
+        children: Array<{ name: string; status: string }>;
+      };
+    };
+    expect(data.recovery).toMatchObject({
+      reason: "final_result_too_large",
+      limit_bytes: COMPOSE_MAX_FINAL_BYTES,
+      preview_truncated: true,
+      children: [{ name: "large", status: "completed" }],
+    });
+    expect(data.recovery.actual_bytes).toBeGreaterThan(COMPOSE_MAX_FINAL_BYTES);
+    expect(data.recovery.preview_bytes).toBeLessThanOrEqual(
+      COMPOSE_MAX_RECOVERY_PREVIEW_BYTES,
+    );
+    expect(Buffer.byteLength(data.recovery.preview)).toBe(
+      data.recovery.preview_bytes,
+    );
+  });
+
+  it("keeps oversized recovery previews on Unicode code-point boundaries", async () => {
+    const result = await run(
+      `return "x".repeat(8188) + "😀" + "y".repeat(${COMPOSE_MAX_FINAL_BYTES});`,
+    );
+
+    const recovery = (result.data as { recovery: { preview: string } })
+      .recovery;
+    const trailingCodeUnit = recovery.preview.charCodeAt(
+      recovery.preview.length - 1,
+    );
+    expect(trailingCodeUnit).not.toBeGreaterThanOrEqual(0xd800);
+    expect(Buffer.byteLength(recovery.preview)).toBeLessThanOrEqual(
+      COMPOSE_MAX_RECOVERY_PREVIEW_BYTES,
+    );
+    expect(recovery.preview.endsWith("x")).toBe(true);
   });
 
   it.each([

@@ -2014,7 +2014,21 @@ export function reducer(state: AppState, action: AppAction): AppState {
               },
             }
           : action.marker;
-      return { ...state, pendingFinalMarker: marker };
+      const messages = applyFinalMarkerToLatestAssistant(
+        state.messages,
+        marker,
+      );
+      return {
+        ...state,
+        messages,
+        // A final marker normally arrives after TOOL_START has created its
+        // assistant row, so attach it immediately. This matters when a queued
+        // interjection keeps the overall run alive: the completed segment can
+        // render its summary while the next segment continues streaming.
+        // Retain the pending fallback only for an out-of-order marker that has
+        // no assistant row to host it yet.
+        pendingFinalMarker: messages === state.messages ? marker : null,
+      };
     }
 
     case "CLEAR_FINAL_MARKER_CONTINUE_ACTIONS":

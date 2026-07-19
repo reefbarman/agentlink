@@ -3,6 +3,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = path.resolve(
@@ -20,8 +21,15 @@ const DEFAULT_PROJECT_OUTPUT_DIR = path.join(
   "telemetry-reports",
   "tool-usage",
 );
+const DEFAULT_FEEDBACK_INPUT = path.join(
+  os.homedir(),
+  ".agentlink",
+  "agentlink-feedback.jsonl",
+);
 const DEFAULT_TOP = 25;
-const OUTCOMES = ["ok", "error", "cancelled", "rejected"];
+const MAX_WARNING_TOOL_NAMES = 5;
+const MAX_TERMINAL_CELL_LENGTH = 120;
+const OUTCOMES = ["ok", "partial", "error", "cancelled", "rejected"];
 const SOURCES = ["agent", "mcp"];
 const INLINE_TOOL_METADATA = {
   find_mcp_tools: { cluster: "mcp", sideEffect: "read" },
@@ -60,8 +68,8 @@ const INLINE_TOOL_PARAMETERS = {
   kill_background_agent: ["sessionId", "reason"],
 };
 
-function main() {
-  const args = parseArgs(process.argv.slice(2));
+export function main(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv);
   if (args.help) {
     printHelp();
     return;
@@ -72,7 +80,16 @@ function main() {
     Number.isFinite(args.top) && args.top > 0 ? args.top : DEFAULT_TOP;
   const knownTools = loadKnownTools();
   const knownParameters = loadKnownToolParameters();
-  const report = readTelemetry(inputPath, knownTools, knownParameters);
+  const report = readTelemetry(inputPath, knownTools, knownParameters, {
+    since: args.since,
+    until: args.until,
+    versions: args.versions,
+  });
+  mergeFeedbackCounts(
+    report,
+    path.resolve(args.feedbackInput ?? DEFAULT_FEEDBACK_INPUT),
+  );
+  finalizeReport(report, knownParameters);
 
   printSummary(report, inputPath, top);
 
@@ -94,13 +111,17 @@ function main() {
   }
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv, now = new Date()) {
   const args = {
     input: undefined,
     csvDir: undefined,
     csv: false,
     json: undefined,
     top: DEFAULT_TOP,
+    since: undefined,
+    until: undefined,
+    versions: [],
+    feedbackInput: undefined,
     help: false,
   };
 
@@ -118,12 +139,77 @@ function parseArgs(argv) {
       args.json = requireValue(argv, ++i, arg);
     } else if (arg === "--top") {
       args.top = Number(requireValue(argv, ++i, arg));
+    } else if (arg === "--since") {
+      args.since = parseSince(requireValue(argv, ++i, arg), now);
+    } else if (arg === "--until") {
+      args.until = parseIsoDate(requireValue(argv, ++i, arg), arg, true);
+    } else if (arg === "--version") {
+      args.versions.push(requireValue(argv, ++i, arg));
+    } else if (arg === "--feedback-input") {
+      args.feedbackInput = requireValue(argv, ++i, arg);
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
 
+  if (args.since && args.until && args.since > args.until) {
+    throw new Error("--since must not be after --until");
+  }
+
   return args;
+}
+
+function parseSince(value, now) {
+  const relative = /^(\d+)([dhm])$/.exec(value);
+  if (!relative) return parseIsoDate(value, "--since");
+  const amount = Number(relative[1]);
+  const unitMs = { d: 86_400_000, h: 3_600_000, m: 60_000 }[relative[2]];
+  return new Date(now.getTime() - amount * unitMs);
+}
+
+function parseIsoDate(value, flag, endOfDay = false) {
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (dateOnly) {
+    const year = Number(dateOnly[1]);
+    const month = Number(dateOnly[2]);
+    const day = Number(dateOnly[3]);
+    if (!isValidCalendarDate(year, month, day)) {
+      throw new Error(`${flag} requires a valid ISO date`);
+    }
+    return new Date(
+      Date.UTC(
+        year,
+        month - 1,
+        day,
+        endOfDay ? 23 : 0,
+        endOfDay ? 59 : 0,
+        endOfDay ? 59 : 0,
+        endOfDay ? 999 : 0,
+      ),
+    );
+  }
+
+  const isoDateTimePattern =
+    /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i;
+  const match = isoDateTimePattern.exec(value);
+  const timestamp = Date.parse(value);
+  if (
+    !match ||
+    !isValidCalendarDate(
+      Number(match[1]),
+      Number(match[2]),
+      Number(match[3]),
+    ) ||
+    !Number.isFinite(timestamp)
+  ) {
+    throw new Error(`${flag} requires a valid ISO date`);
+  }
+  return new Date(timestamp);
+}
+
+function isValidCalendarDate(year, month, day) {
+  if (month < 1 || month > 12 || day < 1) return false;
+  return day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
 function requireValue(argv, index, flag) {
@@ -134,10 +220,11 @@ function requireValue(argv, index, flag) {
   return value;
 }
 
-function readTelemetry(
+export function readTelemetry(
   inputPath,
   knownTools = new Map(),
   knownParameters = new Map(),
+  filters = {},
 ) {
   const report = createEmptyReport();
   seedKnownTools(report, knownTools);
@@ -157,18 +244,34 @@ function readTelemetry(
       record = JSON.parse(line);
     } catch {
       report.invalidLines += 1;
+      report.invalidRecords += 1;
       continue;
     }
 
-    if (
-      record?.version !== 1 ||
-      record?.type !== "tool_usage_flush" ||
-      typeof record.tools !== "object" ||
-      record.tools === null
-    ) {
+    if (record?.version !== 1) {
       report.invalidLines += 1;
+      if (
+        Number.isInteger(record?.version) &&
+        record?.type === "tool_usage_flush"
+      ) {
+        report.unsupportedRecords += 1;
+      } else {
+        report.invalidRecords += 1;
+      }
       continue;
     }
+    if (
+      record?.type !== "tool_usage_flush" ||
+      typeof record.tools !== "object" ||
+      record.tools === null ||
+      Array.isArray(record.tools) ||
+      !isValidDate(record.flushedAt)
+    ) {
+      report.invalidLines += 1;
+      report.invalidRecords += 1;
+      continue;
+    }
+    if (!recordMatchesFilters(record, filters)) continue;
 
     report.flushes += 1;
     if (typeof record.instanceId === "string") {
@@ -188,8 +291,30 @@ function readTelemetry(
   }
 
   finalizeReport(report, knownParameters);
-
   return report;
+}
+
+function isValidDate(value) {
+  if (typeof value !== "string") return false;
+  try {
+    parseIsoDate(value, "flushedAt");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function recordMatchesFilters(record, filters) {
+  const flushedAt = Date.parse(record.flushedAt);
+  if (filters.since && flushedAt < filters.since.getTime()) return false;
+  if (filters.until && flushedAt > filters.until.getTime()) return false;
+  if (
+    filters.versions?.length > 0 &&
+    !filters.versions.includes(record.extensionVersion)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function createEmptyReport() {
@@ -197,6 +322,8 @@ function createEmptyReport() {
     generatedAt: new Date().toISOString(),
     flushes: 0,
     invalidLines: 0,
+    invalidRecords: 0,
+    unsupportedRecords: 0,
     periodStart: undefined,
     periodEnd: undefined,
     totalCalls: 0,
@@ -205,6 +332,10 @@ function createEmptyReport() {
     unusedParameterCount: 0,
     instances: {},
     extensionVersions: {},
+    feedbackCount: 0,
+    invalidFeedbackLines: 0,
+    feedbackCountsByTool: {},
+    warnings: [],
     tools: {},
     parameters: [],
     knownToolCount: 0,
@@ -218,7 +349,7 @@ function seedKnownTools(report, knownTools) {
   }
 }
 
-function finalizeReport(report, knownParameters) {
+export function finalizeReport(report, knownParameters = new Map()) {
   seedKnownParameters(report, knownParameters);
   report.tools = sortObjectByCalls(report.tools);
   report.parameters = buildParameterRows(report.tools);
@@ -237,6 +368,13 @@ function finalizeReport(report, knownParameters) {
   report.unusedParameterCount = report.parameters.filter(
     (row) => row.known && row.count === 0,
   ).length;
+  for (const tool of Object.values(report.tools)) {
+    tool.numericMetrics = sortKeys(tool.numericMetrics);
+    tool.categoricalMetrics = sortKeys(tool.categoricalMetrics);
+  }
+  report.extensionVersions = sortVersions(report.extensionVersions);
+  report.feedbackCountsByTool = sortCountObject(report.feedbackCountsByTool);
+  report.warnings = buildWarnings(report);
 }
 
 function seedKnownParameters(report, knownParameters) {
@@ -269,6 +407,9 @@ function mergeToolBucket(report, toolName, rawBucket) {
   mergeCounts(existing.sources, rawBucket.sources);
   mergeCounts(existing.modes, rawBucket.modes);
   mergeCounts(existing.parameters, rawBucket.parameters);
+  mergeCounts(existing.numericMetrics, rawBucket.numericMetrics, true);
+  mergeCounts(existing.categoricalMetrics, rawBucket.categoricalMetrics);
+  existing.projectAttributedCalls += sumCounts(rawBucket.projects);
   existing.totalDurationMs += asCount(rawBucket.totalDurationMs);
   existing.maxDurationMs = Math.max(
     existing.maxDurationMs,
@@ -277,11 +418,14 @@ function mergeToolBucket(report, toolName, rawBucket) {
 }
 
 function ensureTool(report, toolName, meta) {
+  const dynamicMcp = toolName.includes("__") && !meta.known;
   const existing = report.tools[toolName];
   if (existing) {
     existing.known = existing.known || Boolean(meta.known);
     existing.devOnly = existing.devOnly || Boolean(meta.devOnly);
-    existing.cluster = existing.cluster ?? meta.cluster;
+    existing.dynamicMcp = existing.dynamicMcp || dynamicMcp;
+    existing.cluster =
+      existing.cluster ?? meta.cluster ?? (dynamicMcp ? "mcp" : undefined);
     existing.sideEffect = existing.sideEffect ?? meta.sideEffect;
     return existing;
   }
@@ -291,13 +435,17 @@ function ensureTool(report, toolName, meta) {
     calls: 0,
     known: Boolean(meta.known),
     devOnly: Boolean(meta.devOnly),
-    cluster: meta.cluster,
+    dynamicMcp,
+    cluster: meta.cluster ?? (dynamicMcp ? "mcp" : undefined),
     sideEffect: meta.sideEffect,
     outcomes: {},
     sources: {},
     modes: {},
     parameters: {},
     knownParameters: {},
+    numericMetrics: {},
+    categoricalMetrics: {},
+    projectAttributedCalls: 0,
     totalDurationMs: 0,
     maxDurationMs: 0,
   };
@@ -305,15 +453,27 @@ function ensureTool(report, toolName, meta) {
   return created;
 }
 
-function mergeCounts(target, source) {
-  if (!source || typeof source !== "object") return;
+function mergeCounts(target, source, allowNegative = false) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return;
   for (const [key, value] of Object.entries(source)) {
-    target[key] = (target[key] ?? 0) + asCount(value);
+    const number = asFiniteNumber(value, allowNegative);
+    target[key] = (target[key] ?? 0) + number;
   }
 }
 
+function sumCounts(source) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return 0;
+  return Object.values(source).reduce((sum, value) => sum + asCount(value), 0);
+}
+
+function asFiniteNumber(value, allowNegative = false) {
+  if (!Number.isFinite(value)) return 0;
+  const number = Number(value);
+  return allowNegative || number > 0 ? number : 0;
+}
+
 function asCount(value) {
-  return Number.isFinite(value) && value > 0 ? Number(value) : 0;
+  return asFiniteNumber(value);
 }
 
 function sortObjectByCalls(tools) {
@@ -325,6 +485,82 @@ function sortObjectByCalls(tools) {
         aName.localeCompare(bName),
     ),
   );
+}
+
+function sortKeys(object) {
+  return Object.fromEntries(
+    Object.entries(object).sort(([aName], [bName]) =>
+      aName.localeCompare(bName),
+    ),
+  );
+}
+
+function sortCountObject(counts) {
+  return Object.fromEntries(
+    Object.entries(counts).sort(
+      ([aName, aCount], [bName, bCount]) =>
+        bCount - aCount || aName.localeCompare(bName),
+    ),
+  );
+}
+
+function sortVersions(versions) {
+  return Object.fromEntries(
+    Object.entries(versions).sort(
+      ([a], [b]) => compareVersions(a, b) || a.localeCompare(b),
+    ),
+  );
+}
+
+export function compareVersions(a, b) {
+  const parsedA = parseSemanticVersion(a);
+  const parsedB = parseSemanticVersion(b);
+  if (!parsedA || !parsedB) {
+    if (parsedA) return -1;
+    if (parsedB) return 1;
+    return a.localeCompare(b, undefined, { numeric: true });
+  }
+  for (let index = 0; index < 3; index++) {
+    const difference = parsedA.core[index] - parsedB.core[index];
+    if (difference !== 0) return difference;
+  }
+  if (parsedA.prerelease.length === 0 || parsedB.prerelease.length === 0) {
+    return parsedA.prerelease.length === parsedB.prerelease.length
+      ? 0
+      : parsedA.prerelease.length === 0
+        ? 1
+        : -1;
+  }
+  const length = Math.max(parsedA.prerelease.length, parsedB.prerelease.length);
+  for (let index = 0; index < length; index++) {
+    const left = parsedA.prerelease[index];
+    const right = parsedB.prerelease[index];
+    if (left === undefined || right === undefined) {
+      return left === right ? 0 : left === undefined ? -1 : 1;
+    }
+    if (left === right) continue;
+    const leftNumber = /^\d+$/.test(left) ? Number(left) : undefined;
+    const rightNumber = /^\d+$/.test(right) ? Number(right) : undefined;
+    if (leftNumber !== undefined && rightNumber !== undefined) {
+      return leftNumber - rightNumber;
+    }
+    if (leftNumber !== undefined) return -1;
+    if (rightNumber !== undefined) return 1;
+    return left.localeCompare(right);
+  }
+  return 0;
+}
+
+function parseSemanticVersion(value) {
+  const match =
+    /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
+      value,
+    );
+  if (!match) return undefined;
+  return {
+    core: [Number(match[1]), Number(match[2]), Number(match[3])],
+    prerelease: match[4]?.split(".") ?? [],
+  };
 }
 
 function buildParameterRows(tools) {
@@ -349,6 +585,106 @@ function buildParameterRows(tools) {
       Number(b.known) - Number(a.known) ||
       a.tool.localeCompare(b.tool) ||
       a.parameter.localeCompare(b.parameter),
+  );
+}
+
+export function mergeFeedbackCounts(report, feedbackPath) {
+  report.feedbackCount = 0;
+  report.invalidFeedbackLines = 0;
+  report.feedbackCountsByTool = {};
+  if (!fs.existsSync(feedbackPath)) return;
+
+  for (const line of fs.readFileSync(feedbackPath, "utf-8").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      const toolName =
+        typeof entry?.tool_name === "string" ? entry.tool_name.trim() : "";
+      if (!toolName) {
+        report.invalidFeedbackLines += 1;
+        continue;
+      }
+      report.feedbackCount += 1;
+      report.feedbackCountsByTool[toolName] =
+        (report.feedbackCountsByTool[toolName] ?? 0) + 1;
+    } catch {
+      report.invalidFeedbackLines += 1;
+    }
+  }
+}
+
+function buildWarnings(report) {
+  const warnings = [];
+  if (report.totalCalls > 0) {
+    const agentCalls = sumToolMap(report.tools, "sources", "agent");
+    if (agentCalls === report.totalCalls) {
+      warnings.push({
+        code: "all_agent_source_attribution",
+        message: "All observed calls are attributed to the agent source.",
+      });
+    }
+
+    const attributedCalls = Object.values(report.tools).reduce(
+      (sum, tool) => sum + Math.min(tool.calls, tool.projectAttributedCalls),
+      0,
+    );
+    if (attributedCalls < report.totalCalls) {
+      warnings.push({
+        code: "absent_project_attribution",
+        message: `${report.totalCalls - attributedCalls} of ${report.totalCalls} calls have no project attribution.`,
+      });
+    }
+
+    const rejectedCalls = sumToolMap(report.tools, "outcomes", "rejected");
+    if (rejectedCalls === 0) {
+      warnings.push({
+        code: "zero_rejected_calls_legacy_data",
+        message:
+          "No rejected calls were observed; legacy telemetry may classify structured rejections as successful calls.",
+      });
+    }
+  }
+
+  const unknownTools = Object.values(report.tools)
+    .filter((tool) => !tool.known && !tool.dynamicMcp && tool.calls > 0)
+    .map((tool) => tool.tool)
+    .sort();
+  if (unknownTools.length > 0) {
+    const displayed = unknownTools
+      .slice(0, MAX_WARNING_TOOL_NAMES)
+      .map(truncateTerminalCell);
+    const omitted = unknownTools.length - displayed.length;
+    warnings.push({
+      code: "unknown_observed_tools",
+      message: `${unknownTools.length} observed tool(s) are unknown to this checkout: ${displayed.join(", ")}${omitted > 0 ? ` (+${omitted} more)` : ""}.`,
+    });
+  }
+
+  if (report.invalidRecords > 0) {
+    warnings.push({
+      code: "invalid_records",
+      message: `${report.invalidRecords} malformed or invalid telemetry record(s) were skipped.`,
+    });
+  }
+  if (report.unsupportedRecords > 0) {
+    warnings.push({
+      code: "unsupported_records",
+      message: `${report.unsupportedRecords} unsupported telemetry record(s) were skipped.`,
+    });
+  }
+  if (report.invalidFeedbackLines > 0) {
+    warnings.push({
+      code: "invalid_feedback_records",
+      message: `${report.invalidFeedbackLines} invalid feedback record(s) were skipped.`,
+    });
+  }
+  return warnings;
+}
+
+function sumToolMap(tools, field, key) {
+  return Object.values(tools).reduce(
+    (sum, tool) => sum + asCount(tool[field]?.[key]),
+    0,
   );
 }
 
@@ -552,6 +888,7 @@ function printSummary(report, inputPath, top) {
   console.log(`Input: ${inputPath}`);
   console.log(`Flush records: ${report.flushes}`);
   console.log(`Invalid lines skipped: ${report.invalidLines}`);
+  console.log(`Unsupported records skipped: ${report.unsupportedRecords}`);
   console.log(
     `Period: ${report.periodStart ?? "n/a"} -> ${report.periodEnd ?? "n/a"}`,
   );
@@ -563,6 +900,15 @@ function printSummary(report, inputPath, top) {
   console.log(
     `Known tool parameters with zero calls: ${report.unusedParameterCount}`,
   );
+  console.log(`Feedback records: ${report.feedbackCount}`);
+
+  if (report.warnings.length > 0) {
+    console.log("");
+    console.log("Data quality warnings");
+    for (const warning of report.warnings) {
+      console.log(`- [${warning.code}] ${warning.message}`);
+    }
+  }
 
   const toolRows = Object.values(report.tools)
     .filter((tool) => tool.calls > 0)
@@ -602,6 +948,34 @@ function printSummary(report, inputPath, top) {
     );
   }
 
+  const metricRows = buildMetricRows(report.tools).slice(0, top);
+  if (metricRows.length > 0) {
+    console.log("");
+    console.log(`Top tool metrics (top ${metricRows.length})`);
+    printTable(
+      ["tool", "metric_type", "metric", "value"],
+      metricRows.map((row) => [
+        row.tool,
+        row.metricType,
+        row.metric,
+        formatNumber(row.value),
+      ]),
+    );
+  }
+
+  const feedbackRows = Object.entries(report.feedbackCountsByTool).slice(
+    0,
+    top,
+  );
+  if (feedbackRows.length > 0) {
+    console.log("");
+    console.log(`Feedback counts by tool (top ${feedbackRows.length})`);
+    printTable(
+      ["tool", "feedback_count"],
+      feedbackRows.map(([tool, count]) => [tool, count]),
+    );
+  }
+
   const parameterRows = report.parameters.slice(0, top);
   if (parameterRows.length > 0) {
     console.log("");
@@ -618,6 +992,25 @@ function printSummary(report, inputPath, top) {
       ]),
     );
   }
+}
+
+function buildMetricRows(tools) {
+  const rows = [];
+  for (const tool of Object.values(tools)) {
+    for (const [metric, value] of Object.entries(tool.numericMetrics)) {
+      rows.push({ tool: tool.tool, metricType: "numeric", metric, value });
+    }
+    for (const [metric, value] of Object.entries(tool.categoricalMetrics)) {
+      rows.push({ tool: tool.tool, metricType: "categorical", metric, value });
+    }
+  }
+  return rows.sort(
+    (a, b) =>
+      Math.abs(b.value) - Math.abs(a.value) ||
+      a.tool.localeCompare(b.tool) ||
+      a.metricType.localeCompare(b.metricType) ||
+      a.metric.localeCompare(b.metric),
+  );
 }
 
 function printTable(headers, rows) {
@@ -639,8 +1032,18 @@ function printTable(headers, rows) {
 
 function formatTableRow(row, widths) {
   return row
-    .map((cell, index) => String(cell ?? "").padEnd(widths[index]))
+    .map((cell, index) =>
+      truncateTerminalCell(cell).padEnd(
+        Math.min(widths[index], MAX_TERMINAL_CELL_LENGTH),
+      ),
+    )
     .join("  ");
+}
+
+function truncateTerminalCell(value) {
+  const text = String(value ?? "");
+  if (text.length <= MAX_TERMINAL_CELL_LENGTH) return text;
+  return `${text.slice(0, MAX_TERMINAL_CELL_LENGTH - 1)}…`;
 }
 
 function writeCsvReports(report, csvDir) {
@@ -661,6 +1064,10 @@ function writeCsvReports(report, csvDir) {
         "max_duration_ms",
         "modes_json",
         "parameters_json",
+        "project_attributed_calls",
+        "feedback_count",
+        "numeric_metrics_json",
+        "categorical_metrics_json",
       ],
       Object.values(report.tools).map((tool) => [
         tool.tool,
@@ -675,6 +1082,10 @@ function writeCsvReports(report, csvDir) {
         formatNumber(tool.maxDurationMs),
         JSON.stringify(tool.modes),
         JSON.stringify(tool.parameters),
+        tool.projectAttributedCalls,
+        report.feedbackCountsByTool[tool.tool] ?? 0,
+        JSON.stringify(tool.numericMetrics),
+        JSON.stringify(tool.categoricalMetrics),
       ]),
     ),
     "utf-8",
@@ -690,6 +1101,27 @@ function writeCsvReports(report, csvDir) {
         row.count,
         formatNumber(row.percentOfToolCalls),
       ]),
+    ),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(csvDir, "tool-usage-metrics.csv"),
+    toCsv(
+      ["tool", "metric_type", "metric", "value"],
+      buildMetricRows(report.tools).map((row) => [
+        row.tool,
+        row.metricType,
+        row.metric,
+        formatNumber(row.value),
+      ]),
+    ),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(csvDir, "tool-usage-feedback.csv"),
+    toCsv(
+      ["tool", "feedback_count"],
+      Object.entries(report.feedbackCountsByTool),
     ),
     "utf-8",
   );
@@ -711,6 +1143,15 @@ function writeCsvReports(report, csvDir) {
         ["unused_parameter_count", report.unusedParameterCount],
         ["instances_json", JSON.stringify(report.instances)],
         ["extension_versions_json", JSON.stringify(report.extensionVersions)],
+        ["invalid_records", report.invalidRecords],
+        ["unsupported_records", report.unsupportedRecords],
+        ["feedback_count", report.feedbackCount],
+        ["invalid_feedback_lines", report.invalidFeedbackLines],
+        [
+          "feedback_counts_by_tool_json",
+          JSON.stringify(report.feedbackCountsByTool),
+        ],
+        ["warnings_json", JSON.stringify(report.warnings)],
       ],
     ),
     "utf-8",
@@ -750,10 +1191,18 @@ Options:
                      default: ${DEFAULT_INPUT}
   --top <n>          Number of rows to show in terminal tables
                      default: ${DEFAULT_TOP}
+  --since <date|age> Include records flushed at/after an ISO date or age (Nd/Nh/Nm)
+  --until <date>     Include records flushed at/before an ISO date
+  --version <value>  Include an extension version; repeat for multiple versions
+  --feedback-input <path>
+                     Feedback JSONL path (counts only; text is never reported)
+                     default: ${DEFAULT_FEEDBACK_INPUT}
   --csv-dir <dir>    Write CSV files:
                      tool-usage-summary.csv
                      tool-usage-tools.csv
                      tool-usage-parameters.csv
+                     tool-usage-metrics.csv
+                     tool-usage-feedback.csv
   --csv              Write CSV files to:
                      ${DEFAULT_PROJECT_OUTPUT_DIR}
   --json <path>      Write the normalized aggregate report as JSON
@@ -761,9 +1210,15 @@ Options:
 `);
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+const isDirectExecution =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) ===
+    path.resolve(fileURLToPath(import.meta.url));
+if (isDirectExecution) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }

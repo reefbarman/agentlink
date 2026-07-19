@@ -176,38 +176,44 @@ describe("handleSearchFiles ripgrep args", () => {
     expect(options?.cwd).toBe(path.dirname(filePath));
   });
 
-  it("returns a clear error when file_pattern is provided with file path", async () => {
-    const filePath = path.resolve("src/tools/searchFiles.ts");
-    resolveAndValidatePath.mockReturnValue({
-      absolutePath: filePath,
-      inWorkspace: true,
-    });
+  it.each(["content", "count", "files_with_matches"] as const)(
+    "ignores file_pattern with a warning when path is a file in %s mode",
+    async (outputMode) => {
+      const filePath = path.resolve("src/tools/searchFiles.ts");
+      resolveAndValidatePath.mockReturnValue({
+        absolutePath: filePath,
+        inWorkspace: true,
+      });
+      execRipgrepSearch.mockResolvedValue("");
 
-    const result = await handleSearchFiles(
-      {
-        path: "src/tools/searchFiles.ts",
-        regex: "handleSearchFiles",
-        file_pattern: "**/*.ts",
-        semantic: false,
-      },
-      {
-        isPathTrusted: () => true,
-      } as never,
-      {} as never,
-      "session-file-path-pattern",
-    );
+      const result = await handleSearchFiles(
+        {
+          path: "src/tools/searchFiles.ts",
+          regex: "handleSearchFiles",
+          file_pattern: "**/*.ts",
+          output_mode: outputMode,
+          semantic: false,
+        },
+        {
+          isPathTrusted: () => true,
+        } as never,
+        {} as never,
+        `session-file-path-pattern-${outputMode}`,
+      );
 
-    expect(execRipgrepSearch).not.toHaveBeenCalled();
-    const firstContent = result.content?.[0];
-    expect(firstContent).toBeDefined();
-    const payload = JSON.parse((firstContent as { text: string }).text);
-    expect(payload.error).toContain("file_pattern must be omitted");
-    expect(result).toMatchObject({
-      data: payload,
-      isError: true,
-      error: { kind: "tool_error" },
-    });
-  });
+      expect(execRipgrepSearch).toHaveBeenCalledTimes(1);
+      const args = execRipgrepSearch.mock.calls[0][1] as string[];
+      expect(args).not.toContain("**/*.ts");
+      expect(args[args.length - 1]).toBe(filePath);
+      expect(result).toMatchObject({
+        isError: false,
+        data: {
+          warning:
+            "Ignored file_pattern because path already scopes the search to a single file",
+        },
+      });
+    },
+  );
 
   it("returns rejected output when outside-workspace access is denied", async () => {
     resolveAndValidatePath.mockReturnValue({
