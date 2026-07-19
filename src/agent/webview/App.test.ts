@@ -2600,18 +2600,28 @@ describe("webview App reducer background agent launch blocks", () => {
   });
 
   it("resets detected question state on NEW_SESSION", () => {
-    let state = reducer(initialState, {
-      type: "SET_DETECTED_QUESTION",
-      detectedQuestion: {
-        messageId: "assistant-2",
-        kind: "yes_no",
-        prompt: "Proceed?",
-        options: [
-          { label: "Yes", payload: "Yes" },
-          { label: "No", payload: "No" },
-        ],
+    let state = reducer(
+      {
+        ...initialState,
+        chatState: {
+          ...initialState.chatState,
+          sessionId: "session-old",
+          streaming: true,
+        },
       },
-    });
+      {
+        type: "SET_DETECTED_QUESTION",
+        detectedQuestion: {
+          messageId: "assistant-2",
+          kind: "yes_no",
+          prompt: "Proceed?",
+          options: [
+            { label: "Yes", payload: "Yes" },
+            { label: "No", payload: "No" },
+          ],
+        },
+      },
+    );
 
     state = reducer(state, {
       type: "DISMISS_DETECTED_QUESTION",
@@ -2621,6 +2631,8 @@ describe("webview App reducer background agent launch blocks", () => {
     state = reducer(state, { type: "NEW_SESSION" });
     expect(state.detectedQuestion).toBeNull();
     expect(state.dismissedDetectedQuestionIds).toEqual([]);
+    expect(state.chatState.sessionId).toBeNull();
+    expect(state.chatState.streaming).toBe(false);
   });
 });
 

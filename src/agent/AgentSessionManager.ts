@@ -4161,6 +4161,54 @@ export class AgentSessionManager {
     );
   }
 
+  private refreshingBackgroundApprovalInheritance = false;
+
+  /**
+   * Add newly granted session approvals to existing background descendants.
+   *
+   * Spawn-time inheritance remains an independent snapshot: revoking trust on
+   * a parent does not silently revoke a child that is already working. This
+   * refresh only fills in approvals the parent gained after the child spawned
+   * (and restores inherited trust after a background-only mode switch).
+   */
+  refreshBackgroundApprovalInheritance(): void {
+    if (
+      this.refreshingBackgroundApprovalInheritance ||
+      !this.toolCtx?.inheritSessionApprovalState
+    ) {
+      return;
+    }
+
+    this.refreshingBackgroundApprovalInheritance = true;
+    try {
+      const children = Array.from(this.sessions.values())
+        .filter((session) => {
+          const lifecycle = session.fleetMetadata?.lifecycle;
+          return (
+            session.background &&
+            (lifecycle === "queued" ||
+              lifecycle === "running" ||
+              lifecycle === "paused" ||
+              session.status === "streaming" ||
+              session.status === "tool_executing" ||
+              session.status === "awaiting_approval")
+          );
+        })
+        .sort(
+          (left, right) =>
+            (left.fleetMetadata?.depth ?? 0) -
+            (right.fleetMetadata?.depth ?? 0),
+        );
+      for (const child of children) {
+        const parentSessionId = this.getBackgroundParentSessionId(child.id);
+        if (!parentSessionId || !this.sessions.has(parentSessionId)) continue;
+        this.toolCtx.inheritSessionApprovalState(parentSessionId, child.id);
+      }
+    } finally {
+      this.refreshingBackgroundApprovalInheritance = false;
+    }
+  }
+
   private activeBackgroundCount(): number {
     return Array.from(this.sessions.values()).filter(
       (session) =>

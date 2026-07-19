@@ -338,10 +338,18 @@ describe("summarizeConversation", () => {
           },
         ],
       },
-      { role: "assistant", content: [{ type: "text", text: "Delta one" }] },
-      { role: "user", content: "Continue one" },
-      { role: "assistant", content: [{ type: "text", text: "Delta two" }] },
-      { role: "user", content: "Continue two" },
+      ...Array.from({ length: 20 }, (_, index): AgentMessage[] => [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: `Delta ${index} ${"x".repeat(20_000)}`,
+            },
+          ],
+        },
+        { role: "user", content: `Continue ${index}` } as AgentMessage,
+      ]).flat(),
     ] as AgentMessage[];
 
     const result = await summarizeConversation({
@@ -359,9 +367,13 @@ describe("summarizeConversation", () => {
       ).toContain("Carry this exact prior conclusion.");
     }
     expect(result.metadata?.hadPriorSummaryInInput).toBe(true);
-    expect(result.metadata?.inputMessageCount).toBe(3);
+    expect(result.metadata?.inputMessageCount).toBeLessThan(
+      messages.length - 2,
+    );
     expect(result.metadata?.sourceHash).toMatch(/^[a-f0-9]{16}$/);
-    expect(result.validationWarnings?.[0]).toContain("retried with newest 75%");
+    expect(result.validationWarnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("64,000-token budget")]),
+    );
   });
 
   it("preserves the prior checkpoint in the empty-output fallback", async () => {
@@ -820,7 +832,7 @@ User wants to fix the condense resume bug for Codex after summarization.
     expect(result.metadata?.skippedModelCandidates).toBeUndefined();
   });
 
-  it("skips the cheap Codex condense model and prefers the active model when the request is too large", async () => {
+  it("bounds an oversized single message so the cheap Codex model fits safely", async () => {
     const { provider, complete } = makeCodexProvider();
     // Must exceed 80% of Luna's 1.05M context (~840K tokens ~= 3.36M chars).
     const largeUserMessage = "x".repeat(3_400_000);
@@ -842,15 +854,14 @@ User wants to fix the condense resume bug for Codex after summarization.
     expect(result.error).toBeUndefined();
     expect(complete).toHaveBeenCalled();
     const request = complete.mock.calls[0][0] as CompleteRequest;
-    expect(request.model).toBe("gpt-5.4");
-    expect(result.metadata?.modelCandidates[0]).toBe("gpt-5.4");
-    expect(result.metadata?.modelCandidates).not.toContain(
-      CODEX_CONDENSE_MODEL,
+    expect(request.model).toBe(CODEX_CONDENSE_MODEL);
+    expect(result.metadata?.modelCandidates[0]).toBe(CODEX_CONDENSE_MODEL);
+    expect(result.metadata?.selectedModel).toBe(CODEX_CONDENSE_MODEL);
+    expect(result.metadata?.skippedModelCandidates).toBeUndefined();
+    expect(requestMessageText(request.messages[0])).toContain(
+      "omitted from middle",
     );
-    expect(result.metadata?.selectedModel).toBe("gpt-5.4");
-    expect(result.metadata?.skippedModelCandidates).toEqual([
-      expect.objectContaining({ model: CODEX_CONDENSE_MODEL }),
-    ]);
+    expect(requestMessageText(request.messages[0]).length).toBeLessThan(70_000);
   });
 
   it("retries the next Codex candidate after a context-window error", async () => {
@@ -947,6 +958,124 @@ User wants to fix the condense resume bug for Codex after summarization.
     // No validation retry — just 2 model candidate calls.
     expect(complete).toHaveBeenCalledTimes(2);
     expect(result.summary).toBeTruthy();
+  });
+
+  it("bounds transcript-shaped condense requests by estimated input size", async () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "user",
+        content: "Original terminal implementation request",
+      } as AgentMessage,
+    ];
+    for (let index = 0; index < 600; index += 1) {
+      messages.push({
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: `inspection-${index}-${"x".repeat(20_000)}`,
+          },
+        ],
+      });
+      messages.push({
+        role: "user",
+        content: `Continue terminal package ${index}`,
+      } as AgentMessage);
+    }
+    messages.push({
+      role: "user",
+      content: "Review the finished sandbox plan",
+    } as AgentMessage);
+    messages.push({
+      role: "assistant",
+      content: [{ type: "text", text: "Starting the review." }],
+    });
+
+    const { provider, complete } = makeCodexProvider();
+    const result = await summarizeConversation({
+      messages,
+      provider,
+      activeModel: "gpt-5.4",
+      systemPrompt: "system prompt",
+      isAutomatic: true,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(complete).toHaveBeenCalledOnce();
+    const request = complete.mock.calls[0][0] as CompleteRequest;
+    const requestChars = request.messages.reduce(
+      (total, message) => total + requestMessageText(message).length,
+      0,
+    );
+    expect(requestChars).toBeLessThanOrEqual(480_000);
+    expect(requestMessageText(request.messages.at(-1)!)).toContain(
+      "Review the finished sandbox plan",
+    );
+    expect(result.validationWarnings).toEqual([
+      expect.stringContaining("120,000-token request budget"),
+    ]);
+    expect(result.metadata?.inputMessageCount).toBeLessThan(messages.length);
+    expect(result.metadata?.canonicalUserMessages).toEqual(
+      expect.arrayContaining([
+        "Original terminal implementation request",
+        expect.stringContaining("earlier user messages omitted"),
+        "Review the finished sandbox plan",
+      ]),
+    );
+  });
+
+  it("falls back deterministically after the minimum bounded request is rejected", async () => {
+    const requestSizes: number[] = [];
+    const { provider, complete } = makeCodexProvider((request) => {
+      requestSizes.push(
+        request.messages.reduce(
+          (total, message) => total + requestMessageText(message).length,
+          0,
+        ),
+      );
+      throw new Error("400 status code (no body)");
+    });
+    const messages: AgentMessage[] = Array.from(
+      { length: 80 },
+      (_, index): AgentMessage => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `${index}-${"x".repeat(20_000)}`,
+      }),
+    );
+    messages.push({
+      role: "user",
+      content: "Continue the current implementation",
+    } as AgentMessage);
+    messages.push({
+      role: "assistant",
+      content: "Ready to continue",
+    } as AgentMessage);
+
+    const result = await summarizeConversation({
+      messages,
+      provider,
+      activeModel: "gpt-5.4",
+      systemPrompt: "system prompt",
+      isAutomatic: true,
+    });
+
+    expect(complete).toHaveBeenCalled();
+    expect(result.error).toBeUndefined();
+    expect(result.summary).toContain("deterministic resume anchor");
+    expect(result.validationWarnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("64,000-token budget"),
+        expect.stringContaining("32,000-token budget"),
+        expect.stringContaining("using deterministic handoff sections"),
+      ]),
+    );
+    expect(result.validationWarnings).not.toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Model returned empty summary"),
+      ]),
+    );
+    expect(Math.min(...requestSizes)).toBeLessThan(Math.max(...requestSizes));
+    expect(result.messages.at(-1)?.isSummary).toBe(true);
   });
 
   it("preserves structured error metadata for condense failures", async () => {

@@ -238,6 +238,30 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("refreshes approvals for children that were already spawned", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const parent = await mgr.createSession("code");
+    const inheritSessionApprovalState = vi.fn();
+    mgr.setToolContext({
+      ...toolCtx,
+      inheritSessionApprovalState,
+    });
+
+    const child = await mgr.spawnBackground(
+      { task: "inherit later approval", message: "inspect" },
+      parent.id,
+    );
+    inheritSessionApprovalState.mockClear();
+
+    mgr.refreshBackgroundApprovalInheritance();
+
+    expect(inheritSessionApprovalState).toHaveBeenCalledOnce();
+    expect(inheritSessionApprovalState).toHaveBeenCalledWith(
+      parent.id,
+      child.sessionId,
+    );
+  });
+
   it("queues spawn when the concurrent limit is reached", async () => {
     const mgr = new AgentSessionManager(
       config,

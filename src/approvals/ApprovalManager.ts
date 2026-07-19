@@ -128,12 +128,18 @@ export class ApprovalManager {
 
   /** Approve a single tool for the rest of this session. */
   approveMcpTool(sessionId: string, toolName: string): void {
-    this.mcpApprovals.add(`${sessionId}:tool:${toolName}`);
+    const key = `${sessionId}:tool:${toolName}`;
+    if (this.mcpApprovals.has(key)) return;
+    this.mcpApprovals.add(key);
+    this._onDidChange.fire();
   }
 
   /** Approve all tools from a server for the rest of this session. */
   approveMcpServer(sessionId: string, serverName: string): void {
-    this.mcpApprovals.add(`${sessionId}:server:${serverName}`);
+    const key = `${sessionId}:server:${serverName}`;
+    if (this.mcpApprovals.has(key)) return;
+    this.mcpApprovals.add(key);
+    this._onDidChange.fire();
   }
 
   dispose(): void {

@@ -700,6 +700,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     browserGatewayService,
     approvalManager.onDidChange(() => {
+      agentSessionManager?.refreshBackgroundApprovalInheritance();
       browserGatewayService?.invalidateBrowserSnapshot();
     }),
     vscode.window.onDidChangeActiveColorTheme(() => {

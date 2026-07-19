@@ -947,6 +947,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private view: vscode.WebviewView | undefined;
   private sessionManager: AgentSessionManager | undefined;
+  private foregroundSessionTransition:
+    | {
+        previousSessionId: string | undefined;
+        nextSessionId?: string;
+        promise: Promise<AgentSession>;
+      }
+    | undefined;
   private outputChannel: vscode.OutputChannel;
   private webviewReady = false;
   private pendingMessages: ExtensionToWebview[] = [];
@@ -2663,7 +2670,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const mgr = this.sessionManager;
     if (!mgr) return { ok: false };
-    let effectiveSessionId = sessionId;
+    let effectiveSessionId =
+      await this.resolveForegroundSessionTransition(sessionId);
 
     if (!effectiveSessionId || !mgr.getSession(effectiveSessionId)) {
       const newSession = await mgr.createSession(mode, {
@@ -2939,12 +2947,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): Promise<{ ok: boolean; sessionId?: string; projectId?: string }> {
     if (!this.sessionManager) return { ok: false };
     const nextMode = mode?.trim() || "code";
-    const session = await this.sessionManager.createForegroundSession(
-      nextMode,
-      {
-        projectId,
-      },
-    );
+    const transition = this.beginForegroundSessionTransition(nextMode, {
+      projectId,
+    });
+    const session = await transition.promise;
     this.postSessionLoaded(session, {
       checkpoints: this.getSessionCheckpoints(session.id),
       tailTurns: 0,
@@ -2958,6 +2964,54 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       sessionId: session.id,
       projectId: session.projectScope.projectId,
     };
+  }
+
+  private beginForegroundSessionTransition(
+    mode: string,
+    opts?: { projectId?: string },
+  ): NonNullable<ChatViewProvider["foregroundSessionTransition"]> {
+    if (!this.sessionManager) {
+      throw new Error("Session manager is not initialized.");
+    }
+    const transition: NonNullable<
+      ChatViewProvider["foregroundSessionTransition"]
+    > = {
+      previousSessionId: this.sessionManager.getForegroundSession()?.id,
+      promise: this.sessionManager.createForegroundSession(mode, opts),
+    };
+    this.foregroundSessionTransition = transition;
+    void transition.promise
+      .then((session) => {
+        transition.nextSessionId = session.id;
+      })
+      .catch(() => {
+        if (this.foregroundSessionTransition === transition) {
+          this.foregroundSessionTransition = undefined;
+        }
+      });
+    return transition;
+  }
+
+  private async resolveForegroundSessionTransition(
+    requestedSessionId: string | undefined,
+  ): Promise<string | undefined> {
+    const transition = this.foregroundSessionTransition;
+    if (!transition) return requestedSessionId;
+
+    if (
+      requestedSessionId !== undefined &&
+      requestedSessionId !== transition.previousSessionId
+    ) {
+      if (
+        requestedSessionId === transition.nextSessionId &&
+        this.foregroundSessionTransition === transition
+      ) {
+        this.foregroundSessionTransition = undefined;
+      }
+      return requestedSessionId;
+    }
+
+    return (await transition.promise).id;
   }
 
   public submitBrowserListSessions(): {
@@ -2980,6 +3034,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.log(`[history] session not found: ${sessionId}`);
       return { ok: false };
     }
+    this.foregroundSessionTransition = undefined;
     this.postSessionLoaded(session, {
       checkpoints: this.getSessionCheckpoints(session.id),
     });
@@ -4645,7 +4700,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               },
             ];
         const mgr = this.sessionManager;
-        let effectiveSessionId = sessionId;
+        let effectiveSessionId =
+          await this.resolveForegroundSessionTransition(sessionId);
         if (!effectiveSessionId || !mgr.getSession(effectiveSessionId)) {
           const newSession = await mgr.createSession(mode, {
             activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
@@ -4949,9 +5005,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const mode = (msg.mode as string) ?? "code";
         const projectId =
           typeof msg.projectId === "string" ? msg.projectId : undefined;
-        this.sessionManager
-          .createForegroundSession(mode, { projectId })
+        const transition = this.beginForegroundSessionTransition(mode, {
+          projectId,
+        });
+        transition.promise
           .then((session) => {
+            if (this.foregroundSessionTransition !== transition) return;
             this.postSessionLoaded(session, {
               checkpoints: this.getSessionCheckpoints(session.id),
               tailTurns: 0,
@@ -4959,6 +5018,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this.sendInitialState();
             this.log(
               `New session created: ${session.id} (model: ${session.model})`,
+            );
+          })
+          .catch((err) => {
+            this.log(`[session] failed to create new session: ${err}`);
+            vscode.window.showErrorMessage(
+              `Failed to create a new AgentLink session: ${err instanceof Error ? err.message : String(err)}`,
             );
           });
         break;
@@ -5733,6 +5798,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.log(`[history] session not found: ${sessionId}`);
           break;
         }
+        this.foregroundSessionTransition = undefined;
         this.postSessionLoaded(session, {
           checkpoints: this.getSessionCheckpoints(session.id),
         });

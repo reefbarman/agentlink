@@ -1971,6 +1971,110 @@ describe("ChatViewProvider session state sync", () => {
     ).toBe(true);
   });
 
+  it("routes a stale webview send to an in-flight new session", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+
+    const projectScope = {
+      projectId: "project-1",
+      workspaceFolderUri: "file:///tmp/project",
+      rootPath: "/tmp/project",
+    };
+    const oldSession = {
+      id: "session-old",
+      title: "Old Session",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle",
+      projectScope,
+      projectAvailability: "available",
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      estimatedInputUsed: 0,
+      getAllMessages: () => [{ role: "user", content: "old task" }],
+    };
+    const newSession = {
+      ...oldSession,
+      id: "session-new",
+      title: "New Session",
+      getAllMessages: () => [],
+    };
+
+    let foregroundSession = oldSession;
+    let resolveCreation!: (session: typeof newSession) => void;
+    const creation = new Promise<typeof newSession>((resolve) => {
+      resolveCreation = resolve;
+    });
+    const sendMessage = vi.fn(async () => undefined);
+    const manager = {
+      getForegroundSession: vi.fn(() => foregroundSession),
+      getSession: vi.fn((sessionId: string) =>
+        sessionId === oldSession.id
+          ? oldSession
+          : sessionId === newSession.id
+            ? newSession
+            : undefined,
+      ),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      createForegroundSession: vi.fn(() => creation),
+      sendMessage,
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+
+    const handleWebviewMessage = (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage.bind(provider);
+
+    await handleWebviewMessage({
+      command: "agentNewSession",
+      mode: "code",
+    });
+    const send = handleWebviewMessage({
+      command: "agentSend",
+      text: "new task",
+      sessionId: oldSession.id,
+      mode: "code",
+    });
+
+    await Promise.resolve();
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    foregroundSession = newSession;
+    resolveCreation(newSession);
+    await send;
+    await Promise.resolve();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      newSession.id,
+      "new task",
+      "code",
+      expect.objectContaining({ origin: "vscode" }),
+    );
+    expect(sendMessage).not.toHaveBeenCalledWith(
+      oldSession.id,
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("keeps hidden agent warnings out of the webview transcript", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 

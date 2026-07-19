@@ -2128,6 +2128,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
         detectedQuestion: null,
         dismissedDetectedQuestionIds: [],
         statusOverride: null,
+        chatState: {
+          ...state.chatState,
+          sessionId: null,
+          streaming: false,
+        },
       };
 
     case "SET_REASONING_EFFORT":
