@@ -672,9 +672,8 @@ export class AgentSessionManager {
     }
     const resolution =
       this.projectCatalog.resolvePersistedScope(persistedScope);
-    const providerId = this.host.providers.tryResolveProvider(
-      args.summary.model,
-    )?.id;
+    const model = this.resolveAvailableModelId(args.summary.model);
+    const providerId = this.host.providers.tryResolveProvider(model)?.id;
     const activeContextProject = args.metadata.activeContextResourceUri
       ? this.projectCatalog.resolveProjectForResource(
           args.metadata.activeContextResourceUri,
@@ -693,7 +692,7 @@ export class AgentSessionManager {
     }
     const common = {
       mode: args.summary.mode,
-      config: this.buildConfigForModel(args.summary.model),
+      config: this.buildConfigForModel(model),
       background: args.background,
       activeFilePath,
       activeContextResourceUri: args.metadata.activeContextResourceUri,
@@ -1004,7 +1003,36 @@ export class AgentSessionManager {
       const settings = normalizeCoreWebAccessSettings(
         this.host.config.getWebAccessSettings?.(),
       );
-      const provider = this.host.providers.tryResolveProvider(session.model);
+      const modelResolution = this.host.providers.resolveAvailableModel(
+        session.model,
+      );
+      if (
+        !modelResolution &&
+        (settings.searchBackend === "native" ||
+          settings.fetchBackend === "native")
+      ) {
+        throw new Error(
+          `Model "${session.model}" is no longer available. Select a supported model from the model picker and retry.`,
+        );
+      }
+      if (modelResolution && modelResolution.model !== session.model) {
+        const retiredModel = session.model;
+        session.model = modelResolution.model;
+        session.providerId = modelResolution.provider.id;
+        this.applyThresholdToSession(session);
+        if (!session.background && this.foregroundId === session.id) {
+          this.updateConfig({
+            model: session.model,
+            autoCondenseThreshold: session.autoCondenseThreshold,
+          });
+        }
+        this.log?.(
+          `[model] migrated retired model "${retiredModel}" to "${session.model}" before request execution`,
+        );
+      }
+      const provider =
+        modelResolution?.provider ??
+        this.host.providers.tryResolveProvider(session.model);
       const capabilities = provider?.getRequestCapabilities
         ? await provider.getRequestCapabilities(session.model)
         : provider?.getCapabilities(session.model);
@@ -1631,17 +1659,19 @@ export class AgentSessionManager {
     scope?: Readonly<SessionProjectScope>,
   ): string {
     try {
-      return this.host.config.resolveModelForMode(
-        mode,
-        this.config.model,
-        scope,
+      return this.resolveAvailableModelId(
+        this.host.config.resolveModelForMode(mode, this.config.model, scope),
       );
     } catch (err) {
       this.log?.(
         `[agent] Failed to resolve configured model for mode ${mode}: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return this.config.model;
+      return this.resolveAvailableModelId(this.config.model);
     }
+  }
+
+  private resolveAvailableModelId(model: string): string {
+    return this.host.providers.resolveAvailableModel(model)?.model ?? model;
   }
 
   private getReasoningEffortForMode(
@@ -1834,9 +1864,11 @@ export class AgentSessionManager {
    * updates the session's providerId and rebuilds the system prompt so
    * provider-specific behavioral tuning takes effect.
    */
-  async setModel(model: string): Promise<void> {
+  async setModel(model: string): Promise<string> {
     const fg = this.getForegroundSession();
     if (fg) this.requireSessionExecution(fg);
+    const requestedModel = model;
+    model = this.resolveAvailableModelId(model);
     this.updateConfig({
       model,
       autoCondenseThreshold: this.getCondenseThresholdForModel(
@@ -1844,7 +1876,7 @@ export class AgentSessionManager {
         fg?.projectScope,
       ),
     });
-    if (!fg) return;
+    if (!fg) return model;
 
     fg.model = model;
     this.applyThresholdToSession(fg);
@@ -1857,6 +1889,12 @@ export class AgentSessionManager {
       });
     }
     await this.maybeAutoCondenseForegroundSession();
+    if (requestedModel !== model) {
+      this.log?.(
+        `[model] migrated retired model "${requestedModel}" to "${model}"`,
+      );
+    }
+    return model;
   }
 
   getSession(id: string): AgentSession | undefined {

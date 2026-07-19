@@ -15,6 +15,10 @@ interface ExtensionPackage {
   dependencies?: Record<string, string>;
 }
 
+interface ConfigurationProperty {
+  default?: unknown;
+}
+
 const root = path.join(__dirname, "..");
 const extensionPackage = JSON.parse(
   fs.readFileSync(path.join(root, "package.json"), "utf8"),
@@ -107,6 +111,20 @@ describe("extension package contributions", () => {
     expect(commands.get("agentlink.clearSessionApprovals")).toBe(
       "AgentLink: Clear Built-In Agent Session Approvals",
     );
+  });
+
+  it("defaults every built-in chat mode to flagship GPT-5.6 Sol", () => {
+    const settings = extensionPackage.contributes?.configuration?.properties as
+      | Record<string, ConfigurationProperty>
+      | undefined;
+
+    expect(settings?.["agentlink.agentModel"]?.default).toBe("gpt-5.6-sol");
+    expect(settings?.["agentlink.modeModelPreferences"]?.default).toEqual({
+      code: "gpt-5.6-sol",
+      architect: "gpt-5.6-sol",
+      ask: "gpt-5.6-sol",
+      debug: "gpt-5.6-sol",
+    });
   });
 
   it("retains browser gateway and MCP client package contracts", () => {

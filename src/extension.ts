@@ -538,11 +538,22 @@ export function activate(context: vscode.ExtensionContext): void {
       model,
       providerRegistry.tryResolveProvider(model)?.getCapabilities(model),
     );
+  const startupModelResolution = providerRegistry.resolveAvailableModel(
+    agentConfig.model,
+  );
+  const resolvedStartupModel =
+    startupModelResolution?.model ?? agentConfig.model;
+  if (startupModelResolution?.migratedFrom) {
+    log(
+      `[model] migrated retired startup model "${startupModelResolution.migratedFrom}" to "${resolvedStartupModel}"`,
+    );
+  }
   agentConfig = {
     ...agentConfig,
+    model: resolvedStartupModel,
     autoCondenseThreshold:
-      migratedThresholds[startupModel] ??
-      getConfiguredThresholdWithCapabilities(startupModel),
+      migratedThresholds[resolvedStartupModel] ??
+      getConfiguredThresholdWithCapabilities(resolvedStartupModel),
   };
 
   const publishBrowserGatewayModelCatalog = async (): Promise<void> => {
@@ -1338,11 +1349,14 @@ export function activate(context: vscode.ExtensionContext): void {
         const fgMode = agentSessionManager.getForegroundSession()?.mode;
         const effectiveMode =
           fgMode ?? config.get<string>("defaultMode")?.trim() ?? "code";
-        const model = resolveModelForMode(
+        const configuredModel = resolveModelForMode(
           config,
           effectiveMode,
           FALLBACK_AGENT_MODEL,
         );
+        const model =
+          providerRegistry.resolveAvailableModel(configuredModel)?.model ??
+          configuredModel;
         agentSessionManager.updateConfig({
           model,
           maxTokens: config.get<number>("agentMaxTokens") ?? 8192,

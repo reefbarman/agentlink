@@ -18,3 +18,9 @@
 - Repositioned AgentLink around its built-in VS Code coding agent and browser remote control.
 - Removed the retired inbound MCP server and external-agent configuration flows while preserving outbound MCP client support.
 - Added conservative cleanup and manual remediation guidance for legacy AgentLink-managed external-agent entries, instruction blocks, and hooks.
+
+### Fixed
+
+- Default new installations to flagship GPT-5.6 Sol while keeping the Pro-only GPT-5.3 Codex Spark model available.
+- Migrate persisted selections only after their model is retired, including the former GPT-5.3 Codex default, before session creation, restore, mode switches, or manual model updates.
+- Report an unavailable selected model directly instead of misdiagnosing it as unavailable native web search during request preflight.

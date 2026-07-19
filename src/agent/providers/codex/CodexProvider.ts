@@ -34,6 +34,7 @@ import {
   CODEX_CONDENSE_MODEL,
   getCodexUnavailableModelFallback,
   getCodexModelCapabilities,
+  getCodexModelMigration,
   getEndpointCaps,
   isCodexModelServedOnChatgptBackend,
   listCodexModels,
@@ -132,6 +133,10 @@ export class CodexProvider implements ModelProvider {
     // the common case). The runtime remap still protects anything that slips by.
     if (this.lastResolvedAuthMethod === "apiKey") return all;
     return all.filter((m) => isCodexModelServedOnChatgptBackend(m.id));
+  }
+
+  getModelMigration(model: string): string | undefined {
+    return getCodexModelMigration(model);
   }
 
   /**

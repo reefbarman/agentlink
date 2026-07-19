@@ -1,6 +1,8 @@
-import * as vscode from "vscode";
+import type * as vscode from "vscode";
 
-export const FALLBACK_AGENT_MODEL = "claude-sonnet-4-6";
+import { CODEX_DEFAULT_MODEL } from "../core/model/providers/codex/models.js";
+
+export const FALLBACK_AGENT_MODEL = CODEX_DEFAULT_MODEL;
 
 export type ModeModelPreferences = Record<string, string>;
 

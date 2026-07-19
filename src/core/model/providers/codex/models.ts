@@ -124,6 +124,7 @@ export const CODEX_CHATGPT_BACKEND_MODEL_IDS = [
 const CHATGPT_BACKEND_MODEL_MIGRATIONS: Record<string, string> = {
   "gpt-5.4": "gpt-5.6-terra",
   "gpt-5.4-mini": "gpt-5.6-luna",
+  "gpt-5.3-codex": "gpt-5.6-sol",
 };
 
 const CHATGPT_BACKEND_MODEL_SET = new Set<string>(
@@ -190,6 +191,19 @@ export function getCodexUnavailableModelFallback(
     default:
       return undefined;
   }
+}
+
+/**
+ * Resolve a persisted Codex model that is no longer picker-visible to its
+ * supported replacement. The registry calls this only after direct model
+ * lookup fails, so models still available on the active auth surface are not
+ * migrated prematurely.
+ */
+export function getCodexModelMigration(modelId: string): string | undefined {
+  return (
+    CHATGPT_BACKEND_MODEL_MIGRATIONS[modelId] ??
+    getCodexUnavailableModelFallback(modelId)
+  );
 }
 
 export function resolveCodexEffectiveModel(

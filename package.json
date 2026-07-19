@@ -615,17 +615,17 @@
         "agentlink.agentModel": {
           "scope": "resource",
           "type": "string",
-          "default": "claude-sonnet-4-6",
+          "default": "gpt-5.6-sol",
           "description": "Legacy global fallback model for the built-in agent chat. Use agentlink.modeModelPreferences for mode-specific defaults."
         },
         "agentlink.modeModelPreferences": {
           "scope": "resource",
           "type": "object",
           "default": {
-            "code": "gpt-5.3-codex",
-            "architect": "gpt-5.4",
-            "ask": "gpt-5.4-mini",
-            "debug": "gpt-5.3-codex"
+            "code": "gpt-5.6-sol",
+            "architect": "gpt-5.6-sol",
+            "ask": "gpt-5.6-sol",
+            "debug": "gpt-5.6-sol"
           },
           "additionalProperties": {
             "type": "string"

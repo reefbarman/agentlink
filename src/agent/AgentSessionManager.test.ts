@@ -674,6 +674,70 @@ describe("AgentSessionManager host injection", () => {
     );
   });
 
+  it("migrates retired configured models before creating or updating a session", async () => {
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: "test",
+      displayName: "Test",
+      condenseModel: "model-current",
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => ({
+        supportsThinking: false,
+        supportsCaching: false,
+        supportsImages: false,
+        supportsToolUse: true,
+        contextWindow: 200_000,
+        maxOutputTokens: 8_192,
+      })),
+      listModels: vi.fn(() => [
+        {
+          id: "model-current",
+          displayName: "Current model",
+          provider: "test",
+          capabilities: {
+            supportsThinking: false,
+            supportsCaching: false,
+            supportsImages: false,
+            supportsToolUse: true,
+            contextWindow: 200_000,
+            maxOutputTokens: 8_192,
+          },
+        },
+      ]),
+      getModelMigration: vi.fn((model: string) =>
+        model === "model-retired" ? "model-current" : undefined,
+      ),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as any);
+    const mgr = new AgentSessionManager(
+      { ...makeConfig(), model: "model-retired" },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          providers,
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            getCondenseThresholdForModel: () => 0.9,
+            getBgSummaryMode: () => "heuristic",
+            getBackgroundAgentSettings: () => ({}),
+          },
+        },
+      },
+    );
+
+    const session = await mgr.createSession("code");
+    expect(session.model).toBe("model-current");
+    expect(session.providerId).toBe("test");
+    await expect(mgr.setModel("model-retired")).resolves.toBe("model-current");
+    expect(mgr.getConfig().model).toBe("model-current");
+  });
+
   it("restores the configured reasoning effort when modes change", async () => {
     const mgr = new AgentSessionManager(
       { ...makeConfig(), thinkingBudget: 2048 },
@@ -889,6 +953,38 @@ describe("AgentSessionManager host injection", () => {
 
   it("reports strict web policy failures without storing the rejected turn", async () => {
     const createCheckpoint = vi.fn(async () => null);
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: "test",
+      displayName: "Test",
+      condenseModel: makeConfig().model,
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => ({
+        supportsThinking: false,
+        supportsCaching: false,
+        supportsImages: false,
+        supportsToolUse: true,
+        contextWindow: 200_000,
+        maxOutputTokens: 8_192,
+      })),
+      listModels: vi.fn(() => [
+        {
+          id: makeConfig().model,
+          displayName: "Test model",
+          provider: "test",
+          capabilities: {
+            supportsThinking: false,
+            supportsCaching: false,
+            supportsImages: false,
+            supportsToolUse: true,
+            contextWindow: 200_000,
+            maxOutputTokens: 8_192,
+          },
+        },
+      ]),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as any);
     const mgr = new AgentSessionManager(
       makeConfig(),
       "/tmp",
@@ -899,6 +995,7 @@ describe("AgentSessionManager host injection", () => {
       undefined,
       {
         host: {
+          providers,
           config: {
             resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
             getCondenseThresholdForModel: () => 0.9,
@@ -970,6 +1067,47 @@ describe("AgentSessionManager host injection", () => {
     ]);
     expect(session.addUserMessage).not.toHaveBeenCalled();
     expect(createCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("reports an unavailable selected model before native web capability errors", async () => {
+    const mgr = new AgentSessionManager(
+      { ...makeConfig(), model: "retired-model" },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          providers: new ProviderRegistry(),
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            getCondenseThresholdForModel: () => 0.9,
+            getBgSummaryMode: () => "heuristic",
+            getBackgroundAgentSettings: () => ({}),
+            getWebAccessSettings: () => ({
+              searchBackend: "native",
+              fetchBackend: "native",
+            }),
+          },
+        },
+      },
+    );
+    mgr.setToolContext({
+      approvalManager: { bindSessionProject: vi.fn() } as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+    });
+    const session = await mgr.createSession("code");
+
+    await expect(
+      mgr.sendMessage(session.id, "run a local command", session.mode),
+    ).rejects.toThrow(
+      'Model "retired-model" is no longer available. Select a supported model from the model picker and retry.',
+    );
+    expect(session.addUserMessage).not.toHaveBeenCalled();
   });
 
   it("blocks unavailable sessions at every local execution boundary", async () => {

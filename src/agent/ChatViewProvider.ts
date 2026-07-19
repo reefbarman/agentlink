@@ -2842,13 +2842,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public async submitBrowserSetModel(model: string): Promise<{ ok: boolean }> {
     if (!model || !this.sessionManager) return { ok: false };
-    await this.sessionManager.setModel(model);
+    const selectedModel = await this.sessionManager.setModel(model);
 
     const config = this.getCurrentProjectConfiguration();
     if (!config) return { ok: false };
     await config.update(
       "agentModel",
-      model,
+      selectedModel,
       vscode.ConfigurationTarget.WorkspaceFolder,
     );
 
@@ -2858,13 +2858,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       "modeModelPreferences",
       {
         ...modePrefs,
-        [fgMode]: model,
+        [fgMode]: selectedModel,
       },
       vscode.ConfigurationTarget.WorkspaceFolder,
     );
 
     this.sendInitialState();
-    this.log(`Model changed to: ${model} (saved for mode: ${fgMode})`);
+    this.log(`Model changed to: ${selectedModel} (saved for mode: ${fgMode})`);
     return { ok: true };
   }
 
@@ -5083,12 +5083,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const model = msg.model as string;
         if (!model) break;
         // Update config, session model, and rebuild system prompt if provider changed
-        await this.sessionManager.setModel(model);
+        const selectedModel = await this.sessionManager.setModel(model);
         const config = this.getCurrentProjectConfiguration();
         if (!config) break;
         await config.update(
           "agentModel",
-          model,
+          selectedModel,
           vscode.ConfigurationTarget.WorkspaceFolder,
         );
 
@@ -5100,13 +5100,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           "modeModelPreferences",
           {
             ...modePrefs,
-            [fgMode]: model,
+            [fgMode]: selectedModel,
           },
           vscode.ConfigurationTarget.WorkspaceFolder,
         );
 
         this.sendInitialState();
-        this.log(`Model changed to: ${model} (saved for mode: ${fgMode})`);
+        this.log(
+          `Model changed to: ${selectedModel} (saved for mode: ${fgMode})`,
+        );
         break;
       }
 

@@ -28,6 +28,7 @@ class FakeProvider implements ModelProvider {
 
   visible: string[] = ["fake-a"];
   routable: string[] = ["fake-a"];
+  migrations: Record<string, string> = {};
 
   async isAuthenticated(): Promise<boolean> {
     return true;
@@ -48,6 +49,10 @@ class FakeProvider implements ModelProvider {
 
   listRoutableModelIds(): string[] {
     return this.routable;
+  }
+
+  getModelMigration(model: string): string | undefined {
+    return this.migrations[model];
   }
 
   // oxlint-disable-next-line require-yield
@@ -80,5 +85,50 @@ describe("ProviderRegistry.refreshIndex", () => {
     expect(registry.resolveProvider("fake-a").id).toBe("fake");
     // Picker list reflects only the visible set.
     expect(registry.listAllModels().map((m) => m.id)).toEqual(["fake-b"]);
+  });
+
+  it("migrates retired ids without returning them in the picker model list", () => {
+    const registry = new ProviderRegistry();
+    const provider = new FakeProvider();
+    provider.visible = ["fake-current"];
+    provider.routable = ["fake-current"];
+    provider.migrations = {
+      "fake-retired": "fake-intermediate",
+      "fake-intermediate": "fake-current",
+    };
+    registry.register(provider);
+
+    expect(registry.listAllModels().map(({ id }) => id)).toEqual([
+      "fake-current",
+    ]);
+    expect(registry.tryResolveProvider("fake-retired")).toBeUndefined();
+    expect(registry.resolveAvailableModel("fake-retired")).toEqual({
+      model: "fake-current",
+      provider,
+      migratedFrom: "fake-retired",
+    });
+  });
+
+  it("rejects cyclic or cross-provider migration targets", () => {
+    const registry = new ProviderRegistry();
+    const provider = new FakeProvider();
+    provider.migrations = {
+      "fake-cycle-a": "fake-cycle-b",
+      "fake-cycle-b": "fake-cycle-a",
+      "fake-cross": "other-current",
+      "fake-cross-chain": "other-retired",
+    };
+    registry.register(provider);
+
+    const other = new FakeProvider();
+    Object.defineProperty(other, "id", { value: "other" });
+    other.visible = ["other-current"];
+    other.routable = ["other-current"];
+    other.migrations = { "other-retired": "other-current" };
+    registry.register(other);
+
+    expect(registry.resolveAvailableModel("fake-cycle-a")).toBeUndefined();
+    expect(registry.resolveAvailableModel("fake-cross")).toBeUndefined();
+    expect(registry.resolveAvailableModel("fake-cross-chain")).toBeUndefined();
   });
 });

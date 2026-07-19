@@ -133,6 +133,71 @@ export class ProviderRegistry {
   }
 
   /**
+   * Resolve a picker-visible/routable model, following provider-owned legacy
+   * migrations when a persisted model id has been retired. Migration targets
+   * must resolve back to the same provider, and chains are cycle-safe.
+   */
+  resolveAvailableModel(model: string):
+    | {
+        model: string;
+        provider: ModelProvider;
+        migratedFrom?: string;
+      }
+    | undefined {
+    const requested = model.trim();
+    if (!requested) return undefined;
+
+    let candidate = requested;
+    const visited = new Set<string>();
+    let migrationProviderId: string | undefined;
+    while (!visited.has(candidate)) {
+      visited.add(candidate);
+      const providerId = this.modelIndex.get(candidate);
+      if (providerId) {
+        if (
+          migrationProviderId !== undefined &&
+          providerId !== migrationProviderId
+        ) {
+          return undefined;
+        }
+        const provider = this.providers.get(providerId)!;
+        return {
+          model: candidate,
+          provider,
+          ...(candidate !== requested ? { migratedFrom: requested } : {}),
+        };
+      }
+
+      let migration: { model: string; provider: ModelProvider } | undefined;
+      for (const provider of this.providers.values()) {
+        const migrated = provider.getModelMigration?.(candidate)?.trim();
+        if (!migrated) continue;
+        if (
+          migration !== undefined ||
+          (migrationProviderId !== undefined &&
+            provider.id !== migrationProviderId)
+        ) {
+          return undefined;
+        }
+        migration = { model: migrated, provider };
+      }
+      if (!migration) return undefined;
+      migrationProviderId ??= migration.provider.id;
+
+      const targetProviderId = this.modelIndex.get(migration.model);
+      if (
+        targetProviderId !== undefined &&
+        targetProviderId !== migration.provider.id
+      ) {
+        return undefined;
+      }
+      candidate = migration.model;
+    }
+
+    return undefined;
+  }
+
+  /**
    * Aggregate models from all registered providers.
    */
   listAllModels(): ModelInfo[] {

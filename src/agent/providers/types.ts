@@ -96,6 +96,13 @@ export interface ModelProvider {
    */
   listRoutableModelIds?(): string[];
 
+  /**
+   * Return the supported replacement for a retired model id previously owned
+   * by this provider. Retired ids stay out of model pickers and routing indexes;
+   * the registry follows these aliases only while migrating persisted state.
+   */
+  getModelMigration?(model: string): string | undefined;
+
   /** Streaming completion — the primary agentic loop interface. */
   stream(request: StreamRequest): AsyncGenerator<ProviderStreamEvent>;
 

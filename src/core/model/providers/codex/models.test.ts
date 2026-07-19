@@ -2,6 +2,7 @@ import {
   CODEX_DEFAULT_MODEL,
   CODEX_OAUTH_CHEAP_MODEL,
   getCodexModelCapabilities,
+  getCodexModelMigration,
   getCodexUnavailableModelFallback,
   listCodexModels,
   resolveCodexEffectiveModel,
@@ -95,7 +96,7 @@ describe("Codex model resolution", () => {
     );
   });
 
-  it("lists Spark for OAuth but hides it on API-key auth", () => {
+  it("lists Pro-only Spark for OAuth and preserves retired model migrations", () => {
     const oauthIds = listCodexModels("codex", "oauth").map(({ id }) => id);
     const apiKeyIds = listCodexModels("codex", "apiKey").map(({ id }) => id);
     expect(oauthIds).toContain("gpt-5.3-codex-spark");
@@ -105,6 +106,8 @@ describe("Codex model resolution", () => {
     expect(getCodexUnavailableModelFallback("gpt-5.3-codex-spark")).toBe(
       "gpt-5.6-luna",
     );
+    expect(getCodexModelMigration("gpt-5.3-codex-spark")).toBe("gpt-5.6-luna");
+    expect(getCodexModelMigration("gpt-5.3-codex")).toBe(CODEX_DEFAULT_MODEL);
   });
 
   it("maps API-retired codex models to their published replacements", () => {
