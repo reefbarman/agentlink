@@ -501,6 +501,7 @@ export function activate(context: vscode.ExtensionContext): void {
     context.extensionUri,
     context.globalState,
     projectCustomizationRegistry,
+    extVersion,
   );
 
   // Register providers after chatViewProvider is created so all auth logs

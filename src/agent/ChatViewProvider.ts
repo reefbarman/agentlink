@@ -53,6 +53,10 @@ import type {
   McpServerConnectionOutcome,
 } from "../shared/mcpManagerTypes.js";
 import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
+import type {
+  McpFormElicitationRequest,
+  McpFormElicitationResponse,
+} from "../shared/mcpElicitation.js";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 import type { InstructionBlock } from "./configLoader.js";
 import {
@@ -63,6 +67,10 @@ import { getLatestTodoState, type TodoItem } from "./todoTool.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
 import { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
 import { McpClientHub, type McpServerInfo } from "./McpClientHub.js";
+import {
+  McpFormElicitationCoordinator,
+  type McpFormElicitationSubmitResult,
+} from "./McpFormElicitationCoordinator.js";
 import { cleanupOrphanedMcpOAuthState } from "./McpOAuthProvider.js";
 import { dispatchToolCall, getAgentTools } from "./toolAdapter.js";
 import { MCP_TOOL_BRIDGE_TOOL_NAMES } from "../shared/mcpToolDefinitions.js";
@@ -449,27 +457,8 @@ export type ExtensionToWebview =
       }>;
     }
   | { type: "agentModeSwitchRequest"; mode: string; reason?: string }
-  | {
-      type: "agentElicitationRequest";
-      id: string;
-      serverName: string;
-      message: string;
-      fields: Record<
-        string,
-        {
-          type: "string" | "number" | "boolean";
-          title?: string;
-          description?: string;
-          enum?: string[];
-          default?: unknown;
-          minimum?: number;
-          maximum?: number;
-          minLength?: number;
-          maxLength?: number;
-        }
-      >;
-      required: string[];
-    }
+  | { type: "agentFormElicitationRequest"; request: McpFormElicitationRequest }
+  | { type: "agentFormElicitationCleared"; id: string }
   | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
   | { type: "agentUrlElicitationCleared"; id: string }
   | {
@@ -972,20 +961,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private mainGlobalMcpWatchersInitialized = false;
   private askAgentMcpWatchersInitialized = false;
   private cwd: string = "";
-  private pendingElicitations = new Map<
-    string,
-    { resolve: (values: Record<string, unknown>) => void; cancel: () => void }
-  >();
+  private readonly formElicitationCoordinator: McpFormElicitationCoordinator;
   private pendingUrlElicitations = new Map<
     string,
     {
       request: McpUrlElicitationRequest;
       resolve: (action: "accept" | "cancel" | "decline") => void;
-      timeout?: ReturnType<typeof setTimeout>;
     }
   >();
-  /** Tracks which pending-elicitation IDs belong to each session, for scoped cancellation on stop */
-  private elicitationSessionIndex = new Map<string, Set<string>>();
+
   private pendingApprovals = new Map<
     string,
     (
@@ -1080,6 +1064,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private readonly extensionUri: vscode.Uri,
     private readonly globalState: vscode.Memento,
     projectCustomizationRegistry?: ProjectCustomizationRegistry,
+    extensionVersion = "unknown",
   ) {
     this.projectCustomizationRegistry =
       projectCustomizationRegistry ?? new ProjectCustomizationRegistry();
@@ -1091,76 +1076,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }),
       this.uiEventHub,
     ]);
+    this.formElicitationCoordinator = new McpFormElicitationCoordinator({
+      publishRequest: (request) =>
+        this.uiPublisher.publishFormElicitationRequest(request),
+      publishCleared: (id) =>
+        this.uiPublisher.publishFormElicitationCleared(id),
+    });
     this.deltaBufferFlusher = new DeltaBufferFlusher({
       emit: (message) => this.postMessage(message),
       isBackgroundSession: (sessionId) =>
         Boolean(this.sessionManager?.getSession(sessionId)?.background),
     });
-    this.mcpHub = new McpClientHub(globalState);
-    this.askAgentMcpHub = new McpClientHub(globalState);
+    this.mcpHub = new McpClientHub(globalState, extensionVersion);
+    this.askAgentMcpHub = new McpClientHub(globalState, extensionVersion);
     void cleanupOrphanedMcpOAuthState(globalState);
-
-    const handleMcpSampling: McpClientHub["onSampling"] = async ({
-      messages,
-      systemPrompt,
-      maxTokens,
-      model,
-    }) => {
-      const targetModel = model ?? "claude-sonnet-4-6";
-      const provider = providerRegistry.tryResolveProvider(targetModel);
-      if (!provider) {
-        return {
-          role: "assistant",
-          content: "Sampling unavailable: no provider for model.",
-        };
-      }
-      try {
-        const result = await provider.complete({
-          model: targetModel,
-          systemPrompt: systemPrompt ?? "",
-          messages: messages.map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          maxTokens,
-        });
-        return { role: "assistant", content: result.text };
-      } catch {
-        return {
-          role: "assistant",
-          content: "Sampling failed.",
-        };
-      }
-    };
-    this.mcpHub.onSampling = handleMcpSampling;
-    this.askAgentMcpHub.onSampling = handleMcpSampling;
 
     const handleMcpElicitation: NonNullable<McpClientHub["onElicitation"]> = (
       request,
       resolve,
       cancel,
     ) => {
-      const id = `elicit_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      this.pendingElicitations.set(id, { resolve, cancel });
-      // Best-effort attribution: MCP elicitation callbacks do not currently carry
-      // agent session context, so we associate with the foreground session.
-      // If background MCP tool calls start elicitation, precise attribution will
-      // require threading sessionId through McpClientHub.onElicitation.
-      const sessionId = this.sessionManager?.getForegroundSession()?.id;
-      if (sessionId) {
-        const sessionSet =
-          this.elicitationSessionIndex.get(sessionId) ?? new Set();
-        sessionSet.add(id);
-        this.elicitationSessionIndex.set(sessionId, sessionSet);
-      }
-      this.postMessage({
-        type: "agentElicitationRequest",
-        id,
-        serverName: request.serverName,
-        message: request.message,
-        fields: request.fields,
-        required: request.required,
-      } as unknown as ExtensionToWebview);
+      this.formElicitationCoordinator.enqueue(request, {
+        sessionId: this.sessionManager?.getForegroundSession()?.id,
+        resolve,
+        cancel,
+      });
     };
     this.mcpHub.onElicitation = handleMcpElicitation;
     this.askAgentMcpHub.onElicitation = handleMcpElicitation;
@@ -1170,15 +1110,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     > = (request, resolve) => {
       this.cancelPendingUrlElicitations();
       this.pendingUrlElicitations.set(request.id, { request, resolve });
-      if (request.expiresAt) {
-        const delay = Math.max(0, request.expiresAt - Date.now());
-        const pending = this.pendingUrlElicitations.get(request.id);
-        if (pending) {
-          pending.timeout = setTimeout(() => {
-            this.resolveUrlElicitation(request.id, "cancel");
-          }, delay);
-        }
-      }
       this.uiPublisher.publishUrlElicitationRequest(request);
     };
     this.mcpHub.onUrlElicitation = handleMcpUrlElicitation;
@@ -1186,10 +1117,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const handleMcpUrlElicitationComplete: NonNullable<
       McpClientHub["onUrlElicitationComplete"]
-    > = (_serverName, elicitationId) => {
+    > = (serverName, elicitationId) => {
       for (const pending of this.pendingUrlElicitations.values()) {
-        if (pending.request.elicitationId === elicitationId) {
-          this.clearUrlElicitation(pending.request.id);
+        if (
+          pending.request.serverName === serverName &&
+          pending.request.elicitationId === elicitationId
+        ) {
+          this.resolveUrlElicitation(pending.request.id, "accept");
           return;
         }
       }
@@ -1198,9 +1132,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.askAgentMcpHub.onUrlElicitationComplete =
       handleMcpUrlElicitationComplete;
     this.projectMcpHubRegistry = new ProjectMcpHubRegistry({
-      createHub: () => new McpClientHub(globalState),
+      createHub: () => new McpClientHub(globalState, extensionVersion),
       configureHub: (hub, scope) => {
-        hub.onSampling = handleMcpSampling;
         hub.onElicitation = handleMcpElicitation;
         hub.onUrlElicitation = handleMcpUrlElicitation;
         hub.onUrlElicitationComplete = handleMcpUrlElicitationComplete;
@@ -1243,17 +1176,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.activeApprovalOrder = [];
     this.visibleApprovalId = null;
 
-    for (const { cancel } of this.pendingElicitations.values()) {
-      cancel();
-    }
-    this.pendingElicitations.clear();
+    this.formElicitationCoordinator.dispose();
     for (const [id, pending] of this.pendingUrlElicitations) {
-      if (pending.timeout) clearTimeout(pending.timeout);
       pending.resolve("cancel");
       this.uiPublisher.publishUrlElicitationCleared(id);
     }
     this.pendingUrlElicitations.clear();
-    this.elicitationSessionIndex.clear();
 
     this.outputChannel.dispose();
     this.uiEventHub.dispose();
@@ -2654,6 +2582,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return true;
   }
 
+  public submitBrowserFormElicitation(
+    response: McpFormElicitationResponse,
+  ): McpFormElicitationSubmitResult {
+    return this.formElicitationCoordinator.submit(response);
+  }
+
   public submitBrowserUrlElicitation(msg: {
     id: string;
     action: "accept" | "cancel" | "decline";
@@ -2668,7 +2602,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const pending = this.pendingUrlElicitations.get(id);
     if (!pending) return false;
     this.pendingUrlElicitations.delete(id);
-    if (pending.timeout) clearTimeout(pending.timeout);
     pending.resolve(action);
     this.uiPublisher.publishUrlElicitationCleared(id);
     return true;
@@ -2676,20 +2609,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private cancelPendingUrlElicitations(): void {
     for (const [id, pending] of this.pendingUrlElicitations) {
-      if (pending.timeout) clearTimeout(pending.timeout);
       pending.resolve("cancel");
       this.uiPublisher.publishUrlElicitationCleared(id);
     }
     this.pendingUrlElicitations.clear();
-  }
-
-  private clearUrlElicitation(id: string): boolean {
-    const pending = this.pendingUrlElicitations.get(id);
-    if (!pending) return false;
-    this.pendingUrlElicitations.delete(id);
-    if (pending.timeout) clearTimeout(pending.timeout);
-    this.uiPublisher.publishUrlElicitationCleared(id);
-    return true;
   }
 
   public async submitBrowserSend(input: {
@@ -3728,18 +3651,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.approvalSessionIndex.delete(sessionId);
     }
 
-    // Cancel only the pending elicitation prompts belonging to this session.
-    const elicitationIds = this.elicitationSessionIndex.get(sessionId);
-    if (elicitationIds) {
-      for (const id of elicitationIds) {
-        const pending = this.pendingElicitations.get(id);
-        if (pending) {
-          this.pendingElicitations.delete(id);
-          pending.cancel();
-        }
-      }
-      this.elicitationSessionIndex.delete(sessionId);
-    }
+    this.formElicitationCoordinator.cancelSession(sessionId);
     // Immediately notify the webview so it exits streaming state
     this.postMessage({
       type: "agentDone",
@@ -5349,19 +5261,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
-      case "agentElicitationResponse": {
-        const id = msg.id as string;
-        const pending = this.pendingElicitations.get(id);
-        if (!pending) break;
-        this.pendingElicitations.delete(id);
-        for (const ids of this.elicitationSessionIndex.values()) {
-          ids.delete(id);
-        }
-        if (msg.cancelled) {
-          pending.cancel();
-        } else {
-          pending.resolve(msg.values as Record<string, unknown>);
-        }
+      case "agentFormElicitationResponse": {
+        this.submitBrowserFormElicitation({
+          id: String(msg.id ?? ""),
+          action:
+            msg.action === "accept"
+              ? "accept"
+              : msg.action === "decline"
+                ? "decline"
+                : "cancel",
+          ...(msg.action === "accept" &&
+          msg.values &&
+          typeof msg.values === "object" &&
+          !Array.isArray(msg.values)
+            ? { values: msg.values as Record<string, unknown> }
+            : {}),
+        } as McpFormElicitationResponse);
         break;
       }
 

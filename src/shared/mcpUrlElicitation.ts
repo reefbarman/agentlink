@@ -7,7 +7,6 @@ export interface McpUrlElicitationRequest {
   origin: string;
   host: string;
   isLocalAddress: boolean;
-  expiresAt?: number;
 }
 
 export interface ValidatedMcpUrl {

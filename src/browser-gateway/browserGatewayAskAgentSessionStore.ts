@@ -143,6 +143,7 @@ export interface BrowserGatewayAskAgentSnapshot {
     approval: ApprovalRequest | null;
     question: QuestionRequest | null;
     questionProgress: BrowserGatewayAskAgentQuestionProgress | null;
+    formElicitation: null;
     urlElicitation: null;
     recentEvents: [];
     mcpStatusInfos: [];
@@ -1249,6 +1250,7 @@ export class BrowserGatewayAskAgentSessionStore {
           approval,
           question: this.questionRequest,
           questionProgress: this.questionProgress,
+          formElicitation: null,
           urlElicitation: null,
           recentEvents: [],
           mcpStatusInfos: [],

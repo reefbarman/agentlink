@@ -26,6 +26,7 @@ import {
 
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import type { BrowserGatewayInstanceStatusSummary } from "./protocol.js";
+import type { McpFormElicitationRequest } from "../shared/mcpElicitation.js";
 import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
 import type {
   AgentUiEvent,
@@ -74,6 +75,7 @@ export interface BrowserGatewayUiState {
       }
     | undefined;
   questionProgress: QuestionProgressState | undefined;
+  formElicitation: McpFormElicitationRequest | undefined;
   urlElicitation: McpUrlElicitationRequest | undefined;
   recentEvents: AgentUiEvent[];
 }
@@ -87,6 +89,7 @@ export interface BrowserGatewayWireState {
     backgroundTask?: string;
   } | null;
   questionProgress: QuestionProgressState | null;
+  formElicitation: McpFormElicitationRequest | null;
   urlElicitation: McpUrlElicitationRequest | null;
   recentEvents: AgentUiEvent[];
   mcpStatusInfos: ReturnType<ChatViewProvider["getBrowserMcpStatusInfos"]>;
@@ -239,6 +242,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       }
     | undefined;
   private questionProgress: QuestionProgressState | undefined;
+  private formElicitation: McpFormElicitationRequest | undefined;
   private urlElicitation: McpUrlElicitationRequest | undefined;
   private recentEvents: AgentUiEvent[] = [];
   private modelsVersion = 0;
@@ -440,6 +444,9 @@ export class BrowserGatewayService implements vscode.Disposable {
       approval: this.approval,
       question,
       questionProgress,
+      formElicitation: this.formElicitation
+        ? cloneFormElicitationRequest(this.formElicitation)
+        : undefined,
       urlElicitation: this.urlElicitation
         ? { ...this.urlElicitation }
         : undefined,
@@ -619,6 +626,9 @@ export class BrowserGatewayService implements vscode.Disposable {
       question: question ?? null,
       questionProgress:
         this.getForegroundQuestionProgress(question?.id) ?? null,
+      formElicitation: this.formElicitation
+        ? cloneFormElicitationRequest(this.formElicitation)
+        : null,
       urlElicitation: this.urlElicitation ? { ...this.urlElicitation } : null,
       recentEvents: [...this.recentEvents],
       mcpStatusInfos: this.getMcpStatusInfos(),
@@ -688,17 +698,20 @@ export class BrowserGatewayService implements vscode.Disposable {
     if (
       ui.approval ||
       ui.question ||
+      ui.formElicitation ||
       ui.urlElicitation ||
       session?.questionRequest ||
       session?.status === "awaiting_approval"
     ) {
       return {
         kind: "awaiting_approval",
-        label: ui.urlElicitation
-          ? "MCP URL"
-          : ui.question || session?.questionRequest
-            ? "Question"
-            : "Approval",
+        label: ui.formElicitation
+          ? "MCP Form"
+          : ui.urlElicitation
+            ? "MCP URL"
+            : ui.question || session?.questionRequest
+              ? "Question"
+              : "Approval",
         detail: session?.statusOverride ?? "Awaiting response",
         sessionTitle: session?.title,
       };
@@ -762,6 +775,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     this.approval = undefined;
     this.question = undefined;
     this.questionProgress = undefined;
+    this.formElicitation = undefined;
     this.urlElicitation = undefined;
     this.recentEvents = [];
     this.lastSerializedSnapshot = "";
@@ -860,6 +874,14 @@ export class BrowserGatewayService implements vscode.Disposable {
           notes: { ...event.notes },
           origin: event.origin,
         };
+        break;
+      case "agentFormElicitationRequest":
+        this.formElicitation = cloneFormElicitationRequest(event.request);
+        break;
+      case "agentFormElicitationCleared":
+        if (!this.formElicitation || this.formElicitation.id === event.id) {
+          this.formElicitation = undefined;
+        }
         break;
       case "agentUrlElicitationRequest":
         this.urlElicitation = { ...event.request };
@@ -980,4 +1002,28 @@ export class BrowserGatewayService implements vscode.Disposable {
     }
     return bytes;
   }
+}
+
+function cloneFormElicitationRequest(
+  request: McpFormElicitationRequest,
+): McpFormElicitationRequest {
+  return {
+    ...request,
+    fields: request.fields.map((field) => {
+      if (field.kind === "single-select") {
+        return {
+          ...field,
+          options: field.options.map((option) => ({ ...option })),
+        };
+      }
+      if (field.kind === "multi-select") {
+        return {
+          ...field,
+          options: field.options.map((option) => ({ ...option })),
+          ...(field.default ? { default: [...field.default] } : {}),
+        };
+      }
+      return { ...field };
+    }),
+  };
 }

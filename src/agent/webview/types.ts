@@ -12,6 +12,7 @@ import type {
 import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy.js";
 import type { ComposeTrace } from "../../shared/composeTypes.js";
 import type { LoadedInstructionDebugInfo } from "../../shared/chatProjection.js";
+import type { McpFormElicitationRequest } from "../../shared/mcpElicitation.js";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation.js";
 
 export interface ProjectInfo {
@@ -328,27 +329,8 @@ export type ExtensionMessage =
   | { type: "agentSlashCommandsUpdate"; commands: SlashCommandInfo[] }
   | { type: "agentProviderUsage"; data: ProviderUsageCardData }
   | { type: "agentModeSwitchRequest"; mode: string; reason?: string }
-  | {
-      type: "agentElicitationRequest";
-      id: string;
-      serverName: string;
-      message: string;
-      fields: Record<
-        string,
-        {
-          type: "string" | "number" | "boolean";
-          title?: string;
-          description?: string;
-          enum?: string[];
-          default?: unknown;
-          minimum?: number;
-          maximum?: number;
-          minLength?: number;
-          maxLength?: number;
-        }
-      >;
-      required: string[];
-    }
+  | { type: "agentFormElicitationRequest"; request: McpFormElicitationRequest }
+  | { type: "agentFormElicitationCleared"; id: string }
   | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
   | { type: "agentUrlElicitationCleared"; id: string }
   | {
@@ -390,8 +372,6 @@ export type ExtensionMessage =
       notes: Record<string, string>;
       origin: string;
     }
-  | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
-  | { type: "agentUrlElicitationCleared"; id: string }
   | { type: "agentDroppedFilesResolved"; files: string[] }
   | {
       type: "agentSessionList";

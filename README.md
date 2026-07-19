@@ -192,7 +192,7 @@ Detected skills are also exposed as slash commands in the built-in chat. Skills 
 
 ### Connect the built-in agent to MCP servers
 
-Use `/mcp` to open the shared MCP Manager, `/mcp-config` to open its configuration-oriented view, and `/mcp-refresh` to reconnect configured servers. The manager is available in both VS Code and Browser Ask Agent with four focused views:
+Use `/mcp` to open the shared MCP Manager, `/mcp-config` to open its configuration-oriented view, and `/mcp-refresh` to explicitly reconnect configured servers. Ordinary tool, resource, and prompt catalog changes advertised by a connected server are loaded automatically without `/mcp-refresh`, including every paginated catalog page. The manager is available in both VS Code and Browser Ask Agent with four focused views:
 
 - **Overview** joins saved configuration with connection status, tool/resource/prompt counts, source scope, inherited overrides, secret-key presence, and persistent enabled/disabled state.
 - **Sources** shows every layered file in precedence order, including exact path, read health, editable/read-only state, and raw-open actions where the surface supports them.
@@ -235,7 +235,9 @@ Saving and connecting are reported separately. A valid configuration remains sav
 
 Browser Ask Agent keeps extension-hosted MCP execution and credentials. Browser main-profile configuration is read-only. Loopback Browser Ask Agent sessions may configure local-process servers and secret-bearing env/header changes; LAN browser sessions may configure only secret-free HTTP/SSE servers. Raw config opening is unavailable from the browser.
 
-AgentLink can progressively disclose large MCP catalogs and applies the same session/project/global approval model to connected servers and tools.
+AgentLink can progressively disclose large MCP catalogs and applies the same session/project/global approval model to connected servers and tools. Connected tool results preserve server-declared errors, structured content, annotations, protocol metadata, embedded resources, and resource links. Structured-only results are serialized into model-visible text, while unsupported audio/binary payloads remain bounded placeholders rather than unbounded base64 text.
+
+The outbound client identifies itself with the installed AgentLink version and advertises only implemented capabilities. AgentLink does not advertise deprecated MCP roots or server-initiated sampling. Form elicitation supports strings (including email, URI, date, and date-time formats), numbers, integers, booleans, titled or untitled single-selects, and titled or untitled multi-selects. Defaults and field constraints are applied and validated by shared controls in VS Code chat and VS Code-backed browser sessions. Browser Ask Agent's helper-owned MCP session does not currently expose form or URL elicitation.
 
 ## Web Access
 
@@ -1272,7 +1274,7 @@ Use this for larger tasks that benefit from explicit progress tracking. During o
 
 ## Built-in MCP client tools
 
-These are available to the built-in AgentLink chat when it connects out to other MCP servers from project/global MCP config. Connected MCP servers may also request user input through MCP elicitation; URL-mode elicitations are surfaced as explicit, approval-gated browser-flow prompts in both the VS Code chat and browser gateway.
+These are available to the built-in AgentLink chat when it connects out to other MCP servers from project/global MCP config. Connected MCP servers may also request user input through MCP elicitation. Form requests use the same validated controls in VS Code chat and VS Code-backed browser sessions; URL-mode requests are surfaced as explicit, approval-gated browser-flow prompts in those surfaces. Concurrent form requests are queued and stale responses cannot resolve another request.
 
 ### find_mcp_tools
 
@@ -1299,7 +1301,7 @@ Response details:
 
 Call a tool on a connected MCP server after discovering it with `find_mcp_tools`.
 
-This uses the same approval policy as directly exposed MCP tools, including session/project/global tool or server approvals.
+This uses the same approval policy as directly exposed MCP tools, including session/project/global tool or server approvals. The response preserves MCP `structuredContent` in canonical result data, exposes it to the model when no equivalent text block exists, retains protocol metadata, and marks server-declared `isError` results as tool failures without discarding their corrective content.
 
 | Parameter | Type   | Description                                      |
 | --------- | ------ | ------------------------------------------------ |

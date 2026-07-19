@@ -56,6 +56,29 @@ describe("ProjectMcpHubRegistry", () => {
     );
   });
 
+  it("configures replacement hubs before loading and connecting", async () => {
+    const project = scope("project-a", "/workspace/a");
+    const order: string[] = [];
+    const registry = new ProjectMcpHubRegistry<FakeHub>({
+      createHub: (projectScope, generation) => {
+        const hub = new FakeHub(projectScope.projectId, generation);
+        hub.connect.mockImplementation(async () => {
+          order.push("connect");
+        });
+        return hub;
+      },
+      configureHub: () => order.push("configure"),
+      loadConfigs: async () => {
+        order.push("load");
+        return [];
+      },
+    });
+
+    await registry.reload(project);
+
+    expect(order).toEqual(["configure", "load", "connect"]);
+  });
+
   it("provides a project-isolated empty generation before async loading completes", async () => {
     const project = scope("project-a", "/workspace/a");
     const hubs: FakeHub[] = [];

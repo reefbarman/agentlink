@@ -155,6 +155,16 @@ function makeChatViewProviderStub() {
     submitBrowserApprovalDecision: vi.fn(() => true),
     submitBrowserQuestionResponse: vi.fn(() => true),
     publishBrowserQuestionProgress: vi.fn(() => true),
+    submitBrowserFormElicitation: vi.fn<
+      () =>
+        | { ok: true }
+        | { ok: false; reason: "stale_request" }
+        | {
+            ok: false;
+            reason: "invalid_values";
+            errors: Record<string, string>;
+          }
+    >(() => ({ ok: true })),
     submitBrowserUrlElicitation: vi.fn(() => true),
     submitBrowserSend: vi.fn<() => Promise<{ ok: boolean; queued?: boolean }>>(
       async () => ({ ok: true }),
@@ -1210,6 +1220,7 @@ describe("BrowserGatewayServer", () => {
           ],
         },
         questionProgress: null,
+        formElicitation: null,
         urlElicitation: null,
         recentEvents: [
           {
@@ -1493,6 +1504,117 @@ describe("BrowserGatewayServer", () => {
         },
       },
     );
+
+    const unauthorizedFormElicitation = await fetch(
+      `${baseUrl}/api/form-elicitation`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: "form-1",
+          action: "accept",
+          values: { project: "agentlink" },
+        }),
+      },
+    );
+    expect(unauthorizedFormElicitation.status).toBe(401);
+
+    const authorizedFormElicitation = await fetch(
+      `${baseUrl}/api/form-elicitation`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({
+          id: "form-1",
+          action: "accept",
+          values: {
+            project: "agentlink",
+            retries: 2,
+            enabled: true,
+            regions: ["us", "eu"],
+          },
+        }),
+      },
+    );
+    expect(authorizedFormElicitation.status).toBe(200);
+    expect(await authorizedFormElicitation.json()).toEqual({ ok: true });
+    expect(chatViewProvider.submitBrowserFormElicitation).toHaveBeenCalledWith({
+      id: "form-1",
+      action: "accept",
+      values: {
+        project: "agentlink",
+        retries: 2,
+        enabled: true,
+        regions: ["us", "eu"],
+      },
+    });
+
+    const invalidFormElicitation = await fetch(
+      `${baseUrl}/api/form-elicitation`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({
+          id: "form-1",
+          action: "accept",
+          values: { nested: { rejected: true } },
+        }),
+      },
+    );
+    expect(invalidFormElicitation.status).toBe(400);
+
+    chatViewProvider.submitBrowserFormElicitation.mockReturnValueOnce({
+      ok: false as const,
+      reason: "invalid_values" as const,
+      errors: { project: "Select a project." },
+    });
+    const invalidFormValues = await fetch(`${baseUrl}/api/form-elicitation`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({
+        id: "form-1",
+        action: "accept",
+        values: { project: "" },
+      }),
+    });
+    expect(invalidFormValues.status).toBe(400);
+    expect(await invalidFormValues.json()).toEqual({
+      ok: false,
+      errors: { project: "Select a project." },
+    });
+
+    chatViewProvider.submitBrowserFormElicitation.mockReturnValueOnce({
+      ok: false as const,
+      reason: "stale_request" as const,
+    });
+    const staleFormElicitation = await fetch(
+      `${baseUrl}/api/form-elicitation`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({ id: "stale-form", action: "cancel" }),
+      },
+    );
+    expect(staleFormElicitation.status).toBe(404);
+    expect(await staleFormElicitation.json()).toEqual({ ok: false });
+    expect(
+      chatViewProvider.submitBrowserFormElicitation,
+    ).toHaveBeenLastCalledWith({
+      id: "stale-form",
+      action: "cancel",
+    });
 
     const authorizedUrlElicitation = await fetch(
       `${baseUrl}/api/url-elicitation`,

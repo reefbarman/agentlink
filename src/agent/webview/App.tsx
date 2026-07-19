@@ -57,6 +57,10 @@ import {
 } from "./components/InputArea";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
+import type {
+  McpElicitationValues,
+  McpFormElicitationRequest,
+} from "../../shared/mcpElicitation";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
 import { MessageQueuePanel } from "./components/MessageQueuePanel";
 import { ProviderUsagePanel } from "./components/ProviderUsageBlock";
@@ -289,24 +293,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const [mcpManagerView, setMcpManagerView] = useState<
     "status" | "config" | "add" | "edit"
   >("status");
-  const [elicitation, setElicitation] = useState<{
-    id: string;
-    serverName: string;
-    message: string;
-    fields: Record<
-      string,
-      {
-        type: "string" | "number" | "boolean";
-        title?: string;
-        description?: string;
-        enum?: string[];
-        default?: unknown;
-        minimum?: number;
-        maximum?: number;
-      }
-    >;
-    required: string[];
-  } | null>(null);
+  const [elicitation, setElicitation] =
+    useState<McpFormElicitationRequest | null>(null);
   const [urlElicitation, setUrlElicitation] =
     useState<McpUrlElicitationRequest | null>(null);
   const [sessionHistory, setSessionHistory] = useState<SessionSummary[]>([]);
@@ -672,14 +660,13 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           // new session is being created; the next stateUpdate will set the new sessionId)
           vscodeApi.postMessage({ command: "agentNewSession", mode: msg.mode });
           break;
-        case "agentElicitationRequest":
-          setElicitation({
-            id: msg.id,
-            serverName: msg.serverName,
-            message: msg.message,
-            fields: msg.fields,
-            required: msg.required,
-          });
+        case "agentFormElicitationRequest":
+          setElicitation(msg.request);
+          break;
+        case "agentFormElicitationCleared":
+          setElicitation((current) =>
+            current?.id === msg.id ? null : current,
+          );
           break;
         case "agentUrlElicitationRequest":
           setUrlElicitation(msg.request);
@@ -1998,13 +1985,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   );
 
   const handleElicitSubmit = useCallback(
-    (id: string, values: Record<string, unknown>) => {
-      setElicitation(null);
+    (id: string, values: McpElicitationValues) => {
       vscodeApi.postMessage({
-        command: "agentElicitationResponse",
+        command: "agentFormElicitationResponse",
         id,
+        action: "accept",
         values,
-        cancelled: false,
       });
     },
     [vscodeApi],
@@ -2012,12 +1998,10 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
 
   const handleElicitCancel = useCallback(
     (id: string) => {
-      setElicitation(null);
       vscodeApi.postMessage({
-        command: "agentElicitationResponse",
+        command: "agentFormElicitationResponse",
         id,
-        values: {},
-        cancelled: true,
+        action: "cancel",
       });
     },
     [vscodeApi],
@@ -2436,11 +2420,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     <>
       {elicitation && (
         <ElicitationModal
-          id={elicitation.id}
-          serverName={elicitation.serverName}
-          message={elicitation.message}
-          fields={elicitation.fields}
-          required={elicitation.required}
+          key={elicitation.id}
+          request={elicitation}
           onSubmit={handleElicitSubmit}
           onCancel={handleElicitCancel}
         />

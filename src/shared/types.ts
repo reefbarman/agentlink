@@ -67,6 +67,42 @@ export interface McpApprovalPromotionMeta {
   scopes: Array<"session" | "project" | "global">;
 }
 
+export interface McpContentAnnotations {
+  audience?: Array<"user" | "assistant">;
+  priority?: number;
+  lastModified?: string;
+}
+
+export interface McpResultContentMeta {
+  type: string;
+  annotations?: McpContentAnnotations;
+  meta?: Record<string, unknown>;
+  resourceLink?: {
+    uri: string;
+    name: string;
+    title?: string;
+    description?: string;
+    mimeType?: string;
+    size?: number;
+    icons?: Array<{
+      src: string;
+      mimeType?: string;
+      sizes?: string[];
+      theme?: "light" | "dark";
+    }>;
+  };
+  resource?: {
+    uri: string;
+    mimeType?: string;
+    meta?: Record<string, unknown>;
+  };
+}
+
+export interface McpToolResultMeta {
+  resultMeta?: Record<string, unknown>;
+  content: McpResultContentMeta[];
+}
+
 export type ToolResult = {
   data?: unknown;
   content: Array<
@@ -79,6 +115,7 @@ export type ToolResult = {
     kind: string;
     message: string;
   };
+  mcpMeta?: McpToolResultMeta;
   uiMeta?: {
     mcpApprovalPromotion?: McpApprovalPromotionMeta;
     composeTrace?: import("./composeTypes.js").ComposeTrace;

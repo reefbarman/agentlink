@@ -11,6 +11,14 @@ import type {
   WebviewModelInfo,
 } from "../../agent/webview/types";
 
+import {
+  createMcpElicitationInitialValues,
+  validateAndCoerceMcpElicitationValues,
+  type McpElicitationFieldErrors,
+  type McpElicitationValues,
+  type McpFormElicitationRequest,
+  type McpFormElicitationResponse,
+} from "../../shared/mcpElicitation";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
 import type {
   McpConfigBatchMutation,
@@ -84,6 +92,7 @@ import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBa
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
+import { McpElicitationFormControls } from "../../shared/ui/McpElicitationFormControls";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
 
 import type {
@@ -308,6 +317,7 @@ type GatewaySnapshot = {
       notes: Record<string, string>;
       origin: string;
     } | null;
+    formElicitation: McpFormElicitationRequest | null;
     urlElicitation: McpUrlElicitationRequest | null;
     recentEvents: Array<{ type: string }>;
     memoryCandidateNudge?: AskAgentMemoryCandidateNudge | null;
@@ -470,6 +480,103 @@ function buildAskAgentStatusNotice(params: {
   }
 
   return null;
+}
+
+function FormElicitationPanel({
+  request,
+  onRespond,
+}: {
+  request: McpFormElicitationRequest;
+  onRespond: (response: McpFormElicitationResponse) => Promise<{
+    ok: boolean;
+    errors?: McpElicitationFieldErrors;
+    error?: string;
+  }>;
+}) {
+  const [values, setValues] = useState<McpElicitationValues>(() =>
+    createMcpElicitationInitialValues(request.fields),
+  );
+  const [errors, setErrors] = useState<McpElicitationFieldErrors>({});
+  const [submitError, setSubmitError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const respond = async (response: McpFormElicitationResponse) => {
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      const result = await onRespond(response);
+      if (!result.ok) {
+        setErrors(result.errors ?? {});
+        setSubmitError(result.error ?? "The response could not be submitted.");
+      }
+    } catch {
+      setSubmitError("The response could not be submitted.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const accept = () => {
+    const validation = validateAndCoerceMcpElicitationValues(
+      request.fields,
+      values,
+    );
+    if (!validation.ok) {
+      setErrors(validation.errors);
+      setSubmitError("Check the highlighted fields and try again.");
+      return;
+    }
+    setErrors({});
+    void respond({
+      id: request.id,
+      action: "accept",
+      values: validation.values,
+    });
+  };
+
+  return (
+    <div class="approval-panel-embed mcp-elicitation-panel">
+      <div class="url-elicitation-header">
+        <i class="codicon codicon-list-selection" />
+        <span>MCP input requested by {request.serverName}</span>
+      </div>
+      <p>{request.message}</p>
+      <McpElicitationFormControls
+        fields={request.fields}
+        values={values}
+        errors={errors}
+        disabled={submitting}
+        idPrefix={`browser-mcp-elicitation-${request.id}`}
+        onChange={(name, value) => {
+          setValues((current) => ({ ...current, [name]: value }));
+          setErrors((current) => {
+            if (!current[name]) return current;
+            const next = { ...current };
+            delete next[name];
+            return next;
+          });
+          setSubmitError("");
+        }}
+      />
+      {submitError && (
+        <p class="mcp-elicitation-error" role="alert">
+          {submitError}
+        </p>
+      )}
+      <div class="url-elicitation-actions">
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={() => void respond({ id: request.id, action: "cancel" })}
+        >
+          Cancel
+        </button>
+        <button type="button" disabled={submitting} onClick={accept}>
+          {submitting ? "Submitting…" : "Submit"}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function UrlElicitationPanel({
@@ -1237,6 +1344,7 @@ export function BrowserGatewayApp({
   const pendingApproval = snapshot?.ui.approval ?? null;
   const pendingQuestion =
     foreground?.questionRequest ?? snapshot?.ui.question ?? null;
+  const pendingFormElicitation = snapshot?.ui.formElicitation ?? null;
   const pendingUrlElicitation = snapshot?.ui.urlElicitation ?? null;
   const visibleApproval =
     pendingApproval && pendingApproval.id !== localDismissedApprovalId
@@ -1270,6 +1378,7 @@ export function BrowserGatewayApp({
   const awaitingUserInput = Boolean(
     visibleApproval ||
     visibleQuestion ||
+    pendingFormElicitation ||
     pendingUrlElicitation ||
     foreground?.status === "awaiting_approval" ||
     instanceOptions.some(
@@ -1429,15 +1538,19 @@ export function BrowserGatewayApp({
     if (
       pendingApproval ||
       pendingQuestion ||
+      pendingFormElicitation ||
+      pendingUrlElicitation ||
       foreground?.status === "awaiting_approval"
     ) {
       return {
         kind: "awaiting_approval",
-        label: pendingUrlElicitation
-          ? "MCP URL"
-          : pendingQuestion
-            ? "Question"
-            : "Approval",
+        label: pendingFormElicitation
+          ? "MCP Form"
+          : pendingUrlElicitation
+            ? "MCP URL"
+            : pendingQuestion
+              ? "Question"
+              : "Approval",
         detail: foreground?.statusOverride ?? "Awaiting response",
         sessionTitle: foreground?.title,
       };
@@ -5069,6 +5182,50 @@ export function BrowserGatewayApp({
                 {!mobileReviewOpen && (foreground?.todos?.length ?? 0) > 0 && (
                   <TodoPanel todos={foreground?.todos ?? []} />
                 )}
+                {!isAskAgentSelected &&
+                  pendingFormElicitation &&
+                  !mobileReviewOpen &&
+                  (() => {
+                    const originTabId = snapshotOriginRef.current.tabId;
+                    return (
+                      <FormElicitationPanel
+                        key={`${originTabId}:${pendingFormElicitation.id}`}
+                        request={pendingFormElicitation}
+                        onRespond={async (response) => {
+                          const result = await fetch(
+                            buildApiPathForTab(
+                              "/api/form-elicitation",
+                              originTabId,
+                            ),
+                            {
+                              method: "POST",
+                              headers: {
+                                "Content-Type": "application/json",
+                                Authorization: `Bearer ${authToken}`,
+                              },
+                              body: JSON.stringify(response),
+                            },
+                          );
+                          const body = (await result
+                            .json()
+                            .catch(() => ({}))) as {
+                            ok?: boolean;
+                            errors?: McpElicitationFieldErrors;
+                          };
+                          if (result.ok && body.ok === true)
+                            return { ok: true };
+                          return {
+                            ok: false,
+                            errors: body.errors,
+                            error:
+                              result.status === 404
+                                ? "This request is no longer active."
+                                : "The response could not be submitted.",
+                          };
+                        }}
+                      />
+                    );
+                  })()}
                 {!isAskAgentSelected &&
                   pendingUrlElicitation &&
                   !mobileReviewOpen && (

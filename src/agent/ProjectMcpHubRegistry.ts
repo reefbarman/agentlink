@@ -178,6 +178,7 @@ export class ProjectMcpHubRegistry<
     this.assertScopeMatchesEntry(scope, entry);
     const generation = entry.nextGeneration++;
     const hub = this.createHub(scope, generation);
+    this.options.configureHub?.(hub, scope, generation);
 
     try {
       const configs = await this.loadConfigs(scope);
@@ -204,7 +205,6 @@ export class ProjectMcpHubRegistry<
     };
     const previous = entry.current;
     entry.current = next;
-    this.options.configureHub?.(hub, scope, generation);
     if (previous) {
       previous.retired = true;
       void this.disconnectWhenDrained(scope.projectId, previous);

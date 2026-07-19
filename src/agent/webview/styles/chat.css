@@ -5448,52 +5448,71 @@ body.chat-activity-shelf-resizing * {
   line-height: 1.4;
 }
 
-.elicit-fields {
+.mcp-elicitation-fields {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.elicit-field {
+.mcp-elicitation-field {
   display: flex;
   flex-direction: column;
   gap: 3px;
 }
 
-.elicit-label {
+.elicit-label,
+.mcp-elicitation-label {
   font-size: 12px;
   font-weight: 600;
 }
 
-.elicit-required {
+.mcp-elicitation-required {
   color: var(--vscode-errorForeground);
   margin-left: 2px;
 }
 
-.elicit-field-desc {
+.mcp-elicitation-description,
+.mcp-elicitation-error {
   margin: 0;
   font-size: 11px;
+}
+
+.mcp-elicitation-description {
   color: var(--vscode-descriptionForeground);
 }
 
-.elicit-input,
-.elicit-select {
+.mcp-elicitation-error {
+  color: var(--vscode-errorForeground);
+}
+
+.mcp-elicitation-input,
+.mcp-elicitation-select {
   background: var(--vscode-input-background);
   border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
   border-radius: 4px;
   color: var(--vscode-input-foreground);
   font-family: var(--vscode-font-family);
   font-size: 12px;
+  min-width: 0;
   padding: 4px 8px;
   outline: none;
 }
 
-.elicit-input:focus,
-.elicit-select:focus {
+.mcp-elicitation-select[multiple] {
+  padding: 3px;
+}
+
+.mcp-elicitation-input:focus,
+.mcp-elicitation-select:focus {
   border-color: var(--vscode-focusBorder);
 }
 
-.elicit-checkbox {
+.mcp-elicitation-input[aria-invalid="true"],
+.mcp-elicitation-select[aria-invalid="true"] {
+  border-color: var(--vscode-inputValidation-errorBorder, #f14c4c);
+}
+
+.mcp-elicitation-checkbox {
   width: 16px;
   height: 16px;
   margin: 0;

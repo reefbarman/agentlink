@@ -159,6 +159,100 @@ describe("McpClientHub lifecycle", () => {
   });
 });
 
+describe("McpClientHub form elicitation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.requestHandlers = [];
+    mocks.notificationHandler = undefined;
+  });
+
+  it("normalizes complete form schemas and returns accepted values", async () => {
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([stdioConfig]);
+    const projected = vi.fn();
+    hub.onElicitation = (request, resolve) => {
+      projected(request);
+      resolve({ count: 2, roles: ["dev"] });
+    };
+
+    const result = await mocks.requestHandlers[0]?.({
+      params: {
+        mode: "form",
+        message: "Configure access",
+        requestedSchema: {
+          type: "object",
+          properties: {
+            count: {
+              type: "integer",
+              minimum: 1,
+              maximum: 3,
+              default: 2,
+            },
+            roles: {
+              type: "array",
+              items: {
+                anyOf: [
+                  { const: "dev", title: "Developer" },
+                  { const: "ops", title: "Operations" },
+                ],
+              },
+              minItems: 1,
+            },
+          },
+          required: ["count", "roles"],
+        },
+      },
+    });
+
+    expect(projected).toHaveBeenCalledWith({
+      serverName: stdioConfig.name,
+      message: "Configure access",
+      fields: [
+        expect.objectContaining({
+          kind: "integer",
+          name: "count",
+          required: true,
+          default: 2,
+        }),
+        expect.objectContaining({
+          kind: "multi-select",
+          name: "roles",
+          required: true,
+          options: [
+            { value: "dev", title: "Developer" },
+            { value: "ops", title: "Operations" },
+          ],
+        }),
+      ],
+    });
+    expect(result).toEqual({
+      action: "accept",
+      content: { count: 2, roles: ["dev"] },
+    });
+  });
+
+  it("declines malformed form schemas without projecting them", async () => {
+    const hub = new McpClientHub(new FakeMemento());
+    const onElicitation = vi.fn();
+    hub.onElicitation = onElicitation;
+    await hub.connect([stdioConfig]);
+
+    const result = await mocks.requestHandlers[0]?.({
+      params: {
+        mode: "form",
+        message: "Unsupported",
+        requestedSchema: {
+          type: "object",
+          properties: { nested: { type: "object" } },
+        },
+      },
+    });
+
+    expect(result).toEqual({ action: "decline" });
+    expect(onElicitation).not.toHaveBeenCalled();
+  });
+});
+
 describe("McpClientHub URL elicitation", () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -3,6 +3,10 @@ import type * as vscode from "vscode";
 
 import { isCoreReasoningEffort } from "../core/modelCatalog.js";
 import type {
+  McpFormElicitationResponse,
+  McpElicitationValues,
+} from "../shared/mcpElicitation.js";
+import type {
   McpConfigBatchMutation,
   McpManagerProfile,
   McpManagerScope,
@@ -371,6 +375,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
         rawExact("/api/question"),
         ({ req, res }) => this.handleQuestionAction(req, res),
         json("question action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/form-elicitation"),
+        ({ req, res }) => this.handleFormElicitationAction(req, res),
+        json("form elicitation action failed"),
       ),
       route(
         "POST",
@@ -849,6 +859,50 @@ export class BrowserGatewayServer implements vscode.Disposable {
       attachments: body.attachments,
     });
     this.writeJson(res, ok ? 200 : 404, { ok });
+  }
+
+  private async handleFormElicitationAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as {
+      id?: unknown;
+      action?: unknown;
+      values?: unknown;
+    };
+    if (
+      typeof body?.id !== "string" ||
+      !body.id.trim() ||
+      (body.action !== "accept" && body.action !== "cancel") ||
+      (body.action === "accept" && !isMcpElicitationValues(body.values))
+    ) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+
+    const response: McpFormElicitationResponse =
+      body.action === "accept"
+        ? {
+            id: body.id,
+            action: "accept",
+            values: body.values as McpElicitationValues,
+          }
+        : { id: body.id, action: "cancel" };
+    const result = this.chatViewProvider.submitBrowserFormElicitation(response);
+    if (result.ok) {
+      this.writeJson(res, 200, { ok: true });
+      return;
+    }
+    if (result.reason === "invalid_values") {
+      this.writeJson(res, 400, { ok: false, errors: result.errors });
+      return;
+    }
+    this.writeJson(res, 404, { ok: false });
   }
 
   private async handleUrlElicitationAction(
@@ -2174,4 +2228,15 @@ export class BrowserGatewayServer implements vscode.Disposable {
     });
     res.end(JSON.stringify(body));
   }
+}
+
+function isMcpElicitationValues(value: unknown): value is McpElicitationValues {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value).every(
+    (entry) =>
+      typeof entry === "string" ||
+      typeof entry === "boolean" ||
+      (typeof entry === "number" && Number.isFinite(entry)) ||
+      (Array.isArray(entry) && entry.every((item) => typeof item === "string")),
+  );
 }

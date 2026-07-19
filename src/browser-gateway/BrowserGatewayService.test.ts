@@ -210,6 +210,42 @@ describe("BrowserGatewayService", () => {
     hub.dispose();
   });
 
+  it("projects form elicitation request and clear events into browser state", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const service = makeService(hub);
+    const request = {
+      id: "form-1",
+      serverName: "linear",
+      message: "Choose a project",
+      fields: [
+        {
+          name: "project",
+          title: "Project",
+          required: true,
+          kind: "single-select" as const,
+          options: [{ value: "agentlink", title: "AgentLink" }],
+        },
+      ],
+    };
+
+    hub.publishFormElicitationRequest(request);
+
+    expect(service.getSerializableState().formElicitation).toEqual(request);
+    expect(service.getInstanceStatusSummary()).toMatchObject({
+      kind: "awaiting_approval",
+      label: "MCP Form",
+    });
+
+    hub.publishFormElicitationCleared("another-form");
+    expect(service.getSerializableState().formElicitation?.id).toBe("form-1");
+
+    hub.publishFormElicitationCleared("form-1");
+    expect(service.getSerializableState().formElicitation).toBeNull();
+
+    service.dispose();
+    hub.dispose();
+  });
+
   it("publishes monotonic snapshots with their prebuilt wire payload", () => {
     const hub = new InMemoryAgentUiEventHub();
     const service = makeService(hub);
@@ -1694,6 +1730,12 @@ describe("BrowserGatewayService", () => {
             notes: {},
             origin: "test",
           });
+          hub.publishFormElicitationRequest({
+            id: "matrix-form",
+            serverName: "matrix",
+            message: "Provide input",
+            fields: [],
+          });
           hub.publishUrlElicitationRequest({
             id: "matrix-url",
             serverName: "matrix",
@@ -1709,11 +1751,12 @@ describe("BrowserGatewayService", () => {
           expect(snapshot.ui).toMatchObject({
             approval: { id: "matrix-approval" },
             questionProgress: { id: "matrix-question", step: 1 },
+            formElicitation: { id: "matrix-form" },
             urlElicitation: { id: "matrix-url" },
           });
           expect(snapshot.ui.recentEvents).not.toHaveLength(0);
         },
-        { coalesced: false, count: 4 },
+        { coalesced: false, count: 5 },
       );
 
       expectPublication(
