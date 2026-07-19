@@ -54,6 +54,13 @@ import { randomId } from "../../../shared/randomId";
 import { useEmojiPopup } from "./useEmojiPopup";
 import { useFileMentionPopup } from "./useFileMentionPopup";
 
+export interface ComposerMedia {
+  name: string;
+  mimeType: string;
+  base64: string;
+  kind: "image" | "document";
+}
+
 /** A pasted or dropped file held in webview state before sending. */
 export interface MediaAttachment {
   id: string;
@@ -138,18 +145,24 @@ function getDocumentMimeType(file: File): string | null {
   return ext ? (DOCUMENT_EXTENSION_MIME_TYPES[ext] ?? null) : null;
 }
 
-type ComposerSubmitHandler = (
+export type ComposerSubmitHandler = (
   text: string,
   attachments: string[],
   displayText?: string,
   slashCommandLabel?: string,
-  media?: Array<{
-    name: string;
-    mimeType: string;
-    base64: string;
-    kind: "image" | "document";
-  }>,
+  media?: ComposerMedia[],
 ) => void;
+
+export interface ComposerContextMode {
+  key: string;
+  title: string;
+  placeholder: string;
+  initialText: string;
+  initialAttachments?: string[];
+  initialMedia?: ComposerMedia[];
+  onSubmit: ComposerSubmitHandler;
+  onCancel: () => void;
+}
 
 interface InputAreaProps {
   onSend: ComposerSubmitHandler;
@@ -193,6 +206,7 @@ interface InputAreaProps {
   disabled?: boolean;
   disabledReason?: string;
   submitOnEnter?: boolean;
+  contextMode?: ComposerContextMode | null;
   onComposerEvent?: (
     event: string,
     fields?: Record<string, string | number | boolean | null | undefined>,
@@ -238,6 +252,7 @@ export function InputArea({
   disabled = false,
   disabledReason,
   submitOnEnter = true,
+  contextMode = null,
   onComposerEvent,
 }: InputAreaProps) {
   const [text, setText] = useState("");
@@ -247,6 +262,12 @@ export function InputArea({
   );
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputWrapperRef = useRef<HTMLDivElement>(null);
+  const normalDraftRef = useRef<{
+    text: string;
+    attachments: string[];
+    mediaAttachments: MediaAttachment[];
+  } | null>(null);
+  const activeContextKeyRef = useRef<string | null>(null);
   const {
     open: emojiOpen,
     query: emojiQuery,
@@ -307,8 +328,9 @@ export function InputArea({
   );
 
   const matchedSlashCommand = useMemo(
-    () => parseMatchedSlashCommand(text, displaySlashCommands),
-    [text, displaySlashCommands],
+    () =>
+      contextMode ? null : parseMatchedSlashCommand(text, displaySlashCommands),
+    [text, displaySlashCommands, contextMode],
   );
   const pendingMedia = useMemo(() => {
     if (mediaAttachments.length === 0) return undefined;
@@ -371,6 +393,47 @@ export function InputArea({
     inputWrapperRef,
   });
 
+  useEffect(() => {
+    const nextKey = contextMode?.key ?? null;
+    if (nextKey === activeContextKeyRef.current) return;
+
+    if (nextKey) {
+      if (activeContextKeyRef.current === null) {
+        normalDraftRef.current = {
+          text,
+          attachments,
+          mediaAttachments,
+        };
+      }
+      setText(contextMode?.initialText ?? "");
+      setAttachments(contextMode?.initialAttachments ?? []);
+      setMediaAttachments(
+        (contextMode?.initialMedia ?? []).map((media) => ({
+          id: randomId(),
+          name: media.name,
+          mimeType: media.mimeType,
+          dataUrl: `data:${media.mimeType};base64,${media.base64}`,
+          kind: media.kind,
+        })),
+      );
+      closeSlash();
+      closePicker();
+      closeEmoji();
+      requestAnimationFrame(() => {
+        focusAndAutosizeTextarea(textareaRef.current);
+      });
+    } else {
+      const normalDraft = normalDraftRef.current;
+      if (normalDraft) {
+        setText(normalDraft.text);
+        setAttachments(normalDraft.attachments);
+        setMediaAttachments(normalDraft.mediaAttachments);
+      }
+      normalDraftRef.current = null;
+    }
+    activeContextKeyRef.current = nextKey;
+  }, [contextMode?.key]);
+
   const handleSubmit = useCallback(
     (asInterjection = false) => {
       const trimmed = text.trim();
@@ -394,10 +457,13 @@ export function InputArea({
 
       const submitAttachments = allowAttachments ? attachments : [];
       const submitMedia = allowMediaPaste ? pendingMedia : undefined;
-      const submitMessage =
-        asInterjection && onInterject ? onInterject : onSend;
+      const submitMessage = contextMode
+        ? contextMode.onSubmit
+        : asInterjection && onInterject
+          ? onInterject
+          : onSend;
 
-      if (matchedExecutableSlashCommand) {
+      if (!contextMode && matchedExecutableSlashCommand) {
         setText("");
         setAttachments([]);
         setMediaAttachments([]);
@@ -463,6 +529,7 @@ export function InputArea({
       onComposerEvent,
       streaming,
       disabled,
+      contextMode,
     ],
   );
 
@@ -871,7 +938,9 @@ export function InputArea({
 
       updatePickerFromInput(value, cursor);
 
-      updateSlashFromInput(value, cursor);
+      if (!contextMode) {
+        updateSlashFromInput(value, cursor);
+      }
 
       updateEmojiFromInput(value, cursor);
 
@@ -890,6 +959,7 @@ export function InputArea({
         }
         // Check if user just typed / at start or after whitespace
         if (
+          !contextMode &&
           value[cursor - 1] === "/" &&
           shouldOpenSlashPopup(value, cursor - 1)
         ) {
@@ -921,6 +991,7 @@ export function InputArea({
       trackEmojiAt,
       vscodeApi,
       allowFileMentions,
+      contextMode,
     ],
   );
 
@@ -1154,14 +1225,20 @@ export function InputArea({
   return (
     <div class="input-area">
       <div class="input-toolbar">
-        {modes.length > 0 && onSwitchMode && (
+        {contextMode && (
+          <div class="composer-context-mode" role="status">
+            <i class="codicon codicon-comment-discussion" aria-hidden="true" />
+            <span>{contextMode.title}</span>
+          </div>
+        )}
+        {!contextMode && modes.length > 0 && onSwitchMode && (
           <ModeSelector
             currentMode={currentMode}
             modes={modes}
             onSelect={onSwitchMode}
           />
         )}
-        {availableModels.length > 0 && onSelectModel && (
+        {!contextMode && availableModels.length > 0 && onSelectModel && (
           <ModelSelector
             currentModel={currentModel}
             currentCondenseThreshold={currentCondenseThreshold}
@@ -1171,7 +1248,7 @@ export function InputArea({
             onSignIn={onSignIn}
           />
         )}
-        {allowThinkingToggle && (
+        {!contextMode && allowThinkingToggle && (
           <ReasoningEffortSelector
             current={reasoningEffort}
             currentModel={currentModel}
@@ -1179,13 +1256,13 @@ export function InputArea({
             onSelect={onSetReasoningEffort}
           />
         )}
-        {onSetAgentWriteApproval && (
+        {!contextMode && onSetAgentWriteApproval && (
           <WriteApprovalSelector
             current={agentWriteApproval}
             onSelect={onSetAgentWriteApproval}
           />
         )}
-        {onSetCommandApprovalPolicy && (
+        {!contextMode && onSetCommandApprovalPolicy && (
           <ToolbarControlButton
             active={commandApprovalPolicy === "approve-for-me"}
             aria-pressed={commandApprovalPolicy === "approve-for-me"}
@@ -1212,7 +1289,7 @@ export function InputArea({
             </span>
           </ToolbarControlButton>
         )}
-        {onToggleAutoContinue && (
+        {!contextMode && onToggleAutoContinue && (
           <ToolbarControlButton
             active={autoContinueEnabled}
             aria-pressed={autoContinueEnabled}
@@ -1240,13 +1317,23 @@ export function InputArea({
             }
             title="Attach file"
             type="button"
-            disabled={streaming || disabled}
+            disabled={(!contextMode && streaming) || disabled}
           >
             <i class="codicon codicon-attach" />
           </button>
         )}
         <div class="input-toolbar-spacer" />
-        {allowExportTranscript && hasMessages && (
+        {contextMode && (
+          <button
+            class="composer-context-cancel"
+            onClick={contextMode.onCancel}
+            title="Cancel other context"
+            type="button"
+          >
+            Cancel
+          </button>
+        )}
+        {!contextMode && allowExportTranscript && hasMessages && (
           <button
             class="icon-button"
             onClick={onExportTranscript}
@@ -1390,9 +1477,11 @@ export function InputArea({
           placeholder={
             disabled
               ? (disabledReason ?? "Local execution unavailable")
-              : allowFileMentions && allowAttachments
-                ? "Message... (/ for commands, @ to attach files, : for emoji)"
-                : "Message... (/ for commands, : for emoji)"
+              : contextMode
+                ? contextMode.placeholder
+                : allowFileMentions && allowAttachments
+                  ? "Message... (/ for commands, @ to attach files, : for emoji)"
+                  : "Message... (/ for commands, : for emoji)"
           }
           disabled={disabled}
           onInput={handleInput}
@@ -1404,7 +1493,7 @@ export function InputArea({
           onDrop={handleDrop}
         />
         <div class="composer-action-buttons">
-          {streaming && (
+          {!contextMode && streaming && (
             <button
               class="send-button stop-button"
               onClick={onStop}
@@ -1414,7 +1503,8 @@ export function InputArea({
               <i class="codicon codicon-debug-stop" />
             </button>
           )}
-          {streaming &&
+          {!contextMode &&
+            streaming &&
             onInterject &&
             !matchedExecutableSlashCommand?.command.builtin &&
             hasSubmitContent && (
@@ -1434,7 +1524,7 @@ export function InputArea({
                 <i class="codicon codicon-reply" />
               </button>
             )}
-          {(!streaming || hasSubmitContent) && (
+          {(contextMode || !streaming || hasSubmitContent) && (
             <button
               class="send-button"
               onClick={() => {
@@ -1447,13 +1537,19 @@ export function InputArea({
               title={
                 disabled
                   ? (disabledReason ?? "Local execution unavailable")
-                  : submitOnEnter
-                    ? "Send message (Enter)"
-                    : "Send message"
+                  : contextMode
+                    ? submitOnEnter
+                      ? "Add context (Enter)"
+                      : "Add context"
+                    : submitOnEnter
+                      ? "Send message (Enter)"
+                      : "Send message"
               }
               type="button"
             >
-              <i class="codicon codicon-send" />
+              <i
+                class={`codicon ${contextMode ? "codicon-check" : "codicon-send"}`}
+              />
             </button>
           )}
         </div>

@@ -1192,6 +1192,70 @@ describe("ChatViewProvider session state sync", () => {
     );
   });
 
+  it("routes attachment context for restored ask_user questions through recovery", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = {
+      id: "session-1",
+      projectScope: { projectId: "project-1" },
+    };
+    const manager = {
+      getForegroundSession: vi.fn(() => session),
+      getPendingQuestionRecovery: vi.fn(() => ({
+        questionRequestId: "question-1",
+      })),
+      answerRecoveredQuestion: vi.fn(async () => true),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+
+    const accepted = await provider.submitBrowserQuestionResponse({
+      id: "question-1",
+      answers: {},
+      attachments: {
+        choice: [
+          {
+            kind: "image",
+            name: "screen.png",
+            mimeType: "image/png",
+            base64: "image-data",
+          },
+        ],
+      },
+    });
+
+    expect(accepted).toBe(true);
+    expect(manager.answerRecoveredQuestion).toHaveBeenCalledWith(
+      "session-1",
+      "question-1",
+      {
+        answers: {},
+        notes: {},
+        attachments: {
+          choice: [
+            {
+              kind: "image",
+              name: "screen.png",
+              mimeType: "image/png",
+              base64: "image-data",
+            },
+          ],
+        },
+      },
+      expect.objectContaining({ switchMode: expect.any(Function) }),
+    );
+  });
+
   it("uses async detect result for projected detected question in browser state", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 

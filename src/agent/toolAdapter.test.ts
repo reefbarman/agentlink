@@ -2649,6 +2649,101 @@ describe("dispatchToolCall", () => {
       });
     });
 
+    it("returns question-ordered attachment metadata and native media blocks", async () => {
+      const userQuestionProvider = {
+        ask: vi.fn().mockResolvedValue({
+          answers: { first: "A", second: "B" },
+          notes: { first: "See context" },
+          attachments: {
+            second: [
+              {
+                kind: "document",
+                name: "brief.pdf",
+                mimeType: "application/pdf",
+                base64: "pdf-data",
+              },
+            ],
+            first: [
+              {
+                kind: "file",
+                name: "config.ts",
+                path: "src/config.ts",
+              },
+              {
+                kind: "image",
+                name: "screen.png",
+                mimeType: "image/png",
+                base64: "image-data",
+              },
+            ],
+          },
+        }),
+      };
+
+      const result = await dispatchToolCall(
+        "ask_user",
+        {
+          context: "Need supporting context.",
+          questions: [
+            {
+              id: "first",
+              type: "multiple_choice",
+              question: "First?",
+              options: ["A", "B"],
+              recommended: "A",
+            },
+            {
+              id: "second",
+              type: "multiple_choice",
+              question: "Second?",
+              options: ["A", "B"],
+              recommended: "B",
+            },
+          ],
+        },
+        { ...mockCtx, userQuestionProvider },
+      );
+
+      expect(
+        JSON.parse(
+          result.content[0].type === "text" ? result.content[0].text : "",
+        ),
+      ).toEqual({
+        context: "Need supporting context.",
+        responses: [
+          {
+            question: "First?",
+            answer: "A",
+            note: "See context",
+            attachments: [
+              { kind: "file", name: "config.ts", path: "src/config.ts" },
+              { kind: "image", name: "screen.png", mimeType: "image/png" },
+            ],
+          },
+          {
+            question: "Second?",
+            answer: "B",
+            attachments: [
+              {
+                kind: "document",
+                name: "brief.pdf",
+                mimeType: "application/pdf",
+              },
+            ],
+          },
+        ],
+      });
+      expect(result.content.slice(1)).toEqual([
+        { type: "image", data: "image-data", mimeType: "image/png" },
+        {
+          type: "document",
+          data: "pdf-data",
+          mimeType: "application/pdf",
+          name: "brief.pdf",
+        },
+      ]);
+    });
+
     it("does not call userQuestionProvider when visible context validation fails", async () => {
       const userQuestionProvider = {
         ask: vi.fn(),

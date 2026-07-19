@@ -136,6 +136,7 @@ import {
   createWorkspaceProjectId,
   type SessionProjectScope,
 } from "../core/workspaceProjects.js";
+import { normalizeUserQuestionAttachments } from "../core/capabilities/sessionControl.js";
 
 type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
 type RawDisplayImage = { name: string; mimeType: string; base64: string };
@@ -298,6 +299,11 @@ export type ExtensionToWebview =
       toolName: string;
       result: string;
       resultImages?: Array<{ mimeType: string; data: string }>;
+      resultDocuments?: Array<{
+        name: string;
+        mimeType: string;
+        data: string;
+      }>;
       durationMs: number;
       input?: unknown;
       parentCallId?: string;
@@ -641,6 +647,11 @@ export type ExtensionToWebview =
       toolName: string;
       result: string;
       resultImages?: Array<{ mimeType: string; data: string }>;
+      resultDocuments?: Array<{
+        name: string;
+        mimeType: string;
+        data: string;
+      }>;
       durationMs: number;
       input?: unknown;
     }
@@ -1005,10 +1016,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private visibleApprovalId: string | null = null;
   private pendingQuestions = new Map<
     string,
-    (response: {
-      answers: Record<string, unknown>;
-      notes: Record<string, string>;
-    }) => void
+    (
+      response: import("../core/capabilities/sessionControl.js").UserQuestionResponse,
+    ) => void
   >();
   /** Tracks which pending-question IDs belong to each session, for scoped cancellation on stop */
   private questionSessionIndex = new Map<string, Set<string>>();
@@ -2486,6 +2496,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           answers:
             raw.answers as import("./toolAdapter.js").QuestionResponse["answers"],
           notes: (raw.notes as Record<string, string>) ?? {},
+          attachments: raw.attachments,
         });
       });
       const foregroundSession = this.sessionManager?.getForegroundSession();
@@ -2579,7 +2590,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     id: string;
     answers: Record<string, string | string[] | number | boolean | undefined>;
     notes?: Record<string, string>;
+    attachments?: import("../core/capabilities/sessionControl.js").UserQuestionResponse["attachments"];
   }): Promise<boolean> {
+    const normalizedAttachments = normalizeUserQuestionAttachments(
+      msg.attachments,
+    );
+    const attachments =
+      Object.keys(normalizedAttachments).length > 0
+        ? normalizedAttachments
+        : undefined;
     const resolve = this.pendingQuestions.get(msg.id);
     if (!resolve) {
       const foregroundSession = this.sessionManager?.getForegroundSession();
@@ -2594,6 +2613,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             {
               answers: msg.answers,
               notes: msg.notes ?? {},
+              attachments,
             },
             {
               switchMode: (request) =>
@@ -2615,6 +2635,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     resolve({
       answers: msg.answers,
       notes: msg.notes ?? {},
+      attachments,
     });
     this.applyProjectedAction({ type: "CLEAR_QUESTION" });
     this.uiPublisher.publishQuestionCleared(msg.id);
@@ -5407,6 +5428,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             string | string[] | number | boolean | undefined
           >,
           notes: (msg.notes as Record<string, string>) ?? {},
+          attachments:
+            msg.attachments as import("../core/capabilities/sessionControl.js").UserQuestionResponse["attachments"],
         });
         break;
       }
@@ -6330,6 +6353,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           toolName: extMsg.toolName,
           result: extMsg.result,
           resultImages: extMsg.resultImages,
+          resultDocuments: extMsg.resultDocuments,
           durationMs: extMsg.durationMs,
           input: extMsg.input,
           parentCallId: extMsg.parentCallId,
@@ -6817,16 +6841,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // so the webview sees the full input JSON before the result arrives.
         this.deltaBufferFlusher.flushNow();
         const resultText = event.result
-          .map((c) => (c.type === "text" ? c.text : `[${c.type}]`))
+          .map((content) =>
+            content.type === "text" ? content.text : `[${content.type}]`,
+          )
           .join("\n");
         const resultImages = event.result
           .filter(
-            (c): c is { type: "image"; data: string; mimeType: string } =>
-              c.type === "image" &&
-              typeof c.data === "string" &&
-              typeof c.mimeType === "string",
+            (
+              content,
+            ): content is Extract<
+              ToolResult["content"][number],
+              { type: "image" }
+            > => content.type === "image",
           )
           .map((image) => ({ mimeType: image.mimeType, data: image.data }));
+        const resultDocuments = event.result
+          .filter(
+            (
+              content,
+            ): content is Extract<
+              ToolResult["content"][number],
+              { type: "document" }
+            > => content.type === "document",
+          )
+          .map((document) => ({
+            name: document.name,
+            mimeType: document.mimeType,
+            data: document.data,
+          }));
         this.log(
           `[agent] tool_result tool=${event.toolName} id=${event.toolCallId} duration=${event.durationMs}ms`,
         );
@@ -6837,6 +6879,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           toolName: event.toolName,
           result: resultText,
           ...(resultImages.length ? { resultImages } : {}),
+          ...(resultDocuments.length ? { resultDocuments } : {}),
           durationMs: event.durationMs,
           input: event.input,
           parentCallId: event.parentCallId,

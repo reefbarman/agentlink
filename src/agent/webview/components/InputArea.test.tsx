@@ -352,4 +352,95 @@ describe("InputArea slash popup", () => {
       expect(container.querySelector(".image-attachment-chip")).toBeTruthy();
     });
   });
+
+  it("routes scoped context through its callback and restores the normal draft", async () => {
+    const onSend = vi.fn();
+    const onContextSubmit = vi.fn();
+    const onCancel = vi.fn();
+    const { container, getByRole, rerender } = renderInputArea([], { onSend });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    input.value = "Unsent normal draft";
+    fireEvent.input(input);
+
+    rerender(
+      <InputArea
+        onSend={onSend}
+        onStop={vi.fn()}
+        streaming={true}
+        reasoningEffort="none"
+        onSetReasoningEffort={vi.fn()}
+        onExportTranscript={vi.fn()}
+        hasMessages={false}
+        vscodeApi={{ postMessage: vi.fn() }}
+        injection={null}
+        onInjectionConsumed={vi.fn()}
+        slashCommands={[]}
+        contextMode={{
+          key: "question-1:choice",
+          title: "Adding context to agent question",
+          placeholder: "Add details or paste a screenshot…",
+          initialText: "/not-a-command",
+          onSubmit: onContextSubmit,
+          onCancel,
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(input.value).toBe("/not-a-command");
+    });
+    expect(
+      (getByRole("button", { name: "Attach file" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+
+    const image = new File(["image-bytes"], "context.png", {
+      type: "image/png",
+    });
+    fireEvent.paste(input, {
+      clipboardData: {
+        items: [],
+        files: [image],
+      },
+    });
+    await waitFor(() => {
+      expect(container.querySelector(".image-attachment-chip")).toBeTruthy();
+    });
+    fireEvent.click(getByRole("button", { name: "Add context (Enter)" }));
+
+    expect(onContextSubmit).toHaveBeenCalledWith(
+      "/not-a-command",
+      [],
+      undefined,
+      undefined,
+      [
+        {
+          name: "context.png",
+          mimeType: "image/png",
+          base64: "abc123",
+          kind: "image",
+        },
+      ],
+    );
+    expect(onSend).not.toHaveBeenCalled();
+
+    rerender(
+      <InputArea
+        onSend={onSend}
+        onStop={vi.fn()}
+        streaming={false}
+        reasoningEffort="none"
+        onSetReasoningEffort={vi.fn()}
+        onExportTranscript={vi.fn()}
+        hasMessages={false}
+        vscodeApi={{ postMessage: vi.fn() }}
+        injection={null}
+        onInjectionConsumed={vi.fn()}
+        slashCommands={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(input.value).toBe("Unsent normal draft");
+    });
+  });
 });

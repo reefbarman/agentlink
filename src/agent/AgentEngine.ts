@@ -572,8 +572,10 @@ function toolResultToContent(
 ): string | ContentBlock[] {
   const maxChars =
     TOOL_RESULT_CHAR_LIMITS[toolName] ?? DEFAULT_TOOL_RESULT_CHARS;
-  const hasImage = result.content.some((c) => c.type === "image");
-  if (!hasImage) {
+  const hasMedia = result.content.some(
+    (content) => content.type === "image" || content.type === "document",
+  );
+  if (!hasMedia) {
     // Simple case: all text — join into a single string, then cap size.
     const joined = result.content
       .filter((c) => c.type === "text")
@@ -581,22 +583,38 @@ function toolResultToContent(
       .join("\n");
     return truncateToolText(joined, maxChars, toolUseId);
   }
-  // Mixed content: pass blocks so images are preserved; cap text blocks.
+  // Mixed content: pass blocks so media is preserved; cap text blocks.
   return result.content
-    .map((c): ContentBlock | null => {
-      if (c.type === "text")
+    .map((content): ContentBlock | null => {
+      if (content.type === "text") {
         return {
           type: "text" as const,
-          text: truncateToolText(c.text, maxChars, toolUseId),
+          text: truncateToolText(content.text, maxChars, toolUseId),
         };
-      // image — validate media_type before sending to the API
-      const raw = (c as { type: "image"; data: string; mimeType: string })
-        .mimeType;
-      const mediaType = toSupportedImageMediaType(raw);
+      }
+      if (content.type === "document") {
+        const mediaType = toCoreModelDocumentMediaType(content.mimeType);
+        if (!mediaType) {
+          return {
+            type: "text" as const,
+            text: `[Document with unsupported format: ${content.mimeType}]`,
+          };
+        }
+        return {
+          type: "document" as const,
+          title: content.name,
+          source: {
+            type: "base64" as const,
+            media_type: mediaType,
+            data: content.data,
+          },
+        };
+      }
+      const mediaType = toSupportedImageMediaType(content.mimeType);
       if (!mediaType) {
         return {
           type: "text" as const,
-          text: `[Image with unsupported format: ${raw}]`,
+          text: `[Image with unsupported format: ${content.mimeType}]`,
         };
       }
       return {
@@ -604,7 +622,7 @@ function toolResultToContent(
         source: {
           type: "base64" as const,
           media_type: mediaType,
-          data: (c as { type: "image"; data: string; mimeType: string }).data,
+          data: content.data,
         },
       };
     })

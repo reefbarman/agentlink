@@ -4,9 +4,10 @@ import type { ContentBlock } from "../types";
 import { normalizeProjectedToolName } from "../../../shared/chatProjection";
 import {
   ToolCallBlock,
+  countResultDocuments,
   countResultImages,
   fmtDuration,
-  formatResultImageLabel,
+  formatResultMediaLabel,
   getToolCallVisualState,
   type ToolCallData,
 } from "./ToolCallBlock";
@@ -211,12 +212,14 @@ export function ToolCallGroup({
     (sum, block) => sum + countResultImages(block),
     0,
   );
-  const accessibleLabel = [
-    "Tools",
-    label,
-    statusBadge,
-    imageCount > 0 ? formatResultImageLabel(imageCount) : null,
-  ]
+  const documentCount = blocks.reduce(
+    (sum, block) => sum + countResultDocuments(block),
+    0,
+  );
+  const mediaCount = imageCount + documentCount;
+  const mediaLabel =
+    mediaCount > 0 ? formatResultMediaLabel(imageCount, documentCount) : null;
+  const accessibleLabel = ["Tools", label, statusBadge, mediaLabel]
     .filter(Boolean)
     .join(" ");
 
@@ -236,15 +239,15 @@ export function ToolCallGroup({
         <span class="tool-call-name tool-group-name">Tools</span>
         <span class="tool-call-summary tool-group-summary">{label}</span>
         {statusBadge && <span class="tool-exit-badge">{statusBadge}</span>}
-        {imageCount > 0 && (
+        {mediaCount > 0 && mediaLabel && (
           <span
             class="tool-image-badge"
             role="img"
-            aria-label={formatResultImageLabel(imageCount)}
-            title={`${formatResultImageLabel(imageCount)} — expand to view`}
+            aria-label={mediaLabel}
+            title={`${mediaLabel} — expand to view`}
           >
             <i class="codicon codicon-file-media" aria-hidden="true" />
-            {imageCount > 1 && imageCount}
+            {mediaCount > 1 && mediaCount}
           </span>
         )}
         {totalDuration > 0 && (

@@ -748,6 +748,79 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(nextSession.snapshot.ui.projectHandoff).toBeNull();
   });
 
+  it("returns ordered question attachment metadata and media", () => {
+    const store = createStore();
+    store.appendUserMessage({ id: "ask-user-1", text: "Ask me", now: 100 });
+    const assistant = store.startAssistantMessage({ now: 101 });
+    store.startAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "ask-question-media",
+      toolName: "ask_user",
+      input: {},
+    });
+    store.setQuestionRequest({
+      id: "ask-question-media",
+      context: "Need context.",
+      questions: [{ id: "first", type: "text", question: "What happened?" }],
+    });
+
+    const result = store.answerQuestion(
+      "ask-question-media",
+      {},
+      { first: "See attachments" },
+      {
+        first: [
+          {
+            kind: "image",
+            name: "screen.png",
+            mimeType: "image/png",
+            base64: "image-data",
+          },
+          {
+            kind: "document",
+            name: "brief.pdf",
+            mimeType: "application/pdf",
+            base64: "pdf-data",
+          },
+        ],
+      },
+    );
+
+    expect(result).toEqual({
+      messageId: assistant.id,
+      toolCallId: "ask-question-media",
+      responses: [
+        {
+          question: "What happened?",
+          answer: null,
+          note: "See attachments",
+          attachments: [
+            { kind: "image", name: "screen.png", mimeType: "image/png" },
+            {
+              kind: "document",
+              name: "brief.pdf",
+              mimeType: "application/pdf",
+            },
+          ],
+        },
+      ],
+      media: [
+        {
+          kind: "image",
+          name: "screen.png",
+          mimeType: "image/png",
+          base64: "image-data",
+        },
+        {
+          kind: "document",
+          name: "brief.pdf",
+          mimeType: "application/pdf",
+          base64: "pdf-data",
+        },
+      ],
+    });
+  });
+
   it("prepares the latest retryable assistant error without duplicating the user prompt", () => {
     const store = createStore();
     const credentialStatus: BrowserGatewayModelCredentialStatus = {
@@ -857,6 +930,14 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
         ok: true,
         responses: [{ question: "Continue?", answer: true }],
       }),
+      resultImages: [{ mimeType: "image/png", data: "image-data" }],
+      resultDocuments: [
+        {
+          name: "brief.pdf",
+          mimeType: "application/pdf",
+          data: "pdf-data",
+        },
+      ],
       durationMs: 0,
     });
     store.finishAssistantErrorMessage({
@@ -882,6 +963,14 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
           ok: true,
           responses: [{ question: "Continue?", answer: true }],
         }),
+        resultImages: [{ mimeType: "image/png", data: "image-data" }],
+        resultDocuments: [
+          {
+            name: "brief.pdf",
+            mimeType: "application/pdf",
+            data: "pdf-data",
+          },
+        ],
       },
     ]);
   });

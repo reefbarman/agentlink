@@ -114,6 +114,7 @@ import {
   type CodexGeneratedImage,
 } from "../../core/model/providers/codex/imageGeneration.js";
 import {
+  toCoreModelDocumentMediaType,
   toCoreModelImageMediaType,
   type CoreModelContentBlock,
   type CoreModelMessage,
@@ -121,6 +122,7 @@ import {
   type CoreModelUsage,
 } from "../../core/modelRuntime.js";
 import { getCodexModelCapabilities } from "../../core/model/providers/codex/models.js";
+import { normalizeUserQuestionAttachments } from "../../core/capabilities/sessionControl.js";
 import { ANTHROPIC_HOSTED_WEB_CAPABILITIES } from "../../core/model/providers/anthropic/anthropicModels.js";
 import {
   normalizeCoreWebAccessSettings,
@@ -1366,6 +1368,7 @@ export class BrowserGatewayHelper {
         id?: unknown;
         answers?: unknown;
         notes?: unknown;
+        attachments?: unknown;
       } | null;
       const id = typeof body?.id === "string" ? body.id.trim() : "";
       const answers =
@@ -1387,6 +1390,7 @@ export class BrowserGatewayHelper {
           notes[key] = typeof value === "string" ? value : String(value ?? "");
         }
       }
+      const attachments = normalizeUserQuestionAttachments(body?.attachments);
       const now = Date.now();
       const theme = await this.resolveInitialTheme(null);
       const credential = this.getAskAgentModelCredential(now);
@@ -1410,7 +1414,12 @@ export class BrowserGatewayHelper {
       }
 
       const answerResult = id
-        ? this.askAgentSessionStore.answerQuestion(id, answers, notes)
+        ? this.askAgentSessionStore.answerQuestion(
+            id,
+            answers,
+            notes,
+            attachments,
+          )
         : null;
       if (!answerResult) {
         writeJson(res, 404, {
@@ -1424,17 +1433,69 @@ export class BrowserGatewayHelper {
         ok: true,
         responses: answerResult.responses,
       });
+      const modelMedia: CoreModelContentBlock[] = [];
+      for (const attachment of answerResult.media) {
+        if (!attachment.base64 || !attachment.mimeType) continue;
+        if (attachment.kind === "image") {
+          const mediaType = toCoreModelImageMediaType(attachment.mimeType);
+          if (!mediaType) continue;
+          modelMedia.push({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: attachment.base64,
+            },
+          });
+        } else if (attachment.kind === "document") {
+          const mediaType = toCoreModelDocumentMediaType(attachment.mimeType);
+          if (!mediaType) continue;
+          modelMedia.push({
+            type: "document",
+            title: attachment.name,
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: attachment.base64,
+            },
+          });
+        }
+      }
+      const resultImages = answerResult.media.flatMap((attachment) =>
+        attachment.kind === "image" && attachment.base64 && attachment.mimeType
+          ? [{ mimeType: attachment.mimeType, data: attachment.base64 }]
+          : [],
+      );
+      const resultDocuments = answerResult.media.flatMap((attachment) =>
+        attachment.kind === "document" &&
+        attachment.base64 &&
+        attachment.mimeType
+          ? [
+              {
+                name: attachment.name,
+                mimeType: attachment.mimeType,
+                data: attachment.base64,
+              },
+            ]
+          : [],
+      );
       this.askAgentController.completeAssistantToolCall({
         messageId: answerResult.messageId,
         toolCallId: answerResult.toolCallId,
         toolName: "ask_user",
         input: {},
         result: responseContent,
+        ...(resultImages.length > 0 ? { resultImages } : {}),
+        ...(resultDocuments.length > 0 ? { resultDocuments } : {}),
         durationMs: 0,
       });
       const answerToolMessage = this.buildAskAgentToolResultMessage(
         { id: answerResult.toolCallId, name: "ask_user", input: {} },
         responseContent,
+        false,
+        modelMedia.length > 0
+          ? [{ type: "text", text: responseContent }, ...modelMedia]
+          : responseContent,
       );
       this.logAskAgentEvent("ask-agent.question.response", {
         id,
@@ -4690,11 +4751,11 @@ export class BrowserGatewayHelper {
 
       const { userMessage } = retryableTurn;
       const retryToolResults = retryableTurn.toolResults.map((toolResult) => {
-        const imageBlocks: CoreModelContentBlock[] = [];
+        const mediaBlocks: CoreModelContentBlock[] = [];
         for (const image of toolResult.resultImages ?? []) {
           const mediaType = toCoreModelImageMediaType(image.mimeType);
           if (!mediaType) continue;
-          imageBlocks.push({
+          mediaBlocks.push({
             type: "image",
             source: {
               type: "base64",
@@ -4703,9 +4764,22 @@ export class BrowserGatewayHelper {
             },
           });
         }
+        for (const document of toolResult.resultDocuments ?? []) {
+          const mediaType = toCoreModelDocumentMediaType(document.mimeType);
+          if (!mediaType) continue;
+          mediaBlocks.push({
+            type: "document",
+            title: document.name,
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: document.data,
+            },
+          });
+        }
         const modelContent: CoreModelContentBlock[] | undefined =
-          imageBlocks.length
-            ? [{ type: "text", text: toolResult.result }, ...imageBlocks]
+          mediaBlocks.length
+            ? [{ type: "text", text: toolResult.result }, ...mediaBlocks]
             : undefined;
         return this.buildAskAgentToolResultMessage(
           {

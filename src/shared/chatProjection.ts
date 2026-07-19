@@ -485,6 +485,11 @@ export type AppAction =
       toolName: string;
       result: string;
       resultImages?: Array<{ mimeType: string; data: string }>;
+      resultDocuments?: Array<{
+        name: string;
+        mimeType: string;
+        data: string;
+      }>;
       durationMs: number;
       input?: unknown;
       parentCallId?: string;
@@ -664,6 +669,10 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
     string,
     Array<{ mimeType: string; data: string }>
   >();
+  const toolResultDocuments = new Map<
+    string,
+    Array<{ name: string; mimeType: string; data: string }>
+  >();
   const toolResultUiMeta = new Map<
     string,
     {
@@ -693,25 +702,33 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               : "";
           toolResults.set(block.tool_use_id, text);
           if (Array.isArray(content)) {
-            const images = (
-              content as Array<{
-                type: string;
-                data?: string;
-                mimeType?: string;
-              }>
-            )
-              .filter(
-                (c): c is { type: "image"; data: string; mimeType: string } =>
-                  c.type === "image" &&
-                  typeof c.data === "string" &&
-                  typeof c.mimeType === "string",
-              )
-              .map((image) => ({
-                mimeType: image.mimeType,
-                data: image.data,
-              }));
-            if (images.length > 0)
+            const media = content as Array<{
+              type: string;
+              data?: string;
+              mimeType?: string;
+              name?: string;
+              title?: string;
+              source?: { data?: string; media_type?: string };
+            }>;
+            const images = media.flatMap((item) => {
+              if (item.type !== "image") return [];
+              const data = item.data ?? item.source?.data;
+              const mimeType = item.mimeType ?? item.source?.media_type;
+              return data && mimeType ? [{ data, mimeType }] : [];
+            });
+            if (images.length > 0) {
               toolResultImages.set(block.tool_use_id, images);
+            }
+            const documents = media.flatMap((item) => {
+              if (item.type !== "document") return [];
+              const data = item.data ?? item.source?.data;
+              const mimeType = item.mimeType ?? item.source?.media_type;
+              const name = item.name ?? item.title ?? "document";
+              return data && mimeType ? [{ name, data, mimeType }] : [];
+            });
+            if (documents.length > 0) {
+              toolResultDocuments.set(block.tool_use_id, documents);
+            }
           }
           if (block.mcpApprovalPromotion || block.composeTrace) {
             toolResultUiMeta.set(block.tool_use_id, {
@@ -905,10 +922,14 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           const toolName = normalizeProjectedToolName(block.name ?? "");
           const toolResult = toolResults.get(toolId) ?? "";
           const resultImages = toolResultImages.get(toolId);
+          const resultDocuments = toolResultDocuments.get(toolId);
           if (toolName === "generate_image" && resultImages) {
             messageGeneratedImages.push(...resultImages);
           }
           const resultImageProps = resultImages ? { resultImages } : {};
+          const resultDocumentProps = resultDocuments
+            ? { resultDocuments }
+            : {};
           const inputJson = JSON.stringify(block.input ?? {});
           if (toolName === "set_task_status" && toolId === finalMarkerToolId) {
             continue;
@@ -929,6 +950,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               inputJson,
               result: toolResult,
               ...resultImageProps,
+              ...resultDocumentProps,
               complete: true,
               mcpApprovalPromotion:
                 toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
@@ -977,6 +999,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               inputJson,
               result: toolResult,
               ...resultImageProps,
+              ...resultDocumentProps,
               complete: true,
               mcpApprovalPromotion:
                 toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
@@ -1029,6 +1052,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               inputJson,
               result: toolResult,
               ...resultImageProps,
+              ...resultDocumentProps,
               complete: true,
               mcpApprovalPromotion:
                 toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
@@ -1085,6 +1109,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               inputJson,
               result: toolResult,
               ...resultImageProps,
+              ...resultDocumentProps,
               complete: true,
               mcpApprovalPromotion:
                 toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
@@ -1739,6 +1764,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
             result: action.result,
             ...(b.type === "tool_call" && action.resultImages?.length
               ? { resultImages: action.resultImages }
+              : {}),
+            ...(b.type === "tool_call" && action.resultDocuments?.length
+              ? { resultDocuments: action.resultDocuments }
               : {}),
             complete: true,
             durationMs: action.durationMs,

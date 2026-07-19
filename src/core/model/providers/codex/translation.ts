@@ -182,37 +182,48 @@ export function translateCodexMessages(
                   .map((b) => b.text)
                   .join("") ?? "");
           const callId = sanitizeCodexCallId(block.tool_use_id);
-          // function_call_output is text-only in the Responses API, so image
-          // blocks are re-attached as an input_image user message that
-          // immediately follows the output for this call.
+          // function_call_output is text-only in the Responses API, so media
+          // blocks are re-attached as a user message immediately after it.
           const images =
             contentBlocks?.filter(
               (b): b is Extract<typeof b, { type: "image" }> =>
                 b.type === "image",
             ) ?? [];
+          const documents =
+            contentBlocks?.filter(
+              (b): b is Extract<typeof b, { type: "document" }> =>
+                b.type === "document",
+            ) ?? [];
           toolResults.push({
             type: "function_call_output",
             call_id: callId,
             output:
-              images.length > 0
-                ? [text, "[Image attached in the following user message.]"]
+              images.length > 0 || documents.length > 0
+                ? [text, "[Media attached in the following user message.]"]
                     .filter(Boolean)
                     .join("\n")
                 : text,
           });
-          if (images.length > 0) {
+          if (images.length > 0 || documents.length > 0) {
             toolResults.push({
               role: "user",
               content: [
                 {
                   type: "input_text",
-                  text: `Image output of tool call ${callId}:`,
+                  text: `Media output of tool call ${callId}:`,
                 },
                 ...images.map(
                   (image): UserInputContent => ({
                     type: "input_image",
                     image_url: `data:${image.source.media_type};base64,${image.source.data}`,
                     detail: "auto",
+                  }),
+                ),
+                ...documents.map(
+                  (document): UserInputContent => ({
+                    type: "input_file",
+                    filename: document.title ?? "document.pdf",
+                    file_data: `data:${document.source.media_type};base64,${document.source.data}`,
                   }),
                 ),
               ],

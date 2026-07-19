@@ -176,6 +176,11 @@ export type ExtensionMessage =
       toolName: string;
       result: string;
       resultImages?: Array<{ mimeType: string; data: string }>;
+      resultDocuments?: Array<{
+        name: string;
+        mimeType: string;
+        data: string;
+      }>;
       durationMs: number;
       input?: unknown;
       parentCallId?: string;
@@ -551,6 +556,11 @@ export type ExtensionMessage =
       toolName: string;
       result: string;
       resultImages?: Array<{ mimeType: string; data: string }>;
+      resultDocuments?: Array<{
+        name: string;
+        mimeType: string;
+        data: string;
+      }>;
       durationMs: number;
       input?: unknown;
     }
@@ -768,6 +778,11 @@ export type ContentBlock =
       inputJson: string;
       result: string;
       resultImages?: Array<{ mimeType: string; data: string }>;
+      resultDocuments?: Array<{
+        name: string;
+        mimeType: string;
+        data: string;
+      }>;
       complete: boolean;
       durationMs?: number;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;

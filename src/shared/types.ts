@@ -72,6 +72,7 @@ export type ToolResult = {
   content: Array<
     | { type: "text"; text: string }
     | { type: "image"; data: string; mimeType: string }
+    | { type: "document"; data: string; mimeType: string; name: string }
   >;
   isError?: boolean;
   error?: {

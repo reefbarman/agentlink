@@ -100,7 +100,7 @@ describe("Codex translation", () => {
     ]);
   });
 
-  it("re-attaches tool result images as a user message after the function output", () => {
+  it("re-attaches tool result media as a user message after the function output", () => {
     const input = translateCodexMessages([
       {
         role: "user",
@@ -132,6 +132,15 @@ describe("Codex translation", () => {
                   data: "def456",
                 },
               },
+              {
+                type: "document",
+                title: "brief.pdf",
+                source: {
+                  type: "base64",
+                  media_type: "application/pdf",
+                  data: "pdf-data",
+                },
+              },
             ],
           },
         ],
@@ -142,14 +151,14 @@ describe("Codex translation", () => {
       {
         type: "function_call_output",
         call_id: "call_read_image",
-        output: "[Image attached in the following user message.]",
+        output: "[Media attached in the following user message.]",
       },
       {
         role: "user",
         content: [
           {
             type: "input_text",
-            text: "Image output of tool call call_read_image:",
+            text: "Media output of tool call call_read_image:",
           },
           {
             type: "input_image",
@@ -161,19 +170,24 @@ describe("Codex translation", () => {
       {
         type: "function_call_output",
         call_id: "call_read_mixed",
-        output: "2 pages\n[Image attached in the following user message.]",
+        output: "2 pages\n[Media attached in the following user message.]",
       },
       {
         role: "user",
         content: [
           {
             type: "input_text",
-            text: "Image output of tool call call_read_mixed:",
+            text: "Media output of tool call call_read_mixed:",
           },
           {
             type: "input_image",
             image_url: "data:image/webp;base64,def456",
             detail: "auto",
+          },
+          {
+            type: "input_file",
+            filename: "brief.pdf",
+            file_data: "data:application/pdf;base64,pdf-data",
           },
         ],
       },

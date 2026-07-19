@@ -50,13 +50,20 @@ import { ChatView } from "./components/ChatView";
 import { ContextUsageRow } from "./components/ContextUsageRow";
 import { DebugInfo } from "./components/DebugInfo";
 import { ElicitationModal } from "./components/ElicitationModal";
-import { InputArea } from "./components/InputArea";
+import {
+  InputArea,
+  type ComposerContextMode,
+  type ComposerMedia,
+} from "./components/InputArea";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
 import { MessageQueuePanel } from "./components/MessageQueuePanel";
 import { ProviderUsagePanel } from "./components/ProviderUsageBlock";
-import { QuestionCard } from "./components/QuestionCard";
+import {
+  QuestionCard,
+  type QuestionOtherContext,
+} from "./components/QuestionCard";
 import { SessionHistory } from "./components/SessionHistory";
 import { StreamingStatusBar } from "./components/StreamingStatusBar";
 import { TodoPanel } from "./components/TodoPanel";
@@ -311,6 +318,16 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const [approvalResizing, setApprovalResizing] = useState(false);
   const approvalResizeCleanupRef = useRef<(() => void) | null>(null);
   const forwardedFollowUpRef = useRef("");
+  const [questionContextMode, setQuestionContextMode] =
+    useState<QuestionOtherContext | null>(null);
+  const [questionAttachments, setQuestionAttachments] = useState<
+    Record<string, { paths: string[]; media: ComposerMedia[] }>
+  >({});
+  useEffect(() => {
+    setQuestionContextMode(null);
+    setQuestionAttachments({});
+  }, [state.questionRequest?.id]);
+
   const [remoteQuestionProgress, setRemoteQuestionProgress] = useState<{
     id: string;
     step: number;
@@ -467,6 +484,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             toolName: msg.toolName,
             result: msg.result,
             resultImages: msg.resultImages,
+            resultDocuments: msg.resultDocuments,
             durationMs: msg.durationMs,
             input: msg.input,
             parentCallId: msg.parentCallId,
@@ -1063,6 +1081,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                 toolName: msg.toolName,
                 result: msg.result,
                 resultImages: msg.resultImages,
+                resultDocuments: msg.resultDocuments,
                 durationMs: msg.durationMs,
                 input: msg.input,
               },
@@ -2705,6 +2724,15 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               questions={state.questionRequest.questions}
               backgroundTask={state.questionRequest.backgroundTask}
               modes={state.modes}
+              attachmentCounts={Object.fromEntries(
+                Object.entries(questionAttachments).map(
+                  ([questionId, value]) => [
+                    questionId,
+                    value.paths.length + value.media.length,
+                  ],
+                ),
+              )}
+              onEditOtherContext={setQuestionContextMode}
               remoteProgress={
                 remoteQuestionProgress &&
                 remoteQuestionProgress.id === state.questionRequest.id
@@ -2734,13 +2762,36 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                 >,
                 notes: Record<string, string>,
               ) => {
+                const attachments = Object.fromEntries(
+                  Object.entries(questionAttachments).flatMap(
+                    ([questionId, value]) => {
+                      const items = [
+                        ...value.paths.map((path) => ({
+                          kind: "file" as const,
+                          name: path.split(/[\\/]/).pop() || path,
+                          path,
+                        })),
+                        ...value.media.map((media) => ({
+                          kind: media.kind,
+                          name: media.name,
+                          mimeType: media.mimeType,
+                          base64: media.base64,
+                        })),
+                      ];
+                      return items.length > 0 ? [[questionId, items]] : [];
+                    },
+                  ),
+                );
                 dispatch({ type: "CLEAR_QUESTION" });
                 setRemoteQuestionProgress(null);
+                setQuestionContextMode(null);
+                setQuestionAttachments({});
                 vscodeApi.postMessage({
                   command: "agentQuestionResponse",
                   id,
                   answers,
                   notes,
+                  attachments,
                 });
               }}
             />
@@ -2822,6 +2873,33 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         </ChatActivityShelf>
         <InputArea
           onSend={handleSend}
+          contextMode={
+            questionContextMode
+              ? ({
+                  key: `${state.questionRequest?.id ?? "question"}:${questionContextMode.questionId}`,
+                  title: "Adding context to agent question",
+                  placeholder:
+                    "Add details, paste a screenshot, or attach supporting files…",
+                  initialText: questionContextMode.initialText,
+                  initialAttachments:
+                    questionAttachments[questionContextMode.questionId]?.paths,
+                  initialMedia:
+                    questionAttachments[questionContextMode.questionId]?.media,
+                  onSubmit: (text, paths, _displayText, _slashLabel, media) => {
+                    questionContextMode.onCommit(text);
+                    setQuestionAttachments((current) => ({
+                      ...current,
+                      [questionContextMode.questionId]: {
+                        paths,
+                        media: media ?? [],
+                      },
+                    }));
+                    setQuestionContextMode(null);
+                  },
+                  onCancel: () => setQuestionContextMode(null),
+                } satisfies ComposerContextMode)
+              : null
+          }
           onInterject={handleInterject}
           onStop={handleStop}
           streaming={state.streaming}

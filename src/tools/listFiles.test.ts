@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import type { ToolResult } from "../shared/types.js";
 
 const {
   statMock,
@@ -50,12 +51,7 @@ vi.mock("./pathAccessUI.js", () => ({
   approveOutsideWorkspaceAccess: approveOutsideWorkspaceAccessMock,
 }));
 
-function textResult(result: {
-  content: Array<
-    | { type: "text"; text: string }
-    | { type: "image"; data: string; mimeType: string }
-  >;
-}): string {
+function textResult(result: ToolResult): string {
   const item = result.content[0];
   if (item?.type !== "text") throw new Error("Expected text result");
   return item.text;

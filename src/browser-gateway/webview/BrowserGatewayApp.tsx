@@ -40,9 +40,16 @@ import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow"
 import { DebugInfo } from "../../agent/webview/components/DebugInfo";
 import { BackgroundSessionStrip } from "../../agent/webview/components/BackgroundSessionStrip";
 import { BrowserDiffViewer } from "./components/BrowserDiffViewer";
-import { InputArea } from "../../agent/webview/components/InputArea";
+import {
+  InputArea,
+  type ComposerContextMode,
+  type ComposerMedia,
+} from "../../agent/webview/components/InputArea";
 import { MessageQueuePanel } from "../../agent/webview/components/MessageQueuePanel";
-import { QuestionCard } from "../../agent/webview/components/QuestionCard";
+import {
+  QuestionCard,
+  type QuestionOtherContext,
+} from "../../agent/webview/components/QuestionCard";
 import { SessionHistory } from "../../agent/webview/components/SessionHistory";
 import { StreamingStatusBar } from "../../agent/webview/components/StreamingStatusBar";
 import { TodoPanel } from "../../agent/webview/components/TodoPanel";
@@ -834,6 +841,8 @@ export function BrowserGatewayApp({
     }
     setLocalDismissedApprovalId(null);
     setLocalDismissedQuestionId(null);
+    setQuestionContextMode(null);
+    setQuestionAttachments({});
     setSelectedDiffId(null);
     setTranscriptView(null);
     forwardedFollowUpRef.current = "";
@@ -904,6 +913,11 @@ export function BrowserGatewayApp({
     [],
   );
   const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
+  const [questionContextMode, setQuestionContextMode] =
+    useState<QuestionOtherContext | null>(null);
+  const [questionAttachments, setQuestionAttachments] = useState<
+    Record<string, { paths: string[]; media: ComposerMedia[] }>
+  >({});
   const [sendStatus, setSendStatus] = useState<string>("");
   const [modeStatus, setModeStatus] = useState<string>("");
   const [status, setStatus] = useState("Connecting…");
@@ -1236,6 +1250,12 @@ export function BrowserGatewayApp({
     pendingQuestion && pendingQuestion.id !== localDismissedQuestionId
       ? pendingQuestion
       : null;
+
+  useEffect(() => {
+    setQuestionContextMode(null);
+    setQuestionAttachments({});
+  }, [visibleQuestion?.id]);
+
   const mobileReviewOpen = mobileLayout && mobilePane === "review";
   const visibleApprovalDiff =
     visibleApproval?.kind === "write"
@@ -3942,6 +3962,10 @@ export function BrowserGatewayApp({
           data.notes && typeof data.notes === "object"
             ? (data.notes as Record<string, string>)
             : {};
+        const attachments =
+          data.attachments && typeof data.attachments === "object"
+            ? data.attachments
+            : {};
         if (id) {
           void fetch(
             buildApiPathForTab(
@@ -3956,7 +3980,7 @@ export function BrowserGatewayApp({
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${authToken}`,
               },
-              body: JSON.stringify({ id, answers, notes }),
+              body: JSON.stringify({ id, answers, notes, attachments }),
             },
           );
         }
@@ -5085,6 +5109,15 @@ export function BrowserGatewayApp({
                     questions={visibleQuestion.questions}
                     backgroundTask={visibleQuestion.backgroundTask}
                     modes={modes}
+                    attachmentCounts={Object.fromEntries(
+                      Object.entries(questionAttachments).map(
+                        ([questionId, value]) => [
+                          questionId,
+                          value.paths.length + value.media.length,
+                        ],
+                      ),
+                    )}
+                    onEditOtherContext={setQuestionContextMode}
                     remoteProgress={
                       remoteQuestionProgress &&
                       remoteQuestionProgress.id === visibleQuestion.id
@@ -5107,12 +5140,37 @@ export function BrowserGatewayApp({
                       });
                     }}
                     onSubmit={(id, answers, notes) => {
+                      const attachments = Object.fromEntries(
+                        Object.entries(questionAttachments).flatMap(
+                          ([questionId, value]) => {
+                            const items = [
+                              ...value.paths.map((path) => ({
+                                kind: "file" as const,
+                                name: path.split(/[\\/]/).pop() || path,
+                                path,
+                              })),
+                              ...value.media.map((media) => ({
+                                kind: media.kind,
+                                name: media.name,
+                                mimeType: media.mimeType,
+                                base64: media.base64,
+                              })),
+                            ];
+                            return items.length > 0
+                              ? [[questionId, items]]
+                              : [];
+                          },
+                        ),
+                      );
                       setLocalDismissedQuestionId(id);
+                      setQuestionContextMode(null);
+                      setQuestionAttachments({});
                       browserVscodeApi.postMessage({
                         command: "agentQuestionResponse",
                         id,
                         answers,
                         notes,
+                        attachments,
                         originTabId: snapshotOriginRef.current.tabId,
                       });
                     }}
@@ -5190,6 +5248,43 @@ export function BrowserGatewayApp({
                 <div class="browser-chat-composer">
                   <InputArea
                     onSend={handleSend}
+                    contextMode={
+                      questionContextMode
+                        ? ({
+                            key: `${visibleQuestion?.id ?? "question"}:${questionContextMode.questionId}`,
+                            title: "Adding context to agent question",
+                            placeholder:
+                              "Add details, paste a screenshot, or attach supporting files…",
+                            initialText: questionContextMode.initialText,
+                            initialAttachments:
+                              questionAttachments[
+                                questionContextMode.questionId
+                              ]?.paths,
+                            initialMedia:
+                              questionAttachments[
+                                questionContextMode.questionId
+                              ]?.media,
+                            onSubmit: (
+                              text,
+                              paths,
+                              _displayText,
+                              _slashLabel,
+                              media,
+                            ) => {
+                              questionContextMode.onCommit(text);
+                              setQuestionAttachments((current) => ({
+                                ...current,
+                                [questionContextMode.questionId]: {
+                                  paths,
+                                  media: media ?? [],
+                                },
+                              }));
+                              setQuestionContextMode(null);
+                            },
+                            onCancel: () => setQuestionContextMode(null),
+                          } satisfies ComposerContextMode)
+                        : null
+                    }
                     onInterject={
                       isAskAgentSelected ? undefined : handleInterject
                     }

@@ -1228,12 +1228,21 @@ export async function buildAskUserToolResult(args: {
   const responses = questions.map((q) => {
     const answer = response.answers[q.id];
     const note = response.notes[q.id];
+    const attachments = response.attachments?.[q.id] ?? [];
     const entry: Record<string, unknown> = {
       question: q.question,
       answer: answer ?? null,
     };
     if (q.context) entry.context = q.context;
     if (note) entry.note = note;
+    if (attachments.length > 0) {
+      entry.attachments = attachments.map((attachment) => ({
+        kind: attachment.kind,
+        name: attachment.name,
+        ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+        ...(attachment.path ? { path: attachment.path } : {}),
+      }));
+    }
     return entry;
   });
 
@@ -1272,8 +1281,28 @@ export async function buildAskUserToolResult(args: {
   const payload: Record<string, unknown> = { context, responses };
   if (modeSwitched) payload.modeSwitched = modeSwitched;
   if (modeSwitchFollowUp) payload.follow_up = modeSwitchFollowUp;
+  const media: ToolResult["content"] = [];
+  for (const question of questions) {
+    for (const attachment of response.attachments?.[question.id] ?? []) {
+      if (!attachment.base64 || !attachment.mimeType) continue;
+      if (attachment.kind === "image") {
+        media.push({
+          type: "image",
+          data: attachment.base64,
+          mimeType: attachment.mimeType,
+        });
+      } else if (attachment.kind === "document") {
+        media.push({
+          type: "document",
+          data: attachment.base64,
+          mimeType: attachment.mimeType,
+          name: attachment.name,
+        });
+      }
+    }
+  }
   return {
-    content: [{ type: "text", text: JSON.stringify(payload) }],
+    content: [{ type: "text", text: JSON.stringify(payload) }, ...media],
   };
 }
 

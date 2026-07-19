@@ -11,6 +11,10 @@ import type {
   CoreOwnerRegistrationDto,
   CoreSessionSummaryDto,
 } from "../core/sessionProtocol.js";
+import type {
+  UserQuestionAttachment,
+  UserQuestionResponse,
+} from "../core/capabilities/sessionControl.js";
 
 import type { ApprovalRequest } from "../approvals/webview/types.js";
 import type { BrowserGatewayAskAgentPreferencesSnapshot } from "./browserGatewayAskAgentPreferences.js";
@@ -94,7 +98,9 @@ export interface BrowserGatewayAskAgentQuestionAnswerResult {
     question: string;
     answer: string | string[] | number | boolean | null;
     note?: string;
+    attachments?: Array<Omit<UserQuestionAttachment, "base64">>;
   }>;
+  media: UserQuestionAttachment[];
 }
 
 export interface BrowserGatewayAskAgentRetryToolResult {
@@ -103,6 +109,7 @@ export interface BrowserGatewayAskAgentRetryToolResult {
   input: Record<string, unknown>;
   result: string;
   resultImages?: Array<{ mimeType: string; data: string }>;
+  resultDocuments?: Array<{ name: string; mimeType: string; data: string }>;
 }
 
 export interface BrowserGatewayAskAgentRetryableTurn {
@@ -511,7 +518,13 @@ export class BrowserGatewayAskAgentSessionStore {
       if (block.type !== "tool_call" || !block.complete || !block.result) {
         continue;
       }
-      if (block.name !== "ask_user" && !block.resultImages?.length) continue;
+      if (
+        block.name !== "ask_user" &&
+        !block.resultImages?.length &&
+        !block.resultDocuments?.length
+      ) {
+        continue;
+      }
       let input: Record<string, unknown> = {};
       if (block.inputJson.trim()) {
         try {
@@ -531,6 +544,9 @@ export class BrowserGatewayAskAgentSessionStore {
         result: block.result,
         ...(block.resultImages?.length
           ? { resultImages: block.resultImages }
+          : {}),
+        ...(block.resultDocuments?.length
+          ? { resultDocuments: block.resultDocuments }
           : {}),
       });
     }
@@ -754,6 +770,7 @@ export class BrowserGatewayAskAgentSessionStore {
       string | string[] | number | boolean | undefined
     > = {},
     notes: Record<string, string> = {},
+    attachments: UserQuestionResponse["attachments"] = {},
   ): BrowserGatewayAskAgentQuestionAnswerResult | null {
     if (!this.questionRequest || this.questionRequest.id !== questionId) {
       return null;
@@ -776,7 +793,17 @@ export class BrowserGatewayAskAgentSessionStore {
       question: question.question,
       answer: answers[question.id] ?? null,
       ...(notes[question.id] ? { note: notes[question.id] } : {}),
+      ...(attachments?.[question.id]?.length
+        ? {
+            attachments: attachments[question.id].map(
+              ({ base64: _base64, ...attachment }) => attachment,
+            ),
+          }
+        : {}),
     }));
+    const media = request.questions.flatMap(
+      (question) => attachments?.[question.id] ?? [],
+    );
     session.messages[messageIndex] = {
       ...message,
       blocks: [
@@ -786,7 +813,7 @@ export class BrowserGatewayAskAgentSessionStore {
     };
     this.questionRequest = null;
     this.questionProgress = null;
-    return { messageId: message.id, toolCallId: request.id, responses };
+    return { messageId: message.id, toolCallId: request.id, responses, media };
   }
 
   setTodos(todos: TodoItem[]): void {
@@ -1017,6 +1044,7 @@ export class BrowserGatewayAskAgentSessionStore {
     input: unknown;
     result: string;
     resultImages?: Array<{ mimeType: string; data: string }>;
+    resultDocuments?: Array<{ name: string; mimeType: string; data: string }>;
     durationMs: number;
   }): void {
     const message = this.getAssistantMessage(params.messageId);
@@ -1033,6 +1061,9 @@ export class BrowserGatewayAskAgentSessionStore {
         inputJson: block.inputJson || JSON.stringify(params.input),
         result: params.result,
         ...(params.resultImages ? { resultImages: params.resultImages } : {}),
+        ...(params.resultDocuments
+          ? { resultDocuments: params.resultDocuments }
+          : {}),
         complete: true,
         durationMs: params.durationMs,
       };
@@ -1045,6 +1076,9 @@ export class BrowserGatewayAskAgentSessionStore {
         inputJson: JSON.stringify(params.input),
         result: params.result,
         ...(params.resultImages ? { resultImages: params.resultImages } : {}),
+        ...(params.resultDocuments
+          ? { resultDocuments: params.resultDocuments }
+          : {}),
         complete: true,
         durationMs: params.durationMs,
       });

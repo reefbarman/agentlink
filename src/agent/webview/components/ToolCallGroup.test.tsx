@@ -263,6 +263,34 @@ describe("ToolCallGroup", () => {
     expect(badge?.textContent).toContain("2");
   });
 
+  it("renders document results without leaking placeholder lines", () => {
+    render(
+      <ToolCallGroup
+        blocks={[
+          tool("tool-1", "ask_user", {
+            result: '{"responses":[]}\n[document]',
+            resultDocuments: [
+              {
+                name: "brief.pdf",
+                mimeType: "application/pdf",
+                data: "cGRm",
+              },
+            ],
+          }),
+        ]}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /1 document attached/i }),
+    );
+    expect(screen.queryByText("[document]")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^ask_user/ }));
+    expect(screen.getByText("brief.pdf")).toBeTruthy();
+    expect(screen.getByText("application/pdf")).toBeTruthy();
+    expect(screen.queryByText("[document]")).toBeNull();
+  });
+
   it("omits the image badge from groups without image results", () => {
     const { container } = render(
       <ToolCallGroup

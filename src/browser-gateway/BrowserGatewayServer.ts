@@ -832,6 +832,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
         string | string[] | number | boolean | undefined
       >;
       notes?: Record<string, string>;
+      attachments?: import("../core/capabilities/sessionControl.js").UserQuestionResponse["attachments"];
     };
     if (
       typeof body?.id !== "string" ||
@@ -845,6 +846,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       id: body.id,
       answers: body.answers,
       notes: body.notes,
+      attachments: body.attachments,
     });
     this.writeJson(res, ok ? 200 : 404, { ok });
   }

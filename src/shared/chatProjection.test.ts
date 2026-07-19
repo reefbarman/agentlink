@@ -103,6 +103,55 @@ describe("legacy web activity chat projection", () => {
 });
 
 describe("assistant image chat projection", () => {
+  it("projects restored tool-result documents onto the tool call", () => {
+    const messages = agentMessagesToChatMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "ask-1",
+            name: "ask_user",
+            input: { questions: [] },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "ask-1",
+            content: [
+              { type: "text", text: '{"responses":[]}' },
+              {
+                type: "document",
+                title: "brief.pdf",
+                source: {
+                  type: "base64",
+                  media_type: "application/pdf",
+                  data: "pdf-data",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    expect(messages[0]?.blocks[0]).toMatchObject({
+      type: "tool_call",
+      id: "ask-1",
+      resultDocuments: [
+        {
+          name: "brief.pdf",
+          mimeType: "application/pdf",
+          data: "pdf-data",
+        },
+      ],
+    });
+  });
+
   it("projects direct assistant images into shared display media", () => {
     const messages = agentMessagesToChatMessages([
       {

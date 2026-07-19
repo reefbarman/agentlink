@@ -33,6 +33,30 @@ export function formatResultImageLabel(count: number): string {
   return count === 1 ? "1 image result" : `${count} image results`;
 }
 
+export function countResultDocuments(toolCall: ToolCallData): number {
+  return toolCall.complete ? (toolCall.resultDocuments?.length ?? 0) : 0;
+}
+
+export function formatResultMediaLabel(
+  imageCount: number,
+  documentCount: number,
+): string {
+  if (documentCount === 0) return formatResultImageLabel(imageCount);
+  const parts = [
+    imageCount > 0
+      ? imageCount === 1
+        ? "1 image"
+        : `${imageCount} images`
+      : "",
+    documentCount > 0
+      ? documentCount === 1
+        ? "1 document"
+        : `${documentCount} documents`
+      : "",
+  ].filter(Boolean);
+  return `${parts.join(" and ")} attached`;
+}
+
 /** Parse partial/full JSON safely. */
 function tryParseJson(json: string): Record<string, unknown> | null {
   try {
@@ -48,6 +72,14 @@ type SummaryPart =
   | { type: "file"; display: string; path: string; line?: number }
   | { type: "badge"; text: string; title?: string };
 
+function stripMediaPlaceholderLines(result: string): string {
+  return result
+    .split(/\r?\n/)
+    .filter((line) => !/^\[(?:image|document)\]$/i.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
 /** Generate a smart one-liner summary for known tools. */
 function getToolSummary(
   name: string,
@@ -62,6 +94,7 @@ function getToolSummary(
 
   // Completed tool — summarize based on tool name
   const p = input ?? {};
+  const displayResult = stripMediaPlaceholderLines(result);
   switch (name) {
     case "web_search":
       return [{ type: "text", text: String(p.query ?? "").slice(0, 100) }];
@@ -198,7 +231,10 @@ function getToolSummary(
     case "todo_write":
       return [{ type: "text", text: result || "updated" }];
     default: {
-      const t = result.length > 60 ? result.slice(0, 57) + "..." : result || "";
+      const t =
+        displayResult.length > 60
+          ? displayResult.slice(0, 57) + "..."
+          : displayResult || "";
       return [{ type: "text", text: t }];
     }
   }
@@ -612,13 +648,12 @@ export function ToolCallBlock({
     (onContinueToolCallInBackground || onCompleteToolCall || onCancelToolCall);
   const resultImages =
     complete && toolCall.resultImages ? toolCall.resultImages : [];
+  const resultDocuments =
+    complete && toolCall.resultDocuments ? toolCall.resultDocuments : [];
+  const resultMediaCount = resultImages.length + resultDocuments.length;
   const displayedResult =
-    resultImages.length > 0
-      ? toolCall.result
-          .split(/\r?\n/)
-          .filter((line) => line.trim() !== "[image]")
-          .join("\n")
-          .trim()
+    resultMediaCount > 0
+      ? stripMediaPlaceholderLines(toolCall.result)
       : toolCall.result;
   const revealsRunningTerminal =
     !complete &&
@@ -684,15 +719,18 @@ export function ToolCallBlock({
                 )}
             </span>
           )}
-          {resultImages.length > 0 && (
+          {resultMediaCount > 0 && (
             <span
               class="tool-image-badge"
               role="img"
-              aria-label={formatResultImageLabel(resultImages.length)}
-              title={`${formatResultImageLabel(resultImages.length)} — expand to view`}
+              aria-label={formatResultMediaLabel(
+                resultImages.length,
+                resultDocuments.length,
+              )}
+              title={`${formatResultMediaLabel(resultImages.length, resultDocuments.length)} — expand to view`}
             >
               <i class="codicon codicon-file-media" aria-hidden="true" />
-              {resultImages.length > 1 && resultImages.length}
+              {resultMediaCount > 1 && resultMediaCount}
             </span>
           )}
           {complete && toolCall.durationMs != null && (
@@ -802,7 +840,7 @@ export function ToolCallBlock({
               </div>
             </div>
           )}
-          {(displayedResult || resultImages.length > 0) && (
+          {(displayedResult || resultMediaCount > 0) && (
             <div class="tool-call-section">
               <div class="tool-call-section-label">Result</div>
               {displayedResult &&
@@ -821,6 +859,21 @@ export function ToolCallBlock({
                       alt={`${toolCall.name} result image ${index + 1}`}
                       loading="lazy"
                     />
+                  ))}
+                </div>
+              )}
+              {resultDocuments.length > 0 && (
+                <div class="tool-result-documents">
+                  {resultDocuments.map((document, index) => (
+                    <div
+                      class="tool-result-document"
+                      key={`${document.name}-${document.mimeType}-${index}`}
+                      title={document.mimeType}
+                    >
+                      <i class="codicon codicon-file-pdf" aria-hidden="true" />
+                      <span>{document.name}</span>
+                      <code>{document.mimeType}</code>
+                    </div>
                   ))}
                 </div>
               )}

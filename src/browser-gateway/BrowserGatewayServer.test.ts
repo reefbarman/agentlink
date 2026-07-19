@@ -1462,6 +1462,16 @@ describe("BrowserGatewayServer", () => {
         id: "question-1",
         answers: { q1: "Yes" },
         notes: {},
+        attachments: {
+          q1: [
+            {
+              kind: "image",
+              name: "screen.png",
+              mimeType: "image/png",
+              base64: "image-data",
+            },
+          ],
+        },
       }),
     });
     expect(authorizedQuestion.status).toBe(200);
@@ -1471,6 +1481,16 @@ describe("BrowserGatewayServer", () => {
         id: "question-1",
         answers: { q1: "Yes" },
         notes: {},
+        attachments: {
+          q1: [
+            {
+              kind: "image",
+              name: "screen.png",
+              mimeType: "image/png",
+              base64: "image-data",
+            },
+          ],
+        },
       },
     );
 
