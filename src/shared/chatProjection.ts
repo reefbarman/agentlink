@@ -2146,6 +2146,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           ...state.chatState,
           sessionId: null,
           streaming: false,
+          interrupted: false,
         },
       };
 
@@ -2655,6 +2656,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           mode: action.mode,
           model: action.model,
           streaming: false,
+          interrupted: false,
         },
       };
     }

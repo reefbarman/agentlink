@@ -2651,7 +2651,7 @@ describe("webview App reducer background agent launch blocks", () => {
     ).toBe(false);
   });
 
-  it("resets detected question state on NEW_SESSION", () => {
+  it("resets detected question and interruption state on NEW_SESSION", () => {
     let state = reducer(
       {
         ...initialState,
@@ -2659,6 +2659,7 @@ describe("webview App reducer background agent launch blocks", () => {
           ...initialState.chatState,
           sessionId: "session-old",
           streaming: true,
+          interrupted: true,
         },
       },
       {
@@ -2685,6 +2686,32 @@ describe("webview App reducer background agent launch blocks", () => {
     expect(state.dismissedDetectedQuestionIds).toEqual([]);
     expect(state.chatState.sessionId).toBeNull();
     expect(state.chatState.streaming).toBe(false);
+    expect(state.chatState.interrupted).toBe(false);
+  });
+
+  it("clears stale interruption state while loading another session", () => {
+    const state = reducer(
+      {
+        ...initialState,
+        chatState: {
+          ...initialState.chatState,
+          sessionId: "session-interrupted",
+          interrupted: true,
+        },
+      },
+      {
+        type: "LOAD_SESSION",
+        sessionId: "session-normal",
+        title: "Normal session",
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        messages: [],
+        todos: [],
+      },
+    );
+
+    expect(state.chatState.sessionId).toBe("session-normal");
+    expect(state.chatState.interrupted).toBe(false);
   });
 });
 
