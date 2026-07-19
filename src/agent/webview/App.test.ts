@@ -1729,19 +1729,15 @@ describe("webview App reducer background agent launch blocks", () => {
     });
   });
 
-  it("applies explicit final marker intent on DONE", () => {
+  it("applies explicit final marker intent immediately", () => {
     const marker = {
       status: "blocked" as const,
       source: "tool" as const,
       summary: "Need credentials",
     };
-    const withIntent = reducer(initialState, {
-      type: "SET_FINAL_MARKER",
-      marker,
-    });
     const state = reducer(
       {
-        ...withIntent,
+        ...initialState,
         messages: [
           {
             id: "a1",
@@ -1753,11 +1749,67 @@ describe("webview App reducer background agent launch blocks", () => {
         ],
         streaming: true,
       },
-      { type: "DONE" },
+      { type: "SET_FINAL_MARKER", marker },
     );
 
     expect(state.pendingFinalMarker).toBeNull();
     expect(state.messages[0]?.finalMarker).toEqual(marker);
+  });
+
+  it("keeps an interjected turn's final marker on the completed segment", () => {
+    const marker = {
+      status: "completed" as const,
+      source: "tool" as const,
+      summary: "The compose limit is 40 KiB.",
+    };
+    let state = reducer(
+      {
+        ...initialState,
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            content: "",
+            timestamp: 1,
+            blocks: [
+              {
+                type: "tool_call",
+                id: "final-1",
+                name: "set_task_status",
+                inputJson: JSON.stringify({
+                  status: "completed",
+                  summary: marker.summary,
+                }),
+                result: JSON.stringify({ ok: true }),
+                complete: true,
+              },
+            ],
+          },
+        ],
+        streaming: true,
+      },
+      { type: "SET_FINAL_MARKER", marker },
+    );
+
+    state = reducer(state, {
+      type: "ADD_INTERJECTION",
+      text: "Resume the implementation.",
+    });
+
+    expect(state.messages[0]?.finalMarker).toMatchObject({
+      ...marker,
+      toolCall: {
+        id: "final-1",
+        name: "set_task_status",
+      },
+    });
+    expect(state.messages.at(-2)).toMatchObject({
+      role: "user",
+      content: "Resume the implementation.",
+    });
+    expect(state.messages.at(-1)?.role).toBe("assistant");
+    expect(state.messages.at(-1)?.finalMarker).toBeUndefined();
+    expect(state.pendingFinalMarker).toBeNull();
   });
 
   it("restores slash-command display text and pill metadata from persisted uiHint", async () => {

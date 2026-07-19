@@ -31,6 +31,19 @@ export interface SearchFilesProviders {
   pathAccessProvider: PathAccessProvider;
 }
 
+function withWarning(result: ToolResult, warning?: string): ToolResult {
+  if (
+    !warning ||
+    result.isError ||
+    !result.data ||
+    typeof result.data !== "object" ||
+    Array.isArray(result.data)
+  ) {
+    return result;
+  }
+  return jsonResult({ ...result.data, warning }, true);
+}
+
 function createLegacySearchFilesProviders(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
@@ -271,32 +284,44 @@ export async function handleSearchFiles(
       return semanticSearch(searchDir, params.regex, params.max_results);
     }
 
-    if (pathIsFile && params.file_pattern) {
-      return errorResult(
-        "When path points to a file, file_pattern must be omitted (path already scopes to a single file)",
-        { path: params.path, file_pattern: params.file_pattern },
-      );
-    }
+    const warning =
+      pathIsFile && params.file_pattern
+        ? "Ignored file_pattern because path already scopes the search to a single file"
+        : undefined;
+    const effectiveParams = warning
+      ? { ...params, file_pattern: undefined }
+      : params;
 
-    const maxResults = params.max_results ?? DEFAULT_MAX_RESULTS;
-    const outputMode = params.output_mode ?? "content";
+    const maxResults = effectiveParams.max_results ?? DEFAULT_MAX_RESULTS;
+    const outputMode = effectiveParams.output_mode ?? "content";
 
     // Ripgrep regex search
     const rgPath = await getRipgrepBinPath();
 
     // --- files_with_matches mode ---
     if (outputMode === "files_with_matches") {
-      return await searchFilesOnly(
-        rgPath,
-        searchDir,
-        defaultSearchTarget,
-        params,
+      return withWarning(
+        await searchFilesOnly(
+          rgPath,
+          searchDir,
+          defaultSearchTarget,
+          effectiveParams,
+        ),
+        warning,
       );
     }
 
     // --- count mode ---
     if (outputMode === "count") {
-      return await searchCount(rgPath, searchDir, defaultSearchTarget, params);
+      return withWarning(
+        await searchCount(
+          rgPath,
+          searchDir,
+          defaultSearchTarget,
+          effectiveParams,
+        ),
+        warning,
+      );
     }
 
     // --- content mode (default) ---
@@ -331,7 +356,7 @@ export async function handleSearchFiles(
     const searchTarget = await addFilePatternArgs(
       args,
       searchDir,
-      params.file_pattern,
+      effectiveParams.file_pattern,
       defaultSearchTarget,
     );
 
@@ -355,6 +380,7 @@ export async function handleSearchFiles(
         total_matches: 0,
         truncated: false,
         results: "No results found",
+        ...(warning && { warning }),
       });
     }
 
@@ -416,6 +442,7 @@ export async function handleSearchFiles(
       truncated: totalMatches > maxResults + offset,
       ...(offset > 0 && { offset }),
       results: formatted.join("\n\n"),
+      ...(warning && { warning }),
     };
 
     return jsonResult(result, true);

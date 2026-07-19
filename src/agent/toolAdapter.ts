@@ -193,6 +193,18 @@ export const READ_ONLY_TOOLS = new Set(PARALLEL_SAFE_TOOLS);
 
 const EXCLUDED_TOOLS = new Set(["handshake", "load_rule", "load_skill"]);
 
+/**
+ * Registered language tools hidden from ordinary model catalogs while their
+ * unique value is benchmarked. A custom mode can opt in with the explicit
+ * `language-benchmark` tool group without changing registration or dispatch.
+ */
+export const BENCHMARK_LANGUAGE_TOOLS = new Set([
+  "get_completions",
+  "get_inlay_hints",
+  "get_code_actions",
+  "apply_code_action",
+]);
+
 // --- Zod schema record → JSON Schema conversion ---
 
 const jsonSchemaCache = new Map<string, JsonSchema>();
@@ -437,7 +449,7 @@ const ASK_USER_TOOL: ToolDefinition = {
 const SET_TASK_STATUS_TOOL: ToolDefinition = {
   name: "set_task_status",
   description:
-    "Mark the current turn's final status. Use only when your response is final: completed, waiting_for_user, blocked, or cancelled. Do not call before ask_user or for intermediate progress updates. The summary is the user-facing final response itself, not a meta-description of what you did. If the user asked for a concrete artifact (prompt, code, command, plan, review, answer), that artifact must be visible either in normal text before this tool call or fully inside summary. Never use summary as a teaser such as 'Here is the prompt' or 'See below'; content after this tool call is not a reliable place to deliver the answer. For code-modifying work, structure the summary around what changed, why it matters, validation run or skipped, and concrete follow-up. Include a short continuation button label and prompt when the user can safely continue with one click, especially when the summary mentions a concrete next phase, MVP slice, remaining plan item, follow-up task, or validation step.",
+    "Mark the current turn's final status and end the current response unless another user interjection is already pending. Unfinished todos do not resume automatically after this tool. Use only when your response is final: completed, waiting_for_user, blocked, or cancelled. Do not call before ask_user, for intermediate progress updates, or to answer an interjected question when you intend to resume earlier work afterward; use ordinary visible text in those cases. The summary is the user-facing final response itself, not a meta-description of what you did. If the user asked for a concrete artifact (prompt, code, command, plan, review, answer), that artifact must be visible either in normal text before this tool call or fully inside summary. Never use summary as a teaser such as 'Here is the prompt' or 'See below'; content after this tool call is not a reliable place to deliver the answer. For code-modifying work, structure the summary around what changed, why it matters, validation run or skipped, and concrete follow-up. Include a short continuation button label and prompt when the user can safely continue with one click, especially when the summary mentions a concrete next phase, MVP slice, remaining plan item, follow-up task, or validation step.",
   input_schema: {
     type: "object",
     properties: {
@@ -994,6 +1006,21 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   },
 ];
 
+/**
+ * Every static adapter-defined tool contract. Direct MCP target names are
+ * intentionally excluded because connected catalogs make those names dynamic.
+ * Engine-inline tools such as todo_write are reconciled separately.
+ */
+export const STATIC_ADAPTER_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...Object.keys(TOOL_REGISTRY),
+  ...MCP_META_TOOLS.map((tool) => tool.name),
+  CALL_MCP_TOOL.name,
+  ASK_USER_TOOL.name,
+  "set_task_status",
+  SWITCH_MODE_TOOL.name,
+  ...BG_AGENT_TOOLS.map((tool) => tool.name),
+]);
+
 /** Return value of get_background_status — non-blocking snapshot. */
 export type BgStatusResult = BackgroundAgentStatusResult;
 
@@ -1044,7 +1071,6 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "go_to_type_definition",
     "get_call_hierarchy",
     "get_type_hierarchy",
-    "get_inlay_hints",
     "execute_command",
     "search_session_history",
     "read_session_excerpt",
@@ -1066,7 +1092,6 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "go_to_type_definition",
     "get_call_hierarchy",
     "get_type_hierarchy",
-    "get_inlay_hints",
     "search_session_history",
     "read_session_excerpt",
   ]),
@@ -1098,6 +1123,8 @@ export function getAgentTools(
 ): ToolDefinition[] {
   const mcpToolNames = (mcpToolDefs ?? []).map((t) => t.name);
   const allowed = mode ? getToolsForMode(mode, mcpToolNames) : null;
+  const benchmarkLanguageToolsEnabled =
+    mode?.toolGroups.includes("language-benchmark") ?? false;
   const profileAllowlist = toolProfile
     ? (TOOL_PROFILES[toolProfile] ?? new Set<string>())
     : undefined;
@@ -1114,6 +1141,10 @@ export function getAgentTools(
   const nativeTools = Object.entries(TOOL_SCHEMAS)
     .sort(([a], [b]) => a.localeCompare(b))
     .filter(([name]) => !EXCLUDED_TOOLS.has(name))
+    .filter(
+      ([name]) =>
+        !BENCHMARK_LANGUAGE_TOOLS.has(name) || benchmarkLanguageToolsEnabled,
+    )
     .filter(([name]) => !(isBackground && name === "compose"))
     .filter(
       ([name]) =>
@@ -1306,20 +1337,37 @@ export async function buildAskUserToolResult(args: {
   };
 }
 
-function getToolUsageOutcomeFromResult(result: ToolResult): ToolUsageOutcome {
+export function getToolUsageOutcomeFromResult(
+  result: ToolResult,
+): ToolUsageOutcome {
+  const text = result.content.find((item) => item.type === "text")?.text;
+  let structuredError = false;
+  if (text) {
+    try {
+      const parsed = JSON.parse(text) as {
+        error?: unknown;
+        partial?: unknown;
+        status?: unknown;
+      };
+      if (
+        parsed.status === "rejected" ||
+        parsed.status === "rejected_by_user"
+      ) {
+        return "rejected";
+      }
+      if (parsed.status === "cancelled") return "cancelled";
+      if (parsed.partial === true || parsed.status === "partial")
+        return "partial";
+      structuredError =
+        parsed.status === "error" || typeof parsed.error !== "undefined";
+    } catch {
+      // Plain text tool output is classified from canonical result fields below.
+    }
+  }
   if (result.isError) {
     return result.error?.kind === "aborted" ? "cancelled" : "error";
   }
-  const text = result.content.find((item) => item.type === "text")?.text;
-  if (!text) return "ok";
-  try {
-    const parsed = JSON.parse(text) as { error?: unknown; status?: unknown };
-    if (typeof parsed.error !== "undefined") return "error";
-    if (parsed.status === "cancelled") return "cancelled";
-    if (parsed.status === "error") return "error";
-  } catch {
-    // Plain text tool output is a successful result.
-  }
+  if (structuredError) return "error";
   return "ok";
 }
 
@@ -1839,6 +1887,18 @@ export function createAgentToolRuntime(
     async executeTool(request: AgentToolExecutionRequest) {
       const startedAt = Date.now();
       try {
+        if (
+          request.context.availableToolNames &&
+          !request.context.availableToolNames.has(request.name)
+        ) {
+          return errorResult(
+            `Tool '${request.name}' was not available in the provider request that emitted this call`,
+            {
+              status: "tool_not_available",
+              tool: request.name,
+            },
+          );
+        }
         enforceDelegatedPathPolicy(request.name, request.input, ctx);
         const mutationTarget = resolveWorkspaceMutationTarget(
           request.name,

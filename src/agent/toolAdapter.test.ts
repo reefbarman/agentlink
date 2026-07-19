@@ -4,10 +4,13 @@ import * as path from "node:path";
 
 import { describe, it, expect, vi } from "vitest";
 import {
+  BENCHMARK_LANGUAGE_TOOLS,
   getAgentTools,
   dispatchToolCall,
   createAgentToolRuntime,
+  getToolUsageOutcomeFromResult,
   READ_ONLY_TOOLS,
+  STATIC_ADAPTER_TOOL_NAMES,
   type ToolDispatchContext,
 } from "./toolAdapter.js";
 import {
@@ -17,6 +20,7 @@ import {
 } from "../core/tools/toolCapabilities.js";
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
 import { BUILT_IN_MODES } from "./modes.js";
+import { TODO_TOOL_NAME } from "./todoTool.js";
 import type { ToolDefinition } from "./providers/types.js";
 import type { ToolResult } from "../shared/types.js";
 import { getWorkspaceRoots, resolveAndValidatePath } from "../util/paths.js";
@@ -262,6 +266,28 @@ describe("tool usage telemetry project attribution", () => {
       "/sensitive/project",
     );
   });
+
+  it("rejects top-level calls that were not in the provider request snapshot", async () => {
+    const runtime = createAgentToolRuntime(mockCtx);
+
+    const result = await runtime.executeTool({
+      name: "get_completions",
+      input: { path: "src/file.ts", line: 1, column: 1 },
+      context: {
+        sessionId: "test-session",
+        mode: "code",
+        availableToolNames: new Set(["read_file"]),
+      },
+    });
+
+    expect(result).toMatchObject({
+      isError: true,
+      data: {
+        status: "tool_not_available",
+        tool: "get_completions",
+      },
+    });
+  });
 });
 
 const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
@@ -304,6 +330,13 @@ describe("READ_ONLY_TOOLS", () => {
   it("matches the pre-core compatibility snapshot", () => {
     expect([...READ_ONLY_TOOLS].sort()).toEqual(
       [...READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT].sort(),
+    );
+  });
+
+  it("keeps the capability registry in exact parity with static adapter and engine definitions", () => {
+    const implemented = new Set([...STATIC_ADAPTER_TOOL_NAMES, TODO_TOOL_NAME]);
+    expect([...implemented].sort()).toEqual(
+      Object.keys(TOOL_CAPABILITIES).sort(),
     );
   });
 
@@ -414,6 +447,26 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("handshake");
   });
 
+  it("hides benchmark language tools by default and exposes them only through the explicit group", () => {
+    const defaultNames = getAgentTools().map((tool) => tool.name);
+    for (const name of BENCHMARK_LANGUAGE_TOOLS) {
+      expect(defaultNames).not.toContain(name);
+    }
+
+    const benchmarkMode = {
+      slug: "language-benchmark",
+      name: "Language Benchmark",
+      icon: "beaker",
+      toolGroups: ["read", "language", "language-benchmark"],
+    };
+    const benchmarkNames = getAgentTools(benchmarkMode).map(
+      (tool) => tool.name,
+    );
+    expect(benchmarkNames).toEqual(
+      expect.arrayContaining([...BENCHMARK_LANGUAGE_TOOLS]),
+    );
+  });
+
   it("gates all registry dev-only tools by build type", () => {
     const devOnlyNames = Object.entries(TOOL_REGISTRY)
       .filter(([, metadata]) => metadata.devOnly)
@@ -455,7 +508,22 @@ describe("getAgentTools", () => {
   });
 
   it("keeps composability metadata canonical and registered", () => {
-    const definitions = new Set(getAgentTools().map((tool) => tool.name));
+    const definitions = new Set(
+      getAgentTools({
+        slug: "language-benchmark",
+        name: "Language Benchmark",
+        icon: "beaker",
+        toolGroups: [
+          "read",
+          "edit",
+          "command",
+          "language",
+          "language-benchmark",
+          "search",
+          "mcp",
+        ],
+      }).map((tool) => tool.name),
+    );
     for (const name of COMPOSABLE_TOOLS) {
       expect(TOOL_CAPABILITIES[name]).toMatchObject({
         composable: true,
@@ -633,7 +701,10 @@ describe("getAgentTools", () => {
     expect(names).toContain("get_diagnostics");
     expect(names).toContain("go_to_type_definition");
     expect(names).toContain("get_call_hierarchy");
-    expect(names).toContain("get_inlay_hints");
+    expect(names).not.toContain("get_inlay_hints");
+    expect(names).not.toContain("get_completions");
+    expect(names).not.toContain("get_code_actions");
+    expect(names).not.toContain("apply_code_action");
     expect(names).toContain("find_mcp_tools");
     expect(names).toContain("call_mcp_tool");
     expect(names).toContain("ddg-search__search");
@@ -2491,6 +2562,57 @@ describe("dispatchToolCall", () => {
       { names: ["Server"] },
       { terminalProvider: mockCtx.terminalProvider },
     );
+  });
+
+  describe("tool usage outcome normalization", () => {
+    it.each([
+      [{ status: "rejected" }, "rejected"],
+      [{ status: "rejected_by_user", error: "denied" }, "rejected"],
+      [{ status: "cancelled" }, "cancelled"],
+      [{ partial: true, failed_blocks: [1] }, "partial"],
+      [{ status: "partial" }, "partial"],
+      [{ status: "error" }, "error"],
+      [{ error: "failed" }, "error"],
+      [{ ok: true }, "ok"],
+    ] as const)("normalizes %o as %s", (payload, expected) => {
+      expect(
+        getToolUsageOutcomeFromResult({
+          content: [{ type: "text", text: JSON.stringify(payload) }],
+        }),
+      ).toBe(expected);
+    });
+
+    it("uses canonical error fields when output is not structured JSON", () => {
+      expect(
+        getToolUsageOutcomeFromResult({
+          content: [{ type: "text", text: "aborted" }],
+          isError: true,
+          error: { kind: "aborted", message: "aborted" },
+        }),
+      ).toBe("cancelled");
+      expect(
+        getToolUsageOutcomeFromResult({
+          content: [{ type: "text", text: "failed" }],
+          isError: true,
+          error: { kind: "tool_error", message: "failed" },
+        }),
+      ).toBe("error");
+    });
+
+    it("preserves canonical abort classification when the body is a generic structured error", () => {
+      expect(
+        getToolUsageOutcomeFromResult({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ status: "error", error: "aborted" }),
+            },
+          ],
+          isError: true,
+          error: { kind: "aborted", message: "aborted" },
+        }),
+      ).toBe("cancelled");
+    });
   });
 
   describe("switch_mode", () => {

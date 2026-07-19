@@ -1,9 +1,11 @@
 import * as path from "node:path";
 
-import type {
-  ComposeParams,
-  ComposeRuntimeOptions,
-  ComposeToolResult,
+import {
+  COMPOSE_MAX_FINAL_BYTES,
+  COMPOSE_MAX_RECOVERY_PREVIEW_BYTES,
+  type ComposeParams,
+  type ComposeRuntimeOptions,
+  type ComposeToolResult,
 } from "./composeRuntime.js";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -71,6 +73,50 @@ describe("bundled compose runtime", () => {
 
     expect(result.isError).toBe(false);
     expect(result.data).toEqual({ value: 42, text: "ok" });
+  });
+
+  it("returns bounded recovery evidence after bundled child calls produce an oversized final result", async () => {
+    const result = await runBundledCompose(
+      {
+        script:
+          'const value = tool("lookup", {}); return { value, duplicate: value };',
+        description: "bundle oversized recovery smoke",
+      },
+      {
+        canExecuteChild: (name) => name === "lookup",
+        executeChild: async () => {
+          const data = "x".repeat(COMPOSE_MAX_FINAL_BYTES / 2);
+          return {
+            content: [{ type: "text", text: JSON.stringify(data) }],
+            data,
+            isError: false,
+          };
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      isError: true,
+      error: { kind: "serialization" },
+      uiMeta: {
+        composeTrace: {
+          status: "error",
+          totalChildren: 1,
+          completedChildren: 1,
+        },
+      },
+    });
+    const recovery = (result.data as { recovery: Record<string, unknown> })
+      .recovery;
+    expect(recovery).toMatchObject({
+      reason: "final_result_too_large",
+      limit_bytes: COMPOSE_MAX_FINAL_BYTES,
+      preview_truncated: true,
+      children: [{ name: "lookup", status: "completed" }],
+    });
+    expect(recovery.preview_bytes).toBeLessThanOrEqual(
+      COMPOSE_MAX_RECOVERY_PREVIEW_BYTES,
+    );
   });
 
   it("bridges child tool calls from the bundle", async () => {

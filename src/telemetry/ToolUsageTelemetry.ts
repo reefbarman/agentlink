@@ -6,7 +6,12 @@ import { randomUUID } from "crypto";
 import { sleep } from "../util/sleep.js";
 
 export type ToolUsageSource = "agent" | "mcp";
-export type ToolUsageOutcome = "ok" | "error" | "cancelled" | "rejected";
+export type ToolUsageOutcome =
+  | "ok"
+  | "partial"
+  | "error"
+  | "cancelled"
+  | "rejected";
 
 export interface ToolUsageEvent {
   toolName: string;

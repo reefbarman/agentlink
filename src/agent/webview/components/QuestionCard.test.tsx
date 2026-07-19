@@ -14,7 +14,7 @@ describe("QuestionCard other context", () => {
   it("commits composer text and allows an attachment-only answer", () => {
     const onSubmit = vi.fn();
     const onEditOtherContext = vi.fn();
-    const { getByRole, rerender } = render(
+    const { getByRole, getByText, rerender } = render(
       <QuestionCard
         id="request-1"
         context="Need more context."
@@ -60,6 +60,10 @@ describe("QuestionCard other context", () => {
         onSubmit={onSubmit}
       />,
     );
+
+    expect(getByRole("button", { name: /edit other context/i })).toBeTruthy();
+    expect(getByText("Other context")).toBeTruthy();
+    expect(getByText("See the attached screenshot.")).toBeTruthy();
 
     fireEvent.click(getByRole("button", { name: "Submit" }));
     expect(onSubmit).toHaveBeenCalledWith(

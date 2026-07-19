@@ -177,6 +177,20 @@ AgentLink supports both project-level and user-level customization for the built
 
 Later files override earlier ones for the same mode slug. Custom modes can also override built-in modes like `code` or `review`.
 
+Four low-adoption language-server tools are hidden from ordinary modes so their schemas and calls do not consume routine agent context: `get_completions`, `get_inlay_hints`, `get_code_actions`, and `apply_code_action`. They remain registered for controlled benchmarking. To expose them, define an explicit project mode such as:
+
+```json
+[
+  {
+    "slug": "language-benchmark",
+    "name": "Language Benchmark",
+    "toolGroups": ["read", "language", "language-benchmark"]
+  }
+]
+```
+
+The `language-benchmark` group is opt-in; adding it back to normal modes defeats the experiment. AgentLink also rejects a tool call unless that tool appeared in the exact provider request for the current turn.
+
 **Custom slash commands** are loaded from these directories, again with later sources taking precedence:
 
 - `~/.agents/commands/`
@@ -514,6 +528,8 @@ return hovers.filter((hover) => hover.contents?.length);
 - Child names must also be present in the exact provider request that invoked `compose`. Nested compose, MCP, shell, background/fleet, writes, media, transcript recall, editor UI, semantic search variants, and interactive controls are rejected.
 - Outside-workspace child paths are limited to AgentLink temporary artifacts and paths already trusted before composition. Compose never opens approval, question, diff, mode, or editor UI.
 - Limits: 64 child calls, 16 descriptors per `toolAll`, 32 MiB QuickJS memory, 60 seconds, 1 MiB canonical data per child, 8 MiB cumulative child data, 40 KiB final serialized return, and a bounded UI-only child trace.
+- The 40 KiB ceiling applies only to the final serialized value returned to the model, not to child data processed inside the sandbox. It bounds model-context, transcript, persistence, and UI costs and prevents fan-out scripts from returning their full intermediate dataset instead of a reduced answer.
+- An oversized final value returns a bounded serialization error rather than discarding all diagnostics. The error includes actual/limit byte counts, an 8 KiB UTF-8-safe preview, bounded child names/statuses and omitted-child count, plus bridge metrics. Reduce/filter the result instead of raising the ceiling or repeating the same fan-out.
 - Failures return `isError: true` with a canonical error kind such as `validation`, `policy`, `budget_exhausted`, `child_failed`, `serialization`, `memory_limit`, `timeout`, `aborted`, `script_error`, or `internal`. The parent trace remains visible after session restore in both VS Code and mirrored browser sessions.
 
 `compose` is available only when the extension is built with `DEV_BUILD=true`. It is foreground-only and is not exposed to background profiles or standalone projectless browser Ask Agent.
@@ -673,7 +689,7 @@ Search file contents using regex, or perform semantic codebase search when `sema
 
 | Parameter          | Type     | Description                                                                                                                  |
 | ------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `path`             | string   | Directory to search in                                                                                                       |
+| `path`             | string   | File or directory to search in                                                                                               |
 | `regex`            | string   | Regex pattern to search for, or a natural-language query when `semantic=true`                                                |
 | `file_pattern`     | string?  | Glob to filter files (e.g. `*.ts`). Used for regex mode only.                                                                |
 | `semantic`         | boolean? | Use vector/semantic search instead of regex. Requires the codebase index.                                                    |
@@ -686,7 +702,7 @@ Search file contents using regex, or perform semantic codebase search when `sema
 | `offset`           | number?  | Skip first N matches before returning results. Use with `max_results` for pagination.                                        |
 | `output_mode`      | string?  | `content` (default, matching lines with context), `files_with_matches` (file paths only), or `count` (match counts per file) |
 
-Regex mode is powered by ripgrep with context lines and per-file match counts. Semantic mode uses the same Qdrant-backed codebase index as `codebase_search`.
+Regex mode is powered by ripgrep with context lines and per-file match counts. When `path` already names one file, a supplied `file_pattern` is redundant: AgentLink ignores it, completes the search, and returns a warning in every output mode. Semantic mode uses the same Qdrant-backed codebase index as `codebase_search`.
 
 ### search_session_history
 
@@ -1223,7 +1239,7 @@ Queue a course correction for delivery at the next safe tool boundary. This cann
 
 ### set_task_status
 
-Mark the current built-in agent turn's final status. This drives the highlighted final marker shown in the chat transcript.
+Mark the current built-in agent turn's final status. This ends the current response unless another user interjection is already pending and drives the highlighted final marker shown in the chat transcript. Unfinished todos do not auto-resume after this tool. To answer an interjected question and then resume earlier work, use ordinary visible assistant text instead.
 
 | Parameter        | Type     | Description                                                                                                            |
 | ---------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -1700,6 +1716,16 @@ npm run watch     # rebuild on change
 ```
 
 Press F5 in VS Code to launch the Extension Development Host for testing.
+
+To inspect local tool-adoption telemetry without exposing invocation payloads, run:
+
+```sh
+npm run telemetry:tools -- --top 60
+npm run telemetry:tools -- --since 7d --version 1.17.12
+npm run telemetry:tools:csv
+```
+
+The reporter accepts `--since <ISO date|Nd|Nh|Nm>`, `--until <ISO date>`, repeatable `--version`, `--feedback-input`, `--json`, and `--csv-dir`. It reports aggregate tool/parameter/outcome, latency, feedback-count, and attribution metrics. Feedback text, feedback parameters/result summaries, raw tool inputs/results, project paths, and individual project IDs are never emitted. Dynamic direct MCP names (`server__tool`) are classified separately and do not trigger static inventory-drift warnings.
 
 To release:
 

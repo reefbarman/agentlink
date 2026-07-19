@@ -246,30 +246,40 @@ export function QuestionCard({
         />
 
         {onEditOtherContext ? (
-          <button
-            type="button"
-            class={`question-other-action${currentNote.trim() || attachmentCount > 0 ? " has-context" : ""}`}
-            onClick={() =>
-              onEditOtherContext({
-                questionId: q.id,
-                initialText: currentNote,
-                onCommit: setNote,
-              })
-            }
-          >
-            <i class="codicon codicon-attach" aria-hidden="true" />
-            <span>
-              {currentNote.trim() || attachmentCount > 0
-                ? "Edit other context"
-                : "Other / attach context…"}
-            </span>
-            {attachmentCount > 0 && (
-              <span class="question-other-count">
-                {attachmentCount}{" "}
-                {attachmentCount === 1 ? "attachment" : "attachments"}
+          <div class="question-other-context">
+            <button
+              type="button"
+              class={`question-other-action${currentNote.trim() || attachmentCount > 0 ? " has-context" : ""}`}
+              onClick={() =>
+                onEditOtherContext({
+                  questionId: q.id,
+                  initialText: currentNote,
+                  onCommit: setNote,
+                })
+              }
+            >
+              <i class="codicon codicon-attach" aria-hidden="true" />
+              <span>
+                {currentNote.trim() || attachmentCount > 0
+                  ? "Edit other context"
+                  : "Other / attach context…"}
               </span>
+              {attachmentCount > 0 && (
+                <span class="question-other-count">
+                  {attachmentCount}{" "}
+                  {attachmentCount === 1 ? "attachment" : "attachments"}
+                </span>
+              )}
+            </button>
+            {currentNote.trim() && (
+              <div class="question-other-preview">
+                <div class="question-other-preview-label">Other context</div>
+                <div class="question-other-preview-text">
+                  {currentNote.trim()}
+                </div>
+              </div>
             )}
-          </button>
+          </div>
         ) : (
           <textarea
             class="question-other-input"

@@ -2511,6 +2511,7 @@ export class AgentSessionManager {
         try {
           while (true) {
             let naturalDone = false;
+            let explicitFinalMarker = false;
             runAbortGeneration = session.abortGeneration;
 
             for await (const event of engine.run(session, {
@@ -2526,6 +2527,9 @@ export class AgentSessionManager {
               }
               if (event.type === "todo_update") {
                 lastTodos = event.todos;
+              }
+              if (event.type === "final_marker") {
+                explicitFinalMarker = true;
               }
               if (event.type === "done") {
                 this.saveSession(session.id);
@@ -2592,6 +2596,7 @@ export class AgentSessionManager {
             // Check if we should auto-continue due to pending todos
             if (
               naturalDone &&
+              !explicitFinalMarker &&
               !hasQueuedUserMessages &&
               autoContinueCount < MAX_AUTO_CONTINUE &&
               hasPendingTodos(lastTodos)

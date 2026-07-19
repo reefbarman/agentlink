@@ -323,6 +323,69 @@ describe("TranscriptMessageList model change rendering", () => {
 });
 
 describe("TranscriptMessageList final marker rendering", () => {
+  it("renders a completed interjection summary while the next segment streams", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [
+          {
+            type: "tool_call",
+            id: "final-1",
+            name: "set_task_status",
+            inputJson: JSON.stringify({ status: "completed" }),
+            result: JSON.stringify({ ok: true }),
+            complete: true,
+          },
+        ],
+        finalMarker: {
+          status: "completed",
+          source: "tool",
+          summary: "The compose limit is 40 KiB.",
+          toolCall: {
+            id: "final-1",
+            name: "set_task_status",
+            inputJson: JSON.stringify({ status: "completed" }),
+          },
+        },
+      },
+      {
+        id: "u1",
+        role: "user",
+        content: "Resume the implementation.",
+        timestamp: 2,
+        blocks: [],
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "",
+        timestamp: 3,
+        blocks: [
+          {
+            type: "thinking",
+            id: "thinking-1",
+            text: "Resuming.",
+            complete: false,
+          },
+        ],
+      },
+    ];
+
+    const { container, unmount } = render(
+      h(TranscriptMessageList, { messages, streaming: true }),
+    );
+
+    expect(screen.getByText("The compose limit is 40 KiB.")).toBeTruthy();
+    expect(container.querySelectorAll(".final-marker-tool-call")).toHaveLength(
+      1,
+    );
+    expect(container.querySelectorAll(".streaming-indicator")).toHaveLength(1);
+    unmount();
+  });
+
   it("renders final marker styling for historical and latest assistant messages", () => {
     const messages: ChatMessage[] = [
       {
