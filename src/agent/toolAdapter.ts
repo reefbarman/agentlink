@@ -277,7 +277,9 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
         send_feedback: {
           tool_name: z
             .string()
-            .describe("Name of the tool this feedback is about"),
+            .describe(
+              "Canonical AgentLink tool category this feedback is about. For MCP server-tool calls, use call_mcp_tool even when invoked directly as server__tool; put the MCP server and bare tool in tool_params or feedback. For MCP management helpers, use the AgentLink meta-tool actually called.",
+            ),
           feedback: z
             .string()
             .describe(

@@ -408,6 +408,16 @@ describe("buildSystemPrompt", () => {
   it("includes dev feedback section when devMode is true", async () => {
     const result = await buildSystemPrompt("code", tmpDir, { devMode: true });
     expect(result).toContain("Tool Feedback (Dev Mode)");
+    expect(result).toContain(
+      "use `call_mcp_tool` as the canonical feedback category",
+    );
+    expect(result).toContain("invoked directly as `server__tool`");
+    expect(result).toContain(
+      "do not use a server-specific name such as `unity__run_tests`",
+    );
+    expect(result).toContain(
+      "Do not submit AgentLink feedback for ordinary upstream server/domain errors",
+    );
   });
 
   it("includes custom instructions when AGENTS.md exists", async () => {

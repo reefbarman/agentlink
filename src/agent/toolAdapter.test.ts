@@ -479,11 +479,22 @@ describe("getAgentTools", () => {
   });
 
   it("gates feedback tools by build type", () => {
-    const names = getAgentTools().map((t) => t.name);
+    const tools = getAgentTools();
+    const names = tools.map((tool) => tool.name);
     if (__DEV_BUILD__) {
       expect(names).toContain("send_feedback");
       expect(names).toContain("get_feedback");
       expect(names).toContain("delete_feedback");
+      const sendFeedback = tools.find((tool) => tool.name === "send_feedback");
+      const toolNameSchema = sendFeedback?.input_schema.properties
+        ?.tool_name as { description?: string } | undefined;
+      expect(sendFeedback?.description).toContain(
+        "call_mcp_tool as the canonical feedback category",
+      );
+      expect(sendFeedback?.description).toContain("direct server__tool calls");
+      expect(toolNameSchema?.description).toContain(
+        "use call_mcp_tool even when invoked directly as server__tool",
+      );
     } else {
       expect(names).not.toContain("send_feedback");
       expect(names).not.toContain("get_feedback");

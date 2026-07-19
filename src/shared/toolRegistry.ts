@@ -234,7 +234,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     label: "Submit tool feedback",
     devOnly: true,
     description:
-      "Submit feedback about a agentlink tool \u2014 report issues, suggest improvements, or note missing features/parameters. Feedback is stored locally for the extension developer to review.",
+      "Submit feedback about an AgentLink tool — report issues, suggest improvements, or note missing features/parameters. Use call_mcp_tool as the canonical feedback category for MCP server-tool integration failures, including direct server__tool calls; use the MCP meta-tool actually called for management helpers. Include server/tool details in the feedback fields. Feedback is stored locally for the extension developer to review.",
   },
   get_feedback: {
     label: "Read tool feedback",

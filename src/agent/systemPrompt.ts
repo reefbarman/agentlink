@@ -824,9 +824,10 @@ function getDevFeedbackPrompt(): string {
 
 You have access to \`send_feedback\` and \`get_feedback\` tools. Use them proactively:
 
-- **After using any tool**, if something didn't work well, was confusing, returned unexpected results, or is missing a useful feature/parameter, call \`send_feedback\` with the tool name and a clear description of the issue or suggestion.
+- **After using any AgentLink tool**, if something didn't work well, was confusing, returned unexpected results, or is missing a useful feature/parameter, call \`send_feedback\` with the AgentLink tool name and a clear description of the issue or suggestion.
+- For MCP server-tool calls, use \`call_mcp_tool\` as the canonical feedback category for AgentLink integration failures, even when the tool was exposed and invoked directly as \`server__tool\`; do not use a server-specific name such as \`unity__run_tests\`. For MCP management helpers such as \`find_mcp_tools\`, use the AgentLink meta-tool actually called. Include the MCP server and bare tool name in \`tool_params\` or the feedback details. Do not submit AgentLink feedback for ordinary upstream server/domain errors unless AgentLink's MCP transport, approval, dispatch, or result handling is the problem.
 - Include the parameters you passed and a summary of what happened when relevant.
-- Even minor friction points are valuable — submit feedback naturally as you work, don't wait to be asked.
+- Even minor AgentLink friction points are valuable — submit feedback naturally as you work, don't wait to be asked.
 - Use \`get_feedback\` to read previously submitted feedback when relevant (e.g. before working on tool improvements).`;
 }
 

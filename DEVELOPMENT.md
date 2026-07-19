@@ -30,12 +30,14 @@ The following tools are registered in dev builds only. They are **not** included
 
 Submit feedback about an AgentLink tool — report issues, suggest improvements, or note missing features. Feedback is stored locally for the extension developer to review.
 
-| Parameter             | Type    | Description                                              |
-| --------------------- | ------- | -------------------------------------------------------- |
-| `tool_name`           | string  | Name of the tool this feedback is about                  |
-| `feedback`            | string  | Description of the issue, suggestion, or missing feature |
-| `tool_params`         | string? | The parameters that were passed (helps reproduce)        |
-| `tool_result_summary` | string? | Summary of what happened or the result received          |
+For MCP server-tool calls, use `call_mcp_tool` as the canonical feedback category for AgentLink integration failures, including tools exposed and invoked directly as `server__tool`. Do not use a server-specific name such as `unity__run_tests` or a bare upstream tool name as `tool_name`; put the MCP server and bare tool in `tool_params` or `feedback`. For MCP management helpers (`find_mcp_tools`, `read_mcp_resource`, and so on), use the AgentLink meta-tool actually called. Ordinary upstream server/domain errors do not need AgentLink feedback unless the problem is AgentLink's MCP transport, approval, dispatch, or result handling.
+
+| Parameter             | Type    | Description                                                            |
+| --------------------- | ------- | ---------------------------------------------------------------------- |
+| `tool_name`           | string  | AgentLink category; use `call_mcp_tool` for MCP server-tool calls      |
+| `feedback`            | string  | Description of the issue, suggestion, or missing feature               |
+| `tool_params`         | string? | Parameters passed; include MCP server and bare tool here when relevant |
+| `tool_result_summary` | string? | Summary of what happened or the unexpected result received             |
 
 ### get_feedback
 
