@@ -1,3 +1,5 @@
+import * as vscode from "vscode";
+
 import type { ApprovalRequest, DecisionMessage } from "./webview/types.js";
 import { describe, expect, it, vi } from "vitest";
 
@@ -44,7 +46,10 @@ function createProvider(
     typeof ApprovalPanelProvider
   >[2],
 ) {
-  const statusBarManager = { setPendingCount: vi.fn() };
+  const statusBarManager = {
+    setPendingCount: vi.fn(),
+    showAlert: vi.fn(() => ({ dispose: vi.fn() })),
+  };
   return {
     statusBarManager,
     provider: new ApprovalPanelProvider(
@@ -69,7 +74,7 @@ function projectContext(input: { sessionId?: string; targetPath?: string }) {
 }
 
 describe("ApprovalPanelProvider webview shell", () => {
-  it("renders the shared shell with approval resources", () => {
+  it("renders the shared shell with approval resources", async () => {
     const { provider } = createProvider();
     const webview = {
       options: {},
@@ -78,9 +83,20 @@ describe("ApprovalPanelProvider webview shell", () => {
       asWebviewUri: (uri: { toString: () => string }) => ({
         toString: () => `webview:${uri.toString()}`,
       }),
+      onDidReceiveMessage: vi.fn(() => ({ dispose: vi.fn() })),
+      postMessage: vi.fn(async () => true),
     };
+    const panel = {
+      webview,
+      reveal: vi.fn(),
+      onDidDispose: vi.fn(() => ({ dispose: vi.fn() })),
+      dispose: vi.fn(),
+      iconPath: undefined,
+    };
+    vi.mocked(vscode.window.createWebviewPanel).mockReturnValue(panel as never);
 
-    provider.resolveWebviewView({ webview } as never);
+    provider.enqueuePathApproval("/outside/file.txt");
+    await vi.waitFor(() => expect(panel.reveal).toHaveBeenCalled());
 
     expect(webview.html).toContain("<title>Approval</title>");
     expect(webview.html).toContain(
@@ -95,6 +111,60 @@ describe("ApprovalPanelProvider webview shell", () => {
     expect(webview.html.indexOf("codicon.css")).toBeLessThan(
       webview.html.indexOf("approval.css"),
     );
+    expect(panel.reveal).toHaveBeenCalledWith(2, false);
+    provider.dispose();
+  });
+});
+
+describe("ApprovalPanelProvider command security projection", () => {
+  it("forwards token-free security and project attribution together", async () => {
+    const { provider } = createProvider(projectContext);
+    let shown: ApprovalRequest | undefined;
+    provider.onForwardApproval = (request, respond) => {
+      shown = request;
+      respond({ type: "decision", id: request.id, decision: "run-once" });
+    };
+    const security = {
+      auditId: "audit-1",
+      route: "sandbox" as const,
+      confinement: "verified-baseline" as const,
+      routeReason: "verified-local-macos" as const,
+      approvalPolicy: "sandbox-baseline-v1" as const,
+      preparedAt: 100,
+      sandbox: {
+        attestationId: "attestation-1",
+        attestationVersion: "sandbox-behavior-v1",
+        policyVersion: "policy-v1",
+        profileId: "workspace-write",
+        backend: "seatbelt" as const,
+        architecture: "arm64" as const,
+        capabilities: {
+          backend: "seatbelt",
+          processTree: true,
+          filesystemRead: "isolated" as const,
+          filesystemWrite: "strict" as const,
+          network: "blocked" as const,
+          privateHome: true,
+          privateTmp: true,
+          hostIpcBlocked: true,
+          resourceLimits: "partial" as const,
+          warnings: [],
+        },
+      },
+    };
+
+    await expect(
+      provider.enqueueCommandApproval("npm test", "npm test", {
+        cwd: "/workspace",
+        security,
+        sessionId: "session-b",
+      }).promise,
+    ).resolves.toMatchObject({ decision: "run-once" });
+
+    expect(shown?.security).toBe(security);
+    expect(shown?.sourceProject?.projectId).toBe("project-b");
+    expect(shown).not.toHaveProperty("sandboxCapabilityRequest");
+    expect(shown).not.toHaveProperty("bindingDigest");
   });
 });
 

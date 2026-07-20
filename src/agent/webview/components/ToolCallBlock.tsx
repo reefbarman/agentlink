@@ -427,27 +427,56 @@ function tokenizeJson(src: string): Token[] {
   return tokens;
 }
 
-function getCommandApprovalBadge(
+export function getCommandApprovalBadge(
   resultPayload: Record<string, unknown> | null,
 ): { text: string; title: string } | null {
+  const security = resultPayload?.security;
+  const securityRecord =
+    security && typeof security === "object"
+      ? (security as Record<string, unknown>)
+      : null;
+  const route =
+    securityRecord?.route === "sandbox"
+      ? "sandbox"
+      : securityRecord?.route === "native"
+        ? "native"
+        : null;
+  const routeSuffix = route ? ` · ${route}` : "";
+  const sandbox = securityRecord?.sandbox;
+  const sandboxRecord =
+    sandbox && typeof sandbox === "object"
+      ? (sandbox as Record<string, unknown>)
+      : null;
+  const routeTitle =
+    route === "sandbox"
+      ? ` · Verified sandbox${typeof sandboxRecord?.profileId === "string" ? ` (${sandboxRecord.profileId})` : ""}${typeof sandboxRecord?.attestationVersion === "string" ? ` · ${sandboxRecord.attestationVersion}` : ""}`
+      : route === "native"
+        ? ` · Native terminal (unsandboxed)${typeof securityRecord?.routeReason === "string" ? ` · ${securityRecord.routeReason}` : ""}`
+        : "";
   const approval = resultPayload?.approval;
   if (approval && typeof approval === "object" && "by" in approval) {
     const record = approval as Record<string, unknown>;
     switch (record.by) {
       case "master_bypass":
-        return { text: "approved · bypass", title: "Approved by masterBypass" };
+        return {
+          text: `approved · bypass${routeSuffix}`,
+          title: `Approved by masterBypass${routeTitle}`,
+        };
       case "explicit_rule":
-        return { text: "approved · rule", title: "Approved by command rule" };
+        return {
+          text: `approved · rule${routeSuffix}`,
+          title: `Approved by command rule${routeTitle}`,
+        };
       case "recent_approval":
         return {
-          text: "approved · recent",
-          title: "Approved by recent single-use approval TTL",
+          text: `approved · recent${routeSuffix}`,
+          title: `Approved by recent single-use approval TTL${routeTitle}`,
         };
       case "tier":
         return typeof record.tier === "string"
           ? {
-              text: `auto · ${record.tier}`,
-              title: "Auto-approved by command safety tier",
+              text: `auto · ${record.tier}${routeSuffix}`,
+              title: `Auto-approved by command safety tier${routeTitle}`,
             }
           : null;
       case "model_reviewer": {
@@ -461,16 +490,19 @@ function getCommandApprovalBadge(
             ? ` · ${confidence} confidence · ${risk} risk`
             : "";
         return {
-          text: "approved · reviewer",
-          title: `Approved by one-shot reviewer (${model})${assessment}${reason ? `: ${reason}` : ""}`,
+          text: `approved · reviewer${routeSuffix}`,
+          title: `Approved by one-shot reviewer (${model})${assessment}${reason ? `: ${reason}` : ""}${routeTitle}`,
         };
       }
       case "human":
-        return { text: "approved · human", title: "Approved manually" };
+        return {
+          text: `approved · human${routeSuffix}`,
+          title: `Approved manually${routeTitle}`,
+        };
       case "human_edited":
         return {
-          text: "approved · edited",
-          title: "Approved manually after editing the command",
+          text: `approved · edited${routeSuffix}`,
+          title: `Approved manually after editing the command${routeTitle}`,
         };
       default:
         return null;
@@ -486,8 +518,8 @@ function getCommandApprovalBadge(
     typeof (autoApproved as Record<string, unknown>).tier === "string"
   ) {
     return {
-      text: `auto · ${String((autoApproved as Record<string, unknown>).tier)}`,
-      title: "Auto-approved by command safety tier",
+      text: `auto · ${String((autoApproved as Record<string, unknown>).tier)}${routeSuffix}`,
+      title: `Auto-approved by command safety tier${routeTitle}`,
     };
   }
   return null;

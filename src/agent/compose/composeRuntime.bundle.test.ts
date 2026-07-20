@@ -25,6 +25,7 @@ let runtime: BundledComposeRuntime;
 beforeAll(async () => {
   await execFileAsync(process.execPath, ["esbuild.mjs"], {
     cwd: path.resolve("."),
+    env: { ...process.env, DEV_BUILD: "true" },
   });
   runtime = (await loadComposeRuntime(
     path.resolve("."),

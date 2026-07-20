@@ -30,11 +30,18 @@
           "icon": "media/agentlink.svg"
         }
       ],
+      "secondarySidebar": [
+        {
+          "id": "agentLinkAgent",
+          "title": "AgentLink Agent",
+          "icon": "media/agentlink.svg"
+        }
+      ],
       "panel": [
         {
           "id": "agentLinkPanel",
-          "title": "AgentLink",
-          "icon": "media/agentlink.svg"
+          "title": "AgentLink Terminal",
+          "icon": "media/agentlink-terminal.svg"
         }
       ]
     },
@@ -45,7 +52,9 @@
           "type": "webview",
           "id": "agentLink.statusView",
           "name": "Activity"
-        },
+        }
+      ],
+      "agentLinkAgent": [
         {
           "icon": "media/agentlink.svg",
           "type": "webview",
@@ -55,10 +64,11 @@
       ],
       "agentLinkPanel": [
         {
-          "icon": "media/agentlink.svg",
+          "icon": "media/agentlink-terminal.svg",
           "type": "webview",
-          "id": "agentLink.approvalView",
-          "name": "Approvals"
+          "id": "agentLink.terminalView",
+          "name": "Terminal",
+          "when": "agentLink.customTerminalAvailable"
         }
       ]
     },
@@ -97,6 +107,11 @@
       {
         "command": "agentlink.continueToolCallInBackground",
         "title": "AgentLink: Continue Tool Call in Background"
+      },
+      {
+        "command": "agentlink.openTerminal",
+        "title": "AgentLink: Open Terminal",
+        "icon": "$(terminal)"
       },
       {
         "command": "agentlink.openBrowserGateway",
@@ -227,6 +242,18 @@
     "configuration": {
       "title": "AgentLink",
       "properties": {
+        "agentlink.terminal.enabled": {
+          "type": "boolean",
+          "scope": "machine",
+          "default": true,
+          "description": "Enable AgentLink terminals on supported local macOS extension hosts when a compatible standalone Node.js runtime is available. User Host Shell tabs run unsandboxed, while built-in agent commands run in isolated workspace sandboxes. Unsupported, remote, or runtime-incompatible hosts keep the native VS Code terminal provider."
+        },
+        "agentlink.terminal.nodePath": {
+          "type": "string",
+          "scope": "machine",
+          "default": "",
+          "description": "Optional absolute path to a standalone Node.js executable used by the AgentLink sandbox helper. Leave empty to probe Node.js from VS Code's inherited PATH and standard macOS installation locations. Electron is not supported."
+        },
         "agentlink.webAccess.searchBackend": {
           "scope": "window",
           "type": "string",
@@ -569,20 +596,6 @@
           ],
           "description": "Glob patterns for files to exclude from codebase indexing (in addition to .gitignore)."
         },
-        "agentlink.approvalPosition": {
-          "scope": "window",
-          "type": "string",
-          "enum": [
-            "beside",
-            "panel"
-          ],
-          "default": "panel",
-          "enumDescriptions": [
-            "Opens an editor tab to the right of the active editor (split view). Closes when all approvals are handled.",
-            "Shows a tab in the bottom panel alongside Terminal/Problems. Can be dragged to the secondary sidebar."
-          ],
-          "description": "Where to show approval dialogs."
-        },
         "agentlink.recentApprovalTtl": {
           "scope": "resource",
           "type": "number",
@@ -749,6 +762,7 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "package": "vsce package",
+    "package:sandbox-runtime": "node scripts/package-sandbox-runtime.mjs",
     "release": "bash scripts/release.sh",
     "audit:assistant-runtime": "node scripts/audit-assistant-runtime.mjs",
     "benchmark:codex-oauth-models": "node --experimental-strip-types scripts/benchmark-codex-oauth-models.mts",
@@ -756,9 +770,12 @@
     "telemetry:tools:csv": "node scripts/report-tool-usage-telemetry.mjs --csv",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
-    "lint": "bash -c 'e=0; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
+    "lint": "bash -c 'e=0; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:sandbox-runtime": "node --test scripts/package-sandbox-runtime.test.mjs scripts/sandbox-interactive-helper.test.mjs scripts/sandbox-network-policy.test.mjs scripts/sandbox-network-proxy.test.mjs scripts/sandbox-process-reaper.test.mjs scripts/sandbox-protected-roots.test.mjs scripts/sandbox-runtime-helper.test.mjs",
+    "probe:sandbox-runtime": "node scripts/sandbox-runtime-behavior.mjs",
+    "benchmark:sandbox-runtime": "node scripts/sandbox-runtime-evidence.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.1.0",
@@ -767,6 +784,9 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@vscode/codicons": "^0.0.45",
     "@vscode/tree-sitter-wasm": "^0.3.1",
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/addon-search": "0.15.0",
+    "@xterm/xterm": "5.5.0",
     "bmp-js": "^0.1.0",
     "diff": "^9.0.0",
     "dompurify": "^3.4.11",
@@ -793,6 +813,7 @@
     "uuid": "^14.0.0"
   },
   "devDependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.65",
     "@testing-library/preact": "^3.2.4",
     "@types/bmp-js": "^0.1.2",
     "@types/multicast-dns": "^7.2.4",
@@ -804,6 +825,7 @@
     "esbuild": "^0.28.1",
     "jsdom": "^29.1.1",
     "monaco-editor": "^0.55.1",
+    "node-pty": "1.1.0",
     "oxfmt": "^0.58.0",
     "oxlint": "^1.73.0",
     "typescript": "^7.0.2",

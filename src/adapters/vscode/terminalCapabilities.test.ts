@@ -53,6 +53,43 @@ describe("createVscodeTerminalProvider", () => {
     });
   });
 
+  it("fails closed for sandbox capability and authorization inputs", async () => {
+    const provider = createVscodeTerminalProvider();
+
+    await expect(
+      provider.executeCommand({
+        command: "curl https://example.com",
+        cwd: "/workspace",
+        sandboxCapabilityRequest: { unrestrictedPublicNetwork: true },
+      }),
+    ).rejects.toThrow(
+      "Sandbox capability requests cannot run in the native VS Code terminal provider.",
+    );
+    await expect(
+      provider.executeCommand({
+        command: "pwd",
+        cwd: "/workspace",
+        sandbox: {
+          policy: {
+            version: "test",
+            profileId: "test",
+            readableRoots: [],
+            writableRoots: [],
+            deniedRoots: [],
+            protectedReadOnlyRoots: [],
+            network: { mode: "blocked" },
+            environment: { inheritHost: false, values: {} },
+            allowedUnixSockets: [],
+          },
+          bindingDigest: "binding",
+        },
+      }),
+    ).rejects.toThrow(
+      "Sandbox capability requests cannot run in the native VS Code terminal provider.",
+    );
+    expect(terminalManager.executeCommand).not.toHaveBeenCalled();
+  });
+
   it("delegates terminal state and control methods to TerminalManager", () => {
     terminalManager.getBackgroundState.mockReturnValue({
       is_running: true,

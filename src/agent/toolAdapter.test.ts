@@ -502,6 +502,22 @@ describe("getAgentTools", () => {
     }
   });
 
+  it("does not advertise sandbox capability expansion before B5", () => {
+    const commandTools = BUILT_IN_MODES.flatMap((mode) => {
+      const command = getAgentTools(mode).find(
+        (tool) => tool.name === "execute_command",
+      );
+      return command ? [command] : [];
+    });
+
+    expect(commandTools.length).toBeGreaterThan(0);
+    for (const command of commandTools) {
+      expect(command.input_schema.properties).not.toHaveProperty(
+        "sandbox_permissions",
+      );
+    }
+  });
+
   it("keeps compose out of background, restrictive profile, and skill catalogs", () => {
     expect(
       getAgentTools(undefined, undefined, true).map((tool) => tool.name),
@@ -2549,6 +2565,43 @@ describe("dispatchToolCall", () => {
       mockCtx.sessionId,
       mockCtx.onApprovalRequest,
       { renameSymbolProvider },
+    );
+  });
+
+  it("does not synthesize terminal authority when the host supplies no provider", async () => {
+    const { handleExecuteCommand } = await import("../tools/executeCommand.js");
+    const { handleGetTerminalOutput } =
+      await import("../tools/getTerminalOutput.js");
+    const { handleCloseTerminals } = await import("../tools/closeTerminals.js");
+    const { terminalProvider: _terminalProvider, ...withoutTerminal } = mockCtx;
+
+    await dispatchToolCall(
+      "execute_command",
+      { command: "pwd" },
+      withoutTerminal,
+    );
+    await dispatchToolCall(
+      "get_terminal_output",
+      { terminal_id: "missing" },
+      withoutTerminal,
+    );
+    await dispatchToolCall("close_terminals", {}, withoutTerminal);
+
+    expect(handleExecuteCommand).toHaveBeenLastCalledWith(
+      { command: "pwd" },
+      mockCtx.approvalManager,
+      mockCtx.approvalPanel,
+      mockCtx.sessionId,
+      mockCtx.trackerCtx,
+      { terminalProvider: undefined },
+    );
+    expect(handleGetTerminalOutput).toHaveBeenLastCalledWith(
+      { terminal_id: "missing" },
+      { terminalProvider: undefined },
+    );
+    expect(handleCloseTerminals).toHaveBeenLastCalledWith(
+      {},
+      { terminalProvider: undefined },
     );
   });
 

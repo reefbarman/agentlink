@@ -210,7 +210,7 @@ describe("reference images", () => {
 
   it("resolves workspace file references as base64 input images", async () => {
     const dir = await fs.mkdtemp(
-      path.join(process.cwd(), "tmp", "generate-image-ref-test-"),
+      path.join(process.cwd(), ".generate-image-ref-test-"),
     );
     tempDirs.push(dir);
     const imagePath = path.join(dir, "reference.png");

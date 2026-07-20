@@ -44,7 +44,7 @@ function eligibility(
     classified: classifyCommand(command, context),
     cwd: root,
     workspaceRoots: [root],
-    hasInlineFiles: false,
+    inlineFiles: undefined,
     hasEnvOverrides: false,
     forceRequested: false,
     ...overrides,
@@ -179,9 +179,64 @@ describe("command reviewer automatic approval eligibility", () => {
     });
   });
 
+  it("allows fully previewed non-executable inline files only in a verified sandbox", () => {
+    const inlineFiles = [
+      {
+        name: "input",
+        path: "/private/tmp/agentlink-cmd/input.txt",
+        ext: "txt",
+        bytes: 5,
+        sha256: "a".repeat(64),
+        truncated: false,
+        executable: false,
+        preview: "hello",
+      },
+    ];
+    expect(
+      eligibility("mkdir generated", {
+        inlineFiles,
+        security: {
+          auditId: "audit-inline",
+          route: "sandbox",
+          confinement: "verified-baseline",
+          routeReason: "verified-local-macos",
+          approvalPolicy: "sandbox-baseline-v1",
+          preparedAt: 100,
+        },
+      }),
+    ).toEqual({ eligible: true });
+    expect(eligibility("mkdir generated", { inlineFiles })).toEqual({
+      eligible: false,
+      reason: "Attached temporary command files require a verified sandbox",
+    });
+  });
+
   it.each([
     [{ cwd: "/outside" }, "Working directory outside workspace"],
-    [{ hasInlineFiles: true }, "Attached temporary command files"],
+    [
+      {
+        inlineFiles: [
+          {
+            name: "script",
+            path: "/private/tmp/script.sh",
+            bytes: 5,
+            sha256: "a".repeat(64),
+            truncated: false,
+            executable: true,
+            preview: "true\n",
+          },
+        ],
+        security: {
+          auditId: "audit-inline",
+          route: "sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          approvalPolicy: "sandbox-baseline-v1" as const,
+          preparedAt: 100,
+        },
+      },
+      "Executable or partially previewed temporary command files",
+    ],
     [{ hasEnvOverrides: true }, "Environment overrides"],
     [{ forceRequested: true }, "Forced execution"],
   ])("denies execution context %#", (overrides, reasonFragment) => {
@@ -368,6 +423,44 @@ describe("one-shot command approval reviewer", () => {
       decision: "ask_user",
       reason: "Objective is ambiguous",
     });
+  });
+
+  it("sends bounded inline-file evidence without host temp paths", async () => {
+    const { provider, complete, sessionModel } = makeProvider({});
+    const reviewer = createCommandApprovalReviewer({
+      resolveContext: () => ({ provider, sessionModel }),
+    });
+    const input = {
+      ...reviewInput("cp $AL_FILE(input) generated.txt"),
+      security: {
+        auditId: "audit-inline",
+        route: "sandbox" as const,
+        confinement: "verified-baseline" as const,
+        routeReason: "verified-local-macos" as const,
+        approvalPolicy: "sandbox-baseline-v1" as const,
+        preparedAt: 100,
+      },
+      inlineFiles: [
+        {
+          name: "input",
+          path: "/private/var/folders/secret/agentlink-cmd/input.txt",
+          ext: "txt",
+          bytes: 5,
+          sha256: "a".repeat(64),
+          truncated: false,
+          executable: false,
+          preview: "hello",
+        },
+      ],
+    };
+
+    await reviewer.review(input);
+
+    const content = complete.mock.calls[0]?.[0]?.messages[0]?.content;
+    expect(content).toContain('"name":"input"');
+    expect(content).toContain(`"sha256":"${"a".repeat(64)}"`);
+    expect(content).toContain('"content":"hello"');
+    expect(content).not.toContain("/private/var/folders/secret");
   });
 
   it("does not require the condense model to be routable", async () => {

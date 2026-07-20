@@ -34,6 +34,11 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "codexProMode",
 ] as const;
 
+export const MACHINE_SCOPED_AGENTLINK_SETTINGS = [
+  "terminal.enabled",
+  "terminal.nodePath",
+] as const;
+
 export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "webAccess.searchBackend",
   "webAccess.fetchBackend",
@@ -51,7 +56,6 @@ export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "openaiCompatible.apiKey",
   "openaiCompatible.timeoutMs",
   "questionDetection.mode",
-  "approvalPosition",
   "showThinking",
   "anthropic.dynamicModelCapabilities",
 ] as const;

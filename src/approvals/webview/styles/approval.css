@@ -328,6 +328,39 @@ body {
   color: var(--vscode-terminal-ansiBlue, #6796e6);
 }
 
+.command-security {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorInfo-background, #063b49) 25%,
+    transparent
+  );
+}
+.command-security > .codicon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.command-security.verified > .codicon {
+  color: #4ec9b0;
+}
+.command-security.native > .codicon {
+  color: var(--vscode-terminal-ansiYellow, #d7ba7d);
+}
+.command-security-heading {
+  margin-bottom: 2px;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
 .command-review {
   display: flex;
   align-items: flex-start;

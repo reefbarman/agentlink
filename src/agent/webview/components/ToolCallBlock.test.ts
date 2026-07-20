@@ -7,6 +7,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 import {
   ToolCallBlock,
   formatToolFileDisplayPath,
+  getCommandApprovalBadge,
   getToolCallVisualState,
 } from "./ToolCallBlock";
 
@@ -163,6 +164,53 @@ describe("formatToolFileDisplayPath", () => {
     expect(
       formatToolFileDisplayPath("\\\\server\\share\\output\\full.log"),
     ).toBe("\\\\server\\share\\output\\full.log");
+  });
+});
+
+describe("getCommandApprovalBadge", () => {
+  it("identifies verified sandbox reviewer approvals", () => {
+    expect(
+      getCommandApprovalBadge({
+        approval: {
+          by: "model_reviewer",
+          model: "review-model",
+          confidence: "high",
+          risk: "medium",
+          reason: "Bounded workspace mutation",
+        },
+        security: {
+          route: "sandbox",
+          confinement: "verified-baseline",
+          sandbox: {
+            profileId: "workspace-write",
+            attestationVersion: "sandbox-behavior-v1",
+          },
+        },
+      }),
+    ).toEqual({
+      text: "approved · reviewer · sandbox",
+      title: expect.stringContaining(
+        "Verified sandbox (workspace-write) · sandbox-behavior-v1",
+      ),
+    });
+  });
+
+  it("identifies unsandboxed native approvals and their route reason", () => {
+    expect(
+      getCommandApprovalBadge({
+        approval: { by: "explicit_rule" },
+        security: {
+          route: "native",
+          confinement: "native-unsandboxed",
+          routeReason: "runtime-unavailable",
+        },
+      }),
+    ).toEqual({
+      text: "approved · rule · native",
+      title: expect.stringContaining(
+        "Native terminal (unsandboxed) · runtime-unavailable",
+      ),
+    });
   });
 });
 

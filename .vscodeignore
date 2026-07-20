@@ -26,6 +26,10 @@
 !dist/chat.css
 !dist/browser-gateway.js
 !dist/browser-gateway.css
+!dist/terminal.js
+!dist/terminal.js.map
+!dist/terminal.css
+!dist/terminal.css.map
 !dist/monaco-editor.worker.js
 !dist/monaco-editor.worker.js.map
 !dist/monaco-json.worker.js
@@ -38,6 +42,7 @@
 !dist/monaco-ts.worker.js.map
 !dist/codicon.css
 !dist/codicon.ttf
+!dist/sandbox-runtime/**
 !package.json
 !README.md
 !LICENSE

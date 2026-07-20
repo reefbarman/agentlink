@@ -63,7 +63,9 @@ export function materializeInlineCommandFiles(
   if (!files || files.length === 0) return undefined;
   validateInlineCommandFiles(command, files);
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-cmd-"));
+  const dir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-cmd-")),
+  );
   let cleaned = false;
 
   try {

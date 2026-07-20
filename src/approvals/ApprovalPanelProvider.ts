@@ -13,6 +13,7 @@ import type {
 } from "./webview/types.js";
 
 import type { StatusBarManager } from "../util/StatusBarManager.js";
+import type { TerminalExecutionSecuritySummary } from "../core/capabilities/terminal.js";
 import { isMemoryProtectedPath } from "./protectedPaths.js";
 import path from "path";
 import picomatch from "picomatch";
@@ -118,6 +119,7 @@ interface InternalRequest {
   commandReview?: CommandReviewSummary;
   /** Concise guardrail reason shown instead of reviewer output. */
   humanOnlyReason?: string;
+  security?: TerminalExecutionSecuritySummary;
   writeOperation?: "create" | "modify";
   outsideWorkspace?: boolean;
   oldName?: string;
@@ -139,18 +141,10 @@ interface QueueEntry {
   resolve: (value: unknown) => void;
 }
 
-type ApprovalPosition = "beside" | "panel";
-
 // ── Provider ────────────────────────────────────────────────────────────────
 
-export class ApprovalPanelProvider
-  implements vscode.WebviewViewProvider, vscode.Disposable
-{
-  public static readonly viewType = "agentLink.approvalView";
-
-  // Container references (only one is active at a time)
+export class ApprovalPanelProvider implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
-  private view: vscode.WebviewView | undefined;
 
   // Queue
   private queue: QueueEntry[] = [];
@@ -172,9 +166,6 @@ export class ApprovalPanelProvider
 
   // Alert
   private alertDisposable: vscode.Disposable | undefined;
-
-  // Listener cleanup for panel mode
-  private viewMessageDisposable: vscode.Disposable | undefined;
 
   // Track whether the Preact app has signalled it's ready
   private webviewReady = false;
@@ -202,23 +193,6 @@ export class ApprovalPanelProvider
     },
   ) {}
 
-  // ── WebviewViewProvider (for "panel" mode) ──────────────────────────────
-
-  resolveWebviewView(webviewView: vscode.WebviewView): void {
-    this.view = webviewView;
-    webviewView.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [this.extensionUri],
-    };
-    webviewView.webview.html = this.getShellHtml(webviewView.webview);
-
-    if (this.currentEntry && this.getPosition() !== "beside") {
-      this.showCurrentApproval();
-      webviewView.show(false);
-      vscode.commands.executeCommand("agentLink.approvalView.focus");
-    }
-  }
-
   // ── Public API ──────────────────────────────────────────────────────────
 
   enqueueCommandApproval(
@@ -231,6 +205,7 @@ export class ApprovalPanelProvider
       cwd?: string;
       commandReview?: CommandReviewSummary;
       humanOnlyReason?: string;
+      security?: TerminalExecutionSecuritySummary;
       sessionId?: string;
     },
   ): { promise: Promise<CommandApprovalResponse>; id: string } {
@@ -246,6 +221,7 @@ export class ApprovalPanelProvider
       cwd: options?.cwd,
       commandReview: options?.commandReview,
       humanOnlyReason: options?.humanOnlyReason,
+      security: options?.security,
       sessionId: options?.sessionId,
     }) as Promise<CommandApprovalResponse>;
     return { promise, id };
@@ -461,6 +437,7 @@ export class ApprovalPanelProvider
         cwd: request.cwd,
         commandReview: request.commandReview,
         humanOnlyReason: request.humanOnlyReason,
+        security: request.security,
         filePath: request.filePath,
         writeOperation: request.writeOperation,
         outsideWorkspace: request.outsideWorkspace,
@@ -498,23 +475,9 @@ export class ApprovalPanelProvider
     );
     vscode.commands.executeCommand("workbench.action.focusWindow");
 
-    const position = this.getPosition();
-    const webview = this.ensureWebview(position);
-    if (!webview) {
-      vscode.commands.executeCommand("agentLink.approvalView.focus");
-      return;
-    }
-
-    // Send approval data to the Preact app via postMessage
+    const webview = this.ensureWebview();
     this.postApprovalToWebview(webview);
-
-    // Reveal and focus
-    if (position === "beside") {
-      this.panel!.reveal(vscode.ViewColumn.Beside, false);
-    } else if (this.view) {
-      this.view.show(false);
-      vscode.commands.executeCommand("agentLink.approvalView.focus");
-    }
+    this.panel!.reveal(vscode.ViewColumn.Beside, false);
   }
 
   private postApprovalToWebview(webview: vscode.Webview): void {
@@ -537,6 +500,7 @@ export class ApprovalPanelProvider
       cwd: request.cwd,
       commandReview: request.commandReview,
       humanOnlyReason: request.humanOnlyReason,
+      security: request.security,
       filePath: request.filePath,
       writeOperation: request.writeOperation,
       outsideWorkspace: request.outsideWorkspace,
@@ -579,7 +543,7 @@ export class ApprovalPanelProvider
     if (message.type === "webviewReady") {
       this.webviewReady = true;
       // If there's a pending approval, send it now
-      const webview = this.getActiveWebview();
+      const webview = this.panel?.webview;
       if (webview && this.currentEntry) {
         this.postApprovalToWebview(webview);
       }
@@ -707,89 +671,46 @@ export class ApprovalPanelProvider
       return;
     }
 
-    const position = this.getPosition();
-    if (position === "beside") {
-      this.panel?.dispose();
-      this.panel = undefined;
-      this.webviewReady = false;
-    } else {
-      // Send idle message to Preact app
-      const webview = this.getActiveWebview();
-      if (webview) {
-        webview.postMessage({ type: "idle" });
-      }
-    }
+    this.panel?.dispose();
+    this.panel = undefined;
+    this.webviewReady = false;
   }
 
   // ── Webview lifecycle ───────────────────────────────────────────────────
 
-  private getPosition(): ApprovalPosition {
-    return (
-      vscode.workspace
-        .getConfiguration("agentlink")
-        .get<ApprovalPosition>("approvalPosition") ?? "beside"
-    );
-  }
-
-  private getActiveWebview(): vscode.Webview | undefined {
-    return this.panel?.webview ?? this.view?.webview;
-  }
-
-  private ensureWebview(
-    position: ApprovalPosition,
-  ): vscode.Webview | undefined {
-    if (position === "beside") {
-      if (!this.panel) {
-        this.webviewReady = false;
-        this.panel = vscode.window.createWebviewPanel(
-          "agentLink.approval",
-          "Approval Required",
-          { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
-          {
-            enableScripts: true,
-            localResourceRoots: [this.extensionUri],
-          },
-        );
-        this.panel.iconPath = vscode.Uri.joinPath(
-          this.extensionUri,
-          "media",
-          "agentlink.svg",
-        );
-        this.panel.onDidDispose(() => {
-          this.panel = undefined;
-          this.webviewReady = false;
-          this.rejectAll();
-        });
-        this.panel.webview.onDidReceiveMessage((msg) =>
-          this.handleMessage(msg),
-        );
-        this.panel.webview.html = this.getShellHtml(this.panel.webview);
-      }
-      return this.panel.webview;
-    }
-
-    // Panel mode
-    if (this.view) {
-      this.viewMessageDisposable?.dispose();
-      this.viewMessageDisposable = this.view.webview.onDidReceiveMessage(
-        (msg) => this.handleMessage(msg),
+  private ensureWebview(): vscode.Webview {
+    if (!this.panel) {
+      this.webviewReady = false;
+      this.panel = vscode.window.createWebviewPanel(
+        "agentLink.approval",
+        "Approval Required",
+        { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
+        {
+          enableScripts: true,
+          localResourceRoots: [this.extensionUri],
+        },
       );
-      return this.view.webview;
+      this.panel.iconPath = vscode.Uri.joinPath(
+        this.extensionUri,
+        "media",
+        "agentlink.svg",
+      );
+      this.panel.onDidDispose(() => {
+        this.panel = undefined;
+        this.webviewReady = false;
+        this.rejectAll();
+      });
+      this.panel.webview.onDidReceiveMessage((msg) => this.handleMessage(msg));
+      this.panel.webview.html = this.getShellHtml(this.panel.webview);
     }
-
-    return undefined;
+    return this.panel.webview;
   }
 
   // ── Public: focus the current approval UI ───────────────────────────────
 
   focusApproval(): void {
-    if (!this.currentEntry) return;
-    const position = this.getPosition();
-    if (position === "beside" && this.panel) {
+    if (this.currentEntry && this.panel) {
       this.panel.reveal(vscode.ViewColumn.Beside, false);
-    } else if (this.view) {
-      this.view.show(false);
-      vscode.commands.executeCommand("agentLink.approvalView.focus");
     }
   }
 
@@ -1105,7 +1026,6 @@ export class ApprovalPanelProvider
     this.rejectAll();
     this.panel?.dispose();
     this.panel = undefined;
-    this.viewMessageDisposable?.dispose();
     this.alertDisposable?.dispose();
   }
 }

@@ -1,5 +1,6 @@
 import {
   COMPATIBILITY_AGENTLINK_SETTINGS,
+  MACHINE_SCOPED_AGENTLINK_SETTINGS,
   PROJECT_SCOPED_AGENTLINK_SETTINGS,
   WINDOW_SCOPED_AGENTLINK_SETTINGS,
   createProjectSettingsAccessor,
@@ -55,6 +56,7 @@ describe("ProjectSettingsAccessor", () => {
   it("classifies every contributed setting exactly once with matching manifest scopes", () => {
     const classifications = [
       ...PROJECT_SCOPED_AGENTLINK_SETTINGS,
+      ...MACHINE_SCOPED_AGENTLINK_SETTINGS,
       ...WINDOW_SCOPED_AGENTLINK_SETTINGS,
       ...COMPATIBILITY_AGENTLINK_SETTINGS,
     ];
@@ -67,7 +69,7 @@ describe("ProjectSettingsAccessor", () => {
     };
     const properties = manifest.contributes.configuration.properties;
 
-    expect(classifications).toHaveLength(51);
+    expect(classifications).toHaveLength(52);
     expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain(
       "webAccess.searchBackend",
     );
@@ -89,6 +91,9 @@ describe("ProjectSettingsAccessor", () => {
     expect(Object.keys(properties)).toHaveLength(classifications.length);
     for (const setting of PROJECT_SCOPED_AGENTLINK_SETTINGS) {
       expect(properties[`agentlink.${setting}`]?.scope).toBe("resource");
+    }
+    for (const setting of MACHINE_SCOPED_AGENTLINK_SETTINGS) {
+      expect(properties[`agentlink.${setting}`]?.scope).toBe("machine");
     }
     for (const setting of [
       ...WINDOW_SCOPED_AGENTLINK_SETTINGS,

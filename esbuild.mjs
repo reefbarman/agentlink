@@ -3,10 +3,13 @@ import * as path from "path";
 
 import { copyFileSync, mkdirSync, readFileSync, readdirSync } from "fs";
 
+import { stageSandboxRuntime } from "./scripts/package-sandbox-runtime.mjs";
+
 const watch = process.argv.includes("--watch");
 
-// Load .env.local if it exists (for DEV_BUILD=true opt-in)
-let devBuild = false;
+// Load .env.local if it exists (for DEV_BUILD=true opt-in). An explicit
+// environment value keeps builds deterministic in CI and isolated worktrees.
+let devBuild = process.env.DEV_BUILD === "true";
 try {
   const envLocal = readFileSync(".env.local", "utf-8");
   devBuild = /^DEV_BUILD\s*=\s*true$/m.test(envLocal);
@@ -98,6 +101,13 @@ const browserGatewayOptions = {
   entryNames: "browser-gateway",
 };
 
+/** @type {esbuild.BuildOptions} */
+const terminalOptions = {
+  ...webviewBase,
+  entryPoints: ["src/terminal/webview/index.tsx"],
+  entryNames: "terminal",
+};
+
 // ⚠️ Every output file produced here must also be re-included in `.vscodeignore`
 // (it uses an ignore-all + allowlist model). A new bundle output that isn't listed
 // there builds fine locally but is dropped from the packaged .vsix and 404s for
@@ -180,6 +190,7 @@ if (watch) {
     frCtx,
     chatCtx,
     browserGatewayCtx,
+    terminalCtx,
     monacoWorkerCtx,
     idxCtx,
     helperCtx,
@@ -191,6 +202,7 @@ if (watch) {
     esbuild.context(frPreviewOptions),
     esbuild.context(chatOptions),
     esbuild.context(browserGatewayOptions),
+    esbuild.context(terminalOptions),
     esbuild.context(monacoWorkerOptions),
     esbuild.context(indexerOptions),
     esbuild.context(browserGatewayHelperOptions),
@@ -203,6 +215,7 @@ if (watch) {
     frCtx.watch(),
     chatCtx.watch(),
     browserGatewayCtx.watch(),
+    terminalCtx.watch(),
     monacoWorkerCtx.watch(),
     idxCtx.watch(),
     helperCtx.watch(),
@@ -217,6 +230,7 @@ if (watch) {
     esbuild.build(frPreviewOptions),
     esbuild.build(chatOptions),
     esbuild.build(browserGatewayOptions),
+    esbuild.build(terminalOptions),
     esbuild.build(monacoWorkerOptions),
     esbuild.build(indexerOptions),
     esbuild.build(browserGatewayHelperOptions),
@@ -243,6 +257,8 @@ if (watch) {
       copyFileSync(path.join(wasmSrcDir, f), path.join(wasmDestDir, f));
     }
   }
+
+  await stageSandboxRuntime();
 
   console.log("Build complete.");
 }
