@@ -100,6 +100,22 @@ function renderSpecialBlockContainer(idx: number, block: SpecialBlock): string {
   return `<div class="special-block-container ${blockClass}-container" data-special-idx="${idx}" data-special-kind="${block.kind}"><div class="special-block-render ${blockClass}-render"><pre><code>${escapedCode}</code></pre></div><div class="special-block-actions ${blockClass}-actions"><button type="button" class="special-block-toggle-code">Show Code</button><button type="button" class="special-block-popout">Pop Out</button></div><pre class="special-block-source ${blockClass}-source" style="display:none"><code>${escapedCode}</code></pre><div class="special-block-sr-only">${title}</div></div>`;
 }
 
+function hasClosingCodeFence(raw: string): boolean {
+  const lines = raw.replace(/\r\n/g, "\n").split("\n");
+  const opening = lines[0]?.match(/^ {0,3}(`{3,}|~{3,})/);
+  if (!opening) return false;
+
+  const marker = opening[1]!;
+  return lines.slice(1).some((line) => {
+    const closing = line.match(/^ {0,3}(`+|~+)[ \t]*$/)?.[1];
+    return (
+      closing !== undefined &&
+      closing[0] === marker[0] &&
+      closing.length >= marker.length
+    );
+  });
+}
+
 function parseMarkdown(text: string): {
   html: string;
   specialBlocks: SpecialBlock[];
@@ -111,9 +127,12 @@ function parseMarkdown(text: string): {
       html({ text }: { text: string }) {
         return escapeHtml(text);
       },
-      code({ text, lang }: { text: string; lang?: string }) {
+      code({ text, lang, raw }: { text: string; lang?: string; raw: string }) {
+        const preClass = hasClosingCodeFence(raw)
+          ? ' class="copyable-code-block"'
+          : "";
         const langClass = lang ? ` class="language-${lang}"` : "";
-        return `<pre><code${langClass}>${escapeHtml(text)}</code></pre>`;
+        return `<pre${preClass}><code${langClass}>${escapeHtml(text)}</code></pre>`;
       },
       checkbox({ checked }: { checked: boolean }) {
         return renderMarkdownTaskCheckbox(checked);
@@ -150,6 +169,54 @@ function parseMarkdown(text: string): {
   });
 
   return { html, specialBlocks };
+}
+
+function addCodeBlockCopyButtons(container: HTMLElement) {
+  const addCopyButton = (host: HTMLElement, source: string) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "code-block-copy-button";
+    button.title = "Copy code block";
+    button.setAttribute("aria-label", "Copy code block");
+    button.setAttribute("aria-live", "polite");
+    button.innerHTML = '<i class="codicon codicon-copy"></i>';
+    button.addEventListener("click", () => {
+      navigator.clipboard
+        ?.writeText(source)
+        .then(() => {
+          button.classList.add("copied");
+          button.title = "Copied!";
+          button.setAttribute("aria-label", "Copied code block");
+          button.innerHTML = '<i class="codicon codicon-check"></i>';
+          window.setTimeout(() => {
+            button.classList.remove("copied");
+            button.title = "Copy code block";
+            button.setAttribute("aria-label", "Copy code block");
+            button.innerHTML = '<i class="codicon codicon-copy"></i>';
+          }, 1500);
+        })
+        .catch(() => {
+          // Clipboard access can be unavailable or denied.
+        });
+    });
+    host.appendChild(button);
+  };
+
+  container
+    .querySelectorAll<HTMLElement>("pre.copyable-code-block")
+    .forEach((pre) => {
+      const code = pre.querySelector(":scope > code");
+      if (!code) return;
+      addCopyButton(pre, code.textContent ?? "");
+    });
+
+  container
+    .querySelectorAll<HTMLElement>(".special-block-container")
+    .forEach((specialBlock) => {
+      const code = specialBlock.querySelector(".special-block-source > code");
+      if (!code) return;
+      addCopyButton(specialBlock, code.textContent ?? "");
+    });
 }
 
 function linkifyFilePathNodes(
@@ -313,6 +380,8 @@ export function StreamingText({
   useEffect(() => {
     if (!containerRef.current) return;
     containerRef.current.innerHTML = parsed.html;
+
+    addCodeBlockCopyButtons(containerRef.current);
 
     // Linkify bare file paths in text nodes (skips code/pre blocks)
     if (onOpenFile) {

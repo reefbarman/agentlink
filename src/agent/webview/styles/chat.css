@@ -857,6 +857,56 @@ body.chat-activity-shelf-resizing * {
   padding: 0;
 }
 
+.markdown-body pre.copyable-code-block {
+  position: relative;
+  padding-right: 36px;
+}
+
+.code-block-copy-button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-sideBar-background);
+  color: var(--vscode-foreground);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 1;
+}
+
+.copyable-code-block:hover > .code-block-copy-button,
+.special-block-container:hover > .code-block-copy-button,
+.code-block-copy-button:focus-visible {
+  opacity: 1;
+}
+
+.code-block-copy-button:hover {
+  background: var(
+    --vscode-button-secondaryBackground,
+    var(--vscode-sideBar-background)
+  );
+  border-color: var(--vscode-focusBorder);
+}
+
+.code-block-copy-button.copied {
+  color: var(--vscode-terminal-ansiGreen, #4ec9b0);
+}
+
+@media (hover: none) {
+  .code-block-copy-button {
+    opacity: 1;
+  }
+}
+
 .markdown-body ul,
 .markdown-body ol {
   padding-left: 20px;
@@ -955,6 +1005,7 @@ body.chat-activity-shelf-resizing * {
 /* ── Mermaid / Vega Blocks ── */
 
 .special-block-container {
+  position: relative;
   margin: 8px 0;
   border: 1px solid var(--vscode-panel-border);
   border-radius: 6px;

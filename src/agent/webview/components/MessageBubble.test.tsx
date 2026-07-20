@@ -239,6 +239,78 @@ describe("MessageBubble slash-command rendering", () => {
     expect(fencedCode?.textContent).toBe("const answer = 42;");
   });
 
+  it("copies fenced code blocks independently from the whole message", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const fullMarkdown = [
+      "First:",
+      "```ts",
+      "const first = 1;",
+      "```",
+      "Second:",
+      "```sh",
+      "npm test",
+      "```",
+    ].join("\n");
+    const message: ChatMessage = {
+      id: "assistant-code-copy",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [{ type: "text", text: fullMarkdown }],
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+    const codeCopyButtons = screen.getAllByRole("button", {
+      name: "Copy code block",
+    });
+    expect(codeCopyButtons).toHaveLength(2);
+    expect(codeCopyButtons[0]?.getAttribute("aria-live")).toBe("polite");
+
+    fireEvent.click(codeCopyButtons[0]!);
+    fireEvent.click(codeCopyButtons[1]!);
+
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenNthCalledWith(1, "const first = 1;");
+      expect(writeText).toHaveBeenNthCalledWith(2, "npm test");
+    });
+
+    const messageCopyButton = container.querySelector(
+      ".assistant-content > .copy-button",
+    ) as HTMLButtonElement;
+    fireEvent.click(messageCopyButton);
+
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenNthCalledWith(3, fullMarkdown);
+    });
+  });
+
+  it("does not add copy controls until a fenced code block is closed", () => {
+    const message: ChatMessage = {
+      id: "assistant-open-code-fence",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [{ type: "text", text: "```ts\nconst pending = true;" }],
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+
+    expect(container.querySelector("pre code")?.textContent).toBe(
+      "const pending = true;",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Copy code block" }),
+    ).toBeNull();
+  });
+
   it("renders Markdown task-list markers without native input controls", () => {
     const message: ChatMessage = {
       id: "assistant-task-list",
