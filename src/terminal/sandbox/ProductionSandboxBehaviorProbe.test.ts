@@ -21,9 +21,65 @@ import { BaselineSandboxLaunchAuthorizer } from "./BaselineSandboxLaunchAuthoriz
 import { SandboxBehaviorAttestationService } from "./SandboxBehaviorAttestationService.js";
 import { SandboxHelperClient } from "./SandboxHelperClient.js";
 import { SandboxTerminalCoordinator } from "./SandboxTerminalCoordinator.js";
-import { createHash } from "node:crypto";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+async function waitForProcessExit(pid: number): Promise<boolean> {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
+}
+
+async function waitForProcessGroupExit(pgid: number): Promise<boolean> {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    try {
+      process.kill(-pgid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
+}
+
+async function waitForHelperClose(
+  helper: ChildProcessWithoutNullStreams,
+): Promise<void> {
+  if (helper.exitCode !== null || helper.signalCode !== null) return;
+  await Promise.race([
+    new Promise<void>((resolve) => helper.once("close", () => resolve())),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error("production sandbox helper did not close")),
+        5_000,
+      ),
+    ),
+  ]);
+}
+
+async function readSpawnedPid(filePath: string): Promise<number | undefined> {
+  try {
+    const value = Number.parseInt(await readFile(filePath, "utf8"), 10);
+    return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "al-production-probe-"));
@@ -193,6 +249,183 @@ describe("createProductionSandboxRuntimeFingerprint", () => {
       }
     },
     35_000,
+  );
+
+  it.runIf(
+    process.platform === "darwin" &&
+      process.env.AGENTLINK_RUN_PRODUCTION_SANDBOX_ATTESTATION === "1",
+  )(
+    "cleans owned descendants across production helper lifecycle paths",
+    async () => {
+      const extensionRoot = process.cwd();
+      const root = await realpath(
+        await mkdtemp(path.join(os.tmpdir(), "al-helper-lifecycle-")),
+      );
+      const workspace = path.join(root, "workspace");
+      await mkdir(workspace);
+      const authorizer = new BaselineSandboxLaunchAuthorizer({
+        workspaceRoots: [workspace],
+        trustedRuntimeRoots: [path.dirname(process.execPath)],
+      });
+      const lifecycleScript = [
+        'const fs = require("node:fs");',
+        'const { spawn } = require("node:child_process");',
+        'const child = spawn(process.execPath, ["-e", "process.on(\\"SIGINT\\", () => {}); process.on(\\"SIGTERM\\", () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });',
+        "fs.writeFileSync(process.argv[1], String(child.pid));",
+        'process.stdout.write("lifecycle-ready\\n");',
+        "setInterval(() => {}, 1000);",
+      ].join("");
+
+      async function run(
+        action: "interrupt" | "terminate" | "dispose" | "helper-close",
+      ): Promise<void> {
+        const pidFile = path.join(workspace, `${action}-${randomUUID()}.pid`);
+        const helpers: ChildProcessWithoutNullStreams[] = [];
+        const runtime = new SandboxHelperClient(
+          createNodeSandboxHelperTransportFactory({
+            extensionRoot,
+            nodeExecutable: process.execPath,
+            spawn: (command, args, options) => {
+              const child = spawn(command, [...args], {
+                ...options,
+                stdio: ["pipe", "pipe", "pipe"],
+              });
+              helpers.push(child);
+              return child;
+            },
+          }),
+        );
+        const authorized = await authorizer.authorize({
+          options: {
+            command: [
+              shellQuote(process.execPath),
+              "-e",
+              shellQuote(lifecycleScript),
+              shellQuote(pidFile),
+            ].join(" "),
+            cwd: workspace,
+            sandboxSessionId: `production-lifecycle-${action}`,
+          },
+          channelId: `lifecycle-${action}-${randomUUID()}`,
+          commandId: `command-${randomUUID()}`,
+          generation: 1,
+          dimensions: { columns: 100, rows: 30 },
+        });
+        const command = runtime.launch(authorized.helperRequest);
+        let output = "";
+        const subscription = command.onEvent((event) => {
+          if (event.type === "data") output += event.data;
+        });
+        try {
+          const ready = await command.ready;
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            if (output.includes("lifecycle-ready")) break;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          expect(output).toContain("lifecycle-ready");
+          const descendantPid = await readSpawnedPid(pidFile);
+          expect(descendantPid).toBeDefined();
+
+          if (action === "interrupt") {
+            expect(command.interrupt()).toBe(true);
+            await expect(command.completion).resolves.toMatchObject({
+              exitCode: 130,
+              signal: 2,
+            });
+          } else if (action === "terminate") {
+            expect(command.terminate()).toBe(true);
+            await expect(command.completion).resolves.toMatchObject({
+              timedOut: false,
+            });
+          } else if (action === "dispose") {
+            runtime.dispose();
+            await expect(command.completion).rejects.toThrow("disposed");
+          } else {
+            expect(helpers).toHaveLength(1);
+            helpers[0].kill("SIGTERM");
+            await expect(command.completion).rejects.toThrow(
+              "closed before command completion",
+            );
+          }
+
+          expect(helpers).toHaveLength(1);
+          await waitForHelperClose(helpers[0]);
+          expect(await waitForProcessGroupExit(ready.pgid)).toBe(true);
+          expect(await waitForProcessExit(descendantPid as number)).toBe(true);
+        } finally {
+          subscription.dispose();
+          command.dispose();
+          runtime.dispose();
+          authorized.finalize?.();
+          for (const helper of helpers) {
+            if (helper.exitCode === null && helper.signalCode === null) {
+              helper.kill("SIGKILL");
+            }
+          }
+        }
+      }
+
+      try {
+        for (const action of [
+          "interrupt",
+          "terminate",
+          "dispose",
+          "helper-close",
+        ] as const) {
+          await run(action);
+        }
+
+        for (let iteration = 0; iteration < 5; iteration += 1) {
+          const pidFile = path.join(workspace, `startup-${iteration}.pid`);
+          const helpers: ChildProcessWithoutNullStreams[] = [];
+          const runtime = new SandboxHelperClient(
+            createNodeSandboxHelperTransportFactory({
+              extensionRoot,
+              nodeExecutable: process.execPath,
+              spawn: (command, args, options) => {
+                const child = spawn(command, [...args], {
+                  ...options,
+                  stdio: ["pipe", "pipe", "pipe"],
+                });
+                helpers.push(child);
+                return child;
+              },
+            }),
+          );
+          const authorized = await authorizer.authorize({
+            options: {
+              command: [
+                shellQuote(process.execPath),
+                "-e",
+                shellQuote(lifecycleScript),
+                shellQuote(pidFile),
+              ].join(" "),
+              cwd: workspace,
+              sandboxSessionId: "production-startup-cancel",
+            },
+            channelId: `startup-${randomUUID()}`,
+            commandId: `command-${randomUUID()}`,
+            generation: 1,
+            dimensions: { columns: 100, rows: 30 },
+          });
+          const command = runtime.launch(authorized.helperRequest);
+          command.dispose();
+          await expect(command.ready).rejects.toThrow("disposed");
+          await expect(command.completion).rejects.toThrow("disposed");
+          expect(helpers).toHaveLength(1);
+          await waitForHelperClose(helpers[0]);
+          const descendantPid = await readSpawnedPid(pidFile);
+          if (descendantPid !== undefined) {
+            expect(await waitForProcessExit(descendantPid)).toBe(true);
+          }
+          runtime.dispose();
+          authorized.finalize?.();
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+    60_000,
   );
 
   it.runIf(

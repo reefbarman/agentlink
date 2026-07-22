@@ -1,4 +1,5 @@
 import * as crypto from "crypto";
+import * as nodePath from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
 import type { AgentConfig, AgentMessage, SessionInfo } from "./types.js";
@@ -138,6 +139,8 @@ import type {
 import { convertAcpContentBlock } from "./acpContent.js";
 import type { WorktreeAgentLaunchRequest } from "../core/capabilities/worktree.js";
 import type { ToolResult } from "../shared/types.js";
+import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";
+import { canonicalizePath, isPathWithinRoot } from "../util/paths.js";
 
 const FLEET_VISIBILITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -961,6 +964,7 @@ export class AgentSessionManager {
       session.id,
       session.projectScope,
     );
+    baseContext.approvalManager.touchSession?.(session.id);
     if (!inheritedContext) {
       this.projectMcpHubRegistry?.ensure(session.projectScope);
     }
@@ -992,6 +996,7 @@ export class AgentSessionManager {
         ...captured,
         sessionId: session.id,
         mode: session.mode,
+        isBackgroundSession: session.background,
         projectScope: session.projectScope,
         projectRoot,
         workspaceProjectRoots: this.projectCatalog
@@ -1445,6 +1450,67 @@ export class AgentSessionManager {
     );
   }
 
+  /**
+   * Reuse inherited write authority only when ACP supplies complete structured
+   * file locations. Opaque rawInput is provider-defined and must still prompt.
+   */
+  private getInheritedAcpWriteOption(args: {
+    sessionId: string;
+    requestContext: Readonly<ToolDispatchContext> | undefined;
+    request: RequestPermissionRequest;
+  }): string | undefined {
+    const toolKind = args.request.toolCall.kind;
+    if (toolKind !== "edit" && toolKind !== "delete" && toolKind !== "move") {
+      return undefined;
+    }
+
+    const allowOnce = args.request.options.find(
+      (option) => option.kind === "allow_once",
+    );
+    const locations = args.request.toolCall.locations;
+    const requestContext = args.requestContext;
+    const projectRoot = requestContext?.projectRoot;
+    if (!allowOnce || !locations?.length || !requestContext || !projectRoot) {
+      return undefined;
+    }
+
+    const workspaceRoots = requestContext.workspaceProjectRoots?.length
+      ? requestContext.workspaceProjectRoots
+      : [projectRoot];
+    const canonicalRoots = workspaceRoots.map((root) => canonicalizePath(root));
+    const approvalManager = requestContext.approvalManager;
+
+    for (const location of locations) {
+      const rawPath = location.path.trim();
+      if (!rawPath) return undefined;
+      const absolutePath = canonicalizePath(
+        nodePath.isAbsolute(rawPath)
+          ? rawPath
+          : nodePath.resolve(projectRoot, rawPath),
+      );
+      if (isMemoryProtectedPath(absolutePath, { cwd: projectRoot })) {
+        return undefined;
+      }
+
+      const inWorkspace = canonicalRoots.some((root) =>
+        isPathWithinRoot(absolutePath, root),
+      );
+      const authorized = inWorkspace
+        ? approvalManager.getAgentWriteAuthorization(
+            args.sessionId,
+            absolutePath,
+          ).allowed
+        : approvalManager.isPathTrusted(args.sessionId, absolutePath) &&
+          approvalManager.getFileWriteAuthorization(
+            args.sessionId,
+            absolutePath,
+          ).allowed;
+      if (!authorized) return undefined;
+    }
+
+    return allowOnce.optionId;
+  }
+
   private async handleAcpPermissionRequest(args: {
     sessionId: string;
     task: string;
@@ -1462,6 +1528,13 @@ export class AgentSessionManager {
 
     if (this.bgCancelled.has(args.sessionId)) {
       return { outcome: { outcome: "cancelled" } };
+    }
+
+    const inheritedWriteOption = this.getInheritedAcpWriteOption(args);
+    if (inheritedWriteOption) {
+      return {
+        outcome: { outcome: "selected", optionId: inheritedWriteOption },
+      };
     }
 
     this.noteBackgroundProgress(args.sessionId, "awaiting_approval");
@@ -4558,6 +4631,92 @@ export class AgentSessionManager {
     );
   }
 
+  private inheritSharedBackgroundSessionApprovals(
+    parentSessionId: string,
+    childSessionId: string,
+  ): void {
+    const parent = this.sessions.get(parentSessionId);
+    const child = this.sessions.get(childSessionId);
+    if (
+      !parent?.projectScope.rootPath ||
+      !child?.projectScope.rootPath ||
+      !this.toolCtx?.inheritSessionApprovalState
+    ) {
+      return;
+    }
+
+    // Approval inheritance validates project identity. Background sessions are
+    // created with the parent's scope, but their tool contexts have not yet
+    // necessarily been captured (and therefore bound) at spawn time.
+    this.toolCtx.approvalManager.bindSessionProject(
+      parentSessionId,
+      parent.projectScope,
+    );
+    this.toolCtx.approvalManager.bindSessionProject(
+      childSessionId,
+      child.projectScope,
+    );
+    this.toolCtx.inheritSessionApprovalState(parentSessionId, childSessionId);
+  }
+
+  private inheritSharedBackgroundApprovalState(
+    parentSessionId: string,
+    childSessionId: string,
+  ): void {
+    this.inheritBackgroundApprovalMode(parentSessionId, childSessionId);
+    this.inheritSharedBackgroundSessionApprovals(
+      parentSessionId,
+      childSessionId,
+    );
+  }
+
+  private refreshingBackgroundApprovalInheritance = false;
+
+  /**
+   * Add newly granted parent approvals to active shared-process descendants.
+   * Existing child authority remains independent and is never revoked here.
+   */
+  refreshBackgroundApprovalInheritance(): void {
+    if (
+      this.refreshingBackgroundApprovalInheritance ||
+      !this.toolCtx?.inheritSessionApprovalState
+    ) {
+      return;
+    }
+
+    this.refreshingBackgroundApprovalInheritance = true;
+    try {
+      const children = Array.from(this.sessions.values())
+        .filter((session) => {
+          if (!session.background || session.providerId === "worktree") {
+            return false;
+          }
+          const lifecycle = session.fleetMetadata?.lifecycle;
+          return (
+            lifecycle === "queued" ||
+            lifecycle === "running" ||
+            lifecycle === "paused" ||
+            session.status === "streaming" ||
+            session.status === "tool_executing" ||
+            session.status === "awaiting_approval"
+          );
+        })
+        .sort(
+          (left, right) =>
+            (left.fleetMetadata?.depth ?? 0) -
+            (right.fleetMetadata?.depth ?? 0),
+        );
+
+      for (const child of children) {
+        const parentSessionId = this.getBackgroundParentSessionId(child.id);
+        if (!parentSessionId || !this.sessions.has(parentSessionId)) continue;
+        this.inheritSharedBackgroundSessionApprovals(parentSessionId, child.id);
+      }
+    } finally {
+      this.refreshingBackgroundApprovalInheritance = false;
+    }
+  }
+
   /**
    * True when a background session occupies a concurrency slot. Sessions
    * blocked in get_background_result do not count: a full pool of parents
@@ -4809,7 +4968,7 @@ export class AgentSessionManager {
       session.createAbortController();
       this.sessions.set(session.id, session);
       if (parentSessionId) {
-        this.inheritBackgroundApprovalMode(parentSessionId, session.id);
+        this.inheritSharedBackgroundApprovalState(parentSessionId, session.id);
         this.bgParents.set(session.id, { sessionId: parentSessionId, task });
       }
       this.bgMeta.set(session.id, {
@@ -5092,7 +5251,7 @@ export class AgentSessionManager {
     session.status = "queued";
     this.sessions.set(session.id, session);
     if (parentSessionId) {
-      this.inheritBackgroundApprovalMode(parentSessionId, session.id);
+      this.inheritSharedBackgroundApprovalState(parentSessionId, session.id);
       this.bgParents.set(session.id, {
         sessionId: parentSessionId,
         task,
@@ -6830,8 +6989,9 @@ export class AgentSessionManager {
     request: SpawnBackgroundRequest,
     parent: AgentSession | undefined,
   ): Promise<SpawnBackgroundResult> {
-    const provider = this.toolCtx?.worktreeAgentLaunchProvider;
-    const globalStoragePath = this.toolCtx?.globalStorageUri?.fsPath;
+    const toolCtx = this.toolCtx;
+    const provider = toolCtx?.worktreeAgentLaunchProvider;
+    const globalStoragePath = toolCtx?.globalStorageUri?.fsPath;
     if (!provider || !globalStoragePath) {
       throw new Error("Isolated worktree launcher is unavailable");
     }

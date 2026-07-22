@@ -50,6 +50,17 @@ export function ApprovalPanelEmbed({
         title="Drag to resize approval card"
       />
       {actions}
+      {request.backgroundTask && (
+        <div
+          class="approval-background-attribution"
+          title={request.backgroundTask}
+        >
+          <span class="codicon codicon-multiple-windows" aria-hidden="true" />
+          <span>
+            From background agent: <strong>{request.backgroundTask}</strong>
+          </span>
+        </div>
+      )}
       {request.kind === "command" ? (
         <CommandCard
           request={request}

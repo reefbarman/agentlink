@@ -1,5 +1,3 @@
-import { Buffer } from "node:buffer";
-
 import {
   isValidTerminalDimensions,
   type HostTerminalEvent,
@@ -7,6 +5,7 @@ import {
   type TerminalDimensions,
 } from "../core/terminalProtocol.js";
 import type { ResolvedHostShellProfile } from "./shellProfileResolver.js";
+import { Utf8TailBuffer } from "./Utf8TailBuffer.js";
 
 const DEFAULT_MAX_OUTPUT_BUFFER_BYTES = 1024 * 1024;
 
@@ -70,9 +69,7 @@ export type HostTerminalEventListener = (
 interface ManagedHostTerminal {
   pty: HostPty;
   tab: HostTerminalTab;
-  output: string;
-  outputBytes: number;
-  droppedBytes: number;
+  outputTail: Utf8TailBuffer;
   outputPaused: boolean;
   dataSubscription?: HostPtyDisposable;
   exitSubscription?: HostPtyDisposable;
@@ -80,35 +77,6 @@ interface ManagedHostTerminal {
 
 function cloneTab(tab: HostTerminalTab): HostTerminalTab {
   return { ...tab, dimensions: { ...tab.dimensions } };
-}
-
-function retainUtf8Tail(
-  current: string,
-  appended: string,
-  maxBytes: number,
-): { data: string; byteLength: number; droppedBytes: number } {
-  const previousBytes = Buffer.byteLength(current, "utf8");
-  const appendedBytes = Buffer.byteLength(appended, "utf8");
-  const combined = Buffer.from(current + appended, "utf8");
-  if (combined.byteLength <= maxBytes) {
-    return {
-      data: current + appended,
-      byteLength: combined.byteLength,
-      droppedBytes: 0,
-    };
-  }
-
-  let start = combined.byteLength - maxBytes;
-  while (start < combined.byteLength && (combined[start] & 0xc0) === 0x80) {
-    start += 1;
-  }
-  const data = combined.subarray(start).toString("utf8");
-  const byteLength = Buffer.byteLength(data, "utf8");
-  return {
-    data,
-    byteLength,
-    droppedBytes: previousBytes + appendedBytes - byteLength,
-  };
 }
 
 export class TerminalSessionService implements HostPtyDisposable {
@@ -188,9 +156,7 @@ export class TerminalSessionService implements HostPtyDisposable {
     const managed = {
       pty,
       tab,
-      output: "",
-      outputBytes: 0,
-      droppedBytes: 0,
+      outputTail: new Utf8TailBuffer(this.maxOutputBufferBytes),
       outputPaused: false,
     } as ManagedHostTerminal;
     this.sessions.set(terminalId, managed);
@@ -233,9 +199,9 @@ export class TerminalSessionService implements HostPtyDisposable {
     const managed = this.sessions.get(terminalId);
     if (!managed) return undefined;
     return {
-      data: managed.output,
-      byteLength: managed.outputBytes,
-      droppedBytes: managed.droppedBytes,
+      data: managed.outputTail.toString(),
+      byteLength: managed.outputTail.byteLength,
+      droppedBytes: managed.outputTail.droppedBytes,
       paused: managed.outputPaused,
     };
   }
@@ -309,14 +275,7 @@ export class TerminalSessionService implements HostPtyDisposable {
     ) {
       return;
     }
-    const retained = retainUtf8Tail(
-      managed.output,
-      data,
-      this.maxOutputBufferBytes,
-    );
-    managed.output = retained.data;
-    managed.outputBytes = retained.byteLength;
-    managed.droppedBytes += retained.droppedBytes;
+    managed.outputTail.append(data);
 
     const accepted = this.emit({
       type: "host-terminal/data",

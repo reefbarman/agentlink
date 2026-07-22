@@ -1,10 +1,14 @@
 import { Buffer } from "node:buffer";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 import type { SandboxViolation } from "../../core/sandboxPolicy.js";
 import {
   isValidTerminalDimensions,
   type TerminalDimensions,
 } from "../../core/terminalProtocol.js";
+import { Utf8TailBuffer } from "../Utf8TailBuffer.js";
 import type {
   SandboxCommandDisposable,
   SandboxCommandEvent,
@@ -14,6 +18,7 @@ import type {
 } from "./SandboxRuntimeProvider.js";
 
 const DEFAULT_MAX_REPLAY_BYTES = 1024 * 1024;
+const DEFAULT_MAX_COMMAND_OUTPUT_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_COMMANDS = 200;
 
 export type SandboxCommandOrigin = "agent" | "user" | "ai-staged";
@@ -115,35 +120,37 @@ export interface SandboxTerminalSessionOptions {
   initialCwd: string;
   dimensions: TerminalDimensions;
   maxReplayBytes?: number;
+  maxCommandOutputBytes?: number;
+  outputSpoolRoot?: string;
   maxCommands?: number;
   now?: () => number;
   isAllowedCwd?: (cwd: string) => boolean;
   onListenerError?: (error: unknown) => void;
 }
 
-function retainUtf8Tail(
-  current: string,
-  appended: string,
-  maxBytes: number,
-): { data: string; byteLength: number; droppedBytes: number } {
-  const combined = Buffer.from(current + appended, "utf8");
-  if (combined.byteLength <= maxBytes) {
-    return {
-      data: current + appended,
-      byteLength: combined.byteLength,
-      droppedBytes: 0,
-    };
-  }
-  let start = combined.byteLength - maxBytes;
-  while (start < combined.byteLength && (combined[start] & 0xc0) === 0x80) {
-    start += 1;
-  }
-  const data = combined.subarray(start).toString("utf8");
-  return {
-    data,
-    byteLength: Buffer.byteLength(data, "utf8"),
-    droppedBytes: combined.byteLength - Buffer.byteLength(data, "utf8"),
-  };
+export interface SandboxTerminalCommandOutput {
+  output: string;
+  complete: boolean;
+  finalized: boolean;
+  /** Bytes observed when this snapshot was created; the value can grow until finalized. */
+  totalBytes: number;
+  retainedBytes: number;
+  droppedBytes: number;
+}
+
+export interface SandboxTerminalCommandOutputLease {
+  metadata(): Omit<SandboxTerminalCommandOutput, "output">;
+  read(): SandboxTerminalCommandOutput;
+  dispose(): void;
+}
+
+interface CommandOutputSpool {
+  directory?: string;
+  filePath?: string;
+  fileDescriptor?: number;
+  writtenBytes: number;
+  droppedBytes: number;
+  failed: boolean;
 }
 
 function cloneCommand(
@@ -157,6 +164,8 @@ function cloneCommand(
 
 export class SandboxTerminalSession {
   private readonly maxReplayBytes: number;
+  private readonly maxCommandOutputBytes: number;
+  private readonly outputSpoolRoot: string;
   private readonly maxCommands: number;
   private readonly now: () => number;
   private readonly isAllowedCwd: (cwd: string) => boolean;
@@ -165,16 +174,16 @@ export class SandboxTerminalSession {
     (event: SandboxTerminalSessionEvent) => void
   >();
   private readonly commands: SandboxTerminalCommandRecord[] = [];
+  private readonly commandOutputSpools = new Map<string, CommandOutputSpool>();
   private dimensions: TerminalDimensions;
   private cwd: string;
-  private replay = "";
-  private replayBytes = 0;
-  private droppedReplayBytes = 0;
+  private readonly replayTail: Utf8TailBuffer;
   private nextGeneration = 1;
   private active:
     | {
         process: SandboxCommandProcess;
         command: SandboxTerminalCommandRecord;
+        outputTail: Utf8TailBuffer;
         eventSubscription?: SandboxCommandDisposable;
       }
     | undefined;
@@ -197,6 +206,9 @@ export class SandboxTerminalSession {
       throw new Error("Terminal dimensions must be positive integers");
     }
     this.maxReplayBytes = options.maxReplayBytes ?? DEFAULT_MAX_REPLAY_BYTES;
+    this.maxCommandOutputBytes =
+      options.maxCommandOutputBytes ?? DEFAULT_MAX_COMMAND_OUTPUT_BYTES;
+    this.outputSpoolRoot = options.outputSpoolRoot ?? os.tmpdir();
     this.maxCommands = options.maxCommands ?? DEFAULT_MAX_COMMANDS;
     if (
       !Number.isSafeInteger(this.maxReplayBytes) ||
@@ -204,11 +216,18 @@ export class SandboxTerminalSession {
     ) {
       throw new Error("maxReplayBytes must be a positive safe integer");
     }
+    if (
+      !Number.isSafeInteger(this.maxCommandOutputBytes) ||
+      this.maxCommandOutputBytes <= 0
+    ) {
+      throw new Error("maxCommandOutputBytes must be a positive safe integer");
+    }
     if (!Number.isSafeInteger(this.maxCommands) || this.maxCommands <= 0) {
       throw new Error("maxCommands must be a positive safe integer");
     }
     this.channelId = options.channelId;
     this.title = options.title;
+    this.replayTail = new Utf8TailBuffer(this.maxReplayBytes);
     this.cwd = options.initialCwd;
     this.dimensions = { ...options.dimensions };
     this.now = options.now ?? Date.now;
@@ -263,18 +282,23 @@ export class SandboxTerminalSession {
     const active: {
       process: SandboxCommandProcess;
       command: SandboxTerminalCommandRecord;
+      outputTail: Utf8TailBuffer;
       eventSubscription?: SandboxCommandDisposable;
-    } = { process: input.process, command };
+    } = {
+      process: input.process,
+      command,
+      outputTail: new Utf8TailBuffer(this.maxReplayBytes),
+    };
     this.active = active;
     this.commands.push(command);
-    const replay = retainUtf8Tail(
-      this.replay,
-      `${this.replay ? "\r\n" : ""}$ ${input.command}\r\n`,
-      this.maxReplayBytes,
+    this.resetCommandOutputSpools(command.commandId);
+    this.commandOutputSpools.set(
+      command.commandId,
+      this.createCommandOutputSpool(),
     );
-    this.replay = replay.data;
-    this.replayBytes = replay.byteLength;
-    this.droppedReplayBytes += replay.droppedBytes;
+    this.replayTail.append(
+      `${this.replayTail.isEmpty ? "" : "\r\n"}$ ${input.command}\r\n`,
+    );
     this.nextGeneration += 1;
     this.evictCommands();
     this.emit({ type: "command-started", command: cloneCommand(command) });
@@ -323,6 +347,52 @@ export class SandboxTerminalSession {
     return this.active?.process.terminate() ?? false;
   }
 
+  /**
+   * Returns exact spooled output only for the latest command in this logical
+   * session. Starting another command releases the previous command's spool.
+   */
+  getCommandOutput(
+    commandId: string,
+  ): SandboxTerminalCommandOutput | undefined {
+    const command = this.commands.find(
+      (candidate) => candidate.commandId === commandId,
+    );
+    if (!command) return undefined;
+    return this.readCommandOutput(
+      command,
+      this.commandOutputSpools.get(commandId),
+    );
+  }
+
+  detachCommandOutput(
+    commandId: string,
+  ): SandboxTerminalCommandOutputLease | undefined {
+    const command = this.commands.find(
+      (candidate) => candidate.commandId === commandId,
+    );
+    if (!command) return undefined;
+    const spool = this.commandOutputSpools.get(commandId);
+    this.commandOutputSpools.delete(commandId);
+    if (spool?.fileDescriptor !== undefined) {
+      try {
+        fs.closeSync(spool.fileDescriptor);
+      } catch {
+        spool.failed = true;
+      }
+      spool.fileDescriptor = undefined;
+    }
+    let disposed = false;
+    return {
+      metadata: () => this.commandOutputMetadata(command, spool),
+      read: () => this.readCommandOutput(command, spool),
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        this.disposeCommandOutputSpool(spool);
+      },
+    };
+  }
+
   snapshot(): SandboxTerminalSessionSnapshot {
     return {
       channelId: this.channelId,
@@ -340,10 +410,13 @@ export class SandboxTerminalSession {
         ? { activeCommandId: this.active.command.commandId }
         : {}),
       nextGeneration: this.nextGeneration,
-      replay: this.replay,
-      replayBytes: this.replayBytes,
-      droppedReplayBytes: this.droppedReplayBytes,
-      commands: this.commands.map(cloneCommand),
+      replay: this.replayTail.toString(),
+      replayBytes: this.replayTail.byteLength,
+      droppedReplayBytes: this.replayTail.droppedBytes,
+      commands: this.commands.map((command) => {
+        this.syncCommandRecord(command);
+        return cloneCommand(command);
+      }),
     };
   }
 
@@ -354,6 +427,7 @@ export class SandboxTerminalSession {
     this.active = undefined;
     active?.eventSubscription?.dispose();
     active?.process.dispose();
+    this.resetCommandOutputSpools();
     this.emit({ type: "closed" });
     this.listeners.clear();
   }
@@ -396,22 +470,9 @@ export class SandboxTerminalSession {
     }
     if (active.command.status !== "running") return;
     if (event.type === "data") {
-      const commandOutput = retainUtf8Tail(
-        active.command.output,
-        event.data,
-        this.maxReplayBytes,
-      );
-      active.command.output = commandOutput.data;
-      active.command.outputBytes = commandOutput.byteLength;
-      active.command.droppedOutputBytes += commandOutput.droppedBytes;
-      const replay = retainUtf8Tail(
-        this.replay,
-        event.data,
-        this.maxReplayBytes,
-      );
-      this.replay = replay.data;
-      this.replayBytes = replay.byteLength;
-      this.droppedReplayBytes += replay.droppedBytes;
+      this.appendCommandOutput(active.command.commandId, event.data);
+      active.outputTail.append(event.data);
+      this.replayTail.append(event.data);
       this.emit({
         type: "data",
         commandId: active.command.commandId,
@@ -440,12 +501,26 @@ export class SandboxTerminalSession {
     });
   }
 
+  /**
+   * Command records accumulate output in a chunked tail buffer while the
+   * command runs; the record's string fields are refreshed lazily at read
+   * points instead of on every data chunk.
+   */
+  private syncCommandRecord(command: SandboxTerminalCommandRecord): void {
+    const active = this.active;
+    if (active?.command !== command) return;
+    command.output = active.outputTail.toString();
+    command.outputBytes = active.outputTail.byteLength;
+    command.droppedOutputBytes = active.outputTail.droppedBytes;
+  }
+
   private handleExit(
     process: SandboxCommandProcess,
     exit: SandboxCommandExit,
   ): void {
     const active = this.current(process);
     if (!active) return;
+    this.syncCommandRecord(active.command);
     active.command.status = "exited";
     active.command.finishedAt = this.now();
     active.command.exitCode = exit.exitCode;
@@ -464,6 +539,7 @@ export class SandboxTerminalSession {
   private handleFailure(process: SandboxCommandProcess, error: unknown): void {
     const active = this.current(process);
     if (!active) return;
+    this.syncCommandRecord(active.command);
     active.command.status = "failed";
     active.command.finishedAt = this.now();
     active.command.error =
@@ -480,6 +556,160 @@ export class SandboxTerminalSession {
 
   private current(process: SandboxCommandProcess) {
     return this.active?.process === process ? this.active : undefined;
+  }
+
+  private commandOutputMetadata(
+    command: SandboxTerminalCommandRecord,
+    spool: CommandOutputSpool | undefined,
+  ): Omit<SandboxTerminalCommandOutput, "output"> {
+    this.syncCommandRecord(command);
+    const finalized =
+      command.status === "exited" || command.status === "failed";
+    const totalBytes = command.outputBytes + command.droppedOutputBytes;
+    const spoolComplete =
+      spool?.filePath !== undefined &&
+      !spool.failed &&
+      spool.droppedBytes === 0 &&
+      spool.writtenBytes === totalBytes;
+    const tailComplete = command.droppedOutputBytes === 0;
+    return {
+      complete: finalized && (spoolComplete || tailComplete),
+      finalized,
+      totalBytes,
+      retainedBytes: spoolComplete ? spool.writtenBytes : command.outputBytes,
+      droppedBytes: spoolComplete ? 0 : command.droppedOutputBytes,
+    };
+  }
+
+  private readCommandOutput(
+    command: SandboxTerminalCommandRecord,
+    spool: CommandOutputSpool | undefined,
+  ): SandboxTerminalCommandOutput {
+    const metadata = this.commandOutputMetadata(command, spool);
+    if (
+      spool?.filePath &&
+      metadata.complete &&
+      spool.writtenBytes === metadata.totalBytes
+    ) {
+      try {
+        const raw = fs.readFileSync(spool.filePath);
+        const retainedBytes = raw.byteLength;
+        if (retainedBytes !== metadata.totalBytes) {
+          spool.failed = true;
+        } else {
+          return {
+            output: raw.toString("utf8"),
+            ...metadata,
+            retainedBytes,
+          };
+        }
+      } catch {
+        spool.failed = true;
+      }
+    }
+    return {
+      output: command.output,
+      ...this.commandOutputMetadata(command, spool),
+    };
+  }
+
+  private createCommandOutputSpool(): CommandOutputSpool {
+    try {
+      const directory = fs.mkdtempSync(
+        path.join(this.outputSpoolRoot, "agentlink-terminal-output-"),
+      );
+      const filePath = path.join(directory, "raw-output.txt");
+      const fileDescriptor = fs.openSync(filePath, "w", 0o600);
+      return {
+        directory,
+        filePath,
+        fileDescriptor,
+        writtenBytes: 0,
+        droppedBytes: 0,
+        failed: false,
+      };
+    } catch {
+      return {
+        writtenBytes: 0,
+        droppedBytes: 0,
+        failed: true,
+      };
+    }
+  }
+
+  private appendCommandOutput(commandId: string, data: string): void {
+    const spool = this.commandOutputSpools.get(commandId);
+    if (!spool) return;
+    const dataBytes = Buffer.byteLength(data, "utf8");
+    if (spool.failed || spool.fileDescriptor === undefined) {
+      spool.droppedBytes += dataBytes;
+      return;
+    }
+    const remaining = this.maxCommandOutputBytes - spool.writtenBytes;
+    if (remaining <= 0) {
+      spool.droppedBytes += dataBytes;
+      return;
+    }
+    let retained = data;
+    if (dataBytes > remaining) {
+      retained = "";
+      let retainedBytes = 0;
+      for (const character of data) {
+        const characterBytes = Buffer.byteLength(character, "utf8");
+        if (retainedBytes + characterBytes > remaining) break;
+        retained += character;
+        retainedBytes += characterBytes;
+      }
+    }
+    const retainedBuffer = Buffer.from(retained, "utf8");
+    let offset = 0;
+    try {
+      while (offset < retainedBuffer.byteLength) {
+        const written = fs.writeSync(
+          spool.fileDescriptor,
+          retainedBuffer,
+          offset,
+          retainedBuffer.byteLength - offset,
+        );
+        if (written <= 0)
+          throw new Error("output spool write made no progress");
+        offset += written;
+        spool.writtenBytes += written;
+      }
+      spool.droppedBytes += dataBytes - retainedBuffer.byteLength;
+    } catch {
+      spool.failed = true;
+      spool.droppedBytes += dataBytes - offset;
+    }
+  }
+
+  private disposeCommandOutputSpool(
+    spool: CommandOutputSpool | undefined,
+  ): void {
+    if (!spool) return;
+    if (spool.fileDescriptor !== undefined) {
+      try {
+        fs.closeSync(spool.fileDescriptor);
+      } catch {
+        // Best-effort cleanup of private output spools.
+      }
+      spool.fileDescriptor = undefined;
+    }
+    if (spool.directory) {
+      try {
+        fs.rmSync(spool.directory, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup of private output spools.
+      }
+    }
+  }
+
+  private resetCommandOutputSpools(exceptCommandId?: string): void {
+    for (const [commandId, spool] of this.commandOutputSpools) {
+      if (commandId === exceptCommandId) continue;
+      this.disposeCommandOutputSpool(spool);
+      this.commandOutputSpools.delete(commandId);
+    }
   }
 
   private evictCommands(): void {

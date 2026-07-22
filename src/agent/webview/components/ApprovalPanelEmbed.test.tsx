@@ -53,4 +53,20 @@ describe("ApprovalPanelEmbed", () => {
     expect(getByText("Add follow-up or rejection reason")).toBeTruthy();
     expect(getByLabelText("Follow-up or rejection reason")).toBeTruthy();
   });
+
+  it("identifies approvals requested by a background agent", () => {
+    const { getByText } = render(
+      h(ApprovalPanelEmbed, {
+        request: { ...request, backgroundTask: "Review write handling" },
+        height: DEFAULT_APPROVAL_PANEL_HEIGHT,
+        resizing: false,
+        followUpRef: { current: "" },
+        submit: vi.fn(),
+        onResizeStart: vi.fn(),
+      }),
+    );
+
+    expect(getByText("Review write handling")).toBeTruthy();
+    expect(getByText(/From background agent:/)).toBeTruthy();
+  });
 });

@@ -10,6 +10,7 @@ import {
 } from "../shared/types.js";
 import type {
   EditReviewProvider,
+  WriteApprovalPromptEvent,
   WriteApprovalPolicyProvider,
 } from "../core/capabilities/editReview.js";
 import { handlePendingEditLockError } from "./pendingEditLock.js";
@@ -40,6 +41,7 @@ function getWriteRiskWarnings(
 export interface WriteFileProviders {
   editReviewProvider?: EditReviewProvider;
   writeApprovalPolicyProvider?: WriteApprovalPolicyProvider;
+  onApprovalPrompt?: (event: WriteApprovalPromptEvent) => void;
   diagnosticDelay?: number;
 }
 
@@ -81,6 +83,16 @@ export async function handleWriteFile(
       },
     );
     const canAutoApprove = authorization.allowed;
+    const approvalPromptEvent = !canAutoApprove
+      ? {
+          authorization,
+          sessionId,
+          absolutePath: filePath,
+          relativePath: relPath,
+          inWorkspace,
+          mode,
+        }
+      : undefined;
 
     const result = await providers.editReviewProvider.reviewAndApply({
       mode: canAutoApprove ? "auto" : "interactive",
@@ -91,6 +103,12 @@ export async function handleWriteFile(
       diagnosticDelay: providers.diagnosticDelay ?? DEFAULT_DIAGNOSTIC_DELAY_MS,
       approvalPanel,
       onApprovalRequest,
+      ...(approvalPromptEvent
+        ? {
+            onApprovalPresented: () =>
+              providers.onApprovalPrompt?.(approvalPromptEvent),
+          }
+        : {}),
       sessionId,
     });
 

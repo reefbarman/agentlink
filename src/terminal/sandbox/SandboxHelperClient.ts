@@ -16,6 +16,8 @@ import type {
   SandboxRuntimeProvider,
 } from "./SandboxRuntimeProvider.js";
 
+export const SANDBOX_HELPER_GRACEFUL_CLOSE_TIMEOUT_MS = 2_000;
+
 export interface SandboxHelperTransport {
   /** Accept a complete control frame for delivery; backpressure is handled internally. */
   write(data: string): boolean;
@@ -28,6 +30,7 @@ export interface SandboxHelperTransport {
       stderr?: string;
     }) => void,
   ): SandboxCommandDisposable;
+  closeGracefully(killAfterMs: number): void;
   kill(): void;
   dispose(): void;
 }
@@ -149,7 +152,7 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
     if (this.disposed) return;
     if (this.state === "launching" || this.state === "running") {
       this.send({ ...this.identity, type: "terminate" });
-      this.fail(new Error("Sandbox command process was disposed"));
+      this.fail(new Error("Sandbox command process was disposed"), false);
       return;
     }
     this.disposed = true;
@@ -261,7 +264,7 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
     );
   }
 
-  private fail(error: Error): void {
+  private fail(error: Error, kill = true): void {
     if (this.state === "completed" || this.state === "failed") return;
     this.state = "failed";
     if (!this.readySettled) {
@@ -272,7 +275,7 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
       this.completionSettled = true;
       this.completionDeferred.reject(error);
     }
-    this.finalizeTransport(true);
+    this.finalizeTransport(kill);
   }
 
   private finalizeTransport(kill: boolean): void {
@@ -285,6 +288,8 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
       this.pendingEvents.length = 0;
     }
     if (kill) this.transport.kill();
+    else
+      this.transport.closeGracefully(SANDBOX_HELPER_GRACEFUL_CLOSE_TIMEOUT_MS);
     this.transport.dispose();
   }
 

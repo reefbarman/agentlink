@@ -9,6 +9,9 @@ import {
   type TerminalExecutionSecuritySummary,
   type TerminalExecuteOptions,
   type TerminalMetadata,
+  type TerminalRetainedOutput,
+  type TerminalRetainedOutputLease,
+  type TerminalRetainedOutputMetadata,
 } from "../../core/capabilities/terminal.js";
 import type {
   SandboxExecutionMetadata,
@@ -27,6 +30,8 @@ import type {
 import {
   SandboxTerminalSession,
   type SandboxCommandOrigin,
+  type SandboxTerminalCommandOutput,
+  type SandboxTerminalCommandOutputLease,
   type SandboxTerminalSessionEvent,
   type SandboxTerminalSessionSnapshot,
 } from "./SandboxTerminalSession.js";
@@ -117,6 +122,10 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
   ) => void;
   private readonly channels = new Map<string, ManagedSandboxChannel>();
   private readonly recentlyClosed: ClosedTerminalSnapshot[] = [];
+  private readonly recentlyClosedOutput = new Map<
+    string,
+    SandboxTerminalCommandOutputLease
+  >();
   private readonly channelListeners = new Set<
     (update: SandboxTerminalChannelEvent) => void
   >();
@@ -394,7 +403,12 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     if (!completed) {
       throw new Error("Sandbox command completed without a command record");
     }
-    return this.completedResult(snapshot, completed, authorized.metadata);
+    return this.completedResult(
+      snapshot,
+      completed,
+      authorized.metadata,
+      channel.session.getCommandOutput(commandId),
+    );
   }
 
   private async prepareAuthorizedLaunch(
@@ -497,6 +511,28 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       : undefined;
   }
 
+  getRetainedOutput(terminalId: string): TerminalRetainedOutput | undefined {
+    const channel = this.channels.get(terminalId);
+    if (channel) {
+      const commandId = channel.session.snapshot().commands.at(-1)?.commandId;
+      return commandId
+        ? this.retainedOutput(channel.session.getCommandOutput(commandId))
+        : undefined;
+    }
+    return this.retainedOutput(
+      this.recentlyClosedOutput.get(terminalId)?.read(),
+    );
+  }
+
+  detachRetainedOutput(
+    terminalId: string,
+  ): TerminalRetainedOutputLease | undefined {
+    const lease = this.recentlyClosedOutput.get(terminalId);
+    if (!lease) return undefined;
+    this.recentlyClosedOutput.delete(terminalId);
+    return this.retainedOutputLease(lease);
+  }
+
   interruptTerminal(terminalId: string): boolean {
     return this.channels.get(terminalId)?.session.interrupt() ?? false;
   }
@@ -536,11 +572,15 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       notFound?.delete(channelId);
       notFound?.delete(snapshot.title);
       channel.active?.networkAbortController.abort();
+      const commandId = snapshot.commands.at(-1)?.commandId;
+      const outputLease = commandId
+        ? channel.session.detachCommandOutput(commandId)
+        : undefined;
       channel.session.close();
       channel.active?.finalizer?.();
       this.channels.delete(channelId);
       this.channelReservations.delete(channelId);
-      this.rememberClosed(snapshot);
+      this.rememberClosed(snapshot, outputLease);
       closed += 1;
     }
     return {
@@ -588,6 +628,8 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     this.channels.clear();
     this.channelReservations.clear();
     this.channelListeners.clear();
+    for (const lease of this.recentlyClosedOutput.values()) lease.dispose();
+    this.recentlyClosedOutput.clear();
     this.runtime.dispose();
     for (const listener of this.disposeListeners) listener();
     this.disposeListeners.clear();
@@ -699,11 +741,14 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     snapshot: SandboxTerminalSessionSnapshot,
     command: SandboxTerminalSessionSnapshot["commands"][number],
     metadata: SandboxExecutionMetadata,
+    retained: SandboxTerminalCommandOutput | undefined,
   ): TerminalCommandResult {
+    const output = retained?.output ?? command.output;
     return {
       exit_code: command.exitCode ?? null,
-      output: cleanTerminalOutput(command.output),
-      terminal_raw_output: cleanTerminalRawOutput(command.output),
+      output: cleanTerminalOutput(output),
+      terminal_raw_output: cleanTerminalRawOutput(output),
+      ...this.outputMetadata(retained),
       output_captured: true,
       terminal_id: snapshot.channelId,
       terminal_name: snapshot.title,
@@ -818,14 +863,81 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     };
   }
 
-  private rememberClosed(snapshot: SandboxTerminalSessionSnapshot): void {
+  private retainedOutput(
+    retained: SandboxTerminalCommandOutput | undefined,
+  ): TerminalRetainedOutput | undefined {
+    if (!retained) return undefined;
+    return {
+      output: cleanTerminalOutput(retained.output),
+      complete: retained.complete,
+      finalized: retained.finalized,
+      total_bytes: retained.totalBytes,
+      retained_bytes: retained.retainedBytes,
+      dropped_bytes: retained.droppedBytes,
+    };
+  }
+
+  private retainedOutputMetadata(
+    retained: Omit<SandboxTerminalCommandOutput, "output">,
+  ): TerminalRetainedOutputMetadata {
+    return {
+      complete: retained.complete,
+      finalized: retained.finalized,
+      total_bytes: retained.totalBytes,
+      retained_bytes: retained.retainedBytes,
+      dropped_bytes: retained.droppedBytes,
+    };
+  }
+
+  private retainedOutputLease(
+    lease: SandboxTerminalCommandOutputLease,
+  ): TerminalRetainedOutputLease {
+    return {
+      metadata: () => this.retainedOutputMetadata(lease.metadata()),
+      read: () => this.retainedOutput(lease.read())!,
+      dispose: () => lease.dispose(),
+    };
+  }
+
+  private outputMetadata(
+    retained: Omit<SandboxTerminalCommandOutput, "output"> | undefined,
+  ): Pick<
+    TerminalCommandResult,
+    | "output_complete"
+    | "output_finalized"
+    | "output_total_bytes"
+    | "output_retained_bytes"
+    | "output_dropped_bytes"
+  > {
+    return retained
+      ? {
+          output_complete: retained.complete,
+          output_finalized: retained.finalized,
+          output_total_bytes: retained.totalBytes,
+          output_retained_bytes: retained.retainedBytes,
+          output_dropped_bytes: retained.droppedBytes,
+        }
+      : {};
+  }
+
+  private rememberClosed(
+    snapshot: SandboxTerminalSessionSnapshot,
+    outputLease?: SandboxTerminalCommandOutputLease,
+  ): void {
+    if (outputLease)
+      this.recentlyClosedOutput.set(snapshot.channelId, outputLease);
     this.recentlyClosed.unshift({
       id: snapshot.channelId,
       name: snapshot.title,
       closedAt: this.now(),
       ...this.backgroundStateFromSnapshot(snapshot, true),
+      ...this.outputMetadata(outputLease?.metadata()),
     });
-    this.recentlyClosed.splice(DEFAULT_RECENTLY_CLOSED_LIMIT);
+    const removed = this.recentlyClosed.splice(DEFAULT_RECENTLY_CLOSED_LIMIT);
+    for (const terminal of removed) {
+      this.recentlyClosedOutput.get(terminal.id)?.dispose();
+      this.recentlyClosedOutput.delete(terminal.id);
+    }
   }
 
   private assertActive(): void {

@@ -353,6 +353,114 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it("re-prepares an edited native escalation without changing authority", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const firstExecute = vi.fn();
+    const firstDispose = vi.fn();
+    const secondExecute = vi.fn(async () => ({
+      exit_code: 0,
+      output: "edited native build",
+      output_captured: true,
+      terminal_id: "native-edited-1",
+      execution_mode: "native_pty" as const,
+    }));
+    const secondDispose = vi.fn();
+    const prepareExecution = vi.fn(async (options, routeContext) => ({
+      security: {
+        auditId:
+          options.command === "dotnet build"
+            ? "audit-native-edit-first"
+            : "audit-native-edit-second",
+        route: "native" as const,
+        executionSurface: "agentlink-native" as const,
+        confinement: "native-unsandboxed" as const,
+        routeReason: "verified-local-macos" as const,
+        ...routeContext,
+        executionPolicy: "native-legacy-v1" as const,
+        preparedAt: options.command === "dotnet build" ? 100 : 101,
+      },
+      execute:
+        options.command === "dotnet build" ? firstExecute : secondExecute,
+      dispose:
+        options.command === "dotnet build" ? firstDispose : secondDispose,
+    }));
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({
+        decision: "edit",
+        editedCommand: "dotnet build --no-restore",
+      }),
+    }));
+    const review = vi.fn(async () => ({
+      outcome: "deny" as const,
+      risk: "high" as const,
+      userAuthorization: "unknown" as const,
+      rationale: "The exact native command needs human confirmation",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: "dotnet build",
+        sandbox_permissions: "require_escalated",
+        reason: "The SDK requires a host facility.",
+      },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      { enqueueCommandApproval } as never,
+      "session-native-edit",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(prepareExecution).toHaveBeenCalledTimes(2);
+    expect(
+      prepareExecution.mock.calls.map(([options, routeContext]) => ({
+        command: options.command,
+        requiredAuthority: routeContext.requiredAuthority,
+        permissionIntent: routeContext.permissionIntent,
+      })),
+    ).toEqual([
+      {
+        command: "dotnet build",
+        requiredAuthority: "native-agent",
+        permissionIntent: "native-escalation",
+      },
+      {
+        command: "dotnet build --no-restore",
+        requiredAuthority: "native-agent",
+        permissionIntent: "native-escalation",
+      },
+    ]);
+    expect(firstDispose).toHaveBeenCalledOnce();
+    expect(firstExecute).not.toHaveBeenCalled();
+    expect(secondExecute).toHaveBeenCalledOnce();
+    expect(textPayload(result)).toMatchObject({
+      output: "edited native build",
+      command_modified: true,
+      original_command: "dotnet build",
+      command: "dotnet build --no-restore",
+      security: {
+        auditId: "audit-native-edit-second",
+        route: "native",
+        requiredAuthority: "native-agent",
+        permissionIntent: "native-escalation",
+      },
+    });
+  });
+
   it("rejects an edited command when its sandbox grant changes", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
@@ -501,6 +609,106 @@ describe("handleExecuteCommand", () => {
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
   });
 
+  it("does not execute native escalation when approval resolves after cancellation", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    let resolveApproval!: (response: { decision: "run-once" }) => void;
+    const approvalPromise = new Promise<{ decision: "run-once" }>((resolve) => {
+      resolveApproval = resolve;
+    });
+    const enqueueCommandApproval = vi.fn(() => ({ promise: approvalPromise }));
+    const nativeExecute = vi.fn();
+    const nativeDispose = vi.fn();
+    const recordExecutionAudit = vi.fn();
+    const prepareExecution = vi.fn(async (_options, routeContext) => ({
+      security: {
+        auditId: "audit-native-cancelled",
+        route: "native" as const,
+        executionSurface: "agentlink-native" as const,
+        confinement: "native-unsandboxed" as const,
+        routeReason: "verified-local-macos" as const,
+        ...routeContext,
+        executionPolicy: "native-legacy-v1" as const,
+        preparedAt: 100,
+      },
+      execute: nativeExecute,
+      dispose: nativeDispose,
+    }));
+    const controller = new AbortController();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const execution = handleExecuteCommand(
+      {
+        command: "dotnet build",
+        sandbox_permissions: "require_escalated",
+        reason: "The SDK requires a host facility.",
+      },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      { enqueueCommandApproval } as never,
+      "session-native-cancelled",
+      undefined,
+      {
+        terminalProvider: {
+          ...terminalProvider,
+          prepareExecution,
+          recordExecutionAudit,
+        },
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: {
+          review: async () => ({
+            outcome: "deny",
+            risk: "high",
+            userAuthorization: "unknown",
+            rationale: "Native execution needs human confirmation",
+            model: "review-model",
+            status: "reviewed",
+          }),
+        },
+        isSessionActive: () => true,
+        toolAbortSignal: controller.signal,
+      },
+    );
+
+    await vi.waitFor(() =>
+      expect(enqueueCommandApproval).toHaveBeenCalledOnce(),
+    );
+    controller.abort();
+    resolveApproval({ decision: "run-once" });
+
+    await expect(execution.then(textPayload)).resolves.toMatchObject({
+      status: "cancelled",
+      command: "dotnet build",
+      reason: "Command approval was cancelled before execution",
+      security: {
+        auditId: "audit-native-cancelled",
+        route: "native",
+        requiredAuthority: "native-agent",
+      },
+      command_sent: false,
+    });
+    expect(prepareExecution).toHaveBeenCalledOnce();
+    expect(prepareExecution.mock.calls[0][1]).toMatchObject({
+      requiredAuthority: "native-agent",
+      permissionIntent: "native-escalation",
+    });
+    expect(nativeExecute).not.toHaveBeenCalled();
+    expect(nativeDispose).toHaveBeenCalledOnce();
+    expect(recordExecutionAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "execution_cancelled",
+        auditId: "audit-native-cancelled",
+        route: "native",
+        resultStatus: "approval_cancelled",
+      }),
+    );
+  });
+
   it("uses the standard command approval card when fresh native review denies", async () => {
     const addCommandRule = vi.fn();
     const review = vi.fn(async () => ({
@@ -535,7 +743,14 @@ describe("handleExecuteCommand", () => {
       },
       {
         isCommandApproved: () => false,
-        findMatchingCommandRule: vi.fn(() => null),
+        findMatchingCommandRule: vi.fn(() => ({
+          rule: {
+            pattern: "dotnet build",
+            mode: "exact",
+            decision: "allow",
+          },
+          scope: "project",
+        })),
         addCommandRule,
       } as never,
       { enqueueCommandApproval } as never,
@@ -574,7 +789,17 @@ describe("handleExecuteCommand", () => {
           status: "reviewed",
           rationale: "Native execution needs human confirmation",
         }),
-        subCommands: [expect.objectContaining({ command: "dotnet build" })],
+        subCommands: [
+          expect.objectContaining({
+            command: "dotnet build",
+            existingRule: {
+              pattern: "dotnet build",
+              mode: "exact",
+              decision: "allow",
+              scope: "project",
+            },
+          }),
+        ],
         security: expect.objectContaining({
           route: "native",
           permissionIntent: "native-escalation",
@@ -700,6 +925,76 @@ describe("handleExecuteCommand", () => {
       security: { route: "native", authorityReason: "explicit-rule" },
     });
   });
+
+  it.each([
+    {
+      ruleKind: "regex allow",
+      rule: {
+        pattern: "^npm test$",
+        mode: "regex" as const,
+        decision: "allow" as const,
+      },
+    },
+    {
+      ruleKind: "legacy approval-only",
+      rule: {
+        pattern: "npm test",
+        mode: "exact" as const,
+      },
+    },
+  ])(
+    "keeps $ruleKind rules sandboxed while skipping repeat approval",
+    async ({ rule }) => {
+      getConfiguration.mockReturnValue({
+        get: vi.fn((key: string, fallback?: unknown) =>
+          key === "masterBypass" ? false : fallback,
+        ),
+      });
+      const rules = {
+        session: [rule],
+        project: [],
+        global: [],
+      };
+      const evaluateCommandRules = vi.fn((_sessionId, command) =>
+        evaluateCommandRulePolicy(rules, command),
+      );
+      const enqueueCommandApproval = vi.fn();
+      const review = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        { command: "npm test" },
+        {
+          evaluateCommandRules,
+          isCommandApproved: () => true,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        { enqueueCommandApproval } as never,
+        `session-${rule.mode}-sandboxed-rule`,
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+        },
+      );
+
+      expect(terminalProvider.prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "npm test" }),
+        expect.objectContaining({
+          requiredAuthority: "sandbox",
+          authorityReason: "approval-policy",
+        }),
+      );
+      expect(evaluateCommandRules).toHaveBeenCalledTimes(2);
+      expect(review).not.toHaveBeenCalled();
+      expect(enqueueCommandApproval).not.toHaveBeenCalled();
+      expect(textPayload(result)).toMatchObject({
+        approval: { by: "explicit_rule" },
+        security: { route: "sandbox", authorityReason: "approval-policy" },
+      });
+    },
+  );
 
   it("does not let a command-only allow rule grant native authority to env overrides", async () => {
     getConfiguration.mockReturnValue({
@@ -1163,6 +1458,410 @@ describe("handleExecuteCommand", () => {
     expect(payload.retry_lineage_id).toEqual(expect.any(String));
   });
 
+  it.each([
+    ["dangerous command", "rm -rf src", "destructive"],
+    ["opaque command", "echo $(whoami)", "opaque_shell"],
+    ["unknown command", "custom-tool --flag", "unrecognized_executable"],
+    ["unknown package script", "npm run custom", "unrecognized_operation"],
+    [
+      "compound command with an ineligible subcommand",
+      "dotnet build && custom-tool --flag",
+      "unrecognized_executable",
+    ],
+  ])(
+    "does not retry a structured sandbox denial for an ineligible %s",
+    async (_label, command, riskCode) => {
+      const violation = {
+        operation: "ipc-connect" as const,
+        target: "host-service",
+        reason: "Sandbox denied host IPC",
+        occurredAt: 321,
+      };
+      const prepareExecution = vi.fn(async (_options, routeContext) => ({
+        security: {
+          auditId: "audit-ineligible-retry",
+          route: "sandbox" as const,
+          executionSurface: "verified-sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "sandbox-baseline-v2" as const,
+          preparedAt: 100,
+        },
+        execute: async () => ({
+          exit_code: 1,
+          output: "sandbox denied host IPC",
+          output_captured: true,
+          terminal_id: "sandbox-ineligible-retry",
+          command_sent: true,
+          process_launched: true,
+          execution_mode: "sandbox_pty" as const,
+          sandbox: {
+            policyVersion: "policy-v1",
+            profileId: "workspace-write",
+            backend: "seatbelt",
+            capabilities: {
+              backend: "seatbelt",
+              processTree: true,
+              filesystemRead: "host-visible" as const,
+              filesystemWrite: "strict" as const,
+              network: "blocked" as const,
+              privateHome: false,
+              privateTmp: false,
+              hostIpcBlocked: true,
+              resourceLimits: "partial" as const,
+              warnings: [],
+            },
+            violations: [violation],
+          },
+        }),
+        dispose: vi.fn(),
+      }));
+      const review = vi.fn();
+      const enqueueCommandApproval = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        { command },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true, enqueueCommandApproval } as never,
+        `session-ineligible-retry-${riskCode}`,
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+        },
+      );
+
+      expect(prepareExecution).toHaveBeenCalledOnce();
+      expect(review).not.toHaveBeenCalled();
+      expect(enqueueCommandApproval).not.toHaveBeenCalled();
+      expect(textPayload(result)).toMatchObject({
+        exit_code: 1,
+        capability_denial: violation,
+        retry_outcome: "not_attempted",
+        retry_reason: expect.stringContaining(riskCode),
+        execution_attempts: [{ attempt: 1, route: "sandbox" }],
+      });
+    },
+  );
+
+  it.each([
+    {
+      guard: "resource-limit denial",
+      command: "dotnet build",
+      params: {},
+      operation: "resource-limit" as const,
+      expectedReason:
+        "Resource-limit denials are not retried outside the sandbox.",
+    },
+    {
+      guard: "manual approval policy",
+      command: "dotnet build",
+      params: {},
+      operation: "ipc-connect" as const,
+      approvalMode: {
+        commandApprovalPolicy: "manual" as const,
+        approvalPolicy: "on-request" as const,
+        approvalReviewer: "user" as const,
+        executionPreset: "workspace-write" as const,
+      },
+      expectedReason: "Automatic native retry requires Approve for Me.",
+    },
+    {
+      guard: "read-only execution policy",
+      command: "git status",
+      params: {},
+      operation: "ipc-connect" as const,
+      commandExecutionPolicy: "read-only" as const,
+      expectedReason:
+        "Read-only execution policy does not permit native retry.",
+    },
+    {
+      guard: "temporary inline files",
+      command: "dotnet build --configfile $AL_FILE(input)",
+      params: {
+        files: [{ name: "input", content: "fixture" }],
+      },
+      operation: "ipc-connect" as const,
+      expectedReason:
+        "Commands with temporary inline files cannot be replayed after sandbox completion.",
+    },
+    {
+      guard: "human-edited command",
+      command: "dotnet build",
+      params: {},
+      operation: "ipc-connect" as const,
+      editedCommand: "dotnet build --no-restore",
+      expectedReason:
+        "Commands edited during approval require a new explicit invocation before native retry.",
+    },
+    {
+      guard: "pinned terminal target",
+      command: "dotnet build",
+      params: { terminal_name: "Pinned Sandbox" },
+      operation: "ipc-connect" as const,
+      expectedReason:
+        "Commands pinned to a terminal target cannot switch execution authority automatically.",
+    },
+  ])(
+    "does not transition to native for $guard",
+    async ({
+      command,
+      params,
+      operation,
+      approvalMode,
+      commandExecutionPolicy,
+      editedCommand,
+      expectedReason,
+    }) => {
+      getConfiguration.mockReturnValue({
+        get: vi.fn((key: string, fallback?: unknown) =>
+          key === "masterBypass" ? false : fallback,
+        ),
+      });
+      const violation = {
+        operation,
+        target: "host-service",
+        reason: "Sandbox denied the requested host capability",
+        occurredAt: 456,
+      };
+      const prepareExecution = vi.fn(async (options, routeContext) => ({
+        security: {
+          auditId: `audit-${options.command}`,
+          route: "sandbox" as const,
+          executionSurface: "verified-sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "sandbox-baseline-v2" as const,
+          preparedAt: 100,
+        },
+        execute: async () => ({
+          exit_code: 1,
+          output: "sandbox capability denied",
+          output_captured: true,
+          terminal_id: "sandbox-no-transition",
+          command_sent: true,
+          process_launched: true,
+          execution_mode: "sandbox_pty" as const,
+          sandbox: {
+            policyVersion: "policy-v1",
+            profileId: "workspace-write",
+            backend: "seatbelt",
+            capabilities: {
+              backend: "seatbelt",
+              processTree: true,
+              filesystemRead: "host-visible" as const,
+              filesystemWrite: "strict" as const,
+              network: "blocked" as const,
+              privateHome: false,
+              privateTmp: false,
+              hostIpcBlocked: true,
+              resourceLimits: "partial" as const,
+              warnings: [],
+            },
+            violations: [violation],
+          },
+        }),
+        dispose: vi.fn(),
+      }));
+      const enqueueCommandApproval = vi.fn(() => ({
+        promise: Promise.resolve(
+          editedCommand
+            ? {
+                decision: "edit" as const,
+                editedCommand,
+              }
+            : { decision: "run-once" as const },
+        ),
+        commitApprovalRecording: vi.fn(),
+      }));
+      const review = vi.fn(async () =>
+        editedCommand
+          ? {
+              outcome: "deny" as const,
+              risk: "high" as const,
+              userAuthorization: "unknown" as const,
+              rationale: "The command needs human editing",
+              model: "review-model",
+              status: "reviewed" as const,
+            }
+          : {
+              outcome: "allow" as const,
+              risk: "medium" as const,
+              userAuthorization: "high" as const,
+              rationale: "The bounded sandbox attempt is authorized",
+              model: "review-model",
+              status: "reviewed" as const,
+            },
+      );
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        { command, ...params },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        {
+          isRecentlyApproved: () => false,
+          enqueueCommandApproval,
+        } as never,
+        `session-no-transition-${operation}`,
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () =>
+            approvalMode?.commandApprovalPolicy ?? "approve-for-me",
+          ...(approvalMode
+            ? { getCommandApprovalMode: () => approvalMode }
+            : {}),
+          commandApprovalReviewer: { review },
+          isSessionActive: () => true,
+          ...(commandExecutionPolicy ? { commandExecutionPolicy } : {}),
+        },
+      );
+
+      const payload = textPayload(result);
+      expect(prepareExecution).toHaveBeenCalledTimes(editedCommand ? 2 : 1);
+      expect(
+        prepareExecution.mock.calls.every(
+          ([, routeContext]) => routeContext.requiredAuthority === "sandbox",
+        ),
+      ).toBe(true);
+      expect(payload).toMatchObject({
+        exit_code: 1,
+        capability_denial: violation,
+        retry_outcome: "not_attempted",
+        retry_reason: expectedReason,
+        execution_attempts: [{ attempt: 1, route: "sandbox" }],
+      });
+    },
+  );
+
+  it("does not make a third attempt after the native retry also fails", async () => {
+    const violation = {
+      operation: "ipc-connect" as const,
+      target: "NuGet-Migrations",
+      reason: "Named mutex requires host IPC",
+      occurredAt: 654,
+    };
+    const prepareExecution = vi.fn(async (_options, routeContext) => {
+      const sandbox = routeContext.requiredAuthority === "sandbox";
+      return {
+        security: {
+          auditId: sandbox ? "audit-terminal-first" : "audit-terminal-second",
+          route: sandbox ? ("sandbox" as const) : ("native" as const),
+          executionSurface: sandbox
+            ? ("verified-sandbox" as const)
+            : ("agentlink-native" as const),
+          confinement: sandbox
+            ? ("verified-baseline" as const)
+            : ("native-unsandboxed" as const),
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: sandbox
+            ? ("sandbox-baseline-v2" as const)
+            : ("native-legacy-v1" as const),
+          preparedAt: sandbox ? 100 : 101,
+        },
+        execute: async () =>
+          sandbox
+            ? {
+                exit_code: 1,
+                output: "sandbox denied named mutex",
+                output_captured: true,
+                terminal_id: "sandbox-terminal-retry",
+                command_sent: true,
+                process_launched: true,
+                execution_mode: "sandbox_pty" as const,
+                sandbox: {
+                  policyVersion: "policy-v1",
+                  profileId: "workspace-write",
+                  backend: "seatbelt",
+                  capabilities: {
+                    backend: "seatbelt",
+                    processTree: true,
+                    filesystemRead: "host-visible" as const,
+                    filesystemWrite: "strict" as const,
+                    network: "blocked" as const,
+                    privateHome: false,
+                    privateTmp: false,
+                    hostIpcBlocked: true,
+                    resourceLimits: "partial" as const,
+                    warnings: [],
+                  },
+                  violations: [violation],
+                },
+              }
+            : {
+                exit_code: 1,
+                output: "native build failed",
+                output_captured: true,
+                terminal_id: "native-terminal-retry",
+                command_sent: true,
+                process_launched: true,
+                execution_mode: "native_pty" as const,
+                sandbox: {
+                  policyVersion: "policy-v1",
+                  profileId: "workspace-write",
+                  backend: "seatbelt",
+                  capabilities: {
+                    backend: "seatbelt",
+                    processTree: true,
+                    filesystemRead: "host-visible" as const,
+                    filesystemWrite: "strict" as const,
+                    network: "blocked" as const,
+                    privateHome: false,
+                    privateTmp: false,
+                    hostIpcBlocked: true,
+                    resourceLimits: "partial" as const,
+                    warnings: [],
+                  },
+                  violations: [violation],
+                },
+              },
+        dispose: vi.fn(),
+      };
+    });
+    const review = vi.fn(async () => ({
+      outcome: "allow" as const,
+      risk: "medium" as const,
+      userAuthorization: "high" as const,
+      rationale: "The attributed IPC denial justifies one native retry",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "dotnet build" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-terminal-retry",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+      },
+    );
+
+    expect(prepareExecution).toHaveBeenCalledTimes(2);
+    expect(review).toHaveBeenCalledOnce();
+    expect(textPayload(result)).toMatchObject({
+      exit_code: 1,
+      output: "native build failed",
+      retry_outcome: "completed",
+      execution_attempts: [
+        { attempt: 1, route: "sandbox" },
+        { attempt: 2, route: "native" },
+      ],
+    });
+  });
+
   it("falls back to the normal human card when fresh native retry review denies", async () => {
     const violation = {
       operation: "file-read" as const,
@@ -1568,6 +2267,353 @@ describe("handleExecuteCommand", () => {
         },
       },
     });
+  });
+
+  it.each(["session", "project", "global"] as const)(
+    "saves and reuses an exact %s managed-network rule",
+    async (scope) => {
+      const request = {
+        requestId: "network-save-1",
+        sessionId: `session-network-${scope}`,
+        auditId: "audit-network-save",
+        terminalId: "sandbox-network-save",
+        commandId: "command-network-save",
+        generation: 1,
+        command: "npm view vite version",
+        cwd: "/workspace",
+        reason: "Read public package metadata",
+        host: "registry.npmjs.org",
+        protocol: "https" as const,
+        port: 443,
+        address: "104.16.24.34",
+        family: 4 as const,
+        dnsAnswers: [{ address: "104.16.24.34", family: 4 as const }],
+        destinationClass: "public" as const,
+      };
+      let saved = false;
+      const decisions: string[] = [];
+      const addNetworkRule = vi.fn(() => {
+        saved = true;
+        return true;
+      });
+      const evaluateNetworkRules = vi.fn(() => ({
+        key: "https://registry.npmjs.org:443",
+        decision: saved ? ("allow" as const) : ("prompt" as const),
+        matches: [],
+      }));
+      const enqueueNetworkApproval = vi.fn(() => ({
+        promise: Promise.resolve({ decision: `allow-${scope}` }),
+      }));
+      const prepareExecution = vi.fn(async (options, routeContext) => ({
+        security: {
+          auditId: "audit-network-save",
+          route: "sandbox" as const,
+          executionSurface: "verified-sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "sandbox-baseline-v2" as const,
+          preparedAt: 100,
+          sandbox: {
+            attestationId: "attestation-1",
+            attestationVersion: "sandbox-behavior-v1",
+            policyVersion: "policy-v1",
+            profileId: "workspace-write",
+            backend: "seatbelt" as const,
+            architecture: "arm64" as const,
+            capabilities: { network: "proxy-only" as const },
+            grant: { grantId: "grant-save", auditId: "network-audit-save" },
+          },
+        },
+        execute: async () => {
+          decisions.push(
+            await options.onManagedNetworkRequest(
+              request,
+              new AbortController().signal,
+            ),
+          );
+          decisions.push(
+            await options.onManagedNetworkRequest(
+              { ...request, requestId: "network-save-2" },
+              new AbortController().signal,
+            ),
+          );
+          return {
+            exit_code: 0,
+            output: "7.0.0",
+            output_captured: true,
+            terminal_id: "sandbox-network-save",
+            command_sent: true,
+            process_launched: true,
+            execution_mode: "sandbox_pty" as const,
+          };
+        },
+        dispose: vi.fn(),
+      }));
+      const commandReview = vi.fn(async () => ({
+        outcome: "allow" as const,
+        risk: "low" as const,
+        userAuthorization: "high" as const,
+        rationale: "Authorized package metadata lookup",
+        model: "review-model",
+        status: "reviewed" as const,
+      }));
+      const networkReview = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        {
+          command: "npm view vite version",
+          sandbox_permissions: "require_managed_network",
+          reason: "Read public package metadata from the npm registry.",
+        },
+        {
+          isCommandApproved: () => true,
+          findMatchingCommandRule: vi.fn(() => ({
+            rule: {
+              pattern: "npm view vite version",
+              mode: "exact",
+              decision: "allow",
+            },
+            scope: "project",
+          })),
+          evaluateNetworkRules,
+          addNetworkRule,
+        } as never,
+        {
+          isRecentlyApproved: () => true,
+          enqueueCommandApproval: vi.fn(),
+          enqueueNetworkApproval,
+        } as never,
+        `session-network-${scope}`,
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review: commandReview },
+          networkApprovalReviewer: { review: networkReview },
+          isSessionActive: () => true,
+        },
+      );
+
+      expect(textPayload(result).exit_code).toBe(0);
+      expect(decisions).toEqual(["allow-once", "allow-once"]);
+      expect(enqueueNetworkApproval).toHaveBeenCalledOnce();
+      expect(networkReview).not.toHaveBeenCalled();
+      expect(addNetworkRule).toHaveBeenCalledWith(
+        `session-network-${scope}`,
+        {
+          pattern: "https://registry.npmjs.org:443",
+          mode: "exact",
+          decision: "allow",
+        },
+        scope,
+      );
+      expect(evaluateNetworkRules).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("rejects a forbidden managed-network destination without review or UI", async () => {
+    const decision = vi.fn();
+    const prepareExecution = vi.fn(async (options, routeContext) => ({
+      security: {
+        auditId: "audit-network-forbidden",
+        route: "sandbox" as const,
+        executionSurface: "verified-sandbox" as const,
+        confinement: "verified-baseline" as const,
+        routeReason: "verified-local-macos" as const,
+        ...routeContext,
+        executionPolicy: "sandbox-baseline-v2" as const,
+        preparedAt: 100,
+      },
+      execute: async () => {
+        decision(
+          await options.onManagedNetworkRequest(
+            {
+              requestId: "network-forbidden",
+              sessionId: "session-network-forbidden",
+              auditId: "audit-network-forbidden",
+              terminalId: "sandbox-network-forbidden",
+              commandId: "command-network-forbidden",
+              generation: 1,
+              command: "npm view vite version",
+              cwd: "/workspace",
+              reason: "Read public package metadata",
+              host: "registry.npmjs.org",
+              protocol: "https",
+              port: 443,
+              address: "104.16.24.34",
+              family: 4,
+              dnsAnswers: [{ address: "104.16.24.34", family: 4 }],
+              destinationClass: "public",
+            },
+            new AbortController().signal,
+          ),
+        );
+        return {
+          exit_code: 1,
+          output: "network rejected",
+          output_captured: true,
+          terminal_id: "sandbox-network-forbidden",
+          command_sent: true,
+          process_launched: true,
+          execution_mode: "sandbox_pty" as const,
+        };
+      },
+      dispose: vi.fn(),
+    }));
+    const commandReview = vi.fn(async () => ({
+      outcome: "allow" as const,
+      risk: "low" as const,
+      userAuthorization: "high" as const,
+      rationale: "Authorized package metadata lookup",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const networkReview = vi.fn();
+    const enqueueNetworkApproval = vi.fn();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    await handleExecuteCommand(
+      {
+        command: "npm view vite version",
+        sandbox_permissions: "require_managed_network",
+        reason: "Read public package metadata from the npm registry.",
+      },
+      {
+        isCommandApproved: () => true,
+        findMatchingCommandRule: vi.fn(),
+        evaluateNetworkRules: vi.fn(() => ({
+          key: "https://registry.npmjs.org:443",
+          decision: "forbidden",
+          matches: [{ scope: "project" }],
+        })),
+      } as never,
+      {
+        isRecentlyApproved: () => true,
+        enqueueCommandApproval: vi.fn(),
+        enqueueNetworkApproval,
+      } as never,
+      "session-network-forbidden",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review: commandReview },
+        networkApprovalReviewer: { review: networkReview },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(decision).toHaveBeenCalledWith("reject");
+    expect(networkReview).not.toHaveBeenCalled();
+    expect(enqueueNetworkApproval).not.toHaveBeenCalled();
+  });
+
+  it("rejects a late managed-network allow after tool cancellation", async () => {
+    let resolveApproval!: (value: { decision: "allow-once" }) => void;
+    const pendingApproval = new Promise<{ decision: "allow-once" }>(
+      (resolve) => {
+        resolveApproval = resolve;
+      },
+    );
+    const controller = new AbortController();
+    const decision = vi.fn();
+    const enqueueNetworkApproval = vi.fn(() => ({ promise: pendingApproval }));
+    const prepareExecution = vi.fn(async (options, routeContext) => ({
+      security: {
+        auditId: "audit-network-cancelled",
+        route: "sandbox" as const,
+        executionSurface: "verified-sandbox" as const,
+        confinement: "verified-baseline" as const,
+        routeReason: "verified-local-macos" as const,
+        ...routeContext,
+        executionPolicy: "sandbox-baseline-v2" as const,
+        preparedAt: 100,
+      },
+      execute: async () => {
+        decision(
+          await options.onManagedNetworkRequest(
+            {
+              requestId: "network-cancelled",
+              sessionId: "session-network-cancelled",
+              auditId: "audit-network-cancelled",
+              terminalId: "sandbox-network-cancelled",
+              commandId: "command-network-cancelled",
+              generation: 1,
+              command: "npm view vite version",
+              cwd: "/workspace",
+              reason: "Read public package metadata",
+              host: "registry.npmjs.org",
+              protocol: "https",
+              port: 443,
+              address: "104.16.24.34",
+              family: 4,
+              dnsAnswers: [{ address: "104.16.24.34", family: 4 }],
+              destinationClass: "public",
+            },
+            new AbortController().signal,
+          ),
+        );
+        return {
+          exit_code: 1,
+          output: "network cancelled",
+          output_captured: true,
+          terminal_id: "sandbox-network-cancelled",
+          command_sent: true,
+          process_launched: true,
+          execution_mode: "sandbox_pty" as const,
+        };
+      },
+      dispose: vi.fn(),
+    }));
+    const commandReview = vi.fn(async () => ({
+      outcome: "allow" as const,
+      risk: "low" as const,
+      userAuthorization: "high" as const,
+      rationale: "Authorized package metadata lookup",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = handleExecuteCommand(
+      {
+        command: "npm view vite version",
+        sandbox_permissions: "require_managed_network",
+        reason: "Read public package metadata from the npm registry.",
+      },
+      {
+        isCommandApproved: () => true,
+        findMatchingCommandRule: vi.fn(),
+        evaluateNetworkRules: vi.fn(() => ({
+          key: "https://registry.npmjs.org:443",
+          decision: "prompt",
+          matches: [{ scope: "project" }],
+        })),
+      } as never,
+      {
+        isRecentlyApproved: () => true,
+        enqueueCommandApproval: vi.fn(),
+        enqueueNetworkApproval,
+      } as never,
+      "session-network-cancelled",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review: commandReview },
+        isSessionActive: () => true,
+        toolAbortSignal: controller.signal,
+      },
+    );
+    await vi.waitFor(() =>
+      expect(enqueueNetworkApproval).toHaveBeenCalledOnce(),
+    );
+    controller.abort();
+    resolveApproval({ decision: "allow-once" });
+    await result;
+
+    expect(decision).toHaveBeenCalledWith("reject");
   });
 
   it("keeps use_default sandbox-routed under Approve for Me", async () => {
@@ -2011,6 +3057,44 @@ describe("handleExecuteCommand", () => {
     const payload = textPayload(result);
     expect(payload.output).toBe("two\nthree");
     expect(payload.terminal_raw_output).toBeUndefined();
+  });
+
+  it("reports line counts as retained while output is not finalized", async () => {
+    executeCommand.mockResolvedValue({
+      exit_code: null,
+      output: "one\ntwo",
+      output_captured: true,
+      terminal_id: "term-running-lines",
+      is_running: true,
+      backgrounded: true,
+    });
+    const getRetainedOutput = vi.fn(() => ({
+      output: "one\ntwo",
+      complete: true,
+      finalized: false,
+      total_bytes: 7,
+      retained_bytes: 7,
+      dropped_bytes: 0,
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "printf lines" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-running-lines",
+      undefined,
+      { terminalProvider: { ...terminalProvider, getRetainedOutput } },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      total_lines: 2,
+      lines_shown: 2,
+      total_lines_scope: "retained",
+      output_complete: true,
+      output_finalized: false,
+      output_warning: expect.stringContaining("retained output so far"),
+    });
   });
 
   it("rejects malformed shell commands before masterBypass and force handling", async () => {

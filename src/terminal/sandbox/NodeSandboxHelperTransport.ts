@@ -102,6 +102,8 @@ class NodeSandboxHelperTransport implements SandboxHelperTransport {
   private stderrBytes = 0;
   private closed = false;
   private disposed = false;
+  private stdinClosed = false;
+  private gracefulKillTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly child: SandboxHelperChildProcess) {
     child.stdout.on("data", (chunk: Buffer | string) => this.onStdout(chunk));
@@ -110,6 +112,8 @@ class NodeSandboxHelperTransport implements SandboxHelperTransport {
     child.once("close", (exitCode, signal) => {
       if (this.closed) return;
       this.closed = true;
+      if (this.gracefulKillTimer) clearTimeout(this.gracefulKillTimer);
+      this.gracefulKillTimer = undefined;
       const tail = this.decoder.end();
       if (tail) this.appendDecoded(tail);
       if (this.pending.length > 0) {
@@ -155,6 +159,17 @@ class NodeSandboxHelperTransport implements SandboxHelperTransport {
     return { dispose: () => this.closeListeners.delete(listener) };
   }
 
+  closeGracefully(killAfterMs: number): void {
+    if (this.closed) return;
+    this.closeStdin();
+    if (this.gracefulKillTimer) return;
+    this.gracefulKillTimer = setTimeout(() => {
+      this.gracefulKillTimer = undefined;
+      this.kill();
+    }, killAfterMs);
+    this.gracefulKillTimer.unref?.();
+  }
+
   kill(): void {
     if (this.closed) return;
     this.child.kill("SIGKILL");
@@ -163,10 +178,18 @@ class NodeSandboxHelperTransport implements SandboxHelperTransport {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.child.stdin.end();
+    // Keep the unref'd graceful-kill timer armed until child close; it is the
+    // bounded backstop when the helper does not finish cleanup after stdin EOF.
+    this.closeStdin();
     this.lineListeners.clear();
     this.errorListeners.clear();
     this.closeListeners.clear();
+  }
+
+  private closeStdin(): void {
+    if (this.stdinClosed) return;
+    this.stdinClosed = true;
+    this.child.stdin.end();
   }
 
   private onStdout(chunk: Buffer | string): void {

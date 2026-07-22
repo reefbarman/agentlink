@@ -38,6 +38,8 @@ import {
   classifyCommand,
   isCommandEligibleForReadOnlyExecution,
   isCommandPathInsideWorkspace,
+  type ClassifiedCommand,
+  type CommandRiskCode,
   type CommandTier,
 } from "../approvals/commandTierClassifier.js";
 import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
@@ -325,6 +327,12 @@ function policyDriftResult(
   };
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+}
+
 function sandboxCapabilityDenial(
   result: TerminalCommandResult,
 ): SandboxViolation | undefined {
@@ -341,10 +349,25 @@ function sandboxCapabilityDenial(
   return result.sandbox?.violations?.[0];
 }
 
-function isNativeRetryEligibleDenial(denial: SandboxViolation): boolean {
+const NATIVE_RETRY_ELIGIBLE_COMMAND_CODES = new Set<CommandRiskCode>([
+  "read_only",
+  "version_check",
+  "project_toolchain",
+]);
+
+function isNativeRetryEligibleDenial(
+  denial: SandboxViolation,
+  classified: ClassifiedCommand,
+): boolean {
   return (
     denial.operation !== "network-connect" &&
-    denial.operation !== "resource-limit"
+    denial.operation !== "resource-limit" &&
+    classified.perSubCommand.length > 0 &&
+    classified.perSubCommand.every(
+      ({ result }) =>
+        result.tier !== "dangerous" &&
+        NATIVE_RETRY_ELIGIBLE_COMMAND_CODES.has(result.code),
+    )
   );
 }
 
@@ -1112,12 +1135,23 @@ export async function handleExecuteCommand(
           result,
           capabilityDenial,
         );
+        const retryClassification = classifyCommand(commandToRun, {
+          cwd,
+          workspaceRoots,
+        });
         const retryUnsupportedReason = !isNativeRetryEligibleDenial(
           capabilityDenial,
+          retryClassification,
         )
           ? capabilityDenial.operation === "network-connect"
             ? "Managed network capability review is required; native retry was not attempted."
-            : "Resource-limit denials are not retried outside the sandbox."
+            : capabilityDenial.operation === "resource-limit"
+              ? "Resource-limit denials are not retried outside the sandbox."
+              : `Native retry was not attempted because the command is not a recognized read-only, version, or project-toolchain operation (${
+                  retryClassification.perSubCommand
+                    .map(({ command, result }) => `${command}: ${result.code}`)
+                    .join("; ") || "no classified command"
+                }).`
           : routeContext.commandApprovalPolicySnapshot !== "approve-for-me"
             ? "Automatic native retry requires Approve for Me."
             : readOnlyPolicy
@@ -1425,8 +1459,24 @@ export async function handleExecuteCommand(
       // representations through the model-facing tool result.
       delete result.terminal_raw_output;
 
-      // Apply output filtering and temp file saving
+      // Apply output filtering and temp file saving. Background and timed-out
+      // commands may have a larger exact spool than the bounded display tail.
+      const retainedOutput = providers.terminalProvider.getRetainedOutput?.(
+        result.terminal_id,
+      );
+      if (retainedOutput) {
+        result.output = retainedOutput.output;
+        result.output_complete = retainedOutput.complete;
+        result.output_finalized = retainedOutput.finalized;
+        result.output_total_bytes = retainedOutput.total_bytes;
+        result.output_retained_bytes = retainedOutput.retained_bytes;
+        result.output_dropped_bytes = retainedOutput.dropped_bytes;
+      } else if (result.output_complete === undefined) {
+        result.output_complete = true;
+        result.output_finalized = !result.is_running;
+      }
       if (result.output_captured && result.output) {
+        const fullOutput = result.output;
         const filterOptions = {
           output_head: params.output_head,
           output_tail: params.output_tail,
@@ -1435,16 +1485,24 @@ export async function handleExecuteCommand(
           output_grep_context: params.output_grep_context,
         };
         const { filtered, totalLines, linesShown } = filterOutput(
-          result.output,
+          fullOutput,
           filterOptions,
         );
 
         result.total_lines = totalLines;
         result.lines_shown = linesShown;
+        result.total_lines_scope =
+          result.output_finalized === false || result.output_complete === false
+            ? "retained"
+            : "complete";
 
-        // Only save temp file when output is actually being truncated
-        if (linesShown < totalLines) {
-          const outputFile = saveOutputTempFile(result.output);
+        if (result.output_finalized === false) {
+          result.output_warning =
+            "Terminal output is still running or was closed before finalization. Filtering applies to retained output so far; no final output file is available.";
+        } else if (result.output_complete === false) {
+          result.output_warning = `⚠️ Terminal output exceeded the bounded capture limit. ${result.output_dropped_bytes === undefined ? "Some output" : formatBytes(result.output_dropped_bytes)} was not retained; filtering applies only to the retained tail and no full-output file is available.`;
+        } else if (linesShown < totalLines) {
+          const outputFile = saveOutputTempFile(fullOutput);
           if (outputFile) {
             result.output_file = outputFile;
             result.output_warning =
@@ -1870,6 +1928,7 @@ async function approveSubCommands(
         existingRule: {
           pattern: match.rule.pattern,
           mode: match.rule.mode,
+          decision: match.rule.decision,
           scope: match.scope,
         },
         tier: tierByCommand.get(cmd),

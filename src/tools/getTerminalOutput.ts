@@ -12,6 +12,12 @@ const INTERACTIVE_PROMPT_PATTERNS: RegExp[] = [
   /\bcustom code preservation\b/i,
 ];
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+}
+
 function detectPromptBlock(output: string): {
   blocked_on_prompt: boolean;
   matched_pattern?: string;
@@ -152,12 +158,35 @@ export async function handleGetTerminalOutput(
     };
   }
 
+  const retainedOutput = terminalProvider.getRetainedOutput?.(
+    params.terminal_id,
+  );
+  const output = retainedOutput?.output ?? state.output;
+  const outputComplete =
+    retainedOutput?.complete ?? state.output_complete ?? true;
+  const outputFinalized =
+    retainedOutput?.finalized ?? state.output_finalized ?? !state.is_running;
   const result: Record<string, unknown> = {
     terminal_id: params.terminal_id,
     is_running: state.is_running,
     state: state.state,
     exit_code: state.exit_code,
     output_captured: state.output_captured,
+    output_complete: outputComplete,
+    output_finalized: outputFinalized,
+    ...(retainedOutput
+      ? {
+          output_total_bytes: retainedOutput.total_bytes,
+          output_retained_bytes: retainedOutput.retained_bytes,
+          output_dropped_bytes: retainedOutput.dropped_bytes,
+        }
+      : state.output_total_bytes !== undefined
+        ? {
+            output_total_bytes: state.output_total_bytes,
+            output_retained_bytes: state.output_retained_bytes,
+            output_dropped_bytes: state.output_dropped_bytes,
+          }
+        : {}),
     ...(closedState
       ? {
           terminal_name: closedState.name,
@@ -181,7 +210,7 @@ export async function handleGetTerminalOutput(
     }
   }
 
-  if (state.output_captured && state.output) {
+  if (state.output_captured && output) {
     const filterOptions = {
       output_head: params.output_head,
       output_tail: params.output_tail,
@@ -190,16 +219,24 @@ export async function handleGetTerminalOutput(
       output_grep_context: params.output_grep_context,
     };
     const { filtered, totalLines, linesShown } = filterOutput(
-      state.output,
+      output,
       filterOptions,
     );
 
     result.output = filtered;
     result.total_lines = totalLines;
     result.lines_shown = linesShown;
+    result.total_lines_scope = outputComplete ? "complete" : "retained";
 
-    if (linesShown < totalLines) {
-      const outputFile = saveOutputTempFile(state.output);
+    if (!outputFinalized) {
+      result.output_warning =
+        "Terminal output is still running or was closed before finalization. Filtering applies to retained output so far; no final output file is available.";
+    } else if (!outputComplete) {
+      const droppedBytes =
+        retainedOutput?.dropped_bytes ?? state.output_dropped_bytes;
+      result.output_warning = `⚠️ Terminal output exceeded the bounded capture limit. ${droppedBytes === undefined ? "Some output" : formatBytes(droppedBytes)} was not retained; filtering applies only to the retained tail and no full-output file is available.`;
+    } else if (linesShown < totalLines) {
+      const outputFile = saveOutputTempFile(output);
       if (outputFile) {
         result.output_file = outputFile;
         result.output_warning =

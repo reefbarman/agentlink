@@ -20,6 +20,7 @@ import { startTrustedNetworkProxies } from "./sandbox-network-proxy.mjs";
 const PROTOCOL_VERSION = 2;
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_DATA_BYTES = 256 * 1024;
+const MAX_PENDING_OUTPUT_BYTES = 2 * 1024 * 1024;
 const FORCE_KILL_DELAY_MS = 500;
 const PUBLIC_NETWORK_ALLOWED_DOMAINS = Object.freeze(["*"]);
 const IDENTITY_KEYS = ["type", "channelId", "commandId", "generation"];
@@ -218,23 +219,24 @@ function classifyViolation(line) {
   };
 }
 
-function splitData(data) {
-  if (Buffer.byteLength(data, "utf8") <= MAX_DATA_BYTES) return [data];
-  const chunks = [];
+function* splitData(data) {
+  if (Buffer.byteLength(data, "utf8") <= MAX_DATA_BYTES) {
+    yield data;
+    return;
+  }
   let chunk = "";
   let bytes = 0;
   for (const character of data) {
     const characterBytes = Buffer.byteLength(character, "utf8");
     if (bytes + characterBytes > MAX_DATA_BYTES) {
-      chunks.push(chunk);
+      yield chunk;
       chunk = "";
       bytes = 0;
     }
     chunk += character;
     bytes += characterBytes;
   }
-  if (chunk) chunks.push(chunk);
-  return chunks;
+  if (chunk) yield chunk;
 }
 
 function signalProcessGroup(kill, pgid, signal, terminal) {
@@ -297,9 +299,73 @@ export function createSandboxInteractiveHelper(options = {}) {
   let inputBuffer = Buffer.alloc(0);
   let stopped = false;
   let processing = Promise.resolve();
+  let launching;
+  const pendingOutputFrames = [];
+  let pendingOutputBytes = 0;
+  let outputBackpressured = false;
+  let outputDrainListenerAttached = false;
+  let outputProducerPaused = false;
+
+  const pauseOutputProducer = () => {
+    if (outputProducerPaused || !active?.terminal?.pause) return;
+    active.terminal.pause();
+    outputProducerPaused = true;
+  };
+
+  const resumeOutputProducer = () => {
+    if (!outputProducerPaused || !active?.terminal?.resume) return;
+    active.terminal.resume();
+    outputProducerPaused = false;
+  };
+
+  const flushOutputFrames = () => {
+    if (stopped || outputBackpressured) return;
+    while (pendingOutputFrames.length > 0) {
+      const frame = pendingOutputFrames.shift();
+      pendingOutputBytes -= Buffer.byteLength(frame, "utf8");
+      if (!output.write(frame)) {
+        outputBackpressured = true;
+        pauseOutputProducer();
+        if (!outputDrainListenerAttached) {
+          outputDrainListenerAttached = true;
+          output.once("drain", () => {
+            outputDrainListenerAttached = false;
+            outputBackpressured = false;
+            flushOutputFrames();
+            if (!outputBackpressured) resumeOutputProducer();
+          });
+        }
+        return;
+      }
+    }
+    resumeOutputProducer();
+  };
 
   const writeFrame = (identity, frame) => {
-    output.write(`${JSON.stringify({ ...identity, ...frame })}\n`);
+    const serialized = `${JSON.stringify({ ...identity, ...frame })}\n`;
+    const serializedBytes = Buffer.byteLength(serialized, "utf8");
+    if (pendingOutputBytes + serializedBytes > MAX_PENDING_OUTPUT_BYTES) {
+      pendingOutputFrames.length = 0;
+      pendingOutputBytes = 0;
+      if (active && !active.failed && !active.exited) {
+        active.failed = true;
+        cancelPendingNetworkRequests(active);
+        terminate(active);
+      }
+      const failure = `${JSON.stringify({
+        ...identity,
+        type: "error",
+        message: "sandbox helper output backpressure limit exceeded",
+      })}\n`;
+      pendingOutputFrames.push(failure);
+      pendingOutputBytes = Buffer.byteLength(failure, "utf8");
+      flushOutputFrames();
+      return false;
+    }
+    pendingOutputFrames.push(serialized);
+    pendingOutputBytes += serializedBytes;
+    flushOutputFrames();
+    return true;
   };
 
   const cancelPendingNetworkRequests = (session) => {
@@ -328,10 +394,12 @@ export function createSandboxInteractiveHelper(options = {}) {
       }
     }
     try {
-      try {
-        session.runtime.cleanupAfterCommand();
-      } finally {
-        await session.runtime.reset();
+      if (session.runtime) {
+        try {
+          session.runtime.cleanupAfterCommand();
+        } finally {
+          await session.runtime.reset();
+        }
       }
     } finally {
       await session.networkProxies?.close();
@@ -340,24 +408,36 @@ export function createSandboxInteractiveHelper(options = {}) {
   };
 
   const terminate = (session, signal = "SIGTERM") => {
-    if (!session?.terminal || session.exited) return;
+    if (!session || session.exited) return;
+    if (!session.terminationRequested || signal === "SIGKILL") {
+      session.terminationRequested = signal;
+    }
+    if (!session.terminal || session.terminationSignal === "SIGKILL") return;
+    const requestedSignal = session.terminationRequested;
+    if (session.terminationSignal === requestedSignal) return;
+    if (requestedSignal === "SIGKILL" && session.forceKillTimer) {
+      dependencies.clearTimeout(session.forceKillTimer);
+      session.forceKillTimer = undefined;
+    }
     signalProcessGroup(
       dependencies.kill,
       session.pgid,
-      signal,
+      requestedSignal,
       session.terminal,
     );
-    if (signal !== "SIGKILL" && !session.forceKillTimer) {
-      session.forceKillTimer = dependencies.setTimeout(
-        () =>
-          signalProcessGroup(
-            dependencies.kill,
-            session.pgid,
-            "SIGKILL",
-            session.terminal,
-          ),
-        FORCE_KILL_DELAY_MS,
-      );
+    session.terminationSignal = requestedSignal;
+    if (requestedSignal !== "SIGKILL" && !session.forceKillTimer) {
+      session.forceKillTimer = dependencies.setTimeout(() => {
+        session.forceKillTimer = undefined;
+        if (session.exited || session.terminationSignal === "SIGKILL") return;
+        signalProcessGroup(
+          dependencies.kill,
+          session.pgid,
+          "SIGKILL",
+          session.terminal,
+        );
+        session.terminationSignal = "SIGKILL";
+      }, FORCE_KILL_DELAY_MS);
       session.forceKillTimer.unref?.();
     }
   };
@@ -395,27 +475,38 @@ export function createSandboxInteractiveHelper(options = {}) {
       structurallyProtectedRoots: frame.structurallyProtectedRoots,
     });
     const identity = identityOf(frame);
-    const cwd = await dependencies.realpath(request.cwd);
     const environment = buildSandboxEnvironment(request.environment);
     dependencies.replaceProcessEnvironment(environment);
-    const runtime = await dependencies.loadRuntime();
     let networkProxies;
     const session = {
       identity,
-      runtime,
+      runtime: undefined,
       networkProxies: undefined,
       pendingNetworkRequests: new Map(),
       terminal: undefined,
       pgid: undefined,
       ready: false,
       pendingData: [],
+      pendingDataBytes: 0,
       pendingExit: undefined,
       interruptRequested: false,
       exited: false,
       failed: false,
       cleanupStarted: false,
       forceKillTimer: undefined,
+      terminationRequested: undefined,
+      terminationSignal: undefined,
     };
+    active = session;
+    const cwd = await dependencies.realpath(request.cwd);
+    if (session.terminationRequested) {
+      throw new Error("sandbox helper launch cancelled before initialization");
+    }
+    const runtime = await dependencies.loadRuntime();
+    session.runtime = runtime;
+    if (session.terminationRequested) {
+      throw new Error("sandbox helper launch cancelled before initialization");
+    }
     networkProxies = await dependencies.startTrustedNetworkProxies(
       request.network.allowedDomains,
       {},
@@ -505,9 +596,13 @@ export function createSandboxInteractiveHelper(options = {}) {
       },
     );
     session.networkProxies = networkProxies;
-    active = session;
 
     try {
+      if (session.terminationRequested) {
+        throw new Error(
+          "sandbox helper launch cancelled before initialization",
+        );
+      }
       await runtime.initialize({
         network: {
           allowedDomains: request.network.allowedDomains,
@@ -559,6 +654,9 @@ export function createSandboxInteractiveHelper(options = {}) {
       await dependencies.validateStructurallyProtectedRoots(
         request.structurallyProtectedRoots,
       );
+      if (session.terminationRequested) {
+        throw new Error("sandbox helper launch cancelled before PTY spawn");
+      }
       const terminal = nodePty.spawn(
         authenticatedArgv[0],
         authenticatedArgv.slice(1),
@@ -579,7 +677,15 @@ export function createSandboxInteractiveHelper(options = {}) {
       session.dataSubscription = terminal.onData((data) => {
         if (session.exited || session.failed) return;
         if (!session.ready) {
+          const dataBytes = Buffer.byteLength(data, "utf8");
+          if (session.pendingDataBytes + dataBytes > MAX_PENDING_OUTPUT_BYTES) {
+            void failActive(
+              "sandbox helper pre-ready output buffer limit exceeded",
+            );
+            return;
+          }
           session.pendingData.push(data);
+          session.pendingDataBytes += dataBytes;
           return;
         }
         for (const chunk of splitData(data)) {
@@ -611,8 +717,17 @@ export function createSandboxInteractiveHelper(options = {}) {
             return;
           }
           session.exited = true;
-          if (session.forceKillTimer)
+          if (session.forceKillTimer) {
             dependencies.clearTimeout(session.forceKillTimer);
+            session.forceKillTimer = undefined;
+          }
+          signalProcessGroup(
+            dependencies.kill,
+            session.pgid,
+            "SIGKILL",
+            session.terminal,
+          );
+          session.terminationSignal = "SIGKILL";
           const normalizedInterrupt =
             session.interruptRequested &&
             event.exitCode === 0 &&
@@ -637,6 +752,7 @@ export function createSandboxInteractiveHelper(options = {}) {
         })().catch((error) => errorOutput.write(`${errorMessage(error)}\n`));
       };
       session.exitSubscription = terminal.onExit(handleExit);
+      if (session.terminationRequested) terminate(session);
       writeFrame(identity, {
         type: "ready",
         pid: terminal.pid,
@@ -645,9 +761,11 @@ export function createSandboxInteractiveHelper(options = {}) {
       });
       session.ready = true;
       for (const data of session.pendingData.splice(0)) {
+        session.pendingDataBytes -= Buffer.byteLength(data, "utf8");
         for (const chunk of splitData(data)) {
-          writeFrame(identity, { type: "data", data: chunk });
+          if (!writeFrame(identity, { type: "data", data: chunk })) break;
         }
+        if (session.failed) break;
       }
       if (session.pendingExit) handleExit(session.pendingExit);
     } catch (error) {
@@ -678,14 +796,20 @@ export function createSandboxInteractiveHelper(options = {}) {
         await failActive("sandbox helper accepts exactly one launch frame");
         return;
       }
-      try {
-        await launch(frame);
-      } catch (error) {
-        writeFrame(identityOf(frame), {
-          type: "error",
-          message: errorMessage(error),
+      launching = launch(frame)
+        .catch(async (error) => {
+          writeFrame(identityOf(frame), {
+            type: "error",
+            message: errorMessage(error),
+          });
+          if (active && sameIdentity(active.identity, identityOf(frame))) {
+            await cleanup(active);
+            active = undefined;
+          }
+        })
+        .finally(() => {
+          launching = undefined;
         });
-      }
       return;
     }
     if (!sameIdentity(frame, active.identity)) {
@@ -778,12 +902,17 @@ export function createSandboxInteractiveHelper(options = {}) {
   return {
     async close() {
       stopped = true;
+      pendingOutputFrames.length = 0;
+      pendingOutputBytes = 0;
+      resumeOutputProducer();
       input.off("data", onData);
       input.off("end", onEnd);
       input.off("close", onEnd);
       if (active && !active.exited) terminate(active, "SIGKILL");
-      await cleanup(active);
       await processing;
+      await launching;
+      if (active && !active.exited) terminate(active, "SIGKILL");
+      await cleanup(active);
     },
     get activeIdentity() {
       return active?.identity;

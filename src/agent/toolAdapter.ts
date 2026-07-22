@@ -135,6 +135,7 @@ import type {
   EditorRevealProvider,
   MultiFileEditReviewProvider,
   RenameSymbolProvider,
+  WriteApprovalPromptEvent,
   WriteApprovalPolicyProvider,
 } from "../core/capabilities/editReview.js";
 import type {
@@ -170,6 +171,7 @@ import type {
 } from "../core/capabilities/mcp.js";
 import type {
   ToolUsageOutcome,
+  ToolUsageMetrics,
   ToolUsageTelemetry,
 } from "../telemetry/ToolUsageTelemetry.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
@@ -1683,6 +1685,8 @@ export interface ToolDispatchContext {
   approvalManager: ApprovalManager;
   approvalPanel: ApprovalPanelProvider;
   sessionId: string;
+  /** Whether this request belongs to an in-process background session. */
+  isBackgroundSession?: boolean;
   /** Immutable project identity captured for this request's tool runtime. */
   projectScope?: Readonly<
     import("../core/workspaceProjects.js").SessionProjectScope
@@ -2291,6 +2295,78 @@ function enforceDelegatedPathPolicy(
   }
 }
 
+function writeApprovalStateAgeBucket(ageMs: number | undefined): string {
+  if (ageMs === undefined) return "absent";
+  if (ageMs < 60_000) return "under_1m";
+  if (ageMs < 60 * 60_000) return "1m_to_1h";
+  if (ageMs < 24 * 60 * 60_000) return "1h_to_24h";
+  return "over_24h";
+}
+
+function writeApprovalPromptReason(reason: string | undefined): string {
+  switch (reason) {
+    case "protected_memory_path":
+    case "no_matching_write_authority":
+    case "outside_workspace_requires_matching_rule":
+    case "legacy_policy_provider":
+      return reason;
+    default:
+      return reason ? "other_policy_denial" : "unspecified_policy_denial";
+  }
+}
+
+function recordWriteApprovalPrompt(
+  toolName: "write_file" | "apply_diff",
+  event: WriteApprovalPromptEvent,
+  ctx: ToolDispatchContext,
+): void {
+  const telemetry = ctx.toolUsageTelemetry;
+  if (!telemetry) return;
+
+  const metrics: ToolUsageMetrics = {
+    writeApprovalPrompt: true,
+    writeApprovalPromptReason: writeApprovalPromptReason(
+      event.authorization.reason,
+    ),
+    writeApprovalAuthorizationBasis: event.authorization.basis,
+    writeApprovalInWorkspace: event.inWorkspace,
+    writeApprovalSessionKind: ctx.isBackgroundSession
+      ? "background"
+      : "foreground",
+    writeApprovalMode: event.mode ?? ctx.mode ?? "unknown",
+  };
+  try {
+    const diagnostics = ctx.approvalManager.getAgentWriteApprovalDiagnostics(
+      event.sessionId,
+      event.absolutePath,
+    );
+    Object.assign(metrics, {
+      writeApprovalBlanketScope: diagnostics.effectiveScope,
+      writeApprovalGlobalBlanketApproved: diagnostics.globalBlanketApproved,
+      writeApprovalProjectBlanketApproved: diagnostics.projectBlanketApproved,
+      writeApprovalSessionBlanketApproved: diagnostics.sessionBlanketApproved,
+      writeApprovalLegacyGlobalBlanketApproved:
+        diagnostics.legacyGlobalBlanketApproved,
+      writeApprovalLegacyProjectBlanketApproved:
+        diagnostics.legacyProjectBlanketApproved,
+      writeApprovalLegacySessionBlanketApproved:
+        diagnostics.legacySessionBlanketApproved,
+      writeApprovalSessionProjectBound: diagnostics.sessionProjectBound,
+      writeApprovalSessionStatePresent: diagnostics.sessionStatePresent,
+      writeApprovalSessionStateAgeBucket: writeApprovalStateAgeBucket(
+        diagnostics.sessionStateAgeMs,
+      ),
+      writeApprovalSessionRuleCount: diagnostics.writeRuleCounts.session,
+      writeApprovalProjectRuleCount: diagnostics.writeRuleCounts.project,
+      writeApprovalGlobalRuleCount: diagnostics.writeRuleCounts.global,
+      writeApprovalSettingsRuleCount: diagnostics.writeRuleCounts.settings,
+    });
+  } catch {
+    metrics.writeApprovalDiagnostics = "unavailable";
+  }
+  telemetry.recordMetrics(toolName, metrics);
+}
+
 /**
  * Dispatch a tool call to the appropriate handler.
  * Returns ToolResult compatible with the Anthropic SDK.
@@ -2844,6 +2920,12 @@ export async function dispatchToolCall(
           writeApprovalPolicyProvider:
             ctx.writeApprovalPolicyProvider ??
             createVscodeWriteApprovalPolicyProvider(approvalManager),
+          ...(ctx.toolUsageTelemetry
+            ? {
+                onApprovalPrompt: (event: WriteApprovalPromptEvent) =>
+                  recordWriteApprovalPrompt("write_file", event, ctx),
+              }
+            : {}),
           diagnosticDelay: getConfiguredDiagnosticDelay(),
         },
       );
@@ -2871,6 +2953,12 @@ export async function dispatchToolCall(
           writeApprovalPolicyProvider:
             ctx.writeApprovalPolicyProvider ??
             createVscodeWriteApprovalPolicyProvider(approvalManager),
+          ...(ctx.toolUsageTelemetry
+            ? {
+                onApprovalPrompt: (event: WriteApprovalPromptEvent) =>
+                  recordWriteApprovalPrompt("apply_diff", event, ctx),
+              }
+            : {}),
           diagnosticDelay: getConfiguredDiagnosticDelay(),
         },
       );

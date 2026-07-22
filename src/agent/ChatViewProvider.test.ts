@@ -1058,6 +1058,43 @@ describe("ChatViewProvider session state sync", () => {
     );
   });
 
+  it("updates browser write approval without resetting unrelated sessions", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const setAgentWriteApprovalSelection = vi.fn(() => true);
+    provider.setApprovalManager({
+      setAgentWriteApprovalSelection,
+      onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+    } as never);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => ({
+        id: "foreground-session",
+        projectScope: { rootPath: "/workspace/project" },
+      })),
+    } as never);
+    (provider as unknown as { sendInitialState: () => void }).sendInitialState =
+      vi.fn();
+
+    expect(provider.submitBrowserSetWriteApproval("session")).toEqual({
+      ok: true,
+    });
+    expect(setAgentWriteApprovalSelection).toHaveBeenCalledWith(
+      "foreground-session",
+      "session",
+      "/workspace/project",
+    );
+    setAgentWriteApprovalSelection.mockReturnValueOnce(false);
+    expect(provider.submitBrowserSetWriteApproval("project")).toEqual({
+      ok: false,
+    });
+    expect(provider.submitBrowserSetWriteApproval("invalid")).toEqual({
+      ok: false,
+    });
+  });
+
   it("rejects non-MCP native tools from the Ask Agent MCP bridge", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
@@ -3083,6 +3120,7 @@ describe("ChatViewProvider session state sync", () => {
             kind: string;
             title: string;
             targetPath?: string;
+            backgroundTask?: string;
             choices: Array<{ label: string; value: string }>;
           },
           sessionId?: string,
@@ -3100,6 +3138,7 @@ describe("ChatViewProvider session state sync", () => {
         kind: "write",
         title: "Modify `src/output.ts`?",
         targetPath: "src/output.ts",
+        backgroundTask: "Review implementation",
         choices: [{ label: "Accept", value: "accept" }],
       },
       "session-b",
@@ -3109,6 +3148,7 @@ describe("ChatViewProvider session state sync", () => {
         projectId: "project-b",
         displayName: "Project B",
       },
+      backgroundTask: "Review implementation",
       targetPath: "/workspace/b/src/output.ts",
     });
     expect(backgroundApproval.targetProject).toBeUndefined();

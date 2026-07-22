@@ -3,7 +3,7 @@ import {
   createShellIntegrationParser,
   encodeShellIntegrationValue,
 } from "./shellIntegration.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { HostTerminalRuntime } from "./HostTerminalRuntime.js";
 
@@ -335,6 +335,26 @@ describe("HostTerminalRuntime", () => {
       droppedBytes: 7,
     });
     expect(update.batch?.droppedRenderBytes).toBe(7);
+  });
+
+  it("appends a long printable replay span once instead of once per character", () => {
+    const runtime = raw({ maxRenderReplayBytes: 1024 });
+    const appendReplayUnit = vi.spyOn(
+      runtime as unknown as {
+        appendReplayUnit(data: string, splittable: boolean): void;
+      },
+      "appendReplayUnit",
+    );
+
+    runtime.processData("x".repeat(1200));
+
+    expect(appendReplayUnit).toHaveBeenCalledTimes(1);
+    expect(appendReplayUnit).toHaveBeenCalledWith("x".repeat(1200), true);
+    expect(runtime.snapshot()).toMatchObject({
+      data: "x".repeat(1024),
+      byteLength: 1024,
+      droppedBytes: 176,
+    });
   });
 
   it("requires explicit detach before a different renderer epoch attaches", () => {

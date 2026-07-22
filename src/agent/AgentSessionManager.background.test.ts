@@ -210,6 +210,7 @@ describe("AgentSessionManager background agents", () => {
   it("snapshots the parent's full approval mode for a shared child", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     const parent = await mgr.createSession("code");
+    const inheritSessionApprovalState = vi.fn();
     mgr.setSessionApprovalMode(parent.id, {
       commandApprovalPolicy: "sensitive",
       approvalPolicy: "on-request",
@@ -220,6 +221,7 @@ describe("AgentSessionManager background agents", () => {
       ...toolCtx,
       getCommandApprovalPolicy: (sessionId) =>
         mgr.getCommandApprovalPolicy(sessionId),
+      inheritSessionApprovalState,
     });
 
     const child = await mgr.spawnBackground(
@@ -232,6 +234,18 @@ describe("AgentSessionManager background agents", () => {
       approvalReviewer: "auto-review",
       executionPreset: "native-manual",
     });
+    expect(inheritSessionApprovalState).toHaveBeenCalledWith(
+      parent.id,
+      child.sessionId,
+    );
+    expect(toolCtx.approvalManager.bindSessionProject).toHaveBeenCalledWith(
+      parent.id,
+      parent.projectScope,
+    );
+    expect(toolCtx.approvalManager.bindSessionProject).toHaveBeenCalledWith(
+      child.sessionId,
+      expect.objectContaining({ projectId: parent.projectScope.projectId }),
+    );
 
     mgr.setSessionApprovalMode(parent.id, {
       commandApprovalPolicy: "safe",
@@ -245,6 +259,95 @@ describe("AgentSessionManager background agents", () => {
       approvalReviewer: "auto-review",
       executionPreset: "native-manual",
     });
+  });
+
+  it("adds later parent session approvals to active shared children", async () => {
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 0 },
+    );
+    const parent = await mgr.createSession("code");
+    const inheritSessionApprovalState = vi.fn();
+    mgr.setToolContext({
+      ...toolCtx,
+      inheritSessionApprovalState,
+    });
+
+    const child = await mgr.spawnBackground(
+      { task: "inherit later approval", message: "inspect" },
+      parent.id,
+    );
+    inheritSessionApprovalState.mockClear();
+
+    mgr.refreshBackgroundApprovalInheritance();
+
+    expect(inheritSessionApprovalState).toHaveBeenCalledOnce();
+    expect(inheritSessionApprovalState).toHaveBeenCalledWith(
+      parent.id,
+      child.sessionId,
+    );
+  });
+
+  it("propagates later approvals down the active shared-agent tree", async () => {
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 0 },
+    );
+    const root = await mgr.createSession("code");
+    const authority = new Map<string, Set<string>>([
+      [root.id, new Set(["initial"])],
+    ]);
+    const inheritSessionApprovalState = vi.fn(
+      (parentSessionId: string, childSessionId: string) => {
+        const childAuthority = authority.get(childSessionId) ?? new Set();
+        for (const grant of authority.get(parentSessionId) ?? []) {
+          childAuthority.add(grant);
+        }
+        authority.set(childSessionId, childAuthority);
+      },
+    );
+    mgr.setToolContext({
+      ...toolCtx,
+      inheritSessionApprovalState,
+    });
+
+    const child = await mgr.spawnBackground(
+      { task: "child", message: "inspect" },
+      root.id,
+    );
+    const grandchild = await mgr.spawnBackground(
+      { task: "grandchild", message: "inspect more" },
+      child.sessionId,
+    );
+    const sibling = await mgr.spawnBackground(
+      { task: "sibling", message: "inspect separately" },
+      root.id,
+    );
+    authority.get(root.id)?.add("later-root");
+    authority.get(child.sessionId)?.add("child-only");
+
+    mgr.refreshBackgroundApprovalInheritance();
+
+    expect(authority.get(child.sessionId)).toEqual(
+      new Set(["initial", "child-only", "later-root"]),
+    );
+    expect(authority.get(grandchild.sessionId)).toEqual(
+      new Set(["initial", "child-only", "later-root"]),
+    );
+    expect(authority.get(sibling.sessionId)).toEqual(
+      new Set(["initial", "later-root"]),
+    );
+    expect(authority.get(root.id)).toEqual(new Set(["initial", "later-root"]));
   });
 
   it("queues spawn when the concurrent limit is reached", async () => {
@@ -590,7 +693,8 @@ describe("AgentSessionManager background agents", () => {
       { host: { config: configHost, acpBackgroundRunner } },
     );
     const parent = await mgr.createSession("code");
-    mgr.setToolContext(toolCtx);
+    const inheritSessionApprovalState = vi.fn();
+    mgr.setToolContext({ ...toolCtx, inheritSessionApprovalState });
 
     const spawned = await mgr.spawnBackground(
       {
@@ -620,6 +724,10 @@ describe("AgentSessionManager background agents", () => {
     expect(session.totalCacheReadTokens).toBe(5);
     expect(session.totalCacheCreationTokens).toBe(2);
     expect(session.lastInputTokens).toBe(37);
+    expect(inheritSessionApprovalState).toHaveBeenCalledWith(
+      parent.id,
+      spawned.sessionId,
+    );
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
   });
 
@@ -841,6 +949,128 @@ describe("AgentSessionManager background agents", () => {
       resolvedProvider: "acp",
     });
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
+  });
+
+  it("reuses inherited ACP write authority only for structured safe locations", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      defaultAgent: "acp:claude",
+      acpAgents: [
+        {
+          id: "claude",
+          command: "claude-agent-acp",
+          readonlyOnly: false,
+        },
+      ],
+    });
+    const permissionOutcomes: unknown[] = [];
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        permissionOutcomes.push(
+          await request.onRequestPermission({
+            toolCall: {
+              toolCallId: "tc-edit",
+              kind: "edit",
+              title: "Edit source",
+              locations: [{ path: "file.ts" }],
+              rawInput: { path: "file.ts" },
+            },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "reject", name: "Reject", kind: "reject_once" },
+            ],
+          }),
+          await request.onRequestPermission({
+            toolCall: {
+              toolCallId: "tc-protected",
+              kind: "edit",
+              title: "Edit instructions",
+              locations: [{ path: "AGENTS.md" }],
+              rawInput: { path: "AGENTS.md" },
+            },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "reject", name: "Reject", kind: "reject_once" },
+            ],
+          }),
+          await request.onRequestPermission({
+            toolCall: {
+              toolCallId: "tc-outside",
+              kind: "edit",
+              title: "Edit outside workspace",
+              locations: [{ path: "/outside/file.ts" }],
+              rawInput: { path: "/outside/file.ts" },
+            },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "reject", name: "Reject", kind: "reject_once" },
+            ],
+          }),
+        );
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    const parent = await mgr.createSession("code");
+    const onApprovalRequest = vi.fn(async () => "reject");
+    const approvalManager = {
+      bindSessionProject: vi.fn(),
+      touchSession: vi.fn(),
+      getAgentWriteAuthorization: vi.fn(() => ({
+        allowed: true,
+        basis: "blanket_approval",
+        scope: "session",
+      })),
+      isPathTrusted: vi.fn(() => false),
+      getFileWriteAuthorization: vi.fn(() => ({
+        allowed: false,
+        basis: "none",
+      })),
+    };
+    mgr.setToolContext({
+      ...toolCtx,
+      approvalManager: approvalManager as any,
+      onApprovalRequest,
+      inheritSessionApprovalState: vi.fn(),
+    });
+
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "external implementation",
+        message: "edit this",
+        provider: "acp:claude",
+      },
+      parent.id,
+    );
+    await mgr.waitForBackground(spawned.sessionId);
+
+    expect(approvalManager.getAgentWriteAuthorization).toHaveBeenCalledOnce();
+    expect(permissionOutcomes).toEqual([
+      { outcome: { outcome: "selected", optionId: "allow" } },
+      { outcome: { outcome: "selected", optionId: "reject" } },
+      { outcome: { outcome: "selected", optionId: "reject" } },
+    ]);
+    expect(approvalManager.isPathTrusted).toHaveBeenCalledWith(
+      spawned.sessionId,
+      "/outside/file.ts",
+    );
+    expect(approvalManager.getFileWriteAuthorization).not.toHaveBeenCalled();
+    expect(onApprovalRequest).toHaveBeenCalledTimes(2);
+    expect(onApprovalRequest).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        kind: "write",
+        backgroundTask: "external implementation",
+      }),
+      spawned.sessionId,
+    );
   });
 
   it("cancels non-readonly ACP permission requests without surfacing approval", async () => {

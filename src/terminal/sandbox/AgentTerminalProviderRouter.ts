@@ -9,6 +9,8 @@ import type {
   TerminalExecutionRouteContext,
   TerminalExecutionSecuritySummary,
   TerminalProvider,
+  TerminalRetainedOutput,
+  TerminalRetainedOutputLease,
   TerminalSandboxAttestationSummary,
 } from "../../core/capabilities/terminal.js";
 
@@ -149,13 +151,18 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
   private nativeProvider: TerminalProvider | undefined;
   private nativeAgentProvider: TerminalProvider | undefined;
   private sandboxProvider: ConfinementPreparingTerminalProvider | undefined;
+  private readonly retiredNativeAgentProviders = new Set<TerminalProvider>();
   private readonly retiredSandboxProviders =
     new Set<ConfinementPreparingTerminalProvider>();
-  private readonly sandboxLifecycleSubscriptions = new Map<
-    ConfinementPreparingTerminalProvider,
+  private readonly channelLifecycleSubscriptions = new Map<
+    TerminalProvider,
     { dispose(): void }
   >();
   private readonly retiredRecentlyClosed: ClosedTerminalSnapshot[] = [];
+  private readonly retiredRetainedOutput = new Map<
+    string,
+    TerminalRetainedOutputLease
+  >();
   private activeProvider: TerminalProvider | undefined;
   private sandboxFailure: Error | undefined;
   private readonly pendingExecutions = new Set<() => void>();
@@ -181,6 +188,9 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     if (this.nativeProvider) this.nativeProvider.log = value;
     if (this.nativeAgentProvider) this.nativeAgentProvider.log = value;
     if (this.sandboxProvider) this.sandboxProvider.log = value;
+    for (const provider of this.retiredNativeAgentProviders)
+      provider.log = value;
+    for (const provider of this.retiredSandboxProviders) provider.log = value;
   }
 
   async prepareExecution(
@@ -380,6 +390,14 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     );
   }
 
+  getRetainedOutput(terminalId: string): TerminalRetainedOutput | undefined {
+    const owner = this.ownerForRetainedOutput(terminalId);
+    return (
+      owner?.getRetainedOutput?.(terminalId) ??
+      this.retiredRetainedOutput.get(terminalId)?.read()
+    );
+  }
+
   interruptTerminal(terminalId: string): boolean {
     return (
       this.ownerForTerminal(terminalId)?.interruptTerminal(terminalId) ?? false
@@ -443,7 +461,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
           0,
         ),
       };
-      this.pruneRetiredSandboxes();
+      this.pruneRetiredChannelProviders();
       return result;
     }
     const notFound: string[] = [];
@@ -474,7 +492,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       closed,
       ...(notFound.length > 0 ? { not_found: notFound } : {}),
     };
-    this.pruneRetiredSandboxes();
+    this.pruneRetiredChannelProviders();
     return result;
   }
 
@@ -484,13 +502,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     this.revokePendingExecutions();
     this.currentAttestationId = undefined;
     this.retireSandbox();
-    const nativeAgentProvider = this.nativeAgentProvider;
-    this.nativeAgentProvider = undefined;
-    if (nativeAgentProvider && "dispose" in nativeAgentProvider) {
-      (nativeAgentProvider as TerminalProvider & { dispose(): void }).dispose();
-    }
-    if (this.activeProvider === nativeAgentProvider)
-      this.activeProvider = undefined;
+    this.retireNativeAgent();
     this.sandboxFailure = undefined;
   }
 
@@ -500,12 +512,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     this.generation += 1;
     this.revokePendingExecutions();
     this.currentAttestationId = undefined;
-    this.disposeAllSandboxes();
-    const nativeAgentProvider = this.nativeAgentProvider;
-    this.nativeAgentProvider = undefined;
-    if (nativeAgentProvider && "dispose" in nativeAgentProvider) {
-      (nativeAgentProvider as TerminalProvider & { dispose(): void }).dispose();
-    }
+    this.disposeAllChannelProviders();
   }
 
   private async decideRoute(
@@ -791,7 +798,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       if (matches.length > 1)
         this.rejectExecutionTarget("ambiguous_name", kind);
       const owner = matches[0];
-      if (this.retiredSandboxProviders.has(owner as never)) {
+      if (this.isRetiredChannelProvider(owner)) {
         this.rejectExecutionTarget("provider_retired", kind);
       }
       if (owner !== expectedProvider) {
@@ -810,7 +817,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       this.rejectExecutionTarget("ambiguous_name", "terminal_name");
     }
     const owner = namedMatches[0];
-    if (this.retiredSandboxProviders.has(owner as never)) {
+    if (this.isRetiredChannelProvider(owner)) {
       this.rejectExecutionTarget("provider_retired", "terminal_name");
     }
     if (owner !== expectedProvider) {
@@ -845,10 +852,32 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     );
   }
 
+  private isRetiredChannelProvider(provider: TerminalProvider): boolean {
+    return (
+      this.retiredNativeAgentProviders.has(provider) ||
+      this.retiredSandboxProviders.has(
+        provider as ConfinementPreparingTerminalProvider,
+      )
+    );
+  }
+
   private ownerForTerminal(terminalId: string): TerminalProvider | undefined {
     this.assertActive();
     if (terminalId.startsWith("host-terminal-")) return undefined;
     const matches = this.providersForTerminalId(terminalId);
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+
+  private ownerForRetainedOutput(
+    terminalId: string,
+  ): TerminalProvider | undefined {
+    const liveOwner = this.ownerForTerminal(terminalId);
+    if (liveOwner) return liveOwner;
+    const matches = this.allProviders().filter((provider) =>
+      provider
+        .getRecentlyClosedTerminals(20)
+        .some((terminal) => terminal.id === terminalId),
+    );
     return matches.length === 1 ? matches[0] : undefined;
   }
 
@@ -927,6 +956,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       this.sandboxProvider,
       ...this.retiredSandboxProviders,
       this.nativeAgentProvider,
+      ...this.retiredNativeAgentProviders,
       this.nativeProvider,
     ].filter(
       (provider): provider is TerminalProvider => provider !== undefined,
@@ -938,69 +968,106 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     this.sandboxProvider = undefined;
     if (!provider) return;
     this.retiredSandboxProviders.add(provider);
-    this.pruneRetiredSandboxes();
+    this.pruneRetiredChannelProviders();
+  }
+
+  private retireNativeAgent(): void {
+    const provider = this.nativeAgentProvider;
+    this.nativeAgentProvider = undefined;
+    if (!provider) return;
+    this.retiredNativeAgentProviders.add(provider);
+    this.observeChannelLifecycle(provider);
+    this.pruneRetiredChannelProviders();
   }
 
   private observeSandboxLifecycle(
     provider: ConfinementPreparingTerminalProvider,
   ): void {
+    this.observeChannelLifecycle(provider);
+  }
+
+  private observeChannelLifecycle(provider: TerminalProvider): void {
     if (
       !isTerminalChannelEventProvider(provider) ||
-      this.sandboxLifecycleSubscriptions.has(provider)
+      this.channelLifecycleSubscriptions.has(provider)
     ) {
       return;
     }
     const subscription = provider.onChannelEvent((update) => {
       if (update.snapshot.status !== "closed") return;
       queueMicrotask(() => {
-        if (!this.disposed) this.pruneRetiredSandboxes();
+        if (!this.disposed) this.pruneRetiredChannelProviders();
       });
     });
-    this.sandboxLifecycleSubscriptions.set(provider, subscription);
+    this.channelLifecycleSubscriptions.set(provider, subscription);
   }
 
-  private pruneRetiredSandboxes(): void {
-    for (const provider of this.retiredSandboxProviders) {
+  private pruneRetiredChannelProviders(): void {
+    const retired = [
+      ...this.retiredSandboxProviders,
+      ...this.retiredNativeAgentProviders,
+    ];
+    for (const provider of retired) {
       if (provider.listTerminals().length > 0) continue;
-      this.retiredSandboxProviders.delete(provider);
-      this.rememberRecentlyClosed(provider.getRecentlyClosedTerminals(20));
-      this.sandboxLifecycleSubscriptions.get(provider)?.dispose();
-      this.sandboxLifecycleSubscriptions.delete(provider);
+      this.retiredSandboxProviders.delete(
+        provider as ConfinementPreparingTerminalProvider,
+      );
+      this.retiredNativeAgentProviders.delete(provider);
+      const recentlyClosed = provider.getRecentlyClosedTerminals(20);
+      this.rememberRecentlyClosed(recentlyClosed, provider);
+      this.channelLifecycleSubscriptions.get(provider)?.dispose();
+      this.channelLifecycleSubscriptions.delete(provider);
       if (this.activeProvider === provider) this.activeProvider = undefined;
       if ("dispose" in provider) {
-        (
-          provider as ConfinementPreparingTerminalProvider & { dispose(): void }
-        ).dispose();
+        (provider as TerminalProvider & { dispose(): void }).dispose();
       }
     }
   }
 
-  private rememberRecentlyClosed(terminals: ClosedTerminalSnapshot[]): void {
+  private rememberRecentlyClosed(
+    terminals: ClosedTerminalSnapshot[],
+    provider?: TerminalProvider,
+  ): void {
     for (const terminal of terminals) {
       const existing = this.retiredRecentlyClosed.findIndex(
         (candidate) => candidate.id === terminal.id,
       );
       if (existing >= 0) this.retiredRecentlyClosed.splice(existing, 1);
+      const retained = provider?.detachRetainedOutput?.(terminal.id);
+      if (retained) {
+        this.retiredRetainedOutput.get(terminal.id)?.dispose();
+        this.retiredRetainedOutput.set(terminal.id, retained);
+      }
       this.retiredRecentlyClosed.push({ ...terminal });
     }
     this.retiredRecentlyClosed.sort(
       (left, right) => right.closedAt - left.closedAt,
     );
-    this.retiredRecentlyClosed.splice(20);
+    const removed = this.retiredRecentlyClosed.splice(20);
+    for (const terminal of removed) {
+      this.retiredRetainedOutput.get(terminal.id)?.dispose();
+      this.retiredRetainedOutput.delete(terminal.id);
+    }
   }
 
-  private disposeAllSandboxes(): void {
-    const providers = new Set([
+  private disposeAllChannelProviders(): void {
+    const providers = new Set<TerminalProvider>([
       ...(this.sandboxProvider ? [this.sandboxProvider] : []),
       ...this.retiredSandboxProviders,
+      ...(this.nativeAgentProvider ? [this.nativeAgentProvider] : []),
+      ...this.retiredNativeAgentProviders,
     ]);
     this.sandboxProvider = undefined;
+    this.nativeAgentProvider = undefined;
     this.retiredSandboxProviders.clear();
-    for (const subscription of this.sandboxLifecycleSubscriptions.values()) {
+    this.retiredNativeAgentProviders.clear();
+    for (const subscription of this.channelLifecycleSubscriptions.values()) {
       subscription.dispose();
     }
-    this.sandboxLifecycleSubscriptions.clear();
+    this.channelLifecycleSubscriptions.clear();
     this.retiredRecentlyClosed.length = 0;
+    for (const lease of this.retiredRetainedOutput.values()) lease.dispose();
+    this.retiredRetainedOutput.clear();
     if (this.activeProvider && providers.has(this.activeProvider as never)) {
       this.activeProvider = undefined;
     }

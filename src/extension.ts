@@ -818,7 +818,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 hostIpcBlocked: false,
                 resourceLimits: "partial",
                 warnings: [
-                  "The host home directory is readable but not writable; credential-like environment variables are removed.",
+                  "The host home directory is readable but not writable; the configured shell environment policy controls inherited variables.",
                   "Host temporary directories and POSIX IPC are available for development toolchain compatibility.",
                   "CPU, memory, process-count, and disk quotas are not fully enforced.",
                 ],
@@ -1207,6 +1207,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     browserGatewayService,
     approvalManager.onDidChange(() => {
+      agentSessionManager?.refreshBackgroundApprovalInheritance();
       browserGatewayService?.invalidateBrowserSnapshot();
     }),
     vscode.window.onDidChangeActiveColorTheme(() => {
@@ -1720,6 +1721,8 @@ export function activate(context: vscode.ExtensionContext): void {
         sessionId,
         chatViewProvider.getConfiguredCommandApprovalPolicy(),
       ),
+    inheritSessionApprovalState: (parentSessionId, childSessionId) =>
+      approvalManager.inheritSessionState(parentSessionId, childSessionId),
 
     commandApprovalReviewer,
     networkApprovalReviewer,

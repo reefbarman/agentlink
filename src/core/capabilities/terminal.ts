@@ -191,9 +191,15 @@ export interface TerminalCommandResult {
   terminal_name?: string;
   output_file?: string;
   output_warning?: string;
+  output_complete?: boolean;
+  output_finalized?: boolean;
+  output_total_bytes?: number;
+  output_retained_bytes?: number;
+  output_dropped_bytes?: number;
   terminal_raw_output?: string;
   total_lines?: number;
   lines_shown?: number;
+  total_lines_scope?: "complete" | "retained";
   command?: string;
   command_template?: string;
   command_modified?: boolean;
@@ -322,7 +328,30 @@ export interface TerminalBackgroundState {
   exit_code: number | null;
   output: string;
   output_captured: boolean;
+  output_complete?: boolean;
+  output_finalized?: boolean;
+  output_total_bytes?: number;
+  output_retained_bytes?: number;
+  output_dropped_bytes?: number;
   terminal_raw_output?: string;
+}
+
+export interface TerminalRetainedOutputMetadata {
+  complete: boolean;
+  finalized: boolean;
+  total_bytes: number;
+  retained_bytes: number;
+  dropped_bytes: number;
+}
+
+export interface TerminalRetainedOutput extends TerminalRetainedOutputMetadata {
+  output: string;
+}
+
+export interface TerminalRetainedOutputLease {
+  metadata(): TerminalRetainedOutputMetadata;
+  read(): TerminalRetainedOutput;
+  dispose(): void;
 }
 
 export interface ClosedTerminalSnapshot extends TerminalBackgroundState {
@@ -374,6 +403,10 @@ export interface TerminalProvider {
     terminalId: string,
     options?: { force?: boolean },
   ): string | undefined;
+  getRetainedOutput?(terminalId: string): TerminalRetainedOutput | undefined;
+  detachRetainedOutput?(
+    terminalId: string,
+  ): TerminalRetainedOutputLease | undefined;
   interruptTerminal(terminalId: string): boolean;
   detachTerminal?(terminalId: string): boolean;
   revealTerminal?(terminalId: string): boolean;

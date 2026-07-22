@@ -164,16 +164,20 @@ describe("handleWriteFile", () => {
   it("records scoped trust after interactive accept-session decisions", async () => {
     const approvalPanel = {};
     const editReviewProvider: EditReviewProvider = {
-      reviewAndApply: vi.fn(async () => ({
-        status: "accepted" as const,
-        path: "src/example.ts",
-        operation: "modified" as const,
-        finalContent: "new",
-        decision: "accept-session" as const,
-        writeApprovalResponse: { decision: "accept-session" },
-      })),
+      reviewAndApply: vi.fn(async (params) => {
+        params.onApprovalPresented?.();
+        return {
+          status: "accepted" as const,
+          path: "src/example.ts",
+          operation: "modified" as const,
+          finalContent: "new",
+          decision: "accept-session" as const,
+          writeApprovalResponse: { decision: "accept-session" },
+        };
+      }),
     };
     const policy = createApprovalPolicy(false);
+    const onApprovalPrompt = vi.fn();
 
     const { handleWriteFile } = await import("./writeFile.js");
     const result = await handleWriteFile(
@@ -183,7 +187,11 @@ describe("handleWriteFile", () => {
       "session-1",
       undefined,
       "code",
-      { editReviewProvider, writeApprovalPolicyProvider: policy },
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: policy,
+        onApprovalPrompt,
+      },
     );
 
     expect(toolJson(result)).toMatchObject({
@@ -212,6 +220,45 @@ describe("handleWriteFile", () => {
         approvalPanel,
       }),
     );
+    expect(onApprovalPrompt).toHaveBeenCalledWith({
+      authorization: {
+        allowed: false,
+        basis: "none",
+        reason: "legacy_policy_provider",
+      },
+      sessionId: "session-1",
+      absolutePath: path.join(workspaceDir, "src", "example.ts"),
+      relativePath: "src/example.ts",
+      inWorkspace: true,
+      mode: "code",
+    });
+  });
+
+  it("does not report an approval card before the review provider presents one", async () => {
+    const onApprovalPrompt = vi.fn();
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        error: "Review preparation failed",
+        reason: "prepare_failed",
+      })),
+    };
+
+    const { handleWriteFile } = await import("./writeFile.js");
+    await handleWriteFile(
+      { path: "src/example.ts", content: "new" },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(false),
+        onApprovalPrompt,
+      },
+    );
+
+    expect(onApprovalPrompt).not.toHaveBeenCalled();
   });
 
   it("does not record trust for interactive rejections", async () => {

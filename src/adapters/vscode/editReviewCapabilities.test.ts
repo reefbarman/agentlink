@@ -789,6 +789,33 @@ describe("createVscodeWriteApprovalPolicyProvider", () => {
     ).toEqual({ allowed: true, basis: "architect_plan" });
   });
 
+  it("treats Code-mode plan files as ordinary in-workspace writes", () => {
+    const decision = {
+      allowed: true as const,
+      basis: "blanket_approval" as const,
+      scope: "session" as const,
+    };
+    const approvalManager = {
+      getAgentWriteAuthorization: vi.fn(() => decision),
+    };
+    const provider = createVscodeWriteApprovalPolicyProvider(
+      approvalManager as never,
+    );
+    const request = {
+      sessionId: "session-1",
+      absolutePath: "/workspace/plans/example.md",
+      relativePath: "plans/example.md",
+      inWorkspace: true,
+      mode: "code",
+    } as const;
+
+    expect(provider.getAuthorization?.(request)).toEqual(decision);
+    expect(approvalManager.getAgentWriteAuthorization).toHaveBeenCalledWith(
+      "session-1",
+      "/workspace/plans/example.md",
+    );
+  });
+
   it("preserves the matching write rule in authorization evidence", () => {
     const decision = {
       allowed: true as const,
@@ -814,6 +841,44 @@ describe("createVscodeWriteApprovalPolicyProvider", () => {
     ).toEqual(decision);
   });
 
+  it("explains ordinary and outside-workspace write prompt reasons", () => {
+    const denied = { allowed: false as const, basis: "none" as const };
+    const approvalManager = {
+      getAgentWriteAuthorization: vi.fn(() => denied),
+      getFileWriteAuthorization: vi.fn(() => denied),
+    };
+    const provider = createVscodeWriteApprovalPolicyProvider(
+      approvalManager as never,
+    );
+
+    expect(
+      provider.getAuthorization?.({
+        sessionId: "session-1",
+        absolutePath: "/workspace/src/example.ts",
+        relativePath: "src/example.ts",
+        inWorkspace: true,
+        mode: "code",
+      }),
+    ).toEqual({
+      ...denied,
+      reason: "no_matching_write_authority",
+    });
+    expect(
+      provider.getAuthorization?.({
+        sessionId: "session-1",
+        absolutePath: "/outside/example.ts",
+        relativePath: "/outside/example.ts",
+        inWorkspace: false,
+        mode: "code",
+      }),
+    ).toEqual({
+      ...denied,
+      reason: "outside_workspace_requires_matching_rule",
+    });
+    expect(approvalManager.getAgentWriteAuthorization).toHaveBeenCalledOnce();
+    expect(approvalManager.getFileWriteAuthorization).toHaveBeenCalledOnce();
+  });
+
   it("does not auto-approve protected memory paths even with masterBypass", () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
@@ -837,6 +902,19 @@ describe("createVscodeWriteApprovalPolicyProvider", () => {
         mode: "code",
       }),
     ).toBe(false);
+    expect(
+      provider.getAuthorization?.({
+        sessionId: "session-1",
+        absolutePath: "/workspace/CLAUDE.md",
+        relativePath: "CLAUDE.md",
+        inWorkspace: true,
+        mode: "code",
+      }),
+    ).toEqual({
+      allowed: false,
+      basis: "none",
+      reason: "protected_memory_path",
+    });
   });
 
   it("records accept-session decisions through the approval manager", () => {

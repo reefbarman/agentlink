@@ -2190,7 +2190,7 @@ describe("LiveHostTerminalSurfaceController", () => {
     });
   });
 
-  it("pauses at the render high-water mark and resumes after acknowledgment", async () => {
+  it("requests a resync at the render high-water mark without pausing the PTY", async () => {
     const test = harness(snapshot(), {
       runtimeWatermarks: { high: 5, low: 2 },
     });
@@ -2199,21 +2199,54 @@ describe("LiveHostTerminalSurfaceController", () => {
     const process = test.processes[0];
 
     process.emitData("123456");
-    await vi.waitFor(() => expect(process.pauseCount).toBe(1));
-    const batch = test.events.find(
-      (event) => event.type === "terminal-view/render-batch",
+    await vi.waitFor(() =>
+      expect(
+        test.events.filter(
+          (event) => event.type === "terminal-view/resync-required",
+        ),
+      ).toHaveLength(1),
     );
-    if (!batch || batch.type !== "terminal-view/render-batch") {
-      throw new Error("expected render batch");
-    }
+    expect(process.pauseCount).toBe(0);
+
+    const batchCount = test.events.filter(
+      (event) => event.type === "terminal-view/render-batch",
+    ).length;
+    process.emitData("more");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(process.pauseCount).toBe(0);
+    expect(
+      test.events.filter(
+        (event) => event.type === "terminal-view/render-batch",
+      ),
+    ).toHaveLength(batchCount);
+    expect(
+      test.events.filter(
+        (event) => event.type === "terminal-view/resync-required",
+      ),
+    ).toHaveLength(1);
 
     await test.controller.handleRequest(test.connection, {
-      type: "terminal-view/output-ack",
-      ...target(test, opened),
-      sequence: batch.sequence,
+      type: "terminal-view/resync",
+      rendererEpoch: test.connection.rendererEpoch,
     });
+    const bootstrap = test.events
+      .filter((event) => event.type === "terminal-view/bootstrap")
+      .at(-1);
+    if (!bootstrap || bootstrap.type !== "terminal-view/bootstrap") {
+      throw new Error("expected bootstrap event");
+    }
+    expect(bootstrap.replay).toMatchObject([
+      { terminalId: opened.terminalId, data: "123456more" },
+    ]);
 
-    expect(process.resumeCount).toBe(1);
+    process.emitData("!");
+    await vi.waitFor(() =>
+      expect(
+        test.events.filter(
+          (event) => event.type === "terminal-view/render-batch",
+        ).length,
+      ).toBeGreaterThan(batchCount),
+    );
   });
 
   it("replays retained output on renderer reattach and accepts acknowledgments", async () => {

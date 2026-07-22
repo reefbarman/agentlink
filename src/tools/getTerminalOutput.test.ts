@@ -26,6 +26,7 @@ function textPayload(result: {
 describe("handleGetTerminalOutput", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    terminalProvider.getRetainedOutput = undefined;
     vi.mocked(terminalProvider.getRecentlyClosedTerminals).mockReturnValue([]);
   });
 
@@ -143,6 +144,111 @@ describe("handleGetTerminalOutput", () => {
 
     expect(payload.output).toBe("two\nthree");
     expect(payload.terminal_raw_output).toBeUndefined();
+  });
+
+  it("filters exact retained output and saves a truthful full-output file", async () => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      is_running: false,
+      state: "completed",
+      exit_code: 0,
+      output: "tail-2\ntail-3",
+      output_captured: true,
+      output_complete: false,
+    });
+    terminalProvider.getRetainedOutput = vi.fn(() => ({
+      output: "head-1\ntail-2\ntail-3",
+      complete: true,
+      finalized: true,
+      total_bytes: 20,
+      retained_bytes: 20,
+      dropped_bytes: 0,
+    }));
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_42", output_tail: 1 },
+      { terminalProvider },
+    );
+    const payload = textPayload(result);
+
+    expect(payload).toMatchObject({
+      output: "tail-3",
+      output_complete: true,
+      output_finalized: true,
+      output_total_bytes: 20,
+      output_retained_bytes: 20,
+      output_dropped_bytes: 0,
+      total_lines: 3,
+      lines_shown: 1,
+      output_file: expect.any(String),
+    });
+    expect(payload.output_warning).toContain("Full output saved");
+  });
+
+  it("does not publish a final output file while the command is still running", async () => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      is_running: true,
+      state: "running",
+      exit_code: null,
+      output: "one\ntwo\nthree",
+      output_captured: true,
+    });
+    terminalProvider.getRetainedOutput = vi.fn(() => ({
+      output: "one\ntwo\nthree",
+      complete: false,
+      finalized: false,
+      total_bytes: 13,
+      retained_bytes: 13,
+      dropped_bytes: 0,
+    }));
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_42", output_tail: 1 },
+      { terminalProvider },
+    );
+    const payload = textPayload(result);
+
+    expect(payload).toMatchObject({
+      output: "three",
+      output_complete: false,
+      output_finalized: false,
+      total_lines_scope: "retained",
+    });
+    expect(payload.output_file).toBeUndefined();
+    expect(payload.output_warning).toContain("still running");
+  });
+
+  it("reports incomplete retained output without claiming a full-output file", async () => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      is_running: false,
+      state: "completed",
+      exit_code: 0,
+      output: "tail-2\ntail-3",
+      output_captured: true,
+    });
+    terminalProvider.getRetainedOutput = vi.fn(() => ({
+      output: "tail-2\ntail-3",
+      complete: false,
+      finalized: true,
+      total_bytes: 12 * 1024 * 1024,
+      retained_bytes: 1024 * 1024,
+      dropped_bytes: 11 * 1024 * 1024,
+    }));
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_42", output_tail: 1 },
+      { terminalProvider },
+    );
+    const payload = textPayload(result);
+
+    expect(payload).toMatchObject({
+      output: "tail-3",
+      output_complete: false,
+      output_dropped_bytes: 11 * 1024 * 1024,
+    });
+    expect(payload.output_file).toBeUndefined();
+    expect(payload.output_warning).toContain(
+      "no full-output file is available",
+    );
   });
 
   it("interrupts the terminal when kill is requested", async () => {

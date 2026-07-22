@@ -436,9 +436,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         picked: oldDecision === undefined,
       },
       {
-        label: "Allow",
+        label: result.mode === "regex" ? "Allow (sandboxed)" : "Allow (native)",
         description:
-          "Skip review and use native authority when every segment matches",
+          result.mode === "regex"
+            ? "Skip review but retain the Protected Terminal"
+            : "Skip review and use normal user permissions when every segment matches",
         decision: "allow",
         picked: oldDecision === "allow",
       },

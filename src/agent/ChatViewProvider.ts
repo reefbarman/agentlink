@@ -2455,6 +2455,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       detail?: string;
       mcpServerName?: string;
       mcpToolName?: string;
+      backgroundTask?: string;
       choices: Array<{
         label: string;
         value: string;
@@ -2508,7 +2509,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 : ("unavailable" as const),
           }
         : undefined;
-    const projectContext = { sourceProject, targetProject, targetPath };
+    const projectContext = {
+      sourceProject,
+      targetProject,
+      targetPath,
+      ...(request.backgroundTask
+        ? { backgroundTask: request.backgroundTask }
+        : {}),
+    };
     switch (request.kind) {
       case "write": {
         const pathMatch = request.title.match(/`([^`]+)`/);
@@ -3135,21 +3143,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public submitBrowserSetWriteApproval(mode: string): { ok: boolean } {
-    if (!mode || !this.approvalManager) return { ok: false };
+    if (
+      !this.approvalManager ||
+      (mode !== "prompt" &&
+        mode !== "session" &&
+        mode !== "project" &&
+        mode !== "global")
+    ) {
+      return { ok: false };
+    }
 
     const fgSession = this.sessionManager?.getForegroundSession();
     const fgSessionId = fgSession?.id ?? "agent";
-    this.approvalManager.resetAgentWriteApproval();
-    if (mode !== "prompt") {
-      this.approvalManager.setAgentWriteApproval(
-        fgSessionId,
-        mode as "session" | "project" | "global",
-      );
-    }
+    const updated = this.approvalManager.setAgentWriteApprovalSelection(
+      fgSessionId,
+      mode,
+      fgSession?.projectScope.rootPath,
+    );
 
     this.sendInitialState();
-    this.log(`Agent write approval changed to: ${mode}`);
-    return { ok: true };
+    this.log(
+      updated
+        ? `Agent write approval changed to: ${mode}`
+        : `Agent write approval change failed for: ${mode}`,
+    );
+    return { ok: updated };
   }
 
   public getBrowserThinkingEnabledState(): boolean {
@@ -5488,20 +5506,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "agentSetWriteApproval": {
         const mode = msg.mode as string;
-        if (!mode || !this.approvalManager) break;
+        if (
+          !this.approvalManager ||
+          (mode !== "prompt" &&
+            mode !== "session" &&
+            mode !== "project" &&
+            mode !== "global")
+        ) {
+          break;
+        }
         // Use the foreground session's actual ID so session-level approvals are
         // scoped per chat session (not shared across all foreground sessions).
         const fgSession = this.sessionManager?.getForegroundSession();
         const fgSessionId = fgSession?.id ?? "agent";
-        this.approvalManager.resetAgentWriteApproval();
-        if (mode !== "prompt") {
-          this.approvalManager.setAgentWriteApproval(
-            fgSessionId,
-            mode as "session" | "project" | "global",
+        const updated = this.approvalManager.setAgentWriteApprovalSelection(
+          fgSessionId,
+          mode,
+          fgSession?.projectScope.rootPath,
+        );
+        this.sendInitialState();
+        if (updated) {
+          this.log(`Agent write approval changed to: ${mode}`);
+        } else {
+          this.log(`Agent write approval change failed for: ${mode}`);
+          void vscode.window.showErrorMessage(
+            "Could not update the write approval setting. The existing approval was preserved where possible.",
           );
         }
-        this.sendInitialState();
-        this.log(`Agent write approval changed to: ${mode}`);
         break;
       }
 

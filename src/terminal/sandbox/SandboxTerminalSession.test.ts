@@ -1,3 +1,7 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
 import type {
   SandboxCommandDisposable,
   SandboxCommandEvent,
@@ -362,6 +366,246 @@ describe("SandboxTerminalSession", () => {
       commandId: "command-2",
       origin: "ai-staged",
     });
+  });
+
+  it("spools exact command output beyond the replay tail with UTF-8 boundaries", async () => {
+    const test = session({ maxReplayBytes: 5, maxCommandOutputBytes: 64 });
+    const running = process("command-1", 1);
+    test.session.startCommand({
+      command: "generate output",
+      cwd: "/workspace",
+      origin: "agent",
+      process: running,
+    });
+    running.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+    await flush();
+
+    running.emit({ type: "data", data: "alpha🙂" });
+    running.emit({ type: "data", data: "omega" });
+    running.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+    await flush();
+
+    expect(test.session.snapshot().commands[0]).toMatchObject({
+      output: "omega",
+      droppedOutputBytes: 9,
+    });
+    expect(test.session.getCommandOutput("command-1")).toEqual({
+      output: "alpha🙂omega",
+      complete: true,
+      finalized: true,
+      totalBytes: 14,
+      retainedBytes: 14,
+      droppedBytes: 0,
+    });
+  });
+
+  it("does not report a truncated spool as complete", async () => {
+    const spoolRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-spool-test-"),
+    );
+    try {
+      const test = session({
+        maxReplayBytes: 4,
+        maxCommandOutputBytes: 64,
+        outputSpoolRoot: spoolRoot,
+      });
+      const running = process("command-1", 1);
+      test.session.startCommand({
+        command: "generate output",
+        cwd: "/workspace",
+        origin: "agent",
+        process: running,
+      });
+      running.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+      await flush();
+      running.emit({ type: "data", data: "abcdefgh" });
+      running.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+      await flush();
+
+      const [spoolDirectory] = fs.readdirSync(spoolRoot);
+      fs.truncateSync(
+        path.join(spoolRoot, spoolDirectory, "raw-output.txt"),
+        2,
+      );
+
+      expect(test.session.getCommandOutput("command-1")).toEqual({
+        output: "efgh",
+        complete: false,
+        finalized: true,
+        totalBytes: 8,
+        retainedBytes: 4,
+        droppedBytes: 4,
+      });
+      test.session.close();
+    } finally {
+      fs.rmSync(spoolRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("spools sustained multi-megabyte output exactly while retaining a bounded tail", async () => {
+    const maxCommandOutputBytes = 3 * 1024 * 1024;
+    const test = session({
+      maxReplayBytes: 64 * 1024,
+      maxCommandOutputBytes,
+    });
+    const running = process("command-1", 1);
+    test.session.startCommand({
+      command: "generate large output",
+      cwd: "/workspace",
+      origin: "agent",
+      process: running,
+    });
+    running.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+    await flush();
+
+    const chunk = `${"x".repeat(64 * 1024 - 4)}🙂`;
+    const chunks = Array.from({ length: 40 }, () => chunk);
+    for (const data of chunks) running.emit({ type: "data", data });
+    running.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+    await flush();
+
+    const expected = chunks.join("");
+    const snapshot = test.session.snapshot();
+    expect(snapshot.commands[0].outputBytes).toBeLessThanOrEqual(64 * 1024);
+    expect(snapshot.commands[0].droppedOutputBytes).toBeGreaterThan(0);
+    expect(test.session.getCommandOutput("command-1")).toEqual({
+      output: expected,
+      complete: true,
+      finalized: true,
+      totalBytes: Buffer.byteLength(expected, "utf8"),
+      retainedBytes: Buffer.byteLength(expected, "utf8"),
+      droppedBytes: 0,
+    });
+  });
+
+  it("reports bounded output loss without splitting UTF-8 and keeps detached output until released", async () => {
+    const test = session({ maxReplayBytes: 5, maxCommandOutputBytes: 7 });
+    const running = process("command-1", 1);
+    test.session.startCommand({
+      command: "generate output",
+      cwd: "/workspace",
+      origin: "agent",
+      process: running,
+    });
+    running.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+    await flush();
+    running.emit({ type: "data", data: "ab🙂cdef" });
+
+    const lease = test.session.detachCommandOutput("command-1");
+    expect(lease?.read()).toEqual({
+      output: "cdef",
+      complete: false,
+      finalized: false,
+      totalBytes: 10,
+      retainedBytes: 4,
+      droppedBytes: 6,
+    });
+
+    test.session.close();
+    expect(lease?.read()).toEqual({
+      output: "cdef",
+      complete: false,
+      finalized: false,
+      totalBytes: 10,
+      retainedBytes: 4,
+      droppedBytes: 6,
+    });
+    expect(() => lease?.dispose()).not.toThrow();
+    expect(() => lease?.dispose()).not.toThrow();
+  });
+
+  it("creates private spools and removes them when the session closes", async () => {
+    const spoolRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-spool-test-"),
+    );
+    try {
+      const test = session({ outputSpoolRoot: spoolRoot });
+      const running = process("command-1", 1);
+      test.session.startCommand({
+        command: "generate output",
+        cwd: "/workspace",
+        origin: "agent",
+        process: running,
+      });
+      running.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+      await flush();
+      running.emit({ type: "data", data: "private output" });
+
+      const directories = fs.readdirSync(spoolRoot);
+      expect(directories).toHaveLength(1);
+      const spoolFile = path.join(spoolRoot, directories[0], "raw-output.txt");
+      expect(fs.statSync(spoolFile).mode & 0o777).toBe(0o600);
+
+      test.session.close();
+      expect(fs.readdirSync(spoolRoot)).toEqual([]);
+    } finally {
+      fs.rmSync(spoolRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a detached spool until its lease is disposed", async () => {
+    const spoolRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-spool-test-"),
+    );
+    try {
+      const test = session({ outputSpoolRoot: spoolRoot });
+      const running = process("command-1", 1);
+      test.session.startCommand({
+        command: "generate output",
+        cwd: "/workspace",
+        origin: "agent",
+        process: running,
+      });
+      running.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+      await flush();
+      running.emit({ type: "data", data: "private output" });
+      running.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+      await flush();
+
+      const lease = test.session.detachCommandOutput("command-1");
+      test.session.close();
+      expect(fs.readdirSync(spoolRoot)).toHaveLength(1);
+      expect(lease?.read()).toMatchObject({
+        output: "private output",
+        complete: true,
+        finalized: true,
+      });
+
+      lease?.dispose();
+      expect(fs.readdirSync(spoolRoot)).toEqual([]);
+    } finally {
+      fs.rmSync(spoolRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to retained memory when the spool cannot be created", async () => {
+    const missingRoot = path.join(
+      os.tmpdir(),
+      `agentlink-missing-spool-${Date.now()}-${Math.random()}`,
+    );
+    const test = session({ outputSpoolRoot: missingRoot });
+    const running = process("command-1", 1);
+    test.session.startCommand({
+      command: "generate output",
+      cwd: "/workspace",
+      origin: "agent",
+      process: running,
+    });
+    running.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+    await flush();
+    running.emit({ type: "data", data: "memory output" });
+    running.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+    await flush();
+
+    expect(test.session.getCommandOutput("command-1")).toEqual({
+      output: "memory output",
+      complete: true,
+      finalized: true,
+      totalBytes: 13,
+      retainedBytes: 13,
+      droppedBytes: 0,
+    });
+    test.session.close();
   });
 
   it("records violations and isolates listener failures", async () => {

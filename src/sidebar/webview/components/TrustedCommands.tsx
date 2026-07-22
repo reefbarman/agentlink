@@ -18,6 +18,12 @@ export function TrustedCommands({ state, postCommand }: Props) {
 
   return (
     <CollapsibleSection title="Trusted Commands">
+      <p class="help-text">
+        Exact and prefix allow rules may run matching commands with normal user
+        permissions outside the Protected Terminal when every command segment
+        matches. Regex and legacy approval-only rules do not grant native
+        authority.
+      </p>
       <div class="subsection-label">Global Rules</div>
       {(globalCommandRules ?? []).length > 0 ? (
         <RuleList
@@ -43,7 +49,7 @@ export function TrustedCommands({ state, postCommand }: Props) {
       <button
         class="btn btn-secondary"
         style={{ marginTop: "6px" }}
-        title="Add a command pattern that agents may run without asking again"
+        title="Add a command policy; exact and prefix allow rules may also grant native execution authority"
         onClick={() => postCommand("addGlobalRule")}
       >
         + Add Rule

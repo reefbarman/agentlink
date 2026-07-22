@@ -1,3 +1,7 @@
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type WorkspaceFolder = { name: string; uri: { fsPath: string } };
@@ -89,6 +93,40 @@ describe("getRelativePath", () => {
       absolutePath: "/workspace/second-root/assets/image.png",
       inWorkspace: true,
     });
+  });
+
+  it("classifies missing nested paths through an outside symlink as outside-workspace", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-paths-"));
+    try {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const outsideDir = path.join(tempDir, "outside");
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      fs.mkdirSync(outsideDir, { recursive: true });
+      fs.symlinkSync(
+        outsideDir,
+        path.join(workspaceDir, "outside-link"),
+        "dir",
+      );
+      mockWorkspace.workspaceFolders = [
+        { name: "workspace", uri: { fsPath: workspaceDir } },
+      ];
+
+      const { resolveAndValidatePath } = await import("./paths.js");
+
+      expect(
+        resolveAndValidatePath("outside-link/new-dir/nested/file.ts"),
+      ).toEqual({
+        absolutePath: path.join(
+          fs.realpathSync(outsideDir),
+          "new-dir",
+          "nested",
+          "file.ts",
+        ),
+        inWorkspace: false,
+      });
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("isolates concurrent request-bound workspace roots", async () => {

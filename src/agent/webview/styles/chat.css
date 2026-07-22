@@ -5897,6 +5897,29 @@ body.chat-activity-shelf-resizing * {
   opacity: 0.5;
 }
 
+.approval-background-attribution {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 0 8px;
+  padding: 5px 7px;
+  border-radius: 4px;
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(
+    in srgb,
+    var(--vscode-badge-background) 18%,
+    transparent
+  );
+  font-size: 11px;
+}
+
+.approval-background-attribution > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .approval-panel-embed-resizing,
 body.approval-resizing {
   user-select: none;

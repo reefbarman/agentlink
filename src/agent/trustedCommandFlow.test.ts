@@ -31,6 +31,7 @@ describe("addTrustedCommandViaUi", () => {
     vi.spyOn(vscode.window, "showInformationMessage").mockResolvedValue(
       undefined,
     );
+    vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue(undefined);
   });
 
   it("validates, trims, and persists a project-scoped prefix rule", async () => {
@@ -43,7 +44,7 @@ describe("addTrustedCommandViaUi", () => {
         expect(options).toBeDefined();
         expect(options!.validateInput?.("   ")).toBe("Pattern cannot be empty");
         expect(options!.validateInput?.(" npm ")).toBeNull();
-        return "  npm run  ";
+        return "  npm test  ";
       },
     );
     vi.mocked(vscode.window.showQuickPick)
@@ -57,17 +58,18 @@ describe("addTrustedCommandViaUi", () => {
       [
         {
           label: "Prefix Match",
-          description: 'Trust commands starting with "npm run"',
+          description: 'Native authority for commands starting with "npm test"',
           mode: "prefix",
         },
         {
           label: "Exact Match",
-          description: 'Trust only "npm run"',
+          description: 'Native authority only for "npm test"',
           mode: "exact",
         },
         {
           label: "Regex Match",
-          description: "Trust commands matching /npm run/",
+          description:
+            "Approval shortcut only for commands matching /npm test/",
           mode: "regex",
         },
       ],
@@ -99,11 +101,11 @@ describe("addTrustedCommandViaUi", () => {
     );
     expect(approvalManager.addCommandRule).toHaveBeenCalledWith(
       "_global",
-      { pattern: "npm run", mode: "prefix", decision: "allow" },
+      { pattern: "npm test", mode: "prefix", decision: "allow" },
       "project",
     );
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
-      'Added command policy (project): allow prefix "npm run"',
+      'Added command policy (project): allow prefix "npm test" (native authority; every command segment must match)',
     );
   });
 
@@ -131,6 +133,65 @@ describe("addTrustedCommandViaUi", () => {
       "_global",
       { pattern: "git status", mode: "exact", decision: "allow" },
       "global",
+    );
+    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+      'Added command policy (global): allow exact "git status" (native authority; every command segment must match)',
+    );
+  });
+
+  it("requires explicit confirmation for a broad native prefix", async () => {
+    const approvalManager = createApprovalManager();
+    vi.mocked(vscode.window.showInputBox).mockResolvedValue("git");
+    vi.mocked(vscode.window.showQuickPick).mockImplementationOnce(
+      selectByLabel("Prefix Match") as never,
+    );
+
+    await addTrustedCommandViaUi(approvalManager);
+
+    expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+      'Broad native prefix: "git" can authorize any matching command outside the Protected Terminal with your normal user permissions.',
+      { modal: true },
+      "Add Broad Native Rule",
+    );
+    expect(vscode.window.showQuickPick).toHaveBeenCalledTimes(1);
+    expect(approvalManager.addCommandRule).not.toHaveBeenCalled();
+  });
+
+  it("persists a broad native prefix after explicit confirmation", async () => {
+    const approvalManager = createApprovalManager();
+    vi.mocked(vscode.window.showInputBox).mockResolvedValue("git");
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValue(
+      "Add Broad Native Rule" as never,
+    );
+    vi.mocked(vscode.window.showQuickPick)
+      .mockImplementationOnce(selectByLabel("Prefix Match") as never)
+      .mockImplementationOnce(selectByLabel("$(globe) Global") as never);
+
+    await addTrustedCommandViaUi(approvalManager);
+
+    expect(approvalManager.addCommandRule).toHaveBeenCalledWith(
+      "_global",
+      { pattern: "git", mode: "prefix", decision: "allow" },
+      "global",
+    );
+  });
+
+  it("labels regex allow rules as sandboxed approval shortcuts", async () => {
+    const approvalManager = createApprovalManager();
+    vi.mocked(vscode.window.showInputBox).mockResolvedValue("npm test .+");
+    vi.mocked(vscode.window.showQuickPick)
+      .mockImplementationOnce(selectByLabel("Regex Match") as never)
+      .mockImplementationOnce(selectByLabel("$(globe) Global") as never);
+
+    await addTrustedCommandViaUi(approvalManager);
+
+    expect(approvalManager.addCommandRule).toHaveBeenCalledWith(
+      "_global",
+      { pattern: "npm test .+", mode: "regex", decision: "allow" },
+      "global",
+    );
+    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+      'Added command policy (global): allow regex "npm test .+" (approval only; sandbox retained)',
     );
   });
 

@@ -77,6 +77,8 @@ export type ApprovalKind =
 export interface ApprovalRequest {
   kind: ApprovalKind;
   id: string;
+  /** Background task that initiated this approval, when applicable. */
+  backgroundTask?: string;
   /** Project that initiated this approval. */
   sourceProject?: ApprovalProjectContext;
   /** Project containing the requested target, when it differs from the source. */

@@ -84,6 +84,33 @@ function harness() {
     sandboxes.push(generation);
     return generation;
   });
+  const getSandboxAvailability = vi.fn(async () =>
+    sandboxAvailable
+      ? {
+          status: "verified" as const,
+          attestation: {
+            attestationId: "attestation-1",
+            attestationVersion: "sandbox-behavior-v2",
+            policyVersion: "policy-v1",
+            profileId: "workspace-write",
+            backend: "seatbelt" as const,
+            architecture: "arm64" as const,
+            capabilities: {
+              backend: "seatbelt",
+              processTree: true,
+              filesystemRead: "isolated" as const,
+              filesystemWrite: "strict" as const,
+              network: "blocked" as const,
+              privateHome: true,
+              privateTmp: false,
+              hostIpcBlocked: false,
+              resourceLimits: "partial" as const,
+              warnings: [],
+            },
+          },
+        }
+      : { status: "runtime-unavailable" as const },
+  );
   const log = vi.fn();
   const audit = vi.fn();
   const revealCustomTerminal = vi.fn(() => true);
@@ -93,32 +120,7 @@ function harness() {
     createNativeProvider,
     createNativeAgentProvider,
     createSandboxProvider,
-    getSandboxAvailability: async () =>
-      sandboxAvailable
-        ? {
-            status: "verified" as const,
-            attestation: {
-              attestationId: "attestation-1",
-              attestationVersion: "sandbox-behavior-v2",
-              policyVersion: "policy-v1",
-              profileId: "workspace-write",
-              backend: "seatbelt" as const,
-              architecture: "arm64" as const,
-              capabilities: {
-                backend: "seatbelt",
-                processTree: true,
-                filesystemRead: "isolated" as const,
-                filesystemWrite: "strict" as const,
-                network: "blocked" as const,
-                privateHome: true,
-                privateTmp: false,
-                hostIpcBlocked: false,
-                resourceLimits: "partial" as const,
-                warnings: [],
-              },
-            },
-          }
-        : { status: "runtime-unavailable" as const },
+    getSandboxAvailability,
     recordExecutionAudit: audit,
     revealCustomTerminal,
     log,
@@ -132,6 +134,7 @@ function harness() {
     createNativeProvider,
     createNativeAgentProvider,
     createSandboxProvider,
+    getSandboxAvailability,
     log,
     audit,
     revealCustomTerminal,
@@ -205,6 +208,7 @@ describe("AgentTerminalProviderRouter", () => {
 
     expect(test.createNativeProvider).toHaveBeenCalledTimes(1);
     expect(test.createSandboxProvider).not.toHaveBeenCalled();
+    expect(test.getSandboxAvailability).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -222,6 +226,7 @@ describe("AgentTerminalProviderRouter", () => {
         test.router.executeCommand({ command: "pwd", cwd: "/workspace" }),
       ).resolves.toMatchObject({ output: "native" });
       expect(test.createSandboxProvider).not.toHaveBeenCalled();
+      expect(test.getSandboxAvailability).not.toHaveBeenCalled();
     },
   );
 
@@ -738,6 +743,49 @@ describe("AgentTerminalProviderRouter", () => {
     expect(test.createNativeProvider).toHaveBeenCalledTimes(1);
   });
 
+  it("refreshes sandbox routing across enabled, disabled, and re-enabled states", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    await expect(
+      test.router.executeCommand({
+        command: "echo sandbox",
+        cwd: "/workspace",
+      }),
+    ).resolves.toMatchObject({ output: "sandbox" });
+    const oldLease = await test.router.prepareExecution({
+      command: "echo prepared",
+      cwd: "/workspace",
+    });
+    expect(test.getSandboxAvailability).toHaveBeenCalledTimes(2);
+    expect(test.createSandboxProvider).toHaveBeenCalledTimes(1);
+
+    test.setEnabled(false);
+    test.router.refresh();
+
+    await expect(oldLease.execute()).rejects.toThrow("no longer available");
+    expect(test.sandbox.dispose).toHaveBeenCalledTimes(1);
+    await expect(
+      test.router.executeCommand({ command: "echo native", cwd: "/workspace" }),
+    ).resolves.toMatchObject({ output: "native" });
+    expect(test.getSandboxAvailability).toHaveBeenCalledTimes(2);
+
+    test.setEnabled(true);
+    test.router.refresh();
+    await expect(
+      test.router.executeCommand({
+        command: "echo fresh sandbox",
+        cwd: "/workspace",
+      }),
+    ).resolves.toMatchObject({ output: "sandbox-2" });
+
+    expect(test.getSandboxAvailability).toHaveBeenCalledTimes(3);
+    expect(test.createSandboxProvider).toHaveBeenCalledTimes(2);
+    expect(test.sandbox.executeCommand).toHaveBeenCalledTimes(1);
+    expect(test.sandboxes[1]?.executeCommand).toHaveBeenCalledTimes(1);
+    expect(test.native.executeCommand).toHaveBeenCalledTimes(1);
+    await expect(oldLease.execute()).rejects.toThrow("no longer available");
+  });
+
   it("retains a logger assigned before lazy provider creation", async () => {
     const test = harness();
     const assignedLog = vi.fn();
@@ -750,7 +798,7 @@ describe("AgentTerminalProviderRouter", () => {
     expect(test.sandbox.log).toBe(assignedLog);
   });
 
-  it("disposes Native Agent channels on route refresh", async () => {
+  it("disposes an empty Native Agent provider on route refresh", async () => {
     const test = harness();
     test.setEnabled(true);
     await (
@@ -772,6 +820,131 @@ describe("AgentTerminalProviderRouter", () => {
     expect(test.createNativeAgentProvider).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects new execution in a retired Native Agent channel", async () => {
+    const test = harness();
+    vi.mocked(test.nativeAgent.listTerminals).mockReturnValue([
+      { id: "native-agent-1", name: "Retired Native", busy: true },
+    ]);
+    test.setEnabled(true);
+    await (
+      await test.router.prepareExecution(
+        { command: "sleep 30", cwd: "/workspace" },
+        nativeAgentRoute,
+      )
+    ).execute();
+
+    test.router.refresh();
+    const nextNativeAgent = provider("native-agent-2");
+    test.createNativeAgentProvider.mockImplementationOnce(
+      () => nextNativeAgent,
+    );
+
+    await expect(
+      test.router.prepareExecution(
+        {
+          command: "pwd",
+          cwd: "/workspace",
+          terminal_id: "native-agent-1",
+        },
+        nativeAgentRoute,
+      ),
+    ).rejects.toThrow("provider retired");
+    expect(test.nativeAgent.executeCommand).toHaveBeenCalledTimes(1);
+    expect(test.audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "execution_failed",
+        failure: "provider_retired",
+      }),
+    );
+  });
+
+  it("retains a live Native Agent provider across refresh until its channel closes", async () => {
+    const test = harness();
+    const terminals = [
+      { id: "native-agent-1", name: "Native Agent", busy: true },
+    ];
+    vi.mocked(test.nativeAgent.listTerminals).mockImplementation(() => [
+      ...terminals,
+    ]);
+    vi.mocked(test.nativeAgent.getBackgroundState).mockReturnValue({
+      is_running: true,
+      state: "running",
+      exit_code: null,
+      output: "still running",
+      output_captured: true,
+    });
+    vi.mocked(test.nativeAgent.closeTerminals).mockImplementation(() => {
+      terminals.length = 0;
+      return { closed: 1 };
+    });
+    const closedTerminal = {
+      id: "native-agent-1",
+      name: "Native Agent",
+      closedAt: 500,
+      is_running: false,
+      state: "unknown_termination" as const,
+      exit_code: null,
+      output: "still running",
+      output_captured: true,
+    };
+    vi.mocked(test.nativeAgent.getRecentlyClosedTerminals).mockReturnValue([
+      closedTerminal,
+    ]);
+    const metadata = vi.fn(() => ({
+      complete: false,
+      finalized: false,
+      total_bytes: 13,
+      retained_bytes: 13,
+      dropped_bytes: 0,
+    }));
+    const read = vi.fn(() => ({
+      output: "still running",
+      ...metadata(),
+    }));
+    const dispose = vi.fn();
+    test.nativeAgent.detachRetainedOutput = vi.fn(() => ({
+      metadata,
+      read,
+      dispose,
+    }));
+    test.setEnabled(true);
+    await (
+      await test.router.prepareExecution(
+        { command: "sleep 30", cwd: "/workspace" },
+        nativeAgentRoute,
+      )
+    ).execute();
+
+    test.router.refresh();
+
+    expect(test.nativeAgent.dispose).not.toHaveBeenCalled();
+    expect(test.router.getBackgroundState("native-agent-1")).toMatchObject({
+      is_running: true,
+      output: "still running",
+    });
+    expect(test.router.closeTerminals(["native-agent-1"])).toEqual({
+      closed: 1,
+    });
+    expect(test.nativeAgent.dispose).toHaveBeenCalledTimes(1);
+    expect(test.nativeAgent.detachRetainedOutput).toHaveBeenCalledWith(
+      "native-agent-1",
+    );
+    expect(read).not.toHaveBeenCalled();
+    expect(test.router.getRecentlyClosedTerminals()).toEqual([closedTerminal]);
+    expect(test.router.getRetainedOutput("native-agent-1")).toEqual({
+      output: "still running",
+      complete: false,
+      finalized: false,
+      total_bytes: 13,
+      retained_bytes: 13,
+      dropped_bytes: 0,
+    });
+    expect(read).toHaveBeenCalledOnce();
+
+    test.router.dispose();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
   it("disposes an empty retired sandbox and creates a new generation", async () => {
     const test = harness();
     test.setEnabled(true);
@@ -784,6 +957,39 @@ describe("AgentTerminalProviderRouter", () => {
     test.router.dispose();
     expect(test.sandbox.dispose).toHaveBeenCalledTimes(1);
     expect(test.sandboxes[1]?.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects new execution in a retired sandbox channel", async () => {
+    const test = harness();
+    vi.mocked(test.sandbox.listTerminals).mockReturnValue([
+      { id: "sandbox-1", name: "Retired Sandbox", busy: true },
+    ]);
+    test.setEnabled(true);
+    await test.router.executeCommand({
+      command: "sleep 30",
+      cwd: "/workspace",
+    });
+
+    test.router.refresh();
+
+    await expect(
+      test.router.prepareExecution(
+        {
+          command: "pwd",
+          cwd: "/workspace",
+          terminal_name: "Retired Sandbox",
+        },
+        sandboxRoute,
+      ),
+    ).rejects.toThrow("provider retired");
+    expect(test.sandbox.executeCommand).toHaveBeenCalledTimes(1);
+    expect(test.sandboxes[1]?.executeCommand).not.toHaveBeenCalled();
+    expect(test.audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "execution_failed",
+        failure: "provider_retired",
+      }),
+    );
   });
 
   it("retains a retired sandbox with a live channel and evicts it after close", async () => {
@@ -809,6 +1015,23 @@ describe("AgentTerminalProviderRouter", () => {
     vi.mocked(test.sandbox.getRecentlyClosedTerminals).mockReturnValue([
       closedTerminal,
     ]);
+    const metadata = vi.fn(() => ({
+      complete: true,
+      finalized: true,
+      total_bytes: 4,
+      retained_bytes: 4,
+      dropped_bytes: 0,
+    }));
+    const read = vi.fn(() => ({
+      output: "done",
+      ...metadata(),
+    }));
+    const dispose = vi.fn();
+    test.sandbox.detachRetainedOutput = vi.fn(() => ({
+      metadata,
+      read,
+      dispose,
+    }));
     test.setEnabled(true);
     await test.router.executeCommand({ command: "pwd", cwd: "/workspace" });
 
@@ -817,7 +1040,70 @@ describe("AgentTerminalProviderRouter", () => {
 
     expect(test.router.closeTerminals(["sandbox-1"])).toEqual({ closed: 1 });
     expect(test.sandbox.dispose).toHaveBeenCalledTimes(1);
+    expect(test.sandbox.detachRetainedOutput).toHaveBeenCalledWith("sandbox-1");
+    expect(read).not.toHaveBeenCalled();
     expect(test.router.getRecentlyClosedTerminals()).toEqual([closedTerminal]);
+    expect(test.router.getRetainedOutput("sandbox-1")).toEqual({
+      output: "done",
+      complete: true,
+      finalized: true,
+      total_bytes: 4,
+      retained_bytes: 4,
+      dropped_bytes: 0,
+    });
+    expect(read).toHaveBeenCalledOnce();
+
+    test.router.dispose();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("treats extension-host reload as cleanup-only across active and retired providers", async () => {
+    const test = harness();
+    vi.mocked(test.sandbox.listTerminals).mockReturnValue([
+      { id: "sandbox-1", name: "Retired Sandbox", busy: true },
+    ]);
+    test.setEnabled(true);
+    await test.router.executeCommand({
+      command: "sleep 30",
+      cwd: "/workspace",
+    });
+
+    test.router.refresh();
+    await test.router.executeCommand({
+      command: "printf active sandbox",
+      cwd: "/workspace",
+    });
+    await (
+      await test.router.prepareExecution(
+        { command: "printf active native", cwd: "/workspace" },
+        nativeAgentRoute,
+      )
+    ).execute();
+    const pending = await test.router.prepareExecution(
+      { command: "printf never launched", cwd: "/workspace" },
+      sandboxRoute,
+    );
+
+    test.router.dispose();
+    test.router.dispose();
+
+    expect(test.sandbox.dispose).toHaveBeenCalledTimes(1);
+    expect(test.sandboxes[1]?.dispose).toHaveBeenCalledTimes(1);
+    expect(test.nativeAgent.dispose).toHaveBeenCalledTimes(1);
+    await expect(pending.execute()).rejects.toThrow("no longer available");
+    expect(test.audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "preparation_revoked",
+        failure: "lease_revoked",
+      }),
+    );
+    expect(() => test.router.listTerminals()).toThrow("router is disposed");
+
+    const reloaded = harness();
+    expect(reloaded.router.listTerminals()).toEqual([]);
+    expect(reloaded.createNativeProvider).not.toHaveBeenCalled();
+    expect(reloaded.createNativeAgentProvider).not.toHaveBeenCalled();
+    expect(reloaded.createSandboxProvider).not.toHaveBeenCalled();
   });
 
   it("disposes the sandbox provider exactly once", async () => {

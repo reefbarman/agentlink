@@ -276,6 +276,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
           params.approvalPanel as ApprovalPanelProvider,
           params.onApprovalRequest,
           params.sessionId,
+          params.onApprovalPresented,
         )) as EditReviewDecision;
 
         if (decision === "reject") {
@@ -817,7 +818,7 @@ export function createVscodeWriteApprovalPolicyProvider(
     if (isArchitectPlanFile) {
       return { allowed: true, basis: "architect_plan" as const };
     }
-    return query.inWorkspace
+    const authorization = query.inWorkspace
       ? approvalManager.getAgentWriteAuthorization(
           query.sessionId,
           query.absolutePath,
@@ -826,6 +827,13 @@ export function createVscodeWriteApprovalPolicyProvider(
           query.sessionId,
           query.absolutePath,
         );
+    if (authorization.allowed || authorization.reason) return authorization;
+    return {
+      ...authorization,
+      reason: query.inWorkspace
+        ? "no_matching_write_authority"
+        : "outside_workspace_requires_matching_rule",
+    };
   };
 
   return {

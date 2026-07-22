@@ -148,7 +148,63 @@ describe("CommandCard terminal presentation", () => {
       screen.getByRole("button", { name: /Auto Approval Rules/ }),
     );
     expect(screen.queryByText("Save Rules & Run")).toBeNull();
-    expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow (native)" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Session" }));
+    expect(
+      screen.getByText(
+        /may run matching commands outside the Protected Terminal/,
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/Every parsed command segment must have an explicit/),
+    ).toBeTruthy();
+  });
+
+  it("warns when a manually selected native prefix is broad", () => {
+    const approval = request("sandbox");
+    approval.subCommands = [{ command: "git status" }];
+    const { container } = renderCard(approval);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Auto Approval Rules/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Session" }));
+    fireEvent.input(
+      container.querySelector<HTMLInputElement>(".rule-pattern-input")!,
+      { target: { value: "git" } },
+    );
+
+    expect(screen.getByText(/Broad native prefix/)).toBeTruthy();
+    expect(screen.getByText(/trust the entire command family/)).toBeTruthy();
+  });
+
+  it("labels regex allow rules as sandboxed", () => {
+    const approval = request("sandbox");
+    approval.subCommands = [
+      {
+        command: "npm test -- --runInBand",
+        existingRule: {
+          pattern: "^npm test",
+          mode: "regex",
+          decision: "allow",
+          scope: "project",
+        },
+      },
+    ];
+    renderCard(approval);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Auto Approval Rules/ }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Allow (sandboxed)" }).classList,
+    ).toContain("active");
+    expect(
+      screen.getByText(/stays inside the Protected Terminal/),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/do not grant native execution authority/),
+    ).toBeTruthy();
   });
 
   it("preserves legacy approval-only authority when editing another field", () => {

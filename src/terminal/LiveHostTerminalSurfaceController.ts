@@ -68,6 +68,7 @@ interface ManagedSurfaceTerminal {
   bootstrap: MaterializedHostShellBootstrap;
   deliveryQueue: Promise<void>;
   cleaned: boolean;
+  resyncRequested: boolean;
 }
 
 const MAX_SANDBOX_PENDING_RENDER_BATCHES = 256;
@@ -642,6 +643,8 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     this.refreshSandboxChannels();
     const replay = [];
     for (const terminal of this.terminals.values()) {
+      terminal.resyncRequested = false;
+      terminal.service.resumeOutput(terminal.terminalId);
       replay.push(terminal.runtime.attachRenderer(connection.rendererEpoch));
     }
     for (const terminal of this.sandboxTerminals.values()) {
@@ -1255,6 +1258,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
         bootstrap: materialized,
         deliveryQueue: Promise.resolve(),
         cleaned: false,
+        resyncRequested: false,
       };
       managed.serviceSubscription = service.onEvent((event) =>
         this.handleServiceEvent(managed!, event),
@@ -1337,6 +1341,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     batch: HostTerminalRenderBatch,
   ): void {
     terminal.deliveryQueue = terminal.deliveryQueue.then(async () => {
+      if (terminal.resyncRequested) return;
       const connection = this.currentReadyConnection();
       if (!connection) return;
       const delivered = await this.post(connection, batch);
@@ -1359,8 +1364,32 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
         batch.sequence,
       );
       if (delivery.shouldPause) {
-        terminal.service.pauseOutput(terminal.terminalId);
+        // Never pause the PTY on renderer backpressure: a throttled or hidden
+        // renderer (screen lock marks the window occluded and clamps webview
+        // timers) would otherwise freeze the child process mid-write. Detach
+        // the renderer instead and let it resync from the replay snapshot,
+        // like the sandbox terminal path; the PTY keeps draining host-side.
+        this.requestHostTerminalResync(terminal, connection);
       }
+    });
+  }
+
+  private requestHostTerminalResync(
+    terminal: ManagedSurfaceTerminal,
+    connection: HostTerminalSurfaceConnection,
+  ): void {
+    if (terminal.resyncRequested) return;
+    terminal.resyncRequested = true;
+    const detached = terminal.runtime.detachRenderer(
+      terminal.terminalInstanceId,
+      connection.rendererEpoch,
+    );
+    if (detached.shouldResume) {
+      terminal.service.resumeOutput(terminal.terminalId);
+    }
+    void this.post(connection, {
+      type: "terminal-view/resync-required",
+      rendererEpoch: connection.rendererEpoch,
     });
   }
 

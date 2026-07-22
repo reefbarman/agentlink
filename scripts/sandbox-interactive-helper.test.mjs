@@ -54,6 +54,16 @@ function disposable(set, listener) {
   return { dispose: () => set.delete(listener) };
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function createHarness({
   initialData,
   initialExit,
@@ -79,6 +89,8 @@ function createHarness({
     proxyOptions: [],
     proxyClose: 0,
     replacedEnvironment: [],
+    pauses: 0,
+    resumes: 0,
     cleanup: 0,
     reset: 0,
     order: [],
@@ -98,6 +110,12 @@ function createHarness({
     },
     kill(signal) {
       signals.push([this.pid, signal, "pty"]);
+    },
+    pause() {
+      calls.pauses += 1;
+    },
+    resume() {
+      calls.resumes += 1;
     },
     onData(listener) {
       const registration = disposable(dataListeners, listener);
@@ -241,6 +259,7 @@ function createHarness({
 
   return {
     input,
+    output,
     helper,
     terminal,
     calls,
@@ -318,6 +337,88 @@ test("validates exact control-frame keys and bounds", () => {
       }),
     /invalid sandbox helper input frame/,
   );
+});
+
+test("cancels delayed startup before PTY spawn", async (t) => {
+  const runtimeLoaded = deferred();
+  const harness = createHarness({
+    dependencyOverrides: {
+      loadRuntime: () => runtimeLoaded.promise,
+    },
+  });
+  t.after(() => harness.helper.close());
+
+  harness.send(launch());
+  await harness.waitFor(
+    () => harness.helper.activeIdentity?.commandId === identity.commandId,
+    "active launch identity",
+  );
+  harness.send({ ...identity, type: "terminate" });
+  runtimeLoaded.resolve({
+    async initialize() {},
+    async wrapWithSandboxArgv() {
+      throw new Error("cancelled startup must not prepare a PTY");
+    },
+    cleanupAfterCommand() {
+      harness.calls.cleanup += 1;
+    },
+    async reset() {
+      harness.calls.reset += 1;
+    },
+  });
+
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "error"),
+    "startup cancellation error",
+  );
+  assert.match(
+    harness.frames().find((frame) => frame.type === "error").message,
+    /cancelled before initialization/,
+  );
+  assert.equal(harness.calls.spawn.length, 0);
+  assert.equal(harness.calls.proxyAllowlist.length, 0);
+  assert.equal(harness.calls.cleanup, 1);
+  assert.equal(harness.calls.reset, 1);
+});
+
+test("waits for delayed startup before helper shutdown completes", async () => {
+  const runtimeLoaded = deferred();
+  const harness = createHarness({
+    dependencyOverrides: {
+      loadRuntime: () => runtimeLoaded.promise,
+    },
+  });
+
+  harness.send(launch());
+  await harness.waitFor(
+    () => harness.helper.activeIdentity?.commandId === identity.commandId,
+    "active launch identity",
+  );
+  const closing = harness.helper.close();
+  let closed = false;
+  void closing.then(() => {
+    closed = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(closed, false);
+
+  runtimeLoaded.resolve({
+    async initialize() {},
+    async wrapWithSandboxArgv() {
+      throw new Error("closed startup must not prepare a PTY");
+    },
+    cleanupAfterCommand() {
+      harness.calls.cleanup += 1;
+    },
+    async reset() {
+      harness.calls.reset += 1;
+    },
+  });
+  await closing;
+
+  assert.equal(harness.calls.spawn.length, 0);
+  assert.equal(harness.calls.cleanup, 1);
+  assert.equal(harness.calls.reset, 1);
 });
 
 test("launches blocked networking with a private environment and emits ready before data", async (t) => {
@@ -662,6 +763,104 @@ test("fails closed when a protected file changes after the late snapshot", async
   ]);
 });
 
+test("pauses PTY output on protocol backpressure and resumes in frame order", async (t) => {
+  const harness = createHarness();
+  t.after(() => harness.helper.close());
+  const originalWrite = harness.output.write.bind(harness.output);
+  let backpressureOnce = true;
+  harness.output.write = (chunk, ...args) => {
+    originalWrite(chunk, ...args);
+    if (!backpressureOnce) return true;
+    backpressureOnce = false;
+    return false;
+  };
+
+  harness.send(launch());
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "ready"),
+    "ready frame",
+  );
+  assert.equal(harness.calls.pauses, 1);
+
+  harness.terminal.emitData("first");
+  harness.terminal.emitData("second");
+  assert.deepEqual(
+    harness.frames().filter((frame) => frame.type === "data"),
+    [],
+  );
+
+  harness.output.emit("drain");
+  await harness.waitFor(
+    () =>
+      harness.frames().filter((frame) => frame.type === "data").length === 2,
+    "queued data frames",
+  );
+  assert.deepEqual(
+    harness
+      .frames()
+      .filter((frame) => frame.type === "data")
+      .map((frame) => frame.data),
+    ["first", "second"],
+  );
+  assert.equal(harness.calls.resumes, 1);
+});
+
+test("fails closed when pre-ready PTY output exceeds the bounded buffer", async (t) => {
+  const harness = createHarness({
+    initialData: "x".repeat(2 * 1024 * 1024 + 1),
+  });
+  t.after(() => harness.helper.close());
+
+  harness.send(launch());
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "error"),
+    "pre-ready overflow error",
+  );
+
+  assert.match(
+    harness.frames().find((frame) => frame.type === "error").message,
+    /pre-ready output buffer limit exceeded/,
+  );
+  assert.deepEqual(harness.signals[0], [-4242, "SIGTERM", "group"]);
+});
+
+test("fails closed when queued output exceeds the backpressure bound", async (t) => {
+  const harness = createHarness();
+  t.after(() => harness.helper.close());
+  const originalWrite = harness.output.write.bind(harness.output);
+  let backpressureOnce = true;
+  harness.output.write = (chunk, ...args) => {
+    originalWrite(chunk, ...args);
+    if (!backpressureOnce) return true;
+    backpressureOnce = false;
+    return false;
+  };
+
+  harness.send(launch());
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "ready"),
+    "ready frame",
+  );
+  for (let index = 0; index < 9; index += 1) {
+    harness.terminal.emitData("x".repeat(256 * 1024));
+  }
+  await harness.waitFor(
+    () => harness.signals.length > 0,
+    "overflow termination",
+  );
+  harness.output.emit("drain");
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "error"),
+    "backpressure overflow error",
+  );
+
+  assert.match(
+    harness.frames().find((frame) => frame.type === "error").message,
+    /output backpressure limit exceeded/,
+  );
+  assert.deepEqual(harness.signals[0], [-4242, "SIGTERM", "group"]);
+});
+
 test("chunks PTY data at the protocol byte bound", async (t) => {
   const data = `${"x".repeat(256 * 1024)}é`;
   const harness = createHarness({ initialData: data });
@@ -994,6 +1193,77 @@ test("pauses managed destinations until matching allow or reject decisions", asy
     decision: "reject",
   });
   assert.equal(await rejected, "reject");
+});
+
+test("binds concurrent managed network decisions to exact request IDs", async (t) => {
+  const harness = createHarness();
+  t.after(() => harness.helper.close());
+  harness.send(launch({ network: { mode: "public-proxy" } }));
+  await harness.waitFor(() => harness.frames()[0]?.type === "ready");
+  const authorize = harness.calls.proxyOptions[0].authorizeDestination;
+  const first = authorize(
+    {
+      host: "first.example",
+      protocol: "https:",
+      port: 443,
+      address: "93.184.216.34",
+      family: 4,
+      answers: [{ address: "93.184.216.34", family: 4 }],
+    },
+    new AbortController().signal,
+  );
+  const second = authorize(
+    {
+      host: "second.example",
+      protocol: "socks5:",
+      port: 8443,
+      address: "1.1.1.1",
+      family: 4,
+      answers: [{ address: "1.1.1.1", family: 4 }],
+    },
+    new AbortController().signal,
+  );
+  await harness.waitFor(
+    () =>
+      harness.frames().filter((frame) => frame.type === "network-request")
+        .length === 2,
+    "two managed network requests",
+  );
+  assert.deepEqual(
+    harness
+      .frames()
+      .filter((frame) => frame.type === "network-request")
+      .map((frame) => ({
+        requestId: frame.request.requestId,
+        host: frame.request.host,
+      })),
+    [
+      { requestId: "network-1", host: "first.example" },
+      { requestId: "network-2", host: "second.example" },
+    ],
+  );
+
+  harness.send({
+    ...identity,
+    type: "network-decision",
+    requestId: "network-2",
+    decision: "allow-once",
+  });
+  assert.equal(await second, "allow");
+  let firstSettled = false;
+  void first.finally(() => {
+    firstSettled = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(firstSettled, false);
+
+  harness.send({
+    ...identity,
+    type: "network-decision",
+    requestId: "network-1",
+    decision: "reject",
+  });
+  assert.equal(await first, "reject");
 });
 
 test("validates managed destinations before allocating request IDs", async (t) => {

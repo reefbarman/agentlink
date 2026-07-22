@@ -15,6 +15,7 @@ import { handlePendingEditLockError } from "./pendingEditLock.js";
 import type {
   EditReviewProvider,
   EditReviewResult,
+  WriteApprovalPromptEvent,
   WriteApprovalPolicyProvider,
 } from "../core/capabilities/editReview.js";
 import {
@@ -934,6 +935,7 @@ function buildAtomicFailurePayload(
 export interface ApplyDiffProviders {
   editReviewProvider?: EditReviewProvider;
   writeApprovalPolicyProvider?: WriteApprovalPolicyProvider;
+  onApprovalPrompt?: (event: WriteApprovalPromptEvent) => void;
   diagnosticDelay?: number;
 }
 
@@ -1172,6 +1174,16 @@ export async function handleApplyDiff(
       },
     );
     const canAutoApprove = authorization.allowed;
+    const approvalPromptEvent = !canAutoApprove
+      ? {
+          authorization,
+          sessionId,
+          absolutePath: filePath,
+          relativePath: relPath,
+          inWorkspace,
+          mode,
+        }
+      : undefined;
 
     let lockedFailedBlocks = failedBlocks;
     let lockedBlockResults = blockResults;
@@ -1185,6 +1197,12 @@ export async function handleApplyDiff(
       diagnosticDelay: providers.diagnosticDelay ?? DEFAULT_DIAGNOSTIC_DELAY_MS,
       approvalPanel,
       onApprovalRequest,
+      ...(approvalPromptEvent
+        ? {
+            onApprovalPresented: () =>
+              providers.onApprovalPrompt?.(approvalPromptEvent),
+          }
+        : {}),
       sessionId,
       allowCreate: false,
       operation: "modified",

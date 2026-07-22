@@ -72,5 +72,6 @@ Used by question detection and background summaries (e.g. LM Studio):
 ## Terminal, worktrees, misc
 
 - `terminal.enabled`, `terminal.nodePath` — sandbox-backed AgentLink terminals (macOS hosts)
+- `terminal.environmentPolicy` — sandbox command environment inheritance; the default inherits all host variables, including credential-like names, while helper-reserved variables remain host-controlled
 - `worktreeDirectorySuffix` — sibling worktree container naming for `start_worktree_agent`
 - `diagnosticDelay` — ms to wait after save for diagnostics to settle

@@ -34,6 +34,7 @@ const request: SandboxHelperLaunchRequest = {
 
 class FakeTransport implements SandboxHelperTransport {
   readonly writes: string[] = [];
+  readonly closeGracefully = vi.fn();
   readonly kill = vi.fn();
   readonly dispose = vi.fn();
   acceptWrites = true;
@@ -357,7 +358,8 @@ describe("SandboxHelperClient", () => {
     await expect(second.completion).rejects.toThrow("disposed");
     for (const transport of test.transports) {
       expect(parsedWrites(transport).at(-1)?.type).toBe("terminate");
-      expect(transport.kill).toHaveBeenCalledTimes(1);
+      expect(transport.closeGracefully).toHaveBeenCalledWith(2_000);
+      expect(transport.kill).not.toHaveBeenCalled();
       expect(transport.dispose).toHaveBeenCalledTimes(1);
     }
     expect(() => test.client.launch(request)).toThrow("client is disposed");

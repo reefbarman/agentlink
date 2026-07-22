@@ -2637,6 +2637,84 @@ describe("dispatchToolCall", () => {
     );
   });
 
+  it("records bounded approval-state telemetry when write tools request a prompt", async () => {
+    const { handleWriteFile } = await import("../tools/writeFile.js");
+    const { handleApplyDiff } = await import("../tools/applyDiff.js");
+    const recordMetrics = vi.fn();
+    const getAgentWriteApprovalDiagnostics = vi.fn(() => ({
+      effectiveScope: "session" as const,
+      globalBlanketApproved: false,
+      projectBlanketApproved: false,
+      sessionBlanketApproved: true,
+      legacyGlobalBlanketApproved: false,
+      legacyProjectBlanketApproved: false,
+      legacySessionBlanketApproved: true,
+      sessionProjectBound: true,
+      sessionStatePresent: true,
+      sessionStateAgeMs: 90_000,
+      writeRuleCounts: { session: 2, project: 1, global: 0, settings: 3 },
+    }));
+    const ctx: ToolDispatchContext = {
+      ...mockCtx,
+      mode: "code",
+      isBackgroundSession: true,
+      approvalManager: {
+        getAgentWriteApprovalDiagnostics,
+      } as any,
+      toolUsageTelemetry: { recordMetrics } as any,
+    };
+    const prompt = {
+      authorization: {
+        allowed: false as const,
+        basis: "none" as const,
+        reason: "outside_workspace_requires_matching_rule",
+      },
+      sessionId: "test-session",
+      absolutePath: "/sensitive/outside/file.ts",
+      relativePath: "/sensitive/outside/file.ts",
+      inWorkspace: false,
+      mode: "code",
+    };
+
+    await dispatchToolCall(
+      "write_file",
+      { path: "foo.ts", content: "hello" },
+      ctx,
+    );
+    const writeProviders = vi.mocked(handleWriteFile).mock.calls.at(-1)?.[6];
+    writeProviders?.onApprovalPrompt?.(prompt);
+
+    await dispatchToolCall("apply_diff", { path: "foo.ts", diff: "diff" }, ctx);
+    const diffProviders = vi.mocked(handleApplyDiff).mock.calls.at(-1)?.[6];
+    diffProviders?.onApprovalPrompt?.(prompt);
+
+    expect(recordMetrics).toHaveBeenCalledTimes(2);
+    expect(recordMetrics).toHaveBeenNthCalledWith(
+      1,
+      "write_file",
+      expect.objectContaining({
+        writeApprovalPrompt: true,
+        writeApprovalPromptReason: "outside_workspace_requires_matching_rule",
+        writeApprovalSessionKind: "background",
+        writeApprovalMode: "code",
+        writeApprovalBlanketScope: "session",
+        writeApprovalSessionBlanketApproved: true,
+        writeApprovalSessionProjectBound: true,
+        writeApprovalSessionStateAgeBucket: "1m_to_1h",
+        writeApprovalSessionRuleCount: 2,
+        writeApprovalSettingsRuleCount: 3,
+      }),
+    );
+    expect(recordMetrics).toHaveBeenNthCalledWith(
+      2,
+      "apply_diff",
+      expect.any(Object),
+    );
+    expect(JSON.stringify(recordMetrics.mock.calls)).not.toContain(
+      "/sensitive/outside/file.ts",
+    );
+  });
+
   it("dispatches open_file with editor reveal providers", async () => {
     const { handleOpenFile } = await import("../tools/openFile.js");
     const editorRevealProvider = {

@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.17.40",
+  "version": "1.17.43",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -858,7 +858,7 @@
     "lint": "bash -c 'e=0; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:sandbox-runtime": "node --test scripts/package-sandbox-runtime.test.mjs scripts/sandbox-interactive-helper.test.mjs scripts/sandbox-network-policy.test.mjs scripts/sandbox-network-proxy.test.mjs scripts/sandbox-process-reaper.test.mjs scripts/sandbox-protected-roots.test.mjs scripts/sandbox-runtime-helper.test.mjs",
+    "test:sandbox-runtime": "node --test scripts/package-sandbox-runtime.test.mjs scripts/sandbox-runtime-evidence.test.mjs scripts/sandbox-interactive-helper.test.mjs scripts/sandbox-network-policy.test.mjs scripts/sandbox-network-proxy.test.mjs scripts/sandbox-process-reaper.test.mjs scripts/sandbox-protected-roots.test.mjs scripts/sandbox-runtime-helper.test.mjs",
     "probe:sandbox-runtime": "node scripts/sandbox-runtime-behavior.mjs",
     "benchmark:sandbox-runtime": "node scripts/sandbox-runtime-evidence.mjs"
   },

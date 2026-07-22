@@ -132,6 +132,12 @@ describe("Phase 1 gated activation boundary", () => {
       },
       additionalProperties: false,
     });
+    expect(extensionSource).toContain(
+      "the configured shell environment policy controls inherited variables",
+    );
+    expect(extensionSource).not.toContain(
+      "credential-like environment variables are removed",
+    );
     const commands = manifest.contributes?.commands ?? [];
     expect(commands).toContainEqual({
       command: "agentlink.openTerminal",

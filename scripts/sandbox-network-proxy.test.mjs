@@ -491,6 +491,73 @@ test("wildcard HTTP, CONNECT, and SOCKS deny mixed public/private DNS answers", 
   }
 });
 
+test("HTTP, CONNECT, and SOCKS reject forbidden target classes before review or dial", async () => {
+  const forbiddenAnswers = new Map([
+    ["private.denied.example", { address: "10.0.0.1", family: 4 }],
+    ["loopback.denied.example", { address: "127.0.0.1", family: 4 }],
+    ["link-local.denied.example", { address: "169.254.1.1", family: 4 }],
+    ["metadata.denied.example", { address: "169.254.169.254", family: 4 }],
+    ["special.denied.example", { address: "224.0.0.1", family: 4 }],
+  ]);
+  let authorizations = 0;
+  let dials = 0;
+  const proxies = await startTrustedNetworkProxies(
+    ["*"],
+    {
+      lookupAll: async (host) => {
+        const answer = forbiddenAnswers.get(host);
+        assert.ok(answer, `unexpected host ${host}`);
+        return [answer];
+      },
+    },
+    {
+      authorizeDestination: async () => {
+        authorizations += 1;
+        return "allow";
+      },
+      dial: async () => {
+        dials += 1;
+        throw new Error("forbidden target must be rejected before dialing");
+      },
+      httpRequest: () => {
+        dials += 1;
+        throw new Error("forbidden target must be rejected before dialing");
+      },
+    },
+  );
+  try {
+    for (const host of forbiddenAnswers.keys()) {
+      const http = await httpViaProxy(
+        proxies.httpPort,
+        `http://${host}/resource`,
+        proxies.credentials,
+      );
+      assert.equal(http.statusCode, 403, `HTTP ${host}`);
+
+      const connect = await connectViaProxy(
+        proxies.httpPort,
+        `${host}:443`,
+        "denied",
+        proxies.credentials,
+      );
+      assert.match(connect.status, /403 Forbidden/, `CONNECT ${host}`);
+
+      const socks = await socksViaProxy(
+        proxies.socksPort,
+        host,
+        443,
+        "denied",
+        proxies.credentials,
+      );
+      assert.equal(socks.reply, 2, `SOCKS ${host}`);
+    }
+    assert.equal(authorizations, 0);
+    assert.equal(dials, 0);
+  } finally {
+    await proxies.close();
+  }
+});
+
 test("CONNECT and SOCKS dial only the validated numeric address", async () => {
   await withEchoFixture(async ({ echoPort }) => {
     const dials = [];

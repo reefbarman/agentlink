@@ -11,6 +11,7 @@ export type ToolUsageOutcome =
   | "error"
   | "cancelled"
   | "rejected";
+export type ToolUsageMetrics = Record<string, number | string | boolean>;
 
 export interface ToolUsageEvent {
   toolName: string;
@@ -20,7 +21,7 @@ export interface ToolUsageEvent {
   projectId?: string;
   outcome: ToolUsageOutcome;
   durationMs?: number;
-  metrics?: Record<string, number | string | boolean>;
+  metrics?: ToolUsageMetrics;
 }
 
 interface ToolUsageBucket {
@@ -143,7 +144,31 @@ export class ToolUsageTelemetry {
       }
     }
 
-    for (const [key, value] of Object.entries(event.metrics ?? {}).sort()) {
+    this.addMetrics(bucket, event.metrics);
+
+    if (Number.isFinite(event.durationMs)) {
+      const durationMs = Math.max(0, Math.round(event.durationMs ?? 0));
+      bucket.totalDurationMs += durationMs;
+      bucket.maxDurationMs = Math.max(bucket.maxDurationMs, durationMs);
+    }
+  }
+
+  /** Record a diagnostic observation without inflating the tool call count. */
+  recordMetrics(toolName: string, metrics: ToolUsageMetrics): void {
+    if (this.disposed) return;
+    const normalizedToolName = toolName.trim();
+    if (!normalizedToolName) return;
+
+    const bucket = this.buckets.get(normalizedToolName) ?? createBucket();
+    this.buckets.set(normalizedToolName, bucket);
+    this.addMetrics(bucket, metrics);
+  }
+
+  private addMetrics(
+    bucket: ToolUsageBucket,
+    metrics: ToolUsageMetrics | undefined,
+  ): void {
+    for (const [key, value] of Object.entries(metrics ?? {}).sort()) {
       if (typeof value === "number" && Number.isFinite(value)) {
         bucket.numericMetrics[key] = (bucket.numericMetrics[key] ?? 0) + value;
       } else if (typeof value === "string" || typeof value === "boolean") {
@@ -151,12 +176,6 @@ export class ToolUsageTelemetry {
         bucket.categoricalMetrics[category] =
           (bucket.categoricalMetrics[category] ?? 0) + 1;
       }
-    }
-
-    if (Number.isFinite(event.durationMs)) {
-      const durationMs = Math.max(0, Math.round(event.durationMs ?? 0));
-      bucket.totalDurationMs += durationMs;
-      bucket.maxDurationMs = Math.max(bucket.maxDurationMs, durationMs);
     }
   }
 

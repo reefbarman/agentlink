@@ -915,6 +915,202 @@ describe("SandboxTerminalCoordinator", () => {
     }
   });
 
+  it("survives repeated mixed lifecycle cycles across concurrent named channels", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+
+      for (let iteration = 1; iteration <= 3; iteration += 1) {
+        const foreground = test.coordinator.executeCommand({
+          command: `printf foreground-${iteration}`,
+          cwd: "/workspace",
+          sandboxSessionId: "agent-session",
+        });
+        await flush();
+        await finish(
+          test.processes.at(-1) as FakeProcess,
+          `foreground-${iteration}\r\n`,
+        );
+        await expect(foreground).resolves.toMatchObject({
+          terminal_id: "sandbox-1",
+          exit_code: 0,
+          output: `foreground-${iteration}`,
+        });
+
+        const interrupted = test.coordinator.executeCommand({
+          command: `sleep interrupted-${iteration}`,
+          cwd: "/workspace",
+          terminal_name: "Interrupt lane",
+          background: true,
+          sandboxSessionId: "agent-session",
+        });
+        const completed = test.coordinator.executeCommand({
+          command: `printf completed-${iteration}`,
+          cwd: "/workspace",
+          terminal_name: "Complete lane",
+          background: true,
+          sandboxSessionId: "agent-session",
+        });
+        await flush();
+        await expect(interrupted).resolves.toMatchObject({
+          terminal_id: "sandbox-2",
+          backgrounded: true,
+        });
+        await expect(completed).resolves.toMatchObject({
+          terminal_id: "sandbox-3",
+          backgrounded: true,
+        });
+        const interruptedProcess = test.processes.at(-2) as FakeProcess;
+        const completedProcess = test.processes.at(-1) as FakeProcess;
+        interruptedProcess.readyDeferred.resolve({
+          pid: iteration * 10 + 1,
+          pgid: iteration * 10 + 1,
+          backend: "seatbelt",
+        });
+        completedProcess.readyDeferred.resolve({
+          pid: iteration * 10 + 2,
+          pgid: iteration * 10 + 2,
+          backend: "seatbelt",
+        });
+        await flush();
+        expect(test.coordinator.interruptTerminal("sandbox-2")).toBe(true);
+        interruptedProcess.completionDeferred.resolve({
+          exitCode: 130,
+          signal: 2,
+          timedOut: false,
+        });
+        completedProcess.emit({
+          type: "data",
+          data: `completed-${iteration}\r\n`,
+        });
+        completedProcess.completionDeferred.resolve({
+          exitCode: 0,
+          timedOut: false,
+        });
+        await flush();
+
+        const timedOut = test.coordinator.executeCommand({
+          command: `sleep timeout-${iteration}`,
+          cwd: "/workspace",
+          terminal_name: "Timeout lane",
+          timeout: 10,
+          sandboxSessionId: "agent-session",
+        });
+        await flush();
+        const timedOutProcess = test.processes.at(-1) as FakeProcess;
+        timedOutProcess.readyDeferred.resolve({
+          pid: iteration * 10 + 3,
+          pgid: iteration * 10 + 3,
+          backend: "seatbelt",
+        });
+        await flush();
+        await vi.advanceTimersByTimeAsync(10);
+        await expect(timedOut).resolves.toMatchObject({
+          terminal_id: "sandbox-4",
+          timed_out: true,
+          backgrounded: true,
+          is_running: true,
+        });
+        timedOutProcess.completionDeferred.resolve({
+          exitCode: 0,
+          timedOut: false,
+        });
+        await flush();
+      }
+
+      expect(test.runtime.launch).toHaveBeenCalledTimes(12);
+      expect(test.coordinator.listTerminals()).toEqual([
+        { id: "sandbox-1", name: "Agent command", busy: false },
+        { id: "sandbox-2", name: "Interrupt lane", busy: false },
+        { id: "sandbox-3", name: "Complete lane", busy: false },
+        { id: "sandbox-4", name: "Timeout lane", busy: false },
+      ]);
+      expect(
+        test.coordinator
+          .getChannelSnapshot("sandbox-2")
+          ?.commands.map(({ generation, exitCode }) => ({
+            generation,
+            exitCode,
+          })),
+      ).toEqual([
+        { generation: 1, exitCode: 130 },
+        { generation: 2, exitCode: 130 },
+        { generation: 3, exitCode: 130 },
+      ]);
+      expect(
+        test.coordinator
+          .getChannelSnapshot("sandbox-4")
+          ?.commands.map(({ generation, exitCode }) => ({
+            generation,
+            exitCode,
+          })),
+      ).toEqual([
+        { generation: 1, exitCode: 0 },
+        { generation: 2, exitCode: 0 },
+        { generation: 3, exitCode: 0 },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an unnamed timed-out high-volume command addressable by its returned ID", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const resultPromise = test.coordinator.executeCommand({
+        command: "generate high-volume output",
+        cwd: "/workspace",
+        timeout: 100,
+        sandboxSessionId: "agent-session",
+      });
+      await flush();
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+      await flush();
+      process.emit({ type: "data", data: "1\n2\n3\n" });
+
+      await vi.advanceTimersByTimeAsync(100);
+      const timedOut = await resultPromise;
+      expect(timedOut).toMatchObject({
+        terminal_id: "sandbox-1",
+        terminal_name: "Agent command",
+        timed_out: true,
+        backgrounded: true,
+        is_running: true,
+      });
+      expect(
+        test.coordinator.getBackgroundState(timedOut.terminal_id),
+      ).toMatchObject({
+        is_running: true,
+        state: "running",
+        output: "1\n2\n3",
+      });
+
+      const remainder = `${"line x\n".repeat(180_000)}final line\n`;
+      process.emit({ type: "data", data: remainder });
+      process.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+      await flush();
+
+      expect(
+        test.coordinator.getBackgroundState(timedOut.terminal_id),
+      ).toMatchObject({
+        is_running: false,
+        state: "completed",
+        exit_code: 0,
+      });
+      const retained = test.coordinator.getRetainedOutput(timedOut.terminal_id);
+      expect(retained).toMatchObject({
+        complete: true,
+        finalized: true,
+        dropped_bytes: 0,
+      });
+      expect(retained?.output).toBe(`1\n2\n3\n${remainder}`.trim());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("closes only Sandbox channels and records recovery metadata", async () => {
     const test = harness();
     await test.coordinator.executeCommand({
@@ -951,9 +1147,43 @@ describe("SandboxTerminalCoordinator", () => {
         exit_code: null,
         output: "",
         output_captured: true,
+        output_complete: false,
+        output_finalized: false,
+        output_total_bytes: 0,
+        output_retained_bytes: 0,
+        output_dropped_bytes: 0,
         terminal_raw_output: "",
       },
     ]);
+  });
+
+  it("keeps exact multi-megabyte output retrievable after terminal close", async () => {
+    const test = harness();
+    await test.coordinator.executeCommand({
+      command: "generate output",
+      cwd: "/workspace",
+      terminal_name: "Large output",
+      background: true,
+      sandboxSessionId: "agent-session",
+    });
+    const output = `${"line x\n".repeat(180_000)}final line\n`;
+    await finish(test.processes[0], output);
+
+    expect(
+      test.coordinator.getBackgroundState("sandbox-1")?.output.length,
+    ).toBeLessThan(output.length);
+    expect(test.coordinator.closeTerminals(["sandbox-1"])).toEqual({
+      closed: 1,
+    });
+    expect(test.coordinator.getBackgroundState("sandbox-1")).toBeUndefined();
+    expect(test.coordinator.getRetainedOutput("sandbox-1")).toEqual({
+      output: output.trim(),
+      complete: true,
+      finalized: true,
+      total_bytes: Buffer.byteLength(output, "utf8"),
+      retained_bytes: Buffer.byteLength(output, "utf8"),
+      dropped_bytes: 0,
+    });
   });
 
   it("fails before launch for missing sessions or mismatched authorization identity", async () => {

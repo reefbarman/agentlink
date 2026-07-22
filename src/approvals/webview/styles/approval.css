@@ -967,6 +967,18 @@ body {
   flex-direction: column;
   gap: 6px;
 }
+.rule-row-authority-note {
+  padding: 7px 8px;
+  border-left: 2px solid var(--vscode-notificationsWarningIcon-foreground);
+  background: color-mix(
+    in srgb,
+    var(--vscode-notificationsWarningIcon-foreground) 8%,
+    transparent
+  );
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 1.4;
+}
 .rule-row-option-line {
   display: flex;
   align-items: center;

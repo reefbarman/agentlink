@@ -45,6 +45,8 @@ export interface EditReviewParams {
   diagnosticDelay: number;
   approvalPanel?: unknown;
   onApprovalRequest?: OnApprovalRequest;
+  /** Called only after the interactive approval UI has been enqueued. */
+  onApprovalPresented?: () => void;
   sessionId: string;
   /**
    * Optional portable content refresh that runs inside the provider-owned write
@@ -172,6 +174,10 @@ export interface WriteAuthorizationDecision {
   rule?: { pattern: string; mode: "glob" | "prefix" | "exact" };
   reason?: string;
   decision?: EditReviewDecision;
+}
+
+export interface WriteApprovalPromptEvent extends WriteApprovalQuery {
+  authorization: WriteAuthorizationDecision;
 }
 
 export interface WriteApprovalPolicyProvider {

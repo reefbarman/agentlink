@@ -96,6 +96,43 @@ describe("NodeSandboxHelperTransport", () => {
     expect(test.child.stdin.end).toHaveBeenCalledTimes(1);
   });
 
+  it("closes gracefully before forcing a wedged helper", () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const transport = test.factory.create();
+
+      transport.closeGracefully(2_000);
+      expect(test.child.stdin.end).toHaveBeenCalledTimes(1);
+      expect(test.child.kill).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1_999);
+      expect(test.child.kill).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(test.child.kill).toHaveBeenCalledWith("SIGKILL");
+      transport.dispose();
+      expect(test.child.stdin.end).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels graceful forced kill when the helper closes", () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const transport = test.factory.create();
+
+      transport.closeGracefully(2_000);
+      test.child.emitClose(0, null);
+      vi.advanceTimersByTime(2_000);
+
+      expect(test.child.kill).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("treats writable backpressure as an accepted frame", () => {
     const test = harness();
     test.child.stdin.write.mockReturnValue(false);
