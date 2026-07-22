@@ -778,6 +778,40 @@ describe("createVscodeWriteApprovalPolicyProvider", () => {
       }),
     ).toBe(true);
     expect(approvalManager.isAgentWriteApproved).not.toHaveBeenCalled();
+    expect(
+      provider.getAuthorization?.({
+        sessionId: "session-1",
+        absolutePath: "/workspace/plans/example.md",
+        relativePath: "plans/example.md",
+        inWorkspace: true,
+        mode: "architect",
+      }),
+    ).toEqual({ allowed: true, basis: "architect_plan" });
+  });
+
+  it("preserves the matching write rule in authorization evidence", () => {
+    const decision = {
+      allowed: true as const,
+      basis: "write_rule" as const,
+      scope: "project" as const,
+      rule: { pattern: "src/**", mode: "glob" as const },
+    };
+    const approvalManager = {
+      getAgentWriteAuthorization: vi.fn(() => decision),
+    };
+    const provider = createVscodeWriteApprovalPolicyProvider(
+      approvalManager as never,
+    );
+
+    expect(
+      provider.getAuthorization?.({
+        sessionId: "session-1",
+        absolutePath: "/workspace/src/example.ts",
+        relativePath: "src/example.ts",
+        inWorkspace: true,
+        mode: "code",
+      }),
+    ).toEqual(decision);
   });
 
   it("does not auto-approve protected memory paths even with masterBypass", () => {

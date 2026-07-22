@@ -17,11 +17,11 @@ import {
   isSandboxRuntimeDescriptor,
   parseSandboxRuntimeRequest,
 } from "./sandbox-runtime-helper.mjs";
-import { homedir, tmpdir } from "node:os";
 
 import { ProtectedRootLeaseCoordinator } from "./sandbox-protected-roots.mjs";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
@@ -39,7 +39,7 @@ function makeRequest(root, overrides = {}) {
   const privateHome = path.join(root, "home");
   const privateTmp = path.join(root, "tmp");
   return {
-    version: 1,
+    version: 2,
     operation: "execute",
     command: "/usr/bin/true",
     cwd: root,
@@ -57,6 +57,7 @@ function makeRequest(root, overrides = {}) {
     },
     network: { allowedDomains: [] },
     protectedRoots: [],
+    structurallyProtectedRoots: [],
     timeoutMs: 10_000,
     ...overrides,
   };
@@ -88,7 +89,9 @@ async function runHelper(request, environment = process.env) {
 }
 
 async function makeSandboxRoot(prefix) {
-  const root = await mkdtemp(path.join("/private/tmp", `al-srt-${prefix}-`));
+  const fixtureRoot = path.join(REPO_ROOT, "tmp");
+  await mkdir(fixtureRoot, { recursive: true });
+  const root = await mkdtemp(path.join(fixtureRoot, `al-srt-${prefix}-`));
   await Promise.all([
     mkdir(path.join(root, "home"), { recursive: true }),
     mkdir(path.join(root, "tmp"), { recursive: true }),
@@ -156,7 +159,37 @@ test("validates the one-request protocol and rejects authority-like extras", () 
           HOME: "/private/outside-policy",
         },
       }),
-    /environment.HOME must be within filesystem.allowWrite/,
+    /environment.HOME must be within filesystem.allowRead/,
+  );
+  assert.doesNotThrow(() =>
+    parseSandboxRuntimeRequest({
+      ...request,
+      environment: {
+        ...request.environment,
+        HOME: "/Users/example",
+      },
+      filesystem: {
+        ...request.filesystem,
+        denyRead: [],
+        allowRead: ["/"],
+      },
+    }),
+  );
+  assert.throws(
+    () =>
+      parseSandboxRuntimeRequest({
+        ...request,
+        environment: {
+          ...request.environment,
+          TMPDIR: "/Users/example/tmp",
+        },
+        filesystem: {
+          ...request.filesystem,
+          denyRead: [],
+          allowRead: ["/"],
+        },
+      }),
+    /environment.TMPDIR must be within filesystem.allowWrite/,
   );
   assert.throws(
     () =>
@@ -167,6 +200,11 @@ test("validates the one-request protocol and rejects authority-like extras", () 
       ),
     /TMPDIR is too long for macOS Unix sockets/,
   );
+  assert.throws(() => {
+    const { structurallyProtectedRoots: _omitted, ...missingStructuralRoots } =
+      request;
+    parseSandboxRuntimeRequest(missingStructuralRoots);
+  }, /request\.structurallyProtectedRoots must be an array/);
   assert.throws(
     () =>
       parseSandboxRuntimeRequest({
@@ -495,17 +533,19 @@ darwinTest(
     const gitConfig = path.join(gitRoot, "config");
     const gitHook = path.join(gitRoot, "hooks", "pre-commit");
     const policyFile = path.join(policyRoot, "policy.json");
+    const historyFile = path.join(policyRoot, "history", "sessions.json");
     const normalFile = path.join(root, "normal.txt");
     const renameSource = path.join(root, "rename-source.txt");
     try {
       await Promise.all([
         mkdir(path.dirname(gitHook), { recursive: true }),
-        mkdir(policyRoot, { recursive: true }),
+        mkdir(path.dirname(historyFile), { recursive: true }),
       ]);
       await Promise.all([
         writeFile(gitConfig, "git-config-original"),
         writeFile(gitHook, "git-hook-original"),
         writeFile(policyFile, "policy-original"),
+        writeFile(historyFile, "history-original"),
         writeFile(renameSource, "rename-source"),
       ]);
       const command = [
@@ -513,6 +553,7 @@ darwinTest(
         `! printf attacked > ${shellQuote(gitConfig)}`,
         `! printf attacked > ${shellQuote(gitHook)}`,
         `! printf attacked > ${shellQuote(policyFile)}`,
+        `! printf attacked > ${shellQuote(historyFile)}`,
         `! rm ${shellQuote(gitConfig)}`,
         `! mv ${shellQuote(renameSource)} ${shellQuote(path.join(gitRoot, "renamed.txt"))}`,
         `! mkdir ${shellQuote(path.join(policyRoot, "nested"))}`,
@@ -521,7 +562,7 @@ darwinTest(
         makeRequest(root, {
           command,
           filesystem: protectedFilesystem(root, [gitRoot, policyRoot]),
-          protectedRoots: [gitRoot, policyRoot],
+          protectedRoots: [gitRoot, policyFile],
         }),
       );
       assert.equal(outcome.response.ok, true, JSON.stringify(outcome.response));
@@ -534,6 +575,7 @@ darwinTest(
       assert.equal(await readFile(gitConfig, "utf8"), "git-config-original");
       assert.equal(await readFile(gitHook, "utf8"), "git-hook-original");
       assert.equal(await readFile(policyFile, "utf8"), "policy-original");
+      assert.equal(await readFile(historyFile, "utf8"), "history-original");
       assert.equal(await readFile(renameSource, "utf8"), "rename-source");
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -696,7 +738,6 @@ darwinTest(
     const protectedRoot = path.join(root, ".agentlink");
     const movedRoot = path.join(root, "moved-policy");
     const protectedFile = path.join(protectedRoot, "policy.json");
-    const movedFile = path.join(movedRoot, "policy.json");
     const launched = path.join(root, "launched");
     const proceed = path.join(root, "proceed");
     try {

@@ -2,6 +2,14 @@ import { BlockList, isIP } from "node:net";
 
 import { lookup } from "node:dns/promises";
 
+export class NetworkPolicyError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "NetworkPolicyError";
+    this.code = "ERR_AGENTLINK_NETWORK_POLICY";
+  }
+}
+
 const FORBIDDEN_IPV4 = [
   ["0.0.0.0", 8],
   ["10.0.0.0", 8],
@@ -54,14 +62,33 @@ export function canonicalizeNetworkHost(host) {
     return undefined;
   }
   const bare = stripBrackets(host);
-  if (bare.includes("%") || /[\0-\x20\x7f]/.test(bare)) {
+  const family = isIP(bare);
+  const hasForbiddenCharacter = [...bare].some((character) => {
+    const codePoint = character.codePointAt(0);
+    return (
+      codePoint <= 0x20 || codePoint === 0x7f || "/\\@?#".includes(character)
+    );
+  });
+  if (
+    bare.includes("%") ||
+    hasForbiddenCharacter ||
+    (bare.includes(":") && family !== 6)
+  ) {
     return undefined;
   }
   try {
-    const bracketed = isIP(bare) === 6 ? `[${bare}]` : bare;
-    return stripBrackets(new URL(`http://${bracketed}/`).hostname)
+    const bracketed = family === 6 ? `[${bare}]` : bare;
+    const canonical = stripBrackets(new URL(`http://${bracketed}/`).hostname)
       .replace(/\.$/, "")
       .toLowerCase();
+    if (isIP(canonical)) {
+      return canonical;
+    }
+    return /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/.test(
+      canonical,
+    )
+      ? canonical
+      : undefined;
   } catch {
     return undefined;
   }
@@ -69,10 +96,16 @@ export function canonicalizeNetworkHost(host) {
 
 export function matchesAllowedDomain(host, pattern) {
   const canonicalHost = canonicalizeNetworkHost(host);
+  if (!canonicalHost) {
+    return false;
+  }
+  if (pattern === "*") {
+    return true;
+  }
   const canonicalPattern = canonicalizeNetworkHost(
     pattern.startsWith("*.") ? pattern.slice(2) : pattern,
   );
-  if (!canonicalHost || !canonicalPattern) {
+  if (!canonicalPattern) {
     return false;
   }
   if (pattern.startsWith("*.")) {
@@ -118,14 +151,14 @@ export async function resolveApprovedDestination(
 ) {
   const canonicalHost = canonicalizeNetworkHost(host);
   if (!canonicalHost) {
-    throw new Error("destination host is malformed");
+    throw new NetworkPolicyError("destination host is malformed");
   }
   if (
     !allowedDomains.some((pattern) =>
       matchesAllowedDomain(canonicalHost, pattern),
     )
   ) {
-    throw new Error("destination host is not allowlisted");
+    throw new NetworkPolicyError("destination host is not allowlisted");
   }
 
   const family = isIP(canonicalHost);
@@ -133,19 +166,23 @@ export async function resolveApprovedDestination(
     ? [{ address: canonicalHost, family }]
     : await lookupAll(canonicalHost);
   if (!Array.isArray(answers) || answers.length === 0) {
-    throw new Error("destination host resolved to no addresses");
+    throw new NetworkPolicyError("destination host resolved to no addresses");
   }
 
   const resolved = answers.map((answer) => {
     const address = canonicalizeNetworkHost(answer.address);
     const answerFamily = address ? isIP(address) : 0;
     if (!address || !answerFamily || answerFamily !== Number(answer.family)) {
-      throw new Error("destination host returned a malformed DNS answer");
+      throw new NetworkPolicyError(
+        "destination host returned a malformed DNS answer",
+      );
     }
     return { address, family: answerFamily };
   });
   if (resolved.some((answer) => isForbiddenNetworkAddress(answer.address))) {
-    throw new Error("destination host resolved to a forbidden address");
+    throw new NetworkPolicyError(
+      "destination host resolved to a forbidden address",
+    );
   }
 
   const approved = resolved[0];

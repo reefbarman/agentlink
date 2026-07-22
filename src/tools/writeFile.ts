@@ -13,7 +13,10 @@ import type {
   WriteApprovalPolicyProvider,
 } from "../core/capabilities/editReview.js";
 import { handlePendingEditLockError } from "./pendingEditLock.js";
-import { DEFAULT_DIAGNOSTIC_DELAY_MS } from "../core/capabilities/editReview.js";
+import {
+  DEFAULT_DIAGNOSTIC_DELAY_MS,
+  evaluateWriteAuthorization,
+} from "../core/capabilities/editReview.js";
 
 function getWriteRiskWarnings(
   relPath: string,
@@ -67,14 +70,17 @@ export async function handleWriteFile(
       });
     }
 
-    const canAutoApprove =
-      providers.writeApprovalPolicyProvider?.canAutoApprove({
+    const authorization = evaluateWriteAuthorization(
+      providers.writeApprovalPolicyProvider,
+      {
         sessionId,
         absolutePath: filePath,
         relativePath: relPath,
         inWorkspace,
         mode,
-      }) ?? false;
+      },
+    );
+    const canAutoApprove = authorization.allowed;
 
     const result = await providers.editReviewProvider.reviewAndApply({
       mode: canAutoApprove ? "auto" : "interactive",
@@ -110,7 +116,20 @@ export async function handleWriteFile(
       ...response
     } = warnings ? { ...result, warnings } : result;
 
-    return successResult(response);
+    const appliedAuthorization = canAutoApprove
+      ? authorization
+      : result.decision
+        ? {
+            allowed: result.decision !== "reject",
+            basis: "human" as const,
+            decision: result.decision,
+          }
+        : undefined;
+
+    return successResult({
+      ...response,
+      ...(appliedAuthorization ? { authorization: appliedAuthorization } : {}),
+    });
   } catch (err) {
     return (
       handlePendingEditLockError(err, params.path) ??

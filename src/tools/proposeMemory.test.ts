@@ -76,6 +76,9 @@ function text(result: { content: Array<{ type: string; text?: string }> }) {
 }
 
 function approvingPanel(overrides?: {
+  decision?: "accept" | "reject";
+  rejectionReason?: string;
+  followUp?: string;
   memoryTier?: "instructions" | "skill" | "command" | "memory";
   memoryScope?: "global" | "project";
   memoryName?: string;
@@ -88,7 +91,10 @@ function approvingPanel(overrides?: {
         requests.push(request);
         return {
           id: "approval-1",
-          promise: Promise.resolve({ decision: "accept", ...overrides }),
+          promise: Promise.resolve({
+            decision: overrides?.decision ?? "accept",
+            ...overrides,
+          }),
         };
       }),
     },
@@ -304,7 +310,7 @@ describe("handleProposeMemory", () => {
     );
 
     expect(text(result)).toMatchObject({
-      status: "rejected",
+      status: "rejected_by_user",
       path: ".agentlink/memory.md",
     });
     expect(panel.cancelApproval).toHaveBeenCalledWith("diff-request-1");
@@ -379,6 +385,75 @@ describe("handleProposeMemory", () => {
 
     expect(fs.existsSync(commandPath)).toBe(false);
     expect(diffOpen).not.toHaveBeenCalled();
+  });
+
+  it("updates the loaded same-scope command source instead of creating a blank AgentLink command", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const commandPath = path.join(
+      tmpHome,
+      ".claude",
+      "commands",
+      "address-pr-feedback.md",
+    );
+    fs.mkdirSync(path.dirname(commandPath), { recursive: true });
+    fs.writeFileSync(commandPath, "Existing command body.\n");
+    const { panel } = approvingPanel();
+
+    const result = await handleProposeMemory(
+      {
+        tier: "command",
+        scope: "global",
+        operation: "update",
+        name: "address-pr-feedback",
+        title: "Update command",
+        rationale: "Include all review feedback surfaces.",
+        content: "Updated command body.",
+      },
+      panel as never,
+    );
+
+    expect(diffOpen).toHaveBeenCalledWith(
+      commandPath,
+      "~/.claude/commands/address-pr-feedback.md",
+      "Updated command body.\n",
+    );
+    expect(
+      fs.existsSync(
+        path.join(tmpHome, ".agentlink", "commands", "address-pr-feedback.md"),
+      ),
+    ).toBe(false);
+    expect(text(result)).toMatchObject({
+      status: "accepted",
+      path: "~/.claude/commands/address-pr-feedback.md",
+    });
+  });
+
+  it("returns approval rejection notes in the standard chat annotation shape", async () => {
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    const { panel } = approvingPanel({
+      decision: "reject",
+      rejectionReason: "Keep the current command body.",
+      followUp: "Read the loaded command before trying again.",
+    });
+
+    const result = await handleProposeMemory(
+      {
+        tier: "command",
+        scope: "global",
+        operation: "update",
+        name: "address-pr-feedback",
+        title: "Update command",
+        rationale: "Include all review feedback surfaces.",
+        content: "Updated command body.",
+      },
+      panel as never,
+    );
+
+    expect(text(result)).toMatchObject({
+      status: "rejected_by_user",
+      reason: "Keep the current command body.",
+      follow_up: "Read the loaded command before trying again.",
+    });
   });
 
   it("supports approval retargeting to global command", async () => {

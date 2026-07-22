@@ -41,6 +41,7 @@ export type TerminalSurfaceRequest =
       profileName?: string;
     }
   | { type: "terminal-view/resync"; rendererEpoch: string }
+  | { type: "terminal-view/focus-changed"; focused: boolean }
   | (TerminalTarget & {
       type: "host-terminal/write";
       data: string;
@@ -51,11 +52,15 @@ export type TerminalSurfaceRequest =
     })
   | (TerminalTarget & { type: "host-terminal/activate" })
   | (TerminalTarget & { type: "host-terminal/close-intent" })
-  | (TerminalTarget & { type: "host-terminal/paste-intent" })
+  | (TerminalTarget & {
+      type: "host-terminal/paste-intent";
+      bracketedPasteMode?: boolean;
+    })
   | (TerminalTarget & {
       type: "terminal-view/confirm";
       confirmationId: string;
       accept: boolean;
+      bracketedPasteMode?: boolean;
     })
   | (TerminalTarget & {
       type: "terminal-view/output-ack";
@@ -106,6 +111,7 @@ export type HostTerminalSurfaceLifecycleEvent =
       type: "host-terminal/opened";
       terminalInstanceId: string;
       terminal: HostTerminalTab;
+      activate?: boolean;
     }
   | {
       type: "host-terminal/data";
@@ -129,6 +135,12 @@ export type HostTerminalSurfaceLifecycleEvent =
       type: "host-terminal/activated";
       terminalId: string;
       terminalInstanceId: string;
+    }
+  | {
+      type: "host-terminal/agent-activity";
+      terminalId: string;
+      terminalInstanceId: string;
+      activity: "running" | "unread" | "none";
     }
   | {
       type: "host-terminal/exited";
@@ -198,6 +210,7 @@ export interface TerminalSurfaceConfiguration {
   cursorStyle?: "block" | "line" | "underline";
   cursorBlink?: boolean;
   screenReaderMode?: boolean;
+  multiLinePasteWarning?: "auto" | "always" | "never";
   scrollback: number;
 }
 
@@ -329,6 +342,12 @@ export function isTerminalSurfaceRequest(
       isIdentifier(value.rendererEpoch)
     );
   }
+  if (value.type === "terminal-view/focus-changed") {
+    return (
+      hasExactKeys(value, ["type", "focused"]) &&
+      typeof value.focused === "boolean"
+    );
+  }
 
   const targetKeys = [
     "type",
@@ -355,18 +374,32 @@ export function isTerminalSurfaceRequest(
 
   if (
     value.type === "host-terminal/activate" ||
-    value.type === "host-terminal/close-intent" ||
-    value.type === "host-terminal/paste-intent"
+    value.type === "host-terminal/close-intent"
   ) {
     return hasExactKeys(value, targetKeys) && hasValidTarget(value);
   }
 
+  if (value.type === "host-terminal/paste-intent") {
+    return (
+      hasExactKeys(value, targetKeys, ["bracketedPasteMode"]) &&
+      hasValidTarget(value) &&
+      (!Object.hasOwn(value, "bracketedPasteMode") ||
+        typeof value.bracketedPasteMode === "boolean")
+    );
+  }
+
   if (value.type === "terminal-view/confirm") {
     return (
-      hasExactKeys(value, [...targetKeys, "confirmationId", "accept"]) &&
+      hasExactKeys(
+        value,
+        [...targetKeys, "confirmationId", "accept"],
+        ["bracketedPasteMode"],
+      ) &&
       hasValidTarget(value) &&
       isIdentifier(value.confirmationId) &&
-      typeof value.accept === "boolean"
+      typeof value.accept === "boolean" &&
+      (!Object.hasOwn(value, "bracketedPasteMode") ||
+        typeof value.bracketedPasteMode === "boolean")
     );
   }
 

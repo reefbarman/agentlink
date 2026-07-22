@@ -86,6 +86,15 @@ export type SandboxTerminalSessionEvent =
       violation: SandboxViolation;
     }
   | {
+      type: "network-request";
+      commandId: string;
+      generation: number;
+      request: Extract<
+        SandboxCommandEvent,
+        { type: "network-request" }
+      >["request"];
+    }
+  | {
       type: "command-exited";
       commandId: string;
       generation: number;
@@ -166,7 +175,7 @@ export class SandboxTerminalSession {
     | {
         process: SandboxCommandProcess;
         command: SandboxTerminalCommandRecord;
-        eventSubscription: SandboxCommandDisposable;
+        eventSubscription?: SandboxCommandDisposable;
       }
     | undefined;
   private closed = false;
@@ -251,10 +260,12 @@ export class SandboxTerminalSession {
       droppedOutputBytes: 0,
       violations: [],
     };
-    const eventSubscription = input.process.onEvent((event) =>
-      this.handleProcessEvent(input.process, event),
-    );
-    this.active = { process: input.process, command, eventSubscription };
+    const active: {
+      process: SandboxCommandProcess;
+      command: SandboxTerminalCommandRecord;
+      eventSubscription?: SandboxCommandDisposable;
+    } = { process: input.process, command };
+    this.active = active;
     this.commands.push(command);
     const replay = retainUtf8Tail(
       this.replay,
@@ -272,6 +283,9 @@ export class SandboxTerminalSession {
       (ready) => this.handleReady(input.process, ready),
       (error) => this.handleFailure(input.process, error),
     );
+    active.eventSubscription = input.process.onEvent((event) =>
+      this.handleProcessEvent(input.process, event),
+    );
     void input.process.completion.then(
       (exit) => this.handleExit(input.process, exit),
       (error) => this.handleFailure(input.process, error),
@@ -283,6 +297,12 @@ export class SandboxTerminalSession {
     return this.active?.command.status === "running"
       ? this.active.process.write(data)
       : false;
+  }
+
+  synchronizeCwd(cwd: string): boolean {
+    if (this.closed || !this.isAllowedCwd(cwd)) return false;
+    this.cwd = cwd;
+    return true;
   }
 
   resize(dimensions: TerminalDimensions): boolean {
@@ -332,7 +352,7 @@ export class SandboxTerminalSession {
     this.closed = true;
     const active = this.active;
     this.active = undefined;
-    active?.eventSubscription.dispose();
+    active?.eventSubscription?.dispose();
     active?.process.dispose();
     this.emit({ type: "closed" });
     this.listeners.clear();
@@ -361,7 +381,20 @@ export class SandboxTerminalSession {
     event: SandboxCommandEvent,
   ): void {
     const active = this.current(process);
-    if (!active || active.command.status !== "running") return;
+    if (!active) return;
+    if (event.type === "network-request") {
+      this.emit({
+        type: "network-request",
+        commandId: active.command.commandId,
+        generation: active.command.generation,
+        request: {
+          ...event.request,
+          dnsAnswers: event.request.dnsAnswers.map((answer) => ({ ...answer })),
+        },
+      });
+      return;
+    }
+    if (active.command.status !== "running") return;
     if (event.type === "data") {
       const commandOutput = retainUtf8Tail(
         active.command.output,
@@ -418,7 +451,7 @@ export class SandboxTerminalSession {
     active.command.exitCode = exit.exitCode;
     active.command.signal = exit.signal;
     active.command.timedOut = exit.timedOut;
-    active.eventSubscription.dispose();
+    active.eventSubscription?.dispose();
     this.active = undefined;
     this.emit({
       type: "command-exited",
@@ -435,7 +468,7 @@ export class SandboxTerminalSession {
     active.command.finishedAt = this.now();
     active.command.error =
       error instanceof Error ? error.message : String(error);
-    active.eventSubscription.dispose();
+    active.eventSubscription?.dispose();
     this.active = undefined;
     this.emit({
       type: "command-failed",

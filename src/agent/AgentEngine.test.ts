@@ -402,6 +402,97 @@ describe("AgentEngine", () => {
     });
   });
 
+  describe("parallel tool dispatch", () => {
+    it("runs adjacent safe calls concurrently without crossing ordered barriers", async () => {
+      const toolCalls = [
+        { id: "read-before-a", name: "read", input: {} },
+        { id: "read-before-b", name: "read", input: {} },
+        { id: "write-barrier", name: "write", input: {} },
+        { id: "read-after-a", name: "read", input: {} },
+        { id: "read-after-b", name: "read", input: {} },
+      ];
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCount += 1;
+        if (streamCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: toolCalls.map((call) => ({
+              type: "tool_use" as const,
+              ...call,
+            })),
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const releases = new Map<string, () => void>();
+      const gates = new Map(
+        toolCalls.map((call) => [
+          call.id,
+          new Promise<void>((resolve) => releases.set(call.id, resolve)),
+        ]),
+      );
+      const started: string[] = [];
+      const session = await makeSession();
+      session.addUserMessage("run an ordered mixed batch");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "read",
+            description: "read",
+            input_schema: { type: "object" },
+          },
+          {
+            name: "write",
+            description: "write",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: (name) => name === "read",
+        executeTool: async (request) => {
+          started.push(request.context.toolCallId ?? request.name);
+          await gates.get(request.context.toolCallId ?? "");
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+      });
+
+      const run = collectEvents(engine.run(session));
+      await vi.waitFor(() =>
+        expect(started).toEqual(["read-before-a", "read-before-b"]),
+      );
+      releases.get("read-before-a")?.();
+      releases.get("read-before-b")?.();
+      await vi.waitFor(() =>
+        expect(started).toEqual([
+          "read-before-a",
+          "read-before-b",
+          "write-barrier",
+        ]),
+      );
+      releases.get("write-barrier")?.();
+      await vi.waitFor(() =>
+        expect(started).toEqual([
+          "read-before-a",
+          "read-before-b",
+          "write-barrier",
+          "read-after-a",
+          "read-after-b",
+        ]),
+      );
+      releases.get("read-after-a")?.();
+      releases.get("read-after-b")?.();
+      await expect(run).resolves.toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "done" })]),
+      );
+    });
+  });
+
   describe("mode switch turn boundary", () => {
     it("stops current turn after successful switch_mode and skips trailing non-read-only tools", async () => {
       const streamCalls: StreamRequest[] = [];
@@ -1915,6 +2006,70 @@ describe("AgentEngine", () => {
     });
   });
 
+  describe("reasoning effort normalization", () => {
+    it("downgrades an unsupported effort to the model default and logs it once", async () => {
+      const capabilities: ModelCapabilities = {
+        ...TEST_CAPABILITIES,
+        supportsThinking: true,
+        reasoningEfforts: ["none", "low", "medium", "high"],
+        defaultReasoningEffort: "medium",
+      };
+      const provider = {
+        ...makeMockProvider(),
+        getCapabilities: () => capabilities,
+      };
+      const session = await makeSession();
+      session.reasoningEffort = "max";
+      session.addUserMessage("hello");
+      const logs: string[] = [];
+      const engine = new AgentEngine(makeRegistry(provider), (msg) =>
+        logs.push(msg),
+      );
+
+      const events = await collectEvents(engine.run(session));
+
+      const apiRequest = events.find((e) => e.type === "api_request");
+      expect(apiRequest).toMatchObject({
+        type: "api_request",
+        reasoningEffort: "medium",
+      });
+      expect(logs.filter((msg) => msg.includes("reasoning effort"))).toEqual([
+        `[agent] reasoning effort "max" is not supported by ${TEST_MODEL}; sending "medium" instead`,
+      ]);
+      expect(session.reasoningEffort).toBe("max");
+    });
+
+    it("does not log when the selected effort is supported", async () => {
+      const capabilities: ModelCapabilities = {
+        ...TEST_CAPABILITIES,
+        supportsThinking: true,
+        reasoningEfforts: ["none", "low", "medium", "high", "max"],
+      };
+      const provider = {
+        ...makeMockProvider(),
+        getCapabilities: () => capabilities,
+      };
+      const session = await makeSession();
+      session.reasoningEffort = "max";
+      session.addUserMessage("hello");
+      const logs: string[] = [];
+      const engine = new AgentEngine(makeRegistry(provider), (msg) =>
+        logs.push(msg),
+      );
+
+      const events = await collectEvents(engine.run(session));
+
+      const apiRequest = events.find((e) => e.type === "api_request");
+      expect(apiRequest).toMatchObject({
+        type: "api_request",
+        reasoningEffort: "max",
+      });
+      expect(logs.filter((msg) => msg.includes("reasoning effort"))).toEqual(
+        [],
+      );
+    });
+  });
+
   describe("token accounting", () => {
     it("reports api_request inputTokens as uncached + cache_read + cache_creation", async () => {
       const provider = makeMockProvider(
@@ -2064,6 +2219,7 @@ describe("AgentEngine", () => {
             settings: {
               searchBackend: "native",
               fetchBackend: "disabled",
+              nativeSearchMode: "cached",
               allowedDomains: [],
               blockedDomains: [],
               maxSearchUsesPerTurn: 5,
@@ -3356,6 +3512,68 @@ describe("AgentEngine", () => {
         expect((error as { error?: string }).error).toContain(
           "connection timed out",
         );
+      } finally {
+        backoffSpy.mockRestore();
+      }
+    });
+
+    it("aborts and retries a stream that stays transport-active but never yields events", async () => {
+      let attempts = 0;
+      const requestSignals: AbortSignal[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        attempts += 1;
+        if (request.signal) requestSignals.push(request.signal);
+        // Warm-but-dead stream: keepalive bytes flow, but no parsed events
+        // ever arrive. Before the no-progress watchdog this hung forever.
+        const heartbeat = setInterval(() => {
+          request.onTransportActivity?.({
+            kind: "body",
+            at: Date.now(),
+            bytes: 1,
+          });
+        }, 2);
+        try {
+          await new Promise((_, reject) => {
+            request.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("request aborted")),
+              { once: true },
+            );
+          });
+        } finally {
+          clearInterval(heartbeat);
+        }
+        yield { type: "done" };
+      };
+      const backoffSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((fn: TimerHandler) => {
+          if (typeof fn === "function") fn();
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        });
+
+      try {
+        const session = await makeSession();
+        session.addUserMessage("hello");
+        const engine = new AgentEngine(makeRegistry(provider));
+
+        const events = await collectEvents(
+          engine.run(session, { providerNoProgressTimeoutMs: 10 }),
+        );
+        const error = events.find((event) => event.type === "error");
+
+        // Transport activity classifies these as stream failures:
+        // 1 initial attempt + MAX_STREAM_RETRIES (5).
+        expect(attempts).toBe(6);
+        expect(requestSignals.every((signal) => signal.aborted)).toBe(true);
+        expect(error).toEqual(
+          expect.objectContaining({
+            type: "error",
+            retryable: true,
+          }),
+        );
+        expect((error as { error?: string }).error).toContain("no progress");
       } finally {
         backoffSpy.mockRestore();
       }

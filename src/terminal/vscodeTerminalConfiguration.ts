@@ -116,17 +116,36 @@ export function readVscodeTerminalConfigurationSnapshot(
   };
 }
 
+export function resolveVscodeTerminalFontFamily(
+  fontFamily: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return `${fontFamily}, monospace${platform === "darwin" ? ", AppleBraille" : ""}`;
+}
+
+function normalizeMultiLinePasteWarning(
+  value: unknown,
+): "auto" | "always" | "never" {
+  if (value === "auto" || value === "always" || value === "never") return value;
+  if (typeof value === "boolean") return value ? "auto" : "never";
+  return "auto";
+}
+
 export function readVscodeTerminalSurfaceConfiguration(): TerminalSurfaceConfiguration {
   const terminal = vscode.workspace.getConfiguration("terminal.integrated");
+  const editor = vscode.workspace.getConfiguration("editor");
   const select = <T>(key: string): T | undefined => terminal.get<T>(key);
+  const terminalFontFamily = select<string>("fontFamily")?.trim();
+  const editorFontFamily = editor.get<string>("fontFamily")?.trim();
+  const selectedFontFamily =
+    terminalFontFamily || editorFontFamily || "monospace";
+  const fontFamily = resolveVscodeTerminalFontFamily(selectedFontFamily);
   const fontSize = select<number>("fontSize");
   const lineHeight = select<number>("lineHeight");
   const letterSpacing = select<number>("letterSpacing");
   const scrollback = select<number>("scrollback");
   return {
-    ...(select<string>("fontFamily")?.trim()
-      ? { fontFamily: select<string>("fontFamily")!.trim() }
-      : {}),
+    ...(fontFamily ? { fontFamily } : {}),
     ...(fontSize !== undefined && Number.isFinite(fontSize) && fontSize > 0
       ? { fontSize }
       : {}),
@@ -149,9 +168,11 @@ export function readVscodeTerminalSurfaceConfiguration(): TerminalSurfaceConfigu
       ? { cursorBlink: select<boolean>("cursorBlinking") }
       : {}),
     screenReaderMode:
-      vscode.workspace
-        .getConfiguration("editor")
-        .get<"auto" | "off" | "on">("accessibilitySupport", "auto") === "on",
+      editor.get<"auto" | "off" | "on">("accessibilitySupport", "auto") ===
+      "on",
+    multiLinePasteWarning: normalizeMultiLinePasteWarning(
+      select<unknown>("enableMultiLinePasteWarning"),
+    ),
     scrollback:
       scrollback !== undefined && Number.isFinite(scrollback) && scrollback > 0
         ? Math.floor(scrollback)

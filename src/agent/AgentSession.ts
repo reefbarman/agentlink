@@ -123,6 +123,10 @@ export class AgentSession {
    *  Reset to 0 when addUsage() receives fresh API data. */
   estimatedAccumulatedTokens = 0;
 
+  /** Per-source split of estimatedAccumulatedTokens (e.g. "tool:read_file"),
+   *  used to attribute large context-usage jumps in telemetry. Reset alongside it. */
+  estimatedAccumulationBySource: Record<string, number> = {};
+
   /** Active file path at session creation — used for subfolder AGENTS.md and hot-reload. */
   activeFilePath: string | undefined;
   /** Durable resource identity corresponding to activeFilePath. */
@@ -678,15 +682,19 @@ export class AgentSession {
     this.lastCacheReadTokens = cacheReadTokens;
     // Fresh API data replaces any local estimates.
     this.estimatedAccumulatedTokens = 0;
+    this.estimatedAccumulationBySource = {};
   }
 
   /**
    * Add an estimated token count for content added since the last API response
    * (e.g. tool results, user messages). Uses the same 4-bytes-per-token
-   * heuristic as Codex CLI.
+   * heuristic as Codex CLI. `source` labels the contribution for jump telemetry.
    */
-  addEstimatedTokens(chars: number): void {
-    this.estimatedAccumulatedTokens += estimateTokensFromChars(chars);
+  addEstimatedTokens(chars: number, source = "other"): void {
+    const tokens = estimateTokensFromChars(chars);
+    this.estimatedAccumulatedTokens += tokens;
+    this.estimatedAccumulationBySource[source] =
+      (this.estimatedAccumulationBySource[source] ?? 0) + tokens;
   }
 
   /**

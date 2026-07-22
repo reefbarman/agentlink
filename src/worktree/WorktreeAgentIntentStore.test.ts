@@ -65,6 +65,10 @@ describe("WorktreeAgentIntentStore", () => {
       prompt: "Do match",
       mode: "code",
       autoSubmit: true,
+      commandApprovalPolicy: "approve-for-me",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
     });
     await store.writeIntent({
       id: "other",
@@ -86,6 +90,10 @@ describe("WorktreeAgentIntentStore", () => {
       id: "match",
       prompt: "Do match",
       mode: "code",
+      commandApprovalPolicy: "approve-for-me",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
       consumedAt: 2000,
     });
     const raw = await readFile(

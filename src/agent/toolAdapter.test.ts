@@ -303,6 +303,7 @@ const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
   "web_fetch",
   "search_session_history",
   "read_session_excerpt",
+  "diagnose_activity",
   "codebase_search",
   "get_diagnostics",
   "get_hover",
@@ -318,9 +319,14 @@ const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
   "get_code_actions",
   "open_file",
   "show_notification",
+  "execute_command",
   "get_terminal_output",
   "ask_user",
   "find_mcp_tools",
+  "list_mcp_resources",
+  "read_mcp_resource",
+  "list_mcp_prompts",
+  "get_mcp_prompt",
   "spawn_background_agent",
   "get_background_status",
   "get_background_result",
@@ -361,18 +367,50 @@ describe("READ_ONLY_TOOLS", () => {
     expect(READ_ONLY_TOOLS.has("codebase_search")).toBe(true);
     expect(READ_ONLY_TOOLS.has("search_session_history")).toBe(true);
     expect(READ_ONLY_TOOLS.has("read_session_excerpt")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("diagnose_activity")).toBe(true);
     expect(READ_ONLY_TOOLS.has("web_search")).toBe(true);
     expect(READ_ONLY_TOOLS.has("web_fetch")).toBe(true);
   });
 
-  it("does not include write or terminal meta tools", () => {
+  it("includes commands but excludes write and terminal control tools", () => {
     expect(READ_ONLY_TOOLS.has("write_file")).toBe(false);
     expect(READ_ONLY_TOOLS.has("apply_diff")).toBe(false);
     expect(READ_ONLY_TOOLS.has("find_and_replace")).toBe(false);
-    expect(READ_ONLY_TOOLS.has("execute_command")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("execute_command")).toBe(true);
     expect(READ_ONLY_TOOLS.has("rename_symbol")).toBe(false);
     expect(READ_ONLY_TOOLS.has("switch_mode")).toBe(false);
     expect(READ_ONLY_TOOLS.has("set_task_status")).toBe(false);
+  });
+
+  it("uses per-tool MCP parallel safety for direct and deferred calls", () => {
+    const isToolParallelSafe = vi.fn(
+      (serverName: string, toolName: string) =>
+        serverName === "parallel-server" || toolName === "annotated-read",
+    );
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      mcpHub: { isToolParallelSafe } as any,
+    });
+
+    expect(runtime.isParallelSafe("parallel-server__search", {})).toBe(true);
+    expect(runtime.isParallelSafe("serial-server__search", {})).toBe(false);
+    expect(runtime.isParallelSafe("serial-server__annotated-read", {})).toBe(
+      true,
+    );
+    expect(
+      runtime.isParallelSafe("call_mcp_tool", {
+        server: "parallel-server",
+        tool: "search",
+        input: {},
+      }),
+    ).toBe(true);
+    expect(
+      runtime.isParallelSafe("call_mcp_tool", {
+        server: "serial-server",
+        tool: "annotated-read",
+        input: {},
+      }),
+    ).toBe(true);
   });
 });
 
@@ -392,6 +430,23 @@ describe("getAgentTools", () => {
       expect(tool.input_schema).toBeDefined();
       expect(tool.input_schema.type).toBe("object");
     }
+  });
+
+  it("defines present_images as an approval-free session image selector", () => {
+    const tool = getAgentTools().find(
+      (candidate) => candidate.name === "present_images",
+    );
+    expect(tool).toBeDefined();
+    expect(tool?.description).toContain("main chat transcript");
+    expect(tool?.input_schema.properties).toHaveProperty("image_ids");
+    expect(tool?.input_schema.properties).toHaveProperty("use_recent_images");
+    expect(tool?.input_schema.required).toBeUndefined();
+    expect(TOOL_CAPABILITIES.present_images).toMatchObject({
+      cluster: "media",
+      sideEffect: "control",
+      requiresApproval: "never",
+      parallelSafe: false,
+    });
   });
 
   it("reuses static native JSON schemas without caching MCP definitions", () => {
@@ -502,7 +557,7 @@ describe("getAgentTools", () => {
     }
   });
 
-  it("does not advertise sandbox capability expansion before B5", () => {
+  it("advertises rule-aware native escalation only on full execute_command profiles", () => {
     const commandTools = BUILT_IN_MODES.flatMap((mode) => {
       const command = getAgentTools(mode).find(
         (tool) => tool.name === "execute_command",
@@ -510,12 +565,32 @@ describe("getAgentTools", () => {
       return command ? [command] : [];
     });
 
-    expect(commandTools.length).toBeGreaterThan(0);
-    for (const command of commandTools) {
-      expect(command.input_schema.properties).not.toHaveProperty(
+    const fullCommandTools = commandTools.filter((command) =>
+      Object.hasOwn(
+        command.input_schema.properties ?? {},
         "sandbox_permissions",
-      );
+      ),
+    );
+    expect(fullCommandTools.length).toBeGreaterThan(0);
+    for (const command of fullCommandTools) {
+      expect(
+        command.input_schema.properties?.sandbox_permissions,
+      ).toMatchObject({
+        enum: ["use_default", "require_managed_network", "require_escalated"],
+      });
+      expect(command.description).toContain("command approval rules");
+      expect(command.description).toContain("when no rule matches");
     }
+
+    const readOnlyCommand = getAgentTools(
+      undefined,
+      undefined,
+      true,
+      "readonly-research",
+    ).find((tool) => tool.name === "execute_command");
+    expect(readOnlyCommand?.input_schema.properties).not.toHaveProperty(
+      "sandbox_permissions",
+    );
   });
 
   it("keeps compose out of background, restrictive profile, and skill catalogs", () => {
@@ -578,6 +653,7 @@ describe("getAgentTools", () => {
     expect(names).toContain("get_diagnostics");
     expect(names).toContain("search_session_history");
     expect(names).toContain("read_session_excerpt");
+    expect(names).toContain("diagnose_activity");
     expect(names).toContain("set_task_status");
   });
 
@@ -828,6 +904,23 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("call_mcp_tool");
     expect(names).not.toContain("ddg-search__search");
     expect(names).not.toContain("ddg-search__fetch_content");
+  });
+
+  it("gives worktree setup read-only inspection without write tools", () => {
+    const tools = getAgentTools(
+      BUILT_IN_MODES[2],
+      ddgMcpTools,
+      true,
+      "worktree-setup",
+    );
+    const names = tools.map((tool) => tool.name);
+
+    expect(names).toContain("read_file");
+    expect(names).toContain("execute_command");
+    expect(names).not.toContain("ask_user");
+    expect(names).not.toContain("write_file");
+    expect(names).not.toContain("start_worktree_agent");
+    expect(names).not.toContain("spawn_background_agent");
   });
 
   it("restricts normal tools to the active skill allowed-tools allowlist", () => {
@@ -1223,6 +1316,38 @@ describe("spawn_background_agent tool", () => {
         ],
       }),
     );
+  });
+
+  it("dispatches present_images with images from the current session", async () => {
+    const result = await dispatchToolCall(
+      "present_images",
+      { use_recent_images: 1 },
+      {
+        ...mockCtx,
+        getSessionImages: () => [
+          {
+            id: "image_1",
+            name: "screenshot.png",
+            mimeType: "image/png",
+            base64: "screenshot-data",
+            messageIndex: 2,
+            imageIndex: 0,
+          },
+        ],
+      },
+    );
+
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"status":"presented"'),
+      }),
+      {
+        type: "image",
+        data: "screenshot-data",
+        mimeType: "image/png",
+      },
+    ]);
   });
 
   it("dispatches structured request and returns structured result", async () => {
@@ -1725,6 +1850,36 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("dispatches current-session diagnostic queries to the captured provider", async () => {
+    const diagnose = vi.fn(() => ({
+      sessionId: "session-1",
+      eventCount: 1,
+      recordedEventCount: 1,
+      traceTruncated: false,
+      filters: { toolName: "write_file", limit: 3 },
+      evidence: [],
+    }));
+    const result = await dispatchToolCall(
+      "diagnose_activity",
+      { tool_name: "write_file", limit: 3 },
+      {
+        ...mockCtx,
+        sessionActivityDiagnosticsProvider: { diagnose },
+      },
+    );
+
+    expect(diagnose).toHaveBeenCalledWith({
+      toolName: "write_file",
+      path: undefined,
+      toolCallId: undefined,
+      limit: 3,
+    });
+    const text = result.content.find((entry) => entry.type === "text")?.text;
+    expect(JSON.parse(text ?? "{}")).toMatchObject({
+      sessionId: "session-1",
+    });
+  });
+
   it("denies untrusted nested read paths without invoking the handler", async () => {
     const runtime = createAgentToolRuntime({
       ...mockCtx,
@@ -2173,6 +2328,7 @@ describe("dispatchToolCall", () => {
         getSymbolOutline: expect.any(Function),
         getDiagnosticsSummary: expect.any(Function),
       }),
+      undefined,
     );
     expect(result.content[0]).toMatchObject({
       type: "text",
@@ -2778,6 +2934,57 @@ describe("dispatchToolCall", () => {
         "preceding assistant text does not satisfy the context requirement",
       );
       expect(askUserTool?.input_schema.required).toEqual(["questions"]);
+    });
+
+    it("forwards pending recovery context through the production runtime", async () => {
+      const onQuestion = vi.fn().mockResolvedValue({
+        answers: { choice: "Provider fix" },
+        notes: {},
+      });
+      const pendingQuestionRecovery = {
+        schemaVersion: 1 as const,
+        assistantContent: [
+          {
+            type: "tool_use" as const,
+            id: "toolu-ask-1",
+            name: "ask_user",
+            input: {},
+          },
+        ],
+        toolUseId: "toolu-ask-1",
+        toolName: "ask_user" as const,
+        toolInput: {},
+      };
+      const runtime = createAgentToolRuntime({ ...mockCtx, onQuestion });
+
+      await runtime.executeTool({
+        name: "ask_user",
+        input: {
+          context: "Choose the implementation path.",
+          questions: [
+            {
+              id: "choice",
+              type: "multiple_choice",
+              question: "How should we proceed?",
+              options: ["Provider fix", "UI-only fix"],
+              recommended: "Provider fix",
+            },
+          ],
+        },
+        context: {
+          sessionId: "test-session",
+          mode: "code",
+          pendingQuestionRecovery,
+        },
+      });
+
+      expect(onQuestion).toHaveBeenCalledWith(
+        "Choose the implementation path.",
+        [expect.objectContaining({ id: "choice" })],
+        "test-session",
+        undefined,
+        pendingQuestionRecovery,
+      );
     });
 
     it("dispatches structured questions through userQuestionProvider when supplied", async () => {

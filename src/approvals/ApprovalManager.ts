@@ -8,14 +8,26 @@ import {
   createWorkspaceProjectId,
   type SessionProjectScope,
 } from "../core/workspaceProjects.js";
-import { scanShellLexWords } from "../util/shellLex.js";
+import type { WriteAuthorizationDecision } from "../core/capabilities/editReview.js";
 import type { ConfigStore } from "./ConfigStore.js";
 import { CommandRuleStore, type CommandRule } from "./CommandRuleStore.js";
+import { NetworkRuleStore, type NetworkRule } from "./NetworkRuleStore.js";
+import {
+  evaluateCommandRulePolicy,
+  type CommandRulePolicyEvaluation,
+  type MatchedCommandRule,
+} from "./commandRulePolicy.js";
+import {
+  evaluateNetworkRulePolicy,
+  type NetworkRuleDestination,
+  type NetworkRulePolicyEvaluation,
+} from "./networkRulePolicy.js";
 import { PathRuleStore, type PathRule } from "./PathRuleStore.js";
 import type { RuleScope } from "./ScopedRuleStore.js";
 import { WriteRuleStore } from "./WriteRuleStore.js";
 
 export type { CommandRule } from "./CommandRuleStore.js";
+export type { NetworkRule } from "./NetworkRuleStore.js";
 export type { PathRule } from "./PathRuleStore.js";
 export type { RuleScope } from "./ScopedRuleStore.js";
 
@@ -23,6 +35,7 @@ interface SessionState {
   writeApproved: boolean;
   agentWriteApproved: boolean;
   commandRules: CommandRule[];
+  networkRules: NetworkRule[];
   pathRules: PathRule[];
   writeRules: PathRule[];
   lastActivity: number;
@@ -57,6 +70,7 @@ export class ApprovalManager {
   private mcpApprovals = new Set<string>();
   private configStoreListener: vscode.Disposable;
   private commandRuleStore: CommandRuleStore;
+  private networkRuleStore: NetworkRuleStore;
   private pathRuleStore: PathRuleStore;
   private writeRuleStore: WriteRuleStore;
 
@@ -75,6 +89,7 @@ export class ApprovalManager {
       persist: () => this.persistSessions(),
     };
     this.commandRuleStore = new CommandRuleStore(configStore, sessionHost);
+    this.networkRuleStore = new NetworkRuleStore(configStore, sessionHost);
     this.pathRuleStore = new PathRuleStore(configStore, sessionHost);
     this.writeRuleStore = new WriteRuleStore(configStore, sessionHost);
     this.pruneExpiredSessions();
@@ -323,25 +338,44 @@ export class ApprovalManager {
   // --- Agent write approval (independent from MCP/sidebar path) ---
 
   isAgentWriteApproved(sessionId: string, filePath?: string): boolean {
+    return this.getAgentWriteAuthorization(sessionId, filePath).allowed;
+  }
+
+  getAgentWriteAuthorization(
+    sessionId: string,
+    filePath?: string,
+  ): WriteAuthorizationDecision {
     // Global blanket approval
     if (this.configStore.getGlobalConfig().agentWriteApproved) {
-      return true;
+      return {
+        allowed: true,
+        basis: "blanket_approval",
+        scope: "global",
+      };
     }
     // Project blanket approval follows the target file's owning workspace root.
     const projectConfig = this.getProjectConfig(sessionId, filePath);
     if (projectConfig?.agentWriteApproved) {
-      return true;
+      return {
+        allowed: true,
+        basis: "blanket_approval",
+        scope: "project",
+      };
     }
     // Session blanket approval
     const session = this.getSession(sessionId);
     if (session.agentWriteApproved) {
-      return true;
+      return {
+        allowed: true,
+        basis: "blanket_approval",
+        scope: "session",
+      };
     }
     // File-level checks (only when filePath provided)
     if (filePath) {
-      return this.isFileWriteApproved(sessionId, filePath);
+      return this.getFileWriteAuthorization(sessionId, filePath);
     }
-    return false;
+    return { allowed: false, basis: "none" };
   }
 
   setAgentWriteApproval(
@@ -403,6 +437,10 @@ export class ApprovalManager {
         ...destination.commandRules,
         ...source.commandRules,
       ]);
+      destination.networkRules = deduplicateRules([
+        ...(destination.networkRules ?? []),
+        ...(source.networkRules ?? []),
+      ]);
       destination.pathRules = deduplicateRules([
         ...(destination.pathRules ?? []),
         ...(source.pathRules ?? []),
@@ -427,52 +465,6 @@ export class ApprovalManager {
     this.sessions.delete(fromId);
     this.persistSessions();
     this._onDidChange.fire();
-  }
-
-  /** Snapshot all session-scoped approvals into an independently mutable child. */
-  inheritSessionApprovalState(
-    parentSessionId: string,
-    childSessionId: string,
-  ): void {
-    if (parentSessionId === childSessionId) return;
-
-    const parent = this.sessions.get(parentSessionId);
-    if (parent) {
-      const child = this.sessions.get(childSessionId) ?? this.newSession();
-      child.writeApproved ||= parent.writeApproved;
-      child.agentWriteApproved ||= parent.agentWriteApproved;
-      child.commandRules = deduplicateRules([
-        ...child.commandRules,
-        ...parent.commandRules,
-      ]);
-      child.pathRules = deduplicateRules([
-        ...(child.pathRules ?? []),
-        ...(parent.pathRules ?? []),
-      ]);
-      child.writeRules = deduplicateRules([
-        ...(child.writeRules ?? []),
-        ...(parent.writeRules ?? []),
-      ]);
-      child.lastActivity = Date.now();
-      this.sessions.set(childSessionId, child);
-      this.persistSessions();
-    }
-
-    const parentMcpPrefix = `${parentSessionId}:`;
-    const childMcpPrefix = `${childSessionId}:`;
-    let inheritedMcpApproval = false;
-    for (const approval of Array.from(this.mcpApprovals)) {
-      if (approval.startsWith(parentMcpPrefix)) {
-        this.mcpApprovals.add(
-          `${childMcpPrefix}${approval.slice(parentMcpPrefix.length)}`,
-        );
-        inheritedMcpApproval = true;
-      }
-    }
-
-    if (parent || inheritedMcpApproval) {
-      this._onDidChange.fire();
-    }
   }
 
   /** Reset session-level agent write approval for a single session (e.g. on mode switch). */
@@ -589,6 +581,13 @@ export class ApprovalManager {
   // --- File-level write approval ---
 
   isFileWriteApproved(sessionId: string, filePath: string): boolean {
+    return this.getFileWriteAuthorization(sessionId, filePath).allowed;
+  }
+
+  getFileWriteAuthorization(
+    sessionId: string,
+    filePath: string,
+  ): WriteAuthorizationDecision {
     const projectBinding = this.getProjectBinding(sessionId, filePath);
     const relPath = projectBinding
       ? this.getProjectRelativePath(projectBinding.rootPath, filePath)
@@ -599,25 +598,39 @@ export class ApprovalManager {
     const settingsPatterns = this.getProjectConfiguration(projectBinding).get<
       string[]
     >("writeRules", []);
-    if (
-      settingsPatterns.some((p) =>
-        candidates.some((c) =>
-          this.matchesPathRule(c, { pattern: p, mode: "glob" }),
-        ),
-      )
-    ) {
-      return true;
+    for (const pattern of settingsPatterns) {
+      const rule = { pattern, mode: "glob" as const };
+      if (
+        candidates.some((candidate) => this.matchesPathRule(candidate, rule))
+      ) {
+        return {
+          allowed: true,
+          basis: "settings_rule",
+          scope: "workspace_setting",
+          rule,
+        };
+      }
     }
 
     const rulesByScope = this.writeRuleStore.get(
       sessionId,
       projectBinding?.rootPath,
     );
-    return (["session", "project", "global"] as const).some((scope) =>
-      rulesByScope[scope].some((rule) =>
-        candidates.some((candidate) => this.matchesPathRule(candidate, rule)),
-      ),
-    );
+    for (const scope of ["session", "project", "global"] as const) {
+      for (const rule of rulesByScope[scope]) {
+        if (
+          candidates.some((candidate) => this.matchesPathRule(candidate, rule))
+        ) {
+          return {
+            allowed: true,
+            basis: "write_rule",
+            scope,
+            rule: { ...rule },
+          };
+        }
+      }
+    }
+    return { allowed: false, basis: "none" };
   }
 
   addWriteRule(
@@ -689,32 +702,69 @@ export class ApprovalManager {
   // --- Command approval ---
 
   isCommandApproved(sessionId: string, command: string, cwd?: string): boolean {
-    return this.findMatchingCommandRule(sessionId, command, cwd) !== null;
+    return this.evaluateCommandRules(sessionId, command, cwd)
+      .allSegmentsApprovedByRule;
   }
 
-  /**
-   * Find the first command rule that matches the given command.
-   * Returns the rule and its scope, or null if no match.
-   * Checks session → project → global (same priority as isCommandApproved).
-   */
+  evaluateCommandRules(
+    sessionId: string,
+    command: string,
+    cwd?: string,
+  ): CommandRulePolicyEvaluation {
+    return evaluateCommandRulePolicy(
+      this.commandRuleStore.get(sessionId, this.getProjectRoot(sessionId, cwd)),
+      command,
+    );
+  }
+
+  /** Returns the most restrictive matching rule, preserving scope/insertion order for ties. */
   findMatchingCommandRule(
     sessionId: string,
     command: string,
     cwd?: string,
-  ): { rule: CommandRule; scope: RuleScope } | null {
-    const trimmed = command.trim();
-
-    const rulesByScope = this.commandRuleStore.get(
-      sessionId,
-      this.getProjectRoot(sessionId, cwd),
+  ): MatchedCommandRule | null {
+    const evaluation = this.evaluateCommandRules(sessionId, command, cwd);
+    const matchingSegment = evaluation.segments.find(
+      (segment) => segment.decision === evaluation.decision,
     );
-    for (const scope of ["session", "project", "global"] as const) {
-      for (const rule of rulesByScope[scope]) {
-        if (this.matchesRule(trimmed, rule)) return { rule, scope };
-      }
-    }
+    return (
+      matchingSegment?.matches.find(
+        ({ rule }) => (rule.decision ?? "legacy_allow") === evaluation.decision,
+      ) ?? null
+    );
+  }
 
-    return null;
+  evaluateNetworkRules(
+    sessionId: string,
+    destination: NetworkRuleDestination,
+  ): NetworkRulePolicyEvaluation {
+    return evaluateNetworkRulePolicy(
+      this.networkRuleStore.get(sessionId, this.getProjectRoot(sessionId)),
+      destination,
+    );
+  }
+
+  addNetworkRule(
+    sessionId: string,
+    rule: NetworkRule,
+    scope: RuleScope,
+  ): boolean {
+    const added = this.networkRuleStore.add(
+      sessionId,
+      rule,
+      scope,
+      this.getProjectRoot(sessionId),
+    );
+    if (added) this._onDidChange.fire();
+    return added;
+  }
+
+  getNetworkRules(sessionId: string): {
+    session: NetworkRule[];
+    project: NetworkRule[];
+    global: NetworkRule[];
+  } {
+    return this.networkRuleStore.get(sessionId, this.getProjectRoot(sessionId));
   }
 
   addCommandRule(
@@ -740,6 +790,7 @@ export class ApprovalManager {
     newRule: CommandRule,
     scope: RuleScope,
     sessionId?: string,
+    oldRule?: Pick<CommandRule, "mode" | "decision">,
   ): void {
     if (
       this.commandRuleStore.edit(
@@ -748,6 +799,7 @@ export class ApprovalManager {
         scope,
         sessionId,
         this.getProjectRoot(sessionId),
+        oldRule ? { pattern: oldPattern, ...oldRule } : undefined,
       )
     ) {
       this._onDidChange.fire();
@@ -758,6 +810,7 @@ export class ApprovalManager {
     pattern: string,
     scope: RuleScope,
     sessionId?: string,
+    rule?: Pick<CommandRule, "mode" | "decision">,
   ): void {
     if (
       this.commandRuleStore.remove(
@@ -765,6 +818,7 @@ export class ApprovalManager {
         scope,
         sessionId,
         this.getProjectRoot(sessionId),
+        rule ? { pattern, ...rule } : undefined,
       )
     ) {
       this._onDidChange.fire();
@@ -800,6 +854,7 @@ export class ApprovalManager {
       writeApproved: s.writeApproved,
       agentWriteApproved: s.agentWriteApproved,
       commandRuleCount: s.commandRules.length,
+      networkRuleCount: (s.networkRules ?? []).length,
       pathRuleCount: (s.pathRules ?? []).length,
       writeRuleCount: (s.writeRules ?? []).length,
       lastActivity: s.lastActivity,
@@ -969,31 +1024,6 @@ export class ApprovalManager {
     );
   }
 
-  private matchesRule(command: string, rule: CommandRule): boolean {
-    try {
-      switch (rule.mode) {
-        case "exact":
-          return command === rule.pattern.trim();
-        case "prefix": {
-          const patternWords = scanShellLexWords(rule.pattern.trim()).words;
-          const commandWords = scanShellLexWords(command).words;
-          return (
-            patternWords.length > 0 &&
-            patternWords.length <= commandWords.length &&
-            patternWords.every(
-              (word, index) => word.raw === commandWords[index]?.raw,
-            )
-          );
-        }
-        case "regex":
-          return new RegExp(rule.pattern).test(command);
-      }
-    } catch {
-      // Invalid regex — treat as no match
-      return false;
-    }
-  }
-
   /** Get session state for reading. Returns an empty session if none exists (no side effect). */
   private getSession(sessionId: string): Readonly<SessionState> {
     return this.sessions.get(sessionId) ?? this.emptySession;
@@ -1027,6 +1057,7 @@ export class ApprovalManager {
         writeApproved: !!session.writeApproved,
         agentWriteApproved: !!session.agentWriteApproved,
         commandRules: [...(session.commandRules ?? [])],
+        networkRules: [...(session.networkRules ?? [])],
         pathRules: [...(session.pathRules ?? [])],
         writeRules: [...(session.writeRules ?? [])],
         lastActivity: session.lastActivity || Date.now(),
@@ -1046,6 +1077,7 @@ export class ApprovalManager {
     writeApproved: false,
     agentWriteApproved: false,
     commandRules: [],
+    networkRules: [],
     pathRules: [],
     writeRules: [],
     lastActivity: 0,
@@ -1056,6 +1088,7 @@ export class ApprovalManager {
       writeApproved: false,
       agentWriteApproved: false,
       commandRules: [],
+      networkRules: [],
       pathRules: [],
       writeRules: [],
       lastActivity: Date.now(),

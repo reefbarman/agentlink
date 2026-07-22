@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-export const SANDBOX_BEHAVIOR_ATTESTATION_VERSION = "sandbox-behavior-v1";
+export const SANDBOX_BEHAVIOR_ATTESTATION_VERSION = "sandbox-behavior-v2";
 export const DEFAULT_SANDBOX_BEHAVIOR_PROBE_TIMEOUT_MS = 15_000;
 export const DEFAULT_SANDBOX_BEHAVIOR_PROBE_MAX_OUTPUT_BYTES = 256 * 1024;
 
@@ -35,7 +35,7 @@ export interface SandboxBehaviorHelperLifecycleCheckResult {
 export interface SandboxBehaviorWorkspaceConfinementCheckResult {
   workspaceCreateAllowed: boolean;
   workspaceModifyAllowed: boolean;
-  outsideReadDenied: boolean;
+  outsideReadAllowed: boolean;
   outsideWriteDenied: boolean;
 }
 
@@ -47,17 +47,20 @@ export interface SandboxBehaviorProtectedMetadataCheckResult {
 }
 
 export interface SandboxBehaviorProcessInheritanceCheckResult {
-  childOutsideAccessDenied: boolean;
+  childOutsideReadAllowed: boolean;
   grandchildProtectedAccessDenied: boolean;
   ownedProcessGroupCleaned: boolean;
 }
 
 export interface SandboxBehaviorPrivateEnvironmentCheckResult {
-  homeIsPrivate: boolean;
-  tmpIsPrivate: boolean;
+  homeMatchesHost: boolean;
+  hostHomeReadAllowed: boolean;
+  hostHomeWriteDenied: boolean;
+  hostTmpEnvironmentMatched: boolean;
+  hostTmpWriteAllowed: boolean;
+  slashTmpWriteAllowed: boolean;
   cacheIsPrivate: boolean;
-  hostSentinelAbsent: boolean;
-  realHomeCredentialUnreadable: boolean;
+  credentialEnvironmentInherited: boolean;
 }
 
 export interface SandboxBehaviorBlockedNetworkCheckResult {
@@ -336,7 +339,7 @@ function checkFailureCode(
     !hasExplicitTrueFields(checks.workspaceConfinement, [
       "workspaceCreateAllowed",
       "workspaceModifyAllowed",
-      "outsideReadDenied",
+      "outsideReadAllowed",
       "outsideWriteDenied",
     ])
   ) {
@@ -354,7 +357,7 @@ function checkFailureCode(
   }
   if (
     !hasExplicitTrueFields(checks.processInheritance, [
-      "childOutsideAccessDenied",
+      "childOutsideReadAllowed",
       "grandchildProtectedAccessDenied",
       "ownedProcessGroupCleaned",
     ])
@@ -366,11 +369,14 @@ function checkFailureCode(
   }
   if (
     !hasExplicitTrueFields(checks.privateEnvironment, [
-      "homeIsPrivate",
-      "tmpIsPrivate",
+      "homeMatchesHost",
+      "hostHomeReadAllowed",
+      "hostHomeWriteDenied",
+      "hostTmpEnvironmentMatched",
+      "hostTmpWriteAllowed",
+      "slashTmpWriteAllowed",
       "cacheIsPrivate",
-      "hostSentinelAbsent",
-      "realHomeCredentialUnreadable",
+      "credentialEnvironmentInherited",
     ])
   ) {
     return "private_environment_failed";

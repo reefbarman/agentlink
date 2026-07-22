@@ -13,8 +13,10 @@ import type { TerminalRendererCallbacks } from "./terminalWebviewController.js";
 import {
   detectTerminalHttpLinks,
   interceptTerminalInputTransfer,
+  registerReplayResponseSuppression,
   registerTerminalOscDefenses,
   SUPPRESSED_TERMINAL_OSC_HANDLERS,
+  terminalCursorKeySequence,
   XTERM_ADDON_OSC_HANDLERS,
   XTERM_CORE_OSC_HANDLERS,
   xtermRendererFactory,
@@ -203,6 +205,105 @@ describe("terminal OSC defenses", () => {
 });
 
 describe("xtermRendererFactory", () => {
+  it("encodes normal and application cursor Up and Down sequences", () => {
+    expect(terminalCursorKeySequence("ArrowUp", false)).toBe("\x1b[A");
+    expect(terminalCursorKeySequence("ArrowDown", false)).toBe("\x1b[B");
+    expect(terminalCursorKeySequence("ArrowUp", true)).toBe("\x1bOA");
+    expect(terminalCursorKeySequence("ArrowDown", true)).toBe("\x1bOB");
+    expect(terminalCursorKeySequence("ArrowLeft", false)).toBeUndefined();
+  });
+
+  it("forwards Up and Down arrow key sequences from xterm", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        matches: false,
+        media: "",
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(() => true),
+      })),
+    );
+    const rendererCallbacks = callbacks();
+    const renderer = xtermRendererFactory.create(
+      { scrollback: 1000 },
+      rendererCallbacks,
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    renderer.open(container);
+    const textarea = container.querySelector("textarea");
+    if (!(textarea instanceof HTMLTextAreaElement)) {
+      throw new Error("expected xterm textarea");
+    }
+    vi.mocked(rendererCallbacks.onData).mockClear();
+    const keydown = (key: string, keyCode: number) => {
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(event, "keyCode", { value: keyCode });
+      Object.defineProperty(event, "which", { value: keyCode });
+      textarea.dispatchEvent(event);
+      return event;
+    };
+
+    const arrowUp = keydown("ArrowUp", 38);
+    const arrowDown = keydown("ArrowDown", 40);
+
+    expect(arrowUp.defaultPrevented).toBe(true);
+    expect(arrowDown.defaultPrevented).toBe(true);
+    expect(rendererCallbacks.onData).toHaveBeenCalledTimes(2);
+    expect(["\x1b[A", "\x1bOA"]).toContain(
+      vi.mocked(rendererCallbacks.onData).mock.calls[0]?.[0],
+    );
+    expect(["\x1b[B", "\x1bOB"]).toContain(
+      vi.mocked(rendererCallbacks.onData).mock.calls[1]?.[0],
+    );
+    renderer.dispose();
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it("suppresses color queries only while replay is active", async () => {
+    const terminal = new Terminal();
+    const colorHandler = vi.fn(() => true);
+    terminal.parser.registerOscHandler(11, colorHandler);
+    const query = "\x1b]11;?\x1b\\";
+
+    const suppression = registerReplayResponseSuppression(terminal);
+    await writeTerminal(terminal, query);
+    await writeTerminal(terminal, "\x1b]11;#112233;?\x1b\\");
+    expect(colorHandler).not.toHaveBeenCalled();
+
+    await writeTerminal(terminal, "\x1b]11;#112233\x1b\\");
+    expect(colorHandler).toHaveBeenCalledOnce();
+
+    suppression.dispose();
+    await writeTerminal(terminal, query);
+    expect(colorHandler).toHaveBeenCalledTimes(2);
+    terminal.dispose();
+  });
+
+  it("suppresses indexed queries in mixed OSC 4 replay commands", async () => {
+    const terminal = new Terminal();
+    const colorHandler = vi.fn(() => true);
+    terminal.parser.registerOscHandler(4, colorHandler);
+    const suppression = registerReplayResponseSuppression(terminal);
+
+    await writeTerminal(terminal, "\x1b]4;1;#112233;2;?\x1b\\");
+    expect(colorHandler).not.toHaveBeenCalled();
+
+    await writeTerminal(terminal, "\x1b]4;1;#112233;2;#445566\x1b\\");
+    expect(colorHandler).toHaveBeenCalledOnce();
+    suppression.dispose();
+    terminal.dispose();
+  });
+
   it("registers the stable http link provider and disposes it with the renderer", () => {
     let provider: ILinkProvider | undefined;
     const dispose = vi.fn();

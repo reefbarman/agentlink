@@ -971,12 +971,50 @@ function TextBlock({
   );
 }
 
+function extractStandaloneFencedCode(text: string): string | null {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  let openingIndex = 0;
+  while (openingIndex < lines.length && lines[openingIndex]?.trim() === "") {
+    openingIndex++;
+  }
+
+  const opening = lines[openingIndex]?.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+  if (!opening) return null;
+
+  const fence = opening[1]!;
+  if (fence[0] === "`" && opening[2]?.includes("`")) return null;
+
+  for (
+    let closingIndex = openingIndex + 1;
+    closingIndex < lines.length;
+    closingIndex++
+  ) {
+    const closing = lines[closingIndex]?.match(/^ {0,3}(`+|~+)[ \t]*$/)?.[1];
+    if (
+      closing === undefined ||
+      closing[0] !== fence[0] ||
+      closing.length < fence.length
+    ) {
+      continue;
+    }
+
+    if (lines.slice(closingIndex + 1).some((line) => line.trim() !== "")) {
+      return null;
+    }
+    return lines.slice(openingIndex + 1, closingIndex).join("\n");
+  }
+
+  return null;
+}
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  const standaloneCode = extractStandaloneFencedCode(text);
+  const clipboardText = standaloneCode ?? text;
 
   const handleCopy = useCallback(() => {
     navigator.clipboard
-      ?.writeText(text)
+      ?.writeText(clipboardText)
       .then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
@@ -985,13 +1023,19 @@ function CopyButton({ text }: { text: string }) {
         // Clipboard can be unavailable or reject (e.g. denied permission).
         // Don't surface an unhandled rejection for a copy button.
       });
-  }, [text]);
+  }, [clipboardText]);
 
   return (
     <button
       class={`copy-button ${copied ? "copied" : ""}`}
       onClick={handleCopy}
-      title={copied ? "Copied!" : "Copy as Markdown"}
+      title={
+        copied
+          ? "Copied!"
+          : standaloneCode !== null
+            ? "Copy code block"
+            : "Copy as Markdown"
+      }
     >
       <i class={`codicon codicon-${copied ? "check" : "copy"}`} />
     </button>

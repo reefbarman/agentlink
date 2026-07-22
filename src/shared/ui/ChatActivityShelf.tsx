@@ -60,6 +60,10 @@ function findMaximumHeight(shelf: HTMLElement): number {
 interface ChatActivityShelfProps {
   children: ComponentChildren;
   className?: string;
+  /** Identity of urgent content that should be revealed when it first appears. */
+  revealKey?: string | number | null;
+  /** Minimum usable shelf height while revealing urgent content. */
+  revealMinHeight?: number;
 }
 
 /**
@@ -70,15 +74,24 @@ interface ChatActivityShelfProps {
 export function ChatActivityShelf({
   children,
   className,
+  revealKey = null,
+  revealMinHeight,
 }: ChatActivityShelfProps) {
   const shelfRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
+  const lastRevealRef = useRef<{
+    key: string | number;
+    minHeight: number;
+  } | null>(null);
   const [maxHeight, setMaxHeight] = useState<number | null>(readStoredHeight);
+  const [revealedHeight, setRevealedHeight] = useState<number | null>(null);
   const [resizing, setResizing] = useState(false);
 
   const resizeTo = useCallback((height: number) => {
     const shelf = shelfRef.current;
     if (!shelf) return;
+    setRevealedHeight(null);
     setMaxHeight(
       clampChatActivityShelfHeight(height, findMaximumHeight(shelf)),
     );
@@ -98,14 +111,80 @@ export function ChatActivityShelf({
   }, [maxHeight]);
 
   useEffect(() => {
-    const handleWindowResize = () => {
+    const content = contentRef.current;
+    if (!content || typeof MutationObserver === "undefined") return;
+
+    const observer = new MutationObserver(() => {
+      // A manual size is a useful short-lived preference, but it must not keep
+      // newly added or updated activity hidden. Return to the responsive cap
+      // on the first subsequent content change; the content can then choose
+      // its natural height and scroll only once it reaches that cap.
       if (maxHeight === null) return;
-      resizeTo(maxHeight);
+      setMaxHeight(null);
+      storeHeight(null);
+    });
+    observer.observe(content, {
+      attributes: true,
+      attributeFilter: [
+        "aria-busy",
+        "aria-expanded",
+        "aria-hidden",
+        "class",
+        "hidden",
+        "open",
+      ],
+      childList: true,
+      subtree: true,
+    });
+    return () => observer.disconnect();
+  }, [maxHeight]);
+
+  useEffect(() => {
+    if (revealKey === null || revealKey === undefined || !revealMinHeight) {
+      lastRevealRef.current = null;
+      setRevealedHeight(null);
+      return;
+    }
+    const lastReveal = lastRevealRef.current;
+    if (
+      lastReveal?.key === revealKey &&
+      lastReveal.minHeight >= revealMinHeight
+    ) {
+      return;
+    }
+    lastRevealRef.current = { key: revealKey, minHeight: revealMinHeight };
+
+    const shelf = shelfRef.current;
+    if (!shelf) return;
+    const required = clampChatActivityShelfHeight(
+      revealMinHeight,
+      findMaximumHeight(shelf),
+    );
+    const renderedHeight = shelf.getBoundingClientRect().height;
+    const configuredHeight = maxHeight ?? window.innerHeight / 2;
+    if (Math.max(renderedHeight, configuredHeight) < required) {
+      setRevealedHeight(required);
+    }
+  }, [maxHeight, revealKey, revealMinHeight]);
+
+  useEffect(() => {
+    const handleWindowResize = () => {
+      const shelf = shelfRef.current;
+      if (!shelf) return;
+      const maximum = findMaximumHeight(shelf);
+      if (maxHeight !== null) {
+        setMaxHeight(clampChatActivityShelfHeight(maxHeight, maximum));
+      }
+      setRevealedHeight((current) =>
+        current === null
+          ? null
+          : clampChatActivityShelfHeight(current, maximum),
+      );
     };
     handleWindowResize();
     window.addEventListener("resize", handleWindowResize);
     return () => window.removeEventListener("resize", handleWindowResize);
-  }, [maxHeight, resizeTo]);
+  }, [maxHeight]);
 
   const handleResizeStart = useCallback(
     (event: MouseEvent) => {
@@ -157,9 +236,12 @@ export function ChatActivityShelf({
 
   const resetHeight = useCallback(() => {
     stopResize();
+    setRevealedHeight(null);
     setMaxHeight(null);
     storeHeight(null);
   }, [stopResize]);
+
+  const effectiveMaxHeight = revealedHeight ?? maxHeight;
 
   return (
     <div
@@ -167,7 +249,10 @@ export function ChatActivityShelf({
       ref={shelfRef}
       style={
         {
-          maxHeight: maxHeight === null ? DEFAULT_MAX_HEIGHT : `${maxHeight}px`,
+          maxHeight:
+            effectiveMaxHeight === null
+              ? DEFAULT_MAX_HEIGHT
+              : `${effectiveMaxHeight}px`,
         } as JSX.CSSProperties
       }
     >
@@ -177,7 +262,7 @@ export function ChatActivityShelf({
         aria-valuemax={Math.max(MIN_HEIGHT, window.innerHeight)}
         aria-valuemin={MIN_HEIGHT}
         aria-valuenow={Math.round(
-          maxHeight ??
+          effectiveMaxHeight ??
             shelfRef.current?.getBoundingClientRect().height ??
             MIN_HEIGHT,
         )}
@@ -193,7 +278,9 @@ export function ChatActivityShelf({
         tabIndex={0}
         title="Drag to resize the Chat Activity Shelf; double-click to reset"
       />
-      <div class="chat-activity-shelf-content">{children}</div>
+      <div class="chat-activity-shelf-content" ref={contentRef}>
+        {children}
+      </div>
     </div>
   );
 }

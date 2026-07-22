@@ -796,29 +796,42 @@ export function createVscodeRenameSymbolProvider(
 export function createVscodeWriteApprovalPolicyProvider(
   approvalManager: ApprovalManager,
 ): WriteApprovalPolicyProvider {
-  return {
-    canAutoApprove(query: WriteApprovalQuery) {
-      const masterBypass = getConfiguredMasterBypass();
-      const isArchitectPlanFile =
-        query.mode === "architect" &&
-        query.inWorkspace &&
-        query.relativePath.startsWith("plans/");
-      const isProtectedMemoryPath = isMemoryProtectedPath(query.absolutePath);
+  const getAuthorization = (query: WriteApprovalQuery) => {
+    const masterBypass = getConfiguredMasterBypass();
+    const isArchitectPlanFile =
+      query.mode === "architect" &&
+      query.inWorkspace &&
+      query.relativePath.startsWith("plans/");
+    const isProtectedMemoryPath = isMemoryProtectedPath(query.absolutePath);
 
-      return (
-        !isProtectedMemoryPath &&
-        (masterBypass ||
-          isArchitectPlanFile ||
-          (query.inWorkspace
-            ? approvalManager.isAgentWriteApproved(
-                query.sessionId,
-                query.absolutePath,
-              )
-            : approvalManager.isFileWriteApproved(
-                query.sessionId,
-                query.absolutePath,
-              )))
-      );
+    if (isProtectedMemoryPath) {
+      return {
+        allowed: false,
+        basis: "none" as const,
+        reason: "protected_memory_path",
+      };
+    }
+    if (masterBypass) {
+      return { allowed: true, basis: "master_bypass" as const };
+    }
+    if (isArchitectPlanFile) {
+      return { allowed: true, basis: "architect_plan" as const };
+    }
+    return query.inWorkspace
+      ? approvalManager.getAgentWriteAuthorization(
+          query.sessionId,
+          query.absolutePath,
+        )
+      : approvalManager.getFileWriteAuthorization(
+          query.sessionId,
+          query.absolutePath,
+        );
+  };
+
+  return {
+    getAuthorization,
+    canAutoApprove(query: WriteApprovalQuery) {
+      return getAuthorization(query).allowed;
     },
 
     recordDecision(params) {

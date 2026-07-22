@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import {
   prepareProtectedRoots,
   revalidateProtectedRoots,
+  validateStructurallyProtectedRoots,
 } from "./sandbox-protected-roots.mjs";
 
 import { fileURLToPath } from "node:url";
@@ -10,7 +11,7 @@ import { realpath } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { startTrustedNetworkProxies } from "./sandbox-network-proxy.mjs";
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const MAX_CAPTURED_BYTES = 512 * 1024;
 const DEFAULT_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -30,6 +31,7 @@ const ALLOWED_TOP_LEVEL_KEYS = new Set([
   "filesystem",
   "network",
   "protectedRoots",
+  "structurallyProtectedRoots",
   "timeoutMs",
 ]);
 const ALLOWED_FILESYSTEM_KEYS = new Set([
@@ -158,9 +160,13 @@ function assertEnvironment(value) {
 }
 
 function isWithinAnyRoot(candidate, roots) {
-  return roots.some(
-    (root) => candidate === root || candidate.startsWith(`${root}${path.sep}`),
-  );
+  return roots.some((root) => {
+    const relative = path.relative(root, candidate);
+    return (
+      relative === "" ||
+      (!relative.startsWith("..") && !path.isAbsolute(relative))
+    );
+  });
 }
 
 export function parseSandboxRuntimeRequest(value) {
@@ -190,6 +196,10 @@ export function parseSandboxRuntimeRequest(value) {
   }
 
   const environment = assertEnvironment(request.environment);
+  const allowRead = assertPathArray(
+    filesystem.allowRead,
+    "filesystem.allowRead",
+  );
   const allowWrite = assertPathArray(
     filesystem.allowWrite,
     "filesystem.allowWrite",
@@ -202,14 +212,26 @@ export function parseSandboxRuntimeRequest(value) {
     request.protectedRoots ?? [],
     "request.protectedRoots",
   );
-  for (const protectedRoot of protectedRoots) {
-    if (!isWithinAnyRoot(protectedRoot, denyWrite)) {
-      throw new Error(
-        `protected root must be covered by filesystem.denyWrite: ${protectedRoot}`,
-      );
+  const structurallyProtectedRoots = assertPathArray(
+    request.structurallyProtectedRoots,
+    "request.structurallyProtectedRoots",
+  );
+  for (const [label, roots] of [
+    ["protected", protectedRoots],
+    ["structurally protected", structurallyProtectedRoots],
+  ]) {
+    for (const protectedRoot of roots) {
+      if (!isWithinAnyRoot(protectedRoot, denyWrite)) {
+        throw new Error(
+          `${label} root must be covered by filesystem.denyWrite: ${protectedRoot}`,
+        );
+      }
     }
   }
-  for (const name of ["HOME", "TMPDIR", "XDG_CACHE_HOME"]) {
+  if (!isWithinAnyRoot(environment.HOME, allowRead)) {
+    throw new Error("environment.HOME must be within filesystem.allowRead");
+  }
+  for (const name of ["TMPDIR", "XDG_CACHE_HOME"]) {
     const candidate = environment[name];
     if (candidate !== undefined && !isWithinAnyRoot(candidate, allowWrite)) {
       throw new Error(
@@ -227,7 +249,7 @@ export function parseSandboxRuntimeRequest(value) {
     environment,
     filesystem: {
       denyRead: assertPathArray(filesystem.denyRead, "filesystem.denyRead"),
-      allowRead: assertPathArray(filesystem.allowRead, "filesystem.allowRead"),
+      allowRead,
       allowWrite,
       denyWrite,
     },
@@ -235,6 +257,7 @@ export function parseSandboxRuntimeRequest(value) {
       allowedDomains: assertDomainArray(network.allowedDomains),
     },
     protectedRoots,
+    structurallyProtectedRoots,
     timeoutMs,
   };
 }
@@ -571,7 +594,11 @@ export async function runSandboxRuntimeRequest(request) {
     filesystem: {
       ...request.filesystem,
       denyWrite: [
-        ...new Set([...request.filesystem.denyWrite, ...protectedRoots.roots]),
+        ...new Set([
+          ...request.filesystem.denyWrite,
+          ...protectedRoots.roots,
+          ...request.structurallyProtectedRoots,
+        ]),
       ],
     },
     allowPty: false,
@@ -601,6 +628,9 @@ export async function runSandboxRuntimeRequest(request) {
     const launch = describeLaunch(authenticatedArgv, environment, cwd);
     if (request.operation === "describe") {
       await revalidateProtectedRoots(protectedRoots);
+      await validateStructurallyProtectedRoots(
+        request.structurallyProtectedRoots,
+      );
       return { ok: true, launch };
     }
     const result = await executeLaunch(
@@ -608,7 +638,12 @@ export async function runSandboxRuntimeRequest(request) {
       environment,
       cwd,
       request.timeoutMs,
-      () => revalidateProtectedRoots(protectedRoots),
+      async () => {
+        await revalidateProtectedRoots(protectedRoots);
+        await validateStructurallyProtectedRoots(
+          request.structurallyProtectedRoots,
+        );
+      },
     );
     return { ok: true, launch, result };
   } finally {

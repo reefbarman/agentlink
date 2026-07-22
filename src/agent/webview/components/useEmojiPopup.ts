@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "preact/hooks";
 
 import type { RefObject } from "preact";
+import { autosizeTextarea } from "../../../shared/composerBehavior";
 import {
   searchEmojiShortcodes,
   type EmojiSuggestion,
@@ -103,8 +104,7 @@ export function useEmojiPopup({
         textarea.focus();
         textarea.selectionStart = nextCursor;
         textarea.selectionEnd = nextCursor;
-        textarea.style.height = "auto";
-        textarea.style.height = textarea.scrollHeight + "px";
+        autosizeTextarea(textarea);
       });
     },
     [text, start, onTextChange, textareaRef, close],

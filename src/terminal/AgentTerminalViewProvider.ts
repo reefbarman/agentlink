@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 export interface AgentTerminalViewProviderOptions {
   controller: HostTerminalSurfaceController;
   extensionUri?: vscode.Uri;
+  log?(message: string): void;
   resolveCreateRequest?(
     request: Extract<TerminalSurfaceRequest, { type: "host-terminal/create" }>,
   ): PromiseLike<
@@ -41,7 +42,10 @@ export class AgentTerminalViewProvider
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: this.options.extensionUri
-        ? [vscode.Uri.joinPath(this.options.extensionUri, "dist")]
+        ? [
+            vscode.Uri.joinPath(this.options.extensionUri, "dist"),
+            vscode.Uri.joinPath(this.options.extensionUri, "media"),
+          ]
         : [],
     };
     webviewView.webview.html = this.options.extensionUri
@@ -71,6 +75,19 @@ export class AgentTerminalViewProvider
 
   isVisible(): boolean {
     return this.view?.visible === true;
+  }
+
+  revealPreservingFocus(): boolean {
+    void vscode.commands
+      .executeCommand(`${AgentTerminalViewProvider.viewType}.open`, {
+        preserveFocus: true,
+      })
+      .then(undefined, (error) =>
+        this.options.log?.(
+          `Unable to reveal AgentLink Terminal: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+    return true;
   }
 
   dispose(): void {
@@ -132,12 +149,16 @@ function renderTerminalHtml(
   const codiconStyleUri = webview.asWebviewUri(
     vscode.Uri.joinPath(extensionUri, "dist", "codicon.css"),
   );
+  const agentLinkTerminalIconUri = webview.asWebviewUri(
+    vscode.Uri.joinPath(extensionUri, "media", "agentlink-terminal.svg"),
+  );
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource}; img-src ${webview.cspSource};">
+  <style>:root { --agentlink-terminal-icon: url("${agentLinkTerminalIconUri}"); }</style>
   <link rel="stylesheet" href="${codiconStyleUri}">
   <link rel="stylesheet" href="${styleUri}">
   <title>AgentLink Terminal</title>

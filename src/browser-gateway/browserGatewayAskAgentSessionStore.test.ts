@@ -224,6 +224,84 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     );
   });
 
+  it("collects session images and promotes only explicit presentations", () => {
+    const store = createStore();
+    const credentialStatus: BrowserGatewayModelCredentialStatus = {
+      state: "ready",
+      providerId: "openai-codex",
+      method: "oauth",
+      modelScopes: ["chat"],
+      grantedByOwnerId: "vscode-owner",
+      grantedAt: 100,
+    };
+    store.appendUserMessage({
+      id: "user-reference",
+      text: "Use this reference",
+      now: 100,
+      media: {
+        images: [
+          { name: "reference.jpg", mimeType: "image/jpeg", base64: "first" },
+        ],
+        documents: [],
+      },
+    });
+    const assistant = store.startAssistantMessage({ now: 101 });
+    store.completeAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "screenshot-live",
+      toolName: "browser__screenshot",
+      input: {},
+      result: "[image]",
+      resultImages: [{ mimeType: "image/png", data: "second" }],
+      durationMs: 10,
+    });
+
+    expect(store.getSessionImages()).toEqual([
+      expect.objectContaining({
+        id: "image_1",
+        name: "reference.jpg",
+        mimeType: "image/jpeg",
+        base64: "first",
+      }),
+      expect.objectContaining({
+        id: "image_2",
+        name: "image_2.png",
+        mimeType: "image/png",
+        base64: "second",
+      }),
+    ]);
+
+    store.completeAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "present-live",
+      toolName: "present_images",
+      input: { image_ids: ["image_2"] },
+      result: JSON.stringify({ status: "presented", count: 1 }),
+      resultImages: [{ mimeType: "image/png", data: "second" }],
+      durationMs: 1,
+    });
+
+    const response = store.getOrCreate({
+      now: 200,
+      theme,
+      modelCredentialStatus: credentialStatus,
+    });
+    const projectedAssistant =
+      response.snapshot.session.foreground.projectedMessages.find(
+        (message) => message.id === assistant.id,
+      );
+    expect(projectedAssistant?.displayMedia).toEqual({
+      images: [
+        {
+          name: "presented-image-1.png",
+          mimeType: "image/png",
+          src: "data:image/png;base64,second",
+        },
+      ],
+      documents: [],
+    });
+  });
+
   it("keeps read_file images scoped to the tool result", () => {
     const store = createStore();
     const credentialStatus: BrowserGatewayModelCredentialStatus = {

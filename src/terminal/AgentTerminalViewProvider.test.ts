@@ -1,8 +1,10 @@
+import * as vscode from "vscode";
+
 import type {
   HostTerminalSurfaceConnection,
   HostTerminalSurfaceController,
 } from "./HostTerminalSurfaceController.js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentTerminalViewProvider } from "./AgentTerminalViewProvider.js";
 import { TERMINAL_SURFACE_PROTOCOL_VERSION } from "./terminalSurfaceProtocol.js";
@@ -10,6 +12,7 @@ import { TERMINAL_SURFACE_PROTOCOL_VERSION } from "./terminalSurfaceProtocol.js"
 function harness(
   options: {
     withAssets?: boolean;
+    log?: (message: string) => void;
     resolveCreateRequest?: ConstructorParameters<
       typeof AgentTerminalViewProvider
     >[0]["resolveCreateRequest"];
@@ -44,6 +47,7 @@ function harness(
   const view = {
     webview,
     visible: true,
+    show: vi.fn(),
     onDidDispose: vi.fn((listener: () => void) => {
       viewDisposeListener = listener;
       return { dispose: vi.fn() };
@@ -61,12 +65,14 @@ function harness(
         }
       : {}),
     resolveCreateRequest: options.resolveCreateRequest,
+    log: options.log,
   });
   provider.resolveWebviewView(view as never);
   return {
     provider,
     controller,
     connection,
+    view,
     webview,
     messageSubscription,
     send(message: unknown) {
@@ -82,6 +88,8 @@ function harness(
 }
 
 describe("AgentTerminalViewProvider", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("uses the stable terminal view ID", () => {
     expect(AgentTerminalViewProvider.viewType).toBe("agentLink.terminalView");
   });
@@ -99,13 +107,14 @@ describe("AgentTerminalViewProvider", () => {
     expect(test.controller.attach).toHaveBeenCalledTimes(1);
   });
 
-  it("loads only nonce-protected terminal assets from the extension dist root", () => {
+  it("loads nonce-protected terminal assets and the AgentLink media icon", () => {
     const test = harness({ withAssets: true });
 
     expect(test.webview.options).toEqual({
       enableScripts: true,
       localResourceRoots: [
         expect.objectContaining({ path: "/extension/dist" }),
+        expect.objectContaining({ path: "/extension/media" }),
       ],
     });
     expect(test.webview.html).toContain("default-src 'none'");
@@ -119,6 +128,10 @@ describe("AgentTerminalViewProvider", () => {
     expect(test.webview.html).toContain(
       'src="webview:/extension/dist/terminal.js"',
     );
+    expect(test.webview.html).toContain(
+      '--agentlink-terminal-icon: url("webview:/extension/media/agentlink-terminal.svg")',
+    );
+    expect(test.webview.html).toContain("img-src vscode-webview:");
     expect(test.webview.html).toMatch(
       /style-src vscode-webview: 'unsafe-inline'/,
     );
@@ -133,6 +146,49 @@ describe("AgentTerminalViewProvider", () => {
     expect(test.provider.isVisible()).toBe(false);
     test.disposeView();
     expect(test.provider.isVisible()).toBe(false);
+  });
+
+  it("opens the terminal view container without taking keyboard focus", () => {
+    const executeCommand = vi
+      .spyOn(vscode.commands, "executeCommand")
+      .mockResolvedValue(undefined);
+    const test = harness();
+    test.setVisible(false);
+
+    expect(test.provider.revealPreservingFocus()).toBe(true);
+    expect(executeCommand).toHaveBeenCalledWith("agentLink.terminalView.open", {
+      preserveFocus: true,
+    });
+    expect(test.view.show).not.toHaveBeenCalled();
+  });
+
+  it("opens an unresolved terminal view through its generated view command", () => {
+    const executeCommand = vi
+      .spyOn(vscode.commands, "executeCommand")
+      .mockResolvedValue(undefined);
+    const test = harness();
+    test.disposeView();
+
+    expect(test.provider.revealPreservingFocus()).toBe(true);
+    expect(executeCommand).toHaveBeenCalledWith("agentLink.terminalView.open", {
+      preserveFocus: true,
+    });
+    expect(test.view.show).not.toHaveBeenCalled();
+  });
+
+  it("logs terminal view reveal failures without rejecting", async () => {
+    const log = vi.fn();
+    vi.spyOn(vscode.commands, "executeCommand").mockRejectedValue(
+      new Error("view unavailable"),
+    );
+    const test = harness({ log });
+
+    expect(test.provider.revealPreservingFocus()).toBe(true);
+    await vi.waitFor(() => {
+      expect(log).toHaveBeenCalledWith(
+        "Unable to reveal AgentLink Terminal: view unavailable",
+      );
+    });
   });
 
   it("dispatches exact valid messages with the provider-owned connection", async () => {

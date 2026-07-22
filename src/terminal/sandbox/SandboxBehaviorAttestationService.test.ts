@@ -43,7 +43,7 @@ function passingChecks(): SandboxBehaviorSyntheticCheckResult {
     workspaceConfinement: {
       workspaceCreateAllowed: true,
       workspaceModifyAllowed: true,
-      outsideReadDenied: true,
+      outsideReadAllowed: true,
       outsideWriteDenied: true,
     },
     protectedMetadata: {
@@ -53,16 +53,19 @@ function passingChecks(): SandboxBehaviorSyntheticCheckResult {
       nonexistentDescendantWriteDenied: true,
     },
     processInheritance: {
-      childOutsideAccessDenied: true,
+      childOutsideReadAllowed: true,
       grandchildProtectedAccessDenied: true,
       ownedProcessGroupCleaned: true,
     },
     privateEnvironment: {
-      homeIsPrivate: true,
-      tmpIsPrivate: true,
+      homeMatchesHost: true,
+      hostHomeReadAllowed: true,
+      hostHomeWriteDenied: true,
+      hostTmpEnvironmentMatched: true,
+      hostTmpWriteAllowed: true,
+      slashTmpWriteAllowed: true,
       cacheIsPrivate: true,
-      hostSentinelAbsent: true,
-      realHomeCredentialUnreadable: true,
+      credentialEnvironmentInherited: true,
     },
     blockedNetwork: {
       loopbackConnectDenied: true,
@@ -163,16 +166,20 @@ describe("SandboxBehaviorAttestationService", () => {
     ["helperLifecycle", "readyObserved", "helper_protocol_failed"],
     [
       "workspaceConfinement",
-      "outsideReadDenied",
+      "outsideReadAllowed",
       "filesystem_confinement_failed",
     ],
     ["protectedMetadata", "symlinkWriteDenied", "protected_metadata_failed"],
     [
       "processInheritance",
-      "childOutsideAccessDenied",
+      "childOutsideReadAllowed",
       "process_inheritance_failed",
     ],
-    ["privateEnvironment", "hostSentinelAbsent", "private_environment_failed"],
+    [
+      "privateEnvironment",
+      "credentialEnvironmentInherited",
+      "private_environment_failed",
+    ],
     ["blockedNetwork", "loopbackFixtureUntouched", "network_block_failed"],
     [
       "denialEvidence",

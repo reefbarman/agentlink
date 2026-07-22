@@ -70,6 +70,10 @@ interface MetadataFile {
   activeContextResourceUri?: string;
   mode: string;
   model: string;
+  commandApprovalPolicy?: import("../core/capabilities/terminal.js").TerminalCommandApprovalPolicySnapshot;
+  approvalPolicy?: import("../core/capabilities/terminal.js").TerminalApprovalPolicy;
+  approvalReviewer?: import("../core/capabilities/terminal.js").TerminalApprovalReviewer;
+  executionPreset?: import("../core/capabilities/terminal.js").TerminalExecutionPreset;
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCacheReadTokens?: number;
@@ -453,6 +457,10 @@ export class SessionStore implements SessionPersistenceProvider {
     lastInputTokens: number;
     lastCacheReadTokens: number;
     reasoningEffort?: import("./providers/types.js").ReasoningEffort;
+    commandApprovalPolicy?: import("../core/capabilities/terminal.js").TerminalCommandApprovalPolicySnapshot;
+    approvalPolicy?: import("../core/capabilities/terminal.js").TerminalApprovalPolicy;
+    approvalReviewer?: import("../core/capabilities/terminal.js").TerminalApprovalReviewer;
+    executionPreset?: import("../core/capabilities/terminal.js").TerminalExecutionPreset;
     background?: boolean;
     projectScope?: SessionProjectScope;
     activeContextResourceUri?: string;
@@ -485,6 +493,10 @@ export class SessionStore implements SessionPersistenceProvider {
           activeContextResourceUri: session.activeContextResourceUri,
           mode: session.mode,
           model: session.model,
+          commandApprovalPolicy: session.commandApprovalPolicy,
+          approvalPolicy: session.approvalPolicy,
+          approvalReviewer: session.approvalReviewer,
+          executionPreset: session.executionPreset,
           totalInputTokens: session.totalInputTokens,
           totalOutputTokens: session.totalOutputTokens,
           totalCacheReadTokens: session.totalCacheReadTokens,
@@ -712,6 +724,10 @@ export class SessionStore implements SessionPersistenceProvider {
       activeContextResourceUri: file.activeContextResourceUri,
       mode: file.mode,
       model: file.model,
+      commandApprovalPolicy: file.commandApprovalPolicy,
+      approvalPolicy: file.approvalPolicy,
+      approvalReviewer: file.approvalReviewer,
+      executionPreset: file.executionPreset,
       totalInputTokens: file.totalInputTokens,
       totalOutputTokens: file.totalOutputTokens,
       totalCacheReadTokens: file.totalCacheReadTokens,
@@ -750,6 +766,10 @@ export class SessionStore implements SessionPersistenceProvider {
       activeContextResourceUri: metadata.activeContextResourceUri,
       mode: metadata.mode,
       model: metadata.model,
+      commandApprovalPolicy: metadata.commandApprovalPolicy,
+      approvalPolicy: metadata.approvalPolicy,
+      approvalReviewer: metadata.approvalReviewer,
+      executionPreset: metadata.executionPreset,
       totalInputTokens: metadata.totalInputTokens,
       totalOutputTokens: metadata.totalOutputTokens,
       totalCacheReadTokens: metadata.totalCacheReadTokens,

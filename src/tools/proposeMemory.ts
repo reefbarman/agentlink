@@ -46,6 +46,7 @@ function projectRoot(): string {
 async function resolveTarget(params: ProposeMemoryParams): Promise<Target> {
   return await resolveMemoryProposalTarget(params, {
     projectRoot: projectRoot(),
+    preferExistingCommandTarget: true,
   });
 }
 
@@ -286,9 +287,10 @@ export async function handleProposeMemory(
       decision = (await promise) as MemoryApprovalResponse;
       if (decision.decision === "reject") {
         return successResult({
-          status: "rejected",
+          status: "rejected_by_user",
           path: target.displayPath,
-          rejectionReason: decision.rejectionReason,
+          reason: decision.rejectionReason,
+          ...(decision.followUp && { follow_up: decision.followUp }),
         });
       }
     } else {
@@ -325,9 +327,9 @@ export async function handleProposeMemory(
       followUp = memoryDiffDecision.followUp;
       if (memoryDiffDecision.decision === "reject" || !decision) {
         return successResult({
-          status: "rejected",
+          status: "rejected_by_user",
           path: target.displayPath,
-          rejectionReason: memoryDiffDecision.rejectionReason,
+          reason: memoryDiffDecision.rejectionReason,
           ...(memoryDiffDecision.followUp && {
             follow_up: memoryDiffDecision.followUp,
           }),
@@ -370,9 +372,9 @@ export async function handleProposeMemory(
 
       if (diffDecision.decision === "reject") {
         return successResult({
-          status: "rejected",
+          status: "rejected_by_user",
           path: finalTarget.displayPath,
-          rejectionReason: diffDecision.rejectionReason,
+          reason: diffDecision.rejectionReason,
           ...(diffDecision.followUp && { follow_up: diffDecision.followUp }),
         });
       }

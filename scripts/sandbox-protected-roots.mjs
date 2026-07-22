@@ -101,6 +101,58 @@ export async function canonicalizeProtectedRoots(requestedRoots) {
   return canonicalRoots.sort();
 }
 
+async function validateStructuralNode(root, target, state, isRoot = false) {
+  if (state.entries >= MAX_PROTECTED_ENTRIES) {
+    throw new Error(
+      `structurally protected tree exceeds ${MAX_PROTECTED_ENTRIES} entries: ${root}`,
+    );
+  }
+  let stat;
+  try {
+    stat = await lstat(target, { bigint: true });
+  } catch (error) {
+    if (!isRoot && error?.code === "ENOENT") return;
+    throw error;
+  }
+  state.entries += 1;
+  if (stat.isSymbolicLink()) {
+    throw new Error(
+      `structurally protected tree contains a symbolic link: ${target}`,
+    );
+  }
+  if (stat.isFile() && stat.nlink !== 1n) {
+    throw new Error(
+      `structurally protected file has unexpected hard-link count ${stat.nlink}: ${target}`,
+    );
+  }
+  if (!stat.isDirectory() && !stat.isFile()) {
+    throw new Error(
+      `structurally protected tree contains an unsupported node: ${target}`,
+    );
+  }
+  if (!stat.isDirectory()) return;
+
+  let children;
+  try {
+    children = await readdir(target);
+  } catch (error) {
+    if (!isRoot && error?.code === "ENOENT") return;
+    throw error;
+  }
+  children.sort();
+  for (const child of children) {
+    await validateStructuralNode(root, path.join(target, child), state);
+  }
+}
+
+export async function validateStructurallyProtectedRoots(requestedRoots) {
+  const roots = await canonicalizeProtectedRoots(requestedRoots);
+  for (const root of roots) {
+    await validateStructuralNode(root, root, { entries: 0 }, true);
+  }
+  return roots;
+}
+
 async function snapshotNode(root, target, entries) {
   if (entries.length >= MAX_PROTECTED_ENTRIES) {
     throw new Error(
@@ -167,6 +219,36 @@ async function snapshotRoot(root) {
   return { root, entries };
 }
 
+function describeSnapshotChange(before, after) {
+  const beforeEntries = new Map(
+    before.entries.map((entry) => [entry.path, entry]),
+  );
+  const afterEntries = new Map(
+    after.entries.map((entry) => [entry.path, entry]),
+  );
+  const paths = [
+    ...new Set([...beforeEntries.keys(), ...afterEntries.keys()]),
+  ].sort((left, right) => {
+    if (left === ".") return 1;
+    if (right === ".") return -1;
+    return left.localeCompare(right);
+  });
+  for (const entryPath of paths) {
+    const beforeEntry = beforeEntries.get(entryPath);
+    const afterEntry = afterEntries.get(entryPath);
+    if (!beforeEntry) {
+      return { root: before.root, path: entryPath, change: "added" };
+    }
+    if (!afterEntry) {
+      return { root: before.root, path: entryPath, change: "removed" };
+    }
+    if (JSON.stringify(beforeEntry) !== JSON.stringify(afterEntry)) {
+      return { root: before.root, path: entryPath, change: "modified" };
+    }
+  }
+  return { root: before.root, path: ".", change: "unknown" };
+}
+
 export async function prepareProtectedRoots(requestedRoots) {
   const roots = await canonicalizeProtectedRoots(requestedRoots);
   const snapshots = [];
@@ -186,7 +268,19 @@ export async function revalidateProtectedRoots(prepared) {
     snapshots.push(await snapshotRoot(root));
   }
   if (JSON.stringify(snapshots) !== JSON.stringify(prepared.snapshots)) {
-    throw new Error("protected root contents changed before spawn");
+    const changed = prepared.snapshots
+      .map((snapshot, index) =>
+        describeSnapshotChange(snapshot, snapshots[index]),
+      )
+      .find(
+        (_, index) =>
+          JSON.stringify(prepared.snapshots[index]) !==
+          JSON.stringify(snapshots[index]),
+      );
+    const detail = changed
+      ? `: root=${changed.root} path=${changed.path} change=${changed.change}`
+      : "";
+    throw new Error(`protected root contents changed before spawn${detail}`);
   }
 }
 

@@ -18,6 +18,7 @@ import type {
   SessionSummary as WebviewSessionSummary,
   SlashCommandInfo,
   WebviewModelInfo,
+  WorktreeSetupConfig,
 } from "./webview/types.js";
 import { getConfiguredBaseThresholdForModel } from "./modelCondenseThresholds.js";
 import { getModeModelPreferences } from "./modeModelPreferences.js";
@@ -26,6 +27,7 @@ import type {
   AgentSessionManager,
   CheckpointRevertResult,
   PersistedSessionMutationResult,
+  SessionApprovalMode,
 } from "./AgentSessionManager.js";
 import type { AgentSession } from "./AgentSession.js";
 import type { SessionSummary } from "./SessionStore.js";
@@ -90,6 +92,7 @@ import {
   getMcpConfigFilePaths,
   getMcpConfigSources,
   loadAskAgentMcpConfigs,
+  loadWorkspaceMcpConfigs,
   mutateMcpConfigBatch,
   persistMcpToolApproval,
 } from "./mcpConfig.js";
@@ -107,6 +110,7 @@ import type {
 } from "../approvals/webview/types.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { AgentToolCallTracker } from "./AgentToolCallTracker.js";
+import { ContextJumpTracker } from "../telemetry/ContextJumpTracker.js";
 import {
   createBrowserForegroundSnapshot,
   type BrowserForegroundSnapshot,
@@ -123,6 +127,8 @@ import {
   detectQuestion,
   getQuestionDetectionMode,
 } from "./questionDetectionLlm.js";
+import { buildCommandRegexSuggestionPrompt } from "./commandRegexSuggestion.js";
+import { getApprovalResultAnnotation } from "./approvalResultAnnotation.js";
 import { detectQuestionFromAssistantText } from "./webview/questionDetection.js";
 import type { DetectedQuestion } from "../shared/questionDetection.js";
 import {
@@ -145,6 +151,11 @@ import {
   type SessionProjectScope,
 } from "../core/workspaceProjects.js";
 import { normalizeUserQuestionAttachments } from "../core/capabilities/sessionControl.js";
+import {
+  extractWorktreeSetupConfig,
+  parseWorktreeSlashCommand,
+  type WorktreeSlashDraft,
+} from "../worktree/worktreeSlashCommand.js";
 
 type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
 type RawDisplayImage = { name: string; mimeType: string; base64: string };
@@ -803,6 +814,49 @@ export type ExtensionToWebview =
       budget?: BtwBudget;
     }
   | {
+      type: "agentWorktreeSetupStarted";
+      requestId: string;
+      input: string;
+    }
+  | {
+      type: "agentWorktreeSetupProgress";
+      requestId: string;
+      answer: string;
+      tools: string[];
+      warnings: string[];
+      budget: BtwBudget;
+    }
+  | {
+      type: "agentWorktreeSetupAwaitingInput";
+      requestId: string;
+      answer: string;
+      conversation: Array<{ role: "user" | "assistant"; text: string }>;
+      tools: string[];
+      warnings: string[];
+      budget: BtwBudget;
+    }
+  | {
+      type: "agentWorktreeSetupReady";
+      requestId: string;
+      answer: string;
+      config: WorktreeSetupConfig;
+      tools: string[];
+      warnings: string[];
+      budget: BtwBudget;
+    }
+  | {
+      type: "agentWorktreeSetupLaunching";
+      requestId: string;
+      config: WorktreeSetupConfig;
+    }
+  | {
+      type: "agentWorktreeSetupResult";
+      requestId: string;
+      phase: "opened" | "rejected" | "cancelled" | "error";
+      message: string;
+      config?: WorktreeSetupConfig;
+    }
+  | {
       type: "agentPairingCode";
       pairingId: string;
       code: string;
@@ -841,6 +895,9 @@ export interface ChatState {
   };
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
   commandApprovalPolicy?: CommandApprovalPolicy;
+  approvalPolicy?: SessionApprovalMode["approvalPolicy"];
+  approvalReviewer?: SessionApprovalMode["approvalReviewer"];
+  executionPreset?: SessionApprovalMode["executionPreset"];
   configuredCommandApprovalPolicy?: Exclude<
     CommandApprovalPolicy,
     "approve-for-me"
@@ -998,10 +1055,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   >();
   private pendingForwardedApprovals = new Map<
     string,
-    (msg: DecisionMessage) => void
+    {
+      kind: ApprovalRequest["kind"];
+      respond: (msg: DecisionMessage) => boolean;
+    }
   >();
   /** In-flight /btw side questions, keyed by requestId, for cancellation. */
   private pendingBtwRequests = new Map<string, AbortController>();
+  private pendingWorktreeSetups = new Map<
+    string,
+    {
+      controller: AbortController;
+      config?: WorktreeSetupConfig;
+      draft?: WorktreeSlashDraft;
+      sourcePath?: string;
+      conversation: Array<{ role: "user" | "assistant"; text: string }>;
+      running?: boolean;
+    }
+  >();
   private activeApprovalRequests = new Map<string, ApprovalRequest>();
   private activeApprovalOrder: string[] = [];
   private visibleApprovalId: string | null = null;
@@ -1027,6 +1098,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private approvalManager: ApprovalManager | undefined;
   private approvalManagerListener: vscode.Disposable | undefined;
   private toolCallTracker: AgentToolCallTracker | undefined;
+  private contextJumpTracker: ContextJumpTracker | undefined;
   private anthropicProvider: ModelProvider | undefined;
   private notifyBrowserModelsChanged: (() => void) | undefined;
   private anthropicModelsRefreshInFlight: Promise<void> | undefined;
@@ -1140,6 +1212,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       handleMcpUrlElicitationComplete;
     this.projectMcpHubRegistry = new ProjectMcpHubRegistry({
       createHub: () => new McpClientHub(globalState, extensionVersion),
+      loadConfigs: () =>
+        loadWorkspaceMcpConfigs(this.getWorkspaceMcpProjects()),
       configureHub: (hub, scope) => {
         hub.onElicitation = handleMcpElicitation;
         hub.onUrlElicitation = handleMcpUrlElicitation;
@@ -1163,6 +1237,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this.pendingQuestions.clear();
     this.questionSessionIndex.clear();
+    for (const controller of this.pendingBtwRequests.values()) {
+      controller.abort();
+    }
+    this.pendingBtwRequests.clear();
+    for (const setup of this.pendingWorktreeSetups.values()) {
+      setup.controller.abort();
+    }
+    this.pendingWorktreeSetups.clear();
 
     for (const resolve of this.pendingApprovals.values()) {
       resolve("reject");
@@ -1170,13 +1252,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.pendingApprovals.clear();
     this.approvalSessionIndex.clear();
 
-    for (const [id, resolve] of this.pendingForwardedApprovals) {
+    for (const [id, pending] of this.pendingForwardedApprovals) {
       // Send a synthetic rejection so the approval chain unblocks.
-      resolve({
+      pending.respond({
         type: "decision",
         id,
+        approvalKind: pending.kind,
         decision: "reject",
-      } as import("../approvals/webview/types.js").DecisionMessage);
+      });
     }
     this.pendingForwardedApprovals.clear();
     this.activeApprovalRequests.clear();
@@ -1252,14 +1335,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   getBrowserCommandApprovalPolicy(): CommandApprovalPolicy {
+    return this.getBrowserSessionApprovalMode().commandApprovalPolicy;
+  }
+
+  getBrowserSessionApprovalMode(): SessionApprovalMode {
     const fgSessionId =
       this.sessionManager?.getForegroundSession()?.id ?? "agent";
     const configured = this.getConfiguredCommandApprovalPolicy();
     return (
-      this.sessionManager?.getCommandApprovalPolicy?.(
+      this.sessionManager?.getSessionApprovalMode?.(
         fgSessionId,
         configured,
-      ) ?? configured
+      ) ?? {
+        commandApprovalPolicy: configured,
+        approvalPolicy: "on-request",
+        approvalReviewer: "user",
+        executionPreset: "native-manual",
+      }
     );
   }
 
@@ -1285,6 +1377,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   setToolCallTracker(tracker: AgentToolCallTracker): void {
     this.toolCallTracker = tracker;
+  }
+
+  setContextUsageTelemetry(
+    telemetry: import("../telemetry/ContextUsageTelemetry.js").ContextUsageTelemetry,
+  ): void {
+    this.contextJumpTracker = new ContextJumpTracker((record) =>
+      telemetry.record(record),
+    );
   }
 
   setBrowserGatewayAdminClient(
@@ -1721,12 +1821,84 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private async refreshAllWorkspaceMcpConnections(options?: {
+    interactiveForNewServers?: boolean;
+  }): Promise<void> {
+    await Promise.all(
+      (this.sessionManager?.getWorkspaceProjects() ?? []).flatMap((project) => {
+        if (!project.rootPath || project.availability.status !== "available")
+          return [];
+        const projectScope = createSessionProjectScope(project);
+        this.bumpMcpConfigVersion(projectScope.projectId);
+        return [this.refreshMcpConnections(options, projectScope)];
+      }),
+    );
+  }
+
   private getCurrentProjectScope(): SessionProjectScope | undefined {
     return (
       this.sessionManager?.getForegroundSession()?.projectScope ??
       this.sessionManager?.getDefaultProjectScope?.() ??
       this.initialProjectScope
     );
+  }
+
+  private getMcpManagerProjects(): NonNullable<McpConfigSnapshot["projects"]> {
+    return (this.sessionManager?.getWorkspaceProjects() ?? []).map(
+      (project) => ({
+        projectId: project.id,
+        displayName: project.name,
+        availability:
+          project.availability.status === "available"
+            ? ("available" as const)
+            : ("unavailable" as const),
+      }),
+    );
+  }
+
+  private getWorkspaceMcpProjects(): Array<{
+    projectId: string;
+    displayName: string;
+    rootPath: string;
+  }> {
+    const projects = (
+      this.sessionManager?.getWorkspaceProjects() ?? []
+    ).flatMap((project) =>
+      project.availability.status === "available" && project.rootPath
+        ? [
+            {
+              projectId: project.id,
+              displayName: project.name,
+              rootPath: project.rootPath,
+            },
+          ]
+        : [],
+    );
+    if (projects.length > 0) return projects;
+    return (vscode.workspace.workspaceFolders ?? [])
+      .filter((folder) => folder.uri.scheme === "file")
+      .map((folder) => {
+        let rootPath = folder.uri.fsPath;
+        try {
+          rootPath = require("fs").realpathSync.native(rootPath);
+        } catch {
+          // Keep the URI-backed path; the config reader reports availability.
+        }
+        const workspaceFolderUri = folder.uri.toString();
+        return {
+          projectId: createWorkspaceProjectId(workspaceFolderUri),
+          displayName: folder.name,
+          rootPath,
+        };
+      });
+  }
+
+  private resolveMcpProjectScope(
+    projectId?: string,
+  ): SessionProjectScope | undefined {
+    return projectId
+      ? this.getAvailableBrowserProjectScope(projectId)
+      : this.getCurrentProjectScope();
   }
 
   private getCurrentProjectConfiguration():
@@ -1754,6 +1926,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       : undefined;
   }
 
+  private getProjectMcpStatusInfos(
+    hub: McpClientHub,
+    projectId: string,
+    infos = hub.getServerInfos(),
+  ): McpServerInfo[] {
+    return infos.flatMap((info) => {
+      const config = hub.getServerConfig(info.name);
+      if (
+        config?.sourceProjectIds &&
+        !config.sourceProjectIds.includes(projectId)
+      ) {
+        return [];
+      }
+      return [
+        {
+          ...info,
+          name: config?.sourceServerName ?? info.name,
+        },
+      ];
+    });
+  }
+
+  private resolveProjectMcpRuntimeServerName(
+    hub: McpClientHub,
+    projectId: string,
+    sourceServerName: string,
+  ): string | undefined {
+    return hub.getServerInfos().find((info) => {
+      const config = hub.getServerConfig(info.name);
+      return (
+        (config?.sourceServerName ?? info.name) === sourceServerName &&
+        (!config?.sourceProjectIds ||
+          config.sourceProjectIds.includes(projectId))
+      );
+    })?.name;
+  }
+
   private async refreshAskAgentMcpConnections(options?: {
     interactiveForNewServers?: boolean;
   }): Promise<void> {
@@ -1779,11 +1988,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       ? this.getCurrentProjectMcpHub(projectScope)
       : undefined,
   ): Promise<McpConfigSnapshot> {
-    const infos =
+    const rawInfos =
       statusInfos ??
       (profile === "ask-agent"
         ? (this.askAgentMcpHub?.getServerInfos() ?? [])
         : (mainHub ?? this.mcpHub).getServerInfos());
+    const infos =
+      profile === "main" && projectScope
+        ? this.getProjectMcpStatusInfos(
+            mainHub ?? this.mcpHub,
+            projectScope.projectId,
+            rawInfos,
+          )
+        : rawInfos;
     const projectRoot = projectScope?.rootPath ?? this.cwd;
     const sources =
       profile === "ask-agent"
@@ -1796,6 +2013,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     return {
       profile,
+      ...(profile === "main" && projectScope
+        ? {
+            project: {
+              projectId: projectScope.projectId,
+              displayName: projectScope.displayName,
+              availability: projectScope.rootPath
+                ? ("available" as const)
+                : ("unavailable" as const),
+            },
+            projects: this.getMcpManagerProjects(),
+          }
+        : {}),
       version:
         profile === "ask-agent"
           ? this.askAgentMcpConfigVersion
@@ -1840,17 +2069,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       (options.profile === "ask-agent"
         ? (this.askAgentMcpHub?.getServerInfos() ?? [])
         : (mainHub ?? this.mcpHub).getServerInfos());
+    const configSnapshot = await this.buildMcpConfigSnapshot(
+      options.profile,
+      infos,
+      projectScope,
+      mainHub,
+    );
     this.postMessage({
       type: "agentMcpStatus",
-      infos,
+      infos: configSnapshot.statusInfos,
       open: options.open,
       view: options.view,
-      configSnapshot: await this.buildMcpConfigSnapshot(
-        options.profile,
-        infos,
-        projectScope,
-        mainHub,
-      ),
+      configSnapshot,
     } as ExtensionToWebview);
   }
 
@@ -2014,9 +2244,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   public forwardApproval(
     request: ApprovalRequest,
-    respond: (msg: DecisionMessage) => void,
+    respond: (msg: DecisionMessage) => boolean,
   ): void {
-    this.pendingForwardedApprovals.set(request.id, respond);
+    this.pendingForwardedApprovals.set(request.id, {
+      kind: request.kind,
+      respond,
+    });
     this.showApprovalRequest(request);
   }
 
@@ -2029,6 +2262,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   public sendApprovalIdle(): void {
     this.publishVisibleApprovalOrIdle();
+  }
+
+  public cancelForwardedApproval(id: string): void {
+    this.pendingForwardedApprovals.delete(id);
+    this.clearApprovalRequest(id);
   }
 
   private showApprovalRequest(request: ApprovalRequest): void {
@@ -2065,62 +2303,49 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.uiPublisher.publishApprovalIdle();
   }
 
-  /**
-   * Ask the current foreground model to suggest a regex pattern for a command
-   * approval rule. Runs in a fresh one-shot context (no tools, no session history).
-   */
+  /** Ask the selected provider's fast model for a bounded, context-aware rule. */
   public async suggestRegexForCommand(args: {
     subCommand: string;
     fullCommand: string;
   }): Promise<string> {
     const fg = this.sessionManager?.getForegroundSession();
-    const model =
+    const foregroundModel =
       fg?.model ??
       this.sessionManager?.getConfig().model ??
       "claude-sonnet-4-6";
-    const provider = providerRegistry.tryResolveProvider(model);
+    const provider = providerRegistry.tryResolveProvider(foregroundModel);
     if (!provider) {
-      throw new Error(`No provider available for model "${model}"`);
+      throw new Error(`No provider available for model "${foregroundModel}"`);
     }
 
-    const systemPrompt = [
-      "You generate JavaScript regex patterns for command approval suggestions.",
-      "Given one concrete command, return a simple, reviewable regex that matches that command and useful variants for the same command shape.",
-      "For read-only file-oriented commands such as wc, cat, head, tail, ls, find, grep, rg, git diff/status/log/show, and test runners, generalize file/path/glob/query/test-name inputs. Example: `wc -l README.md package.json` should become a pattern for `wc -l` over one or more file/path/glob tokens, not only those exact two files.",
-      "Prefer readable regexes over exhaustive filename validation. Broad token patterns such as `[^\\s;&|><$`()'\"]+` are acceptable for path/glob-like arguments.",
-      "Preserve the command/program structure and fixed flags/subcommands. Generalize only obvious input positions such as paths, globs, branch names, package names, URLs, search queries, test filters, and numeric limits.",
-      "Avoid matching obvious shell-control syntax such as command separators, shell pipelines, command substitution, redirects, quotes, or newlines, but do not overfit. The user will review the suggestion before accepting it.",
-      "The regex must be fully anchored with ^ and $, must match a single command line, and must not rely on flags.",
-      "Use JavaScript/ECMAScript regex syntax. Do not include delimiters, flags, markdown, or explanation.",
-      "Respond with ONLY the regex pattern as a single line of plain text.",
-    ].join("\n");
-
-    const userPrompt = [
-      "Generate a limited-approval regex for this execute_command approval row.",
-      "",
-      "Full compound command:",
-      args.fullCommand,
-      "",
-      "Sub-command this rule will match:",
-      args.subCommand,
-      "",
-      "Return one anchored JavaScript regex pattern that matches the sub-command and useful variants with the same command shape.",
-    ].join("\n");
-
-    const result = await provider.complete({
-      model,
-      systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
-      maxTokens: 512,
-      temperature: 0,
-      reasoningEffort: "none",
-    });
+    const { systemPrompt, userPrompt, requiredVariants } =
+      await buildCommandRegexSuggestionPrompt({ ...args, session: fg });
+    const model = provider.condenseModel || foregroundModel;
+    const permit = await providerRegistry.requestScheduler.acquire(
+      provider.id,
+      "interactive",
+      fg?.abortSignal,
+    );
+    let result: Awaited<ReturnType<ModelProvider["complete"]>>;
+    try {
+      result = await provider.complete({
+        model,
+        systemPrompt,
+        messages: [{ role: "user", content: userPrompt }],
+        maxTokens: 384,
+        temperature: 0,
+        reasoningEffort: "none",
+        signal: fg?.abortSignal,
+      });
+    } finally {
+      permit.release();
+    }
 
     const pattern = extractRegexPattern(result.text);
     if (!pattern) {
       throw new Error("Model returned no usable regex");
     }
-    validateSuggestedCommandRegex(pattern, args.subCommand);
+    validateSuggestedCommandRegex(pattern, args.subCommand, requiredVariants);
     return pattern;
   }
 
@@ -2158,7 +2383,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   public requestApproval(
     request: {
-      kind: "mcp" | "write" | "rename" | "command" | "mode-switch" | "memory";
+      kind:
+        | "mcp"
+        | "write"
+        | "rename"
+        | "command"
+        | "mode-switch"
+        | "memory"
+        | "worktree";
       title: string;
       detail?: string;
       mcpServerName?: string;
@@ -2376,6 +2608,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           command: request.title,
           mcpDetail: request.detail,
         };
+      case "worktree":
+        return {
+          kind: "worktree",
+          id,
+          ...projectContext,
+          command: request.title,
+          detail: request.detail,
+          worktreeChoices: request.choices,
+        };
       default:
         return {
           kind: request.kind as ApprovalRequest["kind"],
@@ -2465,12 +2706,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public submitBrowserApprovalDecision(msg: {
     id: string;
+    approvalKind?: ApprovalRequest["kind"];
     decision?: string;
     editedCommand?: string;
     rejectionReason?: string;
     rulePattern?: string;
     ruleMode?: string;
-    rules?: Array<{ pattern: string; mode: string; scope: string }>;
+    rules?: Array<{
+      pattern: string;
+      mode: string;
+      decision?: "allow" | "prompt" | "forbidden";
+      scope: string;
+    }>;
     trustScope?: string;
     editedContent?: string;
     memoryTier?: import("../approvals/webview/types.js").MemoryTier;
@@ -2479,8 +2726,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     followUp?: string;
   }): boolean {
     const id = msg.id;
+    const activeRequest = this.activeApprovalRequests.get(id);
     const resolveInline = this.pendingApprovals.get(id);
     if (resolveInline) {
+      if (!activeRequest || msg.approvalKind !== activeRequest.kind)
+        return false;
       this.pendingApprovals.delete(id);
       resolveInline({
         decision: String(msg.decision ?? "reject"),
@@ -2497,13 +2747,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return true;
     }
 
-    const respond = this.pendingForwardedApprovals.get(id);
-    if (!respond) return false;
-    this.pendingForwardedApprovals.delete(id);
-    this.clearApprovalRequest(id);
+    const pending = this.pendingForwardedApprovals.get(id);
+    if (!pending || msg.approvalKind !== pending.kind) return false;
     const decision: DecisionMessage = {
       type: "decision",
       id,
+      approvalKind: msg.approvalKind,
       decision: String(msg.decision ?? "reject"),
       editedCommand: msg.editedCommand ?? undefined,
       rejectionReason: msg.rejectionReason ?? undefined,
@@ -2517,7 +2766,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       memoryName: msg.memoryName ?? undefined,
       followUp: msg.followUp ?? undefined,
     };
-    respond(decision);
+    const accepted = pending.respond(decision);
+    if (!accepted) return false;
+    this.pendingForwardedApprovals.delete(id);
+    this.clearApprovalRequest(id);
     return true;
   }
 
@@ -2794,7 +3046,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
             fg.id,
           ),
-          commandApprovalPolicy: this.getBrowserCommandApprovalPolicy(),
+          ...this.getBrowserSessionApprovalMode(),
           configuredCommandApprovalPolicy:
             this.getConfiguredCommandApprovalPolicy(),
         },
@@ -3327,6 +3579,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const settings = normalizeCoreWebAccessSettings({
       searchBackend: config.get("webAccess.searchBackend"),
       fetchBackend: config.get("webAccess.fetchBackend"),
+      nativeSearchMode: config.get("webAccess.nativeSearchMode"),
       allowedDomains: config.get("webAccess.allowedDomains"),
       blockedDomains: config.get("webAccess.blockedDomains"),
       maxSearchUsesPerTurn: config.get("webAccess.maxSearchUsesPerTurn"),
@@ -3344,25 +3597,49 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public submitBrowserAskAgentMcpTools(): {
     ok: boolean;
     tools: ReturnType<typeof getAgentTools>;
+    parallelSafeToolNames: string[];
+    parallelSafeServerNames: string[];
   } {
+    const parallelSafeServerNames =
+      this.askAgentMcpHub.getParallelToolCallServerNames();
+    const parallelSafeServers = new Set(parallelSafeServerNames);
+    const tools = getAgentTools(
+      BUILT_IN_MODES[0],
+      this.askAgentMcpHub.getToolDefs(),
+    ).filter(
+      (tool) =>
+        McpClientHub.isMcpTool(tool.name) ||
+        MCP_TOOL_BRIDGE_TOOL_NAMES.includes(tool.name),
+    );
     return {
       ok: true,
-      tools: getAgentTools(
-        BUILT_IN_MODES[0],
-        this.askAgentMcpHub.getToolDefs(),
-      ).filter(
-        (tool) =>
-          McpClientHub.isMcpTool(tool.name) ||
-          MCP_TOOL_BRIDGE_TOOL_NAMES.includes(tool.name),
-      ),
+      tools,
+      parallelSafeToolNames: tools
+        .filter((tool) => {
+          const separatorIndex = tool.name.indexOf("__");
+          return (
+            separatorIndex > 0 &&
+            parallelSafeServers.has(tool.name.slice(0, separatorIndex))
+          );
+        })
+        .map((tool) => tool.name),
+      parallelSafeServerNames,
     };
   }
 
   private async persistMcpServerDisabled(
     profile: McpManagerProfile,
     serverName: string,
+    projectScope = profile === "main"
+      ? this.getCurrentProjectScope()
+      : undefined,
   ): Promise<McpConfigMutationResult> {
-    const snapshot = await this.buildMcpConfigSnapshot(profile);
+    const snapshot = await this.buildMcpConfigSnapshot(
+      profile,
+      undefined,
+      projectScope,
+      this.getCurrentProjectMcpHub(projectScope),
+    );
     const entry = snapshot.entries.find(
       (candidate) => candidate.name === serverName,
     );
@@ -3381,6 +3658,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         operationId: randomUUID(),
         profile,
         scope,
+        ...(projectScope ? { projectId: projectScope.projectId } : {}),
         expectedRevision: snapshot.revision,
         operations: [
           {
@@ -3397,6 +3675,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public async submitBrowserMcpAction(
     serverName: string,
     action: "disable" | "reconnect" | "reauthenticate",
+    projectId?: string,
   ): Promise<{
     ok: boolean;
     infos?: ReturnType<McpClientHub["getServerInfos"]>;
@@ -3404,10 +3683,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     errors?: McpConfigMutationResult["errors"];
   }> {
     if (!serverName || !action) return { ok: false };
-    const projectScope = this.getCurrentProjectScope();
+    const projectScope = this.resolveMcpProjectScope(projectId);
+    if (!projectScope?.rootPath) return { ok: false };
     const hub = this.getCurrentProjectMcpHub(projectScope) ?? this.mcpHub;
+    const runtimeServerName = this.resolveProjectMcpRuntimeServerName(
+      hub,
+      projectScope.projectId,
+      serverName,
+    );
+    if (!runtimeServerName) return { ok: false };
     if (action === "disable") {
-      const result = await this.persistMcpServerDisabled("main", serverName);
+      const result = await this.persistMcpServerDisabled(
+        "main",
+        serverName,
+        projectScope,
+      );
       return {
         ok: result.ok,
         configSnapshot: result.configSnapshot,
@@ -3416,9 +3706,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       };
     }
     if (action === "reconnect") {
-      await hub.reconnectServer(serverName);
+      await hub.reconnectServer(runtimeServerName);
     } else {
-      await hub.reauthenticateServer(serverName);
+      await hub.reauthenticateServer(runtimeServerName);
     }
     const configSnapshot = await this.buildMcpConfigSnapshot(
       "main",
@@ -3436,9 +3726,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public async submitBrowserMcpConfigSnapshot(
     profile: McpManagerProfile,
+    projectId?: string,
   ): Promise<{ ok: true; configSnapshot: McpConfigSnapshot }> {
     const projectScope =
-      profile === "main" ? this.getCurrentProjectScope() : undefined;
+      profile === "main" ? this.resolveMcpProjectScope(projectId) : undefined;
     const mainHub = this.getCurrentProjectMcpHub(projectScope);
     return {
       ok: true,
@@ -3505,7 +3796,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       };
     }
     const projectScope =
-      mutation.profile === "main" ? this.getCurrentProjectScope() : undefined;
+      mutation.profile === "main"
+        ? this.resolveMcpProjectScope(mutation.projectId)
+        : undefined;
     const projectRoot = projectScope?.rootPath;
     if (mutation.profile === "main" && !projectRoot) {
       return {
@@ -3527,11 +3820,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         interactiveForNewServers: false,
       });
     } else {
-      this.bumpMcpConfigVersion(projectScope!.projectId);
-      await this.refreshMcpConnections(
-        { interactiveForNewServers: true },
-        projectScope,
-      );
+      await this.refreshAllWorkspaceMcpConnections({
+        interactiveForNewServers: true,
+      });
     }
     const configSnapshot = await this.buildMcpConfigSnapshot(
       mutation.profile,
@@ -3552,6 +3843,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public async submitBrowserMcpConfigServer(input: {
     profile: McpManagerProfile;
     scope: McpManagerScope;
+    projectId?: string;
     server: McpManagerServerDraft;
     expectedRevision?: string;
     operationId?: string;
@@ -3559,13 +3851,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }): Promise<McpConfigMutationResult> {
     const expectedRevision =
       input.expectedRevision ??
-      (await this.buildMcpConfigSnapshot(input.profile)).revision ??
+      (
+        await this.buildMcpConfigSnapshot(
+          input.profile,
+          undefined,
+          input.profile === "main"
+            ? this.resolveMcpProjectScope(input.projectId)
+            : undefined,
+        )
+      ).revision ??
       "";
     return this.submitMcpConfigMutation(
       {
         operationId: input.operationId ?? randomUUID(),
         profile: input.profile,
         scope: input.scope,
+        ...(input.projectId ? { projectId: input.projectId } : {}),
         expectedRevision,
         operations: [
           { kind: "upsert", server: input.server, conflictAction: "replace" },
@@ -3578,6 +3879,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public async submitBrowserMcpConfigRemove(input: {
     profile: McpManagerProfile;
     scope: McpManagerScope;
+    projectId?: string;
     serverName: string;
     expectedRevision?: string;
     operationId?: string;
@@ -3585,13 +3887,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }): Promise<McpConfigMutationResult> {
     const expectedRevision =
       input.expectedRevision ??
-      (await this.buildMcpConfigSnapshot(input.profile)).revision ??
+      (
+        await this.buildMcpConfigSnapshot(
+          input.profile,
+          undefined,
+          input.profile === "main"
+            ? this.resolveMcpProjectScope(input.projectId)
+            : undefined,
+        )
+      ).revision ??
       "";
     return this.submitMcpConfigMutation(
       {
         operationId: input.operationId ?? randomUUID(),
         profile: input.profile,
         scope: input.scope,
+        ...(input.projectId ? { projectId: input.projectId } : {}),
         expectedRevision,
         operations: [{ kind: "remove", serverName: input.serverName }],
       },
@@ -3602,10 +3913,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public async submitBrowserMcpConfigOpenRaw(input: {
     profile: McpManagerProfile;
     scope: McpManagerScope;
+    projectId?: string;
   }): Promise<{ ok: boolean; error?: string }> {
     try {
       const projectScope =
-        input.profile === "main" ? this.getCurrentProjectScope() : undefined;
+        input.profile === "main"
+          ? this.resolveMcpProjectScope(input.projectId)
+          : undefined;
       await this.openRawMcpConfig(input.profile, input.scope, projectScope);
       return { ok: true };
     } catch (err) {
@@ -3821,7 +4135,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
             fg.id,
           ),
-          commandApprovalPolicy: this.getBrowserCommandApprovalPolicy(),
+          ...this.getBrowserSessionApprovalMode(),
           configuredCommandApprovalPolicy:
             this.getConfiguredCommandApprovalPolicy(),
         },
@@ -3877,6 +4191,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
     }
     return accepted;
+  }
+
+  private pauseQueuedMessageInterjectionFromUi(
+    sessionId: string,
+    queueId: string,
+  ): void {
+    if (!sessionId || !queueId || !this.sessionManager) return;
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session) return;
+
+    session.clearPendingInterjectionIf(queueId);
+    this.applyProjectedAction({
+      type: "MARK_QUEUE_INTERJECTION_READY",
+      id: queueId,
+      ready: false,
+    });
+    this.postMessage({
+      type: "agentQueueInterjectionReady",
+      sessionId,
+      queueId,
+      ready: false,
+    });
   }
 
   public async submitBrowserSteerQueuedMessage(input: {
@@ -4208,11 +4544,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         void this.sendModesUpdate();
       }
       if (refreshMainMcp) {
-        this.bumpMcpConfigVersion(scope.projectId);
-        void this.refreshMcpConnections(
-          { interactiveForNewServers: true },
-          scope,
-        );
+        void this.refreshAllWorkspaceMcpConnections({
+          interactiveForNewServers: true,
+        });
       }
     };
     configWatcher.onDidChange(reloadConfig);
@@ -4230,16 +4564,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ),
         );
         const reloadGlobalMcp = () => {
-          for (const project of this.sessionManager?.getWorkspaceProjects() ??
-            []) {
-            if (!project.rootPath) continue;
-            const projectScope = createSessionProjectScope(project);
-            this.bumpMcpConfigVersion(projectScope.projectId);
-            void this.refreshMcpConnections(
-              { interactiveForNewServers: true },
-              projectScope,
-            );
-          }
+          void this.refreshAllWorkspaceMcpConnections({
+            interactiveForNewServers: true,
+          });
         };
         globalMcpWatcher.onDidChange(reloadGlobalMcp);
         globalMcpWatcher.onDidCreate(reloadGlobalMcp);
@@ -4828,7 +5155,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               ),
               agentWriteApproval:
                 this.approvalManager?.getAgentWriteApprovalState(fg.id),
-              commandApprovalPolicy: this.getBrowserCommandApprovalPolicy(),
+              ...this.getBrowserSessionApprovalMode(),
               configuredCommandApprovalPolicy:
                 this.getConfiguredCommandApprovalPolicy(),
             },
@@ -4949,6 +5276,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "agentPauseQueuedMessageInterjection": {
+        this.pauseQueuedMessageInterjectionFromUi(
+          msg.sessionId as string,
+          msg.queueId as string,
+        );
+        break;
+      }
+
       case "agentQueuedMessageCount": {
         // The webview reports its local (non-browser) send-queue size so
         // queued messages can take priority over the todo auto-continue.
@@ -4991,7 +5326,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 ),
                 agentWriteApproval:
                   this.approvalManager?.getAgentWriteApprovalState(fg.id),
-                commandApprovalPolicy: this.getBrowserCommandApprovalPolicy(),
+                ...this.getBrowserSessionApprovalMode(),
                 configuredCommandApprovalPolicy:
                   this.getConfiguredCommandApprovalPolicy(),
               },
@@ -5228,12 +5563,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const serverName = msg.serverName as string;
         const action = msg.action as "disable" | "reconnect" | "reauthenticate";
         if (!serverName || !action) break;
-        const projectScope = this.getCurrentProjectScope();
+        const projectScope = this.resolveMcpProjectScope(
+          typeof msg.projectId === "string" ? msg.projectId : undefined,
+        );
+        if (!projectScope?.rootPath) break;
         const hub = this.getCurrentProjectMcpHub(projectScope) ?? this.mcpHub;
+        const runtimeServerName = this.resolveProjectMcpRuntimeServerName(
+          hub,
+          projectScope.projectId,
+          serverName,
+        );
+        if (!runtimeServerName) break;
         if (action === "disable") {
           const result = await this.persistMcpServerDisabled(
             "main",
             serverName,
+            projectScope,
           );
           if (!result.ok) {
             vscode.window.showErrorMessage(
@@ -5241,9 +5586,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             );
           }
         } else if (action === "reconnect") {
-          await hub.reconnectServer(serverName);
+          await hub.reconnectServer(runtimeServerName);
         } else if (action === "reauthenticate") {
-          await hub.reauthenticateServer(serverName);
+          await hub.reauthenticateServer(runtimeServerName);
         }
         await this.postMcpManagerSnapshot({
           profile: "main",
@@ -5278,6 +5623,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const result = await this.submitBrowserMcpConfigServer({
           profile: (msg.profile as McpManagerProfile) ?? "main",
           scope: msg.scope as McpManagerScope,
+          projectId:
+            typeof msg.projectId === "string" ? msg.projectId : undefined,
           server: msg.server as McpManagerServerDraft,
           allowMainProfileMutation: true,
         });
@@ -5301,6 +5648,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const result = await this.submitBrowserMcpConfigRemove({
           profile: (msg.profile as McpManagerProfile) ?? "main",
           scope: msg.scope as McpManagerScope,
+          projectId:
+            typeof msg.projectId === "string" ? msg.projectId : undefined,
           serverName: String(msg.serverName ?? ""),
           allowMainProfileMutation: true,
         });
@@ -5324,7 +5673,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.openRawMcpConfig(
           (msg.profile as McpManagerProfile) ?? "main",
           msg.scope as McpManagerScope,
+          (msg.profile ?? "main") === "main"
+            ? this.resolveMcpProjectScope(
+                typeof msg.projectId === "string" ? msg.projectId : undefined,
+              )
+            : undefined,
         );
+        break;
+      }
+
+      case "agentMcpSelectProject": {
+        const projectScope = this.resolveMcpProjectScope(
+          typeof msg.projectId === "string" ? msg.projectId : undefined,
+        );
+        if (!projectScope?.rootPath) break;
+        if (msg.refresh === true) {
+          await this.refreshMcpConnections(undefined, projectScope);
+        }
+        await this.postMcpManagerSnapshot({
+          profile: "main",
+          open: true,
+          projectScope,
+          mainHub: this.getCurrentProjectMcpHub(projectScope),
+        });
         break;
       }
 
@@ -5363,6 +5734,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         this.submitBrowserApprovalDecision({
           id,
+          approvalKind: msg.approvalKind as ApprovalRequest["kind"] | undefined,
           decision: msg.decision as string | undefined,
           editedCommand: msg.editedCommand as string | undefined,
           rejectionReason: msg.rejectionReason as string | undefined,
@@ -5372,6 +5744,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             | Array<{
                 pattern: string;
                 mode: string;
+                decision?: "allow" | "prompt" | "forbidden";
                 scope: string;
               }>
             | undefined,
@@ -5541,7 +5914,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
         } else if (name === "mcp-refresh") {
           const projectScope = this.getCurrentProjectScope();
-          await this.refreshMcpConnections(undefined, projectScope);
+          await this.refreshAllWorkspaceMcpConnections();
           await this.postMcpManagerSnapshot({
             profile: "main",
             projectScope,
@@ -5553,6 +5926,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (question) {
             void this.handleBtwQuestion(question);
           }
+        } else if (name === "worktree") {
+          void this.handleWorktreeSlashCommand(String(msg.args ?? ""));
         } else if (name === "pair") {
           const sub = String(msg.args ?? "")
             .trim()
@@ -5577,6 +5952,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentBtwCancel": {
         const requestId = String(msg.requestId ?? "");
         if (requestId) this.cancelBtwQuestion(requestId);
+        break;
+      }
+
+      case "agentWorktreeSetupCancel": {
+        const requestId = String(msg.requestId ?? "");
+        if (requestId) this.cancelWorktreeSetup(requestId);
+        break;
+      }
+
+      case "agentWorktreeSetupReply": {
+        const requestId = String(msg.requestId ?? "");
+        const setup = this.pendingWorktreeSetups.get(requestId);
+        const text = String(msg.text ?? "").trim();
+        if (!setup || setup.running || !text) break;
+        setup.conversation.push({ role: "user", text });
+        setup.controller = new AbortController();
+        void this.runWorktreeSetupTurn(requestId);
+        break;
+      }
+
+      case "agentWorktreeSetupLaunch": {
+        const requestId = String(msg.requestId ?? "");
+        const autoSubmit = msg.autoSubmit !== false;
+        if (requestId)
+          void this.launchConfiguredWorktree(requestId, autoSubmit);
         break;
       }
 
@@ -6685,10 +7085,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     this.ensureProjectedForegroundSession(fg);
 
-    return createBrowserForegroundSnapshot(
-      fg.id,
-      this.projectedForegroundState,
-    );
+    return createBrowserForegroundSnapshot(fg.id, {
+      ...this.projectedForegroundState,
+      chatState: {
+        ...this.projectedForegroundState.chatState,
+        ...this.getBrowserSessionApprovalMode(),
+      },
+    });
   }
 
   public getBrowserMcpStatusInfos(): McpServerInfo[] {
@@ -6886,43 +7289,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (isBackground) {
           this.sendBgSessionsUpdateThrottled();
         }
-        // Emit user-visible annotation for follow-ups and user rejections.
-        // Tool results can be large (file reads, search output); only attempt
-        // the JSON parse when a marker substring is actually present so the
-        // common large-result case skips the parse entirely.
-        try {
-          if (
-            !resultText.includes("follow_up") &&
-            !resultText.includes("rejected_by_user")
-          ) {
-            break;
-          }
-          let parsed: { follow_up?: string; status?: string; reason?: string };
-          try {
-            parsed = JSON.parse(resultText);
-          } catch {
-            // MCP tool results carry the server-owned result in the first
-            // block(s) and the approval follow-up as a trailing JSON block —
-            // fall back to parsing just the last line.
-            parsed = JSON.parse(resultText.trimEnd().split("\n").pop() ?? "");
-          }
-          if (parsed.follow_up) {
-            this.postMessage({
-              type: "agentUserAnnotation",
-              sessionId,
-              text: parsed.follow_up,
-              badge: "follow-up",
-            });
-          } else if (parsed.status === "rejected_by_user" && parsed.reason) {
-            this.postMessage({
-              type: "agentUserAnnotation",
-              sessionId,
-              text: parsed.reason,
-              badge: "rejection",
-            });
-          }
-        } catch {
-          // result is not JSON — no annotation needed
+        const annotation = getApprovalResultAnnotation(resultText);
+        if (annotation) {
+          this.postMessage({
+            type: "agentUserAnnotation",
+            sessionId,
+            ...annotation,
+          });
         }
         break;
       }
@@ -6956,6 +7329,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           storeResponseState: event.storeResponseState,
           providerResponseId: event.providerResponseId,
           contextBreakdown: event.contextBreakdown,
+        });
+        this.contextJumpTracker?.onApiRequest(sessionId, {
+          model: event.model,
+          inputTokens: event.inputTokens,
+          cacheCreationTokens: event.cacheCreationTokens,
+          contextWindow: providerRegistry
+            .tryResolveProvider(event.model)
+            ?.getCapabilities(event.model).contextWindow,
+          accumulatedEstimatedTokens: event.accumulatedEstimatedTokens,
+          accumulatedBySource: event.accumulatedEstimatedTokensBySource,
+          systemPromptTokens: event.contextBreakdown?.prompt.estimatedTokens,
+          toolDefinitionTokens: event.contextBreakdown?.tools?.estimatedTokens,
         });
         break;
 
@@ -7020,6 +7405,49 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           validationWarnings: event.validationWarnings,
           metadata: event.metadata,
         });
+        {
+          const condensedSession = this.sessionManager?.getSession(sessionId);
+          if (condensedSession) {
+            this.contextJumpTracker?.onCondense(sessionId, {
+              model: condensedSession.model,
+              prevInputTokens: event.prevInputTokens,
+              newInputTokens: event.newInputTokens,
+              durationMs: condenseDurationMs,
+            });
+          }
+          // The context bar's budget snapshot (usedInputTokens) is pushed on
+          // send/steer/retry but not on condense, so without this refresh the
+          // bar keeps showing pre-condense usage until the next user message.
+          const fg = this.sessionManager?.getForegroundSession();
+          if (!isBackground && fg && fg.id === sessionId) {
+            const condenseThreshold = this.getConfiguredCondenseThreshold(
+              fg.model,
+            );
+            this.postMessage({
+              type: "stateUpdate",
+              state: {
+                sessionId: fg.id,
+                mode: fg.mode,
+                model: fg.model,
+                streaming:
+                  fg.status === "streaming" ||
+                  fg.status === "tool_executing" ||
+                  fg.status === "awaiting_approval",
+                condenseThreshold,
+                contextBudget: this.buildContextBudget(
+                  fg,
+                  fg.model,
+                  condenseThreshold,
+                ),
+                agentWriteApproval:
+                  this.approvalManager?.getAgentWriteApprovalState(fg.id),
+                ...this.getBrowserSessionApprovalMode(),
+                configuredCommandApprovalPolicy:
+                  this.getConfiguredCommandApprovalPolicy(),
+              },
+            });
+          }
+        }
         if (__DEV_BUILD__ && this.cwd) {
           this.writeCondenseDebug(sessionId, event).catch((err) => {
             this.log(`[agent] condense debug export failed: ${err}`);
@@ -7602,6 +8030,268 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.pendingBtwRequests.get(requestId)?.abort();
   }
 
+  private async handleWorktreeSlashCommand(rawArgs: string): Promise<void> {
+    for (const requestId of this.pendingWorktreeSetups.keys()) {
+      this.cancelWorktreeSetup(requestId);
+    }
+
+    const requestId = randomUUID();
+    const controller = new AbortController();
+    this.pendingWorktreeSetups.set(requestId, {
+      controller,
+      conversation: [],
+    });
+    this.postMessage({
+      type: "agentWorktreeSetupStarted",
+      requestId,
+      input: rawArgs.trim(),
+    } as ExtensionToWebview);
+
+    let parsed: ReturnType<typeof parseWorktreeSlashCommand>;
+    try {
+      parsed = parseWorktreeSlashCommand(rawArgs);
+    } catch (error) {
+      this.finishWorktreeSetup(requestId, "error", String(error));
+      return;
+    }
+
+    const foregroundScope =
+      this.sessionManager?.getForegroundSession()?.projectScope ??
+      this.sessionManager?.getDefaultProjectScope();
+    const sourcePath = foregroundScope?.rootPath;
+    if (!sourcePath) {
+      this.finishWorktreeSetup(
+        requestId,
+        "error",
+        "Open an available local workspace folder before starting a worktree.",
+      );
+      return;
+    }
+    const setup = this.pendingWorktreeSetups.get(requestId)!;
+    setup.draft = parsed.draft;
+    setup.sourcePath = sourcePath;
+
+    if (!parsed.needsConfiguration) {
+      const config = { ...parsed.draft, sourcePath } as WorktreeSetupConfig;
+      setup.config = config;
+      this.postMessage({
+        type: "agentWorktreeSetupReady",
+        requestId,
+        answer: "Configuration ready.",
+        config,
+        tools: [],
+        warnings: [],
+        budget: {
+          apiTurns: 0,
+          maxApiTurns: 0,
+          toolCalls: 0,
+          maxToolCalls: 0,
+        },
+      } as ExtensionToWebview);
+      return;
+    }
+
+    await this.runWorktreeSetupTurn(requestId);
+  }
+
+  private async runWorktreeSetupTurn(requestId: string): Promise<void> {
+    const setup = this.pendingWorktreeSetups.get(requestId);
+    if (
+      !setup?.draft ||
+      !setup.sourcePath ||
+      setup.running ||
+      !this.sessionManager
+    ) {
+      return;
+    }
+    setup.running = true;
+    const controller = setup.controller;
+
+    let answer = "";
+    const tools: string[] = [];
+    const warnings: string[] = [];
+    let budget: BtwBudget = {
+      apiTurns: 0,
+      maxApiTurns: 0,
+      toolCalls: 0,
+      maxToolCalls: 0,
+    };
+
+    try {
+      const result = await this.sessionManager.runWorktreeSetup(setup.draft, {
+        signal: controller.signal,
+        conversation: setup.conversation,
+        onProgress: (event) => {
+          switch (event.type) {
+            case "text_delta":
+              answer += event.text;
+              break;
+            case "tool":
+              tools.push(event.toolName);
+              break;
+            case "warning":
+              warnings.push(event.message);
+              break;
+            case "budget":
+              budget = {
+                apiTurns: event.apiTurns,
+                maxApiTurns: event.maxApiTurns,
+                toolCalls: event.toolCalls,
+                maxToolCalls: event.maxToolCalls,
+              };
+              break;
+          }
+          this.postMessage({
+            type: "agentWorktreeSetupProgress",
+            requestId,
+            answer: answer.replace(/<worktree-config>[\s\S]*$/i, "").trim(),
+            tools: [...tools],
+            warnings: [...warnings],
+            budget,
+          } as ExtensionToWebview);
+        },
+      });
+      if (result.cancelled || controller.signal.aborted) {
+        this.finishWorktreeSetup(requestId, "cancelled", "Setup cancelled.");
+        return;
+      }
+
+      const extracted = extractWorktreeSetupConfig(result.answer);
+      if (extracted.error) throw new Error(extracted.error);
+      if (!extracted.draft) {
+        const question = extracted.displayText || result.answer.trim();
+        if (!question) {
+          throw new Error(
+            "The setup agent stopped without a question or launch configuration.",
+          );
+        }
+        setup.conversation.push({ role: "assistant", text: question });
+        this.postMessage({
+          type: "agentWorktreeSetupAwaitingInput",
+          requestId,
+          answer: question,
+          conversation: [...setup.conversation],
+          tools: result.toolCalls.map((tool) => tool.toolName),
+          warnings: result.warnings,
+          budget: {
+            apiTurns: result.apiTurns,
+            maxApiTurns: result.maxApiTurns,
+            toolCalls: result.toolCallCount,
+            maxToolCalls: result.maxToolCalls,
+          },
+        } as ExtensionToWebview);
+        return;
+      }
+      const config = {
+        ...extracted.draft,
+        ...setup.draft,
+        sourcePath: setup.sourcePath,
+      } as WorktreeSetupConfig;
+      setup.config = config;
+      this.postMessage({
+        type: "agentWorktreeSetupReady",
+        requestId,
+        answer: extracted.displayText || "Configuration ready.",
+        config,
+        tools: result.toolCalls.map((tool) => tool.toolName),
+        warnings: result.warnings,
+        budget: {
+          apiTurns: result.apiTurns,
+          maxApiTurns: result.maxApiTurns,
+          toolCalls: result.toolCallCount,
+          maxToolCalls: result.maxToolCalls,
+        },
+      } as ExtensionToWebview);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        this.finishWorktreeSetup(requestId, "cancelled", "Setup cancelled.");
+      } else {
+        this.finishWorktreeSetup(
+          requestId,
+          "error",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    } finally {
+      const current = this.pendingWorktreeSetups.get(requestId);
+      if (current === setup) current.running = false;
+    }
+  }
+
+  private async launchConfiguredWorktree(
+    requestId: string,
+    autoSubmit: boolean,
+  ): Promise<void> {
+    const setup = this.pendingWorktreeSetups.get(requestId);
+    if (!setup?.config || !this.sessionManager) return;
+    setup.config = { ...setup.config, autoSubmit };
+    this.postMessage({
+      type: "agentWorktreeSetupLaunching",
+      requestId,
+      config: setup.config,
+    } as ExtensionToWebview);
+
+    try {
+      const result = await this.sessionManager.startWorktreeAgent(
+        setup.config,
+        {
+          approvalDecision: autoSubmit
+            ? "approve-autosubmit"
+            : "approve-prefill",
+        },
+      );
+      const text = result.content.find((item) => item.type === "text")?.text;
+      const payload = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+      const status = payload.status;
+      const phase =
+        status === "opened"
+          ? "opened"
+          : status === "rejected"
+            ? "rejected"
+            : "error";
+      const message =
+        typeof payload.message === "string"
+          ? payload.message
+          : phase === "opened"
+            ? "Worktree opened in a new VS Code window."
+            : typeof payload.error === "string"
+              ? payload.error
+              : "Worktree launch failed.";
+      this.finishWorktreeSetup(requestId, phase, message, setup.config);
+    } catch (error) {
+      this.finishWorktreeSetup(
+        requestId,
+        "error",
+        error instanceof Error ? error.message : String(error),
+        setup.config,
+      );
+    }
+  }
+
+  private cancelWorktreeSetup(requestId: string): void {
+    const setup = this.pendingWorktreeSetups.get(requestId);
+    if (!setup) return;
+    setup.controller.abort();
+    this.finishWorktreeSetup(requestId, "cancelled", "Setup cancelled.");
+  }
+
+  private finishWorktreeSetup(
+    requestId: string,
+    phase: "opened" | "rejected" | "cancelled" | "error",
+    message: string,
+    config?: WorktreeSetupConfig,
+  ): void {
+    if (!this.pendingWorktreeSetups.has(requestId)) return;
+    this.pendingWorktreeSetups.delete(requestId);
+    this.postMessage({
+      type: "agentWorktreeSetupResult",
+      requestId,
+      phase,
+      message,
+      ...(config ? { config } : {}),
+    } as ExtensionToWebview);
+  }
+
   /**
    * Promote a /btw answer into the main conversation as a user-visible
    * exchange, so a useful side answer isn't lost when the panel is dismissed.
@@ -7974,6 +8664,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const projects = this.getProjectInfos();
     const defaultProjectId =
       this.sessionManager.getDefaultProjectScope?.()?.projectId ?? null;
+    const approvalMode = this.getBrowserSessionApprovalMode();
     const state: ChatState = {
       sessionId: fg?.id ?? null,
       projects,
@@ -8000,6 +8691,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         fg?.status === "awaiting_approval",
       interrupted:
         Boolean(fg?.runState) &&
+        fg?.runState?.phase !== "awaiting_question" &&
         fg?.status !== "streaming" &&
         fg?.status !== "tool_executing" &&
         fg?.status !== "awaiting_approval",
@@ -8012,7 +8704,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
         fg?.id ?? "agent",
       ),
-      commandApprovalPolicy: this.getBrowserCommandApprovalPolicy(),
+      ...approvalMode,
       configuredCommandApprovalPolicy:
         this.getConfiguredCommandApprovalPolicy(),
       revertRecoveryNotice: fg
@@ -8045,6 +8737,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     prompt: string;
     mode?: string;
     autoSubmit?: boolean;
+    commandApprovalPolicy?: CommandApprovalPolicy;
+    approvalPolicy?: SessionApprovalMode["approvalPolicy"];
+    approvalReviewer?: SessionApprovalMode["approvalReviewer"];
+    executionPreset?: SessionApprovalMode["executionPreset"];
   }): Promise<string> {
     const mode = opts.mode?.trim();
     if (!this.sessionManager) {
@@ -8060,10 +8756,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } else if (mode) {
       await this.sessionManager.switchForegroundMode(mode);
     }
-    if (mode) {
+    if (
+      opts.commandApprovalPolicy &&
+      opts.approvalPolicy &&
+      opts.approvalReviewer &&
+      opts.executionPreset
+    ) {
+      this.sessionManager.setSessionApprovalMode(current.id, {
+        commandApprovalPolicy: opts.commandApprovalPolicy,
+        approvalPolicy: opts.approvalPolicy,
+        approvalReviewer: opts.approvalReviewer,
+        executionPreset: opts.executionPreset,
+      });
+    } else if (opts.commandApprovalPolicy) {
+      this.sessionManager.setCommandApprovalPolicy(
+        current.id,
+        opts.commandApprovalPolicy,
+      );
+    }
+    if (mode || opts.commandApprovalPolicy) {
       this.sendInitialState();
     }
-    this.injectPrompt(opts.prompt, [], opts.autoSubmit);
+    if (opts.autoSubmit && opts.prompt.trim()) {
+      const sessionId = current.id;
+      const prompt = opts.prompt;
+      this.postMessage({
+        type: "agentCommittedUserMessage",
+        sessionId,
+        text: prompt,
+        displayText: prompt,
+        origin: "vscode",
+      });
+      setTimeout(() => {
+        const session = this.sessionManager?.getSession(sessionId);
+        if (!session || !this.sessionManager) return;
+        void this.sessionManager
+          .sendMessage(sessionId, prompt, session.mode, {
+            reasoningEffort: session.reasoningEffort,
+            thinkingEnabled: session.reasoningEffort !== "none",
+            activeFilePath: session.activeFilePath,
+            displayText: prompt,
+            origin: "vscode",
+          })
+          .catch((error) => {
+            this.log(`[worktree-agent] startup prompt failed: ${error}`);
+          });
+      }, 0);
+    } else {
+      this.injectPrompt(opts.prompt, [], false);
+    }
     return current.id;
   }
 
@@ -8640,6 +9381,7 @@ function extractRegexPattern(raw: string): string | undefined {
 function validateSuggestedCommandRegex(
   pattern: string,
   subCommand: string,
+  requiredVariants: string[] = [],
 ): void {
   if (pattern.length > 300) {
     throw new Error("Model returned an overly long regex");
@@ -8664,6 +9406,14 @@ function validateSuggestedCommandRegex(
     throw new Error(
       "Model returned a regex that does not match the current command",
     );
+  }
+  for (const variant of requiredVariants) {
+    regex.lastIndex = 0;
+    if (!regex.test(variant.trim())) {
+      throw new Error(
+        "Model returned a regex that did not generalize an obvious command selector",
+      );
+    }
   }
 }
 

@@ -178,6 +178,13 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     builtin: true,
   },
   {
+    name: "worktree",
+    description:
+      "Configure and start isolated work: /worktree [task] [--branch <name>]",
+    source: "builtin",
+    builtin: true,
+  },
+  {
     name: "pair",
     description:
       "Show a pairing code for a new browser device (or /pair list to manage)",

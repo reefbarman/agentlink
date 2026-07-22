@@ -52,7 +52,11 @@ function canonicalRoots(values: readonly string[], label: string): string[] {
 }
 
 function isWithin(candidate: string, root: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 function validateEnvironment(
@@ -178,21 +182,33 @@ export function compileSandboxHelperLaunchRequest(
     policy.protectedReadOnlyRoots,
     "Sandbox protected root",
   );
-  for (const protectedRoot of protectedRoots) {
-    if (!readableRoots.some((root) => isWithin(protectedRoot, root))) {
-      throw new Error(
-        `Sandbox protected root is not covered by readable roots: ${protectedRoot}`,
-      );
-    }
-    if (!deniedWriteRoots.some((root) => isWithin(protectedRoot, root))) {
-      throw new Error(
-        `Sandbox protected root is not covered by denied-write roots: ${protectedRoot}`,
-      );
+  const structurallyProtectedRoots = canonicalRoots(
+    policy.structurallyProtectedRoots ?? [],
+    "Sandbox structurally protected root",
+  );
+  for (const [label, roots] of [
+    ["protected", protectedRoots],
+    ["structurally protected", structurallyProtectedRoots],
+  ] as const) {
+    for (const protectedRoot of roots) {
+      if (!readableRoots.some((root) => isWithin(protectedRoot, root))) {
+        throw new Error(
+          `Sandbox ${label} root is not covered by readable roots: ${protectedRoot}`,
+        );
+      }
+      if (!deniedWriteRoots.some((root) => isWithin(protectedRoot, root))) {
+        throw new Error(
+          `Sandbox ${label} root is not covered by denied-write roots: ${protectedRoot}`,
+        );
+      }
     }
   }
 
   const environment = validateEnvironment(policy.environment.values);
-  for (const name of ["HOME", "TMPDIR", "XDG_CACHE_HOME"] as const) {
+  if (!readableRoots.some((root) => isWithin(environment.HOME, root))) {
+    throw new Error("Sandbox environment HOME must be within a readable root");
+  }
+  for (const name of ["TMPDIR", "XDG_CACHE_HOME"] as const) {
     const value = environment[name];
     if (
       value !== undefined &&
@@ -228,6 +244,7 @@ export function compileSandboxHelperLaunchRequest(
     },
     network: networkIsPublic ? { mode: "public-proxy" } : { mode: "blocked" },
     protectedRoots,
+    structurallyProtectedRoots,
     dimensions: request.dimensions,
   };
   if (!isSandboxHelperControlFrame(launch)) {

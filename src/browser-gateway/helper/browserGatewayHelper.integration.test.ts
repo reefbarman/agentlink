@@ -4899,6 +4899,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         settings: {
           searchBackend: "native",
           fetchBackend: "native",
+          nativeSearchMode: "cached",
           allowedDomains: [],
           blockedDomains: [],
           maxSearchUsesPerTurn: 5,
@@ -5270,6 +5271,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         settings: {
           searchBackend: "native",
           fetchBackend: "native",
+          nativeSearchMode: "cached",
           allowedDomains: [],
           blockedDomains: [],
           maxSearchUsesPerTurn: 5,
@@ -5373,7 +5375,13 @@ describe("BrowserGatewayHelper proxy routing", () => {
           JSON.stringify({
             ok: true,
             result: {
-              content: [{ type: "text", text: "Search result from primary" }],
+              content: [
+                {
+                  type: "image",
+                  data: "c2NyZWVuc2hvdA==",
+                  mimeType: "image/png",
+                },
+              ],
             },
           }),
         );
@@ -5434,7 +5442,19 @@ describe("BrowserGatewayHelper proxy routing", () => {
     const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
     const modelClient = makeAskAgentToolLoopClient(async (params) => {
       completionParams.push(params);
-      if (params.toolMessages?.length) {
+      if (completionParams.length === 2) {
+        return {
+          text: "Showing the screenshot.",
+          toolCalls: [
+            {
+              id: "present-search-image-1",
+              name: "present_images",
+              input: { use_recent_images: 1 },
+            },
+          ],
+        };
+      }
+      if (completionParams.length > 2) {
         return { text: "Search completed.", toolCalls: [] };
       }
       await fs.writeFile(
@@ -5464,7 +5484,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     });
 
     expect(send.ok).toBe(true);
-    expect(completionParams).toHaveLength(2);
+    expect(completionParams).toHaveLength(3);
     for (const params of completionParams) {
       expect(params.hostedTools).toBeUndefined();
       expect(params.tools?.map((tool) => tool.name)).toEqual(
@@ -5472,8 +5492,39 @@ describe("BrowserGatewayHelper proxy routing", () => {
       );
     }
     expect(JSON.stringify(completionParams[1]?.toolMessages)).toContain(
-      "Search result from primary",
+      "[1 image]",
     );
+    expect(JSON.stringify(completionParams[1]?.toolMessages)).toContain(
+      "c2NyZWVuc2hvdA==",
+    );
+    const sendBody = (await send.json()) as {
+      snapshot: {
+        session: { foreground: { projectedMessages: ChatMessage[] } };
+      };
+    };
+    const mcpToolBlock = sendBody.snapshot.session.foreground.projectedMessages
+      .flatMap((message) => message.blocks)
+      .find(
+        (block) => block.type === "tool_call" && block.id === "direct-search-1",
+      );
+    expect(mcpToolBlock).toMatchObject({
+      type: "tool_call",
+      resultImages: [{ mimeType: "image/png", data: "c2NyZWVuc2hvdA==" }],
+    });
+    const presentedMessage =
+      sendBody.snapshot.session.foreground.projectedMessages.find(
+        (message) => message.displayMedia?.images.length,
+      );
+    expect(presentedMessage?.displayMedia).toEqual({
+      images: [
+        {
+          name: "presented-image-1.png",
+          mimeType: "image/png",
+          src: "data:image/png;base64,c2NyZWVuc2hvdA==",
+        },
+      ],
+      documents: [],
+    });
     expect(primaryRequests).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ url: "/internal/ask-agent/web-policy" }),

@@ -10,3 +10,5 @@ releases/
 plans/*
 .mcp.json
 /AGENTS.md
+tmp/
+.agentlink-smoke/

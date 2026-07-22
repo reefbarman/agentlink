@@ -1,6 +1,7 @@
 import {
   type ClosedTerminalSnapshot,
   type ConfinementPreparingTerminalProvider,
+  type ManagedNetworkRequest,
   type PreparedTerminalExecution,
   type TerminalBackgroundState,
   type TerminalCloseResult,
@@ -38,6 +39,7 @@ export interface AuthorizedSandboxLaunch {
   authorization: SandboxLaunchAuthorization;
   helperRequest: SandboxHelperLaunchRequest;
   metadata: SandboxExecutionMetadata;
+  assertLaunchValid?: () => void;
   finalize?: () => void;
 }
 
@@ -73,9 +75,18 @@ interface ManagedSandboxChannel {
   session: SandboxTerminalSession;
   active?: {
     commandId: string;
+    generation: number;
     process: SandboxCommandProcess;
     metadata: SandboxExecutionMetadata;
     finalizer?: () => void;
+    networkAbortController: AbortController;
+    onManagedNetworkRequest?: TerminalExecuteOptions["onManagedNetworkRequest"];
+    networkContext: Pick<
+      ManagedNetworkRequest,
+      "sessionId" | "terminalId" | "command" | "cwd" | "reason"
+    > & {
+      auditId?: string;
+    };
   };
   latestMetadata?: SandboxExecutionMetadata;
 }
@@ -143,9 +154,54 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       reservation,
     );
     let state: "prepared" | "consumed" | "disposed" = "prepared";
+    const preparedSecurity: TerminalExecutionSecuritySummary = Object.freeze({
+      ...security,
+      ...(security.sandbox
+        ? {
+            sandbox: Object.freeze({
+              ...security.sandbox,
+              policyVersion: prepared.authorized.metadata.policyVersion,
+              profileId: prepared.authorized.metadata.profileId,
+              backend: prepared.authorized.metadata.backend as "seatbelt",
+              capabilities: Object.freeze({
+                ...prepared.authorized.metadata.capabilities,
+                warnings: Object.freeze([
+                  ...prepared.authorized.metadata.capabilities.warnings,
+                ]) as unknown as string[],
+              }),
+              ...(prepared.authorized.metadata.grant
+                ? {
+                    grant: Object.freeze({
+                      ...prepared.authorized.metadata.grant,
+                    }),
+                  }
+                : {}),
+              ...(prepared.authorized.metadata.environmentPolicy
+                ? {
+                    environmentPolicy: Object.freeze({
+                      ...prepared.authorized.metadata.environmentPolicy,
+                      exclude: Object.freeze([
+                        ...prepared.authorized.metadata.environmentPolicy
+                          .exclude,
+                      ]) as unknown as string[],
+                      setKeys: Object.freeze([
+                        ...prepared.authorized.metadata.environmentPolicy
+                          .setKeys,
+                      ]) as unknown as string[],
+                      includeOnly: Object.freeze([
+                        ...prepared.authorized.metadata.environmentPolicy
+                          .includeOnly,
+                      ]) as unknown as string[],
+                    }),
+                  }
+                : {}),
+            }),
+          }
+        : {}),
+    });
 
     return {
-      security,
+      security: preparedSecurity,
       execute: async () => {
         if (state !== "prepared") {
           throw new Error("Prepared sandbox execution is no longer available");
@@ -162,6 +218,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         if (
           current.status === "launching" ||
           current.status === "running" ||
+          current.status === "closed" ||
           current.nextGeneration !== prepared.before.nextGeneration
         ) {
           state = "disposed";
@@ -169,10 +226,15 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
           prepared.authorized.finalize?.();
           throw new Error("Prepared sandbox terminal target changed");
         }
+        prepared.authorized.assertLaunchValid?.();
         state = "consumed";
         this.channelReservations.delete(prepared.before.channelId);
-        const result = await this.executeAuthorized(descriptor, prepared);
-        return { ...result, security };
+        const result = await this.executeAuthorized(
+          descriptor,
+          prepared,
+          preparedSecurity,
+        );
+        return { ...result, security: preparedSecurity };
       },
       dispose: () => {
         if (state !== "prepared") return;
@@ -192,8 +254,20 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     options: TerminalExecuteOptions,
   ): Promise<TerminalCommandResult> {
     const descriptor = this.snapshotOptions(options);
-    const prepared = await this.prepareAuthorizedLaunch(descriptor);
-    return this.executeAuthorized(descriptor, prepared);
+    const reservation = Symbol("sandbox-execution");
+    const prepared = await this.prepareAuthorizedLaunch(
+      descriptor,
+      reservation,
+    );
+    try {
+      return await this.executeAuthorized(descriptor, prepared);
+    } finally {
+      if (
+        this.channelReservations.get(prepared.before.channelId) === reservation
+      ) {
+        this.channelReservations.delete(prepared.before.channelId);
+      }
+    }
   }
 
   private async executeAuthorized(
@@ -204,12 +278,24 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       commandId: string;
       authorized: AuthorizedSandboxLaunch;
     },
+    security?: TerminalExecutionSecuritySummary,
   ): Promise<TerminalCommandResult> {
     this.assertActive();
     const { channel, before, commandId, authorized } = prepared;
     const sandboxSessionId = options.sandboxSessionId as string;
+    const networkAuditId =
+      security?.auditId ?? authorized.metadata.grant?.auditId;
     let process: SandboxCommandProcess;
     try {
+      if (
+        authorized.helperRequest.network.mode === "public-proxy" &&
+        !networkAuditId
+      ) {
+        throw new Error(
+          "Managed sandbox networking requires command audit attribution",
+        );
+      }
+      authorized.assertLaunchValid?.();
       process = this.runtime.launch(authorized.helperRequest);
     } catch (error) {
       authorized.finalize?.();
@@ -224,9 +310,22 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     });
     channel.active = {
       commandId,
+      generation: authorized.helperRequest.generation,
       process,
       metadata: authorized.metadata,
       finalizer,
+      networkAbortController: new AbortController(),
+      onManagedNetworkRequest: options.onManagedNetworkRequest,
+      networkContext: {
+        sessionId: sandboxSessionId,
+        auditId: networkAuditId,
+        terminalId: before.channelId,
+        command: options.command,
+        cwd: options.cwd,
+        reason: options.sandboxCapabilityRequest?.unrestrictedPublicNetwork
+          ? "Managed public network requested"
+          : undefined,
+      },
     };
     channel.latestMetadata = authorized.metadata;
 
@@ -275,6 +374,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         if (timer) clearTimeout(timer);
       });
       if (timedOut) {
+        channel.active?.networkAbortController.abort();
         options.onCommandFinalizationDeferred?.();
         void completion.catch((error) =>
           this.log?.(`[sandbox-terminal] Timed-out command failed: ${error}`),
@@ -435,9 +535,11 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       requested?.delete(snapshot.title);
       notFound?.delete(channelId);
       notFound?.delete(snapshot.title);
+      channel.active?.networkAbortController.abort();
       channel.session.close();
       channel.active?.finalizer?.();
       this.channels.delete(channelId);
+      this.channelReservations.delete(channelId);
       this.rememberClosed(snapshot);
       closed += 1;
     }
@@ -479,6 +581,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     if (this.disposed) return;
     this.disposed = true;
     for (const channel of this.channels.values()) {
+      channel.active?.networkAbortController.abort();
       channel.session.close();
       channel.active?.finalizer?.();
     }
@@ -512,9 +615,13 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     if (options.split_from) {
       return this.createChannel(DEFAULT_SANDBOX_TITLE, options.cwd);
     }
-    const idleDefault = [...this.channels.values()].find(
-      ({ session }) => session.snapshot().status === "idle",
-    );
+    const idleDefault = [...this.channels.values()].find(({ session }) => {
+      const snapshot = session.snapshot();
+      return (
+        snapshot.status === "idle" &&
+        !this.channelReservations.has(snapshot.channelId)
+      );
+    });
     return (
       idleDefault ?? this.createChannel(DEFAULT_SANDBOX_TITLE, options.cwd)
     );
@@ -539,6 +646,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     });
     const channel: ManagedSandboxChannel = { session };
     session.onEvent((event) => {
+      if (event.type === "network-request") {
+        void this.handleManagedNetworkRequest(channel, event);
+      }
       const snapshot = session.snapshot();
       this.onChannelChanged?.(snapshot);
       const update: SandboxTerminalChannelEvent = { event, snapshot };
@@ -578,6 +688,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       is_running:
         command?.status === "launching" || command?.status === "running",
       execution_mode: "sandbox_pty",
+      command_sent: command !== undefined,
+      process_launched: command?.startedAt !== undefined,
+      retry_safe: command === undefined,
       sandbox: metadata,
     };
   }
@@ -599,6 +712,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       timed_out: command.timedOut,
       is_running: false,
       execution_mode: "sandbox_pty",
+      command_sent: true,
+      process_launched: command.startedAt !== undefined,
+      retry_safe: false,
       sandbox: {
         ...metadata,
         violations: command.violations.map((violation) => ({ ...violation })),
@@ -606,11 +722,62 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     };
   }
 
+  private async handleManagedNetworkRequest(
+    channel: ManagedSandboxChannel,
+    event: Extract<SandboxTerminalSessionEvent, { type: "network-request" }>,
+  ): Promise<void> {
+    const active = channel.active;
+    if (
+      !active ||
+      active.commandId !== event.commandId ||
+      active.generation !== event.generation
+    ) {
+      return;
+    }
+    let decision: "allow-once" | "reject" = "reject";
+    try {
+      if (
+        active.networkContext.auditId &&
+        active.onManagedNetworkRequest &&
+        !active.networkAbortController.signal.aborted
+      ) {
+        const networkContext = {
+          ...active.networkContext,
+          auditId: active.networkContext.auditId,
+        };
+        decision = await active.onManagedNetworkRequest(
+          {
+            ...networkContext,
+            commandId: event.commandId,
+            generation: event.generation,
+            ...event.request,
+            dnsAnswers: event.request.dnsAnswers.map((answer) => ({
+              ...answer,
+            })),
+          },
+          active.networkAbortController.signal,
+        );
+      }
+    } catch (error) {
+      this.log?.(`[sandbox-terminal] Network request review failed: ${error}`);
+    }
+    if (channel.active !== active) return;
+    const responded = active.process.respondToNetworkRequest?.(
+      event.request.requestId,
+      active.networkAbortController.signal.aborted ? "reject" : decision,
+    );
+    if (responded !== true) {
+      active.networkAbortController.abort();
+      active.process.terminate();
+    }
+  }
+
   private finishActive(
     channel: ManagedSandboxChannel,
     commandId: string,
   ): void {
     if (channel.active?.commandId !== commandId) return;
+    channel.active.networkAbortController.abort();
     channel.active.finalizer?.();
     channel.active = undefined;
   }

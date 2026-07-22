@@ -35,6 +35,7 @@ export interface McpManagerPanelProps {
   error?: string | null;
   onClose?: () => void;
   onRefresh?: () => void;
+  onSelectProject?: (projectId: string) => void;
   onServerAction?: (
     serverName: string,
     action: "disable" | "reconnect" | "reauthenticate",
@@ -358,6 +359,9 @@ function GuidedEditor({
   const [toolDisclosure, setToolDisclosure] = useState(
     entry?.config.toolDisclosure ?? "auto",
   );
+  const [supportsParallelToolCalls, setSupportsParallelToolCalls] = useState(
+    entry?.config.supportsParallelToolCalls ?? false,
+  );
   const [allowedTools, setAllowedTools] = useState(
     entry?.config.allowedTools?.join("\n") ?? "",
   );
@@ -424,6 +428,7 @@ function GuidedEditor({
           ...(timeout.trim() ? { timeout: Number(timeout) } : {}),
           toolPolicy,
           toolDisclosure,
+          supportsParallelToolCalls,
           allowedTools: parsedAllowedTools.value,
           disabled,
         };
@@ -454,6 +459,9 @@ function GuidedEditor({
           operationId: randomId(),
           profile: snapshot.profile,
           scope,
+          ...(snapshot.project
+            ? { projectId: snapshot.project.projectId }
+            : {}),
           expectedRevision: revisionForScope(snapshot, scope),
           operations: [
             {
@@ -619,6 +627,20 @@ function GuidedEditor({
               <option value="deferred">Deferred</option>
             </select>
           </Field>
+          <label class="mcp-manager-toggle-field">
+            <input
+              type="checkbox"
+              checked={supportsParallelToolCalls}
+              disabled={submission.kind === "pending"}
+              onInput={(event) =>
+                setSupportsParallelToolCalls(event.currentTarget.checked)
+              }
+            />
+            <span>Server supports parallel tool calls</span>
+            <small>
+              Enable only when this server safely accepts concurrent calls.
+            </small>
+          </label>
           <Field
             label="Always allowed tools"
             hint="One tool per line, or a JSON array of strings."
@@ -1018,6 +1040,9 @@ function ImportReview({
               operationId: randomId(),
               profile: snapshot.profile,
               scope,
+              ...(snapshot.project
+                ? { projectId: snapshot.project.projectId }
+                : {}),
               expectedRevision: revisionForScope(snapshot, scope),
               operations,
             };
@@ -1066,6 +1091,7 @@ export function McpManagerPanel({
   error,
   onClose,
   onRefresh,
+  onSelectProject,
   onServerAction,
   onOpenRawConfig,
   onMutateConfig,
@@ -1151,6 +1177,7 @@ export function McpManagerPanel({
       operationId: randomId(),
       profile: snapshot.profile,
       scope,
+      ...(snapshot.project ? { projectId: snapshot.project.projectId } : {}),
       expectedRevision: revisionForScope(snapshot, scope),
       operations: [
         {
@@ -1206,6 +1233,7 @@ export function McpManagerPanel({
       operationId: randomId(),
       profile: snapshot.profile,
       scope,
+      ...(snapshot.project ? { projectId: snapshot.project.projectId } : {}),
       expectedRevision: revisionForScope(snapshot, scope),
       operations: [{ kind: "remove", serverName: entry.name }],
     };
@@ -1256,6 +1284,31 @@ export function McpManagerPanel({
           <i class="codicon codicon-close" aria-hidden="true" />
         </button>
       </header>
+      {snapshot.profile === "main" && snapshot.project && (
+        <label class="mcp-manager-project-selector">
+          <span>Project</span>
+          {snapshot.projects && snapshot.projects.length > 1 ? (
+            <select
+              aria-label="MCP project"
+              value={snapshot.project.projectId}
+              onInput={(event) => onSelectProject?.(event.currentTarget.value)}
+            >
+              {snapshot.projects.map((project) => (
+                <option
+                  key={project.projectId}
+                  value={project.projectId}
+                  disabled={project.availability !== "available"}
+                >
+                  {project.displayName}
+                  {project.availability === "available" ? "" : " (unavailable)"}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <strong>{snapshot.project.displayName}</strong>
+          )}
+        </label>
+      )}
       <nav
         class="mcp-manager-tabs mcp-manager-navigation"
         aria-label="MCP Manager sections"

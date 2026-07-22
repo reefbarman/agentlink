@@ -194,6 +194,18 @@ export async function handleStartWorktreeAgent(
       ...(params.fleetExchangeId
         ? { fleetExchangeId: params.fleetExchangeId }
         : {}),
+      ...(params.commandApprovalPolicy
+        ? { commandApprovalPolicy: params.commandApprovalPolicy }
+        : {}),
+      ...(params.approvalPolicy
+        ? { approvalPolicy: params.approvalPolicy }
+        : {}),
+      ...(params.approvalReviewer
+        ? { approvalReviewer: params.approvalReviewer }
+        : {}),
+      ...(params.executionPreset
+        ? { executionPreset: params.executionPreset }
+        : {}),
       ttlMs: DEFAULT_INTENT_TTL_MS,
     });
 
@@ -452,7 +464,7 @@ async function requestWorktreeApproval(args: {
   if (args.onApprovalRequest) {
     const raw = await args.onApprovalRequest(
       {
-        kind: "command",
+        kind: "worktree",
         title: `Start worktree agent: ${args.task}`,
         detail,
         targetPath: args.worktreePath,

@@ -783,7 +783,11 @@ export class BrowserGatewayServer implements vscode.Disposable {
       body && typeof body === "object"
         ? (body as Record<string, unknown>)
         : undefined;
-    if (typeof parsed?.id !== "string") {
+    if (
+      typeof parsed?.id !== "string" ||
+      typeof parsed.approvalKind !== "string" ||
+      typeof parsed.decision !== "string"
+    ) {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
     }
@@ -1903,12 +1907,18 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const profile = this.parseMcpProfile(
       requestUrl.searchParams.get("profile") ?? "main",
     );
+    const projectId = requestUrl.searchParams.get("projectId") ?? undefined;
     if (!profile) {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
     }
     const result =
-      await this.chatViewProvider.submitBrowserMcpConfigSnapshot(profile);
+      profile === "main"
+        ? await this.chatViewProvider.submitBrowserMcpConfigSnapshot(
+            profile,
+            projectId,
+          )
+        : await this.chatViewProvider.submitBrowserMcpConfigSnapshot(profile);
     this.writeJson(res, 200, result);
   }
 
@@ -2092,6 +2102,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const body = (await readJsonBody(req)) as {
       serverName?: string;
       action?: "disable" | "reconnect" | "reauthenticate";
+      projectId?: string;
     };
     if (
       typeof body?.serverName !== "string" ||
@@ -2109,10 +2120,16 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const result = await this.chatViewProvider.submitBrowserMcpAction(
-      body.serverName,
-      body.action,
-    );
+    const result = body.projectId
+      ? await this.chatViewProvider.submitBrowserMcpAction(
+          body.serverName,
+          body.action,
+          body.projectId,
+        )
+      : await this.chatViewProvider.submitBrowserMcpAction(
+          body.serverName,
+          body.action,
+        );
     this.writeJson(res, result.ok ? 200 : 400, result);
   }
 

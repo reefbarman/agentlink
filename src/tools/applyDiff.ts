@@ -17,7 +17,10 @@ import type {
   EditReviewResult,
   WriteApprovalPolicyProvider,
 } from "../core/capabilities/editReview.js";
-import { DEFAULT_DIAGNOSTIC_DELAY_MS } from "../core/capabilities/editReview.js";
+import {
+  DEFAULT_DIAGNOSTIC_DELAY_MS,
+  evaluateWriteAuthorization,
+} from "../core/capabilities/editReview.js";
 
 interface SearchReplaceBlock {
   search: string;
@@ -1158,14 +1161,17 @@ export async function handleApplyDiff(
       });
     }
 
-    const canAutoApprove =
-      providers.writeApprovalPolicyProvider?.canAutoApprove({
+    const authorization = evaluateWriteAuthorization(
+      providers.writeApprovalPolicyProvider,
+      {
         sessionId,
         absolutePath: filePath,
         relativePath: relPath,
         inWorkspace,
         mode,
-      }) ?? false;
+      },
+    );
+    const canAutoApprove = authorization.allowed;
 
     let lockedFailedBlocks = failedBlocks;
     let lockedBlockResults = blockResults;
@@ -1243,6 +1249,15 @@ export async function handleApplyDiff(
       ...response
     } = result;
     const responseObj = response as Record<string, unknown>;
+    responseObj.authorization = canAutoApprove
+      ? authorization
+      : result.decision
+        ? {
+            allowed: result.decision !== "reject",
+            basis: "human",
+            decision: result.decision,
+          }
+        : undefined;
     const acceptedContent =
       result.status === "accepted"
         ? (result.finalContent ??

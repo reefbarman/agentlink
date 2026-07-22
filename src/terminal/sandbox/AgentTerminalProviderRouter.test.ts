@@ -1,7 +1,10 @@
+import type {
+  ConfinementPreparingTerminalProvider,
+  TerminalExecutionRouteContext,
+} from "../../core/capabilities/terminal.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { AgentTerminalProviderRouter } from "./AgentTerminalProviderRouter.js";
-import type { ConfinementPreparingTerminalProvider } from "../../core/capabilities/terminal.js";
 
 function provider(label: string) {
   const instance: ConfinementPreparingTerminalProvider & {
@@ -39,6 +42,28 @@ function provider(label: string) {
   return instance;
 }
 
+const sandboxRoute: TerminalExecutionRouteContext = {
+  requiredAuthority: "sandbox",
+  permissionIntent: "default",
+  approvalRequirement: "policy",
+  authorityReason: "approval-policy",
+  approvalPolicySnapshot: "on-request" as const,
+  approvalReviewerSnapshot: "auto-review" as const,
+  executionPresetSnapshot: "workspace-write" as const,
+  commandApprovalPolicySnapshot: "approve-for-me",
+};
+
+const nativeAgentRoute: TerminalExecutionRouteContext = {
+  requiredAuthority: "native-agent",
+  permissionIntent: "default",
+  approvalRequirement: "policy",
+  authorityReason: "approval-policy",
+  approvalPolicySnapshot: "on-request" as const,
+  approvalReviewerSnapshot: "user" as const,
+  executionPresetSnapshot: "native-manual" as const,
+  commandApprovalPolicySnapshot: "manual",
+};
+
 function harness() {
   let enabled = false;
   let sandboxAvailable = true;
@@ -48,9 +73,11 @@ function harness() {
     workspaceTrusted: true,
   };
   const native = provider("native");
+  const nativeAgent = provider("native-agent");
   const sandbox = provider("sandbox");
   const sandboxes = [sandbox];
   const createNativeProvider = vi.fn(() => native);
+  const createNativeAgentProvider = vi.fn(() => nativeAgent);
   const createSandboxProvider = vi.fn(() => {
     if (createSandboxProvider.mock.calls.length === 1) return sandbox;
     const generation = provider(`sandbox-${sandboxes.length + 1}`);
@@ -59,10 +86,12 @@ function harness() {
   });
   const log = vi.fn();
   const audit = vi.fn();
+  const revealCustomTerminal = vi.fn(() => true);
   const router = new AgentTerminalProviderRouter({
     isEnabled: () => enabled,
     getHost: () => host,
     createNativeProvider,
+    createNativeAgentProvider,
     createSandboxProvider,
     getSandboxAvailability: async () =>
       sandboxAvailable
@@ -70,7 +99,7 @@ function harness() {
             status: "verified" as const,
             attestation: {
               attestationId: "attestation-1",
-              attestationVersion: "sandbox-behavior-v1",
+              attestationVersion: "sandbox-behavior-v2",
               policyVersion: "policy-v1",
               profileId: "workspace-write",
               backend: "seatbelt" as const,
@@ -82,8 +111,8 @@ function harness() {
                 filesystemWrite: "strict" as const,
                 network: "blocked" as const,
                 privateHome: true,
-                privateTmp: true,
-                hostIpcBlocked: true,
+                privateTmp: false,
+                hostIpcBlocked: false,
                 resourceLimits: "partial" as const,
                 warnings: [],
               },
@@ -91,17 +120,21 @@ function harness() {
           }
         : { status: "runtime-unavailable" as const },
     recordExecutionAudit: audit,
+    revealCustomTerminal,
     log,
   });
   return {
     router,
     native,
+    nativeAgent,
     sandbox,
     sandboxes,
     createNativeProvider,
+    createNativeAgentProvider,
     createSandboxProvider,
     log,
     audit,
+    revealCustomTerminal,
     setEnabled(value: boolean) {
       enabled = value;
     },
@@ -141,6 +174,27 @@ describe("AgentTerminalProviderRouter", () => {
     expect(serialized).not.toContain("bindingDigest");
   });
 
+  it("rejects managed network before routing when destination mediation is missing", async () => {
+    const test = harness();
+    test.setEnabled(true);
+
+    await expect(
+      test.router.prepareExecution(
+        {
+          command: "npm view vite version",
+          cwd: "/workspace",
+          sandboxSessionId: "session-1",
+          sandboxCapabilityRequest: { unrestrictedPublicNetwork: true },
+        },
+        { ...sandboxRoute, permissionIntent: "additional-permissions" },
+      ),
+    ).rejects.toThrow(
+      "Managed public network requires an interactive destination authorization callback",
+    );
+    expect(test.createSandboxProvider).not.toHaveBeenCalled();
+    expect(test.createNativeProvider).not.toHaveBeenCalled();
+  });
+
   it("uses and reuses the native provider when disabled", async () => {
     const test = harness();
 
@@ -171,6 +225,94 @@ describe("AgentTerminalProviderRouter", () => {
     },
   );
 
+  it("snapshots route context before asynchronous availability checks", async () => {
+    let resolveAvailability!: (
+      value: Awaited<
+        ReturnType<
+          ConstructorParameters<
+            typeof AgentTerminalProviderRouter
+          >[0]["getSandboxAvailability"]
+        >
+      >,
+    ) => void;
+    const availability = new Promise<
+      Awaited<
+        ReturnType<
+          ConstructorParameters<
+            typeof AgentTerminalProviderRouter
+          >[0]["getSandboxAvailability"]
+        >
+      >
+    >((resolve) => {
+      resolveAvailability = resolve;
+    });
+    const test = harness();
+    test.setEnabled(true);
+    const mutableRoute = { ...sandboxRoute };
+    const router = new AgentTerminalProviderRouter({
+      isEnabled: () => true,
+      getHost: () => ({
+        platform: "darwin",
+        workspaceTrusted: true,
+      }),
+      createNativeProvider: test.createNativeProvider,
+      createNativeAgentProvider: test.createNativeAgentProvider,
+      createSandboxProvider: test.createSandboxProvider,
+      getSandboxAvailability: () => availability,
+    });
+
+    const preparation = router.prepareExecution(
+      { command: "pwd", cwd: "/workspace" },
+      mutableRoute,
+    );
+    Object.assign(mutableRoute, nativeAgentRoute);
+    resolveAvailability({
+      status: "verified",
+      attestation: {
+        attestationId: "attestation-delayed",
+        attestationVersion: "sandbox-behavior-v2",
+        policyVersion: "policy-v1",
+        profileId: "workspace-write",
+        backend: "seatbelt",
+        architecture: "arm64",
+        capabilities: {
+          backend: "seatbelt",
+          processTree: true,
+          filesystemRead: "isolated",
+          filesystemWrite: "strict",
+          network: "blocked",
+          privateHome: true,
+          privateTmp: false,
+          hostIpcBlocked: false,
+          resourceLimits: "partial",
+          warnings: [],
+        },
+      },
+    });
+
+    const prepared = await preparation;
+    expect(prepared.security).toMatchObject({
+      requiredAuthority: "sandbox",
+      permissionIntent: "default",
+      approvalRequirement: "policy",
+      authorityReason: "approval-policy",
+      approvalPolicySnapshot: "on-request" as const,
+      approvalReviewerSnapshot: "auto-review" as const,
+      executionPresetSnapshot: "workspace-write" as const,
+      commandApprovalPolicySnapshot: "approve-for-me",
+      route: "sandbox",
+    });
+    expect(Object.isFrozen(prepared.security)).toBe(true);
+    expect(Object.isFrozen(prepared.security.sandbox)).toBe(true);
+    expect(Object.isFrozen(prepared.security.sandbox?.capabilities)).toBe(true);
+    expect(
+      Object.isFrozen(prepared.security.sandbox?.capabilities.warnings),
+    ).toBe(true);
+    expect(test.createNativeAgentProvider).not.toHaveBeenCalled();
+    prepared.dispose();
+    router.dispose();
+  });
+
   it("prepares sandbox authority without executing and consumes it once", async () => {
     const test = harness();
     test.setEnabled(true);
@@ -184,7 +326,16 @@ describe("AgentTerminalProviderRouter", () => {
     expect(prepared.security).toMatchObject({
       route: "sandbox",
       confinement: "verified-baseline",
-      approvalPolicy: "sandbox-baseline-v1",
+      executionSurface: "verified-sandbox",
+      requiredAuthority: "sandbox",
+      permissionIntent: "default",
+      approvalRequirement: "policy",
+      authorityReason: "approval-policy",
+      approvalPolicySnapshot: "on-request" as const,
+      approvalReviewerSnapshot: "auto-review" as const,
+      executionPresetSnapshot: "workspace-write" as const,
+      commandApprovalPolicySnapshot: "approve-for-me",
+      executionPolicy: "sandbox-baseline-v2",
     });
     await expect(prepared.execute()).resolves.toMatchObject({
       output: "sandbox",
@@ -235,6 +386,280 @@ describe("AgentTerminalProviderRouter", () => {
     ).resolves.toMatchObject({ output: "native", terminal_id: "native-1" });
     expect(test.createNativeProvider).toHaveBeenCalledTimes(1);
     expect(test.createSandboxProvider).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when required sandbox runtime is unavailable", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    test.setSandboxAvailable(false);
+
+    await expect(
+      test.router.prepareExecution(
+        { command: "pwd", cwd: "/workspace" },
+        sandboxRoute,
+      ),
+    ).rejects.toThrow("Required Sandbox execution is unavailable");
+    expect(test.createNativeProvider).not.toHaveBeenCalled();
+    expect(test.createNativeAgentProvider).not.toHaveBeenCalled();
+    expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("fails closed with a Native Agent availability error when initialization fails", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    test.createNativeAgentProvider.mockImplementation(() => {
+      throw new Error("Packaged node-pty is missing");
+    });
+
+    await expect(
+      test.router.prepareExecution(
+        { command: "pwd", cwd: "/workspace" },
+        nativeAgentRoute,
+      ),
+    ).rejects.toThrow(
+      "Required Native Agent execution is unavailable: Packaged node-pty is missing. No compatibility terminal fallback was attempted.",
+    );
+    expect(test.createNativeProvider).not.toHaveBeenCalled();
+    expect(test.audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "execution_failed",
+        failure: "native_runtime_unavailable",
+      }),
+    );
+  });
+
+  it("routes required Native Agent authority only to its dedicated provider", async () => {
+    const test = harness();
+    test.setEnabled(true);
+
+    const prepared = await test.router.prepareExecution(
+      { command: "pwd", cwd: "/workspace" },
+      nativeAgentRoute,
+    );
+    await expect(prepared.execute()).resolves.toMatchObject({
+      output: "native-agent",
+      security: {
+        route: "native",
+        executionSurface: "agentlink-native",
+        requiredAuthority: "native-agent",
+      },
+    });
+    expect(test.createNativeAgentProvider).toHaveBeenCalledTimes(1);
+    expect(test.createNativeProvider).not.toHaveBeenCalled();
+    expect(test.createSandboxProvider).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["host target", "host-terminal-1", "host target"],
+    ["unknown target", "missing-terminal", "not found"],
+  ])(
+    "rejects an explicit %s without retargeting",
+    async (_name, terminalId, reason) => {
+      const test = harness();
+      test.setEnabled(true);
+
+      await expect(
+        test.router.prepareExecution(
+          { command: "pwd", cwd: "/workspace", terminal_id: terminalId },
+          sandboxRoute,
+        ),
+      ).rejects.toThrow(reason);
+      expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
+      expect(test.native.executeCommand).not.toHaveBeenCalled();
+      expect(test.nativeAgent.executeCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects an explicit terminal owned by the wrong authority", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    vi.mocked(test.nativeAgent.listTerminals).mockReturnValue([
+      { id: "native-agent-1", name: "Native Agent", busy: false },
+    ]);
+    const nativePrepared = await test.router.prepareExecution(
+      { command: "pwd", cwd: "/workspace" },
+      nativeAgentRoute,
+    );
+    await nativePrepared.execute();
+
+    await expect(
+      test.router.prepareExecution(
+        {
+          command: "pwd",
+          cwd: "/workspace",
+          terminal_id: "native-agent-1",
+        },
+        sandboxRoute,
+      ),
+    ).rejects.toThrow("wrong authority");
+    expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects ambiguous names across authority providers", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    vi.mocked(test.nativeAgent.listTerminals).mockReturnValue([
+      { id: "native-agent-1", name: "Shared", busy: false },
+    ]);
+    vi.mocked(test.sandbox.listTerminals).mockReturnValue([
+      { id: "sandbox-1", name: "Shared", busy: false },
+    ]);
+    await (
+      await test.router.prepareExecution(
+        { command: "pwd", cwd: "/workspace" },
+        nativeAgentRoute,
+      )
+    ).execute();
+
+    await expect(
+      test.router.prepareExecution(
+        { command: "pwd", cwd: "/workspace", terminal_name: "Shared" },
+        sandboxRoute,
+      ),
+    ).rejects.toThrow("ambiguous name");
+  });
+
+  it("routes lifecycle operations only to the exact terminal owner", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    vi.mocked(test.sandbox.listTerminals).mockReturnValue([
+      { id: "sandbox-1", name: "Sandbox", busy: true },
+    ]);
+    vi.mocked(test.sandbox.getBackgroundState).mockReturnValue({
+      is_running: true,
+      state: "running",
+      exit_code: null,
+      output: "running",
+      output_captured: true,
+    });
+    vi.mocked(test.sandbox.interruptTerminal).mockReturnValue(true);
+    await (
+      await test.router.prepareExecution(
+        { command: "pwd", cwd: "/workspace" },
+        sandboxRoute,
+      )
+    ).execute();
+
+    expect(test.router.getBackgroundState("sandbox-1")).toMatchObject({
+      output: "running",
+    });
+    expect(test.router.interruptTerminal("sandbox-1")).toBe(true);
+    expect(test.router.interruptTerminal("unknown-1")).toBe(false);
+    expect(test.sandbox.interruptTerminal).toHaveBeenCalledTimes(1);
+    expect(test.native.interruptTerminal).not.toHaveBeenCalled();
+    expect(test.nativeAgent.interruptTerminal).not.toHaveBeenCalled();
+  });
+
+  it("aggregates recently closed terminals across active authorities", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    vi.mocked(test.nativeAgent.getRecentlyClosedTerminals).mockReturnValue([
+      {
+        id: "native-agent-closed",
+        name: "Native Agent",
+        closedAt: 20,
+        is_running: false,
+        state: "completed",
+        exit_code: 0,
+        output: "native output",
+        output_captured: true,
+      },
+    ]);
+    vi.mocked(test.sandbox.getRecentlyClosedTerminals).mockReturnValue([
+      {
+        id: "sandbox-closed",
+        name: "Sandbox",
+        closedAt: 10,
+        is_running: false,
+        state: "completed",
+        exit_code: 0,
+        output: "sandbox output",
+        output_captured: true,
+      },
+    ]);
+    await (
+      await test.router.prepareExecution(
+        { command: "pwd", cwd: "/workspace" },
+        nativeAgentRoute,
+      )
+    ).execute();
+    await (
+      await test.router.prepareExecution(
+        { command: "pwd", cwd: "/workspace" },
+        sandboxRoute,
+      )
+    ).execute();
+
+    expect(test.router.getRecentlyClosedTerminals(5)).toEqual([
+      expect.objectContaining({ id: "native-agent-closed" }),
+      expect.objectContaining({ id: "sandbox-closed" }),
+    ]);
+    expect(test.nativeAgent.getRecentlyClosedTerminals).toHaveBeenCalledWith(5);
+    expect(test.sandbox.getRecentlyClosedTerminals).toHaveBeenCalledWith(5);
+  });
+
+  it("reveals exact custom terminals through the surface fallback", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    vi.mocked(test.sandbox.listTerminals).mockReturnValue([
+      { id: "sandbox-1", name: "Sandbox", busy: true },
+    ]);
+    await (
+      await test.router.prepareExecution(
+        { command: "pwd", cwd: "/workspace" },
+        sandboxRoute,
+      )
+    ).execute();
+
+    expect(test.router.revealTerminal("sandbox-1")).toBe(true);
+    expect(test.revealCustomTerminal).toHaveBeenCalledWith("sandbox-1");
+    expect(test.router.revealTerminal("unknown-1")).toBe(false);
+    expect(test.revealCustomTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps provider-native terminal reveal authoritative", async () => {
+    const test = harness();
+    const revealTerminal = vi.fn(() => false);
+    test.setEnabled(false);
+    test.native.revealTerminal = revealTerminal;
+    vi.mocked(test.native.listTerminals).mockReturnValue([
+      { id: "native-1", name: "Native", busy: true },
+    ]);
+    await test.router.executeCommand({ command: "pwd", cwd: "/workspace" });
+
+    expect(test.router.revealTerminal("native-1")).toBe(false);
+    expect(revealTerminal).toHaveBeenCalledWith("native-1");
+    expect(test.revealCustomTerminal).not.toHaveBeenCalled();
+  });
+
+  it("does not close host targets or ambiguous cross-provider names", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    vi.mocked(test.nativeAgent.listTerminals).mockReturnValue([
+      { id: "native-agent-1", name: "Shared", busy: false },
+    ]);
+    vi.mocked(test.sandbox.listTerminals).mockReturnValue([
+      { id: "sandbox-1", name: "Shared", busy: false },
+    ]);
+    await (
+      await test.router.prepareExecution(
+        { command: "pwd", cwd: "/workspace" },
+        nativeAgentRoute,
+      )
+    ).execute();
+    await (
+      await test.router.prepareExecution(
+        { command: "pwd", cwd: "/workspace" },
+        sandboxRoute,
+      )
+    ).execute();
+
+    expect(test.router.closeTerminals(["Shared", "host-terminal-1"])).toEqual({
+      closed: 0,
+      not_found: ["Shared", "host-terminal-1"],
+    });
+    expect(test.nativeAgent.closeTerminals).not.toHaveBeenCalled();
+    expect(test.sandbox.closeTerminals).not.toHaveBeenCalled();
   });
 
   it("fails closed when runtime availability is lost after sandbox selection", async () => {
@@ -323,6 +748,28 @@ describe("AgentTerminalProviderRouter", () => {
 
     expect(test.router.log).toBe(assignedLog);
     expect(test.sandbox.log).toBe(assignedLog);
+  });
+
+  it("disposes Native Agent channels on route refresh", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    await (
+      await test.router.prepareExecution(
+        { command: "pwd", cwd: "/workspace" },
+        nativeAgentRoute,
+      )
+    ).execute();
+
+    test.router.refresh();
+
+    expect(test.nativeAgent.dispose).toHaveBeenCalledTimes(1);
+    await (
+      await test.router.prepareExecution(
+        { command: "pwd", cwd: "/workspace" },
+        nativeAgentRoute,
+      )
+    ).execute();
+    expect(test.createNativeAgentProvider).toHaveBeenCalledTimes(2);
   });
 
   it("disposes an empty retired sandbox and creates a new generation", async () => {

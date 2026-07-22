@@ -145,6 +145,7 @@ import type {
   FinalMessageStatus,
 } from "../../shared/finalStatus.js";
 import { handleTodoWrite, type TodoToolInput } from "../../agent/todoTool.js";
+import { handlePresentImages } from "../../tools/presentImages.js";
 import { MCP_TOOL_BRIDGE_TOOL_NAMES } from "../../shared/mcpToolDefinitions.js";
 import {
   ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
@@ -214,7 +215,22 @@ export interface PreparedAskAgentWebAccess {
   target: BrowserGatewayInstanceRecord | null;
   policy: Readonly<CoreResolvedWebAccessPolicy>;
   tools: readonly CoreModelToolDefinition[];
+  parallelSafeMcpToolNames: readonly string[];
+  parallelSafeMcpServerNames: readonly string[];
 }
+
+const ASK_AGENT_PARALLEL_SAFE_TOOL_NAMES = new Set([
+  "web_search",
+  "web_fetch",
+  "read_file",
+  "list_files",
+  "search_files",
+  "find_mcp_tools",
+  "list_mcp_resources",
+  "read_mcp_resource",
+  "list_mcp_prompts",
+  "get_mcp_prompt",
+]);
 
 function freezeAskAgentValue<T>(value: T): Readonly<T> {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -614,6 +630,44 @@ type AskAgentToolExecutionResult = {
   modelResult?: string;
 };
 
+function askAgentMediaFromToolResult(result: ToolResult | undefined): {
+  content: string;
+  modelContent: string | CoreModelContentBlock[];
+  resultImages: Array<{ mimeType: string; data: string }>;
+} {
+  if (!result) {
+    return { content: "", modelContent: "", resultImages: [] };
+  }
+  const text = result.content
+    .filter(
+      (
+        item,
+      ): item is Extract<ToolResult["content"][number], { type: "text" }> =>
+        item.type === "text",
+    )
+    .map((item) => item.text)
+    .join("\n");
+  const modelBlocks: CoreModelContentBlock[] = text
+    ? [{ type: "text", text }]
+    : [];
+  const resultImages: Array<{ mimeType: string; data: string }> = [];
+  for (const item of result.content) {
+    if (item.type !== "image") continue;
+    const mediaType = toCoreModelImageMediaType(item.mimeType);
+    if (!mediaType) continue;
+    modelBlocks.push({
+      type: "image",
+      source: { type: "base64", media_type: mediaType, data: item.data },
+    });
+    resultImages.push({ mimeType: mediaType, data: item.data });
+  }
+  return {
+    content: text,
+    modelContent: modelBlocks.length > 0 ? modelBlocks : text,
+    resultImages,
+  };
+}
+
 type AskAgentSessionResponse = { readonly ok: true } & AskAgentControllerState;
 
 export class BrowserGatewayHelper {
@@ -640,7 +694,12 @@ export class BrowserGatewayHelper {
     BrowserGatewayAskAgentModelClient,
     "complete"
   > &
-    Partial<Pick<BrowserGatewayAskAgentModelClient, "completeWithToolCalls">>;
+    Partial<
+      Pick<
+        BrowserGatewayAskAgentModelClient,
+        "completeWithToolCalls" | "executeNativeWebTool"
+      >
+    >;
 
   private readonly askAgentLogPath: string;
   private readonly askAgentPreferencesStore: BrowserGatewayAskAgentPreferencesStore;
@@ -689,7 +748,10 @@ export class BrowserGatewayHelper {
         "complete"
       > &
         Partial<
-          Pick<BrowserGatewayAskAgentModelClient, "completeWithToolCalls">
+          Pick<
+            BrowserGatewayAskAgentModelClient,
+            "completeWithToolCalls" | "executeNativeWebTool"
+          >
         >;
       askAgentSummarizer?: BrowserGatewayAskAgentSummarizer;
       askAgentMemoryStore?: BrowserGatewayAskAgentMemoryStore;
@@ -3444,6 +3506,22 @@ export class BrowserGatewayHelper {
           );
         }
       },
+      isParallelSafe: (toolCall) => {
+        if (ASK_AGENT_PARALLEL_SAFE_TOOL_NAMES.has(toolCall.name)) return true;
+        if (
+          preparedWebAccess.parallelSafeMcpToolNames.includes(toolCall.name)
+        ) {
+          return true;
+        }
+        if (toolCall.name !== "call_mcp_tool") return false;
+        const serverName =
+          typeof toolCall.input.server === "string"
+            ? toolCall.input.server.trim()
+            : "";
+        return preparedWebAccess.parallelSafeMcpServerNames.includes(
+          serverName,
+        );
+      },
       runTool: async (toolCall) => {
         const toolStartedAt = Date.now();
         this.recordAskAgentSemanticDelta();
@@ -3518,7 +3596,7 @@ export class BrowserGatewayHelper {
     signal: AbortSignal,
   ): Promise<PreparedAskAgentWebAccess> {
     const target = await this.getAskAgentMcpBridgeTarget();
-    const [remotePolicy, mcpTools] = await Promise.all([
+    const [remotePolicy, mcpCatalog] = await Promise.all([
       this.getAskAgentWebPolicy(target, signal),
       this.getAskAgentMcpTools(target, signal),
     ]);
@@ -3568,11 +3646,17 @@ export class BrowserGatewayHelper {
     const nativeTools = policy.enabledKinds.map(
       (kind) => CORE_NATIVE_WEB_TOOL_DEFINITIONS[kind],
     );
-    const tools = [...mcpTools, ...nativeTools];
+    const tools = [...mcpCatalog.tools, ...nativeTools];
     return Object.freeze({
       target,
       policy: freezeAskAgentValue(policy),
       tools: freezeAskAgentValue(tools),
+      parallelSafeMcpToolNames: freezeAskAgentValue(
+        mcpCatalog.parallelSafeToolNames,
+      ),
+      parallelSafeMcpServerNames: freezeAskAgentValue(
+        mcpCatalog.parallelSafeServerNames,
+      ),
     });
   }
 
@@ -3618,8 +3702,17 @@ export class BrowserGatewayHelper {
   private async getAskAgentMcpTools(
     target: BrowserGatewayInstanceRecord | null,
     signal: AbortSignal,
-  ): Promise<CoreModelToolDefinition[]> {
-    if (!target) return [];
+  ): Promise<{
+    tools: CoreModelToolDefinition[];
+    parallelSafeToolNames: string[];
+    parallelSafeServerNames: string[];
+  }> {
+    const empty = {
+      tools: [],
+      parallelSafeToolNames: [],
+      parallelSafeServerNames: [],
+    };
+    if (!target) return empty;
     try {
       const response = await fetch(
         `${target.url}/internal/ask-agent/mcp-tools`,
@@ -3628,18 +3721,32 @@ export class BrowserGatewayHelper {
           signal,
         },
       );
-      if (!response.ok) return [];
+      if (!response.ok) return empty;
       const body = (await response.json()) as {
         ok?: boolean;
         tools?: CoreModelToolDefinition[];
+        parallelSafeToolNames?: string[];
+        parallelSafeServerNames?: string[];
       };
-      return Array.isArray(body.tools) ? body.tools : [];
+      return {
+        tools: Array.isArray(body.tools) ? body.tools : [],
+        parallelSafeToolNames: Array.isArray(body.parallelSafeToolNames)
+          ? body.parallelSafeToolNames.filter(
+              (name): name is string => typeof name === "string",
+            )
+          : [],
+        parallelSafeServerNames: Array.isArray(body.parallelSafeServerNames)
+          ? body.parallelSafeServerNames.filter(
+              (name): name is string => typeof name === "string",
+            )
+          : [],
+      };
     } catch (err) {
       this.logAskAgentEvent("ask-agent.tool.mcp_tools_failed", {
         ok: false,
         error: String(err),
       });
-      return [];
+      return empty;
     }
   }
 
@@ -3683,9 +3790,16 @@ export class BrowserGatewayHelper {
         error?: string;
       };
       const result = body.result;
-      const text = result?.content.find((item) => item.type === "text")?.text;
+      const media = askAgentMediaFromToolResult(result);
       const content =
-        text ?? JSON.stringify({ error: body.error ?? "mcp_tool_failed" });
+        media.content ||
+        (media.resultImages.length > 0
+          ? `[${media.resultImages.length} image${media.resultImages.length === 1 ? "" : "s"}]`
+          : JSON.stringify({ error: body.error ?? "mcp_tool_failed" }));
+      const modelContent =
+        Array.isArray(media.modelContent) && !media.content
+          ? [{ type: "text" as const, text: content }, ...media.modelContent]
+          : media.modelContent || content;
       this.logAskAgentEvent("ask-agent.tool.mcp", {
         ok: Boolean(response.ok && body.ok),
         toolName: toolCall.name,
@@ -3693,11 +3807,16 @@ export class BrowserGatewayHelper {
       });
       return {
         content,
+        modelContent,
+        ...(media.resultImages.length > 0
+          ? { resultImages: media.resultImages }
+          : {}),
         stop: false,
         toolMessage: this.buildAskAgentToolResultMessage(
           toolCall,
           content,
-          !(response.ok && body.ok),
+          !(response.ok && body.ok) || result?.isError === true,
+          modelContent,
         ),
       };
     } catch (err) {
@@ -3759,6 +3878,50 @@ export class BrowserGatewayHelper {
           )
         : CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS;
     return { prompt, count, size, timeoutMs };
+  }
+
+  private executeAskAgentPresentImagesTool(
+    toolCall: BrowserGatewayAskAgentToolCall,
+  ): AskAgentToolExecutionResult {
+    try {
+      const result = handlePresentImages(toolCall.input, () =>
+        this.askAgentSessionStore.getSessionImages(),
+      );
+      const media = askAgentMediaFromToolResult(result);
+      this.logAskAgentEvent("ask-agent.tool.present_images", {
+        ok: true,
+        imageCount: media.resultImages.length,
+      });
+      return {
+        content: media.content,
+        modelContent: media.modelContent,
+        resultImages: media.resultImages,
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(
+          toolCall,
+          media.content,
+          false,
+          media.modelContent,
+        ),
+      };
+    } catch (error) {
+      const content = JSON.stringify({
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.logAskAgentEvent("ask-agent.tool.present_images", {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        content,
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(
+          toolCall,
+          content,
+          true,
+        ),
+      };
+    }
   }
 
   private async requestAskAgentGenerateImageApproval(params: {
@@ -3946,11 +4109,66 @@ export class BrowserGatewayHelper {
   ): Promise<AskAgentToolExecutionResult> {
     const kind = toolCall.name === "web_search" ? "search" : "fetch";
     const route = policy.routes[kind];
+    if (!route.available || !route.hostedTool) {
+      const content = JSON.stringify({
+        error: `Native web ${kind} is not available for this request.`,
+      });
+      return {
+        content,
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(
+          toolCall,
+          content,
+          true,
+        ),
+      };
+    }
+
+    const executeNativeWebTool =
+      this.askAgentModelClient.executeNativeWebTool?.bind(
+        this.askAgentModelClient,
+      );
+    if (executeNativeWebTool) {
+      try {
+        const directResult = await executeNativeWebTool({
+          credential,
+          model,
+          kind,
+          input: toolCall.input,
+          settings: policy.settings,
+          signal,
+        });
+        if (directResult) {
+          const content = JSON.stringify(directResult, null, 2);
+          this.logAskAgentEvent(`ask-agent.tool.web_${kind}`, {
+            ok: true,
+            provider: directResult.provider,
+            transport: "standalone",
+            activities: directResult.activities.length,
+            citations: directResult.citations.length,
+          });
+          return {
+            content,
+            modelResult: content,
+            stop: false,
+            toolMessage: this.buildAskAgentToolResultMessage(toolCall, content),
+          };
+        }
+      } catch (error) {
+        if (signal.aborted) throw error;
+        this.logAskAgentEvent(`ask-agent.tool.web_${kind}.standalone`, {
+          ok: false,
+          fallback: "delegated",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     const completeWithToolCalls =
       this.askAgentModelClient.completeWithToolCalls?.bind(
         this.askAgentModelClient,
       );
-    if (!route.available || !route.hostedTool || !completeWithToolCalls) {
+    if (!completeWithToolCalls) {
       const content = JSON.stringify({
         error: `Native web ${kind} is not available for this request.`,
       });
@@ -4131,6 +4349,10 @@ export class BrowserGatewayHelper {
         mcpBridgeTarget,
         signal,
       );
+    }
+
+    if (toolCall.name === "present_images") {
+      return this.executeAskAgentPresentImagesTool(toolCall);
     }
 
     if (toolCall.name === "todo_write") {

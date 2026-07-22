@@ -23,6 +23,10 @@ function createState(overrides: Partial<AppState> = {}): AppState {
         hardBudget: 155_000,
       },
       condenseThreshold: 0.75,
+      commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
     },
     streaming: true,
     thinkingEnabled: true,
@@ -117,6 +121,10 @@ describe("createBrowserForegroundSnapshot", () => {
       reasoningEffort: "high",
       restoringSession: true,
       condenseThreshold: 0.75,
+      commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
       systemPrompt: "system prompt",
     });
 

@@ -8,6 +8,11 @@ import type {
   McpConfigSnapshot,
   McpManagerView,
 } from "../../shared/mcpManagerTypes.js";
+import type {
+  TerminalApprovalPolicy,
+  TerminalApprovalReviewer,
+  TerminalExecutionPreset,
+} from "../../core/capabilities/terminal.js";
 
 import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy.js";
 import type { ComposeTrace } from "../../shared/composeTypes.js";
@@ -142,6 +147,38 @@ export interface BtwBudget {
   maxApiTurns: number;
   toolCalls: number;
   maxToolCalls: number;
+}
+
+export interface WorktreeSetupConfig {
+  task: string;
+  prompt: string;
+  sourcePath?: string;
+  branch?: string;
+  baseRef?: string;
+  worktreePath?: string;
+  mode?: string;
+  autoSubmit?: boolean;
+}
+
+export interface WorktreeSetupState {
+  requestId: string;
+  input: string;
+  answer: string;
+  phase:
+    | "configuring"
+    | "awaiting_input"
+    | "ready"
+    | "launching"
+    | "opened"
+    | "rejected"
+    | "cancelled"
+    | "error";
+  config?: WorktreeSetupConfig;
+  message?: string;
+  tools?: string[];
+  warnings?: string[];
+  budget?: BtwBudget;
+  conversation?: Array<{ role: "user" | "assistant"; text: string }>;
 }
 
 /** Messages from extension to webview */
@@ -665,6 +702,49 @@ export type ExtensionMessage =
       budget?: BtwBudget;
     }
   | {
+      type: "agentWorktreeSetupStarted";
+      requestId: string;
+      input: string;
+    }
+  | {
+      type: "agentWorktreeSetupProgress";
+      requestId: string;
+      answer: string;
+      tools: string[];
+      warnings: string[];
+      budget: BtwBudget;
+    }
+  | {
+      type: "agentWorktreeSetupAwaitingInput";
+      requestId: string;
+      answer: string;
+      conversation: Array<{ role: "user" | "assistant"; text: string }>;
+      tools: string[];
+      warnings: string[];
+      budget: BtwBudget;
+    }
+  | {
+      type: "agentWorktreeSetupReady";
+      requestId: string;
+      answer: string;
+      config: WorktreeSetupConfig;
+      tools: string[];
+      warnings: string[];
+      budget: BtwBudget;
+    }
+  | {
+      type: "agentWorktreeSetupLaunching";
+      requestId: string;
+      config: WorktreeSetupConfig;
+    }
+  | {
+      type: "agentWorktreeSetupResult";
+      requestId: string;
+      phase: "opened" | "rejected" | "cancelled" | "error";
+      message: string;
+      config?: WorktreeSetupConfig;
+    }
+  | {
       type: "agentPairingCode";
       pairingId: string;
       code: string;
@@ -711,6 +791,9 @@ export interface ChatState {
   };
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
   commandApprovalPolicy?: CommandApprovalPolicy;
+  approvalPolicy?: TerminalApprovalPolicy;
+  approvalReviewer?: TerminalApprovalReviewer;
+  executionPreset?: TerminalExecutionPreset;
   configuredCommandApprovalPolicy?: Exclude<
     CommandApprovalPolicy,
     "approve-for-me"

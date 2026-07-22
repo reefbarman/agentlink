@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import type {
+  ApprovalKind,
   ApprovalProjectContext,
   ApprovalRequest,
   CommandReviewSummary,
@@ -9,11 +10,16 @@ import type {
   MemoryOperation,
   MemoryScope,
   MemoryTier,
+  NetworkReviewSummary,
+  RuleEntry,
   SubCommandEntry,
 } from "./webview/types.js";
+import type {
+  ManagedNetworkRequest,
+  TerminalExecutionSecuritySummary,
+} from "../core/capabilities/terminal.js";
 
 import type { StatusBarManager } from "../util/StatusBarManager.js";
-import type { TerminalExecutionSecuritySummary } from "../core/capabilities/terminal.js";
 import { isMemoryProtectedPath } from "./protectedPaths.js";
 import path from "path";
 import picomatch from "picomatch";
@@ -30,13 +36,20 @@ export interface CommandApprovalResponse {
   rejectionReason?: string;
   rulePattern?: string;
   ruleMode?: "prefix" | "exact" | "regex";
-  /** Per-sub-command rules with individual scopes */
-  rules?: Array<{
-    pattern: string;
-    mode: "prefix" | "exact" | "regex" | "skip";
-    scope: "session" | "project" | "global";
-  }>;
+  /** Per-sub-command rules with individual decisions and scopes. */
+  rules?: RuleEntry[];
   /** Optional follow-up message from the user */
+  followUp?: string;
+}
+
+export interface NetworkApprovalResponse {
+  decision:
+    | "allow-once"
+    | "allow-session"
+    | "allow-project"
+    | "allow-global"
+    | "reject";
+  rejectionReason?: string;
   followUp?: string;
 }
 
@@ -99,7 +112,9 @@ export interface MemoryApprovalResponse {
 // ── Internal types ──────────────────────────────────────────────────────────
 
 interface InternalRequest {
-  kind: "command" | "path" | "write" | "rename" | "memory";
+  kind: "command" | "network" | "path" | "write" | "rename" | "memory";
+  deferApprovalRecording?: boolean;
+  bypassRecentApproval?: boolean;
   id: string;
   sessionId?: string;
   sourceProject?: ApprovalProjectContext;
@@ -120,6 +135,8 @@ interface InternalRequest {
   /** Concise guardrail reason shown instead of reviewer output. */
   humanOnlyReason?: string;
   security?: TerminalExecutionSecuritySummary;
+  managedNetwork?: ManagedNetworkRequest;
+  networkReview?: NetworkReviewSummary;
   writeOperation?: "create" | "modify";
   outsideWorkspace?: boolean;
   oldName?: string;
@@ -134,6 +151,7 @@ interface InternalRequest {
   memoryRationale?: string;
   memoryTargetPath?: string;
   memoryContent?: string;
+  signal?: AbortSignal;
 }
 
 interface QueueEntry {
@@ -173,11 +191,14 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   /** When set, route approvals to this callback instead of showing the approval webview. */
   public onForwardApproval?: (
     request: ApprovalRequest,
-    respond: (msg: DecisionMessage) => void,
+    respond: (msg: DecisionMessage) => boolean,
   ) => void;
 
   /** Called when the approval queue empties, if onForwardApproval is set. */
   public onForwardApprovalIdle?: () => void;
+
+  /** Called when a forwarded approval is cancelled without a UI decision. */
+  public onForwardApprovalCancelled?: (id: string) => void;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -207,29 +228,92 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       humanOnlyReason?: string;
       security?: TerminalExecutionSecuritySummary;
       sessionId?: string;
+      signal?: AbortSignal;
+      /** Delay recent-approval persistence until the host revalidates policy. */
+      deferApprovalRecording?: boolean;
+      /** Require a new decision instead of consuming the recent-approval cache. */
+      bypassRecentApproval?: boolean;
     },
-  ): { promise: Promise<CommandApprovalResponse>; id: string } {
+  ): {
+    promise: Promise<CommandApprovalResponse>;
+    id: string;
+    commitApprovalRecording: () => void;
+  } {
+    const id = randomUUID();
+    let pendingRecording:
+      | { request: InternalRequest; response: CommandApprovalResponse }
+      | undefined;
+    let recordingCommitted = false;
+    const promise = this.enqueue(
+      {
+        kind: "command",
+        id,
+        command,
+        fullCommand,
+        subCommands: options?.subCommands,
+        inlineFiles: options?.inlineFiles,
+        reason: options?.reason,
+        cwd: options?.cwd,
+        commandReview: options?.commandReview,
+        humanOnlyReason: options?.humanOnlyReason,
+        security: options?.security,
+        sessionId: options?.sessionId,
+        signal: options?.signal,
+        deferApprovalRecording: options?.deferApprovalRecording,
+        bypassRecentApproval: options?.bypassRecentApproval,
+      },
+      (request, response) => {
+        pendingRecording = {
+          request,
+          response: response as CommandApprovalResponse,
+        };
+      },
+    ) as Promise<CommandApprovalResponse>;
+    return {
+      promise,
+      id,
+      commitApprovalRecording: () => {
+        if (recordingCommitted || !pendingRecording) return;
+        recordingCommitted = true;
+        if (!pendingRecording.response.editedCommand) {
+          this.recordApproval(
+            pendingRecording.request,
+            pendingRecording.response,
+          );
+        }
+        pendingRecording = undefined;
+      },
+    };
+  }
+
+  enqueueNetworkApproval(options: {
+    request: ManagedNetworkRequest;
+    review?: NetworkReviewSummary;
+    signal?: AbortSignal;
+  }): { promise: Promise<NetworkApprovalResponse>; id: string } {
     const id = randomUUID();
     const promise = this.enqueue({
-      kind: "command",
+      kind: "network",
       id,
-      command,
-      fullCommand,
-      subCommands: options?.subCommands,
-      inlineFiles: options?.inlineFiles,
-      reason: options?.reason,
-      cwd: options?.cwd,
-      commandReview: options?.commandReview,
-      humanOnlyReason: options?.humanOnlyReason,
-      security: options?.security,
-      sessionId: options?.sessionId,
-    }) as Promise<CommandApprovalResponse>;
+      sessionId: options.request.sessionId,
+      managedNetwork: {
+        ...options.request,
+        dnsAnswers: options.request.dnsAnswers.map((answer) => ({ ...answer })),
+      },
+      networkReview: options.review,
+      reason: options.request.reason,
+      cwd: options.request.cwd,
+      command: options.request.command,
+      signal: options.signal,
+      bypassRecentApproval: true,
+    }) as Promise<NetworkApprovalResponse>;
     return { promise, id };
   }
 
   enqueuePathApproval(
     filePath: string,
     sessionId?: string,
+    signal?: AbortSignal,
   ): {
     promise: Promise<PathApprovalResponse>;
     id: string;
@@ -241,6 +325,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       filePath,
       sessionId,
       targetPath: filePath,
+      signal,
     }) as Promise<PathApprovalResponse>;
     return { promise, id };
   }
@@ -325,6 +410,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       this.alertDisposable = undefined;
       const entry = this.currentEntry;
       this.currentEntry = undefined;
+      this.onForwardApprovalCancelled?.(id);
       entry.resolve(this.makeRejectResponse(entry.request.kind));
       this.processQueue();
       return;
@@ -332,6 +418,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     const idx = this.queue.findIndex((e) => e.request.id === id);
     if (idx !== -1) {
       const entry = this.queue.splice(idx, 1)[0];
+      this.onForwardApprovalCancelled?.(id);
       entry.resolve(this.makeRejectResponse(entry.request.kind));
       this.updatePendingCount();
     }
@@ -341,11 +428,14 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     kind: InternalRequest["kind"],
   ):
     | CommandApprovalResponse
+    | NetworkApprovalResponse
     | PathApprovalResponse
     | WriteApprovalResponse
     | RenameApprovalResponse
     | MemoryApprovalResponse {
-    if (kind === "command") return { decision: "reject" };
+    if (kind === "command") {
+      return { decision: "reject" };
+    }
     if (kind === "write") return { decision: "reject" };
     if (kind === "rename") return { decision: "reject" };
     if (kind === "memory") return { decision: "reject" };
@@ -354,7 +444,10 @@ export class ApprovalPanelProvider implements vscode.Disposable {
 
   // ── Queue management ────────────────────────────────────────────────────
 
-  private enqueue(request: InternalRequest): Promise<unknown> {
+  private enqueue(
+    request: InternalRequest,
+    deferRecording?: (request: InternalRequest, response: unknown) => void,
+  ): Promise<unknown> {
     const projectContext = this.resolveProjectContext?.({
       sessionId: request.sessionId,
       targetPath: request.targetPath,
@@ -363,11 +456,17 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       ...request,
       ...projectContext,
     };
+    if (attributedRequest.signal?.aborted) {
+      return Promise.resolve(this.makeRejectResponse(attributedRequest.kind));
+    }
+
     // Auto-resolve command repeats immediately if a matching approval was
     // granted recently. Path approvals are intentionally checked only while
     // draining the existing queue so "Allow Once" applies to the current
     // parallel batch, not future requests within the TTL window.
     if (
+      !attributedRequest.bypassRecentApproval &&
+      attributedRequest.kind !== "network" &&
       attributedRequest.kind !== "path" &&
       this.isRecentlyApprovedRequest(attributedRequest)
     ) {
@@ -377,7 +476,18 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     }
 
     return new Promise((resolve) => {
-      this.queue.push({ request: attributedRequest, resolve });
+      const handleAbort = () => this.cancelApproval(attributedRequest.id);
+      const finish = (response: unknown) => {
+        attributedRequest.signal?.removeEventListener("abort", handleAbort);
+        if (attributedRequest.deferApprovalRecording) {
+          deferRecording?.(attributedRequest, response);
+        }
+        resolve(response);
+      };
+      this.queue.push({ request: attributedRequest, resolve: finish });
+      attributedRequest.signal?.addEventListener("abort", handleAbort, {
+        once: true,
+      });
       this.updatePendingCount();
       this.processQueue();
     });
@@ -393,6 +503,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     while (this.queue.length > 0) {
       const front = this.queue[0];
       if (
+        !front.request.bypassRecentApproval &&
         this.isRecentlyApprovedRequest(front.request, {
           allowPathApprovals: options?.allowRecentPathApprovals ?? false,
         })
@@ -420,6 +531,24 @@ export class ApprovalPanelProvider implements vscode.Disposable {
 
     const { request } = this.currentEntry;
 
+    // Approval attention is presentation-independent. Built-in approvals are
+    // rendered in chat while external approvals use a separate webview, but
+    // both must remain visible in the status bar until they are resolved.
+    this.alertDisposable?.dispose();
+    this.alertDisposable = this.showAlert(
+      request.kind === "command"
+        ? "Command approval required"
+        : request.kind === "network"
+          ? "Network approval required"
+          : request.kind === "write"
+            ? "Write approval required"
+            : request.kind === "rename"
+              ? "Rename approval required"
+              : request.kind === "memory"
+                ? "Memory approval required"
+                : "Path access approval required",
+    );
+
     // If a forwarding hook is set, delegate rendering to the caller (e.g. chat webview)
     if (this.onForwardApproval) {
       const queuePosition = 1;
@@ -438,6 +567,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
         commandReview: request.commandReview,
         humanOnlyReason: request.humanOnlyReason,
         security: request.security,
+        managedNetwork: request.managedNetwork,
+        networkReview: request.networkReview,
         filePath: request.filePath,
         writeOperation: request.writeOperation,
         outsideWorkspace: request.outsideWorkspace,
@@ -460,19 +591,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       return;
     }
 
-    // Always show alert and focus window, even if webview isn't ready yet
-    this.alertDisposable?.dispose();
-    this.alertDisposable = this.showAlert(
-      request.kind === "command"
-        ? "Command approval required"
-        : request.kind === "write"
-          ? "Write approval required"
-          : request.kind === "rename"
-            ? "Rename approval required"
-            : request.kind === "memory"
-              ? "Memory approval required"
-              : "Path access approval required",
-    );
+    // Focus the window even if the dedicated webview isn't ready yet.
     vscode.commands.executeCommand("workbench.action.focusWindow");
 
     const webview = this.ensureWebview();
@@ -501,6 +620,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       commandReview: request.commandReview,
       humanOnlyReason: request.humanOnlyReason,
       security: request.security,
+      managedNetwork: request.managedNetwork,
+      networkReview: request.networkReview,
       filePath: request.filePath,
       writeOperation: request.writeOperation,
       outsideWorkspace: request.outsideWorkspace,
@@ -526,19 +647,25 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   private handleMessage(message: {
     type: string;
     id?: string;
+    approvalKind?: ApprovalKind;
     decision?: string;
     editedCommand?: string;
     rejectionReason?: string;
     rulePattern?: string;
     ruleMode?: string;
-    rules?: Array<{ pattern: string; mode: string; scope: string }>;
+    rules?: Array<{
+      pattern: string;
+      mode: string;
+      decision?: string;
+      scope: string;
+    }>;
     trustScope?: string;
     editedContent?: string;
     memoryTier?: MemoryTier;
     memoryScope?: MemoryScope;
     memoryName?: string;
     followUp?: string;
-  }): void {
+  }): boolean {
     // Handle webviewReady handshake
     if (message.type === "webviewReady") {
       this.webviewReady = true;
@@ -547,12 +674,16 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       if (webview && this.currentEntry) {
         this.postApprovalToWebview(webview);
       }
-      return;
+      return false;
     }
 
-    if (message.type !== "decision") return;
-    if (!this.currentEntry || message.id !== this.currentEntry.request.id)
-      return;
+    if (message.type !== "decision") return false;
+    if (!this.currentEntry || message.id !== this.currentEntry.request.id) {
+      return false;
+    }
+    if (!this.isValidDecision(this.currentEntry.request, message)) {
+      return false;
+    }
 
     this.alertDisposable?.dispose();
     this.alertDisposable = undefined;
@@ -564,6 +695,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
 
     let response:
       | CommandApprovalResponse
+      | NetworkApprovalResponse
       | PathApprovalResponse
       | WriteApprovalResponse
       | RenameApprovalResponse
@@ -579,6 +711,12 @@ export class ApprovalPanelProvider implements vscode.Disposable {
           | CommandApprovalResponse["ruleMode"]
           | undefined,
         rules: message.rules as CommandApprovalResponse["rules"],
+        followUp,
+      };
+    } else if (entry.request.kind === "network") {
+      response = {
+        decision: message.decision as NetworkApprovalResponse["decision"],
+        rejectionReason: message.rejectionReason || undefined,
         followUp,
       };
     } else if (entry.request.kind === "write") {
@@ -628,13 +766,106 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     const isRejection = message.decision === "reject";
     const isEdited =
       entry.request.kind === "command" && !!message.editedCommand;
-    if (!isRejection && !isEdited) {
+    if (
+      entry.request.kind !== "network" &&
+      !isRejection &&
+      !isEdited &&
+      !entry.request.deferApprovalRecording
+    ) {
       this.recordApproval(entry.request, response);
     }
 
     this.processQueue({
       allowRecentPathApprovals: entry.request.kind === "path",
     });
+    return true;
+  }
+
+  private isValidDecision(
+    request: InternalRequest,
+    message: {
+      approvalKind?: ApprovalKind;
+      decision?: string;
+      editedCommand?: string;
+      rulePattern?: string;
+      ruleMode?: string;
+      rules?: Array<{
+        pattern?: unknown;
+        mode?: unknown;
+        decision?: unknown;
+        scope?: unknown;
+      }>;
+      trustScope?: string;
+      editedContent?: string;
+      memoryTier?: MemoryTier;
+      memoryScope?: MemoryScope;
+      memoryName?: string;
+    },
+  ): boolean {
+    if (message.approvalKind !== request.kind) return false;
+
+    const allowedDecisions: Record<InternalRequest["kind"], readonly string[]> =
+      {
+        command: ["run-once", "edit", "session", "project", "global", "reject"],
+        network: [
+          "allow-once",
+          "allow-session",
+          "allow-project",
+          "allow-global",
+          "reject",
+        ],
+        path: [
+          "allow-once",
+          "allow-session",
+          "allow-project",
+          "allow-always",
+          "reject",
+        ],
+        write: [
+          "accept",
+          "reject",
+          "accept-session",
+          "accept-project",
+          "accept-always",
+        ],
+        rename: [
+          "accept",
+          "reject",
+          "accept-session",
+          "accept-project",
+          "accept-always",
+        ],
+        memory: ["accept", "reject"],
+      };
+    if (
+      !message.decision ||
+      !allowedDecisions[request.kind].includes(message.decision)
+    ) {
+      return false;
+    }
+
+    if (request.kind === "command" && message.rules !== undefined) {
+      const validModes = ["prefix", "exact", "regex", "skip"];
+      const validDecisions = ["allow", "prompt", "forbidden"];
+      const validScopes = ["session", "project", "global", "skip"];
+      if (
+        !message.rules.every(
+          (rule) =>
+            typeof rule === "object" &&
+            rule !== null &&
+            typeof rule.pattern === "string" &&
+            validModes.includes(String(rule.mode)) &&
+            (rule.decision === undefined ||
+              (typeof rule.decision === "string" &&
+                validDecisions.includes(rule.decision))) &&
+            validScopes.includes(String(rule.scope)),
+        )
+      ) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   private rejectCurrent(reason?: string): void {
@@ -757,9 +988,18 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     kind: InternalRequest["kind"],
     identifier: string,
     projectId = "unscoped",
+    requiredAuthority = "unspecified",
+    permissionIntent = "unspecified",
   ): boolean {
     if (kind !== "command") return false;
-    return this.hasRecentApproval(`${projectId}:cmd:${identifier}`);
+    return this.hasRecentApproval(
+      this.commandApprovalKey(
+        projectId,
+        requiredAuthority,
+        permissionIntent,
+        identifier,
+      ),
+    );
   }
 
   private getRecentApprovalTtl(request?: InternalRequest): number {
@@ -788,13 +1028,29 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     return filePath ? isMemoryProtectedPath(filePath) : true;
   }
 
+  private commandApprovalKey(
+    projectId: string,
+    requiredAuthority: string,
+    permissionIntent: string,
+    command: string,
+  ): string {
+    return `${projectId}:cmd:${requiredAuthority}:${permissionIntent}:${command}`;
+  }
+
   private approvalKeyForRequest(request: InternalRequest): string | undefined {
     const projectPrefix = request.sourceProject?.projectId ?? "unscoped";
     switch (request.kind) {
       case "command":
         return request.fullCommand
-          ? `${projectPrefix}:cmd:${request.fullCommand}`
+          ? this.commandApprovalKey(
+              projectPrefix,
+              request.security?.requiredAuthority ?? "unspecified",
+              request.security?.permissionIntent ?? "unspecified",
+              request.fullCommand,
+            )
           : undefined;
+      case "network":
+        return undefined;
       case "write":
         return request.filePath
           ? `${projectPrefix}:write:${request.filePath}`
@@ -840,6 +1096,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     request: InternalRequest,
     response?:
       | CommandApprovalResponse
+      | NetworkApprovalResponse
       | PathApprovalResponse
       | WriteApprovalResponse
       | RenameApprovalResponse
@@ -1002,11 +1259,16 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     kind: InternalRequest["kind"],
   ):
     | CommandApprovalResponse
+    | NetworkApprovalResponse
     | PathApprovalResponse
     | WriteApprovalResponse
     | RenameApprovalResponse
     | MemoryApprovalResponse {
     switch (kind) {
+      case "network":
+        throw new Error(
+          "Network approvals cannot be auto-approved by recent cache",
+        );
       case "command":
         return { decision: "run-once", recentApproval: true };
       case "write":

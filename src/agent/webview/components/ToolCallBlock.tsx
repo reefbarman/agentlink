@@ -5,6 +5,24 @@ import { InlineDiff } from "./InlineDiff";
 
 export type ToolCallData = ContentBlock & { type: "tool_call" };
 
+const MCP_APPROVAL_SCOPE_PRESENTATION = {
+  session: {
+    label: "Session",
+    icon: "codicon-history",
+    title: "Allow for this chat session",
+  },
+  project: {
+    label: "Project",
+    icon: "codicon-folder",
+    title: "Allow whenever this project uses the tool",
+  },
+  global: {
+    label: "Global",
+    icon: "codicon-globe",
+    title: "Allow whenever any project uses the tool",
+  },
+} as const;
+
 interface ToolCallBlockProps {
   toolCall: ToolCallData;
   onOpenFile?: (path: string, line?: number) => void;
@@ -453,6 +471,19 @@ export function getCommandApprovalBadge(
       : route === "native"
         ? ` · Native terminal (unsandboxed)${typeof securityRecord?.routeReason === "string" ? ` · ${securityRecord.routeReason}` : ""}`
         : "";
+  const reviewerTitle =
+    securityRecord?.approvalReviewerSnapshot === "auto-review"
+      ? " · Auto reviewer"
+      : securityRecord?.approvalReviewerSnapshot === "user"
+        ? " · Human reviewer"
+        : "";
+  const presetTitle =
+    securityRecord?.executionPresetSnapshot === "workspace-write"
+      ? " · Workspace-write preset"
+      : securityRecord?.executionPresetSnapshot === "native-manual"
+        ? " · Native manual preset"
+        : "";
+  const securityTitle = `${routeTitle}${reviewerTitle}${presetTitle}`;
   const approval = resultPayload?.approval;
   if (approval && typeof approval === "object" && "by" in approval) {
     const record = approval as Record<string, unknown>;
@@ -460,23 +491,23 @@ export function getCommandApprovalBadge(
       case "master_bypass":
         return {
           text: `approved · bypass${routeSuffix}`,
-          title: `Approved by masterBypass${routeTitle}`,
+          title: `Approved by masterBypass${securityTitle}`,
         };
       case "explicit_rule":
         return {
           text: `approved · rule${routeSuffix}`,
-          title: `Approved by command rule${routeTitle}`,
+          title: `Approved by command rule${securityTitle}`,
         };
       case "recent_approval":
         return {
           text: `approved · recent${routeSuffix}`,
-          title: `Approved by recent single-use approval TTL${routeTitle}`,
+          title: `Approved by recent single-use approval TTL${securityTitle}`,
         };
       case "tier":
         return typeof record.tier === "string"
           ? {
               text: `auto · ${record.tier}${routeSuffix}`,
-              title: `Auto-approved by command safety tier${routeTitle}`,
+              title: `Auto-approved by command safety tier${securityTitle}`,
             }
           : null;
       case "model_reviewer": {
@@ -491,18 +522,18 @@ export function getCommandApprovalBadge(
             : "";
         return {
           text: `approved · reviewer${routeSuffix}`,
-          title: `Approved by one-shot reviewer (${model})${assessment}${reason ? `: ${reason}` : ""}${routeTitle}`,
+          title: `Approved by one-shot reviewer (${model})${assessment}${reason ? `: ${reason}` : ""}${securityTitle}`,
         };
       }
       case "human":
         return {
           text: `approved · human${routeSuffix}`,
-          title: `Approved manually${routeTitle}`,
+          title: `Approved manually${securityTitle}`,
         };
       case "human_edited":
         return {
           text: `approved · edited${routeSuffix}`,
-          title: `Approved manually after editing the command${routeTitle}`,
+          title: `Approved manually after editing the command${securityTitle}`,
         };
       default:
         return null;
@@ -519,7 +550,7 @@ export function getCommandApprovalBadge(
   ) {
     return {
       text: `auto · ${String((autoApproved as Record<string, unknown>).tier)}${routeSuffix}`,
-      title: `Auto-approved by command safety tier${routeTitle}`,
+      title: `Auto-approved by command safety tier${securityTitle}`,
     };
   }
   return null;
@@ -917,28 +948,57 @@ export function ToolCallBlock({
             availablePromotionScopes.length > 0 && (
               <div class="tool-call-section">
                 <div class="tool-call-section-label">Permissions</div>
-                <div class="tool-call-permission-actions">
-                  <span class="tool-call-permission-hint">
-                    Promote this one-time MCP approval:
-                  </span>
-                  {availablePromotionScopes.map((scope) => (
-                    <button
-                      key={scope}
-                      type="button"
-                      class="tool-call-permission-button"
-                      onClick={(e: MouseEvent) => {
-                        e.stopPropagation();
-                        onPromoteMcpToolApproval({
-                          serverName: mcpApprovalPromotion.serverName,
-                          bareToolName: mcpApprovalPromotion.bareToolName,
-                          scope,
-                        });
-                        setPromotedScopes((prev) => new Set(prev).add(scope));
-                      }}
-                    >
-                      Allow for {scope}
-                    </button>
-                  ))}
+                <div class="tool-call-permission-card">
+                  <div class="tool-call-permission-copy">
+                    <i
+                      class="codicon codicon-shield tool-call-permission-icon"
+                      aria-hidden="true"
+                    />
+                    <div>
+                      <div class="tool-call-permission-title">
+                        Remember this approval
+                      </div>
+                      <div class="tool-call-permission-hint">
+                        Skip future prompts for this MCP tool in:
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    class="tool-call-permission-actions"
+                    role="group"
+                    aria-label="Remember MCP tool approval"
+                  >
+                    {availablePromotionScopes.map((scope) => {
+                      const presentation =
+                        MCP_APPROVAL_SCOPE_PRESENTATION[scope];
+                      return (
+                        <button
+                          key={scope}
+                          type="button"
+                          class="tool-call-permission-button"
+                          title={presentation.title}
+                          aria-label={presentation.title}
+                          onClick={(e: MouseEvent) => {
+                            e.stopPropagation();
+                            onPromoteMcpToolApproval({
+                              serverName: mcpApprovalPromotion.serverName,
+                              bareToolName: mcpApprovalPromotion.bareToolName,
+                              scope,
+                            });
+                            setPromotedScopes((prev) =>
+                              new Set(prev).add(scope),
+                            );
+                          }}
+                        >
+                          <i
+                            class={`codicon ${presentation.icon}`}
+                            aria-hidden="true"
+                          />
+                          {presentation.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             )}

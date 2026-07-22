@@ -69,6 +69,14 @@ import {
   toCodexRequestError,
   type CodexErrorShape,
 } from "../../../core/model/providers/codex/errors.js";
+import {
+  canUseCodexStandaloneWeb,
+  executeCodexStandaloneWeb,
+} from "../../../core/model/providers/codex/standaloneWeb.js";
+import type {
+  CoreWebAccessSettings,
+  CoreWebToolKind,
+} from "../../../core/webAccess.js";
 
 // ── Provider ──
 
@@ -167,6 +175,31 @@ export class CodexProvider implements ModelProvider {
     }
     this.lastResolvedAuthMethod = auth.method;
     return auth;
+  }
+
+  async executeNativeWebTool(request: {
+    model: string;
+    kind: CoreWebToolKind;
+    input: Record<string, unknown>;
+    settings: CoreWebAccessSettings;
+    signal?: AbortSignal;
+  }): Promise<unknown | null> {
+    const auth = await this.getModelAuthOrThrow();
+    if (!canUseCodexStandaloneWeb(auth)) return null;
+    const model = this.resolveEffectiveModel(
+      request.model,
+      auth,
+      `standalone web ${request.kind}`,
+    );
+    return await executeCodexStandaloneWeb({
+      auth,
+      sessionId: this.sessionId,
+      model,
+      operation: request.kind,
+      input: request.input,
+      settings: request.settings,
+      signal: request.signal,
+    });
   }
 
   private getClient(auth: OpenAiCodexResolvedAuth): OpenAI {

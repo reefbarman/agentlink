@@ -4138,10 +4138,14 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
     });
 
-    expect(
-      fetchMock.mock.calls.some(([input]) =>
-        String(input).includes("/api/approval"),
-      ),
-    ).toBe(true);
+    const approvalCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes("/api/approval"),
+    );
+    expect(approvalCall).toBeDefined();
+    expect(JSON.parse(String(approvalCall?.[1]?.body))).toMatchObject({
+      id: "approval-1",
+      approvalKind: "write",
+      decision: "accept",
+    });
   });
 });

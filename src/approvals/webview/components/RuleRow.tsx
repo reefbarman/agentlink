@@ -1,6 +1,7 @@
 import type { RuleEntry, SubCommandEntry } from "../types.js";
 
 const MODES = ["prefix", "exact", "regex"] as const;
+const DECISIONS = ["legacy", "allow", "prompt", "forbidden"] as const;
 const SCOPES = ["session", "project", "global", "skip"] as const;
 const SCOPE_LABELS: Record<string, string> = {
   session: "Session",
@@ -8,6 +9,13 @@ const SCOPE_LABELS: Record<string, string> = {
   global: "Global",
   skip: "Skip",
 };
+
+const DECISION_LABELS = {
+  legacy: "Approval only",
+  allow: "Allow",
+  prompt: "Prompt",
+  forbidden: "Forbidden",
+} as const;
 
 const TIER_LABELS = {
   safe: "Safe",
@@ -178,6 +186,27 @@ export function RuleRow({
       )}
 
       <div class="rule-row-options">
+        <div class="rule-row-option-line">
+          <span class="rule-row-option-label">Decision:</span>
+          <div class="toggle-group">
+            {DECISIONS.map((decision) => (
+              <button
+                key={decision}
+                type="button"
+                class={`mode-btn ${(value.decision ?? "legacy") === decision ? "active" : ""}`}
+                onClick={() =>
+                  onChange({
+                    ...value,
+                    decision: decision === "legacy" ? undefined : decision,
+                  })
+                }
+                disabled={isSkipped}
+              >
+                {DECISION_LABELS[decision]}
+              </button>
+            ))}
+          </div>
+        </div>
         <div class="rule-row-option-line">
           <span class="rule-row-option-label">Scope:</span>
           <div class="toggle-group">

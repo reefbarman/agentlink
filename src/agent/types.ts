@@ -176,6 +176,10 @@ export type AgentEvent =
       storeResponseState?: boolean;
       providerResponseId?: string;
       contextBreakdown?: RequestContextBreakdown;
+      /** Engine-side estimate of content appended since the previous response. */
+      accumulatedEstimatedTokens?: number;
+      /** Per-source split of that estimate (e.g. "tool:read_file") for jump attribution. */
+      accumulatedEstimatedTokensBySource?: Record<string, number>;
     }
   | {
       type: "warning";

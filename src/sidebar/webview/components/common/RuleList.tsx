@@ -26,8 +26,14 @@ export function RuleList({
   return (
     <>
       {rules.map((r, i) => (
-        <div key={`${r.pattern}\0${r.mode}\0${i}`} class="rule-row">
-          <span class="rule-mode">{r.mode}</span>
+        <div
+          key={`${r.pattern}\0${r.mode}\0${"decision" in r ? (r.decision ?? "legacy") : "path"}\0${i}`}
+          class="rule-row"
+        >
+          <span class="rule-mode">
+            {"decision" in r ? `${r.decision ?? "legacy"} · ` : ""}
+            {r.mode}
+          </span>
           <span
             class="rule-pattern"
             title={editCommand ? "Click to edit" : r.pattern}
@@ -37,6 +43,7 @@ export function RuleList({
                     postCommand(editCommand, {
                       pattern: r.pattern,
                       mode: r.mode,
+                      ...("decision" in r ? { decision: r.decision } : {}),
                       ...(sessionId ? { sessionId } : {}),
                     })
                 : undefined
@@ -55,6 +62,7 @@ export function RuleList({
                 postCommand(editCommand, {
                   pattern: r.pattern,
                   mode: r.mode,
+                  ...("decision" in r ? { decision: r.decision } : {}),
                   ...(sessionId ? { sessionId } : {}),
                 })
               }
@@ -71,6 +79,8 @@ export function RuleList({
             onClick={() =>
               postCommand(removeCommand, {
                 pattern: r.pattern,
+                mode: r.mode,
+                ...("decision" in r ? { decision: r.decision } : {}),
                 ...(sessionId ? { sessionId } : {}),
               })
             }

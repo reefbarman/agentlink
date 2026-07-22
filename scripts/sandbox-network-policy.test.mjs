@@ -60,6 +60,9 @@ test("canonicalizes URL-host spellings before policy checks", () => {
   assert.equal(canonicalizeNetworkHost("[0:0:0:0:0:0:0:1]"), "::1");
   assert.equal(canonicalizeNetworkHost("fe80::1%lo0"), undefined);
   assert.equal(canonicalizeNetworkHost("evil.test\0.allowed.test"), undefined);
+  assert.equal(canonicalizeNetworkHost("example.com:443"), undefined);
+  assert.equal(canonicalizeNetworkHost("example.com/path"), undefined);
+  assert.equal(canonicalizeNetworkHost("-invalid.example"), undefined);
 });
 
 test("keeps exact and wildcard domain authority narrow", () => {
@@ -75,6 +78,10 @@ test("keeps exact and wildcard domain authority narrow", () => {
   assert.equal(matchesAllowedDomain("example.com", "*.example.com"), false);
   assert.equal(matchesAllowedDomain("badexample.com", "*.example.com"), false);
   assert.equal(matchesAllowedDomain("127.0.0.1", "*.0.0.1"), false);
+  assert.equal(matchesAllowedDomain("public.example", "*"), true);
+  assert.equal(matchesAllowedDomain("8.8.8.8", "*"), true);
+  assert.equal(matchesAllowedDomain("bad host", "*"), false);
+  assert.equal(matchesAllowedDomain("public.example:443", "*"), false);
 });
 
 test("classifies private, local, metadata, translated, reserved, unspecified, and multicast ranges", () => {
@@ -96,16 +103,36 @@ test("denies explicit private literals even when allowlisted", async () => {
   }
 });
 
-test("rejects an allowlisted hostname when any DNS answer is forbidden", async () => {
-  await assert.rejects(
-    resolveApprovedDestination("mixed.example", ["mixed.example"], {
+test("allows wildcard public DNS answers and rejects private or mixed answers", async () => {
+  const publicDestination = await resolveApprovedDestination(
+    "public.example",
+    ["*"],
+    {
       lookupAll: async () => [
         { address: "93.184.216.34", family: 4 },
-        { address: "127.0.0.1", family: 4 },
+        { address: "2606:4700:4700::1111", family: 6 },
       ],
-    }),
-    /forbidden address/,
+    },
   );
+  assert.deepEqual(publicDestination.answers, [
+    { address: "93.184.216.34", family: 4 },
+    { address: "2606:4700:4700::1111", family: 6 },
+  ]);
+
+  for (const answers of [
+    [{ address: "127.0.0.1", family: 4 }],
+    [
+      { address: "93.184.216.34", family: 4 },
+      { address: "127.0.0.1", family: 4 },
+    ],
+  ]) {
+    await assert.rejects(
+      resolveApprovedDestination("denied.example", ["*"], {
+        lookupAll: async () => answers,
+      }),
+      /forbidden address/,
+    );
+  }
 });
 
 test("returns only a validated numeric destination for dialing", async () => {

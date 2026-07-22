@@ -53,10 +53,14 @@ export class SandboxTerminalIdleEditor {
         }
         continue;
       }
-      if (character === "\x1b" && data[index + 1] === "[") {
+      if (
+        character === "\x1b" &&
+        (data[index + 1] === "[" || data[index + 1] === "O") &&
+        data[index + 2] !== undefined
+      ) {
         const direction = data[index + 2];
+        index += 2;
         if (direction === "A" || direction === "B") {
-          index += 2;
           const replacement = this.recall(direction === "A" ? -1 : 1);
           if (replacement !== undefined) {
             actions.push({
@@ -64,8 +68,8 @@ export class SandboxTerminalIdleEditor {
               data: `\r\x1b[2K$ ${replacement}`,
             });
           }
-          continue;
         }
+        continue;
       }
       if (character < " " || character === "\x7f") continue;
       const next = this.value + character;

@@ -1,0 +1,99 @@
+# AgentLink: an agent harness built into VS Code
+
+_Last updated: 2026-07-22._
+
+Coding agents have gotten remarkably good, and most of the tooling race has been about giving them more autonomy: more parallelism, more cloud, more hands-off execution. Autonomy is necessary — but it's not what makes an agent produce good work.
+
+AgentLink's bet is different: **agents do their best work when they're deeply wired into the editor, easy to steer and observe at any level of autonomy, relentlessly economical with context, and checked by a second frontier model from a different lab.** AgentLink is a VS Code extension — not a fork, not a separate app, not a cloud service — built around those four ideas.
+
+## Wired into the editor, not bolted onto the filesystem
+
+Most agent harnesses treat a codebase as a directory tree: grep for strings, read files, write files, hope for the best. AgentLink's agent works _through_ VS Code, which means it shares the editor's actual understanding of your code:
+
+- **Navigation via language servers.** Go-to-definition, find-references, call and type hierarchies, hover types, code actions — the agent gets real semantic answers, not text-search approximations. When it renames a symbol, it's a workspace-safe LSP rename, not a find-and-replace.
+- **A feedback loop on every write.** Each edit is checked against your language servers immediately; real TypeScript/ESLint diagnostics flow straight back to the agent, so mistakes are caught in the same turn they're made — not at the end when the build breaks.
+- **Edits as diffs you can touch.** Changes open in a native diff view. Accept, reject — or fix something by hand, and your manual corrections flow back into the agent's context. Even format-on-save output is fed back so the agent learns your formatter.
+- **Real terminals.** Commands run in the integrated terminal you can see and interact with — named terminals, split groups, background processes — not a hidden subprocess.
+- **Structural awareness.** A budgeted repo map and per-module dependency views (imports, exports, reverse dependents) give the agent blast-radius awareness before it touches anything — no external index required.
+
+This is the harness's core: an agent with the editor's intelligence makes fewer wrong turns, and when it makes one, both of you find out immediately.
+
+## Steer it, observe it, or let it run
+
+Supervision in most tools is a three-way switch: allow, ask, deny. AgentLink treats it as a dial — from full autopilot to full review — and invests equally in both ends.
+
+**When you want autonomy:** Approve for Me keeps routine development commands inside a verified baseline sandbox and sends exact boundary requests to a separate fail-closed Guardian reviewer. Guardian can allow or deny across risk levels using the user's objective and host-owned execution evidence; bounded retries, denial-loop interruption, scoped command rules, one-shot grants, and structured attempt history keep the agent moving without hiding authority changes. Public network requests stay inside the sandbox through an attributed proxy: private destinations are blocked, every resolved public destination pauses before the numeric dial, redirects are reviewed again, and exact destination rules remain separate from command approvals. When native host authority is genuinely required, the same command rules and approval surface apply without asking you to disable automation for the rest of the session.
+
+**When you want your hands on the wheel:** every approval card carries a follow-up field — accept with added context, or reject with a reason the agent actually receives — so redirecting the agent doesn't mean restarting it. Commands are editable before approval, and scoped command-regex suggestions use a fast model from your selected provider plus bounded project/session context to propose useful variants without hiding the pattern you are granting. Structured questions let the agent ask you for a decision with real options instead of guessing. Side conversations (`/btw`) let _you_ ask a quick question without derailing the main task, while `/worktree` can configure an isolated alternative and confirm its launch directly in the activity shelf without interrupting the agent already running.
+
+**Either way, you can always see what's happening:** background agents, worktree agents, and scheduled automations all report into a fleet panel where you can steer, pause, or kill any agent; every approval decision carries an audit badge (human, rule, tier, or Guardian — with outcome, authorization, and risk); budgets for tokens, tool calls, turns, and cost enforce warn/wrap-up/hard-stop behavior; and shadow-git checkpoints (`/checkpoint`, `/revert`) capture _everything_ — including changes made by shell commands and external tools — so any amount of autonomy is reversible without touching your real git history.
+
+The result: full automation where you've earned confidence, precise steering where it matters, and observability everywhere.
+
+## Nothing happens in the dark
+
+A familiar experience with agent harnesses: the spinner spins, and you're left wondering. Is it thinking? Running a command? Stuck? Done and waiting for you? Many tools compound this by doing real work invisibly — compacting context, retrying requests, spawning sub-agents, writing memories — none of it surfaced unless something breaks.
+
+AgentLink's rule is that the agent's activity is always explicit, and the detail is always one click away when you want it:
+
+- **You can always see the current state.** Tool calls stream into the transcript as they happen; the activity shelf by the composer shows running state, progress, queued messages, and pending questions at a glance; and when the agent stops, it declares an explicit status — completed, waiting on you, or blocked — so a quiet agent is never an ambiguous one.
+- **Background work is foreground-visible.** Every background agent appears in the fleet panel with live status, not as invisible helpers you discover from the bill. Context compaction shows up in the transcript as an event you can see (and trigger yourself), never a silent rewrite of the agent's memory.
+- **The details are there when you want them.** Per-tool-call detail in the transcript; image results stay tucked into those details during routine agent inspection but can be deliberately presented in the main conversation when you ask to see one; a live breakdown of what's actually occupying the context window; `/usage` for what everything is costing; audit badges recording who or what approved each action and why; and a debug panel when you want to go deeper. The agent can query bounded, redacted evidence from its own session to explain recent tool failures and the exact policy basis for file writes. Even tool-usage telemetry is a local report you can run over your own history.
+
+Transparency isn't just comfort — it's what makes the autonomy dial usable. You can only let an agent run freely when you can glance over and know, immediately, what it's doing and what it has done.
+
+## Two labs, one review loop
+
+AgentLink speaks to two frontier providers — Anthropic and OpenAI/Codex — in the same session, and that unlocks the harness's most valuable quality mechanism: **cross-provider review**. Review work can be routed to the _opposite_ provider from the one that wrote the code, so one lab's model checks another's output.
+
+This isn't a gimmick. Models from the same lab share training lineage, and with it blind spots — a reviewer with the same biases as the author tends to nod along. A reviewer from a different lab reliably catches things the author's own family misses, and in practice this consistently produces higher-quality code than any single-model loop. Background review agents, adversarial routing for verification tasks, and per-mode model selection make this a standing part of the workflow rather than a party trick.
+
+You choose the models on both sides — per mode, per task class, with reasoning effort and thinking budgets under your control — on your own accounts, at provider rates.
+
+## Economical with context, by design
+
+Agent quality degrades as context fills with noise, and cost scales with every wasted token. AgentLink optimizes agent efficiency as a first-class concern:
+
+- **Deduplicated context.** The orientation pack the agent works from tracks what it has already seen this session and omits unchanged content instead of re-reading it.
+- **Budgeted structure.** The repo map fits a token budget; terminal output supports head/tail/grep/offset filtering so a noisy build log doesn't flood the transcript; rarely-needed language tools stay hidden until a task needs them.
+- **Progressive tool disclosure.** MCP servers expose tools to the model incrementally rather than dumping every schema into every prompt.
+- **Compaction without amnesia.** Long sessions auto-condense with per-model thresholds — and a transcript-recall tool lets the agent search and re-read even the history that compaction retired, so context economy never costs it the facts.
+- **The right model for the job.** Task-class routing sends background work to appropriate model tiers, budgets keep fleets accountable, and a provider-aware scheduler keeps parallel agents from tripping over rate limits.
+
+The effect compounds: leaner context makes each turn cheaper _and_ better, because the model's attention is spent on your code instead of on its own chat history.
+
+## Leaning into MCP
+
+AgentLink builds natively where integration depth pays off — the editor, supervision, context management — and leans into the MCP ecosystem for everything it does better than any single vendor could. The harness ships a full-depth MCP client: OAuth flows, elicitation (interactive forms mid-task), guided setup with a management UI, layered project/global configuration, a deduplicated union of MCP capabilities across multi-project workspaces, and progressive tool disclosure so large servers don't blow the context budget.
+
+Browser automation is a good example of the philosophy: rather than embedding a browser into the harness, AgentLink connects to browser-automation MCP servers (such as Chrome DevTools MCP) — you get a capability maintained by people who live and breathe it, the agent gets it through the same governed tool pipeline as everything else, and the harness stays focused on what it's uniquely positioned to do. The same applies across the ecosystem: issue trackers, databases, cloud consoles, internal tools — if it speaks MCP, AgentLink can supervise it with the same approval, audit, and budget machinery as its native tools.
+
+## Everything you'd expect, where you'd expect it
+
+The agent-harness ecosystem has converged on a set of conventions, and AgentLink treats them as table stakes rather than differentiators: project and global instruction files (`AGENTS.md`, `CLAUDE.md`), skills with per-skill tool restrictions, custom slash commands, custom modes, rules, persistent memory, checkpoints and revert, session persistence and restore across reloads, structured todo lists, `@`-mentions and file attachments (images and PDFs included), native web search and fetch, and parallel background agents with git-worktree isolation.
+
+Better still, AgentLink reads the same locations other harnesses already use — instructions from `AGENTS.md`/`CLAUDE.md`, commands and skills from `.agents`/`.claude` directories as well as its own — so an existing setup carries over instead of needing migration. If you're arriving from another agent tool, the short version: nothing table-stakes is missing, and most of your configuration already works.
+
+## Your accounts, your machine
+
+AgentLink has no cloud and no model middleman. Everything runs on accounts you already have — Anthropic API key or OAuth, OpenAI/ChatGPT or Codex subscription or API key, with multi-account management — at provider rates, with no markup or credit pool. Code, embeddings, and telemetry stay on your machine by default; configuration reads redact structured secrets before they reach a model; and remote supervision (checking on a long-running fleet from another room, approving a command from a phone browser) works over your own LAN with explicit device pairing — no relay servers. And because AgentLink is a real VS Code extension rather than a fork, your marketplace, proprietary language extensions, and existing setup — including whatever inline-completion tool you prefer — keep working untouched.
+
+## What AgentLink deliberately doesn't do
+
+- **No in-house models, and no inline autocomplete.** The harness runs frontier models you choose rather than a vendor-trained one, and coexists with any completion extension instead of competing with it.
+- **No cloud-hosted agent execution.** Agents run on your machine, under your supervision machinery.
+- **No silent memory writes.** The agent proposes durable learnings; nothing persists without your approval. Silent auto-memory is a prompt-injection vector.
+- **The browser remote surface stays read-only for diffs, with no remote shell.** Supervision from anywhere; mutation only from the editor.
+
+## Where it's heading
+
+Some current rough edges, honestly labeled, and what's planned:
+
+- **Semantic indexing needs setup today** (an external Qdrant instance plus embeddings; off by default). An embedded, fully local index is on the roadmap; the structural repo-map and module-dependency tools already work with zero configuration.
+- **Best-of-N and scheduled automations ship today but are maturing** — result judging and multi-window coordination are actively being hardened.
+- **Checkpoint forking and restore-scope choice** (code, conversation, or both) are planned.
+- **More providers** — Gemini, OpenRouter, local models — are on the longer-term roadmap, as are documented recipes for off-LAN supervision (Tailscale, dev tunnels) and voice input in the browser composer.
+
+## The bet
+
+Plenty of tools will run an agent for you. AgentLink is built for what comes after the demo: agents doing real work on real codebases, where quality comes from the editor's intelligence and a second lab's scrutiny, efficiency comes from disciplined context, and confidence comes from being able to steer, observe, audit, and undo — at whatever level of autonomy the task deserves.

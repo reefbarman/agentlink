@@ -658,6 +658,7 @@ export async function handleReadFile(
   sessionId: string,
   advertisedSkills: AdvertisedSkillFileAccess[] = [],
   enrichmentProvider = createLegacyReadFileEnrichmentProvider(),
+  signal?: AbortSignal,
 ): Promise<ToolResult> {
   const release = await readSemaphore.acquire();
   let released = false;
@@ -681,6 +682,7 @@ export async function handleReadFile(
         approvalManager,
         approvalPanel,
         sessionId,
+        signal,
       );
       if (!approved) {
         return {

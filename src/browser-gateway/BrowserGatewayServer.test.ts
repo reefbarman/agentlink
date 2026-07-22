@@ -6,6 +6,7 @@ import { BrowserGatewayServer } from "./BrowserGatewayServer.js";
 import { BrowserGatewayService } from "./BrowserGatewayService.js";
 import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
 import { InMemoryAgentUiEventHub } from "../agent/AgentUiPublisher.js";
+import type { SessionApprovalMode } from "../agent/AgentSessionManager.js";
 import { StreamingBaselineRecorder } from "../shared/streamingBaselineMetrics.js";
 import { buildBrowserGatewayHelperTrustHeaders } from "./browserGatewayRequestTrust.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
@@ -108,6 +109,12 @@ function makeSessionManagerStub() {
         resolvedModel: "claude-opus-4-8",
       },
     ]),
+    getSessionApprovalMode: vi.fn<() => SessionApprovalMode>(() => ({
+      commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "user",
+      executionPreset: "native-manual",
+    })),
   };
 }
 
@@ -863,6 +870,15 @@ describe("BrowserGatewayServer", () => {
       chatViewProvider.submitBrowserMcpConfigSnapshot,
     ).toHaveBeenCalledWith("ask-agent");
 
+    const mainMcpConfigResponse = await fetch(
+      `${baseUrl}/api/mcp/config?profile=main&projectId=project-a`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(mainMcpConfigResponse.ok).toBe(true);
+    expect(
+      chatViewProvider.submitBrowserMcpConfigSnapshot,
+    ).toHaveBeenLastCalledWith("main", "project-a");
+
     const askMcpConfigSaveResponse = await fetch(
       `${baseUrl}/internal/ask-agent/mcp-config/server`,
       {
@@ -1432,7 +1448,11 @@ describe("BrowserGatewayServer", () => {
     const unauthorizedApproval = await fetch(`${baseUrl}/api/approval`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: "approval-1", decision: "accept" }),
+      body: JSON.stringify({
+        id: "approval-1",
+        approvalKind: "write",
+        decision: "accept",
+      }),
     });
     expect(unauthorizedApproval.status).toBe(401);
 
@@ -1452,16 +1472,66 @@ describe("BrowserGatewayServer", () => {
         "Content-Type": "application/json",
         Authorization: "Bearer test-token",
       },
-      body: JSON.stringify({ id: "approval-1", decision: "accept" }),
+      body: JSON.stringify({
+        id: "approval-1",
+        approvalKind: "command",
+        decision: "run-once",
+        rules: [
+          {
+            pattern: "npm publish",
+            mode: "exact",
+            decision: "prompt",
+            scope: "project",
+          },
+        ],
+      }),
     });
     expect(authorizedApproval.status).toBe(200);
     expect(await authorizedApproval.json()).toEqual({ ok: true });
     expect(chatViewProvider.submitBrowserApprovalDecision).toHaveBeenCalledWith(
       {
         id: "approval-1",
-        decision: "accept",
+        approvalKind: "command",
+        decision: "run-once",
+        rules: [
+          {
+            pattern: "npm publish",
+            mode: "exact",
+            decision: "prompt",
+            scope: "project",
+          },
+        ],
       },
     );
+
+    chatViewProvider.submitBrowserApprovalDecision.mockReturnValueOnce(false);
+    const staleApproval = await fetch(`${baseUrl}/api/approval`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({
+        id: "approval-1",
+        approvalKind: "write",
+        decision: "run-once",
+      }),
+    });
+    expect(staleApproval.status).toBe(404);
+    expect(await staleApproval.json()).toEqual({ ok: false });
+
+    const malformedApproval = await fetch(`${baseUrl}/api/approval`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ id: "approval-1", decision: "accept" }),
+    });
+    expect(malformedApproval.status).toBe(400);
+    expect(await malformedApproval.json()).toEqual({
+      error: "invalid_request",
+    });
 
     const authorizedQuestion = await fetch(`${baseUrl}/api/question`, {
       method: "POST",

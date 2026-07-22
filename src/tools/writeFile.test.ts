@@ -127,6 +127,40 @@ describe("handleWriteFile", () => {
     );
   });
 
+  it("returns exact automatic write authorization evidence", async () => {
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: "src/example.ts",
+        operation: "auto-approved" as const,
+      })),
+    };
+    const authorization = {
+      allowed: true as const,
+      basis: "write_rule" as const,
+      scope: "project" as const,
+      rule: { pattern: "src/**", mode: "glob" as const },
+    };
+    const policy: WriteApprovalPolicyProvider = {
+      getAuthorization: vi.fn(() => authorization),
+      canAutoApprove: vi.fn(() => true),
+      recordDecision: vi.fn(),
+    };
+
+    const { handleWriteFile } = await import("./writeFile.js");
+    const result = await handleWriteFile(
+      { path: "src/example.ts", content: "new" },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      { editReviewProvider, writeApprovalPolicyProvider: policy },
+    );
+
+    expect(toolJson(result)).toMatchObject({ authorization });
+  });
+
   it("records scoped trust after interactive accept-session decisions", async () => {
     const approvalPanel = {};
     const editReviewProvider: EditReviewProvider = {
@@ -156,6 +190,11 @@ describe("handleWriteFile", () => {
       status: "accepted",
       path: "src/example.ts",
       operation: "modified",
+      authorization: {
+        allowed: true,
+        basis: "human",
+        decision: "accept-session",
+      },
     });
     expect(toolJson(result)).not.toHaveProperty("finalContent");
     expect(toolJson(result)).not.toHaveProperty("decision");

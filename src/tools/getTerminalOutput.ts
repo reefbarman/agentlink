@@ -119,16 +119,23 @@ export async function handleGetTerminalOutput(
     await sleep(500);
   }
 
-  const state = terminalProvider.getBackgroundState(params.terminal_id);
+  let state = terminalProvider.getBackgroundState(params.terminal_id);
+  const recentlyClosed = state
+    ? []
+    : terminalProvider.getRecentlyClosedTerminals(20);
+  const closedState = recentlyClosed.find(
+    (terminal) => terminal.id === params.terminal_id,
+  );
+  state ??= closedState;
 
   if (!state) {
-    const recent = terminalProvider.getRecentlyClosedTerminals(5).map((t) => ({
-      terminal_id: t.id,
-      terminal_name: t.name,
-      closed_at: new Date(t.closedAt).toISOString(),
-      state: t.state,
-      exit_code: t.exit_code,
-      output_captured: t.output_captured,
+    const recent = recentlyClosed.slice(0, 5).map((terminal) => ({
+      terminal_id: terminal.id,
+      terminal_name: terminal.name,
+      closed_at: new Date(terminal.closedAt).toISOString(),
+      state: terminal.state,
+      exit_code: terminal.exit_code,
+      output_captured: terminal.output_captured,
     }));
 
     return {
@@ -151,6 +158,13 @@ export async function handleGetTerminalOutput(
     state: state.state,
     exit_code: state.exit_code,
     output_captured: state.output_captured,
+    ...(closedState
+      ? {
+          terminal_name: closedState.name,
+          closed_at: new Date(closedState.closedAt).toISOString(),
+          recently_closed: true,
+        }
+      : {}),
     ...(params.kill && { killed: true }),
   };
 

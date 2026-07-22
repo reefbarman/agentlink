@@ -156,7 +156,28 @@ export interface WriteApprovalQuery {
   mode?: string;
 }
 
+export type WriteAuthorizationBasis =
+  | "master_bypass"
+  | "architect_plan"
+  | "blanket_approval"
+  | "write_rule"
+  | "settings_rule"
+  | "human"
+  | "none";
+
+export interface WriteAuthorizationDecision {
+  allowed: boolean;
+  basis: WriteAuthorizationBasis;
+  scope?: "session" | "project" | "global" | "workspace_setting";
+  rule?: { pattern: string; mode: "glob" | "prefix" | "exact" };
+  reason?: string;
+  decision?: EditReviewDecision;
+}
+
 export interface WriteApprovalPolicyProvider {
+  /** Explain the exact policy basis used for the automatic-write decision. */
+  getAuthorization?(query: WriteApprovalQuery): WriteAuthorizationDecision;
+  /** Compatibility convenience for callers that only need the decision bit. */
   canAutoApprove(query: WriteApprovalQuery): boolean;
   recordDecision(params: {
     decision: EditReviewDecision;
@@ -166,4 +187,18 @@ export interface WriteApprovalPolicyProvider {
     inWorkspace: boolean;
     writeApprovalResponse?: unknown;
   }): void;
+}
+
+export function evaluateWriteAuthorization(
+  provider: WriteApprovalPolicyProvider | undefined,
+  query: WriteApprovalQuery,
+): WriteAuthorizationDecision {
+  if (!provider) return { allowed: false, basis: "none" };
+  return (
+    provider.getAuthorization?.(query) ?? {
+      allowed: provider.canAutoApprove(query),
+      basis: "none",
+      reason: "legacy_policy_provider",
+    }
+  );
 }

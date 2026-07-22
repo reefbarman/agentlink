@@ -137,7 +137,7 @@ export interface AgentToolCallTracker<TTrackerContext = unknown> {
 export interface AgentToolRuntime {
   listTools(request: AgentToolListRequest): CoreToolDefinition[];
   executeTool(request: AgentToolExecutionRequest): Promise<ToolResult>;
-  isParallelSafe(toolName: string): boolean;
+  isParallelSafe(toolName: string, input?: Record<string, unknown>): boolean;
   getToolCallTracker?(): AgentToolCallTracker | undefined;
   getConnectedMcpToolDefs?(): CoreToolDefinition[];
   getMcpToolDisclosureMode?(

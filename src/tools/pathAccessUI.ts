@@ -11,8 +11,13 @@ export async function approveOutsideWorkspaceAccess(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  signal?: AbortSignal,
 ): Promise<{ approved: boolean; reason?: string }> {
-  const { promise } = approvalPanel.enqueuePathApproval(filePath, sessionId);
+  const { promise } = approvalPanel.enqueuePathApproval(
+    filePath,
+    sessionId,
+    signal,
+  );
   const response = await promise;
 
   if (response.decision === "reject") {

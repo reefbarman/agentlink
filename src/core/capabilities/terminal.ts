@@ -2,9 +2,55 @@ import type {
   SandboxCapabilityRequest,
   SandboxExecutionMetadata,
   SandboxLaunchAuthorization,
+  SandboxViolation,
 } from "../sandboxPolicy.js";
 
 export type CommandExecutionPolicy = "read-only";
+
+export type TerminalCommandApprovalPolicySnapshot =
+  | "manual"
+  | "safe"
+  | "sensitive"
+  | "approve-for-me";
+
+export type TerminalApprovalPolicy = "on-request";
+export type TerminalApprovalReviewer = "user" | "auto-review";
+export type TerminalExecutionPreset = "native-manual" | "workspace-write";
+export type AgentTerminalExecutionAuthority = "native-agent" | "sandbox";
+export type TerminalSandboxPermissionIntent =
+  | "default"
+  | "additional-permissions"
+  | "native-escalation";
+export interface TerminalApprovalModeSnapshot {
+  readonly commandApprovalPolicy: TerminalCommandApprovalPolicySnapshot;
+  readonly approvalPolicy: TerminalApprovalPolicy;
+  readonly approvalReviewer: TerminalApprovalReviewer;
+  readonly executionPreset: TerminalExecutionPreset;
+}
+
+export type TerminalExecutionApprovalRequirement =
+  | "policy"
+  | "explicit-permissions"
+  | "explicit-escalation";
+export type TerminalExecutionAuthorityReason =
+  | "approval-policy"
+  | "additional-permissions"
+  | "explicit-escalation"
+  | "explicit-rule";
+
+/** Immutable host-owned authority and policy input for terminal preparation. */
+export interface TerminalExecutionRouteContext {
+  readonly approvalPolicySnapshot: TerminalApprovalPolicy;
+  readonly approvalReviewerSnapshot: TerminalApprovalReviewer;
+  readonly executionPresetSnapshot: TerminalExecutionPreset;
+  readonly requiredAuthority: AgentTerminalExecutionAuthority;
+  readonly permissionIntent: TerminalSandboxPermissionIntent;
+  readonly approvalRequirement: TerminalExecutionApprovalRequirement;
+  readonly authorityReason: TerminalExecutionAuthorityReason;
+  /** Raw AgentLink mode retained for persistence compatibility and drift detection. */
+  readonly commandApprovalPolicySnapshot: TerminalCommandApprovalPolicySnapshot;
+  readonly commandExecutionPolicySnapshot?: CommandExecutionPolicy;
+}
 
 export type TerminalExecutionRouteReason =
   | "verified-local-macos"
@@ -15,6 +61,13 @@ export type TerminalExecutionRouteReason =
 
 export type TerminalExecutionSecurityFailure =
   | "untrusted_workspace"
+  | "policy_drift"
+  | "host_target"
+  | "wrong_authority"
+  | "ambiguous_name"
+  | "not_found"
+  | "native_runtime_unavailable"
+  | "required_sandbox_unavailable"
   | "attestation_failed"
   | "lease_revoked"
   | "stale_generation"
@@ -33,15 +86,30 @@ export interface TerminalSandboxAttestationSummary {
   backend: "seatbelt";
   architecture: "arm64" | "x64";
   capabilities: SandboxExecutionMetadata["capabilities"];
+  grant?: SandboxExecutionMetadata["grant"];
+  environmentPolicy?: SandboxExecutionMetadata["environmentPolicy"];
 }
 
 /** Token-free host-owned evidence shown to approval and result surfaces. */
 export interface TerminalExecutionSecuritySummary {
   auditId: string;
   route: "sandbox" | "native";
+  executionSurface:
+    | "verified-sandbox"
+    | "agentlink-native"
+    | "vscode-compatibility";
   confinement: "verified-baseline" | "native-unsandboxed";
   routeReason: TerminalExecutionRouteReason;
-  approvalPolicy: "sandbox-baseline-v1" | "native-legacy-v1";
+  approvalPolicySnapshot: TerminalApprovalPolicy;
+  approvalReviewerSnapshot: TerminalApprovalReviewer;
+  executionPresetSnapshot: TerminalExecutionPreset;
+  requiredAuthority: AgentTerminalExecutionAuthority;
+  permissionIntent: TerminalSandboxPermissionIntent;
+  approvalRequirement: TerminalExecutionApprovalRequirement;
+  authorityReason: TerminalExecutionAuthorityReason;
+  commandApprovalPolicySnapshot: TerminalCommandApprovalPolicySnapshot;
+  commandExecutionPolicySnapshot?: CommandExecutionPolicy;
+  executionPolicy: "sandbox-baseline-v2" | "native-legacy-v1";
   preparedAt: number;
   sandbox?: TerminalSandboxAttestationSummary;
 }
@@ -85,6 +153,35 @@ export interface PreparedTerminalExecution {
   dispose(): void;
 }
 
+export type TerminalExecutionFailureStage =
+  | "validation"
+  | "preparation"
+  | "approval"
+  | "launch"
+  | "execution";
+
+export interface TerminalExecutionAttemptSummary {
+  attempt: 1 | 2;
+  status:
+    | "completed"
+    | "running"
+    | "timed_out"
+    | "approval_denied"
+    | "cancelled"
+    | "failed";
+  route: TerminalExecutionSecuritySummary["route"];
+  audit_id?: string;
+  command_sent: boolean | "unknown";
+  process_launched: boolean | "unknown";
+  retry_safe: boolean;
+  may_have_side_effects: boolean | "unknown";
+  exit_code?: number | null;
+  terminal_id?: string;
+  execution_mode?: TerminalCommandResult["execution_mode"];
+  failure_stage?: TerminalExecutionFailureStage;
+  capability_denial?: SandboxViolation;
+}
+
 export interface TerminalCommandResult {
   exit_code: number | null;
   output: string;
@@ -116,10 +213,11 @@ export interface TerminalCommandResult {
     | {
         by: "model_reviewer";
         model: string;
-        tier: "sensitive";
-        confidence: "high";
-        risk: "low" | "medium";
-        reason: string;
+        tier: "safe" | "sensitive" | "dangerous";
+        outcome: "allow";
+        risk: "low" | "medium" | "high" | "critical";
+        user_authorization: "unknown" | "low" | "medium" | "high";
+        rationale: string;
       }
     | { by: "human" }
     | { by: "human_edited" };
@@ -131,13 +229,51 @@ export interface TerminalCommandResult {
   timed_out?: boolean;
   backgrounded?: boolean;
   is_running?: boolean;
-  execution_mode?: "shell_integration" | "send_text" | "sandbox_pty";
+  execution_mode?:
+    | "shell_integration"
+    | "send_text"
+    | "native_pty"
+    | "sandbox_pty";
   verification_hint?: string;
   command_sent?: boolean;
+  process_launched?: boolean;
+  retry_safe?: boolean;
+  failure_stage?: TerminalExecutionFailureStage;
+  capability_denial?: SandboxViolation;
+  retry_lineage_id?: string;
+  retry_outcome?:
+    | "not_attempted"
+    | "approval_denied"
+    | "cancelled"
+    | "failed"
+    | "completed";
+  retry_reason?: string;
+  execution_attempts?: TerminalExecutionAttemptSummary[];
   sandbox?: SandboxExecutionMetadata;
   security?: TerminalExecutionSecuritySummary;
   security_failure?: TerminalExecutionSecurityFailure;
 }
+
+export interface ManagedNetworkRequest {
+  requestId: string;
+  sessionId: string;
+  auditId: string;
+  terminalId: string;
+  commandId: string;
+  generation: number;
+  command: string;
+  cwd: string;
+  reason?: string;
+  host: string;
+  protocol: "http" | "https" | "tcp";
+  port: number;
+  address: string;
+  family: 4 | 6;
+  dnsAnswers: Array<{ address: string; family: 4 | 6 }>;
+  destinationClass: "public";
+}
+
+export type ManagedNetworkDecision = "allow-once" | "reject";
 
 export interface TerminalExecuteOptions {
   command: string;
@@ -161,6 +297,11 @@ export interface TerminalExecuteOptions {
   sandboxCapabilityRequest?: SandboxCapabilityRequest;
   /** Host-compiled launch policy and optional token-free grant metadata. */
   sandbox?: SandboxLaunchAuthorization;
+  /** Exact runtime public destination mediation. Missing or failed callbacks deny. */
+  onManagedNetworkRequest?: (
+    request: ManagedNetworkRequest,
+    signal: AbortSignal,
+  ) => Promise<ManagedNetworkDecision>;
   onTerminalAssigned?: (terminalId: string) => void;
   /** Called when cleanup ownership transfers to a background terminal lifecycle. */
   onCommandFinalizationDeferred?: () => void;
@@ -209,6 +350,13 @@ export interface ConfinementPreparingTerminalProvider extends TerminalProvider {
   ): Promise<PreparedTerminalExecution>;
 }
 
+export interface NativePreparingTerminalProvider extends TerminalProvider {
+  prepareNativeExecution(
+    options: TerminalExecuteOptions,
+    security: TerminalExecutionSecuritySummary,
+  ): Promise<PreparedTerminalExecution>;
+}
+
 export interface TerminalProvider {
   /**
    * Prepare immutable one-use execution authority before command approval.
@@ -216,12 +364,19 @@ export interface TerminalProvider {
    */
   prepareExecution?(
     options: TerminalExecuteOptions,
+    routeContext: TerminalExecutionRouteContext,
   ): Promise<PreparedTerminalExecution>;
   executeCommand(
     options: TerminalExecuteOptions,
   ): Promise<TerminalCommandResult>;
   getBackgroundState(terminalId: string): TerminalBackgroundState | undefined;
+  getCurrentOutput?(
+    terminalId: string,
+    options?: { force?: boolean },
+  ): string | undefined;
   interruptTerminal(terminalId: string): boolean;
+  detachTerminal?(terminalId: string): boolean;
+  revealTerminal?(terminalId: string): boolean;
   getRecentlyClosedTerminals(limit?: number): ClosedTerminalSnapshot[];
   listTerminals(): TerminalMetadata[];
   closeTerminals(names?: string[]): TerminalCloseResult;

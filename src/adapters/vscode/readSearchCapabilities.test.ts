@@ -237,6 +237,7 @@ describe("createVscodePathAccessProvider", () => {
       approvalManager,
       approvalPanel,
       "session-2",
+      undefined,
     );
   });
 

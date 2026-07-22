@@ -22,6 +22,7 @@ describe("validateMcpServerConfig", () => {
       timeout: 45_000,
       toolPolicy: "allow",
       toolDisclosure: "deferred",
+      supportsParallelToolCalls: true,
       allowedTools: ["search", "read"],
     });
 
@@ -35,6 +36,7 @@ describe("validateMcpServerConfig", () => {
       timeout: 45_000,
       toolPolicy: "allow",
       toolDisclosure: "deferred",
+      supportsParallelToolCalls: true,
       allowedTools: ["search", "read"],
     });
     expect(result.diagnostics.map(({ code }) => code)).toEqual([
@@ -181,6 +183,12 @@ describe("validateMcpServerConfig", () => {
       "server",
       { command: "mcp", toolDisclosure: "hidden" },
       "invalid_tool_disclosure",
+    ],
+    [
+      "invalid parallel support",
+      "server",
+      { command: "mcp", supportsParallelToolCalls: "yes" },
+      "invalid_parallel_tool_calls",
     ],
     [
       "invalid allowed tools",

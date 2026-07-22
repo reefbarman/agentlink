@@ -72,10 +72,10 @@ export async function addTrustedCommandViaUi(
 
   approvalManager.addCommandRule(
     "_global",
-    { pattern: trimmedPattern, mode: picked.mode },
+    { pattern: trimmedPattern, mode: picked.mode, decision: "allow" },
     scopePick.scope,
   );
   vscode.window.showInformationMessage(
-    `Added trusted command (${scopePick.scope}): ${picked.mode} "${trimmedPattern}"`,
+    `Added command policy (${scopePick.scope}): allow ${picked.mode} "${trimmedPattern}"`,
   );
 }

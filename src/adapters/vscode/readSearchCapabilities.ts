@@ -104,6 +104,7 @@ export function createVscodeSemanticSearchProvider(
 export function createVscodeContextDocumentProvider(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
+  signal?: AbortSignal,
 ): ContextDocumentProvider {
   return {
     async resolveDocument(inputPath, sessionId) {
@@ -114,6 +115,7 @@ export function createVscodeContextDocumentProvider(
             approvalManager,
             approvalPanel,
             sessionId,
+            signal,
           );
         return {
           absolutePath,
@@ -222,6 +224,7 @@ export function createVscodeStructuralGraphProvider(
 export function createVscodePathAccessProvider(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
+  signal?: AbortSignal,
 ): PathAccessProvider {
   return {
     async ensureAccess(request) {
@@ -244,6 +247,7 @@ export function createVscodePathAccessProvider(
         approvalManager,
         approvalPanel,
         request.sessionId,
+        signal,
       );
     },
   };

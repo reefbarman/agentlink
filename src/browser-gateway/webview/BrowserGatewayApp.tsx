@@ -41,7 +41,11 @@ import type {
   ApprovalRequest,
   DecisionMessage,
 } from "../../approvals/webview/types";
-import { ApprovalPanelEmbed } from "../../agent/webview/components/ApprovalPanelEmbed";
+import {
+  ApprovalPanelEmbed,
+  DEFAULT_APPROVAL_PANEL_HEIGHT,
+  MIN_APPROVAL_PANEL_HEIGHT,
+} from "../../agent/webview/components/ApprovalPanelEmbed";
 import { ChatHeader } from "../../agent/webview/components/ChatHeader";
 import { ChatView } from "../../agent/webview/components/ChatView";
 import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow";
@@ -88,6 +92,11 @@ import {
   isCommandApprovalPolicy,
   type CommandApprovalPolicy,
 } from "../../approvals/commandApprovalPolicy";
+import type {
+  TerminalApprovalPolicy,
+  TerminalApprovalReviewer,
+  TerminalExecutionPreset,
+} from "../../core/capabilities/terminal";
 import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
@@ -395,6 +404,9 @@ type GatewaySnapshot = {
       condenseThreshold?: number;
       agentWriteApproval: "prompt" | "session" | "project" | "global";
       commandApprovalPolicy: CommandApprovalPolicy;
+      approvalPolicy: TerminalApprovalPolicy;
+      approvalReviewer: TerminalApprovalReviewer;
+      executionPreset: TerminalExecutionPreset;
       configuredCommandApprovalPolicy: Exclude<
         CommandApprovalPolicy,
         "approve-for-me"
@@ -1105,7 +1117,9 @@ export function BrowserGatewayApp({
   const autoContinueCountRef = useRef(0);
   const pendingAutoContinueUserMessageIdRef = useRef<string | null>(null);
   const autoContinueSessionIdRef = useRef<string | null>(null);
-  const [approvalPanelHeight, setApprovalPanelHeight] = useState(360);
+  const [approvalPanelHeight, setApprovalPanelHeight] = useState(
+    DEFAULT_APPROVAL_PANEL_HEIGHT,
+  );
   const [approvalResizing, setApprovalResizing] = useState(false);
   const [sidePanePercent, setSidePanePercent] = useState(() =>
     readCachedSidePanePercent(),
@@ -3215,6 +3229,37 @@ export function BrowserGatewayApp({
     }
   };
 
+  const refreshWorkspaceMcpStatus = async (
+    projectId?: string,
+    view: McpManagerView = "status",
+  ): Promise<void> => {
+    try {
+      const query = new URLSearchParams({ profile: "main" });
+      if (projectId) query.set("projectId", projectId);
+      const response = await fetch(
+        buildApiPath(`/api/mcp/config?${query.toString()}`),
+        {
+          headers: { Authorization: `Bearer ${authToken}` },
+        },
+      );
+      const body = (await response.json()) as {
+        ok?: boolean;
+        configSnapshot?: McpConfigSnapshot;
+        error?: string;
+      };
+      setMcpManagerSnapshot(body.configSnapshot ?? null);
+      setMcpManagerView(view);
+      setModeStatus(
+        body.ok
+          ? "Workspace MCP manager loaded."
+          : `Workspace MCP unavailable: ${body.error ?? response.status}`,
+      );
+    } catch (err) {
+      setMcpManagerSnapshot(null);
+      setModeStatus(`Workspace MCP status error: ${String(err)}`);
+    }
+  };
+
   const mutateAskAgentMcpConfig = async (
     mutation: McpConfigBatchMutation,
   ): Promise<McpConfigMutationResult> => {
@@ -3316,16 +3361,21 @@ export function BrowserGatewayApp({
   const handleMcpAction = (
     serverName: string,
     action: "disable" | "reconnect" | "reauthenticate",
+    projectId?: string,
   ): void => {
     void (async () => {
-      await fetch(buildApiPath("/api/mcp/action"), {
+      const response = await fetch(buildApiPath("/api/mcp/action"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${authToken}`,
         },
-        body: JSON.stringify({ serverName, action }),
+        body: JSON.stringify({ serverName, action, projectId }),
       });
+      const body = (await response.json()) as {
+        configSnapshot?: McpConfigSnapshot;
+      };
+      if (body.configSnapshot) setMcpManagerSnapshot(body.configSnapshot);
     })();
   };
 
@@ -3355,6 +3405,7 @@ export function BrowserGatewayApp({
         },
         body: JSON.stringify({
           ...data,
+          approvalKind: approval?.kind ?? data.approvalKind,
           ...(followUp ? { followUp } : { followUp: undefined }),
         }),
       });
@@ -3484,7 +3535,10 @@ export function BrowserGatewayApp({
 
     const onMove = (moveEvent: MouseEvent) => {
       const delta = moveEvent.clientY - startY;
-      const nextHeight = Math.max(220, Math.min(720, startHeight - delta));
+      const nextHeight = Math.max(
+        MIN_APPROVAL_PANEL_HEIGHT,
+        Math.min(720, startHeight - delta),
+      );
       setApprovalPanelHeight(nextHeight);
     };
 
@@ -3710,10 +3764,20 @@ export function BrowserGatewayApp({
       }
       case "mcp":
         setShowMcpStatus(true);
+        void refreshWorkspaceMcpStatus(
+          foreground?.project.projectId ??
+            snapshot?.session.defaultProjectId ??
+            undefined,
+        );
         return;
       case "pair":
         setModeStatus(
           "Run /pair in VS Code to add a new browser device — pairing codes can only be generated there.",
+        );
+        return;
+      case "worktree":
+        setModeStatus(
+          "Run /worktree in VS Code to configure and open a local worktree window.",
         );
         return;
     }
@@ -5041,7 +5105,10 @@ export function BrowserGatewayApp({
                   />
                 )}
               </div>
-              <ChatActivityShelf>
+              <ChatActivityShelf
+                revealKey={visibleApproval?.id ?? null}
+                revealMinHeight={approvalPanelHeight + 10}
+              >
                 {!isAskAgentSelected &&
                   foreground &&
                   foreground.messageQueue.length > 0 &&
@@ -5137,8 +5204,17 @@ export function BrowserGatewayApp({
                           if (isAskAgentSelected) {
                             void refreshAskAgentMcpStatus({ reconnect: true });
                           } else {
-                            setModeStatus(
-                              "Use the VS Code window to refresh workspace MCP servers.",
+                            void refreshWorkspaceMcpStatus(
+                              panelSnapshot.project?.projectId,
+                              mcpManagerView,
+                            );
+                          }
+                        }}
+                        onSelectProject={(projectId) => {
+                          if (!isAskAgentSelected) {
+                            void refreshWorkspaceMcpStatus(
+                              projectId,
+                              mcpManagerView,
                             );
                           }
                         }}
@@ -5153,7 +5229,11 @@ export function BrowserGatewayApp({
                               });
                             }
                           } else {
-                            handleMcpAction(serverName, action);
+                            handleMcpAction(
+                              serverName,
+                              action,
+                              panelSnapshot.project?.projectId,
+                            );
                           }
                         }}
                         onOpenRawConfig={(scope) => {

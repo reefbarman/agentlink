@@ -1,17 +1,7 @@
 import type { AgentLinkConfig, ConfigStore } from "./ConfigStore.js";
+import type { RuleScope, ScopedRules, StoredRule } from "./ruleTypes.js";
 
-export interface StoredRule {
-  pattern: string;
-  mode: string;
-}
-
-export type RuleScope = "session" | "project" | "global";
-
-export interface ScopedRules<TRule extends StoredRule> {
-  session: TRule[];
-  project: TRule[];
-  global: TRule[];
-}
+export type { RuleScope, ScopedRules, StoredRule } from "./ruleTypes.js";
 
 export interface RuleSessionHost<TSession> {
   get(sessionId: string): TSession | undefined;
@@ -48,27 +38,22 @@ export class ScopedRuleStore<
     projectRoot?: string,
   ): boolean {
     if (scope === "global") {
-      this.configStore.updateGlobalConfig((config) => {
+      return this.configStore.updateGlobalConfig((config) => {
         this.addToConfig(config, rule);
       });
-      return true;
     }
 
     if (scope === "project") {
       if (!projectRoot) return false;
-      this.configStore.updateProjectConfig(projectRoot, (config) => {
+      return this.configStore.updateProjectConfig(projectRoot, (config) => {
         this.addToConfig(config, rule);
       });
-      return true;
     }
 
     const existing = this.sessions.get(sessionId);
-    if (existing && hasRule(this.descriptor.getSessionRules(existing), rule)) {
-      return true;
-    }
     const session = existing ?? this.sessions.create(sessionId);
     const rules = this.descriptor.getSessionRules(session);
-    rules.push(rule);
+    upsertRule(rules, rule);
     this.descriptor.setSessionRules(session, rules);
     session.lastActivity = Date.now();
     this.sessions.persist();
@@ -81,10 +66,11 @@ export class ScopedRuleStore<
     scope: RuleScope,
     sessionId?: string,
     projectRoot?: string,
+    oldRule?: StoredRule,
   ): boolean {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((config) => {
-        this.editConfigRule(config, oldPattern, newRule);
+        this.editConfigRule(config, oldPattern, newRule, oldRule);
       });
       return true;
     }
@@ -92,7 +78,7 @@ export class ScopedRuleStore<
     if (scope === "project") {
       if (!projectRoot) return false;
       this.configStore.updateProjectConfig(projectRoot, (config) => {
-        this.editConfigRule(config, oldPattern, newRule);
+        this.editConfigRule(config, oldPattern, newRule, oldRule);
       });
       return true;
     }
@@ -105,6 +91,7 @@ export class ScopedRuleStore<
           this.descriptor.getSessionRules(session),
           oldPattern,
           newRule,
+          oldRule,
         )
       ) {
         this.sessions.persist();
@@ -118,10 +105,11 @@ export class ScopedRuleStore<
     scope: RuleScope,
     sessionId?: string,
     projectRoot?: string,
+    rule?: StoredRule,
   ): boolean {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((config) => {
-        this.removeFromConfig(config, pattern);
+        this.removeFromConfig(config, pattern, rule);
       });
       return true;
     }
@@ -129,7 +117,7 @@ export class ScopedRuleStore<
     if (scope === "project") {
       if (!projectRoot) return false;
       this.configStore.updateProjectConfig(projectRoot, (config) => {
-        this.removeFromConfig(config, pattern);
+        this.removeFromConfig(config, pattern, rule);
       });
       return true;
     }
@@ -141,7 +129,9 @@ export class ScopedRuleStore<
           session,
           this.descriptor
             .getSessionRules(session)
-            .filter((rule) => rule.pattern !== pattern),
+            .filter(
+              (candidate) => !matchesStoredRule(candidate, pattern, rule),
+            ),
         );
         this.sessions.persist();
       }
@@ -171,27 +161,32 @@ export class ScopedRuleStore<
 
   private addToConfig(config: AgentLinkConfig, rule: TRule): void {
     const rules = this.getConfigRules(config);
-    if (!hasRule(rules, rule)) {
-      rules.push(rule);
-      this.descriptor.setConfigRules(config, rules);
-    }
+    upsertRule(rules, rule);
+    this.descriptor.setConfigRules(config, rules);
   }
 
   private editConfigRule(
     config: AgentLinkConfig,
     oldPattern: string,
     newRule: TRule,
+    oldRule?: StoredRule,
   ): void {
     const rules = this.getConfigRules(config);
-    if (editFirstRule(rules, oldPattern, newRule)) {
+    if (editFirstRule(rules, oldPattern, newRule, oldRule)) {
       this.descriptor.setConfigRules(config, rules);
     }
   }
 
-  private removeFromConfig(config: AgentLinkConfig, pattern: string): void {
+  private removeFromConfig(
+    config: AgentLinkConfig,
+    pattern: string,
+    rule?: StoredRule,
+  ): void {
     this.descriptor.setConfigRules(
       config,
-      this.getConfigRules(config).filter((rule) => rule.pattern !== pattern),
+      this.getConfigRules(config).filter(
+        (candidate) => !matchesStoredRule(candidate, pattern, rule),
+      ),
     );
   }
 
@@ -200,13 +195,30 @@ export class ScopedRuleStore<
   }
 }
 
-function hasRule<TRule extends StoredRule>(
+function upsertRule<TRule extends StoredRule>(
   rules: TRule[],
   candidate: TRule,
-): boolean {
-  return rules.some(
+): void {
+  const index = rules.findIndex(
     (rule) =>
       rule.pattern === candidate.pattern && rule.mode === candidate.mode,
+  );
+  if (index === -1) {
+    rules.push(candidate);
+  } else {
+    rules[index] = candidate;
+  }
+}
+
+function matchesStoredRule<TRule extends StoredRule>(
+  candidate: TRule,
+  pattern: string,
+  rule?: StoredRule,
+): boolean {
+  return (
+    candidate.pattern === pattern &&
+    (!rule ||
+      (candidate.mode === rule.mode && candidate.decision === rule.decision))
   );
 }
 
@@ -214,8 +226,11 @@ function editFirstRule<TRule extends StoredRule>(
   rules: TRule[],
   oldPattern: string,
   newRule: TRule,
+  oldRule?: StoredRule,
 ): boolean {
-  const index = rules.findIndex((rule) => rule.pattern === oldPattern);
+  const index = rules.findIndex((rule) =>
+    matchesStoredRule(rule, oldPattern, oldRule),
+  );
   if (index === -1) return false;
   rules[index] = newRule;
   return true;

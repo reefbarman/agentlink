@@ -329,6 +329,25 @@ export const searchSessionHistorySchema = {
     ),
 };
 
+export const diagnoseActivitySchema = {
+  tool_name: z
+    .string()
+    .optional()
+    .describe("Exact tool name to filter by, such as write_file"),
+  path: z
+    .string()
+    .optional()
+    .describe("Path text to match in recorded tool input or result evidence"),
+  tool_call_id: z.string().optional().describe("Exact tool-call ID to inspect"),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .optional()
+    .describe("Maximum evidence records to return (default 20, maximum 50)"),
+};
+
 export const readSessionExcerptSchema = {
   start_message_index: z.coerce
     .number()
@@ -425,6 +444,21 @@ export const generateImageSchema = {
     .number()
     .optional()
     .describe("Overall timeout in seconds. Default and maximum: 300."),
+};
+
+export const presentImagesSchema = {
+  image_ids: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Exact IDs of prior session images to show in the main chat transcript. IDs follow image_N session order. Use use_recent_images for the common case where the requested image was just returned by another tool.",
+    ),
+  use_recent_images: z
+    .union([z.boolean(), z.coerce.number()])
+    .optional()
+    .describe(
+      "Show recent session images in the main chat transcript. Pass true for the most recent image, false to disable recent selection, or a positive number for that many recent images. When both selectors are omitted, the most recent image is shown.",
+    ),
 };
 
 export const proposeMemorySchema = {
@@ -613,7 +647,7 @@ export const executeCommandSchema = {
     .string()
     .optional()
     .describe(
-      "Run in a named terminal, creating it if needed. Use a short purpose-based name (for example, 'Dev server', 'Unit tests', or 'Build') when intentionally creating a separate terminal for parallel/background work or temporary environment isolation.",
+      "Run in a named terminal, creating it if needed. Use a short purpose-based name (for example, 'Dev server', 'Unit tests', or 'Build') when the terminal should retain a stable identity; overlapping unnamed commands already allocate separate terminals when needed.",
     ),
   split_from: z
     .string()
@@ -638,6 +672,12 @@ export const executeCommandSchema = {
     .optional()
     .describe(
       'Environment variables to set for this command (e.g. {"CI":"1"}). Merged with the terminal\'s base execution environment.',
+    ),
+  sandbox_permissions: z
+    .enum(["use_default", "require_managed_network", "require_escalated"])
+    .optional()
+    .describe(
+      'Execution authority intent. Omit or use "use_default" for the normal policy-selected route with sandbox network blocked. Use "require_managed_network" for one exact sandboxed command that needs public network access; private and local destinations remain blocked, a non-empty reason is required, and Approve for Me sends the request to Guardian. Use "require_escalated" only when execution must occur outside the sandbox; this also requires a non-empty reason and approval.',
     ),
 
   files: z

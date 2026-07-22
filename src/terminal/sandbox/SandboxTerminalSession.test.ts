@@ -146,6 +146,81 @@ describe("SandboxTerminalSession", () => {
     ]);
   });
 
+  it("retains buffered output replayed during command startup", async () => {
+    const test = session();
+    const immediate = process("command-1", 1);
+    const originalOnEvent = immediate.onEvent.bind(immediate);
+    immediate.onEvent = vi.fn((listener) => {
+      const subscription = originalOnEvent(listener);
+      queueMicrotask(() =>
+        listener({ type: "data", data: "immediate output" }),
+      );
+      return subscription;
+    });
+    immediate.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+
+    test.session.startCommand({
+      command: "printf immediate output",
+      cwd: "/workspace",
+      origin: "agent",
+      process: immediate,
+    });
+    await flush();
+
+    expect(test.session.snapshot().commands[0]).toMatchObject({
+      status: "running",
+      output: "immediate output",
+    });
+  });
+
+  it("forwards identity-bound network requests while the command is launching", () => {
+    const test = session();
+    const launching = process("command-1", 1);
+    const events = vi.fn();
+    test.session.onEvent(events);
+    test.session.startCommand({
+      command: "curl https://example.com",
+      cwd: "/workspace",
+      origin: "agent",
+      process: launching,
+    });
+    const dnsAnswers = [{ address: "93.184.216.34", family: 4 as const }];
+
+    launching.emit({
+      type: "network-request",
+      request: {
+        requestId: "network-1",
+        host: "example.com",
+        protocol: "https",
+        port: 443,
+        address: "93.184.216.34",
+        family: 4,
+        dnsAnswers,
+        destinationClass: "public",
+      },
+    });
+
+    expect(events).toHaveBeenLastCalledWith({
+      type: "network-request",
+      commandId: "command-1",
+      generation: 1,
+      request: {
+        requestId: "network-1",
+        host: "example.com",
+        protocol: "https",
+        port: 443,
+        address: "93.184.216.34",
+        family: 4,
+        dnsAnswers: [{ address: "93.184.216.34", family: 4 }],
+        destinationClass: "public",
+      },
+    });
+    expect(events.mock.calls.at(-1)?.[0].request.dnsAnswers).not.toBe(
+      dnsAnswers,
+    );
+    expect(test.session.snapshot().status).toBe("launching");
+  });
+
   it("requires fresh sequential generations and rejects a busy channel", async () => {
     const test = session();
     const first = process("command-1", 1);

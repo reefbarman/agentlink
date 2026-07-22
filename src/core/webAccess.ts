@@ -12,6 +12,7 @@ export type CoreJsonValue =
   | { [key: string]: CoreJsonValue };
 
 export type CoreWebAccessSelection = "native" | "mcp" | "disabled";
+export type CoreWebSearchMode = "cached" | "indexed" | "live";
 
 export type CoreWebAccessBackend = "provider" | "mcp" | "mixed" | "disabled";
 export type CoreWebToolKind = "search" | "fetch";
@@ -19,6 +20,7 @@ export type CoreWebToolKind = "search" | "fetch";
 export interface CoreWebAccessSettings {
   searchBackend: CoreWebAccessSelection;
   fetchBackend: CoreWebAccessSelection;
+  nativeSearchMode: CoreWebSearchMode;
   allowedDomains: string[];
   blockedDomains: string[];
   maxSearchUsesPerTurn: number;
@@ -33,6 +35,7 @@ export const DEFAULT_CORE_WEB_ACCESS_SETTINGS: Readonly<CoreWebAccessSettings> =
   Object.freeze({
     searchBackend: "native",
     fetchBackend: "native",
+    nativeSearchMode: "cached",
     allowedDomains: [],
     blockedDomains: [],
     maxSearchUsesPerTurn: CORE_WEB_ACCESS_DEFAULT_MAX_SEARCH_USES_PER_TURN,
@@ -160,6 +163,7 @@ export function normalizeCoreWebAccessSettings(
     DEFAULT_CORE_WEB_ACCESS_SETTINGS.fetchBackend,
     "fetchBackend",
   );
+  const nativeSearchMode = resolveSearchMode(value.nativeSearchMode);
 
   const allowedDomains = normalizeDomainList(value.allowedDomains ?? []);
   const blockedDomains = normalizeDomainList(value.blockedDomains ?? []);
@@ -172,6 +176,7 @@ export function normalizeCoreWebAccessSettings(
   return {
     searchBackend,
     fetchBackend,
+    nativeSearchMode,
     allowedDomains,
     blockedDomains,
     maxSearchUsesPerTurn: normalizePositiveInteger(
@@ -195,6 +200,15 @@ export function normalizeCoreWebAccessSettings(
       "maxReplayBytesPerTurn",
     ),
   };
+}
+
+function resolveSearchMode(value: unknown): CoreWebSearchMode {
+  if (value === undefined)
+    return DEFAULT_CORE_WEB_ACCESS_SETTINGS.nativeSearchMode;
+  if (value === "cached" || value === "indexed" || value === "live") {
+    return value;
+  }
+  throw new Error(`Invalid web access nativeSearchMode: ${String(value)}`);
 }
 
 export function resolveCoreWebAccessPolicy(

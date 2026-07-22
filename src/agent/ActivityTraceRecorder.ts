@@ -3,6 +3,11 @@ import * as path from "path";
 
 import type { AgentEvent } from "./types.js";
 import type { ToolResult } from "../shared/types.js";
+import type {
+  SessionActivityDiagnosis,
+  SessionActivityEvidence,
+  SessionActivityQuery,
+} from "../core/sessionActivityDiagnostics.js";
 import { randomUUID } from "crypto";
 
 export type ActivityTraceSource =
@@ -75,6 +80,7 @@ export interface ActivityTraceRecorderOptions {
   maxSummaryChars?: number;
   maxPayloadStringChars?: number;
   maxPayloadArrayItems?: number;
+  log?: (message: string) => void;
 }
 
 export interface BackgroundSummaryTraceEvent {
@@ -102,6 +108,8 @@ export class ActivityTraceRecorder {
   private readonly maxSummaryChars: number;
   private readonly maxPayloadStringChars: number;
   private readonly maxPayloadArrayItems: number;
+  private readonly log: ((message: string) => void) | undefined;
+  private persistenceDisabled = false;
   private sequences = new Map<string, number>();
   private summaries = new Map<string, ActivityTraceSummary>();
 
@@ -115,6 +123,7 @@ export class ActivityTraceRecorder {
       options.maxPayloadStringChars ?? DEFAULT_MAX_PAYLOAD_STRING_CHARS;
     this.maxPayloadArrayItems =
       options.maxPayloadArrayItems ?? DEFAULT_MAX_PAYLOAD_ARRAY_ITEMS;
+    this.log = options.log;
   }
 
   appendAgentEvent(
@@ -197,13 +206,31 @@ export class ActivityTraceRecorder {
 
     const summary = this.getOrCreateSummary(event.sessionId, projectId);
     const shouldRecordEvent =
+      !this.persistenceDisabled &&
       summary.recordedEventCount < this.maxEventsPerSession;
 
     this.updateSummary(normalized, shouldRecordEvent);
-    if (shouldRecordEvent) {
-      this.writeEvent(normalized);
+    if (!this.persistenceDisabled) {
+      try {
+        if (shouldRecordEvent) {
+          this.writeEvent(normalized);
+        }
+        this.writeSummary(event.sessionId);
+      } catch (error) {
+        this.persistenceDisabled = true;
+        if (shouldRecordEvent) {
+          summary.recordedEventCount = Math.max(
+            0,
+            summary.recordedEventCount - 1,
+          );
+          summary.droppedEventCount += 1;
+          summary.traceTruncated = true;
+        }
+        this.log?.(
+          `[activity-trace] Disabled persistence after write failure: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
-    this.writeSummary(event.sessionId);
     return shouldRecordEvent ? normalized : null;
   }
 
@@ -231,6 +258,62 @@ export class ActivityTraceRecorder {
     } catch {
       return null;
     }
+  }
+
+  diagnoseSessionActivity(
+    sessionId: string,
+    query: SessionActivityQuery,
+  ): SessionActivityDiagnosis {
+    const summary =
+      this.loadSummary(sessionId) ?? this.getOrCreateSummary(sessionId);
+    const limit = Math.min(50, Math.max(1, Math.trunc(query.limit ?? 20)));
+    const toolName = query.toolName?.trim();
+    const toolCallId = query.toolCallId?.trim();
+    const pathQuery = query.path?.trim().toLowerCase();
+    const evidence = this.loadEvents(sessionId)
+      .filter(
+        (event) =>
+          event.kind === "tool_result" ||
+          event.kind === "warning" ||
+          event.kind === "error",
+      )
+      .filter((event) => {
+        if (toolName && readString(event.payload, "toolName") !== toolName) {
+          return false;
+        }
+        if (
+          toolCallId &&
+          readString(event.payload, "toolCallId") !== toolCallId
+        ) {
+          return false;
+        }
+        if (
+          pathQuery &&
+          !JSON.stringify(event.payload ?? {})
+            .toLowerCase()
+            .includes(pathQuery)
+        ) {
+          return false;
+        }
+        return true;
+      })
+      .slice(-limit)
+      .reverse()
+      .map(toSessionActivityEvidence);
+
+    return {
+      sessionId,
+      eventCount: summary.eventCount,
+      recordedEventCount: summary.recordedEventCount,
+      traceTruncated: summary.traceTruncated,
+      filters: {
+        ...(toolName ? { toolName } : {}),
+        ...(query.path?.trim() ? { path: query.path.trim() } : {}),
+        ...(toolCallId ? { toolCallId } : {}),
+        limit,
+      },
+      evidence,
+    };
   }
 
   private convertAgentEvent(
@@ -287,6 +370,8 @@ export class ActivityTraceRecorder {
             resultContentTypes: event.result.map((item) => item.type),
             resultTextChars: countToolResultTextChars(event.result),
             input: summarizeToolInput(event.input),
+            outcome: inferToolResultOutcome(event.result),
+            result: summarizeToolResultEvidence(event.result),
             mcpApprovalPromoted: Boolean(event.mcpApprovalPromotion),
             mcpServerName: event.mcpApprovalPromotion?.serverName,
           },
@@ -626,6 +711,102 @@ function summarizeToolInput(input: unknown): unknown {
   return Object.keys(summary).length > 0 ? summary : undefined;
 }
 
+const TOOL_RESULT_EVIDENCE_KEYS = new Set([
+  "status",
+  "error",
+  "reason",
+  "path",
+  "paths",
+  "operation",
+  "authorization",
+  "approval",
+  "auto_approved",
+  "security",
+  "command_sent",
+  "command_modified",
+  "changed_files",
+  "files_changed",
+  "files_modified",
+  "files",
+  "total_replacements",
+  "server",
+  "tool",
+]);
+
+function parseFirstStructuredToolResult(
+  result: ToolResult["content"],
+): Record<string, unknown> | undefined {
+  for (const item of result) {
+    if (item.type !== "text") continue;
+    try {
+      const parsed = JSON.parse(item.text) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Plain-text results have no structured diagnostic evidence.
+    }
+  }
+  return undefined;
+}
+
+function summarizeToolResultEvidence(
+  result: ToolResult["content"],
+): Record<string, unknown> | undefined {
+  const parsed = parseFirstStructuredToolResult(result);
+  if (!parsed) return undefined;
+  const evidence = Object.fromEntries(
+    Object.entries(parsed).filter(([key]) =>
+      TOOL_RESULT_EVIDENCE_KEYS.has(key),
+    ),
+  );
+  return Object.keys(evidence).length > 0 ? evidence : undefined;
+}
+
+function inferToolResultOutcome(result: ToolResult["content"]): string {
+  const parsed = parseFirstStructuredToolResult(result);
+  if (!parsed) return "ok";
+  if (parsed.status === "rejected" || parsed.status === "rejected_by_user") {
+    return "rejected";
+  }
+  if (parsed.status === "cancelled") return "cancelled";
+  if (parsed.status === "partial" || parsed.partial === true) return "partial";
+  if (parsed.status === "error" || parsed.error !== undefined) return "error";
+  return "ok";
+}
+
+function toSessionActivityEvidence(
+  event: ActivityTraceEvent,
+): SessionActivityEvidence {
+  if (event.kind === "tool_result") {
+    return {
+      sequence: event.sequence,
+      timestamp: event.timestamp,
+      kind: "tool_result",
+      source: event.source,
+      summary: event.summary,
+      toolCallId: readString(event.payload, "toolCallId"),
+      toolName: readString(event.payload, "toolName"),
+      durationMs: readOptionalNumber(event.payload, "durationMs"),
+      outcome: readString(event.payload, "outcome"),
+      input: event.payload?.input,
+      result: event.payload?.result,
+    };
+  }
+  return {
+    sequence: event.sequence,
+    timestamp: event.timestamp,
+    kind: event.kind === "warning" ? "warning" : "error",
+    source: event.source,
+    summary: event.summary,
+    retryable:
+      typeof event.payload?.retryable === "boolean"
+        ? event.payload.retryable
+        : undefined,
+    code: readString(event.payload, "code"),
+  };
+}
+
 function sanitizeValue(
   value: unknown,
   options: { maxStringChars: number; maxArrayItems: number },
@@ -685,4 +866,14 @@ function readNumber(
 ): number {
   const value = payload?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function readOptionalNumber(
+  payload: Record<string, unknown> | undefined,
+  key: string,
+): number | undefined {
+  const value = payload?.[key];
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }

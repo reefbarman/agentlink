@@ -22,6 +22,7 @@ import {
   buildCommandReviewContext,
   createCommandApprovalReviewer,
 } from "./approvals/commandApprovalReview.js";
+import { createNetworkApprovalReviewer } from "./approvals/networkApprovalReview.js";
 import { AgentToolCallTracker } from "./agent/AgentToolCallTracker.js";
 import { registerAgentActivityCommands } from "./agent/agentActivityCommands.js";
 import {
@@ -77,6 +78,7 @@ import { BrowserGatewayHelperLeaseClient } from "./browser-gateway/helper/Browse
 import { BrowserGatewayHelperModelAuthLeaseClient } from "./browser-gateway/helper/BrowserGatewayHelperModelAuthLeaseClient.js";
 import type { BrowserGatewayCoreOwnerLeaseRegistration } from "./browser-gateway/protocol.js";
 import type { CoreModelCatalogEntry } from "./core/modelCatalog.js";
+import { normalizeMaxConcurrentModelRequests } from "./core/modelRequestScheduler.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "./browser-gateway/browserGatewayModelProviderIds.js";
 import { setBrowserGatewayRegistryLogger } from "./browser-gateway/browserGatewayRegistry.js";
 import { WorktreeAgentIntentStore } from "./worktree/WorktreeAgentIntentStore.js";
@@ -92,16 +94,24 @@ import {
   createToolUsageTelemetry,
   type ToolUsageTelemetry,
 } from "./telemetry/ToolUsageTelemetry.js";
+import {
+  createContextUsageTelemetry,
+  type ContextUsageTelemetry,
+} from "./telemetry/ContextUsageTelemetry.js";
 import { createVscodeTerminalProvider } from "./adapters/vscode/terminalCapabilities.js";
 import { AgentTerminalViewProvider } from "./terminal/AgentTerminalViewProvider.js";
 import { createDeferredNodePtyLoader } from "./terminal/deferredNodePtyLoader.js";
+import { materializeHostShellBootstrap } from "./terminal/hostShellBootstrap.js";
 import { LiveHostTerminalSurfaceController } from "./terminal/LiveHostTerminalSurfaceController.js";
+import { NativeAgentTerminalCoordinator } from "./terminal/native/NativeAgentTerminalCoordinator.js";
 import { Phase1HostTerminalCoordinator } from "./terminal/Phase1HostTerminalCoordinator.js";
+import { prepareHostShellBootstrap } from "./terminal/prepareHostShellBootstrap.js";
 import {
   AgentTerminalProviderRouter,
   type SandboxPreparationAvailability,
 } from "./terminal/sandbox/AgentTerminalProviderRouter.js";
 import { BaselineSandboxLaunchAuthorizer } from "./terminal/sandbox/BaselineSandboxLaunchAuthorizer.js";
+import type { SandboxShellEnvironmentPolicy } from "./terminal/sandbox/sandboxEnvironmentPolicy.js";
 import { SandboxHelperClient } from "./terminal/sandbox/SandboxHelperClient.js";
 import { createNodeSandboxHelperTransportFactory } from "./terminal/sandbox/NodeSandboxHelperTransport.js";
 import { SandboxTerminalChannelHub } from "./terminal/sandbox/SandboxTerminalChannelHub.js";
@@ -142,6 +152,7 @@ let browserGatewayHelperDiscovery:
   | import("./browser-gateway/protocol.js").BrowserGatewayHelperDiscoveryRecord
   | null = null;
 let toolUsageTelemetry: ToolUsageTelemetry | null = null;
+let contextUsageTelemetry: ContextUsageTelemetry | null = null;
 
 let browserGatewayHelperLeaseClient: BrowserGatewayHelperLeaseClient | null =
   null;
@@ -255,6 +266,10 @@ async function consumeWorktreeStartupIntent(
       prompt: intent.prompt,
       mode: intent.mode,
       autoSubmit: intent.autoSubmit,
+      commandApprovalPolicy: intent.commandApprovalPolicy,
+      approvalPolicy: intent.approvalPolicy,
+      approvalReviewer: intent.approvalReviewer,
+      executionPreset: intent.executionPreset,
     });
     if (intent.fleetExchangeId) {
       const exchangeStore = new WorktreeFleetExchangeStore(
@@ -336,19 +351,34 @@ export function activate(context: vscode.ExtensionContext): void {
   outputChannel = vscode.window.createOutputChannel("AgentLink");
   context.subscriptions.push(outputChannel);
 
+  const configureProviderRequestConcurrency = () => {
+    const configured = normalizeMaxConcurrentModelRequests(
+      getConfig<unknown>("provider.maxConcurrentRequests"),
+    );
+    providerRegistry.requestScheduler.setMaxConcurrentPerProvider(configured);
+    log(
+      `[provider-scheduler] max concurrent requests per provider: ${configured}`,
+    );
+  };
+  configureProviderRequestConcurrency();
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (
+        event.affectsConfiguration("agentlink.provider.maxConcurrentRequests")
+      ) {
+        configureProviderRequestConcurrency();
+      }
+    }),
+  );
+
   let agentTerminalViewProvider: AgentTerminalViewProvider | undefined;
-  const sandboxTerminalChannelHub = new SandboxTerminalChannelHub({
-    onAgentCommandStarted: () => {
-      if (agentTerminalViewProvider?.isVisible()) return;
-      void vscode.commands
-        .executeCommand(`${AgentTerminalViewProvider.viewType}.focus`)
-        .then(undefined, (error) =>
-          log(`Unable to reveal AgentLink Terminal: ${String(error)}`),
-        );
-    },
-    onCallbackError: (error) =>
-      log(`Unable to reveal AgentLink Terminal: ${String(error)}`),
+  let liveTerminalSurfaceController:
+    | LiveHostTerminalSurfaceController
+    | undefined;
+  const agentNodePtyLoader = createDeferredNodePtyLoader({
+    extensionRoot: context.extensionPath,
   });
+  const sandboxTerminalChannelHub = new SandboxTerminalChannelHub();
   let resolvedSandboxNodeRuntime: ResolvedSandboxNodeRuntime | undefined;
   let sandboxBehaviorAttestationService:
     | SandboxBehaviorAttestationService
@@ -358,6 +388,7 @@ export function activate(context: vscode.ExtensionContext): void {
     | undefined;
   let agentTerminalProvider: AgentTerminalProviderRouter | undefined;
   let hostTerminalCoordinator!: Phase1HostTerminalCoordinator;
+  let customTerminalRuntimeWarning: string | undefined;
   let sandboxRuntimeWarning: string | undefined;
   const resetSandboxNodeRuntime = () => {
     resolvedSandboxNodeRuntime = undefined;
@@ -376,6 +407,7 @@ export function activate(context: vscode.ExtensionContext): void {
         environmentPath: process.env.PATH,
       }).then((runtime) => {
         resolvedSandboxNodeRuntime = runtime;
+        sandboxRuntimeWarning = undefined;
         log(
           `[sandbox-terminal] Using standalone Node runtime ${runtime.executable} (${runtime.source})`,
         );
@@ -399,7 +431,7 @@ export function activate(context: vscode.ExtensionContext): void {
       ? (["Configure Node Path", "Install Node.js", "Retry"] as const)
       : (["Show Logs", "Retry"] as const);
     const action = await vscode.window.showWarningMessage(
-      `${error.message} AgentLink Terminal is disabled and agent commands will use VS Code's native terminal.`,
+      `${error.message} Sandbox execution is unavailable; agent commands will use the native terminal route until it is fixed.`,
       ...actions,
     );
     if (action === "Configure Node Path") {
@@ -416,6 +448,20 @@ export function activate(context: vscode.ExtensionContext): void {
     } else if (action === "Retry") {
       resetSandboxNodeRuntime();
       agentTerminalProvider?.refresh();
+    }
+  };
+  const showCustomTerminalRuntimeUnavailable = async (error: Error) => {
+    if (customTerminalRuntimeWarning === error.message) return;
+    customTerminalRuntimeWarning = error.message;
+    const action = await vscode.window.showWarningMessage(
+      `${error.message} AgentLink Terminal is unavailable.`,
+      "Show Logs",
+      "Retry",
+    );
+    if (action === "Show Logs") {
+      outputChannel.show(true);
+    } else if (action === "Retry") {
+      customTerminalRuntimeWarning = undefined;
       void hostTerminalCoordinator.refresh();
     }
   };
@@ -432,16 +478,10 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.executeCommand("setContext", key, value),
     subscribeEnabledChanges: (listener) =>
       vscode.workspace.onDidChangeConfiguration((event) => {
-        if (
-          event.affectsConfiguration("agentlink.terminal.enabled") ||
-          event.affectsConfiguration("agentlink.terminal.nodePath")
-        ) {
-          resetSandboxNodeRuntime();
+        if (event.affectsConfiguration("agentlink.terminal.enabled"))
           listener();
-        }
       }),
     createRuntime: async () => {
-      await ensureSandboxNodeRuntime();
       const controller = new LiveHostTerminalSurfaceController({
         host: {
           platform: process.platform,
@@ -451,9 +491,7 @@ export function activate(context: vscode.ExtensionContext): void {
           context.globalStorageUri.fsPath,
           "host-terminal-bootstrap",
         ),
-        nodePtyLoader: createDeferredNodePtyLoader({
-          extensionRoot: context.extensionPath,
-        }),
+        nodePtyLoader: agentNodePtyLoader,
         getConfigurationSnapshot: ({ cwd, profileName }) =>
           readVscodeTerminalConfigurationSnapshot({
             requestedCwd: cwd,
@@ -469,12 +507,17 @@ export function activate(context: vscode.ExtensionContext): void {
         readClipboard: () => vscode.env.clipboard.readText(),
         writeClipboard: (text) => vscode.env.clipboard.writeText(text),
         sandboxChannelHub: sandboxTerminalChannelHub,
+        requestTerminalViewReveal: () => {
+          agentTerminalViewProvider?.revealPreservingFocus();
+        },
         log,
       });
+      liveTerminalSurfaceController = controller;
       const provider = new AgentTerminalViewProvider({
         controller,
         extensionUri: context.extensionUri,
         resolveCreateRequest: resolveVscodeTerminalCreateRequest,
+        log,
       });
       agentTerminalViewProvider = provider;
       try {
@@ -497,6 +540,7 @@ export function activate(context: vscode.ExtensionContext): void {
               ].some((key) =>
                 event.affectsConfiguration(`terminal.integrated.${key}`),
               ) ||
+              event.affectsConfiguration("editor.fontFamily") ||
               event.affectsConfiguration("editor.accessibilitySupport")
             ) {
               controller.updateConfiguration(
@@ -504,10 +548,14 @@ export function activate(context: vscode.ExtensionContext): void {
               );
             }
           });
+        customTerminalRuntimeWarning = undefined;
         return {
           dispose: () => {
             if (agentTerminalViewProvider === provider) {
               agentTerminalViewProvider = undefined;
+            }
+            if (liveTerminalSurfaceController === controller) {
+              liveTerminalSurfaceController = undefined;
             }
             controller.dispose();
             configurationSubscription.dispose();
@@ -519,12 +567,15 @@ export function activate(context: vscode.ExtensionContext): void {
         if (agentTerminalViewProvider === provider) {
           agentTerminalViewProvider = undefined;
         }
+        if (liveTerminalSurfaceController === controller) {
+          liveTerminalSurfaceController = undefined;
+        }
         controller.dispose();
         provider.dispose();
         throw error;
       }
     },
-    onRuntimeUnavailable: showSandboxRuntimeUnavailable,
+    onRuntimeUnavailable: showCustomTerminalRuntimeUnavailable,
     log,
   });
   context.subscriptions.push(hostTerminalCoordinator);
@@ -590,7 +641,12 @@ export function activate(context: vscode.ExtensionContext): void {
     log,
   });
   context.subscriptions.push(toolUsageTelemetry);
-  toolCallTracker = new AgentToolCallTracker(log);
+  contextUsageTelemetry = createContextUsageTelemetry({
+    extensionVersion: extVersion,
+    log,
+  });
+  context.subscriptions.push(contextUsageTelemetry);
+  toolCallTracker = new AgentToolCallTracker(log, () => agentTerminalProvider);
 
   // Status bar manager for approval alerts and indexer errors
   statusBarManager = new StatusBarManager();
@@ -636,18 +692,89 @@ export function activate(context: vscode.ExtensionContext): void {
       workspaceTrusted: vscode.workspace.isTrusted,
     }),
     createNativeProvider: createVscodeTerminalProvider,
+    revealCustomTerminal: (terminalId) =>
+      liveTerminalSurfaceController?.revealTerminal(terminalId) ?? false,
+    createNativeAgentProvider: () => {
+      const coordinator = new NativeAgentTerminalCoordinator({
+        nodePtyLoader: agentNodePtyLoader,
+        initialCwd: workspaceCwd,
+        prepareShell: async ({ channelId, cwd, env }) => {
+          const configuration = readVscodeTerminalConfigurationSnapshot({
+            requestedCwd: cwd,
+          });
+          const prepared = prepareHostShellBootstrap({
+            configuration: {
+              ...configuration,
+              baseEnvironment: {
+                ...configuration.baseEnvironment,
+                ...env,
+              },
+            },
+            host: {
+              platform: process.platform,
+              remoteName: vscode.env.remoteName,
+            },
+            runtimeRoot: path.join(
+              context.globalStorageUri.fsPath,
+              "native-agent-terminal-bootstrap",
+            ),
+            artifactId: `channel-${channelId}-${randomUUID()}`.replaceAll(
+              "-",
+              "_",
+            ),
+            nonce: randomUUID().replaceAll("-", "_"),
+            originalZdotdir: configuration.baseEnvironment.ZDOTDIR,
+          });
+          if (prepared.plan.mode !== "integrated") {
+            throw new Error(
+              prepared.plan.mode === "native-fallback"
+                ? prepared.plan.message
+                : "Native Agent requires integrated bash or zsh shell support",
+            );
+          }
+          await fs.promises.mkdir(
+            path.join(
+              context.globalStorageUri.fsPath,
+              "native-agent-terminal-bootstrap",
+            ),
+            { recursive: true },
+          );
+          return materializeHostShellBootstrap({
+            ...prepared.plan,
+            profile: {
+              ...prepared.plan.profile,
+              environment: {
+                ...prepared.plan.profile.environment,
+                ...env,
+                ...(prepared.plan.shell === "zsh"
+                  ? { ZDOTDIR: prepared.plan.profile.environment.ZDOTDIR }
+                  : {}),
+              },
+            },
+          });
+        },
+        createChannelId: () => `native-agent-${randomUUID()}`,
+        createCommandId: randomUUID,
+        log,
+      });
+      sandboxTerminalChannelHub.attach(coordinator, "native");
+      return coordinator;
+    },
     getSandboxAvailability:
       async (): Promise<SandboxPreparationAvailability> => {
         let runtime: ResolvedSandboxNodeRuntime;
         try {
           runtime = await ensureSandboxNodeRuntime();
         } catch (error) {
+          const failure =
+            error instanceof Error ? error : new Error(String(error));
           log(
-            `[sandbox-terminal] Using native terminal fallback before sandbox selection: ${error instanceof Error ? error.message : String(error)}`,
+            `[sandbox-terminal] Using native terminal fallback before sandbox selection: ${failure.message}`,
           );
+          void showSandboxRuntimeUnavailable(failure);
           return {
             status: "runtime-unavailable",
-            detail: error instanceof Error ? error.message : String(error),
+            detail: failure.message,
           };
         }
         try {
@@ -683,14 +810,16 @@ export function activate(context: vscode.ExtensionContext): void {
               capabilities: {
                 backend: "seatbelt",
                 processTree: true,
-                filesystemRead: "isolated",
+                filesystemRead: "host-visible",
                 filesystemWrite: "strict",
                 network: "blocked",
-                privateHome: true,
-                privateTmp: true,
-                hostIpcBlocked: true,
+                privateHome: false,
+                privateTmp: false,
+                hostIpcBlocked: false,
                 resourceLimits: "partial",
                 warnings: [
+                  "The host home directory is readable but not writable; credential-like environment variables are removed.",
+                  "Host temporary directories and POSIX IPC are available for development toolchain compatibility.",
                   "CPU, memory, process-count, and disk quotas are not fully enforced.",
                 ],
               },
@@ -726,6 +855,12 @@ export function activate(context: vscode.ExtensionContext): void {
           runtime,
           authorizer: new BaselineSandboxLaunchAuthorizer({
             workspaceRoots,
+            environmentPolicy: vscode.workspace
+              .getConfiguration("agentlink")
+              .get<SandboxShellEnvironmentPolicy>(
+                "terminal.environmentPolicy",
+                {},
+              ),
             trustedRuntimeRoots: [
               path.dirname(resolvedSandboxNodeRuntime.executable),
             ],
@@ -747,9 +882,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     agentTerminalProvider,
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (
+      if (event.affectsConfiguration("agentlink.terminal.nodePath")) {
+        resetSandboxNodeRuntime();
+        agentTerminalProvider.refresh();
+      } else if (
         event.affectsConfiguration("agentlink.terminal.enabled") ||
-        event.affectsConfiguration("agentlink.terminal.nodePath")
+        event.affectsConfiguration("agentlink.terminal.environmentPolicy")
       ) {
         agentTerminalProvider.refresh();
       }
@@ -1069,7 +1207,6 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     browserGatewayService,
     approvalManager.onDidChange(() => {
-      agentSessionManager?.refreshBackgroundApprovalInheritance();
       browserGatewayService?.invalidateBrowserSnapshot();
     }),
     vscode.window.onDidChangeActiveColorTheme(() => {
@@ -1540,6 +1677,8 @@ export function activate(context: vscode.ExtensionContext): void {
     chatViewProvider.forwardApproval(req, respond);
   builtinApprovalPanel.onForwardApprovalIdle = () =>
     chatViewProvider.sendApprovalIdle();
+  builtinApprovalPanel.onForwardApprovalCancelled = (id) =>
+    chatViewProvider.cancelForwardedApproval(id);
 
   const fleetAutomationLifecycle = createFleetAutomationLifecycle({
     store: new FleetAutomationStore(
@@ -1551,13 +1690,17 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   context.subscriptions.push(fleetAutomationLifecycle);
 
+  const resolveApprovalReviewerContext = (sessionId: string) => {
+    const session = agentSessionManager.getSession(sessionId);
+    if (!session || session.isAborted) return undefined;
+    const provider = providerRegistry.tryResolveProvider(session.model);
+    return provider ? { provider, sessionModel: session.model } : undefined;
+  };
   const commandApprovalReviewer = createCommandApprovalReviewer({
-    resolveContext: (sessionId) => {
-      const session = agentSessionManager.getSession(sessionId);
-      if (!session || session.isAborted) return undefined;
-      const provider = providerRegistry.tryResolveProvider(session.model);
-      return provider ? { provider, sessionModel: session.model } : undefined;
-    },
+    resolveContext: resolveApprovalReviewerContext,
+  });
+  const networkApprovalReviewer = createNetworkApprovalReviewer({
+    resolveContext: resolveApprovalReviewerContext,
   });
 
   // Wire up window-level capabilities. MCP is captured from the session project registry.
@@ -1572,12 +1715,14 @@ export function activate(context: vscode.ExtensionContext): void {
         sessionId,
         chatViewProvider.getConfiguredCommandApprovalPolicy(),
       ),
-    inheritSessionApprovalState: (parentSessionId, childSessionId) =>
-      approvalManager.inheritSessionApprovalState(
-        parentSessionId,
-        childSessionId,
+    getCommandApprovalMode: (sessionId) =>
+      agentSessionManager.getSessionApprovalMode(
+        sessionId,
+        chatViewProvider.getConfiguredCommandApprovalPolicy(),
       ),
+
     commandApprovalReviewer,
+    networkApprovalReviewer,
     isSessionActive: (sessionId) => {
       const session = agentSessionManager.getSession(sessionId);
       return Boolean(session && !session.isAborted);
@@ -1665,6 +1810,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   chatViewProvider.setApprovalManager(approvalManager);
   chatViewProvider.setToolCallTracker(toolCallTracker);
+  if (contextUsageTelemetry) {
+    chatViewProvider.setContextUsageTelemetry(contextUsageTelemetry);
+  }
   chatViewProvider.setSessionManager(agentSessionManager);
 
   void consumeWorktreeStartupIntent(context, chatViewProvider, log);
@@ -1889,4 +2037,6 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {
   toolUsageTelemetry?.dispose();
   toolUsageTelemetry = null;
+  contextUsageTelemetry?.dispose();
+  contextUsageTelemetry = null;
 }

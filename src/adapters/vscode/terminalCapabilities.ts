@@ -21,8 +21,17 @@ export function createVscodeTerminalProvider(): TerminalProvider {
     getBackgroundState(terminalId) {
       return terminalManager.getBackgroundState(terminalId);
     },
+    getCurrentOutput(terminalId, options) {
+      return terminalManager.getCurrentOutput(terminalId, options);
+    },
     interruptTerminal(terminalId) {
       return terminalManager.interruptTerminal(terminalId);
+    },
+    detachTerminal(terminalId) {
+      return terminalManager.detachTerminal(terminalId);
+    },
+    revealTerminal(terminalId) {
+      return terminalManager.revealTerminal(terminalId);
     },
     getRecentlyClosedTerminals(limit) {
       return terminalManager.getRecentlyClosedTerminals(limit);

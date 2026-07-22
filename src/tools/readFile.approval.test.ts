@@ -89,6 +89,7 @@ describe("handleReadFile outside-workspace approval ordering", () => {
       approvalManager,
       approvalPanel,
       sessionId,
+      undefined,
     );
 
     const text = result.content.find((c) => c.type === "text")?.text;
@@ -458,6 +459,7 @@ describe("handleReadFile outside-workspace approval ordering", () => {
       approvalManager,
       approvalPanel,
       sessionId,
+      undefined,
     );
 
     const text = result.content.find((c) => c.type === "text")?.text;

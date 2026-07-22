@@ -13,6 +13,24 @@
 - **Brand color**: `#4EC9B0` (teal) — used in `media/agentlink-terminal.svg` and throughout the chat webview UI (file picker indicator, active states)
 - **Icon**: `media/agentlink.svg` uses `currentColor` (themed by VS Code); `media/agentlink-terminal.svg` uses the hardcoded brand color
 
+## Positioning Article
+
+[why-agentlink.md](why-agentlink.md) is a public-facing article on why AgentLink is a good agent harness. Keep it accurate:
+
+- When a user-facing capability materially changes (tools, providers/models, supervision/approvals, MCP support, multi-agent features, non-goals, or a roadmap item in its "Where it's heading" section shipping), update the article in the same piece of work and bump its "Last updated" date.
+- Preserve its framing: article style, not a feature matrix or evaluation guide; compare against the field generally, never head-to-head against a named competitor.
+- Emphasis order to maintain: (1) deep editor integration, (2) steering/observing agents with full automation available — including explicit, drill-down-on-demand activity transparency (the "Nothing happens in the dark" section), (3) cross-provider review, (4) agent/context efficiency, (5) leaning into MCP; local-first, BYO-accounts, and ecosystem parity (the "Everything you'd expect" section — conventions like skills, commands, `AGENTS.md`/`CLAUDE.md`) stay present but secondary.
+- Keep claims honest: rough edges stay labeled as such; don't promote maturing features to done.
+
+## Built-in Documentation Skill
+
+[resources/builtin-skills/documentation/](resources/builtin-skills/documentation/) is a bundled skill that lets the built-in agent answer questions about AgentLink's own capabilities and configuration. It deliberately stays a **routing layer**: the SKILL.md and its `references/` files hold distilled summaries and point to the shipped `README.md` and `package.json` (`contributes.configuration`) as the authoritative detail, so README-level edits do not need mirroring. Keep it accurate:
+
+- Update it **in the same piece of work** whenever something it distills changes: modes, built-in slash commands, settings added/renamed/regrouped (`references/settings.md`), MCP config behavior or file precedence (`references/mcp.md`), customization conventions — instruction files, custom modes/commands, skills, memory (`references/customization.md`), or major user-facing features and surfaces (`references/capabilities.md`).
+- Detail-level changes already covered by the README (a tool gaining a parameter, reworded setting descriptions) need no skill edit — the skill routes readers to those files.
+- Keep frontmatter single-line (AgentLink's simple `key: value` parser) and the `description` trigger-rich, per the bundled `skill-writing` skill.
+- No registration or packaging steps: bundled skills under `resources/builtin-skills/` are auto-discovered by `src/agent/skillLoader.ts` and shipped via the `!resources/**` line in `.vscodeignore`.
+
 ## Formatting
 
 - **Format**: `npm run fmt` — formats supported project files with Oxfmt using `.oxfmtrc.json`.
@@ -55,11 +73,13 @@ When adding a new tool or changing tool parameters:
 4. Add or update handler/unit tests for definitions, dispatch, and result behavior
 5. Keep the VS Code and browser surfaces in parity when the tool affects shared session state or user-visible events
 6. Update `README.md` — add a full tool section with parameter table and response details
-7. Run `npm run release -- --install` to rebuild and reinstall the extension. (Not when developing the agent, though)
+7. If the change alters what the built-in documentation skill distills (new user-facing capability area, mode, or setting — see [Built-in Documentation Skill](#built-in-documentation-skill)), update that skill too
+8. Run `npm run release -- --install` to rebuild and reinstall the extension. (Not when developing the agent, though)
 
 ## Tool Usage and Feedback Review
 
 - Run `npm run telemetry:tools -- --top 60` to inspect the local aggregate tool-usage report before changing an existing tool because of anecdotal friction, apparent underuse, or a suspected failure pattern.
+- Run `npm run telemetry:context` to inspect local context-window telemetry: large usage jumps between API requests (with per-source attribution, e.g. `tool:read_file`) and post-condense estimate gaps. Use it before tuning condense thresholds, the post-condense token estimate, or investigating "context suddenly full" reports.
 - Use `npm run telemetry:tools:csv` when a sortable export is useful. Generated files under `telemetry-reports/` are ignored and must not be committed.
 - In dev builds, inspect relevant entries with `get_feedback` before changing tool behavior. Do not delete feedback until the issue has been addressed or deliberately declined; delete only the reviewed indices.
 - Treat raw call counts as directional, not as an availability-normalized adoption rate. The current telemetry does not yet say how often a tool was advertised, and legacy outcome aggregates may classify structured rejections as successful calls. See [plans/tool-usage-observability-and-adoption-plan.md](plans/tool-usage-observability-and-adoption-plan.md).

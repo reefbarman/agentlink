@@ -414,13 +414,21 @@ export class HostTerminalRuntime {
     return this.presentation.terminalRunning;
   }
 
-  get closeRequiresConfirmation(): boolean {
+  get hasActiveCommand(): boolean {
+    return this.blocks.activeCommandBlockId !== undefined;
+  }
+
+  get userMayBeBusy(): boolean {
     if (!this.presentation.terminalRunning) return false;
     return (
       this.presentation.alternateScreen ||
       this.blocks.mode !== "integrated" ||
       this.blocks.activeCommandBlockId !== undefined
     );
+  }
+
+  get closeRequiresConfirmation(): boolean {
+    return this.userMayBeBusy;
   }
 
   get interactionStateKey(): string {

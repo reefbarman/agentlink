@@ -130,7 +130,8 @@ class NodeSandboxHelperTransport implements SandboxHelperTransport {
 
   write(data: string): boolean {
     if (this.disposed || this.closed) return false;
-    return this.child.stdin.write(data, "utf8");
+    this.child.stdin.write(data, "utf8");
+    return true;
   }
 
   onLine(listener: (line: string) => void): SandboxCommandDisposable {

@@ -72,6 +72,11 @@ export interface AgentToolLoopHandlers<
   }): Promise<AgentToolLoopModelResult>;
   /** Execute a single requested tool. */
   runTool(call: AgentToolLoopCall): Promise<AgentToolLoopToolResult<TOutcome>>;
+  /**
+   * Classify calls that may overlap with adjacent safe calls. Calls for which
+   * this returns false are ordered barriers. The default is fully sequential.
+   */
+  isParallelSafe?(call: AgentToolLoopCall): boolean;
   /** Observe the exact private iteration sequence before the loop returns. */
   onIterationMessagesComplete?(messages: readonly CoreModelMessage[]): void;
   /** Finalize a turn that produced assistant text. */
@@ -117,19 +122,38 @@ export async function runAgentToolLoop<
     }
 
     iterationMessages.push(toAssistantMessage(result));
-    for (const call of result.toolCalls) {
-      const executed = await handlers.runTool(call);
-      if (executed.toolMessage) {
-        const toolMessage = normalizeToolResultMessage(executed.toolMessage);
-        toolMessages.push(toolMessage);
-        iterationMessages.push(toolMessage);
+    let nextCallIndex = 0;
+    while (nextCallIndex < result.toolCalls.length) {
+      const firstCall = result.toolCalls[nextCallIndex];
+      const parallelSafe = handlers.isParallelSafe?.(firstCall) ?? false;
+      const batch: AgentToolLoopCall[] = [firstCall];
+      nextCallIndex += 1;
+
+      if (parallelSafe) {
+        while (nextCallIndex < result.toolCalls.length) {
+          const candidate = result.toolCalls[nextCallIndex];
+          if (!(handlers.isParallelSafe?.(candidate) ?? false)) break;
+          batch.push(candidate);
+          nextCallIndex += 1;
+        }
       }
-      if (executed.stop) {
-        handlers.onIterationMessagesComplete?.(iterationMessages);
-        return handlers.finishSuccess(
-          assistantText || executed.content,
-          executed.outcome,
-        );
+
+      const executedBatch = parallelSafe
+        ? await Promise.all(batch.map((call) => handlers.runTool(call)))
+        : [await handlers.runTool(firstCall)];
+      for (const executed of executedBatch) {
+        if (executed.toolMessage) {
+          const toolMessage = normalizeToolResultMessage(executed.toolMessage);
+          toolMessages.push(toolMessage);
+          iterationMessages.push(toolMessage);
+        }
+        if (executed.stop) {
+          handlers.onIterationMessagesComplete?.(iterationMessages);
+          return handlers.finishSuccess(
+            assistantText || executed.content,
+            executed.outcome,
+          );
+        }
       }
     }
   }

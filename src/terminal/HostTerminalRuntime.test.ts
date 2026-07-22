@@ -115,8 +115,9 @@ describe("HostTerminalRuntime", () => {
     ).toBe(true);
   });
 
-  it("requires close confirmation only when host state cannot prove an idle integrated prompt", () => {
+  it("treats a user terminal as busy unless host state proves an idle integrated prompt", () => {
     const integratedRuntime = integrated();
+    expect(integratedRuntime.userMayBeBusy).toBe(true);
     expect(integratedRuntime.closeRequiresConfirmation).toBe(true);
 
     integratedRuntime.processData(
@@ -126,6 +127,7 @@ describe("HostTerminalRuntime", () => {
         "$ ",
       ].join(""),
     );
+    expect(integratedRuntime.userMayBeBusy).toBe(false);
     expect(integratedRuntime.closeRequiresConfirmation).toBe(false);
 
     integratedRuntime.processData(
@@ -133,14 +135,18 @@ describe("HostTerminalRuntime", () => {
         "",
       ),
     );
+    expect(integratedRuntime.userMayBeBusy).toBe(true);
     expect(integratedRuntime.closeRequiresConfirmation).toBe(true);
 
     const tuiRuntime = raw();
     tuiRuntime.processData("\x1b[?1049h");
+    expect(tuiRuntime.userMayBeBusy).toBe(true);
     expect(tuiRuntime.closeRequiresConfirmation).toBe(true);
+    expect(raw().userMayBeBusy).toBe(true);
     expect(raw().closeRequiresConfirmation).toBe(true);
 
     integratedRuntime.finish();
+    expect(integratedRuntime.userMayBeBusy).toBe(false);
     expect(integratedRuntime.closeRequiresConfirmation).toBe(false);
   });
 

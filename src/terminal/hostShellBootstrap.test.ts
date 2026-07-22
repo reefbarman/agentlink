@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import {
   mkdtemp,
   mkdir,
@@ -19,6 +20,7 @@ import {
 } from "./hostShellBootstrap.js";
 import type { HostShellLaunchDecision } from "./hostShellLaunchPolicy.js";
 import type { ResolvedHostShellProfile } from "./shellProfileResolver.js";
+import { createShellIntegrationParser } from "./shellIntegration.js";
 
 const nonce = "bootstrap_nonce_123456";
 const tempRoots: string[] = [];
@@ -172,6 +174,14 @@ describe("host shell bootstrap", () => {
     expect(zshrc?.content).toContain("__agentlink_si_nonce");
     expect(zshrc?.content).toContain(
       'export ZDOTDIR="$__agentlink_user_zdotdir"',
+    );
+    expect(zshrc?.content).toContain(
+      'if [[ "$HISTFILE" == "$__agentlink_bootstrap_zdotdir/.zsh_history" ]]; then',
+    );
+    expect(
+      zshrc?.content.indexOf('HISTFILE="$__agentlink_user_zdotdir'),
+    ).toBeLessThan(
+      zshrc!.content.indexOf(`source "$__agentlink_user_zdotdir/.zshrc"`),
     );
   });
 
@@ -356,6 +366,7 @@ describe("host shell bootstrap", () => {
 });
 
 const describeDarwin = process.platform === "darwin" ? describe : describe.skip;
+const itWithExpect = existsSync("/usr/bin/expect") ? it : it.skip;
 
 describeDarwin("host shell bootstrap Darwin conformance", () => {
   it("loads normal bashrc before hooks and executes an interactive command", async () => {
@@ -395,6 +406,123 @@ describeDarwin("host shell bootstrap Darwin conformance", () => {
     expect(result.stdout).toContain("__RESULT__:bash-user");
     expect(`${result.stdout}${result.stderr}`).toContain("697;AgentLink");
   });
+
+  it("restores the user zsh history path before sourcing their zshrc", async () => {
+    const { runtimeRoot, homeDirectory } = await fixture();
+    const userZdotdir = path.join(homeDirectory, "zsh-config");
+    await mkdir(userZdotdir, { mode: 0o700 });
+    await writeFile(
+      path.join(userZdotdir, ".zshrc"),
+      'export AGENTLINK_HISTFILE_AT_ZSHRC="$HISTFILE"\n',
+    );
+    const plan = planHostShellBootstrap({
+      decision: integrated("zsh", [], {
+        HOME: homeDirectory,
+        ZDOTDIR: userZdotdir,
+      }),
+      runtimeRoot,
+      artifactId: "zsh-history-real",
+      nonce,
+      homeDirectory,
+      originalZdotdir: userZdotdir,
+    });
+    const materialized = await materializeHostShellBootstrap(plan);
+    if (materialized.mode !== "integrated")
+      throw new Error("expected integrated");
+
+    const result = spawnSync(
+      materialized.profile.shellPath,
+      [
+        ...materialized.profile.shellArgs,
+        "-c",
+        'printf "__HISTFILE__:%s:%s\\n" "$AGENTLINK_HISTFILE_AT_ZSHRC" "$HISTFILE"',
+      ],
+      {
+        encoding: "utf8",
+        env: materialized.profile.environment,
+        timeout: 5000,
+      },
+    );
+    await materialized.cleanup();
+
+    const expectedHistoryFile = path.join(userZdotdir, ".zsh_history");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      `__HISTFILE__:${expectedHistoryFile}:${expectedHistoryFile}`,
+    );
+    expect(result.stdout).not.toContain(
+      `${materialized.artifactDirectory}/.zsh_history`,
+    );
+  });
+
+  itWithExpect(
+    "recalls seeded zsh history through a real interactive PTY",
+    async () => {
+      const { runtimeRoot, homeDirectory } = await fixture();
+      const userZdotdir = path.join(homeDirectory, "zsh-config");
+      const historyCommand = "printf agentlink-history-sentinel";
+      await mkdir(userZdotdir, { mode: 0o700 });
+      await writeFile(
+        path.join(userZdotdir, ".zsh_history"),
+        `${historyCommand}\n`,
+      );
+      await writeFile(
+        path.join(userZdotdir, ".zshrc"),
+        [
+          "bindkey -e",
+          "HISTSIZE=100",
+          "SAVEHIST=100",
+          'PROMPT="__AGENTLINK_HISTORY_PROMPT__ "',
+          "",
+        ].join("\n"),
+      );
+      const plan = planHostShellBootstrap({
+        decision: integrated("zsh", [], {
+          HOME: homeDirectory,
+          ZDOTDIR: userZdotdir,
+          TERM: "xterm-256color",
+        }),
+        runtimeRoot,
+        artifactId: "zsh-history-pty",
+        nonce,
+        homeDirectory,
+        originalZdotdir: userZdotdir,
+      });
+      const materialized = await materializeHostShellBootstrap(plan);
+      if (materialized.mode !== "integrated")
+        throw new Error("expected integrated");
+
+      const expectScript = [
+        "set timeout 5",
+        `spawn -noecho ${JSON.stringify(materialized.profile.shellPath)} ${materialized.profile.shellArgs.map((argument) => JSON.stringify(argument)).join(" ")}`,
+        'expect "__AGENTLINK_HISTORY_PROMPT__ "',
+        'send -- "\\033\\[A"',
+        `expect ${JSON.stringify(historyCommand)}`,
+        'send -- "\\003"',
+        'expect "__AGENTLINK_HISTORY_PROMPT__ "',
+        'send -- "\\033OA"',
+        `expect ${JSON.stringify(historyCommand)}`,
+        'send -- "\\003"',
+        'expect "__AGENTLINK_HISTORY_PROMPT__ "',
+        'send -- "exit\\r"',
+        "expect eof",
+      ].join("\n");
+      const result = spawnSync("/usr/bin/expect", ["-c", expectScript], {
+        cwd: homeDirectory,
+        encoding: "utf8",
+        env: materialized.profile.environment,
+        timeout: 10_000,
+      });
+      await materialized.cleanup();
+
+      const transcript = `${result.stdout}${result.stderr}`;
+      expect(result.status, transcript).toBe(0);
+      expect(transcript).toContain(historyCommand);
+      expect(transcript).not.toContain(
+        `${materialized.artifactDirectory}/.zsh_history`,
+      );
+    },
+  );
 
   it.each([
     ["non-login", []],
@@ -441,7 +569,7 @@ describeDarwin("host shell bootstrap Darwin conformance", () => {
         [
           ...materialized.profile.shellArgs,
           "-c",
-          'printf "__RESULT__:%s:%s:%s:%s\\n" "$AGENTLINK_ZSH_ORDER" "$ZDOTDIR" "${precmd_functions[(Ie)__agentlink_si_precmd]}" "${preexec_functions[(Ie)__agentlink_si_preexec]}"',
+          '__agentlink_si_encode "a%b"; printf "__RESULT__:%s:%s:%s:%s:%s\\n" "$AGENTLINK_ZSH_ORDER" "$ZDOTDIR" "${precmd_functions[(Ie)__agentlink_si_precmd]}" "${preexec_functions[(Ie)__agentlink_si_preexec]}" "$__agentlink_si_encoded"; __agentlink_si_preexec "printf lifecycle"; (exit 7); __agentlink_si_precmd',
         ],
         {
           encoding: "utf8",
@@ -454,9 +582,24 @@ describeDarwin("host shell bootstrap Darwin conformance", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(
         args.length === 0
-          ? `__RESULT__:env,rc:${userZdotdir}:1:1`
-          : `__RESULT__:env,profile,rc,login:${userZdotdir}:1:1`,
+          ? `__RESULT__:env,rc:${userZdotdir}:1:1:a%25b`
+          : `__RESULT__:env,profile,rc,login:${userZdotdir}:1:1:a%25b`,
       );
+      const lifecycle = createShellIntegrationParser(nonce).push(
+        `${result.stdout}${result.stderr}`,
+      );
+      expect(lifecycle.events).toContainEqual({
+        type: "command-start",
+        command: "printf lifecycle",
+      });
+      expect(lifecycle.events).toContainEqual({
+        type: "command-end",
+        exitCode: 7,
+      });
+      expect(lifecycle.events).toContainEqual({
+        type: "cwd",
+        cwd: process.cwd(),
+      });
     },
   );
 });

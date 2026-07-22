@@ -1,4 +1,4 @@
-export const CURRENT_SANDBOX_POLICY_VERSION = "2026-07.sandbox.v1";
+export const CURRENT_SANDBOX_POLICY_VERSION = "2026-07.sandbox.v3";
 
 export type SandboxNetworkPolicy =
   | { mode: "blocked" }
@@ -12,9 +12,21 @@ export type SandboxNetworkPolicy =
       allowedPrivateTargets?: string[];
     };
 
+export type SandboxEnvironmentInheritance = "all" | "core" | "none";
+
+export interface SandboxEnvironmentPolicySummary {
+  inherit: SandboxEnvironmentInheritance;
+  ignoreDefaultExcludes: boolean;
+  exclude: string[];
+  setKeys: string[];
+  includeOnly: string[];
+  useProfile: boolean;
+}
+
 export interface SandboxEnvironmentPolicy {
   inheritHost: false;
   values: Record<string, string>;
+  summary?: SandboxEnvironmentPolicySummary;
 }
 
 export interface SandboxResourceLimits {
@@ -35,6 +47,8 @@ export interface SandboxPolicy {
   deniedWriteRoots?: string[];
   /** Existing denied-write roots that also receive hard-link/race revalidation. */
   protectedReadOnlyRoots: string[];
+  /** Existing denied-write trees checked for symlink, hard-link, and node-type aliases before spawn. */
+  structurallyProtectedRoots?: string[];
   network: SandboxNetworkPolicy;
   environment: SandboxEnvironmentPolicy;
   allowedUnixSockets: string[];
@@ -237,5 +251,6 @@ export interface SandboxExecutionMetadata {
     grantId: string;
     auditId: string;
   };
+  environmentPolicy?: SandboxEnvironmentPolicySummary;
   violations?: SandboxViolation[];
 }

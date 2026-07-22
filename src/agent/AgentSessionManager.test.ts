@@ -409,6 +409,120 @@ describe("AgentSessionManager host injection", () => {
     expect(mgr.getCommandApprovalPolicy(session.id, "manual")).toBe("manual");
   });
 
+  it("persists approval dimensions when a live session policy changes", async () => {
+    const saveSession = vi.fn(
+      async (_args: {
+        session: PersistedSessionRecord;
+        expectedRevision: string | null;
+      }) => ({
+        ok: true as const,
+        revision: "revision-1",
+      }),
+    );
+    const store = {
+      saveSession,
+      list: vi.fn(() => []),
+    } as any;
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    const session = await mgr.createSession("code");
+
+    mgr.setCommandApprovalPolicy(session.id, "approve-for-me");
+    await flushPromises();
+
+    expect(saveSession).toHaveBeenCalledTimes(1);
+    expect(saveSession.mock.calls[0]![0].session.metadata).toMatchObject({
+      commandApprovalPolicy: "approve-for-me",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
+    });
+  });
+
+  it("restores independent approval dimensions and derives missing dimensions from legacy policy", async () => {
+    const summary = {
+      schemaVersion: 1,
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Persisted",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 1,
+      lastActiveAt: 2,
+    };
+    const readSession = vi.fn(async () => ({
+      ok: true as const,
+      revision: "revision-1",
+      value: {
+        summary,
+        messages: [{ role: "user" as const, content: "hello" }],
+        metadata: {
+          mode: summary.mode,
+          model: summary.model,
+          commandApprovalPolicy: "safe" as const,
+          approvalPolicy: "on-request" as const,
+          approvalReviewer: "auto-review" as const,
+          executionPreset: "workspace-write" as const,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          checkpointState: { baseCommit: null, checkpoints: [] },
+        },
+      },
+    }));
+    const store = {
+      readSession,
+      list: vi.fn(() => [summary]),
+      listAll: vi.fn(() => [summary]),
+    } as any;
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    await mgr.loadPersistedSession(summary.id);
+
+    expect(mgr.getSessionApprovalMode(summary.id)).toEqual({
+      commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
+    });
+
+    readSession.mockResolvedValueOnce({
+      ok: true,
+      revision: "revision-2",
+      value: {
+        summary: { ...summary, id: "legacy-session" },
+        messages: [{ role: "user", content: "legacy" }],
+        metadata: {
+          mode: summary.mode,
+          model: summary.model,
+          commandApprovalPolicy: "approve-for-me",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          checkpointState: { baseCommit: null, checkpoints: [] },
+        },
+      },
+    } as any);
+    await mgr.loadPersistedSession("legacy-session");
+    expect(mgr.getSessionApprovalMode("legacy-session")).toEqual({
+      commandApprovalPolicy: "approve-for-me",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
+    });
+  });
+
   it("fans out session changes without replacing the legacy callback", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
     const legacyListener = vi.fn();

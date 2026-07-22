@@ -1,6 +1,13 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 
+import type {
+  TerminalApprovalPolicy,
+  TerminalApprovalReviewer,
+  TerminalCommandApprovalPolicySnapshot,
+  TerminalExecutionPreset,
+} from "../core/capabilities/terminal.js";
+
 import { randomUUID } from "crypto";
 
 export interface WorktreeAgentStartupIntent {
@@ -16,6 +23,10 @@ export interface WorktreeAgentStartupIntent {
   mode?: string;
   autoSubmit: boolean;
   fleetExchangeId?: string;
+  commandApprovalPolicy?: TerminalCommandApprovalPolicySnapshot;
+  approvalPolicy?: TerminalApprovalPolicy;
+  approvalReviewer?: TerminalApprovalReviewer;
+  executionPreset?: TerminalExecutionPreset;
   consumedAt?: number;
 }
 
@@ -66,6 +77,18 @@ export class WorktreeAgentIntentStore {
       autoSubmit: intent.autoSubmit,
       ...(intent.fleetExchangeId
         ? { fleetExchangeId: intent.fleetExchangeId }
+        : {}),
+      ...(intent.commandApprovalPolicy
+        ? { commandApprovalPolicy: intent.commandApprovalPolicy }
+        : {}),
+      ...(intent.approvalPolicy
+        ? { approvalPolicy: intent.approvalPolicy }
+        : {}),
+      ...(intent.approvalReviewer
+        ? { approvalReviewer: intent.approvalReviewer }
+        : {}),
+      ...(intent.executionPreset
+        ? { executionPreset: intent.executionPreset }
         : {}),
     };
 
@@ -217,6 +240,18 @@ function isValidIntent(
     (value.mode === undefined || typeof value.mode === "string") &&
     (value.fleetExchangeId === undefined ||
       typeof value.fleetExchangeId === "string") &&
+    (value.commandApprovalPolicy === undefined ||
+      ["manual", "safe", "sensitive", "approve-for-me"].includes(
+        value.commandApprovalPolicy,
+      )) &&
+    (value.approvalPolicy === undefined ||
+      value.approvalPolicy === "on-request") &&
+    (value.approvalReviewer === undefined ||
+      value.approvalReviewer === "user" ||
+      value.approvalReviewer === "auto-review") &&
+    (value.executionPreset === undefined ||
+      value.executionPreset === "native-manual" ||
+      value.executionPreset === "workspace-write") &&
     (value.consumedAt === undefined || typeof value.consumedAt === "number")
   );
 }

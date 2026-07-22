@@ -274,7 +274,10 @@ function splitTopLevelChatBlocks(message: ChatMessage): TranscriptRow[] {
   return rows;
 }
 
-function buildTranscriptRows(messages: ChatMessage[]): TranscriptRow[] {
+function buildTranscriptRows(
+  messages: ChatMessage[],
+  streaming: boolean,
+): TranscriptRow[] {
   const rows: TranscriptRow[] = [];
   let previousModel: string | undefined;
   let previousReasoningEffort: ReasoningEffort | undefined;
@@ -330,6 +333,28 @@ function buildTranscriptRows(messages: ChatMessage[]): TranscriptRow[] {
       if (reasoningEffort) previousReasoningEffort = reasoningEffort;
     }
     rows.push(...messageRows);
+  }
+
+  // While streaming, if the newest assistant message currently ends with a
+  // background result card, append an empty tail segment to carry the
+  // streaming indicator. Without it the indicator renders on the segment
+  // above the card and the transcript ends on a static completed card,
+  // which reads as the agent having stalled.
+  const lastMessage = messages[messages.length - 1];
+  const lastRow = rows[rows.length - 1];
+  if (
+    streaming &&
+    lastMessage?.role === "assistant" &&
+    lastRow?.sourceMessage === lastMessage &&
+    lastRow.bgAgentResultOnly
+  ) {
+    const id = `${lastMessage.id}:streaming-tail`;
+    rows.push({
+      key: id,
+      message: cloneAssistantSegment(lastMessage, id, []),
+      sourceMessage: lastMessage,
+      bgAgentResultOnly: false,
+    });
   }
 
   return rows;
@@ -725,7 +750,10 @@ export function TranscriptMessageList({
   streamingMetricsSurface,
   streamingMetricsScope = sessionId ?? "transcript",
 }: TranscriptMessageListProps) {
-  const rows = useMemo(() => buildTranscriptRows(messages), [messages]);
+  const rows = useMemo(
+    () => buildTranscriptRows(messages, streaming),
+    [messages, streaming],
+  );
   const lastMessage = messages[messages.length - 1];
   let streamingRowKey: string | null = null;
   if (streaming && lastMessage?.role === "assistant") {

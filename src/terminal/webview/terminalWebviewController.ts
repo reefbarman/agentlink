@@ -27,18 +27,19 @@ export interface TerminalRendererCallbacks {
   onBlockAnchorDisposed(blockId: string): void;
   onData(data: string): void;
   onLink(url: string): void;
-  onPaste(): void;
+  onPaste(bracketedPasteMode: boolean): void;
 }
 
 export interface TerminalRenderer {
   open(container: HTMLElement): void;
-  write(data: string): Promise<void>;
+  write(data: string, source?: "live" | "replay"): Promise<void>;
   reset(): void;
   focus(): void;
   fit(): TerminalDimensions | undefined;
   findNext(term: string): boolean;
   findPrevious(term: string): boolean;
   clearSearch(): void;
+  isBracketedPasteMode(): boolean;
   registerBlockBoundary(
     blockId: string,
     boundary: HostTerminalBlockBoundary,
@@ -94,6 +95,7 @@ export interface TerminalWebviewState {
   phase: "loading" | "ready";
   tabs: readonly TerminalTabView[];
   activeTabId?: string;
+  focusRequest: number;
   fallback?: HostTerminalFallbackState;
   error?: string;
   creating: boolean;
@@ -116,17 +118,22 @@ interface RendererEntry {
   blockKinds: Map<string, TerminalBlockView["kind"]>;
   anchoredBlockIds: Set<string>;
   presentation: HostTerminalSurfacePresentation;
+  renderQueue: Promise<void>;
+  renderGeneration: number;
 }
 
 interface MessageHost {
+  readonly document?: { hasFocus(): boolean };
   addEventListener(
     type: "message",
     listener: (event: MessageEvent<unknown>) => void,
   ): void;
+  addEventListener(type: "focus" | "blur", listener: () => void): void;
   removeEventListener(
     type: "message",
     listener: (event: MessageEvent<unknown>) => void,
   ): void;
+  removeEventListener(type: "focus" | "blur", listener: () => void): void;
 }
 
 export interface TerminalWebviewControllerOptions {
@@ -190,10 +197,7 @@ function replayWarning(
   snapshot: HostTerminalReplaySnapshot,
 ): string | undefined {
   if (snapshot.replayPendingControl) {
-    return "The retained terminal replay ended during a control sequence.";
-  }
-  if (snapshot.replayTruncated) {
-    return `${snapshot.droppedBytes.toLocaleString()} bytes were omitted from the retained terminal output.`;
+    return "Earlier terminal output could not be restored completely.";
   }
   return undefined;
 }
@@ -202,6 +206,7 @@ export class TerminalWebviewController {
   private state: TerminalWebviewState = {
     phase: "loading",
     tabs: [],
+    focusRequest: 0,
     creating: false,
     blockStates: {},
     rendererErrors: {},
@@ -224,6 +229,8 @@ export class TerminalWebviewController {
   private readonly messageListener = (event: MessageEvent<unknown>) => {
     void this.receive(event.data);
   };
+  private readonly focusListener = () => this.postFocusChanged(true);
+  private readonly blurListener = () => this.postFocusChanged(false);
 
   constructor(options: TerminalWebviewControllerOptions) {
     this.vscodeApi = options.vscodeApi;
@@ -246,10 +253,13 @@ export class TerminalWebviewController {
     if (this.messageHost) this.unmount();
     this.messageHost = messageHost;
     messageHost.addEventListener("message", this.messageListener);
+    messageHost.addEventListener("focus", this.focusListener);
+    messageHost.addEventListener("blur", this.blurListener);
     this.post({
       type: "terminal-view/ready",
       protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
     });
+    this.postFocusChanged(messageHost.document?.hasFocus() ?? false);
     return () => this.unmount();
   }
 
@@ -287,10 +297,11 @@ export class TerminalWebviewController {
       }
       return;
     }
-    this.patchState({ activeTabId: terminalId });
+    this.patchState({
+      activeTabId: terminalId,
+      focusRequest: this.state.focusRequest + 1,
+    });
     this.postTarget(entry, { type: "host-terminal/activate" });
-    this.fitEntry(entry);
-    entry.renderer.focus();
   }
 
   closeTerminal(terminalId: string): void {
@@ -302,7 +313,10 @@ export class TerminalWebviewController {
   pasteTerminal(terminalId: string): void {
     const entry = this.entries.get(terminalId);
     if (!entry) return;
-    this.postTarget(entry, { type: "host-terminal/paste-intent" });
+    this.postTarget(entry, {
+      type: "host-terminal/paste-intent",
+      bracketedPasteMode: entry.renderer.isBracketedPasteMode(),
+    });
   }
 
   runBlockAction(
@@ -338,6 +352,9 @@ export class TerminalWebviewController {
       type: "terminal-view/confirm",
       confirmationId: confirmation.confirmationId,
       accept,
+      ...(confirmation.operation === "paste"
+        ? { bracketedPasteMode: entry.renderer.isBracketedPasteMode() }
+        : {}),
     });
   }
 
@@ -371,6 +388,11 @@ export class TerminalWebviewController {
     }
   }
 
+  fitActive(): void {
+    const entry = this.activeEntry();
+    if (entry) this.fitEntry(entry);
+  }
+
   focusActive(): void {
     const entry = this.activeEntry();
     if (!entry) return;
@@ -402,7 +424,13 @@ export class TerminalWebviewController {
 
   private unmount(): void {
     this.messageHost?.removeEventListener("message", this.messageListener);
+    this.messageHost?.removeEventListener("focus", this.focusListener);
+    this.messageHost?.removeEventListener("blur", this.blurListener);
     this.messageHost = undefined;
+  }
+
+  private postFocusChanged(focused: boolean): void {
+    this.post({ type: "terminal-view/focus-changed", focused });
   }
 
   private async applyEvent(event: unknown): Promise<void> {
@@ -446,10 +474,14 @@ export class TerminalWebviewController {
         this.patchState({ fallback: message.fallback });
         return;
       case "terminal-view/render-batch":
-        await this.applyRenderBatch(message);
+        this.enqueueRenderBatch(message);
         return;
       case "host-terminal/opened":
-        this.applyOpened(message.terminal, message.terminalInstanceId);
+        this.applyOpened(
+          message.terminal,
+          message.terminalInstanceId,
+          message.activate,
+        );
         return;
       case "host-terminal/data":
         // Renderable output arrives through ordered render batches. This lifecycle
@@ -487,38 +519,61 @@ export class TerminalWebviewController {
         if (
           this.matchingEntry(message.terminalId, message.terminalInstanceId)
         ) {
+          this.updateTab(
+            message.terminalId,
+            message.terminalInstanceId,
+            (tab) => ({
+              ...tab,
+              agentActivity:
+                tab.agentActivity === "unread" ? undefined : tab.agentActivity,
+            }),
+          );
           this.patchState({ activeTabId: message.terminalId });
         }
+        return;
+      case "host-terminal/agent-activity":
+        this.updateTab(
+          message.terminalId,
+          message.terminalInstanceId,
+          (tab) => ({
+            ...tab,
+            agentActivity:
+              message.activity === "none" ? undefined : message.activity,
+          }),
+        );
         return;
       case "host-terminal/exited": {
         const entry = this.matchingEntry(
           message.terminalId,
           message.terminalInstanceId,
         );
-        if (entry) {
-          entry.presentation = {
-            ...entry.presentation,
-            terminalRunning: false,
-          };
-        }
-        this.updateTab(
-          message.terminalId,
-          message.terminalInstanceId,
-          (tab) => ({
-            ...tab,
-            status: "exited",
-            ...(message.exitCode === undefined
-              ? {}
-              : { exitCode: message.exitCode }),
-            ...(message.signal === undefined ? {} : { signal: message.signal }),
-          }),
-        );
-        if (entry) this.patchState({ blockStates: this.projectBlockStates() });
+        if (!entry) return;
+        entry.renderQueue = entry.renderQueue
+          .then(() => this.applyExited(message))
+          .catch((error: unknown) => {
+            if (this.entries.get(entry.terminalId) === entry) {
+              this.setRendererError(entry.terminalId, errorMessage(error));
+            }
+          });
         return;
       }
-      case "host-terminal/closed":
-        this.applyClosed(message.terminalId, message.terminalInstanceId);
+      case "host-terminal/closed": {
+        const entry = this.matchingEntry(
+          message.terminalId,
+          message.terminalInstanceId,
+        );
+        if (!entry) return;
+        entry.renderQueue = entry.renderQueue
+          .then(() =>
+            this.applyClosed(message.terminalId, message.terminalInstanceId),
+          )
+          .catch((error: unknown) => {
+            if (this.entries.get(entry.terminalId) === entry) {
+              this.setRendererError(entry.terminalId, errorMessage(error));
+            }
+          });
         return;
+      }
       case "host-terminal/error":
         if (
           message.requestId !== undefined &&
@@ -541,6 +596,7 @@ export class TerminalWebviewController {
       );
     }
 
+    const initialBootstrap = this.state.phase === "loading";
     this.rendererEpoch = message.rendererEpoch;
     this.configuration = message.configuration;
     this.pendingCreateRequestId = undefined;
@@ -593,6 +649,7 @@ export class TerminalWebviewController {
         }
       }
       if (entry) {
+        if (resetForResync) entry.renderGeneration += 1;
         entry.blockMode = replay.blocks.mode;
         entry.blockKinds = new Map(
           replay.blocks.blocks.map((block) => [block.id, block.kind]),
@@ -615,6 +672,10 @@ export class TerminalWebviewController {
       phase: "ready",
       tabs,
       activeTabId: message.state.activeTabId,
+      focusRequest:
+        initialBootstrap && message.state.activeTabId
+          ? this.state.focusRequest + 1
+          : this.state.focusRequest,
       fallback: message.fallback,
       creating: false,
       blockStates: this.projectBlockStates(),
@@ -638,9 +699,30 @@ export class TerminalWebviewController {
         snapshot.terminalInstanceId,
       );
       if (!entry || !replayTerminalIds.has(snapshot.terminalId)) continue;
-      entry.renderer.reset();
-      if (snapshot.data) await entry.renderer.write(snapshot.data);
-      entry.lastSequence = snapshot.sequence;
+      const renderGeneration = entry.renderGeneration;
+      entry.renderQueue = entry.renderQueue
+        .then(async () => {
+          if (
+            this.entries.get(entry.terminalId) !== entry ||
+            entry.renderGeneration !== renderGeneration
+          ) {
+            return;
+          }
+          entry.renderer.reset();
+          if (snapshot.data)
+            await entry.renderer.write(snapshot.data, "replay");
+          if (
+            this.entries.get(entry.terminalId) === entry &&
+            entry.renderGeneration === renderGeneration
+          ) {
+            entry.lastSequence = snapshot.sequence;
+          }
+        })
+        .catch((error: unknown) => {
+          if (this.entries.get(entry.terminalId) === entry) {
+            this.setRendererError(entry.terminalId, errorMessage(error));
+          }
+        });
     }
   }
 
@@ -658,14 +740,41 @@ export class TerminalWebviewController {
     }
   }
 
+  private enqueueRenderBatch(batch: HostTerminalRenderBatch): void {
+    const entry = this.matchingEntry(
+      batch.terminalId,
+      batch.terminalInstanceId,
+    );
+    if (!entry) return;
+    const renderGeneration = entry.renderGeneration;
+    entry.renderQueue = entry.renderQueue
+      .then(() => {
+        if (entry.renderGeneration !== renderGeneration) return;
+        return this.applyRenderBatch(batch, renderGeneration);
+      })
+      .catch((error: unknown) => {
+        if (this.entries.get(entry.terminalId) === entry) {
+          this.setRendererError(entry.terminalId, errorMessage(error));
+        }
+      });
+  }
+
   private async applyRenderBatch(
     batch: HostTerminalRenderBatch,
+    renderGeneration: number,
   ): Promise<void> {
     const entry = this.matchingEntry(
       batch.terminalId,
       batch.terminalInstanceId,
     );
-    if (!entry || !this.rendererEpoch || this.resyncPending) return;
+    if (
+      !entry ||
+      !this.rendererEpoch ||
+      this.resyncPending ||
+      entry.renderGeneration !== renderGeneration
+    ) {
+      return;
+    }
 
     if (batch.sequence > entry.lastSequence + 1) {
       if (!this.resyncPending) {
@@ -682,6 +791,12 @@ export class TerminalWebviewController {
       for (const operation of batch.operations) {
         if (operation.type === "write") {
           await entry.renderer.write(operation.data);
+          if (
+            this.entries.get(entry.terminalId) !== entry ||
+            entry.renderGeneration !== renderGeneration
+          ) {
+            return;
+          }
         } else if (operation.type === "block-boundary") {
           this.applyBlockBoundary(entry, operation.blockId, operation.boundary);
         } else if (operation.type === "alternate-screen") {
@@ -704,18 +819,12 @@ export class TerminalWebviewController {
         }
       }
       entry.lastSequence = batch.sequence;
-      this.patchState({ blockStates: this.projectBlockStates() });
-      if (batch.replayTruncated || batch.replayPendingControl) {
-        const warning = batch.replayPendingControl
-          ? "Terminal output is waiting for a complete control sequence."
-          : `${batch.droppedRenderBytes.toLocaleString()} bytes are outside the retained terminal replay.`;
-        this.patchState({
-          replayWarnings: {
-            ...this.state.replayWarnings,
-            [batch.terminalId]: warning,
-          },
-        });
-      }
+      const replayWarnings = { ...this.state.replayWarnings };
+      delete replayWarnings[batch.terminalId];
+      this.patchState({
+        blockStates: this.projectBlockStates(),
+        replayWarnings,
+      });
     }
 
     // Ack duplicates as well as newly rendered batches so a lost host-side ack
@@ -726,7 +835,32 @@ export class TerminalWebviewController {
     });
   }
 
-  private applyOpened(tab: HostTerminalTab, terminalInstanceId: string): void {
+  private applyExited(
+    message: Extract<TerminalSurfaceEvent, { type: "host-terminal/exited" }>,
+  ): void {
+    const entry = this.matchingEntry(
+      message.terminalId,
+      message.terminalInstanceId,
+    );
+    if (!entry) return;
+    entry.presentation = {
+      ...entry.presentation,
+      terminalRunning: false,
+    };
+    this.updateTab(message.terminalId, message.terminalInstanceId, (tab) => ({
+      ...tab,
+      status: "exited",
+      ...(message.exitCode === undefined ? {} : { exitCode: message.exitCode }),
+      ...(message.signal === undefined ? {} : { signal: message.signal }),
+    }));
+    this.patchState({ blockStates: this.projectBlockStates() });
+  }
+
+  private applyOpened(
+    tab: HostTerminalTab,
+    terminalInstanceId: string,
+    activate = true,
+  ): void {
     this.pendingCreateRequestId = undefined;
     const existing = this.entries.get(tab.id);
     if (existing?.terminalInstanceId !== terminalInstanceId) {
@@ -747,7 +881,12 @@ export class TerminalWebviewController {
     this.patchState({
       phase: "ready",
       tabs,
-      activeTabId: tab.id,
+      activeTabId:
+        activate || !this.state.activeTabId ? tab.id : this.state.activeTabId,
+      focusRequest:
+        activate || !this.state.activeTabId
+          ? this.state.focusRequest + 1
+          : this.state.focusRequest,
       fallback: undefined,
       creating: false,
       error: undefined,
@@ -803,8 +942,11 @@ export class TerminalWebviewController {
           url,
         });
       },
-      onPaste: () =>
-        this.postTarget(entry, { type: "host-terminal/paste-intent" }),
+      onPaste: (bracketedPasteMode) =>
+        this.postTarget(entry, {
+          type: "host-terminal/paste-intent",
+          bracketedPasteMode,
+        }),
       onBlockAnchorDisposed: (blockId) => {
         if (!entry.anchoredBlockIds.delete(blockId)) return;
         if (this.entries.get(entry.terminalId) === entry) {
@@ -825,6 +967,8 @@ export class TerminalWebviewController {
       blockKinds: new Map(),
       anchoredBlockIds: new Set(),
       presentation: EMPTY_PRESENTATION,
+      renderQueue: Promise.resolve(),
+      renderGeneration: 0,
     };
     return entry;
   }
@@ -906,7 +1050,14 @@ export class TerminalWebviewController {
   }
 
   private fitEntry(entry: RendererEntry): void {
-    if (!entry.opened || !entry.container || !this.rendererEpoch) return;
+    if (
+      entry.terminalId !== this.state.activeTabId ||
+      !entry.opened ||
+      !entry.container ||
+      !this.rendererEpoch
+    ) {
+      return;
+    }
     try {
       const dimensions = entry.renderer.fit();
       if (

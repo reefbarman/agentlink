@@ -555,6 +555,24 @@ describe("AgentSession", () => {
       expect(session.estimatedTotalUsed).toBe(2100);
     });
 
+    it("attributes estimated accumulation per source and resets on fresh usage", async () => {
+      const session = await makeSession();
+      session.addEstimatedTokens(400, "tool:read_file");
+      session.addEstimatedTokens(800, "tool:read_file");
+      session.addEstimatedTokens(400);
+
+      // 4 chars ≈ 1 token
+      expect(session.estimatedAccumulationBySource).toEqual({
+        "tool:read_file": 300,
+        other: 100,
+      });
+      expect(session.estimatedAccumulatedTokens).toBe(400);
+
+      session.addUsage(1000, 500);
+      expect(session.estimatedAccumulatedTokens).toBe(0);
+      expect(session.estimatedAccumulationBySource).toEqual({});
+    });
+
     it("restoreFromStore restores cache totals and last token snapshot", async () => {
       const session = await makeSession();
       session.restoreFromStore({

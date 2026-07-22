@@ -904,7 +904,12 @@ describe("buildSystemPrompt", () => {
     });
     expect(result).toContain("Provider-Specific Behavior");
     expect(result).toContain("Visible progress and rationale");
+    expect(result).toContain("interactive, collaborative partner");
     expect(result).toContain("do not rely on hidden thinking");
+    expect(result).toContain("After at most 2-3 consecutive tool calls");
+    expect(result).toContain(
+      "do not bundle investigation, implementation, and validation into one silent tool-only sequence",
+    );
   });
 
   it("gives anthropic models high-level code tool guidance", async () => {

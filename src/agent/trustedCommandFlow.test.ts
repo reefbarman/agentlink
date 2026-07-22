@@ -99,11 +99,11 @@ describe("addTrustedCommandViaUi", () => {
     );
     expect(approvalManager.addCommandRule).toHaveBeenCalledWith(
       "_global",
-      { pattern: "npm run", mode: "prefix" },
+      { pattern: "npm run", mode: "prefix", decision: "allow" },
       "project",
     );
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
-      'Added trusted command (project): prefix "npm run"',
+      'Added command policy (project): allow prefix "npm run"',
     );
   });
 
@@ -129,7 +129,7 @@ describe("addTrustedCommandViaUi", () => {
     );
     expect(approvalManager.addCommandRule).toHaveBeenCalledWith(
       "_global",
-      { pattern: "git status", mode: "exact" },
+      { pattern: "git status", mode: "exact", decision: "allow" },
       "global",
     );
   });

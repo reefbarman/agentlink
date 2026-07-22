@@ -307,6 +307,11 @@ describe("handleApplyDiff", () => {
       status: "rejected_by_user",
       path: "src/rejected.ts",
       reason: "Needs a smaller diff",
+      authorization: {
+        allowed: false,
+        basis: "human",
+        decision: "reject",
+      },
     });
     expect(toolJson(result)).not.toHaveProperty("decision");
     expect(policy.recordDecision).not.toHaveBeenCalled();

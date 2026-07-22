@@ -1,5 +1,9 @@
 import type { ApprovalRequest, DecisionMessage, RuleEntry } from "../types.js";
 import {
+  autosizeTextarea,
+  observeTextareaAutosize,
+} from "../../../shared/composerBehavior.js";
+import {
   useCallback,
   useEffect,
   useMemo,
@@ -8,8 +12,10 @@ import {
 } from "preact/hooks";
 
 import { ApprovalLayout } from "./ApprovalLayout.js";
+import { CommandExecutionContext } from "./CommandExecutionContext.js";
 import type { RefObject } from "preact";
 import { RuleRow } from "./RuleRow.js";
+import { isBannedCommandRulePrefixSuggestion } from "../../commandRulePolicy.js";
 
 interface CommandCardProps {
   request: ApprovalRequest;
@@ -101,12 +107,14 @@ export function CommandCard({
         return {
           pattern: entry.existingRule.pattern,
           mode: entry.existingRule.mode,
+          decision: entry.existingRule.decision,
           scope: entry.existingRule.scope,
         };
       }
       return {
         pattern: entry.command,
         mode: "prefix" as const,
+        decision: "allow" as const,
         scope: "skip" as const,
       };
     }),
@@ -123,12 +131,14 @@ export function CommandCard({
           return {
             pattern: entry.existingRule.pattern,
             mode: entry.existingRule.mode,
+            decision: entry.existingRule.decision,
             scope: entry.existingRule.scope,
           };
         }
         return {
           pattern: entry.command,
           mode: "prefix" as const,
+          decision: "allow" as const,
           scope: "skip" as const,
         };
       }),
@@ -141,6 +151,7 @@ export function CommandCard({
     return (
       rule.pattern !== initial.pattern ||
       rule.mode !== initial.mode ||
+      rule.decision !== initial.decision ||
       rule.scope !== initial.scope
     );
   });
@@ -148,28 +159,11 @@ export function CommandCard({
   // Auto-size on command change
   useEffect(() => {
     const el = textareaRef.current;
-    if (el && el.clientWidth > 0) {
-      el.style.height = "auto";
-      el.style.height = el.scrollHeight + "px";
-    }
+    if (el && el.clientWidth > 0) autosizeTextarea(el);
   }, [command]);
 
-  // Re-run sizing when the panel becomes visible (clientWidth goes from 0 to real value)
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    let lastWidth = el.clientWidth;
-    const observer = new ResizeObserver(() => {
-      const w = el.clientWidth;
-      if (w !== lastWidth && w > 0) {
-        lastWidth = w;
-        el.style.height = "auto";
-        el.style.height = el.scrollHeight + "px";
-      }
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+  // Re-run sizing when the width changes (panel resize, hidden → visible)
+  useEffect(() => observeTextareaAutosize(textareaRef.current), []);
 
   const handleRun = useCallback(() => {
     submit({
@@ -285,6 +279,7 @@ export function CommandCard({
           const autoPrefixSuggestion =
             canSuggestPrefix &&
             rule.mode === "prefix" &&
+            !isBannedCommandRulePrefixSuggestion(prefixSuggestion) &&
             !state.hiddenPrefix &&
             !explicitSuggestion
               ? prefixSuggestion
@@ -363,6 +358,7 @@ export function CommandCard({
   const commandReview = request.commandReview;
   const humanOnlyReason = request.humanOnlyReason;
   const security = request.security;
+  const nativeEscalation = security?.permissionIntent === "native-escalation";
   const inlineFiles = request.inlineFiles ?? [];
 
   return (
@@ -382,56 +378,6 @@ export function CommandCard({
       onReject={handleReject}
       followUpRef={followUpRef}
     >
-      {security && (
-        <div
-          class={`command-security ${security.route === "sandbox" ? "verified" : "native"}`}
-        >
-          <span
-            class={`codicon ${security.route === "sandbox" ? "codicon-shield" : "codicon-warning"}`}
-          />
-          <div>
-            <div class="command-security-heading">
-              {security.route === "sandbox"
-                ? "Verified Sandbox"
-                : "Native Terminal (unsandboxed)"}
-            </div>
-            <div>
-              {security.route === "sandbox"
-                ? `Workspace writes allowed · protected metadata read-only · private HOME/TMP · network blocked${security.sandbox ? ` · ${security.sandbox.backend}/${security.sandbox.profileId}` : ""}`
-                : `Normal terminal permissions · ${security.routeReason.replaceAll("-", " ")}`}
-            </div>
-            {isEdited && (
-              <div>Edited command will be re-prepared before execution.</div>
-            )}
-          </div>
-        </div>
-      )}
-      {reason && (
-        <div class="command-reason">
-          <span class="codicon codicon-info" />
-          <span>{reason}</span>
-        </div>
-      )}
-      {commandReview && (
-        <div class="command-review">
-          <span class="codicon codicon-shield" />
-          <div>
-            <div class="command-review-heading">
-              Reviewer requested approval
-              {commandReview.status === "reviewed"
-                ? ` · ${commandReview.confidence} confidence · ${commandReview.risk} risk`
-                : ` · ${commandReview.status.replace("_", " ")}`}
-            </div>
-            <div>{commandReview.reason}</div>
-          </div>
-        </div>
-      )}
-      {humanOnlyReason && (
-        <div class="command-guardrail">
-          <span class="codicon codicon-lock" />
-          <span>{humanOnlyReason}</span>
-        </div>
-      )}
       {inlineFiles.length > 0 && (
         <div class="terminal-box inline-files-box">
           <div class="terminal-header">
@@ -462,7 +408,7 @@ export function CommandCard({
 
       <div class="terminal-box">
         <div class="terminal-header">
-          <span class="codicon codicon-terminal" />
+          <span aria-hidden="true" class="codicon codicon-terminal" />
           <span>Command</span>
           {isEdited && (
             <span class="edited-badge">
@@ -471,7 +417,7 @@ export function CommandCard({
           )}
           {request.cwd && (
             <span class="terminal-cwd" title={request.cwd}>
-              <span class="codicon codicon-folder" />
+              <span aria-hidden="true" class="codicon codicon-folder" />
               <span class="terminal-cwd-path">{request.cwd}</span>
             </span>
           )}
@@ -488,6 +434,18 @@ export function CommandCard({
           />
         </div>
       </div>
+
+      {(security || reason || commandReview || humanOnlyReason) && (
+        <CommandExecutionContext
+          security={security}
+          reason={reason}
+          review={commandReview}
+          humanOnlyReason={humanOnlyReason}
+          edited={isEdited}
+          nativeEscalation={nativeEscalation}
+          approvalRulesSupported={nativeEscalation}
+        />
+      )}
     </ApprovalLayout>
   );
 }

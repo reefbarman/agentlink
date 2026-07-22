@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.17.16",
+  "version": "1.17.40",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -254,6 +254,74 @@
           "default": "",
           "description": "Optional absolute path to a standalone Node.js executable used by the AgentLink sandbox helper. Leave empty to probe Node.js from VS Code's inherited PATH and standard macOS installation locations. Electron is not supported."
         },
+        "agentlink.terminal.environmentPolicy": {
+          "type": "object",
+          "scope": "machine",
+          "default": {
+            "inherit": "all",
+            "ignoreDefaultExcludes": true,
+            "exclude": [],
+            "set": {},
+            "includeOnly": [],
+            "useProfile": false
+          },
+          "additionalProperties": false,
+          "properties": {
+            "inherit": {
+              "type": "string",
+              "enum": [
+                "all",
+                "core",
+                "none"
+              ],
+              "default": "all",
+              "description": "Choose whether sandboxed commands start from all host variables, only core variables (HOME, LOGNAME, PATH, SHELL, USER), or none."
+            },
+            "ignoreDefaultExcludes": {
+              "type": "boolean",
+              "default": true,
+              "description": "When true, inherit names containing KEY, SECRET, or TOKEN. Set false to apply those default exclusions before custom filters."
+            },
+            "exclude": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "description": "Case-insensitive glob patterns for inherited variable names to remove."
+            },
+            "set": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {},
+              "description": "Explicit variables inserted after exclusions. Values are part of the command launch binding and are not shown in sandbox metadata."
+            },
+            "includeOnly": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "description": "When non-empty, retain only variable names matching these case-insensitive glob patterns after exclusions and explicit values are applied."
+            },
+            "useProfile": {
+              "type": "boolean",
+              "default": false,
+              "description": "Run through the user's shell profile. This currently fails closed because the attested interactive helper does not yet support profile loading."
+            }
+          },
+          "description": "Controls the host environment inherited by sandboxed agent commands. The default matches Codex: inherit all variables, including credential-like names. Helper-reserved proxy, loader, and VS Code IPC variables remain host-controlled."
+        },
+        "agentlink.provider.maxConcurrentRequests": {
+          "scope": "window",
+          "type": "number",
+          "minimum": 1,
+          "maximum": 32,
+          "default": 6,
+          "description": "Maximum simultaneous streaming model requests per provider, shared by foreground sessions, background agents, maintenance work, and native web tools. Higher values improve parallel throughput but can increase provider rate-limit errors and usage costs."
+        },
         "agentlink.webAccess.searchBackend": {
           "scope": "window",
           "type": "string",
@@ -285,6 +353,22 @@
           ],
           "default": "native",
           "description": "Choose whether AgentLink exposes its native web_fetch tool. Native provider use can incur additional charges and sends URLs and fetched content to the selected provider. Web content is untrusted model input."
+        },
+        "agentlink.webAccess.nativeSearchMode": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "cached",
+            "indexed",
+            "live"
+          ],
+          "enumDescriptions": [
+            "Prefer the provider's cached web index for the lowest latency.",
+            "Use the provider's indexed web corpus, which may be fresher than cached results without requiring live retrieval.",
+            "Allow live external web retrieval for the freshest results, with potentially higher latency."
+          ],
+          "default": "cached",
+          "description": "External web access mode for provider-native search and fetch transports that support it. The Codex OAuth fast path supports all three modes; other providers may ignore this setting."
         },
         "agentlink.webAccess.allowedDomains": {
           "scope": "window",
@@ -768,6 +852,7 @@
     "benchmark:codex-oauth-models": "node --experimental-strip-types scripts/benchmark-codex-oauth-models.mts",
     "telemetry:tools": "node scripts/report-tool-usage-telemetry.mjs",
     "telemetry:tools:csv": "node scripts/report-tool-usage-telemetry.mjs --csv",
+    "telemetry:context": "node scripts/report-context-jumps.mjs",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "bash -c 'e=0; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",

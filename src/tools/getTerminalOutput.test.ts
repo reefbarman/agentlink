@@ -70,21 +70,31 @@ describe("handleGetTerminalOutput", () => {
   });
 
   it("retrieves retained output and status after the terminal closes", async () => {
-    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
-      is_running: false,
-      state: "completed",
-      exit_code: 7,
-      output: "partial output before close",
-      output_captured: true,
-    });
+    const closedAt = Date.now() - 1000;
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue(undefined);
+    vi.mocked(terminalProvider.getRecentlyClosedTerminals).mockReturnValue([
+      {
+        id: "term_closed",
+        name: "completed-run",
+        closedAt,
+        is_running: false,
+        state: "completed",
+        exit_code: 7,
+        output: "one\npartial output before close\nthree",
+        output_captured: true,
+      },
+    ]);
 
     const result = await handleGetTerminalOutput(
-      { terminal_id: "term_closed" },
+      { terminal_id: "term_closed", output_grep: "partial" },
       { terminalProvider },
     );
 
     expect(textPayload(result)).toMatchObject({
       terminal_id: "term_closed",
+      terminal_name: "completed-run",
+      closed_at: new Date(closedAt).toISOString(),
+      recently_closed: true,
       is_running: false,
       state: "completed",
       exit_code: 7,

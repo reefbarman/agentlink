@@ -41,6 +41,18 @@ export type SandboxCapabilityConsumeResult =
   | { ok: true; grant: ApprovedSandboxCapabilityGrant }
   | { ok: false; reason: SandboxCapabilityConsumeInvalidReason };
 
+export type SandboxCapabilityPreparedValidationResult =
+  | { ok: true; grant: ApprovedSandboxCapabilityGrant }
+  | {
+      ok: false;
+      reason:
+        | "unknown_grant"
+        | "not_consumed"
+        | "expired"
+        | "revoked"
+        | "wrong_binding";
+    };
+
 export interface SandboxCapabilityAuthorityOptions {
   now?: () => number;
   createId?: () => string;
@@ -159,6 +171,31 @@ export class SandboxCapabilityAuthority {
       auditId: entry.grant.auditId,
       bindingDigest,
     });
+    return { ok: true, grant: { ...entry.grant } };
+  }
+
+  validateConsumed(
+    grantId: string,
+    binding: SandboxLaunchBindingInput,
+  ): SandboxCapabilityPreparedValidationResult {
+    const entry = this.grants.get(grantId);
+    if (!entry) return { ok: false, reason: "unknown_grant" };
+    if (entry.grant.revokedAt !== undefined) {
+      return { ok: false, reason: "revoked" };
+    }
+    if (entry.grant.consumedAt === undefined) {
+      return { ok: false, reason: "not_consumed" };
+    }
+    if (this.now() >= entry.grant.expiresAt) {
+      return { ok: false, reason: "expired" };
+    }
+    if (
+      entry.grant.bindingDigest !== createSandboxLaunchBindingDigest(binding) ||
+      entry.grant.sessionId !== binding.sessionId ||
+      entry.grant.policyVersion !== binding.policyVersion
+    ) {
+      return { ok: false, reason: "wrong_binding" };
+    }
     return { ok: true, grant: { ...entry.grant } };
   }
 

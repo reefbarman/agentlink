@@ -59,14 +59,15 @@ function imageExtensionForMimeType(mimeType: string): string {
   return "png";
 }
 
-function generatedImagesToDisplayMedia(
+function resultImagesToDisplayMedia(
   images: Array<{ mimeType: string; data: string }> | undefined,
   startIndex = 0,
+  namePrefix = "generated-image",
 ): DisplayMedia | undefined {
   if (!images?.length) return undefined;
   return {
     images: images.map((image, index) => ({
-      name: `generated-image-${startIndex + index + 1}.${imageExtensionForMimeType(image.mimeType)}`,
+      name: `${namePrefix}-${startIndex + index + 1}.${imageExtensionForMimeType(image.mimeType)}`,
       mimeType: image.mimeType,
       src: `data:${image.mimeType};base64,${image.data}`,
     })),
@@ -839,6 +840,8 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
       const finalMarkerToolId = finalMarker?.toolCall?.id;
       const messageGeneratedImages: Array<{ mimeType: string; data: string }> =
         [];
+      const messagePresentedImages: Array<{ mimeType: string; data: string }> =
+        [];
       const messageDirectImages: Array<{ mimeType: string; data: string }> = [];
       for (const block of contentArr as Array<{
         type: string;
@@ -925,6 +928,8 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           const resultDocuments = toolResultDocuments.get(toolId);
           if (toolName === "generate_image" && resultImages) {
             messageGeneratedImages.push(...resultImages);
+          } else if (toolName === "present_images" && resultImages) {
+            messagePresentedImages.push(...resultImages);
           }
           const resultImageProps = resultImages ? { resultImages } : {};
           const resultDocumentProps = resultDocuments
@@ -1130,23 +1135,37 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
                 ),
             )
           : blocks;
-      const displayImages = [...messageDirectImages, ...messageGeneratedImages];
+      const generatedDisplayImages = [
+        ...messageDirectImages,
+        ...messageGeneratedImages,
+      ];
       if (
         visibleBlocks.length > 0 ||
-        displayImages.length > 0 ||
+        generatedDisplayImages.length > 0 ||
+        messagePresentedImages.length > 0 ||
         hasRuntimeError ||
         finalMarker
       ) {
-        const generatedDisplayMedia =
-          generatedImagesToDisplayMedia(displayImages);
+        const generatedDisplayMedia = resultImagesToDisplayMedia(
+          generatedDisplayImages,
+        );
+        const presentedDisplayMedia = resultImagesToDisplayMedia(
+          messagePresentedImages,
+          generatedDisplayMedia?.images.length ?? 0,
+          "presented-image",
+        );
+        const displayImages = [
+          ...(generatedDisplayMedia?.images ?? []),
+          ...(presentedDisplayMedia?.images ?? []),
+        ];
         result.push({
           id: randomId(),
           role: "assistant",
           content: "",
           timestamp: Date.now(),
           blocks: visibleBlocks,
-          ...(generatedDisplayMedia
-            ? { displayMedia: generatedDisplayMedia }
+          ...(displayImages.length > 0
+            ? { displayMedia: { images: displayImages, documents: [] } }
             : {}),
           finalMarker,
           ...(hasRuntimeError
@@ -1200,6 +1219,25 @@ function cloneLast(messages: ChatMessage[]): {
   };
   msgs[msgs.length - 1] = last;
   return { msgs, last };
+}
+
+/**
+ * Blocks at the tail of an assistant message that are still "live": running
+ * tools, open thinking, or (while streaming) text that may still receive
+ * deltas. A bg_agent_result arriving mid-turn is inserted before these so the
+ * active end of the transcript stays last instead of a completed card landing
+ * below the live indicator and making the turn look stalled.
+ */
+function isActiveTailBlock(block: ContentBlock, streaming: boolean): boolean {
+  if (
+    (block.type === "tool_call" ||
+      block.type === "skill_load" ||
+      block.type === "thinking") &&
+    !block.complete
+  ) {
+    return true;
+  }
+  return streaming && block.type === "text";
 }
 
 function attachFinalMarkerToolCall(
@@ -1791,18 +1829,22 @@ export function reducer(state: AppState, action: AppAction): AppState {
         return b;
       });
       msgs[targetIdx] = target;
-      const generatedDisplayMedia =
-        action.toolName === "generate_image"
-          ? generatedImagesToDisplayMedia(
+      const promotedDisplayMedia =
+        action.toolName === "generate_image" ||
+        action.toolName === "present_images"
+          ? resultImagesToDisplayMedia(
               action.resultImages,
               target.displayMedia?.images.length ?? 0,
+              action.toolName === "present_images"
+                ? "presented-image"
+                : "generated-image",
             )
           : undefined;
-      if (generatedDisplayMedia) {
+      if (promotedDisplayMedia) {
         target.displayMedia = {
           images: [
             ...(target.displayMedia?.images ?? []),
-            ...generatedDisplayMedia.images,
+            ...promotedDisplayMedia.images,
           ],
           documents: target.displayMedia?.documents ?? [],
         };
@@ -1840,16 +1882,29 @@ export function reducer(state: AppState, action: AppAction): AppState {
             (b) => b.type === "bg_agent_result" && b.sessionId === sessionId,
           );
           if (!alreadyAdded) {
+            const bgResultBlock: ContentBlock = {
+              type: "bg_agent_result",
+              sessionId,
+              task: findBgTaskForSession(msgs, target.blocks, sessionId),
+              status: inferBgResultStatus(action.result),
+              resultText: action.result || undefined,
+              summary: undefined,
+            };
+            // On the live last message, insert before any still-active tail
+            // blocks so the running end of the transcript stays last.
+            let insertAt = target.blocks.length;
+            if (targetIdx === msgs.length - 1) {
+              while (
+                insertAt > 0 &&
+                isActiveTailBlock(target.blocks[insertAt - 1], state.streaming)
+              ) {
+                insertAt -= 1;
+              }
+            }
             target.blocks = [
-              ...target.blocks,
-              {
-                type: "bg_agent_result",
-                sessionId,
-                task: findBgTaskForSession(msgs, target.blocks, sessionId),
-                status: inferBgResultStatus(action.result),
-                resultText: action.result || undefined,
-                summary: undefined,
-              },
+              ...target.blocks.slice(0, insertAt),
+              bgResultBlock,
+              ...target.blocks.slice(insertAt),
             ];
             msgs[targetIdx] = target;
           }
@@ -2147,6 +2202,10 @@ export function reducer(state: AppState, action: AppAction): AppState {
           sessionId: null,
           streaming: false,
           interrupted: false,
+          agentWriteApproval:
+            state.chatState.agentWriteApproval === "session"
+              ? "prompt"
+              : state.chatState.agentWriteApproval,
         },
       };
 
@@ -2691,7 +2750,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
 
     case "BG_AGENT_DONE": {
       // Insert a bg_agent_result notification at the current position in chat.
-      // If the last message is an assistant message, append the block to it.
+      // If the last message is an assistant message, insert the block before
+      // any still-active tail blocks (running tools, open thinking, streaming
+      // text) so the live end of the transcript stays last.
       // Otherwise, create a new assistant message for the notification.
       const resultBlock: ContentBlock = {
         type: "bg_agent_result",
@@ -2704,7 +2765,18 @@ export function reducer(state: AppState, action: AppAction): AppState {
       const lastMsg = state.messages[state.messages.length - 1];
       if (lastMsg?.role === "assistant") {
         const { msgs, last } = cloneLast(state.messages);
-        last.blocks = [...last.blocks, resultBlock];
+        let insertAt = last.blocks.length;
+        while (
+          insertAt > 0 &&
+          isActiveTailBlock(last.blocks[insertAt - 1], state.streaming)
+        ) {
+          insertAt -= 1;
+        }
+        last.blocks = [
+          ...last.blocks.slice(0, insertAt),
+          resultBlock,
+          ...last.blocks.slice(insertAt),
+        ];
         return { ...state, messages: msgs };
       }
       return {

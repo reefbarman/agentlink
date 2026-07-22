@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
 
+import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import { successResult, type ToolResult } from "../shared/types.js";
 import { getAgentToolCompletionStrategy } from "./agentToolCompletionStrategies.js";
 
@@ -53,7 +54,12 @@ export class AgentToolCallTracker extends EventEmitter {
   private recentCalls = new Map<string, TrackedCallInfo>();
   private log: (msg: string) => void;
 
-  constructor(log?: (msg: string) => void) {
+  constructor(
+    log?: (msg: string) => void,
+    private readonly getTerminalProvider: () =>
+      | TerminalProvider
+      | undefined = () => undefined,
+  ) {
     super();
     this.log = log ?? (() => {});
   }
@@ -123,9 +129,8 @@ export class AgentToolCallTracker extends EventEmitter {
 
   private async revealExecuteCommandTerminal(call: TrackedCall): Promise<void> {
     if (!call.terminalId) return;
-    const { getTerminalManager } =
-      await import("../integrations/TerminalManager.js");
-    const revealed = getTerminalManager().revealTerminal(call.terminalId);
+    const revealed =
+      this.getTerminalProvider()?.revealTerminal?.(call.terminalId) ?? false;
     this.log(
       `REVEAL_TERMINAL ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${call.terminalId}, revealed=${revealed}`,
     );
@@ -249,9 +254,8 @@ export class AgentToolCallTracker extends EventEmitter {
 
   private async detachExecuteCommand(call: TrackedCall): Promise<void> {
     if (!call.terminalId) return;
-    const { getTerminalManager } =
-      await import("../integrations/TerminalManager.js");
-    const detached = getTerminalManager().detachTerminal(call.terminalId);
+    const detached =
+      this.getTerminalProvider()?.detachTerminal?.(call.terminalId) ?? false;
     this.log(
       `BACKGROUND_DETACH ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${call.terminalId}, detached=${detached}`,
     );
@@ -286,6 +290,9 @@ export class AgentToolCallTracker extends EventEmitter {
     for (const descendantId of descendantIds) {
       if (descendantId === id) continue;
       const descendant = this.activeCalls.get(descendantId);
+      if (descendant?.terminalId) {
+        this.getTerminalProvider()?.interruptTerminal(descendant.terminalId);
+      }
       descendant?.forceResolve(
         successResult({
           status: "cancelled",
@@ -298,13 +305,10 @@ export class AgentToolCallTracker extends EventEmitter {
     // Kill the running terminal process if applicable
     if (call.terminalId) {
       this.log(`CANCEL_INTERRUPT terminal ${call.terminalId}`);
-      import("../integrations/TerminalManager.js").then(
-        ({ getTerminalManager }) => {
-          getTerminalManager().interruptTerminal(call.terminalId!);
-        },
-        (err) => {
-          this.log(`CANCEL_INTERRUPT import failed: ${err}`);
-        },
+      const interrupted =
+        this.getTerminalProvider()?.interruptTerminal(call.terminalId) ?? false;
+      this.log(
+        `CANCEL_INTERRUPT_RESULT terminal ${call.terminalId}, interrupted=${interrupted}`,
       );
     }
 
@@ -340,6 +344,6 @@ export class AgentToolCallTracker extends EventEmitter {
     this.log(`COMPLETE_AGENT ${call.toolName} (${id.slice(0, 8)})`);
 
     const strategy = getAgentToolCompletionStrategy(call.toolName);
-    await strategy(call, this.log);
+    await strategy(call, this.log, this.getTerminalProvider());
   }
 }

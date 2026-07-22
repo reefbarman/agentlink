@@ -527,6 +527,7 @@ describe("createVscodeNavigationProvider", () => {
       approvalManager,
       approvalPanel,
       "session-1",
+      undefined,
     );
   });
 

@@ -7,24 +7,28 @@ import {
 import {
   prepareProtectedRoots,
   revalidateProtectedRoots,
+  validateStructurallyProtectedRoots,
 } from "./sandbox-protected-roots.mjs";
 
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { startTrustedNetworkProxies } from "./sandbox-network-proxy.mjs";
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_DATA_BYTES = 256 * 1024;
 const FORCE_KILL_DELAY_MS = 500;
+const PUBLIC_NETWORK_ALLOWED_DOMAINS = Object.freeze(["*"]);
 const IDENTITY_KEYS = ["type", "channelId", "commandId", "generation"];
 const CONTROL_KEYS = {
   input: [...IDENTITY_KEYS, "data"],
   resize: [...IDENTITY_KEYS, "dimensions"],
   interrupt: IDENTITY_KEYS,
   terminate: IDENTITY_KEYS,
+  "network-decision": [...IDENTITY_KEYS, "requestId", "decision"],
 };
 
 function isPlainObject(value) {
@@ -133,6 +137,7 @@ export function parseSandboxInteractiveControl(
         "filesystem",
         "network",
         "protectedRoots",
+        "structurallyProtectedRoots",
         "dimensions",
       ]) ||
       value.version !== PROTOCOL_VERSION ||
@@ -144,6 +149,7 @@ export function parseSandboxInteractiveControl(
       !isFilesystem(value.filesystem) ||
       !isNetwork(value.network) ||
       !isPathArray(value.protectedRoots) ||
+      !isPathArray(value.structurallyProtectedRoots) ||
       !isDimensions(value.dimensions)
     ) {
       throw new Error("invalid sandbox helper launch frame");
@@ -164,6 +170,13 @@ export function parseSandboxInteractiveControl(
   }
   if (value.type === "resize" && !isDimensions(value.dimensions)) {
     throw new Error("invalid sandbox helper resize frame");
+  }
+  if (
+    value.type === "network-decision" &&
+    (!isNonEmptyString(value.requestId) ||
+      (value.decision !== "allow-once" && value.decision !== "reject"))
+  ) {
+    throw new Error("invalid sandbox helper network decision frame");
   }
   return value;
 }
@@ -245,14 +258,23 @@ function replaceProcessEnvironment(environment) {
   Object.assign(process.env, environment);
 }
 
+function managedNetworkProtocol(protocol) {
+  if (protocol === "http:") return "http";
+  if (protocol === "https:") return "https";
+  if (protocol === "connect:" || protocol === "socks5:") return "tcp";
+  throw new Error("unsupported managed network protocol");
+}
+
 function defaultDependencies() {
   return {
     platform: process.platform,
     realpath,
     prepareProtectedRoots,
     revalidateProtectedRoots,
+    validateStructurallyProtectedRoots,
     startTrustedNetworkProxies,
     replaceProcessEnvironment,
+    createNetworkRequestId: () => randomBytes(16).toString("hex"),
     kill: process.kill.bind(process),
     setTimeout,
     clearTimeout,
@@ -280,11 +302,19 @@ export function createSandboxInteractiveHelper(options = {}) {
     output.write(`${JSON.stringify({ ...identity, ...frame })}\n`);
   };
 
+  const cancelPendingNetworkRequests = (session) => {
+    for (const [requestId, pending] of session.pendingNetworkRequests) {
+      session.pendingNetworkRequests.delete(requestId);
+      pending.reject(new Error("managed network request was cancelled"));
+    }
+  };
+
   const cleanup = async (session) => {
     if (!session || session.cleanupStarted) return;
     session.cleanupStarted = true;
     if (session.forceKillTimer)
       dependencies.clearTimeout(session.forceKillTimer);
+    cancelPendingNetworkRequests(session);
     let disposalError;
     for (const dispose of [
       () => session.dataSubscription?.dispose?.(),
@@ -304,7 +334,7 @@ export function createSandboxInteractiveHelper(options = {}) {
         await session.runtime.reset();
       }
     } finally {
-      await session.networkProxies.close();
+      await session.networkProxies?.close();
     }
     if (disposalError) throw disposalError;
   };
@@ -335,6 +365,7 @@ export function createSandboxInteractiveHelper(options = {}) {
   const failActive = async (message) => {
     if (!active || active.failed || active.exited) return;
     active.failed = true;
+    cancelPendingNetworkRequests(active);
     writeFrame(active.identity, { type: "error", message });
     terminate(active);
   };
@@ -347,12 +378,10 @@ export function createSandboxInteractiveHelper(options = {}) {
         "the interactive sandbox helper supports local macOS only",
       );
     }
-    if (frame.network.mode === "public-proxy") {
-      throw new Error(
-        "public-proxy mode is unavailable: the interactive protocol does not provide a trusted public-target policy",
-      );
-    }
-
+    const allowedDomains =
+      frame.network.mode === "public-proxy"
+        ? PUBLIC_NETWORK_ALLOWED_DOMAINS
+        : [];
     const request = parseSandboxRuntimeRequest({
       version: frame.version,
       operation: "execute",
@@ -361,22 +390,21 @@ export function createSandboxInteractiveHelper(options = {}) {
       shell: frame.shell,
       environment: frame.environment,
       filesystem: frame.filesystem,
-      network: { allowedDomains: [] },
+      network: { allowedDomains },
       protectedRoots: frame.protectedRoots,
+      structurallyProtectedRoots: frame.structurallyProtectedRoots,
     });
     const identity = identityOf(frame);
     const cwd = await dependencies.realpath(request.cwd);
     const environment = buildSandboxEnvironment(request.environment);
     dependencies.replaceProcessEnvironment(environment);
-    const protectedRoots = await dependencies.prepareProtectedRoots(
-      request.protectedRoots,
-    );
     const runtime = await dependencies.loadRuntime();
-    const networkProxies = await dependencies.startTrustedNetworkProxies([]);
+    let networkProxies;
     const session = {
       identity,
       runtime,
-      networkProxies,
+      networkProxies: undefined,
+      pendingNetworkRequests: new Map(),
       terminal: undefined,
       pgid: undefined,
       ready: false,
@@ -388,12 +416,101 @@ export function createSandboxInteractiveHelper(options = {}) {
       cleanupStarted: false,
       forceKillTimer: undefined,
     };
+    networkProxies = await dependencies.startTrustedNetworkProxies(
+      request.network.allowedDomains,
+      {},
+      {
+        authorizeDestination: (destination, signal) => {
+          if (frame.network.mode !== "public-proxy") {
+            return Promise.resolve("reject");
+          }
+          return new Promise((resolve, reject) => {
+            if (signal?.aborted) {
+              reject(new Error("managed network request was cancelled"));
+              return;
+            }
+            let protocol;
+            try {
+              protocol = managedNetworkProtocol(destination?.protocol);
+            } catch (error) {
+              reject(error);
+              return;
+            }
+            if (
+              !isPlainObject(destination) ||
+              !isNonEmptyString(destination.host) ||
+              !Number.isSafeInteger(destination.port) ||
+              destination.port < 1 ||
+              destination.port > 65_535 ||
+              !isNonEmptyString(destination.address) ||
+              (destination.family !== 4 && destination.family !== 6) ||
+              !Array.isArray(destination.answers) ||
+              destination.answers.length === 0 ||
+              !destination.answers.every(
+                (answer) =>
+                  isPlainObject(answer) &&
+                  isNonEmptyString(answer.address) &&
+                  (answer.family === 4 || answer.family === 6),
+              )
+            ) {
+              reject(new Error("invalid managed network request"));
+              return;
+            }
+            const requestId = dependencies.createNetworkRequestId();
+            if (
+              !isNonEmptyString(requestId) ||
+              session.pendingNetworkRequests.has(requestId)
+            ) {
+              reject(
+                new Error("invalid or duplicate managed network request ID"),
+              );
+              return;
+            }
+            const abort = () => {
+              const pending = session.pendingNetworkRequests.get(requestId);
+              if (!pending) return;
+              session.pendingNetworkRequests.delete(requestId);
+              pending.reject(
+                new Error("managed network request was cancelled"),
+              );
+            };
+            signal?.addEventListener("abort", abort, { once: true });
+            session.pendingNetworkRequests.set(requestId, {
+              resolve: (decision) => {
+                signal?.removeEventListener("abort", abort);
+                resolve(decision === "allow-once" ? "allow" : "reject");
+              },
+              reject: (error) => {
+                signal?.removeEventListener("abort", abort);
+                reject(error);
+              },
+            });
+            writeFrame(identity, {
+              type: "network-request",
+              request: {
+                requestId,
+                host: destination.host,
+                protocol,
+                port: destination.port,
+                address: destination.address,
+                family: destination.family,
+                dnsAnswers: destination.answers.map((answer) => ({
+                  ...answer,
+                })),
+                destinationClass: "public",
+              },
+            });
+          });
+        },
+      },
+    );
+    session.networkProxies = networkProxies;
     active = session;
 
     try {
       await runtime.initialize({
         network: {
-          allowedDomains: [],
+          allowedDomains: request.network.allowedDomains,
           deniedDomains: [],
           strictAllowlist: true,
           allowUnixSockets: [],
@@ -408,7 +525,8 @@ export function createSandboxInteractiveHelper(options = {}) {
           denyWrite: [
             ...new Set([
               ...request.filesystem.denyWrite,
-              ...protectedRoots.roots,
+              ...request.protectedRoots,
+              ...request.structurallyProtectedRoots,
             ]),
           ],
         },
@@ -433,8 +551,14 @@ export function createSandboxInteractiveHelper(options = {}) {
         request,
         networkProxies,
       );
-      await dependencies.revalidateProtectedRoots(protectedRoots);
       const nodePty = await dependencies.loadNodePty();
+      const protectedRoots = await dependencies.prepareProtectedRoots(
+        request.protectedRoots,
+      );
+      await dependencies.revalidateProtectedRoots(protectedRoots);
+      await dependencies.validateStructurallyProtectedRoots(
+        request.structurallyProtectedRoots,
+      );
       const terminal = nodePty.spawn(
         authenticatedArgv[0],
         authenticatedArgv.slice(1),
@@ -569,6 +693,18 @@ export function createSandboxInteractiveHelper(options = {}) {
       return;
     }
     if (active.exited || active.failed) return;
+    if (frame.type === "network-decision") {
+      const pending = active.pendingNetworkRequests.get(frame.requestId);
+      if (!pending) {
+        await failActive(
+          "sandbox helper rejected an unknown network request decision",
+        );
+        return;
+      }
+      active.pendingNetworkRequests.delete(frame.requestId);
+      pending.resolve(frame.decision);
+      return;
+    }
     if (frame.type === "input") active.terminal.write(frame.data);
     else if (frame.type === "resize") {
       active.terminal.resize(frame.dimensions.columns, frame.dimensions.rows);

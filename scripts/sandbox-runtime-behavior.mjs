@@ -51,7 +51,7 @@ async function makeSandboxRoot(prefix) {
 
 function makeRequest(root, overrides = {}) {
   return {
-    version: 1,
+    version: 2,
     operation: "execute",
     command: "/usr/bin/true",
     cwd: root,
@@ -69,6 +69,7 @@ function makeRequest(root, overrides = {}) {
     },
     network: { allowedDomains: [] },
     protectedRoots: [],
+    structurallyProtectedRoots: [],
     timeoutMs: DEFAULT_TIMEOUT_MS,
     ...overrides,
   };

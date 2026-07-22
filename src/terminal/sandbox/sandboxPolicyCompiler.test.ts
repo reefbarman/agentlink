@@ -18,7 +18,11 @@ function authorization(
       writableRoots: ["/workspace", "/private/tmp/session"],
       deniedRoots: ["/Users"],
       deniedWriteRoots: ["/workspace/.git", "/workspace/.agentlink"],
-      protectedReadOnlyRoots: ["/workspace/.git", "/workspace/.agentlink"],
+      protectedReadOnlyRoots: [
+        "/workspace/.git/config",
+        "/workspace/.agentlink",
+      ],
+      structurallyProtectedRoots: ["/workspace/.git"],
       network: { mode: "blocked" },
       environment: {
         inheritHost: false,
@@ -51,7 +55,7 @@ function compile(auth = authorization()) {
 describe("compileSandboxHelperLaunchRequest", () => {
   it("compiles a deterministic blocked-network baseline", () => {
     expect(compile()).toEqual({
-      version: 1,
+      version: 2,
       type: "launch",
       channelId: "channel-1",
       commandId: "command-1",
@@ -73,7 +77,8 @@ describe("compileSandboxHelperLaunchRequest", () => {
         denyWrite: ["/workspace/.agentlink", "/workspace/.git"],
       },
       network: { mode: "blocked" },
-      protectedRoots: ["/workspace/.agentlink", "/workspace/.git"],
+      protectedRoots: ["/workspace/.agentlink", "/workspace/.git/config"],
+      structurallyProtectedRoots: ["/workspace/.git"],
     });
   });
 
@@ -222,6 +227,26 @@ describe("compileSandboxHelperLaunchRequest", () => {
     ).toThrow("Unsupported sandbox policy version");
   });
 
+  it("allows a read-only HOME when the host filesystem is readable", () => {
+    const base = authorization();
+    const hostVisible = authorization({
+      policy: {
+        ...base.policy,
+        readableRoots: ["/"],
+        deniedRoots: [],
+        environment: {
+          inheritHost: false,
+          values: {
+            ...base.policy.environment.values,
+            HOME: "/Users/me",
+          },
+        },
+      },
+    });
+
+    expect(compile(hostVisible).environment.HOME).toBe("/Users/me");
+  });
+
   it("rejects unsafe roots, cwd, private directories, and environment values", () => {
     const base = authorization();
     expect(() =>
@@ -234,6 +259,30 @@ describe("compileSandboxHelperLaunchRequest", () => {
         }),
       ),
     ).toThrow("protected root is not covered by denied-write roots");
+    expect(() =>
+      compile(
+        authorization({
+          policy: {
+            ...base.policy,
+            deniedWriteRoots: ["/workspace/.agentlink"],
+            protectedReadOnlyRoots: ["/workspace/.agentlink"],
+          },
+        }),
+      ),
+    ).toThrow(
+      "structurally protected root is not covered by denied-write roots",
+    );
+    expect(() =>
+      compile(
+        authorization({
+          policy: {
+            ...base.policy,
+            readableRoots: ["/usr", "/private/tmp/session"],
+            protectedReadOnlyRoots: [],
+          },
+        }),
+      ),
+    ).toThrow("structurally protected root is not covered by readable roots");
     expect(() =>
       compileSandboxHelperLaunchRequest({
         channelId: "channel-1",
@@ -251,6 +300,7 @@ describe("compileSandboxHelperLaunchRequest", () => {
         authorization({
           policy: {
             ...base.policy,
+            readableRoots: ["/usr", "/workspace", "/private/tmp/session"],
             environment: {
               inheritHost: false,
               values: { ...base.policy.environment.values, HOME: "/Users/me" },
@@ -258,7 +308,23 @@ describe("compileSandboxHelperLaunchRequest", () => {
           },
         }),
       ),
-    ).toThrow("HOME must be within a writable root");
+    ).toThrow("HOME must be within a readable root");
+    expect(() =>
+      compile(
+        authorization({
+          policy: {
+            ...base.policy,
+            environment: {
+              inheritHost: false,
+              values: {
+                ...base.policy.environment.values,
+                TMPDIR: "/Users/me/tmp",
+              },
+            },
+          },
+        }),
+      ),
+    ).toThrow("TMPDIR must be within a writable root");
     expect(() =>
       compile(
         authorization({

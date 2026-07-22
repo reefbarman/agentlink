@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { agentMessagesToChatMessages } from "./chatProjection.js";
+import type { AppState } from "./chatProjection.js";
+import type { ChatMessage } from "../agent/webview/types.js";
+import {
+  agentMessagesToChatMessages,
+  initialState,
+  reducer,
+} from "./chatProjection.js";
 
 describe("legacy web activity chat projection", () => {
   it("assigns distinct fallback IDs to malformed persisted activities", () => {
@@ -184,5 +190,130 @@ describe("assistant image chat projection", () => {
       ],
       documents: [],
     });
+  });
+});
+
+describe("BG_AGENT_DONE result placement", () => {
+  const bgDone = {
+    type: "BG_AGENT_DONE" as const,
+    sessionId: "bg-1",
+    task: "Review implementation",
+    status: "completed" as const,
+    resultText: "Looks good.",
+  };
+
+  function stateWith(
+    blocks: ChatMessage["blocks"],
+    streaming: boolean,
+  ): AppState {
+    return {
+      ...initialState,
+      streaming,
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "",
+          timestamp: 1,
+          blocks,
+        },
+      ],
+    };
+  }
+
+  it("inserts the result before a still-running tool call at the tail", () => {
+    const state = stateWith(
+      [
+        { type: "thinking", id: "think-1", text: "Plan.", complete: true },
+        {
+          type: "tool_call",
+          id: "tool-1",
+          name: "read_file",
+          inputJson: "{}",
+          result: "",
+          complete: false,
+        },
+      ],
+      true,
+    );
+
+    const next = reducer(state, bgDone);
+
+    expect(next.messages[0].blocks.map((b) => b.type)).toEqual([
+      "thinking",
+      "bg_agent_result",
+      "tool_call",
+    ]);
+  });
+
+  it("appends the result after completed blocks during a streaming gap", () => {
+    const state = stateWith(
+      [
+        {
+          type: "tool_call",
+          id: "tool-1",
+          name: "read_file",
+          inputJson: "{}",
+          result: "done",
+          complete: true,
+        },
+      ],
+      true,
+    );
+
+    const next = reducer(state, bgDone);
+
+    expect(next.messages[0].blocks.map((b) => b.type)).toEqual([
+      "tool_call",
+      "bg_agent_result",
+    ]);
+  });
+
+  it("inserts the result before text that is still streaming", () => {
+    const state = stateWith(
+      [{ type: "text", text: "Streaming answer so far" }],
+      true,
+    );
+
+    const next = reducer(state, bgDone);
+
+    expect(next.messages[0].blocks.map((b) => b.type)).toEqual([
+      "bg_agent_result",
+      "text",
+    ]);
+  });
+
+  it("appends the result after text when the foreground turn is idle", () => {
+    const state = stateWith([{ type: "text", text: "Finished answer" }], false);
+
+    const next = reducer(state, bgDone);
+
+    expect(next.messages[0].blocks.map((b) => b.type)).toEqual([
+      "text",
+      "bg_agent_result",
+    ]);
+  });
+
+  it("creates a standalone assistant message when the last message is from the user", () => {
+    const state: AppState = {
+      ...initialState,
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "Please check this",
+          timestamp: 1,
+          blocks: [],
+        },
+      ],
+    };
+
+    const next = reducer(state, bgDone);
+
+    expect(next.messages).toHaveLength(2);
+    expect(next.messages[1].role).toBe("assistant");
+    expect(next.messages[1].blocks.map((b) => b.type)).toEqual([
+      "bg_agent_result",
+    ]);
   });
 });

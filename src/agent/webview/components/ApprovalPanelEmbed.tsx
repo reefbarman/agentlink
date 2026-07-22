@@ -1,16 +1,21 @@
-import type { ComponentChildren, RefObject } from "preact";
-
 import type {
   ApprovalRequest,
   DecisionMessage,
 } from "../../../approvals/webview/types";
+import type { ComponentChildren, RefObject } from "preact";
+
 import { CommandCard } from "../../../approvals/webview/components/CommandCard";
 import { McpCard } from "../../../approvals/webview/components/McpCard";
 import { MemoryCard } from "../../../approvals/webview/components/MemoryCard";
 import { ModeSwitchCard } from "../../../approvals/webview/components/ModeSwitchCard";
+import { NetworkCard } from "../../../approvals/webview/components/NetworkCard";
 import { PathCard } from "../../../approvals/webview/components/PathCard";
 import { RenameCard } from "../../../approvals/webview/components/RenameCard";
+import { WorktreeCard } from "../../../approvals/webview/components/WorktreeCard";
 import { WriteCard } from "../../../approvals/webview/components/WriteCard";
+
+export const DEFAULT_APPROVAL_PANEL_HEIGHT = 240;
+export const MIN_APPROVAL_PANEL_HEIGHT = 220;
 
 export function ApprovalPanelEmbed({
   request,
@@ -37,7 +42,7 @@ export function ApprovalPanelEmbed({
   return (
     <div
       class={`approval-panel-embed${resizing ? " approval-panel-embed-resizing" : ""}`}
-      style={{ height: `${height}px` }}
+      style={{ minHeight: `${height}px` }}
     >
       <div
         class="approval-panel-embed-handle"
@@ -51,6 +56,12 @@ export function ApprovalPanelEmbed({
           submit={submit}
           followUpRef={followUpRef}
           onSuggestRegex={onSuggestRegex}
+        />
+      ) : request.kind === "network" ? (
+        <NetworkCard
+          request={request}
+          submit={submit}
+          followUpRef={followUpRef}
         />
       ) : request.kind === "write" ? (
         <WriteCard
@@ -74,6 +85,12 @@ export function ApprovalPanelEmbed({
         />
       ) : request.kind === "mode-switch" ? (
         <ModeSwitchCard
+          request={request}
+          submit={submit}
+          followUpRef={followUpRef}
+        />
+      ) : request.kind === "worktree" ? (
+        <WorktreeCard
           request={request}
           submit={submit}
           followUpRef={followUpRef}

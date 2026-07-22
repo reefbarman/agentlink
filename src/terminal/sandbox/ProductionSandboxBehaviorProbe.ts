@@ -61,6 +61,9 @@ interface ProbeFixtures {
   credentialFile: string;
   gitFile: string;
   policyFile: string;
+  agentsFile: string;
+  codexFile: string;
+  instructionsFile: string;
   symlinkPath: string;
   nonexistentProtectedPath: string;
   scriptPath: string;
@@ -78,19 +81,25 @@ interface CommandEvidence {
 interface ScriptEvidence {
   workspaceCreateAllowed: boolean;
   workspaceModifyAllowed: boolean;
-  outsideReadDenied: boolean;
+  outsideReadAllowed: boolean;
   outsideWriteDenied: boolean;
   gitWriteDenied: boolean;
   policyWriteDenied: boolean;
+  agentsWriteDenied: boolean;
+  codexWriteDenied: boolean;
+  instructionsWriteDenied: boolean;
   symlinkWriteDenied: boolean;
   nonexistentDescendantWriteDenied: boolean;
-  childOutsideAccessDenied: boolean;
+  childOutsideReadAllowed: boolean;
   grandchildProtectedAccessDenied: boolean;
-  homeIsPrivate: boolean;
-  tmpIsPrivate: boolean;
+  homeMatchesHost: boolean;
+  hostHomeReadAllowed: boolean;
+  hostHomeWriteDenied: boolean;
+  hostTmpEnvironmentMatched: boolean;
+  hostTmpWriteAllowed: boolean;
+  slashTmpWriteAllowed: boolean;
   cacheIsPrivate: boolean;
-  hostSentinelAbsent: boolean;
-  realHomeCredentialUnreadable: boolean;
+  credentialEnvironmentInherited: boolean;
   loopbackConnectDenied: boolean;
   privateConnectDenied: boolean;
   publicConnectDenied: boolean;
@@ -153,14 +162,14 @@ if (mode === "child") {
   let parsed = {};
   try { parsed = JSON.parse(grandchild.stdout || "{}"); } catch {}
   process.stdout.write(JSON.stringify({
-    outsideDenied: denied(() => fs.readFileSync(outsideFile)),
+    outsideReadAllowed: !denied(() => fs.readFileSync(outsideFile)),
     grandchildProtectedDenied: parsed.protectedDenied === true,
   }));
   process.exit(0);
 }
 
 (async () => {
-  const [workspace, credentialFile, gitFile, policyFile, symlinkPath, nonexistentProtectedPath, portText, sentinelName, realHome, privateDirectoryPrefix] = process.argv.slice(4);
+  const [workspace, credentialFile, gitFile, policyFile, agentsFile, codexFile, instructionsFile, symlinkPath, nonexistentProtectedPath, portText, sentinelName, realHome, privateDirectoryPrefix, hostTemporaryDirectory] = process.argv.slice(4);
   const created = path.join(workspace, "created.txt");
   const modified = path.join(workspace, "modified.txt");
   fs.writeFileSync(created, "created");
@@ -169,24 +178,38 @@ if (mode === "child") {
   const child = spawnSync(process.execPath, [__filename, "child", outsideFile, gitFile], { encoding: "utf8" });
   let childEvidence = {};
   try { childEvidence = JSON.parse(child.stdout || "{}"); } catch {}
-  const privateRoot = path.dirname(process.env.HOME || "");
-  const privateRootIsExpected = privateRoot.startsWith(privateDirectoryPrefix);
+  const privateCacheRoot = path.dirname(process.env.XDG_CACHE_HOME || "");
+  const privateCacheRootIsExpected = privateCacheRoot.startsWith(privateDirectoryPrefix);
   const evidence = {
     workspaceCreateAllowed: fs.readFileSync(created, "utf8") === "created",
     workspaceModifyAllowed: fs.readFileSync(modified, "utf8") === "after",
-    outsideReadDenied: denied(() => fs.readFileSync(outsideFile)),
+    outsideReadAllowed: !denied(() => fs.readFileSync(outsideFile)),
     outsideWriteDenied: denied(() => fs.writeFileSync(outsideFile, "bad")),
     gitWriteDenied: denied(() => fs.writeFileSync(gitFile, "bad")),
     policyWriteDenied: denied(() => fs.writeFileSync(policyFile, "bad")),
+    agentsWriteDenied: denied(() => fs.writeFileSync(agentsFile, "bad")),
+    codexWriteDenied: denied(() => fs.writeFileSync(codexFile, "bad")),
+    instructionsWriteDenied: denied(() => fs.writeFileSync(instructionsFile, "bad")),
     symlinkWriteDenied: denied(() => fs.writeFileSync(symlinkPath, "bad")),
     nonexistentDescendantWriteDenied: denied(() => fs.writeFileSync(nonexistentProtectedPath, "bad")),
-    childOutsideAccessDenied: childEvidence.outsideDenied === true,
+    childOutsideReadAllowed: childEvidence.outsideReadAllowed === true,
     grandchildProtectedAccessDenied: childEvidence.grandchildProtectedDenied === true,
-    homeIsPrivate: privateRootIsExpected && process.env.HOME === path.join(privateRoot, "h") && process.env.HOME !== realHome,
-    tmpIsPrivate: privateRootIsExpected && process.env.TMPDIR === path.join(privateRoot, "t"),
-    cacheIsPrivate: privateRootIsExpected && process.env.XDG_CACHE_HOME === path.join(privateRoot, "c"),
-    hostSentinelAbsent: process.env[sentinelName] === undefined,
-    realHomeCredentialUnreadable: denied(() => fs.readFileSync(credentialFile)),
+    homeMatchesHost: process.env.HOME === realHome,
+    hostHomeReadAllowed: !denied(() => fs.readFileSync(credentialFile)),
+    hostHomeWriteDenied: denied(() => fs.writeFileSync(credentialFile, "bad")),
+    hostTmpEnvironmentMatched: process.env.TMPDIR === hostTemporaryDirectory,
+    hostTmpWriteAllowed: !denied(() => {
+      const probe = path.join(process.env.TMPDIR, "agentlink-attest-" + process.pid);
+      fs.writeFileSync(probe, "tmp");
+      fs.unlinkSync(probe);
+    }),
+    slashTmpWriteAllowed: !denied(() => {
+      const probe = path.join("/tmp", "agentlink-attest-" + process.pid);
+      fs.writeFileSync(probe, "tmp");
+      fs.unlinkSync(probe);
+    }),
+    cacheIsPrivate: privateCacheRootIsExpected && process.env.XDG_CACHE_HOME === path.join(privateCacheRoot, "c"),
+    credentialEnvironmentInherited: process.env[sentinelName] === "host-secret-sentinel",
     loopbackConnectDenied: await connectDenied("127.0.0.1", Number(portText)),
     privateConnectDenied: await connectDenied("10.255.255.1", 9),
     publicConnectDenied: await connectDenied("1.1.1.1", 53),
@@ -205,7 +228,7 @@ function shellQuote(value: string): string {
 
 async function createFixtures(): Promise<ProbeFixtures> {
   const root = await realpath(
-    await mkdtemp(path.join(os.tmpdir(), "al-sandbox-attest-")),
+    await mkdtemp(path.join(os.homedir(), ".agentlink-sandbox-attest-")),
   );
   const workspace = path.join(root, "workspace");
   const outside = path.join(root, "outside");
@@ -213,6 +236,8 @@ async function createFixtures(): Promise<ProbeFixtures> {
   await Promise.all([
     mkdir(path.join(workspace, ".git"), { recursive: true }),
     mkdir(path.join(workspace, ".agentlink"), { recursive: true }),
+    mkdir(path.join(workspace, ".agents"), { recursive: true }),
+    mkdir(path.join(workspace, ".codex"), { recursive: true }),
     mkdir(outside, { recursive: true }),
     mkdir(fakeHome, { recursive: true }),
   ]);
@@ -220,6 +245,9 @@ async function createFixtures(): Promise<ProbeFixtures> {
   const credentialFile = path.join(fakeHome, ".credential-sentinel");
   const gitFile = path.join(workspace, ".git", "config");
   const policyFile = path.join(workspace, ".agentlink", "policy.md");
+  const agentsFile = path.join(workspace, ".agents", "config.json");
+  const codexFile = path.join(workspace, ".codex", "config.toml");
+  const instructionsFile = path.join(workspace, "AGENTS.md");
   const symlinkPath = path.join(workspace, "outside-link");
   const nonexistentProtectedPath = path.join(
     workspace,
@@ -233,6 +261,9 @@ async function createFixtures(): Promise<ProbeFixtures> {
     writeFile(credentialFile, "credential-sentinel", { mode: 0o600 }),
     writeFile(gitFile, "git-sentinel", { mode: 0o600 }),
     writeFile(policyFile, "policy-sentinel", { mode: 0o600 }),
+    writeFile(agentsFile, "agents-sentinel", { mode: 0o600 }),
+    writeFile(codexFile, "codex-sentinel", { mode: 0o600 }),
+    writeFile(instructionsFile, "instructions-sentinel", { mode: 0o600 }),
     writeFile(scriptPath, PROBE_SCRIPT, { mode: 0o700 }),
     symlink(outsideFile, symlinkPath),
   ]);
@@ -244,6 +275,9 @@ async function createFixtures(): Promise<ProbeFixtures> {
     credentialFile,
     gitFile,
     policyFile,
+    agentsFile,
+    codexFile,
+    instructionsFile,
     symlinkPath,
     nonexistentProtectedPath,
     scriptPath,
@@ -380,22 +414,23 @@ export function createProductionSandboxBehaviorProbe(
         }),
       );
       request.registerCleanup(() => runtime.dispose());
+      const sentinelName = `AL_ATTEST_HOST_${randomUUID().replaceAll("-", "")}`;
       const authorizer = new BaselineSandboxLaunchAuthorizer({
         workspaceRoots: [fixtures.workspace],
         homeDirectory:
           options.homeDirectory ?? path.dirname(fixtures.credentialFile),
         privateDirectoryPrefix: PRIVATE_PREFIX,
         trustedRuntimeRoots: [path.dirname(options.nodeExecutable)],
+        hostEnvironment: {
+          ...process.env,
+          [sentinelName]: "host-secret-sentinel",
+        },
       });
-      const sentinelName = `AL_ATTEST_HOST_${randomUUID().replaceAll("-", "")}`;
       const privateDirectoryPrefix = path.join(
         await realpath(path.dirname(PRIVATE_PREFIX)),
         path.basename(PRIVATE_PREFIX),
       );
-      process.env[sentinelName] = "host-secret-sentinel";
-      request.registerCleanup(() => {
-        delete process.env[sentinelName];
-      });
+
       const command = [
         options.nodeExecutable,
         fixtures.scriptPath,
@@ -405,12 +440,16 @@ export function createProductionSandboxBehaviorProbe(
         fixtures.credentialFile,
         fixtures.gitFile,
         fixtures.policyFile,
+        fixtures.agentsFile,
+        fixtures.codexFile,
+        fixtures.instructionsFile,
         fixtures.symlinkPath,
         fixtures.nonexistentProtectedPath,
         String(listener.port),
         sentinelName,
         options.homeDirectory ?? path.dirname(fixtures.credentialFile),
         privateDirectoryPrefix,
+        await realpath(os.tmpdir()),
       ]
         .map(shellQuote)
         .join(" ");
@@ -453,29 +492,37 @@ export function createProductionSandboxBehaviorProbe(
         workspaceConfinement: {
           workspaceCreateAllowed: evidence.workspaceCreateAllowed,
           workspaceModifyAllowed: evidence.workspaceModifyAllowed,
-          outsideReadDenied: evidence.outsideReadDenied,
+          outsideReadAllowed: evidence.outsideReadAllowed,
           outsideWriteDenied: evidence.outsideWriteDenied,
         },
         protectedMetadata: {
           gitWriteDenied: evidence.gitWriteDenied,
-          policyWriteDenied: evidence.policyWriteDenied,
+          policyWriteDenied:
+            evidence.policyWriteDenied &&
+            evidence.agentsWriteDenied &&
+            evidence.codexWriteDenied &&
+            evidence.instructionsWriteDenied,
           symlinkWriteDenied: evidence.symlinkWriteDenied,
           nonexistentDescendantWriteDenied:
             evidence.nonexistentDescendantWriteDenied,
         },
         processInheritance: {
-          childOutsideAccessDenied: evidence.childOutsideAccessDenied,
+          childOutsideReadAllowed: evidence.childOutsideReadAllowed,
           grandchildProtectedAccessDenied:
             evidence.grandchildProtectedAccessDenied,
           ownedProcessGroupCleaned:
             conformance.pgidCleaned && interrupt.pgidCleaned,
         },
         privateEnvironment: {
-          homeIsPrivate: evidence.homeIsPrivate,
-          tmpIsPrivate: evidence.tmpIsPrivate,
+          homeMatchesHost: evidence.homeMatchesHost,
+          hostHomeReadAllowed: evidence.hostHomeReadAllowed,
+          hostHomeWriteDenied: evidence.hostHomeWriteDenied,
+          hostTmpEnvironmentMatched: evidence.hostTmpEnvironmentMatched,
+          hostTmpWriteAllowed: evidence.hostTmpWriteAllowed,
+          slashTmpWriteAllowed: evidence.slashTmpWriteAllowed,
           cacheIsPrivate: evidence.cacheIsPrivate,
-          hostSentinelAbsent: evidence.hostSentinelAbsent,
-          realHomeCredentialUnreadable: evidence.realHomeCredentialUnreadable,
+          credentialEnvironmentInherited:
+            evidence.credentialEnvironmentInherited,
         },
         blockedNetwork: {
           loopbackConnectDenied: evidence.loopbackConnectDenied,
@@ -486,7 +533,7 @@ export function createProductionSandboxBehaviorProbe(
         },
         denialEvidence: {
           expectedDenialsObserved:
-            evidence.outsideReadDenied &&
+            evidence.outsideReadAllowed &&
             evidence.outsideWriteDenied &&
             evidence.gitWriteDenied &&
             evidence.loopbackConnectDenied,

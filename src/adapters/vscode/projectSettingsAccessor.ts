@@ -37,11 +37,14 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
 export const MACHINE_SCOPED_AGENTLINK_SETTINGS = [
   "terminal.enabled",
   "terminal.nodePath",
+  "terminal.environmentPolicy",
 ] as const;
 
 export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
+  "provider.maxConcurrentRequests",
   "webAccess.searchBackend",
   "webAccess.fetchBackend",
+  "webAccess.nativeSearchMode",
   "webAccess.allowedDomains",
   "webAccess.blockedDomains",
   "webAccess.maxSearchUsesPerTurn",

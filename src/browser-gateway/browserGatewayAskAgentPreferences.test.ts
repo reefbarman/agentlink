@@ -26,6 +26,7 @@ describe("BrowserGatewayAskAgentPreferencesStore", () => {
         settings: {
           searchBackend: "native",
           fetchBackend: "native",
+          nativeSearchMode: "cached",
           allowedDomains: [],
           blockedDomains: [],
           maxSearchUsesPerTurn: 5,

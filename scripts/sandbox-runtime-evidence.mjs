@@ -325,7 +325,7 @@ function parseJsonLine(text) {
 
 function makeSandboxRequest(root) {
   return {
-    version: 1,
+    version: 2,
     operation: "execute",
     command: "/usr/bin/true",
     cwd: root,
@@ -343,6 +343,7 @@ function makeSandboxRequest(root) {
     },
     network: { allowedDomains: [] },
     protectedRoots: [],
+    structurallyProtectedRoots: [],
     timeoutMs: 10_000,
   };
 }
@@ -981,10 +982,10 @@ terminal.onExit(({ exitCode, signal }) => {
     conformanceEstablished:
       focusedOutcome.exitCode === 0 &&
       !focusedOutcome.timedOut &&
-      /tests 45/.test(stripAnsi(focusedOutcome.stdout)) &&
-      /pass 45/.test(stripAnsi(focusedOutcome.stdout)) &&
+      /tests 51/.test(stripAnsi(focusedOutcome.stdout)) &&
+      /pass 51/.test(stripAnsi(focusedOutcome.stdout)) &&
       /fail 0/.test(stripAnsi(focusedOutcome.stdout)),
-    expectedTests: 45,
+    expectedTests: 51,
     scope:
       "the complete focused resolver/proxy/reaper/protected-root/helper suite under signed Node 22.19.0 x64 via Rosetta",
     ...boundedOutcomeEvidence(focusedOutcome),

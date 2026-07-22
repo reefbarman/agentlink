@@ -62,6 +62,69 @@ const mockGetConfiguration = vi.fn((section?: string) => ({
   update: mockConfigUpdate,
 }));
 
+describe("worktree startup prompt policy", () => {
+  it("applies inherited Approve for Me before submitting the startup prompt exactly once", async () => {
+    vi.useFakeTimers();
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const order: string[] = [];
+    const session = {
+      id: "worktree-session",
+      mode: "code",
+      reasoningEffort: "low",
+      activeFilePath: undefined,
+    };
+    const setSessionApprovalMode = vi.fn(() => order.push("policy"));
+    const sendMessage = vi.fn(async () => {
+      order.push("prompt");
+    });
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: () => session,
+      getSession: () => session,
+      setSessionApprovalMode,
+      sendMessage,
+    };
+    (provider as unknown as { sendInitialState: () => void }).sendInitialState =
+      vi.fn();
+    vi.spyOn(provider, "injectPrompt");
+
+    await provider.startPromptInMode({
+      prompt: "Run the isolated task",
+      autoSubmit: true,
+      commandApprovalPolicy: "approve-for-me",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
+    });
+
+    expect(setSessionApprovalMode).toHaveBeenCalledWith("worktree-session", {
+      commandApprovalPolicy: "approve-for-me",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
+    });
+    expect(order).toEqual(["policy"]);
+    expect(provider.injectPrompt).not.toHaveBeenCalled();
+
+    await vi.runAllTimersAsync();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "worktree-session",
+      "Run the isolated task",
+      "code",
+      expect.objectContaining({
+        displayText: "Run the isolated task",
+        origin: "vscode",
+      }),
+    );
+    expect(order).toEqual(["policy", "prompt"]);
+    vi.useRealTimers();
+  });
+});
+
 describe("tool terminal reveal messages", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -90,6 +153,111 @@ describe("tool terminal reveal messages", () => {
     });
 
     expect(revealTerminal).toHaveBeenCalledWith("tool-running");
+  }, 15_000);
+
+  it("projects MCP parallel opt-ins to Browser Ask Agent", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (
+      provider as unknown as {
+        askAgentMcpHub: {
+          getToolDefs(): unknown[];
+          getParallelToolCallServerNames(): string[];
+        };
+      }
+    ).askAgentMcpHub = {
+      getToolDefs: () => [
+        {
+          name: "parallel__read",
+          description: "Parallel read",
+          input_schema: { type: "object" },
+        },
+        {
+          name: "serial__read",
+          description: "Serial read",
+          input_schema: { type: "object" },
+        },
+      ],
+      getParallelToolCallServerNames: () => ["parallel"],
+    };
+
+    expect(provider.submitBrowserAskAgentMcpTools()).toMatchObject({
+      ok: true,
+      parallelSafeToolNames: ["parallel__read"],
+      parallelSafeServerNames: ["parallel"],
+    });
+  }, 15_000);
+
+  it("uses the selected provider's fast model and enforces selector variants", async () => {
+    const { providerRegistry } = await import("./providers/index.js");
+    const complete = vi.fn(async () => ({
+      text: String.raw`^TARGET=[A-Za-z0-9_.-]+[ \t]+make[ \t]+test-[A-Za-z0-9_.-]+$`,
+    }));
+    providerRegistry.register({
+      id: "regex-suggestion-test",
+      displayName: "Regex suggestion test",
+      condenseModel: "regex-fast",
+      listModels: () => [
+        {
+          id: "regex-foreground",
+          displayName: "Regex foreground",
+          provider: "regex-suggestion-test",
+          capabilities: {},
+        },
+      ],
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => ({})),
+      stream: vi.fn(),
+      complete,
+    } as never);
+
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (
+      provider as unknown as {
+        sessionManager: unknown;
+      }
+    ).sessionManager = {
+      getForegroundSession: () => ({
+        model: "regex-foreground",
+        projectScope: { displayName: "compiler" },
+        title: "Test language targets",
+        mode: "code",
+        filesRead: new Set(),
+        getAllMessages: () => [
+          { role: "user", content: "Run the Go test target" },
+        ],
+      }),
+      getConfig: () => ({ model: "regex-foreground" }),
+    };
+
+    await expect(
+      provider.suggestRegexForCommand({
+        fullCommand: "TARGET=tertiary make test-go",
+        subCommand: "TARGET=tertiary make test-go",
+      }),
+    ).resolves.toBe(
+      String.raw`^TARGET=[A-Za-z0-9_.-]+[ \t]+make[ \t]+test-[A-Za-z0-9_.-]+$`,
+    );
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "regex-fast",
+        reasoningEffort: "none",
+        messages: [
+          expect.objectContaining({
+            content: expect.stringContaining(
+              "TARGET=tertiary make test-agentlink-variant",
+            ),
+          }),
+        ],
+      }),
+    );
   }, 15_000);
 });
 
@@ -1083,6 +1251,55 @@ describe("ChatViewProvider session state sync", () => {
     ).toBe(true);
   });
 
+  it("does not mark a restored ask_user question as an interrupted session", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+
+    const session = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle",
+      reasoningEffort: "high",
+      runState: {
+        phase: "awaiting_question",
+        startedAt: 123,
+        question: { questionRequestId: "question-1" },
+      },
+    };
+    const manager = {
+      getForegroundSession: vi.fn(() => session),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+
+    (
+      provider as unknown as { sendInitialState: () => void }
+    ).sendInitialState();
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "stateUpdate",
+        state: expect.objectContaining({ interrupted: false }),
+      }),
+    );
+  });
+
   it("keeps a restored ask_user question visible when recovery rejects the answer", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
@@ -1865,6 +2082,43 @@ describe("ChatViewProvider session state sync", () => {
     );
   });
 
+  it("pauses a pending interjection while its queued message is edited", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const clearPendingInterjectionIf = vi.fn();
+    (
+      provider as unknown as {
+        sessionManager: { getSession: ReturnType<typeof vi.fn> };
+      }
+    ).sessionManager = {
+      getSession: vi.fn(() => ({ clearPendingInterjectionIf })),
+    };
+    const postMessage = vi.fn();
+    (provider as unknown as { postMessage: typeof postMessage }).postMessage =
+      postMessage;
+
+    (
+      provider as unknown as {
+        pauseQueuedMessageInterjectionFromUi(
+          sessionId: string,
+          queueId: string,
+        ): void;
+      }
+    ).pauseQueuedMessageInterjectionFromUi("session-1", "queue-1");
+
+    expect(clearPendingInterjectionIf).toHaveBeenCalledWith("queue-1");
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "agentQueueInterjectionReady",
+      sessionId: "session-1",
+      queueId: "queue-1",
+      ready: false,
+    });
+  });
+
   it("clears the projected transcript when creating a new browser session", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
@@ -2133,6 +2387,85 @@ describe("ChatViewProvider session state sync", () => {
             "Provider returned empty responses 3 times in a row. Please retry.",
       ),
     ).toBe(true);
+  });
+
+  it("refreshes the context budget snapshot when the foreground session condenses", async () => {
+    const { providerRegistry } = await import("./providers/index.js");
+    providerRegistry.register({
+      id: "ctx-budget-test",
+      displayName: "Context budget test",
+      condenseModel: "ctx-test-model",
+      listModels: () => [
+        {
+          id: "ctx-test-model",
+          displayName: "Ctx test",
+          provider: "ctx-budget-test",
+          capabilities: {},
+        },
+      ],
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => ({
+        contextWindow: 200_000,
+        maxOutputTokens: 8_000,
+      })),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as never);
+
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+
+    // Post-condense session state: usage already reset to the new estimate.
+    const session = {
+      id: "fg-1",
+      background: false,
+      status: "streaming",
+      title: "Chat",
+      mode: "code",
+      model: "ctx-test-model",
+      lastInputTokens: 12_000,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      estimatedInputUsed: 12_000,
+      estimatedTotalUsed: 12_000,
+      getAllMessages: vi.fn(() => []),
+    };
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getSession: (sessionId: string) =>
+        sessionId === session.id ? session : undefined,
+      getForegroundSession: () => session,
+      getConfig: () => ({ maxTokens: 8_000, thinkingBudget: 0 }),
+    };
+
+    const handleAgentEvent = (
+      provider as unknown as {
+        handleAgentEvent: (sessionId: string, event: unknown) => void;
+      }
+    ).handleAgentEvent;
+    handleAgentEvent.call(provider, "fg-1", {
+      type: "condense",
+      summary: "summary",
+      prevInputTokens: 180_000,
+      newInputTokens: 12_000,
+      durationMs: 500,
+    });
+
+    const stateUpdate = mockPostMessage.mock.calls
+      .map(([message]) => message)
+      .find((message) => message.type === "stateUpdate");
+    expect(stateUpdate).toBeDefined();
+    expect(stateUpdate.state.sessionId).toBe("fg-1");
+    expect(stateUpdate.state.contextBudget).toMatchObject({
+      usedInputTokens: 12_000,
+      contextWindow: 200_000,
+    });
   });
 
   it("emits background-only transcript events for background sessions", async () => {
@@ -2594,6 +2927,9 @@ describe("ChatViewProvider session state sync", () => {
         thinkingEnabled: false,
         agentWriteApproval: undefined,
         commandApprovalPolicy: "safe",
+        approvalPolicy: "on-request",
+        approvalReviewer: "user",
+        executionPreset: "native-manual",
         configuredCommandApprovalPolicy: "safe",
         revertRecoveryNotice: null,
       },
@@ -2829,6 +3165,7 @@ describe("ChatViewProvider session state sync", () => {
 
     const ok = provider.submitBrowserApprovalDecision({
       id: "approval-inline",
+      approvalKind: "write",
       decision: "accept",
     });
 
@@ -2837,6 +3174,73 @@ describe("ChatViewProvider session state sync", () => {
     });
     expect(ok).toBe(true);
     expect(publishApprovalIdleSpy).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a worktree launch approval distinct from an overlapping main-agent approval", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const uiPublisher = (
+      provider as unknown as {
+        uiPublisher: { publishApproval: (request: unknown) => void };
+      }
+    ).uiPublisher;
+    const publishApprovalSpy = vi.spyOn(uiPublisher, "publishApproval");
+
+    const mainRespond = vi.fn(() => true);
+    provider.forwardApproval(
+      {
+        kind: "command",
+        id: "main-command",
+        command: "npm test",
+        subCommands: [],
+      },
+      mainRespond,
+    );
+
+    const worktreePromise = provider.requestApproval({
+      kind: "worktree",
+      id: "worktree-launch",
+      title: "Start worktree agent: Reliability pass",
+      detail: "Destination: /workspace/reliability",
+      choices: [
+        {
+          label: "Approve and autosubmit prompt",
+          value: "approve-autosubmit",
+          isPrimary: true,
+        },
+        {
+          label: "Approve, prefill only",
+          value: "approve-prefill",
+        },
+        { label: "Deny", value: "deny", isDanger: true },
+      ],
+    });
+
+    expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: "worktree-launch",
+        kind: "worktree",
+      }),
+    );
+
+    const ok = provider.submitBrowserApprovalDecision({
+      id: "worktree-launch",
+      approvalKind: "worktree",
+      decision: "approve-autosubmit",
+    });
+
+    await expect(worktreePromise).resolves.toMatchObject({
+      decision: "approve-autosubmit",
+    });
+    expect(ok).toBe(true);
+    expect(mainRespond).not.toHaveBeenCalled();
+    expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "main-command" }),
+    );
   });
 
   it("restores an older forwarded approval after resolving an overlapping newer inline approval", async () => {
@@ -2858,7 +3262,7 @@ describe("ChatViewProvider session state sync", () => {
     const publishApprovalSpy = vi.spyOn(uiPublisher, "publishApproval");
     const publishApprovalIdleSpy = vi.spyOn(uiPublisher, "publishApprovalIdle");
 
-    const forwardedRespond = vi.fn();
+    const forwardedRespond = vi.fn(() => true);
     provider.forwardApproval(
       {
         kind: "command",
@@ -2885,6 +3289,7 @@ describe("ChatViewProvider session state sync", () => {
 
     const ok = provider.submitBrowserApprovalDecision({
       id: "foreground-write",
+      approvalKind: "write",
       decision: "accept",
     });
 
@@ -2927,7 +3332,7 @@ describe("ChatViewProvider session state sync", () => {
         { label: "Reject", value: "reject", isDanger: true },
       ],
     });
-    const forwardedRespond = vi.fn();
+    const forwardedRespond = vi.fn(() => true);
     provider.forwardApproval(
       {
         kind: "command",
@@ -2944,6 +3349,7 @@ describe("ChatViewProvider session state sync", () => {
 
     const ok = provider.submitBrowserApprovalDecision({
       id: "background-command",
+      approvalKind: "command",
       decision: "accept",
     });
 
@@ -2958,11 +3364,81 @@ describe("ChatViewProvider session state sync", () => {
 
     provider.submitBrowserApprovalDecision({
       id: "foreground-write",
+      approvalKind: "write",
       decision: "reject",
     });
     await expect(foregroundPromise).resolves.toMatchObject({
       decision: "reject",
     });
+  });
+
+  it("keeps a forwarded native command approval pending until the owner accepts it", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const respond = vi
+      .fn<
+        (
+          message: import("../approvals/webview/types.js").DecisionMessage,
+        ) => boolean
+      >()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+
+    provider.forwardApproval(
+      {
+        kind: "command",
+        id: "native-escalation",
+        command: "dotnet build",
+        cwd: "/workspace",
+        reason: "Needs a host facility.",
+      },
+      respond,
+    );
+
+    expect(
+      provider.submitBrowserApprovalDecision({
+        id: "native-escalation",
+        approvalKind: "write",
+        decision: "run-once",
+      }),
+    ).toBe(false);
+    expect(respond).not.toHaveBeenCalled();
+
+    expect(
+      provider.submitBrowserApprovalDecision({
+        id: "native-escalation",
+        approvalKind: "command",
+        decision: "edit",
+        editedCommand: "dotnet test",
+      }),
+    ).toBe(false);
+    expect(respond).toHaveBeenCalledTimes(1);
+
+    expect(
+      provider.submitBrowserApprovalDecision({
+        id: "native-escalation",
+        approvalKind: "command",
+        decision: "run-once",
+      }),
+    ).toBe(true);
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(respond).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: "native-escalation",
+        approvalKind: "command",
+        decision: "run-once",
+      }),
+    );
+    expect(
+      provider.submitBrowserApprovalDecision({
+        id: "native-escalation",
+        approvalKind: "command",
+        decision: "run-once",
+      }),
+    ).toBe(false);
   });
 
   it("publishes question cleared after resolving a browser question response", async () => {

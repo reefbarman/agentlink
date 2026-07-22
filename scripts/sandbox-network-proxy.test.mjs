@@ -1,7 +1,8 @@
+import { PassThrough, Readable } from "node:stream";
 import { createConnection, createServer as createTcpServer } from "node:net";
-import { createServer as createHttpServer, get as httpGet } from "node:http";
 
 import assert from "node:assert/strict";
+import { get as httpGet } from "node:http";
 import { startTrustedNetworkProxies } from "./sandbox-network-proxy.mjs";
 import test from "node:test";
 
@@ -19,6 +20,30 @@ function close(server) {
   return new Promise((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function fakeHttpRequester(calls) {
+  return (options, onResponse) => {
+    calls.push(options);
+    const request = new PassThrough();
+    queueMicrotask(() => {
+      const response = Readable.from(["http-ok"]);
+      response.statusCode = 200;
+      response.headers = { "content-type": "text/plain" };
+      onResponse(response);
+    });
+    return request;
+  };
 }
 
 function proxyAuthorization(credentials) {
@@ -176,9 +201,254 @@ async function withEchoFixture(operation) {
   }
 }
 
-test("HTTP, CONNECT, and SOCKS deny mixed public/private DNS answers", async () => {
+test("HTTP, CONNECT, and SOCKS authorize normalized retained destinations before dialing", async () => {
+  await withEchoFixture(async ({ echoPort }) => {
+    const events = [];
+    const authorizations = [];
+    const httpDials = [];
+    const socketDials = [];
+    const answers = [
+      { address: "93.184.216.34", family: 4 },
+      { address: "1.1.1.1", family: 4 },
+    ];
+    const proxies = await startTrustedNetworkProxies(
+      ["*"],
+      {
+        lookupAll: async (host) => {
+          events.push(`resolve:${host}`);
+          return answers;
+        },
+      },
+      {
+        authorizeDestination: async (request, signal) => {
+          events.push(`authorize:${request.protocol}:${request.host}`);
+          assert.equal(signal.aborted, false);
+          assert.equal(Object.isFrozen(request), true);
+          assert.equal(Object.isFrozen(request.answers), true);
+          assert.equal(Object.isFrozen(request.answers[0]), true);
+          assert.throws(() => {
+            request.address = "127.0.0.1";
+          }, TypeError);
+          authorizations.push(request);
+          return "allow";
+        },
+        dial: async (approved, port) => {
+          events.push(`dial:${approved.requestedHost}`);
+          socketDials.push({ approved, port });
+          return createConnection(port, "127.0.0.1");
+        },
+        httpRequest: (options, onResponse) => {
+          events.push(`dial:${options.headers.host.split(":")[0]}`);
+          return fakeHttpRequester(httpDials)(options, onResponse);
+        },
+      },
+    );
+    try {
+      const http = await httpViaProxy(
+        proxies.httpPort,
+        "http://HTTP.Example.:8080/resource",
+        proxies.credentials,
+      );
+      assert.deepEqual(http, { statusCode: 200, body: "http-ok" });
+
+      const connect = await connectViaProxy(
+        proxies.httpPort,
+        `CONNECT.Example.:${echoPort}`,
+        "connect-ok",
+        proxies.credentials,
+      );
+      assert.match(connect.status, /200 Connection Established/);
+      assert.equal(connect.body, "connect-ok");
+
+      const socks = await socksViaProxy(
+        proxies.socksPort,
+        "SOCKS.Example.",
+        echoPort,
+        "socks-ok",
+        proxies.credentials,
+      );
+      assert.equal(socks.reply, 0);
+      assert.equal(socks.body, "socks-ok");
+
+      assert.deepEqual(
+        authorizations.map(({ host, protocol, port }) => ({
+          host,
+          protocol,
+          port,
+        })),
+        [
+          { host: "http.example", protocol: "http:", port: 8080 },
+          {
+            host: "connect.example",
+            protocol: "connect:",
+            port: echoPort,
+          },
+          { host: "socks.example", protocol: "socks5:", port: echoPort },
+        ],
+      );
+      for (const authorization of authorizations) {
+        assert.equal(authorization.address, answers[0].address);
+        assert.equal(authorization.family, answers[0].family);
+        assert.deepEqual(authorization.answers, answers);
+      }
+      assert.equal(httpDials.length, 1);
+      assert.equal(httpDials[0].host, answers[0].address);
+      assert.equal(httpDials[0].family, answers[0].family);
+      assert.equal(socketDials.length, 2);
+      for (const { approved } of socketDials) {
+        assert.equal(approved.address, answers[0].address);
+        assert.equal(approved.family, answers[0].family);
+      }
+      assert.deepEqual(events, [
+        "resolve:http.example",
+        "authorize:http::http.example",
+        "dial:http.example.",
+        "resolve:connect.example",
+        "authorize:connect::connect.example",
+        "dial:connect.example",
+        "resolve:socks.example",
+        "authorize:socks5::socks.example",
+        "dial:socks.example",
+      ]);
+    } finally {
+      await proxies.close();
+    }
+  });
+});
+
+test("HTTP, CONNECT, and SOCKS authorization rejection never dials", async () => {
+  const authorizations = [];
+  let dials = 0;
   const proxies = await startTrustedNetworkProxies(
-    ["mixed.example"],
+    ["denied.example"],
+    {
+      lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    },
+    {
+      authorizeDestination: async (request) => {
+        authorizations.push(request);
+        return "reject";
+      },
+      dial: async () => {
+        dials += 1;
+        throw new Error("authorization rejection must happen before dialing");
+      },
+      httpRequest: () => {
+        dials += 1;
+        throw new Error("authorization rejection must happen before dialing");
+      },
+    },
+  );
+  try {
+    const http = await httpViaProxy(
+      proxies.httpPort,
+      "http://denied.example/resource",
+      proxies.credentials,
+    );
+    assert.equal(http.statusCode, 403);
+
+    const connect = await connectViaProxy(
+      proxies.httpPort,
+      "denied.example:443",
+      "denied",
+      proxies.credentials,
+    );
+    assert.match(connect.status, /403 Forbidden/);
+
+    const socks = await socksViaProxy(
+      proxies.socksPort,
+      "denied.example",
+      443,
+      "denied",
+      proxies.credentials,
+    );
+    assert.equal(socks.reply, 2);
+    assert.equal(dials, 0);
+    assert.deepEqual(
+      authorizations.map(({ protocol }) => protocol),
+      ["http:", "connect:", "socks5:"],
+    );
+  } finally {
+    await proxies.close();
+  }
+});
+
+test("transport failures containing policy-like words are not classified as policy denials", async () => {
+  const proxies = await startTrustedNetworkProxies(["transport.example"], {
+    lookupAll: async () => {
+      throw new Error("DNS answer transport unavailable for destination host");
+    },
+  });
+  try {
+    const http = await httpViaProxy(
+      proxies.httpPort,
+      "http://transport.example/resource",
+      proxies.credentials,
+    );
+    assert.deepEqual(http, {
+      statusCode: 400,
+      body: "Invalid proxy request",
+    });
+
+    const connect = await connectViaProxy(
+      proxies.httpPort,
+      "transport.example:443",
+      "unused",
+      proxies.credentials,
+    );
+    assert.match(connect.status, /502 Bad Gateway/);
+    assert.equal(connect.body, "");
+  } finally {
+    await proxies.close();
+  }
+});
+
+test("closing proxies aborts pending authorization and destroys its client socket", async () => {
+  const entered = deferred();
+  const aborted = deferred();
+  let dials = 0;
+  const proxies = await startTrustedNetworkProxies(
+    ["pending.example"],
+    {
+      lookupAll: async () => [{ address: "93.184.216.34", family: 4 }],
+    },
+    {
+      authorizeDestination: async (_request, signal) => {
+        entered.resolve();
+        await new Promise((resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              aborted.resolve(signal.reason);
+              reject(signal.reason);
+            },
+            { once: true },
+          );
+        });
+        return "allow";
+      },
+      httpRequest: () => {
+        dials += 1;
+        throw new Error("close must abort before dialing");
+      },
+    },
+  );
+  const request = httpViaProxy(
+    proxies.httpPort,
+    "http://pending.example/resource",
+    proxies.credentials,
+  );
+  await entered.promise;
+  await proxies.close();
+  const reason = await aborted.promise;
+  assert.match(reason.message, /closed during authorization/);
+  await assert.rejects(request);
+  assert.equal(dials, 0);
+});
+
+test("wildcard HTTP, CONNECT, and SOCKS deny mixed public/private DNS answers", async () => {
+  const proxies = await startTrustedNetworkProxies(
+    ["*"],
     {
       lookupAll: async () => [
         { address: "93.184.216.34", family: 4 },
@@ -271,6 +541,7 @@ test("CONNECT and SOCKS dial only the validated numeric address", async () => {
 
 test("proxy authentication rejects missing, wrong, and cross-session credentials before policy evaluation", async () => {
   let policyEvaluations = 0;
+  let authorizations = 0;
   let dials = 0;
   const options = {
     lookupAll: async () => {
@@ -279,6 +550,10 @@ test("proxy authentication rejects missing, wrong, and cross-session credentials
     },
   };
   const adapter = {
+    authorizeDestination: async () => {
+      authorizations += 1;
+      return "allow";
+    },
     dial: async () => {
       dials += 1;
       throw new Error("authentication denial must happen before dialing");
@@ -340,6 +615,7 @@ test("proxy authentication rejects missing, wrong, and cross-session credentials
     );
     assert.equal(crossSessionSocks.authStatus, 1);
     assert.equal(policyEvaluations, 0);
+    assert.equal(authorizations, 0);
     assert.equal(dials, 0);
     assert.notEqual(first.credentials.password, second.credentials.password);
     await first.close();

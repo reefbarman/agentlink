@@ -215,6 +215,15 @@ describe("shell integration hook generation", () => {
     expect(script).toContain('__agentlink_si_emit C "$1"');
     expect(script).toContain('__agentlink_si_emit P "$PWD"');
     expect(script).toContain("__agentlink_si_emit D");
+    expect(script).toContain(
+      'PS1="%{$(__agentlink_si_prompt_start)%}$PS1%{$(__agentlink_si_prompt_end)%}"',
+    );
+    expect(script).toContain("if (( ! __agentlink_si_prompt_wrapped )); then");
+    expect(script).toContain('PS1="$__agentlink_si_prior_prompt"');
+    expect(script).toContain("__agentlink_si_prompt_wrapped=0");
+    expect(script.indexOf("__agentlink_si_emit A")).toBeLessThan(
+      script.indexOf("__agentlink_si_emit B"),
+    );
   });
 
   it("generates guarded bash prompt lifecycle and DEBUG hooks", () => {
@@ -260,12 +269,16 @@ describe("shell integration hook generation", () => {
     );
   });
 
-  it("uses shell built-ins and escapes protocol delimiters", () => {
+  it("uses shell built-ins and shell-correct literal delimiter escaping", () => {
     for (const shell of ["zsh", "bash"] as const) {
       const script = createShellIntegrationScript(shell, NONCE);
       expect(script).toContain("printf");
       expect(script).toContain("697;AgentLink;%s;%s");
-      expect(script).toContain("${__agentlink_si_value//%/%25}");
+      expect(script).toContain(
+        shell === "zsh"
+          ? '${__agentlink_si_value//"%"/%25}'
+          : "${__agentlink_si_value//%/%25}",
+      );
       expect(script).toContain("${__agentlink_si_value//;/%3B}");
       expect(script).not.toMatch(/\b(?:base64|perl|python|sed|tr)\b/);
     }

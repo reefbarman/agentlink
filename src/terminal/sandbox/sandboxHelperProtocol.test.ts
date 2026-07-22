@@ -31,7 +31,8 @@ const launch: SandboxHelperLaunchRequest = {
     denyWrite: ["/workspace/.git"],
   },
   network: { mode: "blocked" },
-  protectedRoots: ["/workspace/.git"],
+  protectedRoots: ["/workspace/.git/config"],
+  structurallyProtectedRoots: ["/workspace/.git"],
   dimensions: { columns: 80, rows: 24 },
 };
 
@@ -57,6 +58,14 @@ describe("sandbox helper control protocol", () => {
     ).toBe(true);
     expect(
       isSandboxHelperControlFrame({ ...identity, type: "terminate" }),
+    ).toBe(true);
+    expect(
+      isSandboxHelperControlFrame({
+        ...identity,
+        type: "network-decision",
+        requestId: "network-1",
+        decision: "allow-once",
+      }),
     ).toBe(true);
   });
 
@@ -88,6 +97,9 @@ describe("sandbox helper control protocol", () => {
     expect(isSandboxHelperControlFrame({ ...launch, unexpected: true })).toBe(
       false,
     );
+    const { structurallyProtectedRoots: _omitted, ...missingStructuralRoots } =
+      launch;
+    expect(isSandboxHelperControlFrame(missingStructuralRoots)).toBe(false);
     expect(isSandboxHelperControlFrame({ ...launch, generation: 0 })).toBe(
       false,
     );
@@ -103,6 +115,23 @@ describe("sandbox helper control protocol", () => {
         ...identity,
         type: "resize",
         dimensions: { columns: 0, rows: 24 },
+      }),
+    ).toBe(false);
+    expect(
+      isSandboxHelperControlFrame({
+        ...identity,
+        type: "network-decision",
+        requestId: "network-1",
+        decision: "allow-always",
+      }),
+    ).toBe(false);
+    expect(
+      isSandboxHelperControlFrame({
+        ...identity,
+        type: "network-decision",
+        requestId: "network-1",
+        decision: "reject",
+        address: "93.184.216.34",
       }),
     ).toBe(false);
   });
@@ -135,6 +164,23 @@ describe("sandbox helper event protocol", () => {
       },
       { ...identity, type: "data", data: "output" },
       { ...identity, type: "cwd", cwd: "/workspace/subdir", nonce: "nonce" },
+      {
+        ...identity,
+        type: "network-request",
+        request: {
+          requestId: "network-1",
+          host: "registry.npmjs.org",
+          protocol: "https",
+          port: 443,
+          address: "104.16.1.35",
+          family: 4,
+          dnsAnswers: [
+            { address: "104.16.1.35", family: 4 },
+            { address: "104.16.0.35", family: 4 },
+          ],
+          destinationClass: "public",
+        },
+      },
       {
         ...identity,
         type: "violation",

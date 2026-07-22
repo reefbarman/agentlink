@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   runAgentToolLoop,
   type AgentToolLoopCall,
@@ -290,5 +290,97 @@ describe("runAgentToolLoop", () => {
       }),
     );
     expect(result.text).toBe("thinking out loud");
+  });
+
+  it("runs adjacent parallel-safe calls concurrently and replays results in model order", async () => {
+    const calls: AgentToolLoopCall[] = [
+      { id: "slow", name: "web_fetch", input: {} },
+      { id: "fast", name: "web_fetch", input: {} },
+    ];
+    let releaseSlow!: () => void;
+    const slowCanFinish = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
+    let fastFinished = false;
+    const seenIterationMessages: CoreModelMessage[][] = [];
+    let iteration = 0;
+
+    const run = runAgentToolLoop(
+      makeHandlers({
+        callModel: async ({ iterationMessages }) => {
+          seenIterationMessages.push(structuredClone(iterationMessages));
+          iteration += 1;
+          return iteration === 1
+            ? { text: "", toolCalls: calls }
+            : { text: "done", toolCalls: [] };
+        },
+        isParallelSafe: () => true,
+        runTool: async (call) => {
+          if (call.id === "slow") await slowCanFinish;
+          else fastFinished = true;
+          return {
+            stop: false,
+            content: call.id,
+            toolMessage: toolMessage(call.id),
+          };
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(fastFinished).toBe(true));
+    releaseSlow();
+    await expect(run).resolves.toEqual({
+      outcome: "model_success",
+      text: "done",
+    });
+    expect(seenIterationMessages[1]?.slice(1)).toEqual([
+      toolMessage("slow"),
+      toolMessage("fast"),
+    ]);
+  });
+
+  it("keeps non-parallel calls as ordered barriers between safe batches", async () => {
+    const calls: AgentToolLoopCall[] = [
+      { id: "read-before", name: "read", input: {} },
+      { id: "barrier", name: "write", input: {} },
+      { id: "read-after", name: "read", input: {} },
+    ];
+    const started: string[] = [];
+    let releaseFirst!: () => void;
+    let releaseBarrier!: () => void;
+    const firstCanFinish = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const barrierCanFinish = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    let iteration = 0;
+    const run = runAgentToolLoop(
+      makeHandlers({
+        callModel: async () => {
+          iteration += 1;
+          return iteration === 1
+            ? { text: "", toolCalls: calls }
+            : { text: "done", toolCalls: [] };
+        },
+        isParallelSafe: (call) => call.name === "read",
+        runTool: async (call) => {
+          started.push(call.id);
+          if (call.id === "read-before") await firstCanFinish;
+          if (call.id === "barrier") await barrierCanFinish;
+          return { stop: false, content: call.id };
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(started).toEqual(["read-before"]));
+    releaseFirst();
+    await vi.waitFor(() => expect(started).toEqual(["read-before", "barrier"]));
+    releaseBarrier();
+    await expect(run).resolves.toEqual({
+      outcome: "model_success",
+      text: "done",
+    });
+    expect(started).toEqual(["read-before", "barrier", "read-after"]);
   });
 });

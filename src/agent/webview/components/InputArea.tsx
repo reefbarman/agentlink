@@ -13,6 +13,7 @@ import {
   autosizeTextarea,
   canSubmitComposer,
   focusAndAutosizeTextarea,
+  observeTextareaAutosize,
 } from "../../../shared/composerBehavior";
 import {
   findTrailingEmojiShortcode,
@@ -322,6 +323,8 @@ export function InputArea({
     autosizeTextarea(el);
   }, [text]);
 
+  useEffect(() => observeTextareaAutosize(textareaRef.current), []);
+
   const displaySlashCommands = useMemo(
     () => slashCommands.map(withSlashCommandDisplayName),
     [slashCommands],
@@ -543,6 +546,7 @@ export function InputArea({
     "skills",
     "mcp",
     "mcp-refresh",
+    "worktree",
     "pair",
   ]);
   // Commands that open a sub-picker

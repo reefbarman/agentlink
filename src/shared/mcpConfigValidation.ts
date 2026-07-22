@@ -62,6 +62,7 @@ export type McpConfigDiagnosticCode =
   | "invalid_timeout"
   | "invalid_tool_policy"
   | "invalid_tool_disclosure"
+  | "invalid_parallel_tool_calls"
   | "invalid_allowed_tools"
   | "invalid_disabled";
 
@@ -105,6 +106,7 @@ const SUPPORTED_FIELDS = new Set([
   "timeout",
   "toolPolicy",
   "toolDisclosure",
+  "supportsParallelToolCalls",
   "allowedTools",
 ]);
 
@@ -614,6 +616,21 @@ export function validateMcpServerConfig(
       );
     } else {
       draft.toolDisclosure = configValue.toolDisclosure;
+    }
+  }
+
+  if (configValue.supportsParallelToolCalls !== undefined) {
+    if (typeof configValue.supportsParallelToolCalls !== "boolean") {
+      diagnostics.push(
+        diagnostic(
+          "error",
+          "invalid_parallel_tool_calls",
+          fieldPath(path, "supportsParallelToolCalls"),
+          "Parallel tool call support must be a boolean.",
+        ),
+      );
+    } else {
+      draft.supportsParallelToolCalls = configValue.supportsParallelToolCalls;
     }
   }
 

@@ -96,6 +96,19 @@ describe("NodeSandboxHelperTransport", () => {
     expect(test.child.stdin.end).toHaveBeenCalledTimes(1);
   });
 
+  it("treats writable backpressure as an accepted frame", () => {
+    const test = harness();
+    test.child.stdin.write.mockReturnValue(false);
+    const transport = test.factory.create();
+
+    expect(transport.write("large-frame\n")).toBe(true);
+    expect(test.child.stdin.write).toHaveBeenCalledWith(
+      "large-frame\n",
+      "utf8",
+    );
+    expect(test.child.kill).not.toHaveBeenCalled();
+  });
+
   it("decodes split UTF-8 and multiple newline-delimited frames", () => {
     const test = harness();
     const transport = test.factory.create();

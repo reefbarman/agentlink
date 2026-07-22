@@ -1,45 +1,33 @@
 import * as vscode from "vscode";
 
 /**
- * Status bar manager for AgentLink approval alerts and indexer errors.
- *
- * The primary item stays hidden while idle and appears only for a temporary
- * approval alert or an active error. The secondary item shows queued approvals.
+ * Unified status bar manager for AgentLink approval attention and indexer errors.
  */
 export class StatusBarManager implements vscode.Disposable {
-  private readonly primaryItem: vscode.StatusBarItem;
-  private readonly pendingItem: vscode.StatusBarItem;
+  private readonly item: vscode.StatusBarItem;
 
   private flashInterval: ReturnType<typeof setInterval> | undefined;
+  private alertGeneration = 0;
+  private alert:
+    | { generation: number; message: string; command: string }
+    | undefined;
+  private pendingCount = 0;
   private errorMessage: string | undefined;
 
   constructor() {
-    this.primaryItem = vscode.window.createStatusBarItem(
+    this.item = vscode.window.createStatusBarItem(
+      "approvalAlert",
       vscode.StatusBarAlignment.Left,
       10000,
     );
-
-    this.pendingItem = vscode.window.createStatusBarItem(
-      vscode.StatusBarAlignment.Left,
-      9999,
-    );
-    this.pendingItem.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.warningBackground",
-    );
-    this.pendingItem.command = "agentLink.focusApproval";
+    this.item.name = "AgentLink Status";
   }
 
   /** Set an error message. Shown as "Error" with error background. */
   setError(message: string): void {
     this.stopFlash();
     this.errorMessage = message;
-    this.primaryItem.text = "$(link) AgentLink — Error";
-    this.primaryItem.tooltip = message;
-    this.primaryItem.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.errorBackground",
-    );
-    this.primaryItem.command = "agentLink.statusView.focus";
-    this.primaryItem.show();
+    this.renderError();
   }
 
   /** Clear the error state and return the primary item to its idle state. */
@@ -54,49 +42,102 @@ export class StatusBarManager implements vscode.Disposable {
    */
   showAlert(message: string, command?: string): vscode.Disposable {
     this.stopFlash();
-
-    this.primaryItem.text = `$(alert) ${message}`;
-    this.primaryItem.tooltip = message;
-    this.primaryItem.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.warningBackground",
-    );
-    this.primaryItem.command = command ?? "agentLink.focusApproval";
-    this.primaryItem.show();
-
-    let flash = true;
-    this.flashInterval = setInterval(() => {
-      flash = !flash;
-      this.primaryItem.text = flash ? `$(alert) ${message}` : `     ${message}`;
-    }, 800);
+    const generation = ++this.alertGeneration;
+    this.alert = {
+      generation,
+      message,
+      command: command ?? "agentLink.focusApproval",
+    };
+    this.renderAlert(true);
+    this.startFlash();
 
     return {
       dispose: () => {
+        if (generation !== this.alert?.generation) return;
         this.stopFlash();
+        this.alert = undefined;
         this.restoreBaseState();
       },
     };
   }
 
-  /** Update the pending approvals count badge. Hidden when count is 0. */
+  /** Update the queued approval count on the unified status item. */
   setPendingCount(count: number): void {
-    if (count > 0) {
-      this.pendingItem.text = `$(ellipsis) ${count} more approval${count > 1 ? "s" : ""} pending`;
-      this.pendingItem.show();
-    } else {
-      this.pendingItem.hide();
+    this.pendingCount = Math.max(0, count);
+    if (this.errorMessage) return;
+    if (this.alert) {
+      this.renderAlert(true);
+      return;
     }
+    this.restoreBaseState();
+  }
+
+  private startFlash(): void {
+    let visible = true;
+    this.flashInterval = setInterval(() => {
+      if (!this.alert || this.errorMessage) return;
+      visible = !visible;
+      this.renderAlert(visible);
+    }, 800);
+  }
+
+  private renderAlert(showIcon: boolean): void {
+    if (!this.alert) return;
+    const countSuffix =
+      this.pendingCount > 0 ? ` (+${this.pendingCount} pending)` : "";
+    const queuedTooltip =
+      this.pendingCount > 0
+        ? `\n${this.pendingCount} more approval${this.pendingCount > 1 ? "s" : ""} pending`
+        : "";
+    this.item.text = `${showIcon ? "$(alert)" : "    "} ${this.alert.message}${countSuffix}`;
+    this.item.tooltip = `${this.alert.message}${queuedTooltip}`;
+    this.item.backgroundColor = new vscode.ThemeColor(
+      "statusBarItem.warningBackground",
+    );
+    this.item.command = this.alert.command;
+    this.item.show();
+  }
+
+  private renderPending(): void {
+    this.item.text = `$(alert) AgentLink — ${this.pendingCount} approval${this.pendingCount > 1 ? "s" : ""} pending`;
+    this.item.tooltip = `${this.pendingCount} AgentLink approval${this.pendingCount > 1 ? "s" : ""} pending`;
+    this.item.backgroundColor = new vscode.ThemeColor(
+      "statusBarItem.warningBackground",
+    );
+    this.item.command = "agentLink.focusApproval";
+    this.item.show();
+  }
+
+  private renderError(): void {
+    if (!this.errorMessage) return;
+    this.item.text = "$(link) AgentLink — Error";
+    this.item.tooltip = this.errorMessage;
+    this.item.backgroundColor = new vscode.ThemeColor(
+      "statusBarItem.errorBackground",
+    );
+    this.item.command = "agentLink.statusView.focus";
+    this.item.show();
   }
 
   private restoreBaseState(): void {
     if (this.errorMessage) {
-      this.setError(this.errorMessage);
+      this.renderError();
       return;
     }
-    this.primaryItem.text = "";
-    this.primaryItem.tooltip = undefined;
-    this.primaryItem.backgroundColor = undefined;
-    this.primaryItem.command = undefined;
-    this.primaryItem.hide();
+    if (this.alert) {
+      this.renderAlert(true);
+      this.startFlash();
+      return;
+    }
+    if (this.pendingCount > 0) {
+      this.renderPending();
+      return;
+    }
+    this.item.text = "";
+    this.item.tooltip = undefined;
+    this.item.backgroundColor = undefined;
+    this.item.command = undefined;
+    this.item.hide();
   }
 
   private stopFlash(): void {
@@ -107,8 +148,8 @@ export class StatusBarManager implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.alertGeneration++;
     this.stopFlash();
-    this.primaryItem.dispose();
-    this.pendingItem.dispose();
+    this.item.dispose();
   }
 }

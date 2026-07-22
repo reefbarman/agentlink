@@ -28,6 +28,7 @@ export async function resolveAndOpenDocument(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  signal?: AbortSignal,
 ): Promise<ResolvedDocument> {
   const { absolutePath, inWorkspace } = resolveAndValidatePath(inputPath);
   const relPath = getRelativePath(absolutePath);
@@ -42,6 +43,7 @@ export async function resolveAndOpenDocument(
       approvalManager,
       approvalPanel,
       sessionId,
+      signal,
     );
     if (!approved) {
       const result: ToolResult = {

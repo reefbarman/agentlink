@@ -156,6 +156,13 @@ function zshProxySource(fileName: string, afterSource: string[] = []): string {
   const userFile = `"$__agentlink_user_zdotdir/${fileName}"`;
   return [
     'export ZDOTDIR="$__agentlink_user_zdotdir"',
+    ...(fileName === ".zshrc"
+      ? [
+          'if [[ "$HISTFILE" == "$__agentlink_bootstrap_zdotdir/.zsh_history" ]]; then',
+          '  HISTFILE="$__agentlink_user_zdotdir/.zsh_history"',
+          "fi",
+        ]
+      : []),
     ...sourceIfReadable(userFile),
     "__agentlink_user_zdotdir=${ZDOTDIR:-$__agentlink_user_zdotdir}",
     ...afterSource,

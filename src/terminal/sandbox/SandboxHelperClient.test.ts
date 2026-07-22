@@ -27,7 +27,8 @@ const request: SandboxHelperLaunchRequest = {
     denyWrite: ["/workspace/.git"],
   },
   network: { mode: "blocked" },
-  protectedRoots: ["/workspace/.git"],
+  protectedRoots: ["/workspace/.git/config"],
+  structurallyProtectedRoots: ["/workspace/.git"],
   dimensions: { columns: 80, rows: 24 },
 };
 
@@ -156,6 +157,62 @@ describe("SandboxHelperClient", () => {
     ]);
   });
 
+  it("delivers coalesced ready, data, and exit in trusted lifecycle order", async () => {
+    const test = harness();
+    const process = test.client.launch(request);
+    const transport = test.transports[0];
+    const order: string[] = [];
+    process.ready.then(() => order.push("ready"));
+    process.onEvent((event) => order.push(event.type));
+    process.completion.then(() => order.push("completion"));
+
+    ready(transport);
+    transport.emit({
+      ...process.identity,
+      type: "data",
+      data: "coalesced output",
+    });
+    transport.emit({
+      ...process.identity,
+      type: "exit",
+      exitCode: 0,
+      timedOut: false,
+    });
+    await Promise.all([process.ready, process.completion]);
+    await Promise.resolve();
+
+    expect(order).toEqual(["ready", "data", "completion"]);
+  });
+
+  it("replays command events emitted before the first consumer subscribes", async () => {
+    const test = harness();
+    const process = test.client.launch(request);
+    const transport = test.transports[0];
+    ready(transport);
+    transport.emit({
+      ...process.identity,
+      type: "data",
+      data: "immediate output",
+    });
+    transport.emit({
+      ...process.identity,
+      type: "exit",
+      exitCode: 0,
+      timedOut: false,
+    });
+    await process.completion;
+    const events = vi.fn();
+
+    process.onEvent(events);
+    expect(events).not.toHaveBeenCalled();
+    await Promise.resolve();
+
+    expect(events).toHaveBeenCalledWith({
+      type: "data",
+      data: "immediate output",
+    });
+  });
+
   it("forwards current events and ignores stale command generations", async () => {
     const test = harness();
     const process = test.client.launch(request);
@@ -188,6 +245,7 @@ describe("SandboxHelperClient", () => {
         occurredAt: 100,
       },
     });
+    await Promise.resolve();
 
     expect(events.mock.calls.map(([event]) => event)).toEqual([
       { type: "data", data: "current" },

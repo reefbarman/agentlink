@@ -1,12 +1,25 @@
 import {
   bgTranscriptStreamingOverride,
   initialState,
+  queuedMessagesReadyToDrain,
   reducer,
   shouldAcceptSessionChunk,
   shouldDropSessionScopedEvent,
   shouldProjectBackgroundCompletion,
 } from "./App";
 import { describe, expect, it } from "vitest";
+
+describe("queued message draining", () => {
+  it("keeps the message being edited out of the automatic send batch", () => {
+    const queue = [
+      { id: "editing", text: "still changing", source: "vscode" as const },
+      { id: "ready", text: "send this", source: "vscode" as const },
+      { id: "browser", text: "remote", source: "browser" as const },
+    ];
+
+    expect(queuedMessagesReadyToDrain(queue, "editing")).toEqual([queue[1]]);
+  });
+});
 
 describe("webview App reducer tool input", () => {
   it("shows complete tool input from the start event while the call is running", () => {
@@ -304,6 +317,42 @@ describe("webview App reducer background agent launch blocks", () => {
         resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
       }),
     ]);
+  });
+
+  it("promotes explicitly presented session images to assistant display media", () => {
+    const toolCallId = "tool-present-image";
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "show me the screenshot",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId,
+      toolName: "present_images",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId,
+      toolName: "present_images",
+      result: JSON.stringify({ status: "presented", count: 1 }),
+      resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+      durationMs: 1,
+      input: { use_recent_images: 1 },
+    });
+
+    const assistant = state.messages[state.messages.length - 1];
+    expect(assistant?.displayMedia).toEqual({
+      images: [
+        {
+          name: "presented-image-1.png",
+          mimeType: "image/png",
+          src: "data:image/png;base64,YWJjZA==",
+        },
+      ],
+      documents: [],
+    });
   });
 
   it("keeps non-generate_image result images scoped to the tool call", () => {
@@ -2035,6 +2084,50 @@ describe("webview App reducer background agent launch blocks", () => {
     });
   });
 
+  it("restores presented session images into assistant display media", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+    const resultText = JSON.stringify({ status: "presented", count: 1 });
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "show me the screenshot" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "present-image-restore",
+            name: "present_images",
+            input: { use_recent_images: 1 },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "present-image-restore",
+            content: [
+              { type: "text", text: resultText },
+              { type: "image", data: "YWJjZA==", mimeType: "image/png" },
+            ],
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    expect(restored[1]?.displayMedia).toEqual({
+      images: [
+        {
+          name: "presented-image-1.png",
+          mimeType: "image/png",
+          src: "data:image/png;base64,YWJjZA==",
+        },
+      ],
+      documents: [],
+    });
+  });
+
   it("restores non-generate_image result images only onto the tool call", async () => {
     const { agentMessagesToChatMessages } = await import("./App");
 
@@ -2660,6 +2753,7 @@ describe("webview App reducer background agent launch blocks", () => {
           sessionId: "session-old",
           streaming: true,
           interrupted: true,
+          agentWriteApproval: "session",
         },
       },
       {
@@ -2687,7 +2781,27 @@ describe("webview App reducer background agent launch blocks", () => {
     expect(state.chatState.sessionId).toBeNull();
     expect(state.chatState.streaming).toBe(false);
     expect(state.chatState.interrupted).toBe(false);
+    expect(state.chatState.agentWriteApproval).toBe("prompt");
   });
+
+  it.each(["project", "global"] as const)(
+    "keeps %s write approval on NEW_SESSION",
+    (agentWriteApproval) => {
+      const state = reducer(
+        {
+          ...initialState,
+          chatState: {
+            ...initialState.chatState,
+            sessionId: "session-old",
+            agentWriteApproval,
+          },
+        },
+        { type: "NEW_SESSION" },
+      );
+
+      expect(state.chatState.agentWriteApproval).toBe(agentWriteApproval);
+    },
+  );
 
   it("clears stale interruption state while loading another session", () => {
     const state = reducer(

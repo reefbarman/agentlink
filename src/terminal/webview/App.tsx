@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 import {
   TerminalWebviewController,
@@ -13,6 +13,52 @@ import type { HostTerminalSurfaceAction } from "../terminalSurfaceProtocol.js";
 export interface AppProps {
   vscodeApi: VsCodeApi;
   controller?: TerminalWebviewController;
+}
+
+const TERMINAL_LIST_WIDTH_KEY = "agentlink.terminal.listWidth.v1";
+const DEFAULT_TERMINAL_LIST_WIDTH = 220;
+const MIN_TERMINAL_LIST_WIDTH = 150;
+const MAX_TERMINAL_LIST_WIDTH = 420;
+const MIN_TERMINAL_CONTENT_WIDTH = 240;
+const TERMINAL_LIST_KEYBOARD_STEP = 16;
+
+function terminalListWidthBounds(totalWidth?: number): {
+  minimum: number;
+  maximum: number;
+} {
+  const availableWidth =
+    totalWidth === undefined || totalWidth <= 0
+      ? MAX_TERMINAL_LIST_WIDTH
+      : Math.max(0, totalWidth - MIN_TERMINAL_CONTENT_WIDTH);
+  const maximum = Math.min(MAX_TERMINAL_LIST_WIDTH, availableWidth);
+  return {
+    minimum: Math.min(MIN_TERMINAL_LIST_WIDTH, maximum),
+    maximum,
+  };
+}
+
+function clampTerminalListWidth(width: number, totalWidth?: number): number {
+  const { minimum, maximum } = terminalListWidthBounds(totalWidth);
+  return Math.max(minimum, Math.min(maximum, width));
+}
+
+function readTerminalListWidth(): number {
+  try {
+    const value = Number(window.localStorage.getItem(TERMINAL_LIST_WIDTH_KEY));
+    return Number.isFinite(value) && value > 0
+      ? clampTerminalListWidth(value)
+      : DEFAULT_TERMINAL_LIST_WIDTH;
+  } catch {
+    return DEFAULT_TERMINAL_LIST_WIDTH;
+  }
+}
+
+function writeTerminalListWidth(width: number): void {
+  try {
+    window.localStorage.setItem(TERMINAL_LIST_WIDTH_KEY, String(width));
+  } catch {
+    // Best-effort webview preference only.
+  }
 }
 
 function exitLabel(tab: TerminalTabView): string {
@@ -183,9 +229,21 @@ function TerminalList({
         {tabs.map((tab) => {
           const active = tab.id === activeTabId;
           const sandbox = tab.channelKind === "agent-sandbox";
+          const native = tab.channelKind === "agent-native";
+          const authorityLabel = sandbox
+            ? "Sandbox"
+            : native
+              ? "Native Agent"
+              : "Host Shell";
+          const activityLabel =
+            tab.agentActivity === "running"
+              ? "Agent command running"
+              : tab.agentActivity === "unread"
+                ? "Agent command finished — output not viewed"
+                : undefined;
           return (
             <div
-              class={`terminal-list-item${active ? " active" : ""}`}
+              class={`terminal-list-item${active ? " active" : ""}${tab.agentActivity ? ` agent-${tab.agentActivity}` : ""}`}
               role="listitem"
               key={tab.id}
             >
@@ -193,20 +251,30 @@ function TerminalList({
                 type="button"
                 class="terminal-list-select"
                 aria-current={active ? "true" : undefined}
-                aria-label={`Focus ${tab.title} (${sandbox ? "Sandbox" : "Host Shell"})`}
-                title={`${tab.title} — ${tab.cwd}`}
+                aria-label={`Focus ${tab.title} (${authorityLabel})${activityLabel ? `. ${activityLabel}` : ""}`}
+                title={`${tab.title} — ${tab.cwd}${activityLabel ? ` — ${activityLabel}` : ""}`}
                 onClick={() => controller.selectTerminal(tab.id)}
               >
                 <span
-                  class={`codicon codicon-${sandbox ? "shield terminal-sandbox-icon" : "terminal"}`}
-                  title={sandbox ? "Fresh sandbox per command" : undefined}
+                  class={
+                    native
+                      ? "terminal-agentlink-icon"
+                      : `codicon codicon-${sandbox ? "shield terminal-sandbox-icon" : "terminal"}`
+                  }
+                  title={
+                    sandbox
+                      ? "Fresh sandbox per command"
+                      : native
+                        ? "Unsandboxed agent command"
+                        : undefined
+                  }
                   aria-hidden="true"
                 />
                 <span class="terminal-list-name">{tab.title}</span>
                 <span
-                  class={`terminal-status ${tab.status}`}
-                  title={exitLabel(tab)}
-                  aria-label={exitLabel(tab)}
+                  class={`terminal-status ${tab.agentActivity ? `agent-${tab.agentActivity}` : tab.status}`}
+                  title={activityLabel ?? exitLabel(tab)}
+                  aria-label={activityLabel ?? exitLabel(tab)}
                 />
               </button>
               <button
@@ -397,6 +465,13 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
   const [terminalListPreference, setTerminalListPreference] = useState<
     "auto" | "shown" | "hidden"
   >("auto");
+  const [terminalListWidth, setTerminalListWidth] = useState(
+    readTerminalListWidth,
+  );
+  const [terminalListResizing, setTerminalListResizing] = useState(false);
+  const [workbenchWidth, setWorkbenchWidth] = useState(0);
+  const workbenchRef = useRef<HTMLDivElement>(null);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const unsubscribe = controller.subscribe(setState);
@@ -409,8 +484,8 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
   }, [controller, providedController]);
 
   useEffect(() => {
-    if (state.activeTabId && !searchVisible) controller.focusActive();
-  }, [controller, searchVisible, state.activeTabId]);
+    if (!searchVisible) controller.focusActive();
+  }, [controller, searchVisible, state.focusRequest]);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
@@ -423,8 +498,33 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
   }, []);
 
   useEffect(() => {
-    controller.focusActive();
-  }, [controller, terminalListPreference, wideLayout]);
+    controller.fitActive();
+  }, [
+    controller,
+    state.activeTabId,
+    terminalListPreference,
+    terminalListWidth,
+    wideLayout,
+    workbenchWidth,
+  ]);
+
+  useEffect(() => {
+    const workbench = workbenchRef.current;
+    if (!workbench) return;
+    const updateWidth = () =>
+      setWorkbenchWidth(workbench.getBoundingClientRect().width);
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(workbench);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(
+    () => () => {
+      resizeCleanupRef.current?.();
+    },
+    [],
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -437,10 +537,75 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  const effectiveTerminalListWidth = clampTerminalListWidth(
+    terminalListWidth,
+    workbenchWidth,
+  );
+  const terminalListWidthBoundsForWorkbench =
+    terminalListWidthBounds(workbenchWidth);
+
+  const commitTerminalListWidth = (width: number): void => {
+    const nextWidth = clampTerminalListWidth(width, workbenchWidth);
+    setTerminalListWidth(nextWidth);
+    writeTerminalListWidth(nextWidth);
+  };
+
+  const handleTerminalListResizeStart = (event: MouseEvent): void => {
+    if (event.button !== 0) return;
+    const workbench = workbenchRef.current;
+    if (!workbench) return;
+    event.preventDefault();
+    resizeCleanupRef.current?.();
+
+    let latestWidth = effectiveTerminalListWidth;
+    setTerminalListResizing(true);
+    const onMove = (moveEvent: MouseEvent) => {
+      const rect = workbench.getBoundingClientRect();
+      latestWidth = clampTerminalListWidth(
+        rect.right - moveEvent.clientX,
+        rect.width,
+      );
+      setTerminalListWidth(latestWidth);
+    };
+    const cleanup = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", finish);
+      resizeCleanupRef.current = null;
+    };
+    const finish = () => {
+      cleanup();
+      writeTerminalListWidth(latestWidth);
+      setTerminalListResizing(false);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", finish);
+    resizeCleanupRef.current = cleanup;
+  };
+
+  const handleTerminalListResizeKeyDown = (event: KeyboardEvent): void => {
+    const step = event.shiftKey
+      ? TERMINAL_LIST_KEYBOARD_STEP * 2
+      : TERMINAL_LIST_KEYBOARD_STEP;
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      event.preventDefault();
+      commitTerminalListWidth(effectiveTerminalListWidth + step);
+    } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      event.preventDefault();
+      commitTerminalListWidth(effectiveTerminalListWidth - step);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      commitTerminalListWidth(MIN_TERMINAL_LIST_WIDTH);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      commitTerminalListWidth(MAX_TERMINAL_LIST_WIDTH);
+    }
+  };
+
   const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId);
   const terminalListVisible =
     terminalListPreference === "shown" ||
-    (terminalListPreference === "auto" && wideLayout);
+    (terminalListPreference === "auto" &&
+      (wideLayout || state.tabs.length > 1));
 
   return (
     <main class="terminal-app">
@@ -458,11 +623,17 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
               title={`${activeTab.title} — ${activeTab.cwd}`}
             >
               <span
-                class={`codicon codicon-${activeTab.channelKind === "agent-sandbox" ? "shield terminal-sandbox-icon" : "terminal"}`}
+                class={
+                  activeTab.channelKind === "agent-native"
+                    ? "terminal-agentlink-icon"
+                    : `codicon codicon-${activeTab.channelKind === "agent-sandbox" ? "shield terminal-sandbox-icon" : "terminal"}`
+                }
                 title={
                   activeTab.channelKind === "agent-sandbox"
                     ? "Fresh sandbox per command"
-                    : undefined
+                    : activeTab.channelKind === "agent-native"
+                      ? "Unsandboxed agent command"
+                      : undefined
                 }
                 aria-hidden="true"
               />
@@ -538,7 +709,8 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
       </header>
 
       <div
-        class={`terminal-workbench${terminalListVisible ? " list-visible" : ""}`}
+        class={`terminal-workbench${terminalListVisible ? " list-visible" : ""}${terminalListResizing ? " resizing" : ""}`}
+        ref={workbenchRef}
       >
         <div class="terminal-content">
           {state.phase === "loading" && (
@@ -586,11 +758,38 @@ export function App({ vscodeApi, controller: providedController }: AppProps) {
         {state.phase === "ready" &&
           state.tabs.length > 0 &&
           terminalListVisible && (
-            <TerminalList
-              activeTabId={state.activeTabId}
-              controller={controller}
-              tabs={state.tabs}
-            />
+            <>
+              <div
+                aria-label="Resize terminal list"
+                aria-orientation="vertical"
+                aria-valuemax={terminalListWidthBoundsForWorkbench.maximum}
+                aria-valuemin={terminalListWidthBoundsForWorkbench.minimum}
+                aria-valuenow={Math.round(effectiveTerminalListWidth)}
+                aria-valuetext={`${Math.round(effectiveTerminalListWidth)} pixels; Left or Up expands, Right or Down contracts`}
+                class="terminal-list-resize-handle"
+                onKeyDown={(event) =>
+                  handleTerminalListResizeKeyDown(
+                    event as unknown as KeyboardEvent,
+                  )
+                }
+                onMouseDown={(event) =>
+                  handleTerminalListResizeStart(event as unknown as MouseEvent)
+                }
+                role="separator"
+                tabIndex={0}
+                title="Drag to resize the terminal list"
+              />
+              <div
+                class="terminal-list-shell"
+                style={{ width: `${effectiveTerminalListWidth}px` }}
+              >
+                <TerminalList
+                  activeTabId={state.activeTabId}
+                  controller={controller}
+                  tabs={state.tabs}
+                />
+              </div>
+            </>
           )}
       </div>
     </main>
