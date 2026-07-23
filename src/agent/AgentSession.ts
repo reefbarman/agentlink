@@ -181,6 +181,7 @@ export class AgentSession {
   private _abortSignal: AbortSignal | undefined;
   private _abortGeneration = 0;
   private _pendingInterjections: PendingInterjection[] = [];
+  private readonly _pendingInterjectionQueuedListeners = new Set<() => void>();
   // Transient per-surface counts of messages sitting in UI send queues
   // (VS Code webview / browser remote). Not persisted; used to give queued
   // user messages priority over the todo auto-continue prompt.
@@ -807,7 +808,20 @@ export class AgentSession {
     );
     if (index >= 0) this._pendingInterjections[index] = entry;
     else this._pendingInterjections.push(entry);
+    for (const listener of this._pendingInterjectionQueuedListeners) {
+      listener();
+    }
     return true;
+  }
+
+  /**
+   * Subscribe to interjection queueing so blocking waits (e.g. a parent stuck
+   * in get_background_result) can return early and let the engine drain the
+   * pending message at the next tool boundary. Returns an unsubscribe function.
+   */
+  onPendingInterjectionQueued(listener: () => void): () => void {
+    this._pendingInterjectionQueuedListeners.add(listener);
+    return () => this._pendingInterjectionQueuedListeners.delete(listener);
   }
 
   updatePendingInterjection(

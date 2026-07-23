@@ -15,9 +15,11 @@ import {
   type OnApprovalRequest,
 } from "../shared/types.js";
 import type {
+  EditReviewParams,
   MultiFileEditMatch,
   MultiFileEditReviewProvider,
 } from "../core/capabilities/editReview.js";
+import type { PathAccessProvider } from "../core/capabilities/readSearch.js";
 
 const CONTEXT_LINES = 5;
 
@@ -35,6 +37,8 @@ interface FileReplacement {
 
 export interface FindAndReplaceProviders {
   multiFileEditReviewProvider?: MultiFileEditReviewProvider;
+  pathAccessProvider?: PathAccessProvider;
+  prepareOneShotAuthorization?: EditReviewParams["prepareOneShotAuthorization"];
 }
 
 export async function handleFindAndReplace(
@@ -89,17 +93,26 @@ export async function handleFindAndReplace(
     if (params.path) {
       const { absolutePath, inWorkspace } = resolveAndValidatePath(params.path);
 
-      // Outside-workspace gate — consistent with read/write tools
+      // Outside-workspace read gate. The later write review is independent and
+      // proposal-bound; read approval never authorizes the mutation.
       if (
         !inWorkspace &&
         !approvalManager.isPathTrusted(sessionId, absolutePath)
       ) {
-        const { approved, reason } = await approveOutsideWorkspaceAccess(
-          absolutePath,
-          approvalManager,
-          approvalPanel,
-          sessionId,
-        );
+        const { approved, reason } = providers.pathAccessProvider
+          ? await providers.pathAccessProvider.ensureAccess({
+              absolutePath,
+              inputPath: params.path,
+              inWorkspace,
+              sessionId,
+              kind: "read",
+            })
+          : await approveOutsideWorkspaceAccess(
+              absolutePath,
+              approvalManager,
+              approvalPanel,
+              sessionId,
+            );
         if (!approved) {
           return {
             content: [
@@ -291,6 +304,7 @@ export async function handleFindAndReplace(
       sessionId,
       approvalPanel,
       onApprovalRequest,
+      prepareOneShotAuthorization: providers.prepareOneShotAuthorization,
     });
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {

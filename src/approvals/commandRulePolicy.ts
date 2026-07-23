@@ -171,6 +171,23 @@ export function isBannedCommandRulePrefixSuggestion(
   );
 }
 
+// Compiled-regex cache for regex-mode rules. Rule patterns are static user
+// configuration evaluated for every proposed command, so compiling per check
+// (× segments × scopes) is wasted work. Bounded as a safety valve.
+const compiledRuleRegexCache = new Map<string, RegExp>();
+const COMPILED_RULE_REGEX_CACHE_MAX = 500;
+
+function compiledRuleRegex(pattern: string): RegExp {
+  const cached = compiledRuleRegexCache.get(pattern);
+  if (cached) return cached;
+  const compiled = new RegExp(pattern);
+  if (compiledRuleRegexCache.size >= COMPILED_RULE_REGEX_CACHE_MAX) {
+    compiledRuleRegexCache.clear();
+  }
+  compiledRuleRegexCache.set(pattern, compiled);
+  return compiled;
+}
+
 export function commandRuleMatches(
   command: string,
   rule: CommandRule,
@@ -199,7 +216,7 @@ export function commandRuleMatches(
         );
       }
       case "regex":
-        return new RegExp(rule.pattern).test(command.trim());
+        return compiledRuleRegex(rule.pattern).test(command.trim());
     }
   } catch {
     return false;

@@ -33,7 +33,12 @@ import type {
   PersistenceRevision,
   RevertRecoveryState,
 } from "./persistenceContracts.js";
-import { hasPendingTodos, todoTool, type TodoItem } from "./todoTool.js";
+import {
+  getLatestTodoState,
+  hasPendingTodos,
+  todoTool,
+  type TodoItem,
+} from "./todoTool.js";
 import {
   createCommandReviewTurnCircuit,
   createRetainedCommandReviewDenials,
@@ -69,6 +74,10 @@ import type {
   ToolKind,
 } from "@agentclientprotocol/sdk" with { "resolution-mode": "import" };
 import { normalizeBackgroundAgentSettings } from "./background/acpAgentConfig.js";
+import {
+  DEFAULT_BACKGROUND_MAX_CHILDREN_PER_PARENT,
+  DEFAULT_BACKGROUND_MAX_CONCURRENT,
+} from "./background/backgroundConcurrency.js";
 import { resolveBackgroundBackendRoute } from "./background/backgroundBackendRouter.js";
 import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
@@ -387,6 +396,12 @@ export class AgentSessionManager {
   private sessionRevisions = new Map<string, PersistenceRevision>();
   private sessionRevertPending = new Map<string, RevertRecoveryState>();
   private sessionSaveQueues = new Map<string, Promise<void>>();
+  /**
+   * Sessions with a deferred save already queued behind an in-flight write.
+   * Deferred saves snapshot state when they run, so queuing more than one per
+   * session would only repeat the same full-transcript write.
+   */
+  private pendingDeferredSaves = new Set<string>();
   private sessionRunSettled = new Map<string, Promise<void>>();
   private sessionSendQueues = new Map<string, Promise<void>>();
   private log?: (msg: string) => void;
@@ -637,7 +652,7 @@ export class AgentSessionManager {
       maxDepth?: number;
       maxChildrenPerParent?: number;
     } = {
-      maxConcurrent: 3,
+      maxConcurrent: DEFAULT_BACKGROUND_MAX_CONCURRENT,
     },
     opts?: AgentSessionManagerOptions,
   ) {
@@ -677,7 +692,12 @@ export class AgentSessionManager {
         this.bgDefaults.maxConcurrentPerProvider ??
         this.bgDefaults.maxConcurrent,
       maxDepth: this.bgDefaults.maxDepth ?? 2,
-      maxChildrenPerParent: this.bgDefaults.maxChildrenPerParent ?? 4,
+      maxChildrenPerParent:
+        this.bgDefaults.maxChildrenPerParent ??
+        Math.max(
+          DEFAULT_BACKGROUND_MAX_CHILDREN_PER_PARENT,
+          this.bgDefaults.maxConcurrent,
+        ),
     });
   }
 
@@ -2004,6 +2024,8 @@ export class AgentSessionManager {
     opts?: { activeFilePath?: string; projectId?: string },
   ): Promise<AgentSession> {
     await this.discardEmptyForegroundSession();
+    this.sessionApprovalModes.delete("agent");
+    this.toolCtx?.approvalManager.clearSession("agent");
     return this.createSession(mode, opts);
   }
 
@@ -2198,6 +2220,7 @@ export class AgentSessionManager {
     this.retainedCommandReviewDenials.clearSession(session.id);
     this.sessionRevisions.delete(session.id);
     this.sessionSaveQueues.delete(session.id);
+    this.pendingDeferredSaves.delete(session.id);
     if (this.foregroundId === session.id) {
       this.foregroundId = null;
     }
@@ -2212,8 +2235,16 @@ export class AgentSessionManager {
       return;
     }
 
-    const run = () => this.saveSessionRevisionAware(id);
+    // The queued run reads live session state when it executes, so one deferred
+    // save behind the in-flight write covers all later requests — coalesce them.
+    if (this.pendingDeferredSaves.has(id)) return;
+
+    const run = () => {
+      this.pendingDeferredSaves.delete(id);
+      return this.saveSessionRevisionAware(id);
+    };
     const previous = this.sessionSaveQueues.get(id);
+    if (previous) this.pendingDeferredSaves.add(id);
     const next = previous ? previous.then(run, run) : run();
     const tracked = next.finally(() => {
       if (this.sessionSaveQueues.get(id) === tracked) {
@@ -3067,7 +3098,7 @@ export class AgentSessionManager {
                 `[agent] auto-continuing (${autoContinueCount}/${MAX_AUTO_CONTINUE}): pending todos remain`,
               );
               session.addUserMessage(
-                "You stopped but there are still pending tasks. Continue with the remaining items.",
+                "You stopped but the TODO list still has unfinished items. Before doing more work, reconcile the complete list against the conversation and current workspace: mark already-finished items completed, revise or remove obsolete items, and keep exactly one actual current item in progress. Do not redo completed work merely because its TODO status is stale. Then continue the genuine remaining work.",
               );
               session.status = "streaming";
               continue;
@@ -3321,13 +3352,32 @@ export class AgentSessionManager {
     const toolResultText =
       toolResult.content.find((block) => block.type === "text")?.text ??
       JSON.stringify(toolResult.content);
-    session.appendToolResults([
-      {
-        type: "tool_result" as const,
-        tool_use_id: question.toolUseId,
-        content: toolResultText,
-      },
-    ]);
+    // Sibling tool calls from the same turn ran (or were still running) when
+    // the session was interrupted and their results were never persisted, so
+    // answer them with synthetic results to keep the transcript well-formed.
+    session.appendToolResults(
+      question.assistantContent
+        .filter(
+          (
+            block,
+          ): block is import("../core/modelRuntime.js").CoreModelToolUseBlock =>
+            block.type === "tool_use",
+        )
+        .map((block) =>
+          block.id === question.toolUseId
+            ? {
+                type: "tool_result" as const,
+                tool_use_id: question.toolUseId,
+                content: toolResultText,
+              }
+            : {
+                type: "tool_result" as const,
+                tool_use_id: block.id,
+                content:
+                  "[Session was interrupted before this tool's result could be saved. The tool may or may not have completed; inspect current state and re-run it if the result is still needed.]",
+              },
+        ),
+    );
     session.runState = { phase: "running", startedAt: Date.now() };
     await this.saveSessionNow(session.id);
     void this.retrySession(session.id);
@@ -3475,6 +3525,19 @@ export class AgentSessionManager {
     }
   }
 
+  /** Resolve one session's project-specific mode without mutating the session. */
+  async resolveSessionMode(
+    sessionId: string,
+    mode: string,
+  ): Promise<AgentMode | undefined> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    return resolveMode(
+      mode,
+      await this.projectCustomizationRegistry.getModes(session.projectScope),
+    );
+  }
+
   /** Switch one session in-place without changing foreground ownership. */
   async switchSessionMode(
     sessionId: string,
@@ -3484,6 +3547,9 @@ export class AgentSessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
     this.requireSessionExecution(session);
+    const agentMode =
+      opts?.agentMode ?? (await this.resolveSessionMode(sessionId, mode));
+    if (!agentMode) return null;
 
     const model = this.getModelForMode(mode, session.projectScope);
     const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
@@ -3496,12 +3562,6 @@ export class AgentSessionManager {
     );
     this.applyThresholdToSession(session);
     this.refreshMcpToolDisclosure(session);
-    const agentMode =
-      opts?.agentMode ??
-      resolveMode(
-        mode,
-        await this.projectCustomizationRegistry.getModes(session.projectScope),
-      );
     await session.setMode(mode, { ...opts, agentMode });
 
     if (!session.background && this.foregroundId === session.id) {
@@ -3583,6 +3643,7 @@ export class AgentSessionManager {
     toolNames: string[];
     mcpServerNames: string[];
     activeSkills: string[];
+    todos: TodoItem[];
   } {
     this.refreshMcpToolDisclosure(session, context);
     const connectedMcpToolDefs = context?.mcpHub?.getToolDefs() ?? [];
@@ -3604,6 +3665,7 @@ export class AgentSessionManager {
         ),
       ],
       activeSkills: [...session.loadedSkills],
+      todos: getLatestTodoState(session.getAllMessages()),
     };
   }
 
@@ -4285,6 +4347,7 @@ export class AgentSessionManager {
       this.sessions.delete(sessionId);
       this.sessionRevisions.delete(sessionId);
       this.sessionSaveQueues.delete(sessionId);
+      this.pendingDeferredSaves.delete(sessionId);
       this.sessionApprovalModes.delete(sessionId);
       this.retainedCommandReviewDenials.clearSession(sessionId);
       this.bgFinalResults.delete(sessionId);
@@ -4471,6 +4534,7 @@ export class AgentSessionManager {
 
     this.sessionRevisions.delete(sessionId);
     this.sessionSaveQueues.delete(sessionId);
+    this.pendingDeferredSaves.delete(sessionId);
     this.sessionApprovalModes.delete(sessionId);
     this.retainedCommandReviewDenials.clearSession(sessionId);
     if (this.sessions.has(sessionId)) {
@@ -6276,19 +6340,22 @@ export class AgentSessionManager {
   ): Promise<string> {
     const caller = this.sessions.get(callerSessionId);
     const target = this.sessions.get(sessionId);
+    const waitOptions = {
+      interruptOnUserMessageForSessionId: callerSessionId,
+    };
     const willBlock =
       caller?.background === true &&
       target !== undefined &&
       this.bgFinalResults.get(sessionId) === undefined &&
       !this.getProjectedBgStatus(target).done;
-    if (!willBlock) return this.waitForBackground(sessionId);
+    if (!willBlock) return this.waitForBackground(sessionId, waitOptions);
 
     this.bgResultWaitHolds.set(
       callerSessionId,
       (this.bgResultWaitHolds.get(callerSessionId) ?? 0) + 1,
     );
     this.drainBackgroundQueue();
-    return this.waitForBackground(sessionId).finally(() => {
+    return this.waitForBackground(sessionId, waitOptions).finally(() => {
       const remaining = (this.bgResultWaitHolds.get(callerSessionId) ?? 1) - 1;
       if (remaining > 0) {
         this.bgResultWaitHolds.set(callerSessionId, remaining);
@@ -6310,6 +6377,14 @@ export class AgentSessionManager {
 
     const session = this.sessions.get(sessionId);
     if (!session) return text;
+    // An interrupted wait returns before the background agent finishes;
+    // don't attach in-progress images to the interruption payload.
+    if (
+      this.bgFinalResults.get(sessionId) === undefined &&
+      !this.getProjectedBgStatus(session).done
+    ) {
+      return text;
+    }
     const images = session
       .getAllMessages()
       .flatMap((message) =>
@@ -6523,11 +6598,36 @@ export class AgentSessionManager {
   }
 
   /**
+   * Structured result returned when a blocking wait is released because a user
+   * or steering message is pending for the waiting session. The background
+   * agent itself is untouched and keeps running.
+   */
+  private buildBackgroundWaitInterruptedResult(sessionId: string): string {
+    return JSON.stringify({
+      status: "wait_interrupted",
+      reason: "user_message_pending",
+      done: false,
+      sessionId,
+      retrySafe: true,
+      message:
+        "Waiting stopped because a user message is pending for your session. The background agent was not interrupted and keeps running. Handle the user's message first, then call get_background_result again when ready to block, or get_background_status for a non-blocking check.",
+    });
+  }
+
+  /**
    * Async — blocks until the background session finishes.
    * Returns the last assistant message text.
    * Uses a double-check pattern to prevent races between status check and waiter registration.
+   *
+   * When `interruptOnUserMessageForSessionId` is set, the wait also resolves
+   * early with a `wait_interrupted` payload as soon as that session has a
+   * pending interjection (user steering), without affecting the background
+   * agent. This lets a blocked caller handle the user's message and re-wait.
    */
-  waitForBackground(sessionId: string): Promise<string> {
+  waitForBackground(
+    sessionId: string,
+    options?: { interruptOnUserMessageForSessionId?: string },
+  ): Promise<string> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return Promise.resolve(
@@ -6552,15 +6652,33 @@ export class AgentSessionManager {
       );
     }
 
+    const interruptSession = options?.interruptOnUserMessageForSessionId
+      ? this.sessions.get(options.interruptOnUserMessageForSessionId)
+      : undefined;
+    if (interruptSession?.hasPendingInterjections) {
+      return Promise.resolve(
+        this.buildBackgroundWaitInterruptedResult(sessionId),
+      );
+    }
+
     return new Promise((resolve) => {
+      let settled = false;
+      let unsubscribeInterrupt: (() => void) | undefined;
+      const settle = (result: string) => {
+        if (settled) return;
+        settled = true;
+        unsubscribeInterrupt?.();
+        resolve(result);
+      };
+
       const waiters = this.bgResultWaiters.get(sessionId) ?? [];
-      waiters.push(resolve);
+      waiters.push(settle);
       this.bgResultWaiters.set(sessionId, waiters);
 
       // Double-check after registration to close the race window
       const storedAfter = this.bgFinalResults.get(sessionId);
       if (storedAfter !== undefined) {
-        resolve(storedAfter);
+        settle(storedAfter);
         return;
       }
 
@@ -6571,7 +6689,7 @@ export class AgentSessionManager {
         this.log?.(
           `[background] Result waiter timed out for ${sessionId}; background agent is still allowed to continue running.`,
         );
-        resolve(
+        settle(
           session.getLastAssistantText() ??
             "(background agent timed out waiting for result)",
         );
@@ -6579,6 +6697,25 @@ export class AgentSessionManager {
       const timers = this.bgSafetyTimers.get(sessionId) ?? [];
       timers.push(timerId);
       this.bgSafetyTimers.set(sessionId, timers);
+
+      if (interruptSession) {
+        unsubscribeInterrupt = interruptSession.onPendingInterjectionQueued(
+          () => {
+            // Detach this waiter and its safety timer so the eventual
+            // completion does not keep stale entries alive for 30 minutes.
+            const waiterList = this.bgResultWaiters.get(sessionId);
+            const waiterIndex = waiterList?.indexOf(settle) ?? -1;
+            if (waiterList && waiterIndex >= 0) {
+              waiterList.splice(waiterIndex, 1);
+            }
+            this.host.timers.clearTimeout(timerId);
+            const timerList = this.bgSafetyTimers.get(sessionId);
+            const timerIndex = timerList?.indexOf(timerId) ?? -1;
+            if (timerList && timerIndex >= 0) timerList.splice(timerIndex, 1);
+            settle(this.buildBackgroundWaitInterruptedResult(sessionId));
+          },
+        );
+      }
     });
   }
 

@@ -2202,6 +2202,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
           sessionId: null,
           streaming: false,
           interrupted: false,
+          commandApprovalPolicy:
+            state.chatState.configuredCommandApprovalPolicy ?? "safe",
+          approvalPolicy: "on-request",
+          approvalReviewer: "user",
+          executionPreset: "native-manual",
           agentWriteApproval:
             state.chatState.agentWriteApproval === "session"
               ? "prompt"

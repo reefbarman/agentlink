@@ -31,6 +31,14 @@ export interface AgentRuntimeError {
   actions?: AgentErrorActions;
 }
 
+export interface PreservedRuntimeContext {
+  toolNames: string[];
+  mcpServerNames?: string[];
+  activeSkills?: string[];
+  /** Canonical task state reattached after context condensation. */
+  todos?: TodoItem[];
+}
+
 export type AgentMessage = MessageParam & {
   /**
    * Pasted media (images/PDFs) attached to this user message. Kept out of
@@ -47,11 +55,7 @@ export type AgentMessage = MessageParam & {
   isResumeContext?: boolean;
   condenseId?: string;
   condenseParent?: string;
-  preservedContext?: {
-    toolNames: string[];
-    mcpServerNames?: string[];
-    activeSkills?: string[];
-  };
+  preservedContext?: PreservedRuntimeContext;
   runtimeError?: AgentRuntimeError;
   uiHint?: {
     userMessage?: {

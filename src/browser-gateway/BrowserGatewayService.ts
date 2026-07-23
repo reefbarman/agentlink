@@ -918,9 +918,13 @@ export class BrowserGatewayService implements vscode.Disposable {
         break;
     }
 
-    this.recentEvents = [...this.recentEvents, event].slice(
-      -this.maxRecentEvents,
-    );
+    this.recentEvents.push(event);
+    if (this.recentEvents.length > this.maxRecentEvents) {
+      this.recentEvents.splice(
+        0,
+        this.recentEvents.length - this.maxRecentEvents,
+      );
+    }
     this.invalidateBrowserSnapshot({ immediate: true });
   }
 

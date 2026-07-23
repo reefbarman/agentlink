@@ -30,7 +30,7 @@ const launch: SandboxHelperLaunchRequest = {
     allowWrite: ["/workspace", "/private/tmp"],
     denyWrite: ["/workspace/.git"],
   },
-  network: { mode: "blocked" },
+  network: { mode: "loopback" },
   protectedRoots: ["/workspace/.git/config"],
   structurallyProtectedRoots: ["/workspace/.git"],
   dimensions: { columns: 80, rows: 24 },
@@ -69,11 +69,23 @@ describe("sandbox helper control protocol", () => {
     ).toBe(true);
   });
 
-  it("accepts public-only proxy policy and rejects other expansions", () => {
+  it("accepts loopback/public proxy with optional local binding and rejects expansions", () => {
+    expect(
+      isSandboxHelperControlFrame({
+        ...launch,
+        network: { mode: "loopback", allowLocalBinding: true },
+      }),
+    ).toBe(true);
     expect(
       isSandboxHelperControlFrame({
         ...launch,
         network: { mode: "public-proxy" },
+      }),
+    ).toBe(true);
+    expect(
+      isSandboxHelperControlFrame({
+        ...launch,
+        network: { mode: "public-proxy", allowLocalBinding: true },
       }),
     ).toBe(true);
     expect(
@@ -89,6 +101,18 @@ describe("sandbox helper control protocol", () => {
       isSandboxHelperControlFrame({
         ...launch,
         network: { mode: "domain-proxy", allowedDomains: ["example.com"] },
+      }),
+    ).toBe(false);
+    expect(
+      isSandboxHelperControlFrame({
+        ...launch,
+        network: { mode: "loopback", allowLocalBinding: false },
+      }),
+    ).toBe(false);
+    expect(
+      isSandboxHelperControlFrame({
+        ...launch,
+        network: { mode: "loopback", unexpected: true },
       }),
     ).toBe(false);
   });

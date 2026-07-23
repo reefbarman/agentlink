@@ -109,7 +109,7 @@ describe("ChatView message windowing", () => {
     ).toBeTruthy();
     expect(screen.getByText("Tasks 0/1")).toBeTruthy();
     expect(screen.getAllByText("Reviewing implementation")).toHaveLength(2);
-    expect(screen.getByText("Waiting for provider")).toBeTruthy();
+    expect(screen.getByText("Waiting for provider…")).toBeTruthy();
   });
 
   it("cancels pending bottom scrolling before revealing earlier history", () => {

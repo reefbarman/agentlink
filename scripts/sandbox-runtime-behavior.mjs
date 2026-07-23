@@ -4,6 +4,7 @@ import { homedir, hostname } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
+import { constrainLoopbackRuntimeDescriptor } from "./sandbox-runtime-helper.mjs";
 import { createConnection } from "node:net";
 import { fileURLToPath } from "node:url";
 import { lookup } from "node:dns/promises";
@@ -51,7 +52,7 @@ async function makeSandboxRoot(prefix) {
 
 function makeRequest(root, overrides = {}) {
   return {
-    version: 2,
+    version: 3,
     operation: "execute",
     command: "/usr/bin/true",
     cwd: root,
@@ -184,7 +185,7 @@ async function withPtyRuntime(root, operation) {
       strictAllowlist: true,
       allowUnixSockets: [],
       allowAllUnixSockets: false,
-      allowLocalBinding: false,
+      allowLocalBinding: true,
       allowMachLookup: [],
     },
     filesystem: {
@@ -208,7 +209,11 @@ async function withPtyRuntime(root, operation) {
           undefined,
           root,
         );
-        return descriptor.argv;
+        return constrainLoopbackRuntimeDescriptor(descriptor.argv, {
+          shell: "/bin/bash",
+          command,
+          network: { allowLocalBinding: false },
+        });
       },
     });
   } finally {

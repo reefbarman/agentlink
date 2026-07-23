@@ -11,7 +11,7 @@ import { realpath } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { startTrustedNetworkProxies } from "./sandbox-network-proxy.mjs";
 
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const MAX_CAPTURED_BYTES = 512 * 1024;
 const DEFAULT_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -40,7 +40,11 @@ const ALLOWED_FILESYSTEM_KEYS = new Set([
   "allowWrite",
   "denyWrite",
 ]);
-const ALLOWED_NETWORK_KEYS = new Set(["allowedDomains"]);
+const ALLOWED_NETWORK_KEYS = new Set(["allowedDomains", "allowLocalBinding"]);
+const LOCAL_BIND_RULE = '(allow network-bind (local ip "*:*"))';
+const LOCAL_INBOUND_RULE = '(allow network-inbound (local ip "*:*"))';
+const LOOPBACK_OUTBOUND_RULE =
+  '(allow network-outbound (remote ip "localhost:*"))';
 const FORBIDDEN_ENV_NAMES = new Set([
   "ALL_PROXY",
   "all_proxy",
@@ -255,6 +259,7 @@ export function parseSandboxRuntimeRequest(value) {
     },
     network: {
       allowedDomains: assertDomainArray(network.allowedDomains),
+      allowLocalBinding: network.allowLocalBinding === true,
     },
     protectedRoots,
     structurallyProtectedRoots,
@@ -288,6 +293,44 @@ function replaceExactCount(source, search, replacement, expectedCount, label) {
     );
   }
   return parts.join(replacement);
+}
+
+export function constrainLoopbackRuntimeDescriptor(argv, request) {
+  if (!isSandboxRuntimeDescriptor(argv, request)) {
+    throw new Error(
+      "cannot constrain an unexpected sandbox runtime descriptor",
+    );
+  }
+  let wrapper = argv[2];
+  for (const [rule, label] of [
+    [LOCAL_BIND_RULE, "local bind"],
+    [LOCAL_INBOUND_RULE, "local inbound"],
+    [LOOPBACK_OUTBOUND_RULE, "loopback outbound"],
+  ]) {
+    const count = wrapper.split(rule).length - 1;
+    if (count !== 1) {
+      throw new Error(
+        `sandbox runtime loopback contract drifted for ${label}: expected 1, found ${count}`,
+      );
+    }
+  }
+  if (!request.network.allowLocalBinding) {
+    // Removing the exact rule text leaves only blank profile lines, which SBPL
+    // ignores while preserving the surrounding shell/profile quoting.
+    wrapper = replaceExactCount(wrapper, LOCAL_BIND_RULE, "", 1, "local bind");
+    wrapper = replaceExactCount(
+      wrapper,
+      LOCAL_INBOUND_RULE,
+      "",
+      1,
+      "local inbound",
+    );
+  }
+  const constrained = [argv[0], argv[1], wrapper];
+  if (!isSandboxRuntimeDescriptor(constrained, request)) {
+    throw new Error("constrained sandbox runtime descriptor failed validation");
+  }
+  return constrained;
 }
 
 export function bindProxyCredentialsToRuntimeDescriptor(
@@ -586,7 +629,9 @@ export async function runSandboxRuntimeRequest(request) {
       strictAllowlist: true,
       allowUnixSockets: [],
       allowAllUnixSockets: false,
-      allowLocalBinding: false,
+      // SRT emits loopback client and listener clauses as one option. AgentLink
+      // constrains the generated descriptor below before adding proxy secrets.
+      allowLocalBinding: true,
       allowMachLookup: [],
       httpProxyPort: networkProxies.httpPort,
       socksProxyPort: networkProxies.socksPort,
@@ -620,8 +665,12 @@ export async function runSandboxRuntimeRequest(request) {
         "sandbox runtime returned an unexpected launch descriptor",
       );
     }
-    const authenticatedArgv = bindProxyCredentialsToRuntimeDescriptor(
+    const constrainedArgv = constrainLoopbackRuntimeDescriptor(
       descriptor.argv,
+      request,
+    );
+    const authenticatedArgv = bindProxyCredentialsToRuntimeDescriptor(
+      constrainedArgv,
       request,
       networkProxies,
     );

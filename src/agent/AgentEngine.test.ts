@@ -23,6 +23,7 @@ import { AgentSession } from "./AgentSession.js";
 import { ProviderRegistry } from "./providers/index.js";
 import { AgentToolCallTracker } from "./AgentToolCallTracker.js";
 import type { AgentToolExecutionRequest } from "../core/tools/types.js";
+import type { CoreModelContentBlock } from "../core/modelRuntime.js";
 import { CORE_NATIVE_WEB_MAX_PAUSE_TURNS } from "../core/nativeWebTools.js";
 import {
   createAgentToolRuntime,
@@ -303,7 +304,34 @@ describe("AgentEngine", () => {
   describe("auto-condense threshold behavior", () => {
     it("triggers auto-condense at 90% of usable input by default", async () => {
       const session = await makeSession();
-      session.addUserMessage("hello");
+      const todos = [
+        {
+          id: "inspect",
+          content: "Inspect the failure",
+          activeForm: "Inspecting the failure",
+          status: "completed" as const,
+        },
+        {
+          id: "fix",
+          content: "Fix the failure",
+          activeForm: "Fixing the failure",
+          status: "in_progress" as const,
+        },
+      ];
+      session.replaceMessages([
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "todo-1",
+              name: "todo_write",
+              input: { todos },
+            },
+          ],
+        },
+      ]);
       session.lastInputTokens = 173_000; // >90% of 191,808 usable input tokens
       session.lastCacheReadTokens = 0;
 
@@ -323,6 +351,12 @@ describe("AgentEngine", () => {
 
       const events = await collectEvents(engine.run(session));
       expect(condenseSpy).toHaveBeenCalledTimes(1);
+      expect(condenseSpy).toHaveBeenCalledWith(
+        session,
+        true,
+        expect.anything(),
+        expect.objectContaining({ todos }),
+      );
       expect(events.some((e) => e.type === "condense")).toBe(true);
     });
 
@@ -930,6 +964,85 @@ describe("AgentEngine", () => {
         role: "user",
         content:
           '<file path="note.md">\n```md\n# Note\nhello\n```\n</file>\n\nfollow up',
+      });
+    });
+
+    it("injects queued image path attachments as image media instead of text", async () => {
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "agent-engine-"));
+      const imageBytes = Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00,
+      ]);
+      await fs.writeFile(path.join(cwd, "canteen.png"), imageBytes);
+
+      const requests: StreamRequest[] = [];
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        callCount += 1;
+        if (callCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call_read",
+                name: "read_file",
+                input: { path: "src/a.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const session = await AgentSession.createForLegacyCwd({
+        mode: "code",
+        config: testConfig,
+        cwd,
+      });
+      session.addUserMessage("read then inspect the image");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const toolCtx: ToolDispatchContext = {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      };
+      setEngineToolContext(engine, toolCtx, async () => {
+        session.setPendingInterjection(
+          "[Attached: canteen.png]\n\ninspect this image",
+          "queue-image",
+          undefined,
+          undefined,
+          false,
+          undefined,
+          ["canteen.png"],
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+        };
+      });
+
+      await collectEvents(engine.run(session));
+
+      expect(requests).toHaveLength(2);
+      expect(requests[1].messages.at(-1)).toEqual({
+        role: "user",
+        content: [
+          { type: "text", text: "inspect this image" },
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: imageBytes.toString("base64"),
+            },
+          },
+        ],
       });
     });
 
@@ -1725,6 +1838,107 @@ describe("AgentEngine", () => {
         role: "assistant",
         content: [{ type: "text", text: "continued after rejection" }],
       });
+    });
+  });
+
+  describe("pending question recovery arming", () => {
+    const runAskUserTurn = async (blocks: CoreModelContentBlock[]) => {
+      let streamCall = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCall += 1;
+        if (streamCall === 1) {
+          yield { type: "content_blocks", blocks };
+        } else {
+          yield {
+            type: "content_blocks",
+            blocks: [{ type: "text", text: "done" }],
+          };
+        }
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("configure providers");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const executeTool = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+      }));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "ask_user",
+            description: "ask the user",
+            input_schema: { type: "object", properties: {} },
+          },
+          {
+            name: "get_context",
+            description: "read a file",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+        isParallelSafe: () => true,
+        executeTool,
+      });
+      await collectEvents(engine.run(session));
+      return executeTool;
+    };
+
+    it("arms recovery for an ask_user call even when the turn has sibling tool calls", async () => {
+      const executeTool = await runAskUserTurn([
+        {
+          type: "tool_use",
+          id: "call_ctx",
+          name: "get_context",
+          input: { path: "a.ts" },
+        },
+        {
+          type: "tool_use",
+          id: "call_ask",
+          name: "ask_user",
+          input: { questions: [] },
+        },
+      ]);
+
+      expect(executeTool).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "ask_user",
+          context: expect.objectContaining({
+            pendingQuestionRecovery: expect.objectContaining({
+              toolUseId: "call_ask",
+              toolName: "ask_user",
+              assistantContent: [
+                expect.objectContaining({ id: "call_ctx" }),
+                expect.objectContaining({ id: "call_ask" }),
+              ],
+            }),
+          }),
+        }),
+      );
+    });
+
+    it("does not arm recovery when a turn contains multiple ask_user calls", async () => {
+      const executeTool = await runAskUserTurn([
+        {
+          type: "tool_use",
+          id: "call_ask_1",
+          name: "ask_user",
+          input: { questions: [] },
+        },
+        {
+          type: "tool_use",
+          id: "call_ask_2",
+          name: "ask_user",
+          input: { questions: [] },
+        },
+      ]);
+
+      for (const call of executeTool.mock.calls as unknown as Array<
+        [AgentToolExecutionRequest]
+      >) {
+        expect(call[0].context.pendingQuestionRecovery).toBeUndefined();
+      }
     });
   });
 

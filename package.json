@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.17.44",
+  "version": "1.17.47",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -596,7 +596,7 @@
           "type": "number",
           "minimum": 1,
           "maximum": 16,
-          "default": 3,
+          "default": 8,
           "description": "Maximum number of background agents running at once. Launches beyond the limit are queued and start as slots free up. Also caps concurrency per root session and per provider."
         },
         "agentlink.questionDetection.llmEnabled": {

@@ -31,7 +31,13 @@ Use this when:
 
 Task rules:
 - Exactly ONE task should be in_progress at a time
-- Mark tasks completed promptly during ongoing work (don't batch progress updates)
+- Treat the list as user-visible execution state, not a loose plan or end-of-turn recap
+- Before starting substantive work, make sure the list reflects the actual scope and current item
+- Before moving from one item to the next, call todo_write in the same transition: mark the finished item completed and the next item in_progress
+- Mark an item completed immediately after its outcome is achieved and verified; do not batch status updates until the end
+- After new evidence, user direction, or scope changes, promptly add, revise, reorder, or remove items so descriptions and statuses remain true
+- Never silently drop unfinished items. Remove one only when it is no longer part of the user's ask or is explicitly superseded, and preserve completed items as progress history
+- If the list looks stale after condensing or resuming, reconcile it against the conversation and current workspace before continuing. Update stale statuses; do not redo completed work merely because an item still says pending
 - When finishing the turn and all visible todos are complete, use set_task_status with status="completed" and completeTodos=true instead of a final todo_write only to mark todos complete
 - Use nested children to break complex tasks into sub-steps
 - content: imperative form ("Run tests")
@@ -100,9 +106,13 @@ export function handleTodoWrite(input: TodoToolInput): {
 
   const counts = countTodos(todos);
   const summary = `Updated: ${counts.completed}/${counts.total} complete, ${counts.inProgress} in progress, ${counts.pending} pending`;
+  const guidance =
+    counts.inProgress > 1
+      ? ` Warning: ${counts.inProgress} items are in_progress; reconcile the complete list so exactly one actual current item is in_progress before continuing.`
+      : "";
 
   return {
-    content: summary,
+    content: summary + guidance,
     todos,
   };
 }

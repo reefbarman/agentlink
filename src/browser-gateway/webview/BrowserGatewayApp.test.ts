@@ -820,7 +820,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     );
 
     await selectWorkspaceTab();
-    await screen.findByText("Waiting for response…");
+    await screen.findByText("Working…");
     fireEvent.click(await screen.findByTestId("trigger-interject"));
 
     await waitFor(() => {

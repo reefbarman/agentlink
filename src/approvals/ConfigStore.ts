@@ -25,9 +25,11 @@ const GLOBAL_CONFIG_PATH = path.join(GLOBAL_DIR, "agentlink.json");
 const PROJECT_CONFIG_RELATIVE = path.join(".agentlink", "agentlink.json");
 const DEBOUNCE_MS = 200;
 
+let logChannel: vscode.LogOutputChannel | null = null;
+
 function log(msg: string): void {
-  const ch = vscode.window.createOutputChannel("agentlink", { log: true });
-  ch.info(msg);
+  logChannel ??= vscode.window.createOutputChannel("agentlink", { log: true });
+  logChannel.info(msg);
 }
 
 export class ConfigStore {

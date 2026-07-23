@@ -576,10 +576,21 @@ describe("getAgentTools", () => {
       expect(
         command.input_schema.properties?.sandbox_permissions,
       ).toMatchObject({
-        enum: ["use_default", "require_managed_network", "require_escalated"],
+        enum: [
+          "use_default",
+          "with_additional_permissions",
+          "require_managed_network",
+          "require_escalated",
+        ],
       });
-      expect(command.description).toContain("command approval rules");
-      expect(command.description).toContain("when no rule matches");
+      expect(
+        command.input_schema.properties?.additional_permissions,
+      ).toBeDefined();
+      expect(command.description).toContain("loopback client access");
+      expect(command.description).toContain("allow_local_binding=true");
+      expect(command.description).toContain(
+        "every non-default intent requires approval",
+      );
     }
 
     const readOnlyCommand = getAgentTools(
@@ -2775,6 +2786,10 @@ describe("dispatchToolCall", () => {
         multiFileEditReviewProvider: expect.objectContaining({
           reviewAndApply: expect.any(Function),
         }),
+        pathAccessProvider: expect.objectContaining({
+          ensureAccess: expect.any(Function),
+        }),
+        prepareOneShotAuthorization: undefined,
       },
     );
   });
@@ -2798,7 +2813,12 @@ describe("dispatchToolCall", () => {
       mockCtx.approvalPanel,
       mockCtx.sessionId,
       mockCtx.onApprovalRequest,
-      { renameSymbolProvider },
+      {
+        renameSymbolProvider,
+        pathAccessProvider: expect.objectContaining({
+          ensureAccess: expect.any(Function),
+        }),
+      },
     );
   });
 

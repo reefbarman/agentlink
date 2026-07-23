@@ -1291,6 +1291,95 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result).retry_lineage_id).toBeUndefined();
   });
 
+  it("preserves interactive prompt termination without native retry", async () => {
+    const violation = {
+      operation: "ipc-connect" as const,
+      target: "prompt-helper",
+      reason: "synthetic denial metadata must not trigger retry",
+      occurredAt: 123,
+    };
+    const execute = vi.fn(async () => ({
+      exit_code: 143,
+      output: "Continue?",
+      output_captured: true,
+      terminal_id: "sandbox-prompt-stop",
+      command_sent: true,
+      process_launched: true,
+      retry_safe: false,
+      execution_mode: "sandbox_pty" as const,
+      termination_reason: "interactive_prompt" as const,
+      interactive_prompt: {
+        kind: "confirmation" as const,
+        confidence: "high" as const,
+        evidence: "Continue?",
+      },
+      sandbox: {
+        policyVersion: "sandbox-v1",
+        profileId: "workspace-write",
+        backend: "seatbelt" as const,
+        capabilities: {
+          backend: "seatbelt" as const,
+          processTree: true,
+          filesystemRead: "policy-denied" as const,
+          filesystemWrite: "strict" as const,
+          network: "blocked" as const,
+          privateHome: true,
+          privateTmp: false,
+          hostIpcBlocked: false,
+          resourceLimits: "partial" as const,
+          warnings: [],
+        },
+        violations: [violation],
+      },
+    }));
+    const prepareExecution = vi.fn(async (_options, routeContext) => ({
+      security: {
+        auditId: "audit-prompt-stop",
+        route: "sandbox" as const,
+        executionSurface: "verified-sandbox" as const,
+        confinement: "verified-baseline" as const,
+        routeReason: "verified-local-macos" as const,
+        ...routeContext,
+        executionPolicy: "sandbox-baseline-v2" as const,
+        preparedAt: 100,
+      },
+      execute,
+      dispose: vi.fn(),
+    }));
+    const review = vi.fn();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "dotnet build" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-prompt-stop",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+      },
+    );
+
+    expect(prepareExecution).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      exit_code: 143,
+      termination_reason: "interactive_prompt",
+      interactive_prompt: {
+        kind: "confirmation",
+        confidence: "high",
+        evidence: "Continue?",
+      },
+      retry_safe: false,
+    });
+    expect(textPayload(result).capability_denial).toBeUndefined();
+    expect(textPayload(result).retry_lineage_id).toBeUndefined();
+    expect(textPayload(result).retry_outcome).toBeUndefined();
+  });
+
   it("makes one freshly reviewed native retry for a structured sandbox denial", async () => {
     const violation = {
       operation: "ipc-connect" as const,
@@ -2091,6 +2180,174 @@ describe("handleExecuteCommand", () => {
     expect(prepareExecution).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      {
+        command: "npm test",
+        sandbox_permissions: "with_additional_permissions" as const,
+        reason: "Start the test listener.",
+      },
+      'sandbox_permissions="with_additional_permissions" currently requires additional_permissions.network.allow_local_binding=true.',
+    ],
+    [
+      {
+        command: "npm test",
+        additional_permissions: {
+          network: { allow_local_binding: true as const },
+        },
+      },
+      'additional_permissions requires sandbox_permissions="with_additional_permissions".',
+    ],
+  ])(
+    "rejects mismatched local-binding capability input before preparation",
+    async (params, reason) => {
+      const prepareExecution = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        params,
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-local-binding-invalid",
+        undefined,
+        { terminalProvider: { ...terminalProvider, prepareExecution } },
+      );
+
+      expect(textPayload(result)).toEqual({
+        status: "rejected",
+        command: "npm test",
+        reason,
+        command_sent: false,
+      });
+      expect(prepareExecution).not.toHaveBeenCalled();
+    },
+  );
+
+  it("forces fresh review and forwards exact local-binding capability", async () => {
+    const execute = vi.fn(async () => ({
+      exit_code: 0,
+      output: "listening",
+      output_captured: true,
+      terminal_id: "sandbox-listener-1",
+      command_sent: true,
+      process_launched: true,
+      execution_mode: "sandbox_pty" as const,
+    }));
+    const prepareExecution = vi.fn(async (options, routeContext) => ({
+      security: {
+        auditId: "audit-listener",
+        route: "sandbox" as const,
+        executionSurface: "verified-sandbox" as const,
+        confinement: "verified-baseline" as const,
+        routeReason: "verified-local-macos" as const,
+        ...routeContext,
+        executionPolicy: "sandbox-baseline-v2" as const,
+        preparedAt: 100,
+        sandbox: {
+          attestationId: "attestation-listener",
+          attestationVersion: "sandbox-behavior-v3",
+          policyVersion: "policy-v4",
+          profileId: "workspace-write",
+          backend: "seatbelt" as const,
+          architecture: "arm64" as const,
+          capabilities: {
+            backend: "seatbelt",
+            processTree: true,
+            filesystemRead: "host-visible" as const,
+            filesystemWrite: "strict" as const,
+            network: "loopback-listener" as const,
+            privateHome: false,
+            privateTmp: false,
+            hostIpcBlocked: false,
+            resourceLimits: "partial" as const,
+            warnings: [],
+          },
+          grant: { grantId: "grant-listener", auditId: "audit-listener-grant" },
+          capabilityRequest: { allowLocalBinding: true },
+        },
+      },
+      execute,
+      dispose: vi.fn(),
+    }));
+    const review = vi.fn(async () => ({
+      outcome: "allow" as const,
+      risk: "medium" as const,
+      userAuthorization: "high" as const,
+      rationale:
+        "The test server is required and outbound access remains confined.",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const enqueueCommandApproval = vi.fn();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: "npm test",
+        sandbox_permissions: "with_additional_permissions",
+        additional_permissions: { network: { allow_local_binding: true } },
+        reason: "Start the test listener.",
+      },
+      {
+        isCommandApproved: () => true,
+        findMatchingCommandRule: vi.fn(() => ({
+          rule: { pattern: "npm test", mode: "exact", decision: "allow" },
+          scope: "project",
+        })),
+      } as never,
+      { isRecentlyApproved: () => true, enqueueCommandApproval } as never,
+      "session-local-binding",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "npm test",
+        sandboxCapabilityRequest: { allowLocalBinding: true },
+        onManagedNetworkRequest: undefined,
+      }),
+      expect.objectContaining({
+        requiredAuthority: "sandbox",
+        permissionIntent: "additional-permissions",
+        approvalRequirement: "explicit-permissions",
+        authorityReason: "additional-permissions",
+      }),
+    );
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "npm test",
+        reason: "Start the test listener.",
+        security: expect.objectContaining({
+          sandbox: expect.objectContaining({
+            capabilities: expect.objectContaining({
+              network: "loopback-listener",
+            }),
+            capabilityRequest: { allowLocalBinding: true },
+          }),
+        }),
+      }),
+    );
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(execute).toHaveBeenCalledOnce();
+    expect(textPayload(result)).toMatchObject({
+      exit_code: 0,
+      approval: { by: "model_reviewer", outcome: "allow" },
+      security: {
+        permissionIntent: "additional-permissions",
+        sandbox: {
+          capabilities: { network: "loopback-listener" },
+          capabilityRequest: { allowLocalBinding: true },
+        },
+      },
+    });
+  });
+
   it("keeps managed public network sandboxed and reviews each live destination", async () => {
     const networkRequest = {
       requestId: "network-1",
@@ -2668,6 +2925,39 @@ describe("handleExecuteCommand", () => {
       command: "pwd",
       reason:
         "Read-only command execution does not allow the sandbox_permissions parameter",
+      command_sent: false,
+    });
+    expect(prepareExecution).not.toHaveBeenCalled();
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+  });
+
+  it("rejects local listener binding in read-only command mode", async () => {
+    const prepareExecution = vi.fn();
+    const enqueueCommandApproval = vi.fn();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: "npm test",
+        sandbox_permissions: "with_additional_permissions",
+        additional_permissions: { network: { allow_local_binding: true } },
+        reason: "Start the test listener.",
+      },
+      { isCommandApproved: () => false } as never,
+      { enqueueCommandApproval } as never,
+      "session-readonly-listener",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        commandExecutionPolicy: "read-only",
+      },
+    );
+
+    expect(textPayload(result)).toEqual({
+      status: "rejected",
+      command: "npm test",
+      reason:
+        "Read-only command execution cannot request local listener binding.",
       command_sent: false,
     });
     expect(prepareExecution).not.toHaveBeenCalled();

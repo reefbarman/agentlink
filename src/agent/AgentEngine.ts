@@ -2,7 +2,11 @@ import { createHash, randomUUID } from "crypto";
 import * as fs from "fs/promises";
 import * as path from "path";
 import type { AgentSession } from "./AgentSession.js";
-import type { AgentEvent, AgentMessage } from "./types.js";
+import type {
+  AgentEvent,
+  AgentMessage,
+  PreservedRuntimeContext,
+} from "./types.js";
 import {
   buildAgentErrorMessage,
   getAgentErrorActions,
@@ -69,6 +73,7 @@ import type {
 import { truncateMiddle } from "../util/truncateMiddle.js";
 import { getAgentLinkHttpDiagnostics } from "../util/httpDispatcher.js";
 import { collectSessionImages } from "./sessionImages.js";
+import { resolveProjectAttachments } from "./attachmentResolver.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import type { ModelRequestPermit } from "../core/modelRequestScheduler.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
@@ -736,6 +741,8 @@ export class AgentEngine {
                 .filter((name) => name.length > 0),
             ),
           ],
+          activeSkills: [...session.loadedSkills],
+          todos: currentTodos,
         };
         logTiming(
           "tool setup",
@@ -749,28 +756,21 @@ export class AgentEngine {
           text: string,
           attachments?: string[],
         ) => {
-          if (!attachments?.length) return text;
+          if (!attachments?.length) {
+            return { text, images: [], documents: [] };
+          }
           const attachmentStartedAt = Date.now();
-          const blocks = await Promise.all(
-            attachments.map(async (filePath) => {
-              try {
-                const absPath = path.isAbsolute(filePath)
-                  ? filePath
-                  : path.join(session.requireProjectRoot(), filePath);
-                const content = await fs.readFile(absPath, "utf-8");
-                const ext = path.extname(filePath).slice(1) || "";
-                return `<file path="${filePath}">\n\`\`\`${ext}\n${content}\n\`\`\`\n</file>`;
-              } catch {
-                return `<file path="${filePath}">\n[Error: could not read file]\n</file>`;
-              }
-            }),
+          const resolved = await resolveProjectAttachments(
+            text,
+            attachments,
+            session.requireProjectRoot(),
           );
           logTiming(
             "queued attachments",
             attachmentStartedAt,
             `count=${attachments.length}`,
           );
-          return `${blocks.join("\n\n")}\n\n${text}`;
+          return resolved;
         };
 
         if (
@@ -791,16 +791,24 @@ export class AgentEngine {
             interjection !== null;
             interjection = session.consumePendingInterjection()
           ) {
-            const resolvedInterjectionText = await resolveQueuedAttachments(
+            const resolvedInterjection = await resolveQueuedAttachments(
               interjection.text,
               interjection.attachments,
             );
-            session.addUserMessage(resolvedInterjectionText, {
+            const images = [
+              ...(interjection.images ?? []),
+              ...resolvedInterjection.images,
+            ];
+            const documents = [
+              ...(interjection.documents ?? []),
+              ...resolvedInterjection.documents,
+            ];
+            session.addUserMessage(resolvedInterjection.text, {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
-              images: interjection.images,
-              documents: interjection.documents,
+              images: images.length > 0 ? images : undefined,
+              documents: documents.length > 0 ? documents : undefined,
             });
             yield {
               type: "user_interjection" as const,
@@ -809,8 +817,8 @@ export class AgentEngine {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
-              images: interjection.images,
-              documents: interjection.documents,
+              images: images.length > 0 ? images : undefined,
+              documents: documents.length > 0 ? documents : undefined,
             };
           }
         }
@@ -1668,17 +1676,23 @@ export class AgentEngine {
           }
         }
 
+        // Arm recovery for the turn's ask_user call even when the model issued
+        // sibling tool calls in parallel — the whole turn lives only in memory
+        // until every tool resolves, so a reload while the question is pending
+        // would otherwise lose it. Recovery replay substitutes synthetic
+        // results for the sibling calls.
+        const askUserBlocks = toolUseBlocks.filter(
+          (block) => block.name === "ask_user",
+        );
         const pendingQuestionRecovery =
-          !opts?.isBackground &&
-          toolUseBlocks.length === 1 &&
-          toolUseBlocks[0]?.name === "ask_user"
+          !opts?.isBackground && askUserBlocks.length === 1
             ? {
                 schemaVersion: 1 as const,
                 assistantContent: structuredClone(contentBlocks),
-                toolUseId: toolUseBlocks[0].id,
+                toolUseId: askUserBlocks[0]!.id,
                 toolName: "ask_user" as const,
                 toolInput: structuredClone(
-                  toolUseBlocks[0].input as Record<string, unknown>,
+                  askUserBlocks[0]!.input as Record<string, unknown>,
                 ),
               }
             : undefined;
@@ -1989,16 +2003,24 @@ export class AgentEngine {
             interjection !== null;
             interjection = session.consumePendingInterjection()
           ) {
-            const resolvedInterjectionText = await resolveQueuedAttachments(
+            const resolvedInterjection = await resolveQueuedAttachments(
               interjection.text,
               interjection.attachments,
             );
-            session.addUserMessage(resolvedInterjectionText, {
+            const images = [
+              ...(interjection.images ?? []),
+              ...resolvedInterjection.images,
+            ];
+            const documents = [
+              ...(interjection.documents ?? []),
+              ...resolvedInterjection.documents,
+            ];
+            session.addUserMessage(resolvedInterjection.text, {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
-              images: interjection.images,
-              documents: interjection.documents,
+              images: images.length > 0 ? images : undefined,
+              documents: documents.length > 0 ? documents : undefined,
             });
             yield {
               type: "user_interjection" as const,
@@ -2007,8 +2029,8 @@ export class AgentEngine {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
-              images: interjection.images,
-              documents: interjection.documents,
+              images: images.length > 0 ? images : undefined,
+              documents: documents.length > 0 ? documents : undefined,
             };
           }
         }
@@ -2318,7 +2340,7 @@ export class AgentEngine {
     session: AgentSession,
     isAutomatic: boolean,
     provider?: ModelProvider,
-    preservedContext?: { toolNames: string[]; mcpServerNames?: string[] },
+    preservedContext?: PreservedRuntimeContext,
   ): AsyncGenerator<AgentEvent, boolean> {
     const condenseStartedAt = Date.now();
     yield { type: "condense_start", isAutomatic };

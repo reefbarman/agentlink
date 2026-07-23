@@ -13,6 +13,7 @@ import {
 import {
   bindProxyCredentialsToRuntimeDescriptor,
   buildSandboxEnvironment,
+  constrainLoopbackRuntimeDescriptor,
   describeLaunch,
   isSandboxRuntimeDescriptor,
   parseSandboxRuntimeRequest,
@@ -39,7 +40,7 @@ function makeRequest(root, overrides = {}) {
   const privateHome = path.join(root, "home");
   const privateTmp = path.join(root, "tmp");
   return {
-    version: 2,
+    version: 3,
     operation: "execute",
     command: "/usr/bin/true",
     cwd: root,
@@ -55,7 +56,7 @@ function makeRequest(root, overrides = {}) {
       allowWrite: [root],
       denyWrite: [],
     },
-    network: { allowedDomains: [] },
+    network: { allowedDomains: [], allowLocalBinding: false },
     protectedRoots: [],
     structurallyProtectedRoots: [],
     timeoutMs: 10_000,
@@ -280,6 +281,62 @@ test("rejects spoofed or structurally unexpected runtime descriptors", () => {
     ),
     false,
   );
+});
+
+test("constrains only the exact known SRT localhost clauses", () => {
+  const localBind = '(allow network-bind (local ip "*:*"))';
+  const localInbound = '(allow network-inbound (local ip "*:*"))';
+  const loopbackOutbound = '(allow network-outbound (remote ip "localhost:*"))';
+  const request = {
+    shell: "/bin/bash",
+    command: "/usr/bin/true",
+    network: { allowedDomains: [], allowLocalBinding: false },
+  };
+  const profile = [localBind, localInbound, loopbackOutbound].join("\n");
+  const descriptor = [
+    "/bin/bash",
+    "-c",
+    `env SANDBOX_RUNTIME=1 /usr/bin/sandbox-exec -p '${profile}' /bin/bash -c /usr/bin/true`,
+  ];
+
+  const constrained = constrainLoopbackRuntimeDescriptor(descriptor, request);
+  assert.equal(constrained[2].includes(localBind), false);
+  assert.equal(constrained[2].includes(localInbound), false);
+  assert.equal(constrained[2].includes(loopbackOutbound), true);
+
+  const localBindingDescriptor = constrainLoopbackRuntimeDescriptor(
+    descriptor,
+    {
+      ...request,
+      network: { ...request.network, allowLocalBinding: true },
+    },
+  );
+  assert.equal(localBindingDescriptor[2].includes(localBind), true);
+  assert.equal(localBindingDescriptor[2].includes(localInbound), true);
+  assert.equal(localBindingDescriptor[2].includes(loopbackOutbound), true);
+
+  for (const rule of [localBind, localInbound, loopbackOutbound]) {
+    assert.throws(
+      () =>
+        constrainLoopbackRuntimeDescriptor(
+          [descriptor[0], descriptor[1], descriptor[2].replace(rule, "")],
+          request,
+        ),
+      /loopback contract drifted.*expected 1, found 0/,
+    );
+    assert.throws(
+      () =>
+        constrainLoopbackRuntimeDescriptor(
+          [
+            descriptor[0],
+            descriptor[1],
+            descriptor[2].replace(rule, `${rule}\n${rule}`),
+          ],
+          request,
+        ),
+      /loopback contract drifted.*expected 1, found 2/,
+    );
+  }
 });
 
 test("binds generated credentials only to the exact external proxy descriptor contract", () => {

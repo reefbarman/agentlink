@@ -96,6 +96,7 @@ import { useWebviewMessageConnection } from "./useWebviewMessageConnection";
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
 const MCP_CONFIG_MUTATION_TIMEOUT_MS = 30_000;
+const PROMPT_POLISH_TIMEOUT_MS = 60_000;
 
 interface OpenTranscriptState {
   sessionId: string;
@@ -354,6 +355,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const bgSessionsRef = useRef<BgSessionInfoProps[]>([]);
   bgSessionsRef.current = bgSessions;
   const [openFleetToActiveRequest, setOpenFleetToActiveRequest] = useState(0);
+  const [showFleetRequest, setShowFleetRequest] = useState(0);
   const [transcriptView, setTranscriptView] =
     useState<OpenTranscriptState | null>(null);
   const [btwState, setBtwState] = useState<BtwState | null>(null);
@@ -788,6 +790,21 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               pending.resolve(msg.pattern);
             } else {
               pending.reject(new Error("No suggestion returned"));
+            }
+          }
+          break;
+        }
+
+        case "promptPolishResult": {
+          const pending = pendingPromptPolishRef.current.get(msg.requestId);
+          if (pending) {
+            pendingPromptPolishRef.current.delete(msg.requestId);
+            if (msg.error) {
+              pending.reject(new Error(msg.error));
+            } else if (msg.polished) {
+              pending.resolve(msg.polished);
+            } else {
+              pending.reject(new Error("No polished text returned"));
             }
           }
           break;
@@ -2084,6 +2101,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             thinkingEnabled: false,
           });
           break;
+        case "fleet":
+          setShowFleetRequest((request) => request + 1);
+          break;
       }
 
       if (isForwardedBuiltinCommand("vscode", name)) {
@@ -2184,6 +2204,41 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           requestId,
           subCommand: args.subCommand,
           fullCommand: args.fullCommand,
+        });
+      });
+    },
+    [vscodeApi],
+  );
+
+  const pendingPromptPolishRef = useRef<
+    Map<
+      string,
+      { resolve: (polished: string) => void; reject: (err: Error) => void }
+    >
+  >(new Map());
+  const handlePolishPrompt = useCallback(
+    (draft: string): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        const requestId = `polish-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const timeout = setTimeout(() => {
+          if (pendingPromptPolishRef.current.delete(requestId)) {
+            reject(new Error("Polish timed out"));
+          }
+        }, PROMPT_POLISH_TIMEOUT_MS);
+        pendingPromptPolishRef.current.set(requestId, {
+          resolve: (polished) => {
+            clearTimeout(timeout);
+            resolve(polished);
+          },
+          reject: (err) => {
+            clearTimeout(timeout);
+            reject(err);
+          },
+        });
+        vscodeApi.postMessage({
+          command: "agentPolishPrompt",
+          requestId,
+          draft,
         });
       });
     },
@@ -2768,13 +2823,14 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               );
               messageQueueRef.current = nextQueue;
               dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
-              if (item.source === "browser") {
-                vscodeApi.postMessage({
-                  command: "agentRemoveQueuedMessage",
-                  sessionId: stateRef.current.sessionId,
-                  queueId: item.id,
-                });
-              }
+              // Always notify the extension: a VS Code-sourced message may be
+              // registered as a pending interjection, and without this the
+              // deleted message would still be injected at the next tool break.
+              vscodeApi.postMessage({
+                command: "agentRemoveQueuedMessage",
+                sessionId: stateRef.current.sessionId,
+                queueId: item.id,
+              });
             }}
           />
           <ContextUsageRow
@@ -3077,8 +3133,10 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             />
           )}
           <BackgroundSessionStrip
+            key={state.chatState.sessionId ?? "no-session"}
             sessions={bgSessions}
             openToActiveRequest={openFleetToActiveRequest}
+            showFleetRequest={showFleetRequest}
             onStop={handleStopBackground}
             onOpenTranscript={handleOpenBgTranscript}
             onSteer={handleSteerBackground}
@@ -3120,6 +3178,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           }
           onInterject={handleInterject}
           onStop={handleStop}
+          onPolishPrompt={handlePolishPrompt}
           streaming={state.streaming}
           reasoningEffort={
             state.chatState.reasoningEffort ??

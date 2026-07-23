@@ -1,6 +1,7 @@
 import {
   bindProxyCredentialsToRuntimeDescriptor,
   buildSandboxEnvironment,
+  constrainLoopbackRuntimeDescriptor,
   isSandboxRuntimeDescriptor,
   parseSandboxRuntimeRequest,
 } from "./sandbox-runtime-helper.mjs";
@@ -17,7 +18,7 @@ import { randomBytes } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { startTrustedNetworkProxies } from "./sandbox-network-proxy.mjs";
 
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_DATA_BYTES = 256 * 1024;
 const MAX_PENDING_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -110,8 +111,11 @@ function isFilesystem(value) {
 function isNetwork(value) {
   return (
     isPlainObject(value) &&
-    hasExactKeys(value, ["mode"]) &&
-    (value.mode === "blocked" || value.mode === "public-proxy")
+    Object.keys(value).every((key) =>
+      ["mode", "allowLocalBinding"].includes(key),
+    ) &&
+    (value.mode === "loopback" || value.mode === "public-proxy") &&
+    (value.allowLocalBinding === undefined || value.allowLocalBinding === true)
   );
 }
 
@@ -470,7 +474,10 @@ export function createSandboxInteractiveHelper(options = {}) {
       shell: frame.shell,
       environment: frame.environment,
       filesystem: frame.filesystem,
-      network: { allowedDomains },
+      network: {
+        allowedDomains,
+        allowLocalBinding: frame.network.allowLocalBinding === true,
+      },
       protectedRoots: frame.protectedRoots,
       structurallyProtectedRoots: frame.structurallyProtectedRoots,
     });
@@ -610,7 +617,9 @@ export function createSandboxInteractiveHelper(options = {}) {
           strictAllowlist: true,
           allowUnixSockets: [],
           allowAllUnixSockets: false,
-          allowLocalBinding: false,
+          // Generate SRT's audited localhost clause family for every command.
+          // AgentLink removes bind/inbound below unless the bound request grants it.
+          allowLocalBinding: true,
           allowMachLookup: [],
           httpProxyPort: networkProxies.httpPort,
           socksProxyPort: networkProxies.socksPort,
@@ -641,8 +650,12 @@ export function createSandboxInteractiveHelper(options = {}) {
           "sandbox runtime returned an unexpected launch descriptor",
         );
       }
-      const authenticatedArgv = bindProxyCredentialsToRuntimeDescriptor(
+      const constrainedArgv = constrainLoopbackRuntimeDescriptor(
         descriptor.argv,
+        request,
+      );
+      const authenticatedArgv = bindProxyCredentialsToRuntimeDescriptor(
+        constrainedArgv,
         request,
         networkProxies,
       );

@@ -26,6 +26,23 @@ export type EditReviewPrepareResult =
   | { status: "continue"; content: string }
   | { status: "abort"; result: EditReviewResult };
 
+export interface PreparedWriteProposal {
+  absolutePath: string;
+  baselineExists: boolean;
+  baselineContent: string;
+  proposedContent: string;
+}
+
+/** One exact proposal or an atomic set that must be consumed together. */
+export type PreparedWriteProposalInput =
+  | PreparedWriteProposal
+  | readonly PreparedWriteProposal[];
+
+export interface OneShotWriteAuthorization {
+  authorization: WriteAuthorizationDecision;
+  consume(current: PreparedWriteProposalInput): boolean;
+}
+
 export interface EditSaveFailureRecovery {
   document_dirty: boolean;
   disk_state: "unchanged" | "changed" | "missing" | "unreadable";
@@ -56,6 +73,16 @@ export interface EditReviewParams {
   prepareContent?: (
     currentContent: string,
   ) => EditReviewPrepareResult | Promise<EditReviewPrepareResult>;
+  /**
+   * Optional one-shot authorization prepared from the exact locked proposal.
+   * Providers must rebuild the proposal and consume immediately before writing.
+   */
+  prepareOneShotAuthorization?: (
+    proposal: PreparedWriteProposalInput,
+  ) =>
+    | OneShotWriteAuthorization
+    | undefined
+    | Promise<OneShotWriteAuthorization | undefined>;
   /** Whether the provider may create a missing file before writing. Defaults to true. */
   allowCreate?: boolean;
   operation?: EditReviewResult["operation"];
@@ -89,6 +116,7 @@ export interface EditReviewResult {
   warnings?: string[];
   decision?: EditReviewDecision;
   writeApprovalResponse?: unknown;
+  authorization?: WriteAuthorizationDecision;
 }
 
 export interface EditReviewProvider {
@@ -130,6 +158,7 @@ export interface MultiFileEditReviewParams {
   sessionId: string;
   approvalPanel?: unknown;
   onApprovalRequest?: OnApprovalRequest;
+  prepareOneShotAuthorization?: EditReviewParams["prepareOneShotAuthorization"];
 }
 
 export interface MultiFileEditReviewProvider {
@@ -144,6 +173,8 @@ export interface RenameSymbolParams {
   sessionId: string;
   approvalPanel?: unknown;
   onApprovalRequest?: OnApprovalRequest;
+  /** The calling tool already authorized reading the source document. */
+  sourceReadAuthorized?: boolean;
 }
 
 export interface RenameSymbolProvider {
@@ -164,6 +195,7 @@ export type WriteAuthorizationBasis =
   | "blanket_approval"
   | "write_rule"
   | "settings_rule"
+  | "guardian"
   | "human"
   | "none";
 

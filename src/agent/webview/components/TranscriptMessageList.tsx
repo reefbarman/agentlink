@@ -692,9 +692,10 @@ function createRowRevision(params: {
   sessionId?: string | null;
 }): string {
   const { actions, row } = params;
-  return JSON.stringify({
-    message: messageRevision(row.message),
-    warningMessages: row.warningMessages?.map(messageRevision),
+  // The message revisions are already JSON strings (cached per message object).
+  // Concatenate them instead of nesting them in another JSON.stringify, which
+  // would re-walk and re-escape every message body on each render.
+  const scalars = JSON.stringify({
     modelChange: row.modelChange,
     reasoningChange: row.reasoningChange,
     active: params.active,
@@ -720,6 +721,11 @@ function createRowRevision(params: {
       params.isLatest,
     ),
   });
+  // JSON.stringify output never contains a raw NUL character (control chars are
+  // escaped), so "\u0000" is a collision-safe separator.
+  const warnings =
+    row.warningMessages?.map(messageRevision).join("\u0000") ?? "";
+  return `${scalars}\u0000${warnings}\u0000${messageRevision(row.message)}`;
 }
 
 export function TranscriptMessageList({

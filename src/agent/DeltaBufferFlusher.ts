@@ -7,6 +7,8 @@ type DeltaBufferMessage = Extract<
       | "agentTextDelta"
       | "agentThinkingDelta"
       | "agentToolInputDelta"
+      | "agentBgTextDelta"
+      | "agentBgThinkingDelta"
       | "agentBgToolInputDelta";
   }
 >;
@@ -74,14 +76,20 @@ export class DeltaBufferFlusher {
 
   private flush(): void {
     for (const [sessionId, text] of this.textBySession) {
-      this.options.emit({ type: "agentTextDelta", sessionId, text });
+      const isBackground = this.options.isBackgroundSession(sessionId);
+      this.options.emit({
+        type: isBackground ? "agentBgTextDelta" : "agentTextDelta",
+        sessionId,
+        text,
+      });
     }
     this.textBySession.clear();
 
     for (const [sessionId, byThinkingId] of this.thinkingBySession) {
+      const isBackground = this.options.isBackgroundSession(sessionId);
       for (const [thinkingId, text] of byThinkingId) {
         this.options.emit({
-          type: "agentThinkingDelta",
+          type: isBackground ? "agentBgThinkingDelta" : "agentThinkingDelta",
           sessionId,
           thinkingId,
           text,

@@ -625,7 +625,10 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
         sessionId: options.sandboxSessionId,
         policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
         profileId: PROFILE_ID,
-        capability: { publicNetwork: capability.publicNetwork },
+        capability: {
+          publicNetwork: capability.publicNetwork,
+          localBinding: capability.localBinding,
+        },
       };
       const bindingDigest = createSandboxLaunchBindingDigest(binding);
       let consumedGrant:
@@ -633,8 +636,8 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
             SandboxCapabilityAuthority["issuePublicNetworkGrant"]
           >["grant"]
         | undefined;
-      if (capability.publicNetwork) {
-        const issued = this.capabilityAuthority.issuePublicNetworkGrant({
+      if (capability.publicNetwork || capability.localBinding) {
+        const issued = this.capabilityAuthority.issueCapabilityGrant({
           binding,
           expiresAt: this.now() + this.capabilityGrantTtlMs,
         });
@@ -645,16 +648,21 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
         if (!consumed.ok) {
           this.capabilityAuthority.revoke(issued.grant.grantId);
           throw new Error(
-            `Sandbox public-network grant could not be consumed: ${consumed.reason}`,
+            `Sandbox capability grant could not be consumed: ${consumed.reason}`,
           );
         }
         consumedGrant = consumed.grant;
       }
       const authorization: SandboxLaunchAuthorization = {
         bindingDigest,
-        ...(capability.publicNetwork
+        ...(capability.publicNetwork || capability.localBinding
           ? {
-              capabilityRequest: { unrestrictedPublicNetwork: true },
+              capabilityRequest: {
+                ...(capability.publicNetwork
+                  ? { unrestrictedPublicNetwork: true }
+                  : {}),
+                ...(capability.localBinding ? { allowLocalBinding: true } : {}),
+              },
               grant: consumedGrant,
             }
           : {}),
@@ -671,9 +679,12 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
           deniedWriteRoots,
           protectedReadOnlyRoots,
           structurallyProtectedRoots,
-          network: capability.publicNetwork
-            ? { mode: "public-proxy" }
-            : { mode: "blocked" },
+          network: {
+            mode: capability.publicNetwork ? "public-proxy" : "loopback",
+            ...(capability.localBinding
+              ? { allowLocalBinding: true as const }
+              : {}),
+          },
           environment: {
             inheritHost: false,
             values: environmentResult.environment,
@@ -702,7 +713,13 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
           processTree: true,
           filesystemRead: "host-visible",
           filesystemWrite: "strict",
-          network: capability.publicNetwork ? "proxy-only" : "blocked",
+          network: capability.localBinding
+            ? capability.publicNetwork
+              ? "partial"
+              : "loopback-listener"
+            : capability.publicNetwork
+              ? "proxy-only"
+              : "loopback",
           privateHome: false,
           privateTmp: false,
           hostIpcBlocked: false,
@@ -713,6 +730,16 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
             "CPU, memory, process-count, and disk quotas are not fully enforced.",
           ],
         },
+        ...(capability.publicNetwork || capability.localBinding
+          ? {
+              capabilityRequest: {
+                ...(capability.publicNetwork
+                  ? { unrestrictedPublicNetwork: true }
+                  : {}),
+                ...(capability.localBinding ? { allowLocalBinding: true } : {}),
+              },
+            }
+          : {}),
         ...(consumedGrant
           ? {
               grant: {
@@ -744,7 +771,7 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
                 );
                 if (!validation.ok) {
                   throw new Error(
-                    `Prepared sandbox public-network grant is no longer valid: ${validation.reason}`,
+                    `Prepared sandbox capability grant is no longer valid: ${validation.reason}`,
                   );
                 }
               },

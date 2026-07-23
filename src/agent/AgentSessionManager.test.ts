@@ -393,7 +393,7 @@ describe("AgentSessionManager host injection", () => {
     );
   });
 
-  it("keeps command approval policy session-scoped and migrates a pre-session choice", async () => {
+  it("keeps command approval policy session-scoped and migrates an explicit pre-send choice", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
 
     expect(mgr.getCommandApprovalPolicy("missing", "manual")).toBe("manual");
@@ -407,6 +407,32 @@ describe("AgentSessionManager host injection", () => {
     expect(mgr.getCommandApprovalPolicy(session.id)).toBe("sensitive");
     mgr.clearSessionCommandApprovalPolicy(session.id);
     expect(mgr.getCommandApprovalPolicy(session.id, "manual")).toBe("manual");
+  });
+
+  it("starts an explicit new foreground session with Approve for Me off", async () => {
+    const clearSession = vi.fn();
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    mgr.setToolContext({
+      approvalManager: {
+        bindSessionProject: vi.fn(),
+        clearSession,
+      } as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+    });
+    mgr.setCommandApprovalPolicy("agent", "approve-for-me");
+
+    const session = await mgr.createForegroundSession("code");
+
+    expect(clearSession).toHaveBeenCalledOnce();
+    expect(clearSession).toHaveBeenCalledWith("agent");
+    expect(mgr.getCommandApprovalPolicy(session.id, "sensitive")).toBe(
+      "sensitive",
+    );
+    expect(mgr.getCommandApprovalPolicy("agent", "sensitive")).toBe(
+      "sensitive",
+    );
   });
 
   it("persists approval dimensions when a live session policy changes", async () => {
@@ -1540,6 +1566,29 @@ describe("AgentSessionManager manual condense", () => {
     session.status = "idle";
     (session as any).loadedSkills = new Set<string>();
     (mgr as any).foregroundId = session.id;
+    const todos = [
+      {
+        id: "resume",
+        content: "Resume the implementation",
+        activeForm: "Resuming the implementation",
+        status: "in_progress" as const,
+      },
+    ];
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Implement the feature" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "todo-1",
+            name: "todo_write",
+            input: { todos },
+          },
+        ],
+      },
+    ];
+    vi.mocked(session.getAllMessages).mockReturnValue(messages);
 
     const onEvent = vi.fn();
     mgr.onEvent = onEvent;
@@ -1572,6 +1621,12 @@ describe("AgentSessionManager manual condense", () => {
     await mgr.condenseCurrentSession();
 
     expect(engine.condenseSession).toHaveBeenCalledTimes(1);
+    expect(engine.condenseSession).toHaveBeenCalledWith(
+      session,
+      false,
+      undefined,
+      expect.objectContaining({ todos }),
+    );
     expect(engine.run).not.toHaveBeenCalled();
     expect(onEvent).toHaveBeenCalledWith(
       session.id,
@@ -1903,6 +1958,91 @@ describe("AgentSessionManager in-flight persistence", () => {
     });
     expect(session.runState?.phase).toBe("running");
     expect(retrySession).toHaveBeenCalledWith(session.id);
+  });
+
+  it("answers a recovered ask_user with synthetic results for sibling tool calls", async () => {
+    const store = {
+      saveSession: vi.fn(async () => ({ ok: true, revision: "1" })),
+      list: vi.fn(() => []),
+      get: vi.fn(),
+      loadMessages: vi.fn(),
+      loadMetadata: vi.fn(),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    const session = await mgr.createSession("code");
+    const appended: AgentMessage[] = [];
+    (session as any).appendAssistantTurn = vi.fn((content: any) => {
+      appended.push({ role: "assistant", content });
+    });
+    (session as any).appendToolResults = vi.fn((content: any) => {
+      appended.push({ role: "user", content });
+    });
+    vi.spyOn(mgr, "retrySession").mockResolvedValue(undefined);
+
+    await mgr.persistPendingQuestionRecovery(
+      session.id,
+      "question-1",
+      "Pick one.",
+      [
+        {
+          id: "choice",
+          type: "multiple_choice",
+          question: "Which path?",
+          options: ["A", "B"],
+          recommended: "A",
+        },
+      ],
+      {
+        schemaVersion: 1,
+        assistantContent: [
+          {
+            type: "tool_use",
+            id: "toolu-sibling",
+            name: "get_background_status",
+            input: { sessionId: "bg-1" },
+          },
+          {
+            type: "tool_use",
+            id: "toolu-1",
+            name: "ask_user",
+            input: { context: "Pick one." },
+          },
+        ],
+        toolUseId: "toolu-1",
+        toolName: "ask_user",
+        toolInput: { context: "Pick one." },
+      },
+    );
+
+    await expect(
+      mgr.answerRecoveredQuestion(session.id, "question-1", {
+        answers: { choice: "A" },
+        notes: {},
+      }),
+    ).resolves.toBe(true);
+
+    expect(appended[1]).toMatchObject({
+      role: "user",
+      content: [
+        expect.objectContaining({
+          type: "tool_result",
+          tool_use_id: "toolu-sibling",
+          content: expect.stringContaining("interrupted"),
+        }),
+        expect.objectContaining({
+          type: "tool_result",
+          tool_use_id: "toolu-1",
+          content: expect.stringContaining('"answer":"A"'),
+        }),
+      ],
+    });
   });
 
   it("restores persisted runState and resumes with an interruption notice", async () => {

@@ -25,7 +25,7 @@ function launch(overrides = {}) {
   const root = "/private/tmp/agentlink-interactive";
   return {
     ...identity,
-    version: 2,
+    version: 3,
     type: "launch",
     command: "/usr/bin/true",
     cwd: root,
@@ -41,7 +41,7 @@ function launch(overrides = {}) {
       allowWrite: [root],
       denyWrite: [],
     },
-    network: { mode: "blocked" },
+    network: { mode: "loopback" },
     protectedRoots: [],
     structurallyProtectedRoots: [],
     dimensions: { columns: 80, rows: 24 },
@@ -142,6 +142,11 @@ function createHarness({
     },
   };
 
+  const loopbackRules = [
+    '(allow network-bind (local ip "*:*"))',
+    '(allow network-inbound (local ip "*:*"))',
+    '(allow network-outbound (remote ip "localhost:*"))',
+  ].join("\n");
   const runtime = {
     async initialize(config) {
       calls.order.push("initialize");
@@ -155,7 +160,7 @@ function createHarness({
         argv: [
           "/bin/bash",
           "-c",
-          `env ${Array.from({ length: 8 }, () => httpProxy).join(" ")} ${Array.from({ length: 4 }, () => socksProxy).join(" ")} /usr/bin/sandbox-exec -p profile /bin/bash -c /usr/bin/true`,
+          `env ${Array.from({ length: 8 }, () => httpProxy).join(" ")} ${Array.from({ length: 4 }, () => socksProxy).join(" ")} /usr/bin/sandbox-exec -p '${loopbackRules}' /bin/bash -c /usr/bin/true`,
         ],
       };
     },
@@ -421,7 +426,7 @@ test("waits for delayed startup before helper shutdown completes", async () => {
   assert.equal(harness.calls.reset, 1);
 });
 
-test("launches blocked networking with a private environment and emits ready before data", async (t) => {
+test("launches loopback networking with a private environment and emits ready before data", async (t) => {
   const harness = createHarness({ initialData: "early output" });
   t.after(() => harness.helper.close());
 
@@ -456,6 +461,9 @@ test("launches blocked networking with a private environment and emits ready bef
     harness.calls.spawn[0][1][1],
     /socks5h:\/\/agentlink:a{64}@localhost:43102/,
   );
+  assert.doesNotMatch(harness.calls.spawn[0][1][1], /allow network-bind/);
+  assert.doesNotMatch(harness.calls.spawn[0][1][1], /allow network-inbound/);
+  assert.match(harness.calls.spawn[0][1][1], /allow network-outbound/);
   assert.deepEqual(harness.calls.replacedEnvironment, [
     {
       HOME: "/private/tmp/agentlink-interactive/home",
@@ -481,7 +489,7 @@ test("launches blocked networking with a private environment and emits ready bef
     strictAllowlist: true,
     allowUnixSockets: [],
     allowAllUnixSockets: false,
-    allowLocalBinding: false,
+    allowLocalBinding: true,
     allowMachLookup: [],
     httpProxyPort: 43101,
     socksProxyPort: 43102,
@@ -1085,6 +1093,21 @@ test("resets the runtime when subscription disposal fails", async (t) => {
   await harness.waitFor(() => /data disposal failed/.test(harness.errorText()));
 });
 
+test("retains all localhost clauses for local binding", async (t) => {
+  const harness = createHarness();
+  t.after(() => harness.helper.close());
+  harness.send(
+    launch({ network: { mode: "loopback", allowLocalBinding: true } }),
+  );
+  await harness.waitFor(() => harness.frames()[0]?.type === "ready");
+
+  const wrapper = harness.calls.spawn[0][1][1];
+  assert.match(wrapper, /allow network-bind/);
+  assert.match(wrapper, /allow network-inbound/);
+  assert.match(wrapper, /allow network-outbound/);
+  assert.equal(harness.calls.initialize[0].network.allowLocalBinding, true);
+});
+
 test("launches public-proxy with a host-owned wildcard and redacts credentials from frames", async (t) => {
   const harness = createHarness();
   t.after(() => harness.helper.close());
@@ -1098,7 +1121,7 @@ test("launches public-proxy with a host-owned wildcard and redacts credentials f
     strictAllowlist: true,
     allowUnixSockets: [],
     allowAllUnixSockets: false,
-    allowLocalBinding: false,
+    allowLocalBinding: true,
     allowMachLookup: [],
     httpProxyPort: 43101,
     socksProxyPort: 43102,

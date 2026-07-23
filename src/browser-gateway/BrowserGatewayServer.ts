@@ -372,6 +372,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/polish-prompt"),
+        ({ req, res }) => this.handlePolishPromptAction(req, res),
+        json("polish-prompt action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/question"),
         ({ req, res }) => this.handleQuestionAction(req, res),
         json("question action failed"),
@@ -824,6 +830,31 @@ export class BrowserGatewayServer implements vscode.Disposable {
         fullCommand: body.fullCommand,
       });
       this.writeJson(res, 200, { ok: true, pattern });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.writeJson(res, 200, { ok: false, error: message });
+    }
+  }
+
+  private async handlePolishPromptAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as { draft?: string } | null;
+    if (!body || typeof body.draft !== "string" || !body.draft.trim()) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    try {
+      const polished = await this.chatViewProvider.polishPrompt({
+        draft: body.draft,
+      });
+      this.writeJson(res, 200, { ok: true, polished });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.writeJson(res, 200, { ok: false, error: message });

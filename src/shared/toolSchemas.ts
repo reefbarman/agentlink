@@ -674,10 +674,34 @@ export const executeCommandSchema = {
       'Environment variables to set for this command (e.g. {"CI":"1"}). Merged with the terminal\'s base execution environment.',
     ),
   sandbox_permissions: z
-    .enum(["use_default", "require_managed_network", "require_escalated"])
+    .enum([
+      "use_default",
+      "with_additional_permissions",
+      "require_managed_network",
+      "require_escalated",
+    ])
     .optional()
     .describe(
-      'Execution authority intent. Omit or use "use_default" for the normal policy-selected route with sandbox network blocked. Use "require_managed_network" for one exact sandboxed command that needs public network access; private and local destinations remain blocked, a non-empty reason is required, and Approve for Me sends the request to Guardian. Use "require_escalated" only when execution must occur outside the sandbox; this also requires a non-empty reason and approval.',
+      'Execution authority intent. Omit or use "use_default" for the normal sandbox route with loopback client access and public/LAN egress blocked. Use "with_additional_permissions" with additional_permissions for a narrow sandbox capability such as local listener binding. "require_managed_network" is the compatibility intent for one exact sandboxed command that needs reviewed public network access. Use "require_escalated" only when execution must occur outside the sandbox. Every non-default intent requires a non-empty reason and approval.',
+    ),
+  additional_permissions: z
+    .object({
+      network: z
+        .object({
+          allow_local_binding: z
+            .literal(true)
+            .optional()
+            .describe(
+              "Allow this exact sandboxed command to bind TCP listeners. On macOS Seatbelt, bind authorization cannot be restricted to loopback addresses even though outbound traffic remains loopback/proxy constrained.",
+            ),
+        })
+        .strict()
+        .optional(),
+    })
+    .strict()
+    .optional()
+    .describe(
+      "Exact additional sandbox capability delta. Currently supports network.allow_local_binding=true for commands that start local test or development servers.",
     ),
 
   files: z

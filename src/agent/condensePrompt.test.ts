@@ -42,6 +42,20 @@ describe("renderDeterministicSections", () => {
           toolNames: ["read_file", "execute_command"],
           mcpServerNames: ["linear"],
           activeSkills: ["conventional-commits"],
+          todos: [
+            {
+              id: "inspect",
+              content: "Inspect the failure",
+              activeForm: "Inspecting the failure",
+              status: "completed",
+            },
+            {
+              id: "validate",
+              content: "Run validation",
+              activeForm: "Running validation",
+              status: "in_progress",
+            },
+          ],
         },
       }),
     ).toBe(`<system-reminder>
@@ -72,6 +86,25 @@ The full current-session transcript, including original messages retired by cond
 
 ### Active loaded skills
 - conventional-commits
+
+### Current structured TODO state (authoritative)
+Treat this exact list as the authoritative task-tracking starting point. Preserve every item and completed progress, then reconcile statuses against the checkpoint summary and current workspace before continuing. Repair stale statuses with \`todo_write\`; do not redo completed work merely because an item still says pending or in_progress. When calling \`todo_write\`, include the complete list because that tool replaces all prior TODO state.
+<todo-state>
+[
+  {
+    "id": "inspect",
+    "content": "Inspect the failure",
+    "activeForm": "Inspecting the failure",
+    "status": "completed"
+  },
+  {
+    "id": "validate",
+    "content": "Run validation",
+    "activeForm": "Running validation",
+    "status": "in_progress"
+  }
+]
+</todo-state>
 </system-reminder>`);
   });
 
@@ -111,6 +144,9 @@ The full current-session transcript, including original messages retired by cond
 
 ### Active loaded skills
 - None
+
+### Current structured TODO state (authoritative)
+Not captured for this checkpoint.
 </system-reminder>`);
   });
 });

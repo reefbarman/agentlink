@@ -418,6 +418,20 @@ describe("summarizeConversation", () => {
       preservedContext: {
         toolNames: ["read_file", "codebase_search", "linear__get_issue"],
         mcpServerNames: ["linear", "notion"],
+        todos: [
+          {
+            id: "inspect",
+            content: "Inspect the condense path",
+            activeForm: "Inspecting the condense path",
+            status: "completed",
+          },
+          {
+            id: "fix",
+            content: "Fix TODO persistence",
+            activeForm: "Fixing TODO persistence",
+            status: "in_progress",
+          },
+        ],
       },
     });
 
@@ -432,6 +446,14 @@ describe("summarizeConversation", () => {
     expect(String(finalMessage.content)).toContain("- codebase_search");
     expect(String(finalMessage.content)).toContain("- linear");
     expect(String(finalMessage.content)).toContain("- notion");
+    expect(String(finalMessage.content)).toContain(
+      "### Current structured TODO state (authoritative)",
+    );
+    expect(String(finalMessage.content)).toContain(
+      '"content": "Inspect the condense path"',
+    );
+    expect(String(finalMessage.content)).toContain('"status": "completed"');
+    expect(String(finalMessage.content)).toContain('"status": "in_progress"');
   });
 
   it("strips memory candidate reminders from condense canonical user messages", async () => {

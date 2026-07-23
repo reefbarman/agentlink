@@ -42,6 +42,10 @@ import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.j
 import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
 import type { CommandApprovalReviewer } from "../approvals/commandApprovalReview.js";
 import type { NetworkApprovalReviewer } from "../approvals/networkApprovalReview.js";
+import type {
+  ActionApprovalReviewer,
+  OutsideReadOperation,
+} from "../approvals/actionApprovalReview.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { McpClientHub } from "./McpClientHub.js";
 import type { Question } from "./webview/types.js";
@@ -117,6 +121,8 @@ import { getConfiguredDiagnosticDelay } from "../adapters/vscode/agentLinkConfig
 import { handleLoadRule } from "../tools/loadRule.js";
 import { handleLoadSkill } from "../tools/loadSkill.js";
 import { handleOpenFile } from "../tools/openFile.js";
+import type { GuardianOutsideReadOptions } from "../tools/pathAccessUI.js";
+import { createGuardianOutsideWriteAuthorizationPreparer } from "../tools/actionWriteApproval.js";
 import { handleProposeMemory } from "../tools/proposeMemory.js";
 // --- Handler imports ---
 import { handleReadFile } from "../tools/readFile.js";
@@ -872,7 +878,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "get_background_result",
     description:
-      "Wait for a background agent to finish and return its final response. Successful runs return the expected response; failed, interrupted, cancelled, unauthorized, or incomplete expected-result runs return structured JSON with status, terminalReason, retrySafe, agentRetryable, and preserved partialOutput when available. Use this for explicit pull/wait flows; skip it when a completion result was already pushed into context. Waiting releases your own background concurrency slot, so it is safe to block on a spawned agent that is still queued.",
+      "Wait for a background agent to finish and return its final response. Successful runs return the expected response; failed, interrupted, cancelled, unauthorized, or incomplete expected-result runs return structured JSON with status, terminalReason, retrySafe, agentRetryable, and preserved partialOutput when available. Use this for explicit pull/wait flows; skip it when a completion result was already pushed into context. Waiting releases your own background concurrency slot, so it is safe to block on a spawned agent that is still queued. If a user or steering message arrives for your own session while you wait, the call returns early with status wait_interrupted; the background agent keeps running untouched — handle the user's message first, then call get_background_result again.",
     input_schema: {
       type: "object",
       properties: {
@@ -1712,6 +1718,7 @@ export interface ToolDispatchContext {
   ) => void;
   commandApprovalReviewer?: CommandApprovalReviewer;
   networkApprovalReviewer?: NetworkApprovalReviewer;
+  actionApprovalReviewer?: ActionApprovalReviewer;
   commandReviewTurnCircuit?: import("../approvals/commandApprovalReview.js").CommandReviewTurnCircuit;
   retainedCommandReviewDenials?: import("../approvals/commandApprovalReview.js").RetainedCommandReviewDenials;
   isSessionActive?: (sessionId: string) => boolean;
@@ -2371,6 +2378,43 @@ function recordWriteApprovalPrompt(
  * Dispatch a tool call to the appropriate handler.
  * Returns ToolResult compatible with the Anthropic SDK.
  */
+export function createGuardianOutsideWritePreparer(
+  ctx: ToolDispatchContext,
+  sessionId: string,
+  requestingTool: string,
+  signal?: AbortSignal,
+) {
+  if (!ctx.actionApprovalReviewer) return undefined;
+  return createGuardianOutsideWriteAuthorizationPreparer({
+    reviewer: ctx.actionApprovalReviewer,
+    sessionId,
+    requestingTool,
+    getPolicy: () => ctx.getCommandApprovalMode?.(sessionId),
+    isSessionActive: () => ctx.isSessionActive?.(sessionId) ?? false,
+    getUserObjective: () => ctx.getCommandReviewObjective?.(sessionId),
+    getContext: () => ctx.getCommandReviewContext?.(sessionId) ?? [],
+    signal,
+  });
+}
+
+function createGuardianOutsideReadOptions(
+  ctx: ToolDispatchContext,
+  sessionId: string,
+  requestingTool: string,
+  operation: OutsideReadOperation,
+): GuardianOutsideReadOptions | undefined {
+  if (!ctx.actionApprovalReviewer) return undefined;
+  return {
+    reviewer: ctx.actionApprovalReviewer,
+    requestingTool,
+    operation,
+    getPolicy: () => ctx.getCommandApprovalMode?.(sessionId),
+    isSessionActive: () => ctx.isSessionActive?.(sessionId) ?? false,
+    getUserObjective: () => ctx.getCommandReviewObjective?.(sessionId),
+    getContext: () => ctx.getCommandReviewContext?.(sessionId) ?? [],
+  };
+}
+
 export async function dispatchToolCall(
   toolName: string,
   input: Record<string, unknown>,
@@ -2803,6 +2847,44 @@ export async function dispatchToolCall(
         ctx.getAdvertisedSkills?.() ?? [],
         createVscodeReadFileEnrichmentProvider(),
         toolAbortSignal,
+        ...(ctx.actionApprovalReviewer
+          ? [
+              createGuardianOutsideReadOptions(ctx, sessionId, "read_file", {
+                kind: "read-file",
+                offset: params.offset,
+                limit: params.limit,
+                includeSymbols: params.include_symbols !== false,
+                autoFollowSuggestion: params.auto_follow_suggestion === true,
+                ...(params.offset === undefined
+                  ? params.anchor !== undefined
+                    ? {
+                        selector: {
+                          kind: "anchor" as const,
+                          value: params.anchor,
+                          offset: params.anchor_offset,
+                        },
+                      }
+                    : params.anchor_regex !== undefined
+                      ? {
+                          selector: {
+                            kind: "regex" as const,
+                            value: params.anchor_regex,
+                            offset: params.anchor_offset,
+                          },
+                        }
+                      : params.query !== undefined
+                        ? {
+                            selector: {
+                              kind: "query" as const,
+                              value: params.query,
+                              offset: params.anchor_offset,
+                            },
+                          }
+                        : {}
+                  : {}),
+              })!,
+            ]
+          : []),
       );
     case "get_context":
       if (ctx.onFileRead && typeof params.path === "string") {
@@ -2877,6 +2959,14 @@ export async function dispatchToolCall(
             approvalManager,
             approvalPanel,
             toolAbortSignal,
+            createGuardianOutsideReadOptions(ctx, sessionId, "list_files", {
+              kind: "list",
+              recursive: params.recursive === true,
+              includeIgnored: params.include_ignored === true,
+              depth: params.depth,
+              pattern: params.pattern,
+              query: params.query,
+            }),
           ),
         },
       );
@@ -2892,6 +2982,20 @@ export async function dispatchToolCall(
             approvalManager,
             approvalPanel,
             toolAbortSignal,
+            createGuardianOutsideReadOptions(ctx, sessionId, "search_files", {
+              kind: "search",
+              pattern: params.regex,
+              patternKind: params.semantic ? "semantic" : "regex",
+              filePattern: params.file_pattern,
+              caseInsensitive: params.case_insensitive,
+              context: params.context,
+              contextBefore: params.context_before,
+              contextAfter: params.context_after,
+              multiline: params.multiline === true,
+              maxResults: params.max_results,
+              offset: params.offset,
+              outputMode: params.output_mode,
+            }),
           ),
         },
       );
@@ -2926,6 +3030,12 @@ export async function dispatchToolCall(
                   recordWriteApprovalPrompt("write_file", event, ctx),
               }
             : {}),
+          prepareOneShotAuthorization: createGuardianOutsideWritePreparer(
+            ctx,
+            sessionId,
+            "write_file",
+            toolAbortSignal,
+          ),
           diagnosticDelay: getConfiguredDiagnosticDelay(),
         },
       );
@@ -2959,6 +3069,12 @@ export async function dispatchToolCall(
                   recordWriteApprovalPrompt("apply_diff", event, ctx),
               }
             : {}),
+          prepareOneShotAuthorization: createGuardianOutsideWritePreparer(
+            ctx,
+            sessionId,
+            "apply_diff",
+            toolAbortSignal,
+          ),
           diagnosticDelay: getConfiguredDiagnosticDelay(),
         },
       );
@@ -2977,6 +3093,29 @@ export async function dispatchToolCall(
               approvalManager,
               extensionUri,
             ),
+          pathAccessProvider: createVscodePathAccessProvider(
+            approvalManager,
+            approvalPanel,
+            toolAbortSignal,
+            createGuardianOutsideReadOptions(
+              ctx,
+              sessionId,
+              "find_and_replace",
+              {
+                kind: "search",
+                pattern: params.find,
+                patternKind: params.regex ? "regex" : "literal",
+                multiline: false,
+                outputMode: "content",
+              },
+            ),
+          ),
+          prepareOneShotAuthorization: createGuardianOutsideWritePreparer(
+            ctx,
+            sessionId,
+            "find_and_replace",
+            toolAbortSignal,
+          ),
         },
       );
     case "rename_symbol":
@@ -2989,6 +3128,17 @@ export async function dispatchToolCall(
           renameSymbolProvider:
             ctx.renameSymbolProvider ??
             createVscodeRenameSymbolProvider(approvalManager),
+          pathAccessProvider: createVscodePathAccessProvider(
+            approvalManager,
+            approvalPanel,
+            toolAbortSignal,
+            createGuardianOutsideReadOptions(ctx, sessionId, "rename_symbol", {
+              kind: "language-intelligence",
+              feature: "references",
+              line: params.line,
+              column: params.column,
+            }),
+          ),
         },
       );
     case "propose_memory":
@@ -3094,6 +3244,13 @@ export async function dispatchToolCall(
           approvalManager,
           approvalPanel,
           toolAbortSignal,
+          createGuardianOutsideReadOptions(ctx, sessionId, "open_file", {
+            kind: "open-file",
+            line: params.line,
+            column: params.column,
+            endLine: params.end_line,
+            endColumn: params.end_column,
+          }),
         ),
         editorRevealProvider:
           ctx.editorRevealProvider ?? createVscodeEditorRevealProvider(),

@@ -397,6 +397,12 @@ export type ExtensionMessage =
       pattern?: string;
       error?: string;
     }
+  | {
+      type: "promptPolishResult";
+      requestId: string;
+      polished?: string;
+      error?: string;
+    }
   | ({
       type: "agentQuestionRequest";
     } & QuestionRequest)

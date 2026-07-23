@@ -1038,6 +1038,7 @@ export function BrowserGatewayApp({
     Record<string, { paths: string[]; media: ComposerMedia[] }>
   >({});
   const [sendStatus, setSendStatus] = useState<string>("");
+  const [showFleetRequest, setShowFleetRequest] = useState(0);
   const [modeStatus, setModeStatus] = useState<string>("");
   const [status, setStatus] = useState("Connecting…");
   const [thinkingPending, setThinkingPending] = useState(false);
@@ -3452,6 +3453,29 @@ export function BrowserGatewayApp({
     return body.pattern;
   };
 
+  const handlePolishPrompt = async (draft: string): Promise<string> => {
+    const response = await fetch(buildApiPath("/api/polish-prompt"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ draft }),
+    });
+    const body = (await response.json()) as {
+      ok?: boolean;
+      polished?: string;
+      error?: string;
+    };
+    if (!response.ok) {
+      throw new Error(body.error ?? `HTTP ${response.status}`);
+    }
+    if (!body.ok || !body.polished) {
+      throw new Error(body.error ?? "Failed to polish prompt");
+    }
+    return body.polished;
+  };
+
   const commitSidePanePercent = (percent: number): void => {
     const layout = browserLayoutRef.current;
     const totalWidth = layout?.getBoundingClientRect().width ?? 0;
@@ -3762,6 +3786,9 @@ export function BrowserGatewayApp({
         if (modelId) handleSelectModel(modelId);
         break;
       }
+      case "fleet":
+        setShowFleetRequest((request) => request + 1);
+        return;
       case "mcp":
         setShowMcpStatus(true);
         void refreshWorkspaceMcpStatus(
@@ -5457,7 +5484,9 @@ export function BrowserGatewayApp({
                 ) : null}
                 {!isAskAgentSelected && !mobileReviewOpen && (
                   <BackgroundSessionStrip
+                    key={foreground?.sessionId ?? selectedTabId}
                     sessions={background}
+                    showFleetRequest={showFleetRequest}
                     onStop={handleStopBackground}
                     onOpenTranscript={handleOpenBgTranscript}
                     onSteer={(sessionId, message) =>
@@ -5524,6 +5553,9 @@ export function BrowserGatewayApp({
                     }
                     onInterject={
                       isAskAgentSelected ? undefined : handleInterject
+                    }
+                    onPolishPrompt={
+                      isAskAgentSelected ? undefined : handlePolishPrompt
                     }
                     onComposerEvent={
                       isAskAgentSelected

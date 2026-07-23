@@ -668,16 +668,19 @@ export function ToolCallBlock({
   >(new Set());
 
   const complete = toolCall.complete;
-  const input = tryParseJson(toolCall.inputJson);
-  const summaryParts = getToolSummary(
-    toolCall.name,
-    input,
-    toolCall.result,
-    complete,
+  const input = useMemo(
+    () => tryParseJson(toolCall.inputJson),
+    [toolCall.inputJson],
+  );
+  const summaryParts = useMemo(
+    () => getToolSummary(toolCall.name, input, toolCall.result, complete),
+    [toolCall.name, input, toolCall.result, complete],
   );
 
-  const { statusClass, statusIconClass, cmdExitBadge } =
-    getToolCallVisualState(toolCall);
+  const { statusClass, statusIconClass, cmdExitBadge } = useMemo(
+    () => getToolCallVisualState(toolCall),
+    [toolCall],
+  );
 
   const handleFileClick = useCallback(
     (e: MouseEvent, path: string, line?: number) => {
@@ -687,11 +690,12 @@ export function ToolCallBlock({
     [onOpenFile],
   );
 
-  // Format input JSON for expanded view
-  let formattedInput = toolCall.inputJson;
-  if (input) {
-    formattedInput = JSON.stringify(input, null, 2);
-  }
+  // Format input JSON for the expanded view — only rendered (and only worth
+  // computing) when expanded.
+  const formattedInput = useMemo(() => {
+    if (!expanded) return toolCall.inputJson;
+    return input ? JSON.stringify(input, null, 2) : toolCall.inputJson;
+  }, [expanded, input, toolCall.inputJson]);
 
   const hasSummary = summaryParts.some(
     (p) =>

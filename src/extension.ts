@@ -23,6 +23,7 @@ import {
   createCommandApprovalReviewer,
 } from "./approvals/commandApprovalReview.js";
 import { createNetworkApprovalReviewer } from "./approvals/networkApprovalReview.js";
+import { createActionApprovalReviewer } from "./approvals/actionApprovalReview.js";
 import { AgentToolCallTracker } from "./agent/AgentToolCallTracker.js";
 import { registerAgentActivityCommands } from "./agent/agentActivityCommands.js";
 import {
@@ -812,7 +813,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 processTree: true,
                 filesystemRead: "host-visible",
                 filesystemWrite: "strict",
-                network: "blocked",
+                network: "loopback",
                 privateHome: false,
                 privateTmp: false,
                 hostIpcBlocked: false,
@@ -1703,6 +1704,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const networkApprovalReviewer = createNetworkApprovalReviewer({
     resolveContext: resolveApprovalReviewerContext,
   });
+  const actionApprovalReviewer = createActionApprovalReviewer({
+    resolveContext: resolveApprovalReviewerContext,
+  });
+  chatViewProvider.setActionApprovalReviewer(actionApprovalReviewer);
 
   // Wire up window-level capabilities. MCP is captured from the session project registry.
   agentSessionManager.setToolContext({
@@ -1726,6 +1731,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     commandApprovalReviewer,
     networkApprovalReviewer,
+    actionApprovalReviewer,
     isSessionActive: (sessionId) => {
       const session = agentSessionManager.getSession(sessionId);
       return Boolean(session && !session.isAborted);

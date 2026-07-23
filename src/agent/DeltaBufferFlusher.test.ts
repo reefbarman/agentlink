@@ -10,6 +10,8 @@ type DeltaBufferMessage = Extract<
       | "agentTextDelta"
       | "agentThinkingDelta"
       | "agentToolInputDelta"
+      | "agentBgTextDelta"
+      | "agentBgThinkingDelta"
       | "agentBgToolInputDelta";
   }
 >;
@@ -154,6 +156,28 @@ describe("DeltaBufferFlusher", () => {
         sessionId: "session-1",
         toolCallId: "tool-1",
         partialJson: "{}",
+      },
+    ]);
+  });
+
+  it("emits background variants for text and thinking deltas", () => {
+    const backgroundSessions = new Set<string>(["bg-session"]);
+    const { flusher, messages } = createFlusher(backgroundSessions);
+
+    flusher.appendText("bg-session", "hel");
+    flusher.appendText("bg-session", "lo");
+    flusher.appendText("fg-session", "front");
+    flusher.appendThinking("bg-session", "thinking-1", "hmm");
+    flusher.flushNow();
+
+    expect(messages).toEqual([
+      { type: "agentBgTextDelta", sessionId: "bg-session", text: "hello" },
+      { type: "agentTextDelta", sessionId: "fg-session", text: "front" },
+      {
+        type: "agentBgThinkingDelta",
+        sessionId: "bg-session",
+        thinkingId: "thinking-1",
+        text: "hmm",
       },
     ]);
   });

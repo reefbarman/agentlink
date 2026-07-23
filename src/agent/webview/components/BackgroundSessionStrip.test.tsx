@@ -30,6 +30,11 @@ describe("BackgroundSessionStrip defaults", () => {
     expect(screen.getByText("Active review")).toBeTruthy();
     expect(screen.queryByText("Old result")).toBeNull();
     expect(
+      container.querySelector(
+        ".bg-session-streaming .live-link-indicator.live-link-moving",
+      ),
+    ).toBeTruthy();
+    expect(
       screen
         .getByRole("button", { name: "active" })
         .classList.contains("active"),
@@ -77,6 +82,73 @@ describe("BackgroundSessionStrip defaults", () => {
     ).toBe(true);
   });
 
+  it("hides after the last unfinished agent completes and /fleet reveals it", () => {
+    const onStop = vi.fn();
+    const { container, rerender } = render(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          { id: "active", task: "Active review", status: "streaming" },
+        ],
+        showFleetRequest: 0,
+        onStop,
+      }),
+    );
+
+    expect(screen.getByRole("button", { name: /Agent Fleet/ })).toBeTruthy();
+
+    rerender(
+      h(BackgroundSessionStrip, {
+        sessions: [{ id: "active", task: "Active review", status: "idle" }],
+        showFleetRequest: 0,
+        onStop,
+      }),
+    );
+
+    expect(container.querySelector(".bg-session-strip")).toBeNull();
+
+    rerender(
+      h(BackgroundSessionStrip, {
+        sessions: [{ id: "active", task: "Active review", status: "idle" }],
+        showFleetRequest: 1,
+        onStop,
+      }),
+    );
+
+    expect(container.querySelector(".bg-session-strip-body")).toBeTruthy();
+    expect(screen.getByText("Active review")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "all" }).classList.contains("active"),
+    ).toBe(true);
+  });
+
+  it("keeps the fleet visible while an agent is paused", () => {
+    const onStop = vi.fn();
+    const { container, rerender } = render(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          { id: "active", task: "Active review", status: "streaming" },
+        ],
+        onStop,
+      }),
+    );
+
+    rerender(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          {
+            id: "active",
+            task: "Active review",
+            status: "idle",
+            lifecycle: "paused",
+          },
+        ],
+        onStop,
+      }),
+    );
+
+    expect(container.querySelector(".bg-session-strip")).toBeTruthy();
+  });
+
   it("uses the runtime start timestamp after the UI reconnects", () => {
     vi.spyOn(Date, "now").mockReturnValue(70_000);
     render(
@@ -118,7 +190,7 @@ describe("BackgroundSessionStrip defaults", () => {
     fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
 
     expect(
-      screen.getByText("Waiting for provider · request 1:05"),
+      screen.getByText("Waiting for provider… · request 1:05"),
     ).toBeTruthy();
   });
 

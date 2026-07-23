@@ -58,3 +58,18 @@ export async function withFileLock<T>(
     }
   }
 }
+
+/** Acquire multiple file locks in stable order to avoid cross-edit deadlocks. */
+export async function withFileLocks<T>(
+  filePaths: readonly string[],
+  fn: () => Promise<T>,
+): Promise<T> {
+  const paths = [
+    ...new Set(filePaths.map((filePath) => path.resolve(filePath))),
+  ].sort();
+  const acquire = async (index: number): Promise<T> => {
+    if (index >= paths.length) return fn();
+    return withFileLock(paths[index]!, () => acquire(index + 1));
+  };
+  return acquire(0);
+}

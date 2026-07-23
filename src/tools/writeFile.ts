@@ -10,6 +10,7 @@ import {
 } from "../shared/types.js";
 import type {
   EditReviewProvider,
+  EditReviewParams,
   WriteApprovalPromptEvent,
   WriteApprovalPolicyProvider,
 } from "../core/capabilities/editReview.js";
@@ -42,6 +43,7 @@ export interface WriteFileProviders {
   editReviewProvider?: EditReviewProvider;
   writeApprovalPolicyProvider?: WriteApprovalPolicyProvider;
   onApprovalPrompt?: (event: WriteApprovalPromptEvent) => void;
+  prepareOneShotAuthorization?: EditReviewParams["prepareOneShotAuthorization"];
   diagnosticDelay?: number;
 }
 
@@ -103,6 +105,7 @@ export async function handleWriteFile(
       diagnosticDelay: providers.diagnosticDelay ?? DEFAULT_DIAGNOSTIC_DELAY_MS,
       approvalPanel,
       onApprovalRequest,
+      prepareOneShotAuthorization: providers.prepareOneShotAuthorization,
       ...(approvalPromptEvent
         ? {
             onApprovalPresented: () =>
@@ -134,15 +137,17 @@ export async function handleWriteFile(
       ...response
     } = warnings ? { ...result, warnings } : result;
 
-    const appliedAuthorization = canAutoApprove
-      ? authorization
-      : result.decision
-        ? {
-            allowed: result.decision !== "reject",
-            basis: "human" as const,
-            decision: result.decision,
-          }
-        : undefined;
+    const appliedAuthorization = result.authorization
+      ? result.authorization
+      : canAutoApprove
+        ? authorization
+        : result.decision
+          ? {
+              allowed: result.decision !== "reject",
+              basis: "human" as const,
+              decision: result.decision,
+            }
+          : undefined;
 
     return successResult({
       ...response,

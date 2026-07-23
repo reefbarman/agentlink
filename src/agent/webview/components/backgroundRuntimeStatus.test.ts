@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { formatBackgroundRuntimeStatus } from "./backgroundRuntimeStatus";
+import {
+  formatBackgroundRuntimeStatus,
+  getBackgroundRuntimeMotion,
+} from "./backgroundRuntimeStatus";
 
 describe("formatBackgroundRuntimeStatus", () => {
   it("shows provider request elapsed time while waiting", () => {
@@ -9,7 +12,7 @@ describe("formatBackgroundRuntimeStatus", () => {
         { phase: "waiting_for_provider", requestStartedAt: 1_000 },
         66_000,
       ),
-    ).toBe("Waiting for provider · request 1:05");
+    ).toBe("Waiting for provider… · request 1:05");
   });
 
   it("shows thinking time against the same provider request", () => {
@@ -18,7 +21,7 @@ describe("formatBackgroundRuntimeStatus", () => {
         { phase: "thinking", requestStartedAt: 10_000 },
         24_000,
       ),
-    ).toBe("Thinking · request 14s");
+    ).toBe("Thinking… · request 14s");
   });
 
   it("shows retry timing", () => {
@@ -31,6 +34,14 @@ describe("formatBackgroundRuntimeStatus", () => {
         },
         40_000,
       ),
-    ).toBe("Retrying provider · request 30s · retry in 2s");
+    ).toBe("Retrying provider… · request 30s · retry in 2s");
+  });
+
+  it("maps runtime phases to the three Live Link motion classes", () => {
+    expect(getBackgroundRuntimeMotion({ phase: "thinking" })).toBe("moving");
+    expect(getBackgroundRuntimeMotion({ phase: "awaiting_approval" })).toBe(
+      "attention",
+    );
+    expect(getBackgroundRuntimeMotion({ phase: "completed" })).toBe("static");
   });
 });

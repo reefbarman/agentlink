@@ -2754,6 +2754,11 @@ describe("webview App reducer background agent launch blocks", () => {
           streaming: true,
           interrupted: true,
           agentWriteApproval: "session",
+          commandApprovalPolicy: "approve-for-me",
+          configuredCommandApprovalPolicy: "sensitive",
+          approvalPolicy: "on-request",
+          approvalReviewer: "auto-review",
+          executionPreset: "workspace-write",
         },
       },
       {
@@ -2782,6 +2787,10 @@ describe("webview App reducer background agent launch blocks", () => {
     expect(state.chatState.streaming).toBe(false);
     expect(state.chatState.interrupted).toBe(false);
     expect(state.chatState.agentWriteApproval).toBe("prompt");
+    expect(state.chatState.commandApprovalPolicy).toBe("sensitive");
+    expect(state.chatState.approvalPolicy).toBe("on-request");
+    expect(state.chatState.approvalReviewer).toBe("user");
+    expect(state.chatState.executionPreset).toBe("native-manual");
   });
 
   it.each(["project", "global"] as const)(

@@ -67,11 +67,16 @@ function passingChecks(): SandboxBehaviorSyntheticCheckResult {
       cacheIsPrivate: true,
       credentialEnvironmentInherited: true,
     },
-    blockedNetwork: {
-      loopbackConnectDenied: true,
+    networkConfinement: {
+      baselineIpv4LoopbackConnectAllowed: true,
+      baselineIpv6LoopbackConnectAllowedOrUnavailable: true,
+      baselineListenerBindDenied: true,
       privateConnectDenied: true,
       publicConnectDenied: true,
-      loopbackFixtureUntouched: true,
+      listenerCapabilityBindAllowed: true,
+      listenerCapabilityPrivateConnectDenied: true,
+      listenerCapabilityPublicConnectDenied: true,
+      loopbackFixtureReached: true,
       proxyEndpointsLoopbackOnly: true,
     },
     denialEvidence: {
@@ -146,7 +151,7 @@ describe("SandboxBehaviorAttestationService", () => {
           "protected_metadata",
           "process_inheritance",
           "private_environment",
-          "blocked_network",
+          "network_confinement",
           "denial_evidence",
         ],
       },
@@ -180,7 +185,7 @@ describe("SandboxBehaviorAttestationService", () => {
       "credentialEnvironmentInherited",
       "private_environment_failed",
     ],
-    ["blockedNetwork", "loopbackFixtureUntouched", "network_block_failed"],
+    ["networkConfinement", "loopbackFixtureReached", "network_block_failed"],
     [
       "denialEvidence",
       "successIndependentOfExitCode",
@@ -204,8 +209,8 @@ describe("SandboxBehaviorAttestationService", () => {
   it("fails closed when a required field is omitted and maps cleanup evidence separately", async () => {
     const incomplete = passingChecks();
     delete (
-      incomplete.blockedNetwork as Partial<
-        SandboxBehaviorSyntheticCheckResult["blockedNetwork"]
+      incomplete.networkConfinement as Partial<
+        SandboxBehaviorSyntheticCheckResult["networkConfinement"]
       >
     ).publicConnectDenied;
     const incompleteService = new SandboxBehaviorAttestationService({

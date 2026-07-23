@@ -116,29 +116,42 @@ function hasClosingCodeFence(raw: string): boolean {
   });
 }
 
+const localMarked = new Marked({
+  renderer: {
+    html({ text }: { text: string }) {
+      return escapeHtml(text);
+    },
+    code({ text, lang, raw }: { text: string; lang?: string; raw: string }) {
+      const preClass = hasClosingCodeFence(raw)
+        ? ' class="copyable-code-block"'
+        : "";
+      const langClass = lang ? ` class="language-${lang}"` : "";
+      return `<pre${preClass}><code${langClass}>${escapeHtml(text)}</code></pre>`;
+    },
+    checkbox({ checked }: { checked: boolean }) {
+      return renderMarkdownTaskCheckbox(checked);
+    },
+  },
+});
+
+function extractSpecialBlocks(text: string): SpecialBlock[] {
+  const specialBlocks: SpecialBlock[] = [];
+  SPECIAL_FENCE_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = SPECIAL_FENCE_RE.exec(text)) !== null) {
+    specialBlocks.push({
+      kind: match[1] as SpecialBlock["kind"],
+      source: match[2]!,
+    });
+  }
+  return specialBlocks;
+}
+
 function parseMarkdown(text: string): {
   html: string;
   specialBlocks: SpecialBlock[];
 } {
   const specialBlocks: SpecialBlock[] = [];
-
-  const localMarked = new Marked({
-    renderer: {
-      html({ text }: { text: string }) {
-        return escapeHtml(text);
-      },
-      code({ text, lang, raw }: { text: string; lang?: string; raw: string }) {
-        const preClass = hasClosingCodeFence(raw)
-          ? ' class="copyable-code-block"'
-          : "";
-        const langClass = lang ? ` class="language-${lang}"` : "";
-        return `<pre${preClass}><code${langClass}>${escapeHtml(text)}</code></pre>`;
-      },
-      checkbox({ checked }: { checked: boolean }) {
-        return renderMarkdownTaskCheckbox(checked);
-      },
-    },
-  });
 
   let raw = "";
   let lastIndex = 0;
@@ -292,6 +305,10 @@ const MIN_CHARS_PER_FRAME = 1;
 const MAX_CHARS_PER_FRAME = 6;
 // How aggressively to catch up (higher = faster catchup)
 const CATCHUP_FACTOR = 0.04;
+// Minimum ms between committing reveal progress to state. Each commit re-parses
+// the revealed markdown and replaces the container DOM, so committing every rAF
+// frame is O(text²) over a message; ~20Hz is visually indistinguishable.
+const REVEAL_COMMIT_MS = 48;
 
 export function StreamingText({
   text,
@@ -306,10 +323,15 @@ export function StreamingText({
   const targetLenRef = useRef(text.length);
   const bufferingRef = useRef(streaming);
   const revealStartedRef = useRef(!streaming);
+  // Reveal position advances every frame in this ref; it is committed to state
+  // (triggering the markdown reparse) at most every REVEAL_COMMIT_MS.
+  const revealPosRef = useRef(streaming ? 0 : text.length);
+  const lastCommitTimeRef = useRef(0);
 
   // When not streaming, show everything immediately
   useEffect(() => {
     if (!streaming) {
+      revealPosRef.current = text.length;
       setRevealedLen(text.length);
       bufferingRef.current = false;
       cancelAnimationFrame(rafRef.current);
@@ -336,19 +358,25 @@ export function StreamingText({
   useEffect(() => {
     if (!streaming) return;
 
-    const tick = () => {
-      setRevealedLen((prev) => {
-        if (bufferingRef.current) return prev;
+    const tick = (now: number) => {
+      if (!bufferingRef.current) {
         const target = targetLenRef.current;
-        if (prev >= target) return prev;
-        // Adaptive speed: reveal faster when further behind
-        const gap = target - prev;
-        const speed = Math.max(
-          MIN_CHARS_PER_FRAME,
-          Math.min(MAX_CHARS_PER_FRAME, Math.ceil(gap * CATCHUP_FACTOR)),
-        );
-        return Math.min(prev + speed, target);
-      });
+        const prev = revealPosRef.current;
+        if (prev < target) {
+          // Adaptive speed: reveal faster when further behind
+          const gap = target - prev;
+          const speed = Math.max(
+            MIN_CHARS_PER_FRAME,
+            Math.min(MAX_CHARS_PER_FRAME, Math.ceil(gap * CATCHUP_FACTOR)),
+          );
+          revealPosRef.current = Math.min(prev + speed, target);
+        }
+        const caughtUp = revealPosRef.current >= targetLenRef.current;
+        if (caughtUp || now - lastCommitTimeRef.current >= REVEAL_COMMIT_MS) {
+          lastCommitTimeRef.current = now;
+          setRevealedLen(revealPosRef.current);
+        }
+      }
       rafRef.current = requestAnimationFrame(tick);
     };
 
@@ -356,10 +384,11 @@ export function StreamingText({
     return () => cancelAnimationFrame(rafRef.current);
   }, [streaming]);
 
-  // Parse the FULL text to get stable special block sources (not affected by reveal animation)
-  const fullParsed = useMemo(() => parseMarkdown(text), [text]);
+  // Scan the FULL text to get stable special block sources (not affected by
+  // reveal animation). Cheap regex scan — no markdown parse needed here.
+  const fullSpecialBlocks = useMemo(() => extractSpecialBlocks(text), [text]);
   const specialBlocksRef = useRef<SpecialBlock[]>([]);
-  specialBlocksRef.current = fullParsed.specialBlocks;
+  specialBlocksRef.current = fullSpecialBlocks;
 
   // Parse the revealed portion for display
   const displayText = streaming ? text.slice(0, revealedLen) : text;

@@ -1766,11 +1766,35 @@ export class BrowserGatewayHelper {
     );
   }
 
+  private globalDurableMemoryCache: {
+    mtimeMs: number;
+    size: number;
+    content: string;
+  } | null = null;
+
   private readGlobalDurableMemoryContent(): string | undefined {
     const memoryPath = path.join(os.homedir(), ".agentlink", "memory.md");
     try {
-      return fsSync.readFileSync(memoryPath, "utf-8");
+      // Called per processed user message — a full synchronous read would block
+      // the helper's event loop every time, so re-read only when the file changed.
+      const stat = fsSync.statSync(memoryPath);
+      const cached = this.globalDurableMemoryCache;
+      if (
+        cached &&
+        cached.mtimeMs === stat.mtimeMs &&
+        cached.size === stat.size
+      ) {
+        return cached.content;
+      }
+      const content = fsSync.readFileSync(memoryPath, "utf-8");
+      this.globalDurableMemoryCache = {
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        content,
+      };
+      return content;
     } catch {
+      this.globalDurableMemoryCache = null;
       return undefined;
     }
   }

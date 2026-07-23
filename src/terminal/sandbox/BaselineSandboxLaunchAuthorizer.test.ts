@@ -146,7 +146,7 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
     }
   });
 
-  it("compiles a blocked workspace-write policy with private environment and protected metadata", async () => {
+  it("compiles a loopback workspace-write policy without a grant", async () => {
     const test = await fixture();
     try {
       const launch = await test.authorizer.authorize(request(test.workspace));
@@ -157,7 +157,7 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       expect(policy).toMatchObject({
         version: CURRENT_SANDBOX_POLICY_VERSION,
         profileId: "workspace-write",
-        network: { mode: "blocked" },
+        network: { mode: "loopback" },
         deniedRoots: [],
         allowedUnixSockets: [],
       });
@@ -260,10 +260,13 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
         );
       }
       expect(launch.authorization.bindingDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(launch.authorization.capabilityRequest).toBeUndefined();
+      expect(launch.authorization.grant).toBeUndefined();
+      expect(launch.helperRequest.network).toEqual({ mode: "loopback" });
       expect(launch.metadata.capabilities).toMatchObject({
         filesystemRead: "host-visible",
         filesystemWrite: "strict",
-        network: "blocked",
+        network: "loopback",
         privateHome: false,
         privateTmp: false,
         hostIpcBlocked: false,
@@ -523,7 +526,7 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
         sessionId: "session-1",
         policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
         profileId: "workspace-write",
-        capability: { publicNetwork: false },
+        capability: { publicNetwork: false, localBinding: false },
       });
       expect(launch.authorization.bindingDigest).toBe(expectedBinding);
       launch.finalize?.();
@@ -588,6 +591,61 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       await test.dispose();
     }
   });
+
+  it.each([
+    [
+      "local binding",
+      { allowLocalBinding: true },
+      { mode: "loopback", allowLocalBinding: true },
+    ],
+    [
+      "public network and local binding",
+      { unrestrictedPublicNetwork: true, allowLocalBinding: true },
+      { mode: "public-proxy", allowLocalBinding: true },
+    ],
+  ] as const)(
+    "binds and consumes one exact %s grant",
+    async (_label, capabilityRequest, network) => {
+      const test = await fixture();
+      let nextId = 1;
+      const capabilityAuthority = new SandboxCapabilityAuthority({
+        now: () => 100,
+        createId: () => `grant-id-${nextId++}`,
+      });
+      const authorizer = new BaselineSandboxLaunchAuthorizer({
+        workspaceRoots: [test.workspace],
+        privateDirectoryPrefix: path.join(test.privateRoot, "al-capability-"),
+        homeDirectory: path.join(test.root, "real-home"),
+        hostTemporaryDirectory: os.tmpdir(),
+        capabilityAuthority,
+        capabilityGrantTtlMs: 100,
+        now: () => 100,
+      });
+
+      try {
+        const launch = await authorizer.authorize(
+          request(test.workspace, {
+            sandboxCapabilityRequest: capabilityRequest,
+          }),
+        );
+        expect(launch.authorization.policy.network).toEqual(network);
+        expect(launch.authorization.capabilityRequest).toEqual(
+          capabilityRequest,
+        );
+        expect(launch.authorization.grant).toMatchObject({
+          consumedAt: 100,
+          bindingDigest: launch.authorization.bindingDigest,
+        });
+        expect(launch.helperRequest.network).toEqual(network);
+        expect(
+          capabilityAuthority.getAuditEvents().map(({ type }) => type),
+        ).toEqual(["issued", "consumed"]);
+        launch.finalize?.();
+      } finally {
+        await test.dispose();
+      }
+    },
+  );
 
   it("fails closed for outside cwd and changed inline files", async () => {
     const test = await fixture();

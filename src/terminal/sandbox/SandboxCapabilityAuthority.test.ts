@@ -18,7 +18,7 @@ const binding: SandboxLaunchBindingInput = {
   sessionId: "session-1",
   policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
   profileId: "workspace-write",
-  capability: { publicNetwork: true },
+  capability: { publicNetwork: true, localBinding: false },
 };
 
 function authority() {
@@ -51,6 +51,12 @@ describe("SandboxCapabilityAuthority", () => {
         command: "curl example.net",
       }),
     ).not.toBe(createSandboxLaunchBindingDigest(binding));
+    expect(
+      createSandboxLaunchBindingDigest({
+        ...binding,
+        capability: { publicNetwork: true, localBinding: true },
+      }),
+    ).not.toBe(createSandboxLaunchBindingDigest(binding));
   });
 
   it("keeps bearer authority out of serializable grant metadata", () => {
@@ -71,6 +77,24 @@ describe("SandboxCapabilityAuthority", () => {
       issuedAt: 100,
       expiresAt: 200,
       auditId: "id-2",
+    });
+  });
+
+  it("issues a local-binding-only one-use capability grant", () => {
+    const test = authority();
+    const localBinding = {
+      ...binding,
+      capability: { publicNetwork: false, localBinding: true },
+    };
+    const issued = test.authority.issueCapabilityGrant({
+      binding: localBinding,
+      expiresAt: 200,
+    });
+
+    expect(test.authority.consume(issued.handle, localBinding).ok).toBe(true);
+    expect(test.authority.consume(issued.handle, localBinding)).toEqual({
+      ok: false,
+      reason: "consumed",
     });
   });
 
@@ -153,10 +177,22 @@ describe("SandboxCapabilityAuthority", () => {
     const test = authority();
     expect(() =>
       test.authority.issuePublicNetworkGrant({
-        binding: { ...binding, capability: { publicNetwork: false } },
+        binding: {
+          ...binding,
+          capability: { publicNetwork: false, localBinding: false },
+        },
         expiresAt: 200,
       }),
     ).toThrow("requires publicNetwork capability");
+    expect(() =>
+      test.authority.issueCapabilityGrant({
+        binding: {
+          ...binding,
+          capability: { publicNetwork: false, localBinding: false },
+        },
+        expiresAt: 200,
+      }),
+    ).toThrow("requires an additional capability");
     expect(() =>
       test.authority.issuePublicNetworkGrant({ binding, expiresAt: 100 }),
     ).toThrow("expiry must be in the future");

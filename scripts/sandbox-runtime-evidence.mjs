@@ -326,7 +326,7 @@ function parseJsonLine(text) {
 
 function makeSandboxRequest(root) {
   return {
-    version: 2,
+    version: 3,
     operation: "execute",
     command: "/usr/bin/true",
     cwd: root,

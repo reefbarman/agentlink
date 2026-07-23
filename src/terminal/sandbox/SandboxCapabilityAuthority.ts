@@ -82,7 +82,7 @@ export class SandboxCapabilityAuthority {
     this.createId = options.createId ?? randomUUID;
   }
 
-  issuePublicNetworkGrant(input: {
+  issueCapabilityGrant(input: {
     binding: SandboxLaunchBindingInput;
     expiresAt: number;
     auditId?: string;
@@ -90,8 +90,13 @@ export class SandboxCapabilityAuthority {
     grant: ApprovedSandboxCapabilityGrant;
     handle: SandboxCapabilityConsumptionHandle;
   } {
-    if (!input.binding.capability.publicNetwork) {
-      throw new Error("Public-network grant requires publicNetwork capability");
+    if (
+      !input.binding.capability.publicNetwork &&
+      !input.binding.capability.localBinding
+    ) {
+      throw new Error(
+        "Sandbox capability grant requires an additional capability",
+      );
     }
 
     const issuedAt = this.now();
@@ -124,6 +129,21 @@ export class SandboxCapabilityAuthority {
     });
 
     return { grant: { ...grant }, handle };
+  }
+
+  /** Backward-compatible name for callers issuing the original public-network grant. */
+  issuePublicNetworkGrant(input: {
+    binding: SandboxLaunchBindingInput;
+    expiresAt: number;
+    auditId?: string;
+  }): {
+    grant: ApprovedSandboxCapabilityGrant;
+    handle: SandboxCapabilityConsumptionHandle;
+  } {
+    if (!input.binding.capability.publicNetwork) {
+      throw new Error("Public-network grant requires publicNetwork capability");
+    }
+    return this.issueCapabilityGrant(input);
   }
 
   consume(

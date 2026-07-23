@@ -13,6 +13,7 @@ import type {
   SandboxRuntimeProvider,
 } from "./SandboxRuntimeProvider.js";
 import {
+  SANDBOX_INTERACTIVE_PROMPT_GRACE_MS,
   SandboxTerminalCoordinator,
   type AuthorizedSandboxLaunch,
   type SandboxLaunchAuthorizer,
@@ -126,13 +127,13 @@ function harness() {
             writableRoots: ["/workspace"],
             deniedRoots: [],
             protectedReadOnlyRoots: [],
-            network: { mode: "blocked" },
+            network: { mode: "loopback" },
             environment: { inheritHost: false, values: {} },
             allowedUnixSockets: [],
           },
         },
         helperRequest: {
-          version: 2,
+          version: 3,
           type: "launch",
           channelId,
           commandId,
@@ -147,7 +148,7 @@ function harness() {
             allowWrite: ["/workspace"],
             denyWrite: [],
           },
-          network: { mode: "blocked" },
+          network: { mode: "loopback" },
           protectedRoots: [],
           structurallyProtectedRoots: [],
           dimensions,
@@ -835,6 +836,216 @@ describe("SandboxTerminalCoordinator", () => {
       name: "Agent command",
       busy: true,
     });
+  });
+
+  it("terminates a foreground process group after a high-confidence prompt stays inactive", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const resultPromise = test.coordinator.executeCommand({
+        command: "interactive-generator",
+        cwd: "/workspace",
+        sandboxSessionId: "agent-session",
+      });
+      await flush();
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 10, pgid: 10, backend: "seatbelt" });
+      await flush();
+      process.terminate.mockImplementation(() => {
+        expect(test.coordinator.getBackgroundState("sandbox-1")).toMatchObject({
+          state: "interactive_prompt",
+          termination_reason: "interactive_prompt",
+        });
+        return true;
+      });
+
+      process.emit({
+        type: "data",
+        data: "\u001b[33mContinue?\u001b[0m ",
+      });
+      await vi.advanceTimersByTimeAsync(
+        SANDBOX_INTERACTIVE_PROMPT_GRACE_MS - 1,
+      );
+      expect(process.terminate).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(process.terminate).toHaveBeenCalledOnce();
+
+      process.completionDeferred.resolve({
+        exitCode: 143,
+        signal: 15,
+        timedOut: false,
+      });
+      const result = await resultPromise;
+      expect(result).toMatchObject({
+        exit_code: 143,
+        timed_out: false,
+        termination_reason: "interactive_prompt",
+        interactive_prompt: {
+          kind: "confirmation",
+          confidence: "high",
+          evidence: "Continue?",
+        },
+        is_running: false,
+        retry_safe: false,
+      });
+      expect(result.backgrounded).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets or cancels the foreground watchdog on later output", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const resultPromise = test.coordinator.executeCommand({
+        command: "interactive-generator",
+        cwd: "/workspace",
+        sandboxSessionId: "agent-session",
+      });
+      await flush();
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 11, pgid: 11, backend: "seatbelt" });
+      await flush();
+
+      process.emit({ type: "data", data: "Continue? " });
+      await vi.advanceTimersByTimeAsync(
+        SANDBOX_INTERACTIVE_PROMPT_GRACE_MS - 100,
+      );
+      process.emit({ type: "data", data: "\rWorking...\n" });
+      await vi.advanceTimersByTimeAsync(SANDBOX_INTERACTIVE_PROMPT_GRACE_MS);
+      expect(process.terminate).not.toHaveBeenCalled();
+
+      process.emit({ type: "data", data: "Press Enter to continue" });
+      await vi.advanceTimersByTimeAsync(
+        SANDBOX_INTERACTIVE_PROMPT_GRACE_MS - 1,
+      );
+      process.emit({ type: "data", data: "\u001b[0m" });
+      await vi.advanceTimersByTimeAsync(
+        SANDBOX_INTERACTIVE_PROMPT_GRACE_MS - 1,
+      );
+      expect(process.terminate).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(process.terminate).toHaveBeenCalledOnce();
+
+      process.completionDeferred.resolve({ exitCode: 143, timedOut: false });
+      await resultPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves background interactive prompts observation-only", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      await test.coordinator.executeCommand({
+        command: "interactive-server",
+        cwd: "/workspace",
+        background: true,
+        sandboxSessionId: "agent-session",
+      });
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 12, pgid: 12, backend: "seatbelt" });
+      await flush();
+      process.emit({ type: "data", data: "Continue? " });
+
+      await vi.advanceTimersByTimeAsync(
+        SANDBOX_INTERACTIVE_PROMPT_GRACE_MS * 2,
+      );
+      expect(process.terminate).not.toHaveBeenCalled();
+      expect(test.coordinator.getBackgroundState("sandbox-1")).toMatchObject({
+        is_running: true,
+        state: "running",
+      });
+      expect(
+        test.coordinator.getBackgroundState("sandbox-1")?.termination_reason,
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cleans the foreground watchdog on completion, timeout, and close", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const completed = test.coordinator.executeCommand({
+        command: "complete-after-prompt",
+        cwd: "/workspace",
+        terminal_name: "Complete",
+        sandboxSessionId: "agent-session",
+      });
+      await flush();
+      const completedProcess = test.processes[0];
+      completedProcess.readyDeferred.resolve({
+        pid: 13,
+        pgid: 13,
+        backend: "seatbelt",
+      });
+      await flush();
+      completedProcess.emit({ type: "data", data: "Continue? " });
+      completedProcess.completionDeferred.resolve({
+        exitCode: 0,
+        timedOut: false,
+      });
+      await completed;
+
+      const timedOut = test.coordinator.executeCommand({
+        command: "timeout-after-prompt",
+        cwd: "/workspace",
+        terminal_name: "Timeout",
+        timeout: 100,
+        sandboxSessionId: "agent-session",
+      });
+      await flush();
+      const timedOutProcess = test.processes[1];
+      timedOutProcess.readyDeferred.resolve({
+        pid: 14,
+        pgid: 14,
+        backend: "seatbelt",
+      });
+      await flush();
+      timedOutProcess.emit({ type: "data", data: "Continue? " });
+      await vi.advanceTimersByTimeAsync(100);
+      await timedOut;
+
+      const closing = test.coordinator.executeCommand({
+        command: "close-after-prompt",
+        cwd: "/workspace",
+        terminal_name: "Close",
+        sandboxSessionId: "agent-session",
+      });
+      await flush();
+      const closedProcess = test.processes[2];
+      closedProcess.readyDeferred.resolve({
+        pid: 15,
+        pgid: 15,
+        backend: "seatbelt",
+      });
+      await flush();
+      closedProcess.emit({ type: "data", data: "Continue? " });
+      test.coordinator.closeTerminals(["Close"]);
+
+      await vi.advanceTimersByTimeAsync(
+        SANDBOX_INTERACTIVE_PROMPT_GRACE_MS * 2,
+      );
+      expect(completedProcess.terminate).not.toHaveBeenCalled();
+      expect(timedOutProcess.terminate).not.toHaveBeenCalled();
+      expect(closedProcess.terminate).not.toHaveBeenCalled();
+      timedOutProcess.completionDeferred.resolve({
+        exitCode: 0,
+        timedOut: false,
+      });
+      closedProcess.completionDeferred.resolve({
+        exitCode: 0,
+        timedOut: false,
+      });
+      await flush();
+      void closing.catch(() => undefined);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("provides background output, UI input, resize, and Ctrl+C", async () => {

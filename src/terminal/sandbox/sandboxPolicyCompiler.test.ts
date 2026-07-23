@@ -23,7 +23,7 @@ function authorization(
         "/workspace/.agentlink",
       ],
       structurallyProtectedRoots: ["/workspace/.git"],
-      network: { mode: "blocked" },
+      network: { mode: "loopback" },
       environment: {
         inheritHost: false,
         values: {
@@ -53,9 +53,9 @@ function compile(auth = authorization()) {
 }
 
 describe("compileSandboxHelperLaunchRequest", () => {
-  it("compiles a deterministic blocked-network baseline", () => {
+  it("compiles a deterministic loopback baseline without a grant", () => {
     expect(compile()).toEqual({
-      version: 2,
+      version: 3,
       type: "launch",
       channelId: "channel-1",
       commandId: "command-1",
@@ -76,7 +76,7 @@ describe("compileSandboxHelperLaunchRequest", () => {
         denyRead: ["/Users"],
         denyWrite: ["/workspace/.agentlink", "/workspace/.git"],
       },
-      network: { mode: "blocked" },
+      network: { mode: "loopback" },
       protectedRoots: ["/workspace/.agentlink", "/workspace/.git/config"],
       structurallyProtectedRoots: ["/workspace/.git"],
     });
@@ -101,6 +101,40 @@ describe("compileSandboxHelperLaunchRequest", () => {
 
     expect(compile(elevated).network).toEqual({ mode: "public-proxy" });
   });
+
+  it.each([
+    [
+      "local binding",
+      { allowLocalBinding: true },
+      { mode: "loopback", allowLocalBinding: true },
+    ],
+    [
+      "public proxy and local binding",
+      { unrestrictedPublicNetwork: true, allowLocalBinding: true },
+      { mode: "public-proxy", allowLocalBinding: true },
+    ],
+  ] as const)(
+    "compiles %s with one consumed matching grant",
+    (_label, request, network) => {
+      const base = authorization();
+      const elevated = authorization({
+        capabilityRequest: request,
+        grant: {
+          grantId: "grant-1",
+          bindingDigest: base.bindingDigest,
+          policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
+          sessionId: "session-1",
+          issuedAt: 100,
+          expiresAt: 200,
+          auditId: "audit-1",
+          consumedAt: 125,
+        },
+        policy: { ...base.policy, network },
+      });
+
+      expect(compile(elevated).network).toEqual(network);
+    },
+  );
 
   it.each([
     [
@@ -166,7 +200,44 @@ describe("compileSandboxHelperLaunchRequest", () => {
       "does not match",
     ],
     [
-      "grant on blocked policy",
+      "local-binding request without local-binding policy",
+      (base: SandboxLaunchAuthorization) => ({
+        ...base,
+        capabilityRequest: { allowLocalBinding: true },
+      }),
+      "does not match",
+    ],
+    [
+      "local-binding policy without request",
+      (base: SandboxLaunchAuthorization) => ({
+        ...base,
+        policy: {
+          ...base.policy,
+          network: {
+            mode: "loopback" as const,
+            allowLocalBinding: true as const,
+          },
+        },
+      }),
+      "does not match",
+    ],
+    [
+      "local-binding capability without grant",
+      (base: SandboxLaunchAuthorization) => ({
+        ...base,
+        capabilityRequest: { allowLocalBinding: true },
+        policy: {
+          ...base.policy,
+          network: {
+            mode: "loopback" as const,
+            allowLocalBinding: true as const,
+          },
+        },
+      }),
+      "requires an approved grant",
+    ],
+    [
+      "grant on baseline policy",
       (base: SandboxLaunchAuthorization) => ({
         ...base,
         grant: {

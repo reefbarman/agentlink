@@ -88,6 +88,7 @@ export interface TerminalSandboxAttestationSummary {
   capabilities: SandboxExecutionMetadata["capabilities"];
   grant?: SandboxExecutionMetadata["grant"];
   environmentPolicy?: SandboxExecutionMetadata["environmentPolicy"];
+  capabilityRequest?: SandboxExecutionMetadata["capabilityRequest"];
 }
 
 /** Token-free host-owned evidence shown to approval and result surfaces. */
@@ -160,12 +161,29 @@ export type TerminalExecutionFailureStage =
   | "launch"
   | "execution";
 
+export type TerminalTerminationReason = "interactive_prompt";
+
+export type TerminalInteractivePromptKind =
+  | "confirmation"
+  | "press_enter"
+  | "input_request"
+  | "choice_request"
+  | "waiting_for_input"
+  | "custom_code_preservation";
+
+export interface TerminalInteractivePromptDetection {
+  kind: TerminalInteractivePromptKind;
+  confidence: "high" | "observation";
+  evidence: string;
+}
+
 export interface TerminalExecutionAttemptSummary {
   attempt: 1 | 2;
   status:
     | "completed"
     | "running"
     | "timed_out"
+    | "interactive_prompt"
     | "approval_denied"
     | "cancelled"
     | "failed";
@@ -233,6 +251,8 @@ export interface TerminalCommandResult {
     threshold: "safe" | "sensitive";
   };
   timed_out?: boolean;
+  termination_reason?: TerminalTerminationReason;
+  interactive_prompt?: TerminalInteractivePromptDetection;
   backgrounded?: boolean;
   is_running?: boolean;
   execution_mode?:
@@ -319,6 +339,7 @@ export type TerminalLifecycleState =
   | "running"
   | "detached"
   | "timed_out"
+  | "interactive_prompt"
   | "completed"
   | "unknown_termination";
 
@@ -334,6 +355,8 @@ export interface TerminalBackgroundState {
   output_retained_bytes?: number;
   output_dropped_bytes?: number;
   terminal_raw_output?: string;
+  termination_reason?: TerminalTerminationReason;
+  interactive_prompt?: TerminalInteractivePromptDetection;
 }
 
 export interface TerminalRetainedOutputMetadata {

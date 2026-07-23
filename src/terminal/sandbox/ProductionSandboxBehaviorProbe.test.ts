@@ -137,7 +137,7 @@ describe("createProductionSandboxRuntimeFingerprint", () => {
         metadata: {
           extensionVersion: "1.2.3",
           profileId: "workspace-write",
-          helperProtocolVersion: 2,
+          helperProtocolVersion: 3,
           backend: "seatbelt",
           platform: "darwin",
           architecture: "arm64",

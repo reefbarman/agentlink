@@ -1,48 +1,13 @@
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
+import { type ToolResult } from "../shared/types.js";
+import { detectInteractivePrompt } from "../terminal/interactivePromptDetector.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 import { sleep } from "../util/sleep.js";
-
-import { type ToolResult } from "../shared/types.js";
-
-const INTERACTIVE_PROMPT_PATTERNS: RegExp[] = [
-  /\b(y\/n|yes\/no|press\s+(enter|return)|continue\?|are you sure)\b/i,
-  /\b(choose|select)\b.*\b(option|number)\b/i,
-  /\b(waiting\s+for\s+(input|confirmation)|enter\s+(?:yes|no|y|n))\b/i,
-  // Known prompt text emitted by codegen workflows that pause for confirmation.
-  /\bcustom code preservation\b/i,
-];
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} bytes`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
-}
-
-function detectPromptBlock(output: string): {
-  blocked_on_prompt: boolean;
-  matched_pattern?: string;
-} {
-  const trimmed = output.trim();
-  if (!trimmed) {
-    return { blocked_on_prompt: false };
-  }
-
-  const tail = trimmed.slice(Math.max(0, trimmed.length - 4000));
-  const nonEmptyLines = tail
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  const recentTail = nonEmptyLines.slice(-6).join("\n");
-
-  for (const pattern of INTERACTIVE_PROMPT_PATTERNS) {
-    if (pattern.test(recentTail)) {
-      return {
-        blocked_on_prompt: true,
-        matched_pattern: pattern.source,
-      };
-    }
-  }
-  return { blocked_on_prompt: false };
 }
 
 export interface GetTerminalOutputProviders {
@@ -194,19 +159,23 @@ export async function handleGetTerminalOutput(
           recently_closed: true,
         }
       : {}),
+    ...(state.termination_reason
+      ? { termination_reason: state.termination_reason }
+      : {}),
+    ...(state.interactive_prompt
+      ? { interactive_prompt: { ...state.interactive_prompt } }
+      : {}),
     ...(params.kill && { killed: true }),
   };
 
   if (state.is_running && state.output_captured) {
-    const promptState = detectPromptBlock(state.output);
-    if (promptState.blocked_on_prompt) {
+    const prompt = detectInteractivePrompt(output);
+    if (prompt) {
       result.blocked_on_prompt = true;
-      result.prompt_detection = "heuristic";
-      if (promptState.matched_pattern) {
-        result.prompt_pattern = promptState.matched_pattern;
-      }
+      result.prompt_detection = "observation_only";
+      result.interactive_prompt = prompt;
       result.prompt_hint =
-        "The command appears to be waiting for interactive input. Use terminal_id with get_terminal_output(kill: true) to stop it, or open the terminal UI and answer the prompt.";
+        "The background command may be waiting for interactive input. get_terminal_output only observes background commands; use kill: true to stop it, or open the terminal UI and answer the prompt.";
     }
   }
 

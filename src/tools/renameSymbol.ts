@@ -6,9 +6,12 @@ import {
 
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import type { RenameSymbolProvider } from "../core/capabilities/editReview.js";
+import type { PathAccessProvider } from "../core/capabilities/readSearch.js";
+import { resolveAndValidatePath } from "../util/paths.js";
 
 export interface RenameSymbolProviders {
   renameSymbolProvider?: RenameSymbolProvider;
+  pathAccessProvider?: PathAccessProvider;
 }
 
 export async function handleRenameSymbol(
@@ -35,14 +38,42 @@ export async function handleRenameSymbol(
       };
     }
 
+    let providerPath = params.path;
+    if (providers.pathAccessProvider) {
+      const resolved = resolveAndValidatePath(params.path);
+      const access = await providers.pathAccessProvider.ensureAccess({
+        absolutePath: resolved.absolutePath,
+        inputPath: params.path,
+        inWorkspace: resolved.inWorkspace,
+        sessionId,
+        kind: "read",
+      });
+      if (!access.approved) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "rejected",
+                path: params.path,
+                ...(access.reason ? { reason: access.reason } : {}),
+              }),
+            },
+          ],
+        };
+      }
+      providerPath = resolved.absolutePath;
+    }
+
     return await providers.renameSymbolProvider.rename({
-      path: params.path,
+      path: providerPath,
       line: params.line,
       column: params.column,
       newName: params.new_name,
       sessionId,
       approvalPanel,
       onApprovalRequest,
+      ...(providers.pathAccessProvider ? { sourceReadAuthorized: true } : {}),
     });
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {

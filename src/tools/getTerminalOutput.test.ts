@@ -251,6 +251,92 @@ describe("handleGetTerminalOutput", () => {
     );
   });
 
+  it("observes ANSI prompts in background output without interrupting", async () => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      is_running: true,
+      state: "running",
+      exit_code: null,
+      output: "build output\n\u001b[33mContinue?\u001b[0m ",
+      output_captured: true,
+    });
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_prompt" },
+      { terminalProvider },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      terminal_id: "term_prompt",
+      is_running: true,
+      blocked_on_prompt: true,
+      prompt_detection: "observation_only",
+      interactive_prompt: {
+        kind: "confirmation",
+        confidence: "high",
+        evidence: "Continue?",
+      },
+      prompt_hint: expect.stringContaining("only observes background commands"),
+    });
+    expect(terminalProvider.interruptTerminal).not.toHaveBeenCalled();
+  });
+
+  it("reports low-confidence prompt hints as observation-only", async () => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      is_running: true,
+      state: "running",
+      exit_code: null,
+      output: "Checking custom code preservation settings...",
+      output_captured: true,
+    });
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_prompt_hint" },
+      { terminalProvider },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      blocked_on_prompt: true,
+      prompt_detection: "observation_only",
+      interactive_prompt: {
+        kind: "custom_code_preservation",
+        confidence: "observation",
+      },
+    });
+    expect(terminalProvider.interruptTerminal).not.toHaveBeenCalled();
+  });
+
+  it("preserves a coordinator-owned interactive prompt termination reason", async () => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      is_running: false,
+      state: "interactive_prompt",
+      exit_code: 143,
+      output: "Continue?",
+      output_captured: true,
+      termination_reason: "interactive_prompt",
+      interactive_prompt: {
+        kind: "confirmation",
+        confidence: "high",
+        evidence: "Continue?",
+      },
+    });
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_terminated_prompt" },
+      { terminalProvider },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      state: "interactive_prompt",
+      exit_code: 143,
+      termination_reason: "interactive_prompt",
+      interactive_prompt: {
+        kind: "confirmation",
+        confidence: "high",
+        evidence: "Continue?",
+      },
+    });
+  });
+
   it("interrupts the terminal when kill is requested", async () => {
     vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
       is_running: false,

@@ -42,7 +42,7 @@ const binding: SandboxLaunchBindingInput = {
   sessionId: "session-1",
   policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
   profileId: "workspace-write",
-  capability: { publicNetwork: true },
+  capability: { publicNetwork: true, localBinding: false },
 };
 
 describe("sandbox launch bindings", () => {
@@ -76,7 +76,14 @@ describe("sandbox launch bindings", () => {
     ["session", { sessionId: "session-2" }],
     ["policy version", { policyVersion: "future-policy" }],
     ["profile", { profileId: "read-only" }],
-    ["capability", { capability: { publicNetwork: false } }],
+    [
+      "public-network capability",
+      { capability: { publicNetwork: false, localBinding: false } },
+    ],
+    [
+      "local-binding capability",
+      { capability: { publicNetwork: true, localBinding: true } },
+    ],
   ])("changes when the %s changes", (_label, changes) => {
     expect(serializeSandboxLaunchBinding({ ...binding, ...changes })).not.toBe(
       serializeSandboxLaunchBinding(binding),
@@ -94,20 +101,31 @@ describe("sandbox launch bindings", () => {
 });
 
 describe("Checkpoint B sandbox capabilities", () => {
-  it("accepts absent, blocked, and public-network requests", () => {
+  it("accepts baseline, public-network, local-binding, and combined requests", () => {
     expect(validateCheckpointBSandboxCapabilityRequest(undefined)).toEqual({
       ok: true,
       publicNetwork: false,
+      localBinding: false,
     });
     expect(validateCheckpointBSandboxCapabilityRequest({})).toEqual({
       ok: true,
       publicNetwork: false,
+      localBinding: false,
     });
     expect(
       validateCheckpointBSandboxCapabilityRequest({
         unrestrictedPublicNetwork: true,
       }),
-    ).toEqual({ ok: true, publicNetwork: true });
+    ).toEqual({ ok: true, publicNetwork: true, localBinding: false });
+    expect(
+      validateCheckpointBSandboxCapabilityRequest({ allowLocalBinding: true }),
+    ).toEqual({ ok: true, publicNetwork: false, localBinding: true });
+    expect(
+      validateCheckpointBSandboxCapabilityRequest({
+        unrestrictedPublicNetwork: true,
+        allowLocalBinding: true,
+      }),
+    ).toEqual({ ok: true, publicNetwork: true, localBinding: true });
   });
 
   it("rejects every deferred capability field", () => {

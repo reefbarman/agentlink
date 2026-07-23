@@ -40,7 +40,10 @@ import {
 import type { ApprovalManager } from "../../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvider.js";
 import { WorkingSetStore } from "../../tools/context/WorkingSetStore.js";
-import { approveOutsideWorkspaceAccess } from "../../tools/pathAccessUI.js";
+import {
+  approveOutsideWorkspaceAccess,
+  type GuardianOutsideReadOptions,
+} from "../../tools/pathAccessUI.js";
 import { getAlCollectionName } from "../../indexer/collectionName.js";
 import { isAgentlinkTmpArtifact } from "../../util/agentlinkTmpArtifacts.js";
 import { projectVisibleStructuralGraph } from "../../indexer/structuralGraph.js";
@@ -225,6 +228,7 @@ export function createVscodePathAccessProvider(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   signal?: AbortSignal,
+  guardian?: GuardianOutsideReadOptions,
 ): PathAccessProvider {
   return {
     async ensureAccess(request) {
@@ -248,6 +252,7 @@ export function createVscodePathAccessProvider(
         approvalPanel,
         request.sessionId,
         signal,
+        ...(guardian ? [guardian] : []),
       );
     },
   };

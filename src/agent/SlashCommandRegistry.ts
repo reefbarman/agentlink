@@ -140,6 +140,12 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     builtin: true,
   },
   {
+    name: "fleet",
+    description: "Show the Agent Fleet panel",
+    source: "builtin",
+    builtin: true,
+  },
+  {
     name: "remember",
     description:
       "Review this session for durable learnings and propose approved memory/config updates",

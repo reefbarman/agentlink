@@ -1,3 +1,5 @@
+import type { ActivityMotion } from "./activityPresentation";
+
 export type BackgroundRuntimePhase =
   | "queued"
   | "waiting_for_provider"
@@ -14,6 +16,22 @@ export interface BackgroundRuntimeStatus {
   phase?: BackgroundRuntimePhase;
   requestStartedAt?: number;
   retryAt?: number;
+}
+
+export function getBackgroundRuntimeMotion(
+  runtime: BackgroundRuntimeStatus | undefined,
+): ActivityMotion {
+  switch (runtime?.phase) {
+    case "awaiting_approval":
+      return "attention";
+    case "completed":
+    case "failed":
+    case "cancelled":
+    case "queued":
+      return "static";
+    default:
+      return "moving";
+  }
 }
 
 function formatDurationMs(durationMs: number): string {
@@ -37,21 +55,21 @@ export function formatBackgroundRuntimeStatus(
 
   switch (runtime.phase) {
     case "waiting_for_provider":
-      return `Waiting for provider${requestSuffix}`;
+      return `Waiting for provider…${requestSuffix}`;
     case "thinking":
-      return `Thinking${requestSuffix}`;
+      return `Thinking…${requestSuffix}`;
     case "responding":
-      return `Responding${requestSuffix}`;
+      return `Responding…${requestSuffix}`;
     case "retrying_provider": {
       const retryIn = runtime.retryAt
         ? ` · retry in ${formatDurationMs(runtime.retryAt - now)}`
         : "";
-      return `Retrying provider${requestSuffix}${retryIn}`;
+      return `Retrying provider…${requestSuffix}${retryIn}`;
     }
     case "executing_tool":
-      return "Executing tool";
+      return "Running tool…";
     case "awaiting_approval":
-      return "Awaiting approval";
+      return "Approval needed";
     case "queued":
       return "Queued";
     case "completed":

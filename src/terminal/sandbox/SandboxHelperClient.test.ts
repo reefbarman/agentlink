@@ -26,7 +26,7 @@ const request: SandboxHelperLaunchRequest = {
     allowWrite: ["/workspace", "/private/tmp"],
     denyWrite: ["/workspace/.git"],
   },
-  network: { mode: "blocked" },
+  network: { mode: "loopback" },
   protectedRoots: ["/workspace/.git/config"],
   structurallyProtectedRoots: ["/workspace/.git"],
   dimensions: { columns: 80, rows: 24 },

@@ -139,6 +139,14 @@ export class SessionStore implements SessionPersistenceProvider {
   private readonly log: ((message: string) => void) | undefined;
   /** In-memory index — updated on every save/delete/rename */
   private index: Map<string, SessionSummary> = new Map();
+  /**
+   * SHA-256 of the last messages.json content written per session. Lets
+   * metadata-only saves (token counters, run state) skip re-writing and
+   * re-fsyncing the full transcript.
+   */
+  private lastMessagesDigest: Map<string, string> = new Map();
+  /** Directories already created this process — skips redundant mkdirSync. */
+  private ensuredDirs = new Set<string>();
   private indexLoadState:
     | { ok: true }
     | { ok: false; reason: "corrupt" | "io_error"; message: string } = {
@@ -695,10 +703,19 @@ export class SessionStore implements SessionPersistenceProvider {
       schemaVersion: SCHEMA_VERSION,
       messages: record.messages,
     };
-    this.writeJsonFileAtomic(
-      path.join(sessionDir, "messages.json"),
-      messagesFile,
-    );
+    const messagesPath = path.join(sessionDir, "messages.json");
+    const messagesJson = `${JSON.stringify(messagesFile)}\n`;
+    const messagesDigest = crypto
+      .createHash("sha256")
+      .update(messagesJson)
+      .digest("base64");
+    const transcriptUnchanged =
+      this.lastMessagesDigest.get(summary.id) === messagesDigest &&
+      fs.existsSync(messagesPath);
+    if (!transcriptUnchanged) {
+      this.writeSerializedFileAtomic(messagesPath, messagesJson);
+      this.lastMessagesDigest.set(summary.id, messagesDigest);
+    }
 
     const metadataFile = this.recordMetadataToFile(metadata, revision, summary);
     this.writeJsonFileAtomic(
@@ -787,8 +804,29 @@ export class SessionStore implements SessionPersistenceProvider {
   }
 
   private writeJsonFileAtomic(filePath: string, value: unknown): void {
+    this.writeSerializedFileAtomic(filePath, `${JSON.stringify(value)}\n`);
+  }
+
+  private writeSerializedFileAtomic(filePath: string, content: string): void {
     const dir = path.dirname(filePath);
     this.ensureDir(dir);
+    try {
+      this.writeSerializedFileAtomicInDir(filePath, dir, content);
+    } catch (error) {
+      if (!this.isNotFoundError(error)) throw error;
+      // The directory was removed out from under the ensuredDirs cache (e.g.
+      // another window deleted the session) — recreate it and retry once.
+      this.ensuredDirs.delete(dir);
+      this.ensureDir(dir);
+      this.writeSerializedFileAtomicInDir(filePath, dir, content);
+    }
+  }
+
+  private writeSerializedFileAtomicInDir(
+    filePath: string,
+    dir: string,
+    content: string,
+  ): void {
     const tempPath = path.join(
       dir,
       `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`,
@@ -797,11 +835,7 @@ export class SessionStore implements SessionPersistenceProvider {
     let fd: number | undefined;
     try {
       fd = this.atomicFileOps.openSync(tempPath, "w");
-      this.atomicFileOps.writeFileSync(
-        fd,
-        `${JSON.stringify(value)}\n`,
-        "utf-8",
-      );
+      this.atomicFileOps.writeFileSync(fd, content, "utf-8");
       this.atomicFileOps.fsyncSync(fd);
       this.atomicFileOps.closeSync(fd);
       fd = undefined;
@@ -943,10 +977,16 @@ export class SessionStore implements SessionPersistenceProvider {
   delete(sessionId: string): boolean {
     if (!this.index.has(sessionId)) return false;
     this.index.delete(sessionId);
+    this.lastMessagesDigest.delete(sessionId);
     this.flushIndex();
 
     // Remove session directory
     const sessionDir = path.join(this.historyDir, sessionId);
+    for (const dir of this.ensuredDirs) {
+      if (dir === sessionDir || dir.startsWith(sessionDir + path.sep)) {
+        this.ensuredDirs.delete(dir);
+      }
+    }
     try {
       fs.rmSync(sessionDir, { recursive: true, force: true });
     } catch {
@@ -960,7 +1000,9 @@ export class SessionStore implements SessionPersistenceProvider {
   // ---------------------------------------------------------------------------
 
   private ensureDir(dir: string): void {
+    if (this.ensuredDirs.has(dir)) return;
     fs.mkdirSync(dir, { recursive: true });
+    this.ensuredDirs.add(dir);
   }
 
   /**

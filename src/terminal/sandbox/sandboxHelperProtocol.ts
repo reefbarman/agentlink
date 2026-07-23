@@ -5,7 +5,7 @@ import type {
 
 import type { TerminalDimensions } from "../../core/terminalProtocol.js";
 
-export const SANDBOX_HELPER_PROTOCOL_VERSION = 2;
+export const SANDBOX_HELPER_PROTOCOL_VERSION = 3;
 export const MAX_SANDBOX_HELPER_FRAME_BYTES = 1024 * 1024;
 export const MAX_SANDBOX_HELPER_DATA_BYTES = 256 * 1024;
 
@@ -181,10 +181,12 @@ function isFilesystem(
 
 function isNetworkPolicy(value: unknown): value is SandboxNetworkPolicy {
   if (!isRecord(value) || typeof value.mode !== "string") return false;
-  if (value.mode === "blocked") return hasOnlyKeys(value, ["mode"]);
-  if (value.mode === "public-proxy") {
+  if (value.mode === "loopback" || value.mode === "public-proxy") {
     return (
-      hasOnlyKeys(value, ["mode"]) && value.allowedPrivateTargets === undefined
+      hasOnlyKeys(value, ["mode", "allowLocalBinding"]) &&
+      (value.allowLocalBinding === undefined ||
+        value.allowLocalBinding === true) &&
+      value.allowedPrivateTargets === undefined
     );
   }
   return false;

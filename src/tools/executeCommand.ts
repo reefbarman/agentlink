@@ -342,7 +342,8 @@ function sandboxCapabilityDenial(
     result.exit_code === null ||
     result.backgrounded ||
     result.is_running ||
-    result.timed_out
+    result.timed_out ||
+    result.termination_reason === "interactive_prompt"
   ) {
     return undefined;
   }
@@ -380,9 +381,11 @@ function executionAttemptSummary(
   const commandSent = result.command_sent ?? "unknown";
   const status = result.timed_out
     ? "timed_out"
-    : result.is_running || result.backgrounded
-      ? "running"
-      : "completed";
+    : result.termination_reason === "interactive_prompt"
+      ? "interactive_prompt"
+      : result.is_running || result.backgrounded
+        ? "running"
+        : "completed";
   return {
     attempt,
     status,
@@ -610,8 +613,12 @@ export async function handleExecuteCommand(
     env?: Record<string, string>;
     sandbox_permissions?:
       | "use_default"
+      | "with_additional_permissions"
       | "require_managed_network"
       | "require_escalated";
+    additional_permissions?: {
+      network?: { allow_local_binding?: true };
+    };
     files?: InlineCommandFileInput[];
     output_head?: number;
     output_tail?: number;
@@ -661,7 +668,22 @@ export async function handleExecuteCommand(
     const nativeEscalation = params.sandbox_permissions === "require_escalated";
     const managedNetwork =
       params.sandbox_permissions === "require_managed_network";
-    if ((nativeEscalation || managedNetwork) && !params.reason?.trim()) {
+    const additionalPermissions =
+      params.sandbox_permissions === "with_additional_permissions";
+    const localBinding =
+      params.additional_permissions?.network?.allow_local_binding === true;
+    if (additionalPermissions !== localBinding) {
+      return rejectedCommandResult(
+        params.command,
+        additionalPermissions
+          ? 'sandbox_permissions="with_additional_permissions" currently requires additional_permissions.network.allow_local_binding=true.'
+          : 'additional_permissions requires sandbox_permissions="with_additional_permissions".',
+      );
+    }
+    if (
+      (nativeEscalation || managedNetwork || additionalPermissions) &&
+      !params.reason?.trim()
+    ) {
       return rejectedCommandResult(
         params.command,
         `sandbox_permissions="${params.sandbox_permissions}" requires a non-empty reason explaining why the additional authority is needed.`,
@@ -685,6 +707,7 @@ export async function handleExecuteCommand(
     const explicitRuleAuthority =
       !nativeEscalation &&
       !managedNetwork &&
+      !additionalPermissions &&
       !params.files?.length &&
       !params.env &&
       !params.force &&
@@ -695,7 +718,7 @@ export async function handleExecuteCommand(
       approvalMode,
       nativeEscalation
         ? "native-escalation"
-        : managedNetwork
+        : managedNetwork || additionalPermissions
           ? "additional-permissions"
           : "default",
       providers.commandExecutionPolicy,
@@ -704,6 +727,12 @@ export async function handleExecuteCommand(
     const readOnlyPolicy =
       routeContext.commandExecutionPolicySnapshot === "read-only";
     if (readOnlyPolicy) {
+      if (localBinding) {
+        return rejectedCommandResult(
+          params.command,
+          "Read-only command execution cannot request local listener binding.",
+        );
+      }
       const rejectionReason = getReadOnlyCommandRejectionReason(
         params,
         cwd,
@@ -739,7 +768,10 @@ export async function handleExecuteCommand(
     let approvalFollowUp: string | undefined;
     let approvalAudit: CommandApprovalAudit | undefined = readOnlyPolicy
       ? { by: "readonly_policy" }
-      : !nativeEscalation && !managedNetwork && masterBypass
+      : !nativeEscalation &&
+          !managedNetwork &&
+          !additionalPermissions &&
+          masterBypass
         ? { by: "master_bypass" }
         : undefined;
     let autoApprovedByTier:
@@ -876,9 +908,13 @@ export async function handleExecuteCommand(
         timeout: params.timeout ? params.timeout * 1000 : undefined,
         env: params.env,
         sandboxSessionId: sessionId,
-        sandboxCapabilityRequest: managedNetwork
-          ? { unrestrictedPublicNetwork: true }
-          : undefined,
+        sandboxCapabilityRequest:
+          managedNetwork || localBinding
+            ? {
+                ...(managedNetwork ? { unrestrictedPublicNetwork: true } : {}),
+                ...(localBinding ? { allowLocalBinding: true } : {}),
+              }
+            : undefined,
         onManagedNetworkRequest: managedNetwork
           ? (request, signal) =>
               reviewManagedNetworkRequest(
@@ -915,6 +951,7 @@ export async function handleExecuteCommand(
       if (
         nativeEscalation ||
         managedNetwork ||
+        additionalPermissions ||
         (!masterBypass && !readOnlyPolicy)
       ) {
         // Gate: only one command goes through approval at a time, so pending
@@ -935,11 +972,13 @@ export async function handleExecuteCommand(
               displayCommand: commandToRun,
               inlineFiles,
               requireHumanApproval: inlineFiles !== undefined,
-              requireFreshReview: nativeEscalation || managedNetwork,
+              requireFreshReview:
+                nativeEscalation || managedNetwork || additionalPermissions,
               rulePolicy: initialRulePolicy,
               ruleFastPathAllowed:
                 !inlineFiles &&
                 !managedNetwork &&
+                !additionalPermissions &&
                 !params.env &&
                 !params.force &&
                 !params.force_reason,

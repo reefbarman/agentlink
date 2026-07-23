@@ -112,6 +112,8 @@ export class ActivityTraceRecorder {
   private persistenceDisabled = false;
   private sequences = new Map<string, number>();
   private summaries = new Map<string, ActivityTraceSummary>();
+  /** Directories already created this process — skips redundant mkdirSync. */
+  private ensuredDirs = new Set<string>();
 
   constructor(options: ActivityTraceRecorderOptions) {
     this.historyDir = path.join(options.workspaceDir, ".agentlink", "history");
@@ -628,19 +630,46 @@ export class ActivityTraceRecorder {
     return truncate(text, maxChars);
   }
 
+  private ensureDir(dir: string): void {
+    if (this.ensuredDirs.has(dir)) return;
+    fs.mkdirSync(dir, { recursive: true });
+    this.ensuredDirs.add(dir);
+  }
+
+  /**
+   * Run a write with the target directory ensured. If the directory was removed
+   * out from under the cache (e.g. the session was deleted), recreate it and
+   * retry once instead of letting persistence get disabled.
+   */
+  private withEnsuredDir(dir: string, write: () => void): void {
+    this.ensureDir(dir);
+    try {
+      write();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code !== "ENOENT") {
+        throw error;
+      }
+      this.ensuredDirs.delete(dir);
+      this.ensureDir(dir);
+      write();
+    }
+  }
+
   private writeEvent(event: ActivityTraceEvent): void {
     const file = this.tracePath(event.sessionId);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.appendFileSync(file, `${JSON.stringify(event)}\n`, "utf-8");
+    this.withEnsuredDir(path.dirname(file), () =>
+      fs.appendFileSync(file, `${JSON.stringify(event)}\n`, "utf-8"),
+    );
   }
 
   private writeSummary(sessionId: string): void {
     const file = this.summaryPath(sessionId);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(
-      file,
-      JSON.stringify(this.getOrCreateSummary(sessionId), null, 2),
-      "utf-8",
+    this.withEnsuredDir(path.dirname(file), () =>
+      fs.writeFileSync(
+        file,
+        JSON.stringify(this.getOrCreateSummary(sessionId)),
+        "utf-8",
+      ),
     );
   }
 

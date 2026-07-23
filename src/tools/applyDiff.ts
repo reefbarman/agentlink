@@ -14,6 +14,7 @@ import {
 import { handlePendingEditLockError } from "./pendingEditLock.js";
 import type {
   EditReviewProvider,
+  EditReviewParams,
   EditReviewResult,
   WriteApprovalPromptEvent,
   WriteApprovalPolicyProvider,
@@ -936,6 +937,7 @@ export interface ApplyDiffProviders {
   editReviewProvider?: EditReviewProvider;
   writeApprovalPolicyProvider?: WriteApprovalPolicyProvider;
   onApprovalPrompt?: (event: WriteApprovalPromptEvent) => void;
+  prepareOneShotAuthorization?: EditReviewParams["prepareOneShotAuthorization"];
   diagnosticDelay?: number;
 }
 
@@ -1197,6 +1199,7 @@ export async function handleApplyDiff(
       diagnosticDelay: providers.diagnosticDelay ?? DEFAULT_DIAGNOSTIC_DELAY_MS,
       approvalPanel,
       onApprovalRequest,
+      prepareOneShotAuthorization: providers.prepareOneShotAuthorization,
       ...(approvalPromptEvent
         ? {
             onApprovalPresented: () =>
@@ -1267,15 +1270,17 @@ export async function handleApplyDiff(
       ...response
     } = result;
     const responseObj = response as Record<string, unknown>;
-    responseObj.authorization = canAutoApprove
-      ? authorization
-      : result.decision
-        ? {
-            allowed: result.decision !== "reject",
-            basis: "human",
-            decision: result.decision,
-          }
-        : undefined;
+    responseObj.authorization = result.authorization
+      ? result.authorization
+      : canAutoApprove
+        ? authorization
+        : result.decision
+          ? {
+              allowed: result.decision !== "reject",
+              basis: "human",
+              decision: result.decision,
+            }
+          : undefined;
     const acceptedContent =
       result.status === "accepted"
         ? (result.finalContent ??

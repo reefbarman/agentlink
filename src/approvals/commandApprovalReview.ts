@@ -383,6 +383,8 @@ function serializeReviewData(input: CommandApprovalReviewInput): string {
                   backend: input.security.sandbox.backend,
                   architecture: input.security.sandbox.architecture,
                   capabilities: input.security.sandbox.capabilities,
+                  capabilityRequest:
+                    input.security.sandbox.capabilityRequest ?? null,
                 }
               : null,
           }
