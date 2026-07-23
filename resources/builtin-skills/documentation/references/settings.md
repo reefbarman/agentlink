@@ -51,6 +51,7 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 - `browserGatewayPort` — stable localhost port for the shared gateway
 - `browserGatewayLanAccess` — expose on LAN (requires device pairing via `/pair`)
 - `browserGatewayMdnsName` — mDNS hostname (`<name>.local`)
+- `browserGateway.dataPlane` — staged data-plane mode: `on` uses the helper relay and is the dogfood default, `shadow` dual-publishes while browsers use legacy traffic, and `off` is the complete legacy rollback
 
 ## Semantic codebase search
 

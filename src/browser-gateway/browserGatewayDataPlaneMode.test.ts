@@ -3,6 +3,7 @@ import {
   isBrowserGatewayOwnerPublicationEnabled,
   normalizeBrowserGatewayDataPlaneMode,
   resolveEffectiveBrowserGatewayDataPlaneMode,
+  resolveRegisteredBrowserGatewayDataPlaneModes,
 } from "./browserGatewayDataPlaneMode.js";
 import { describe, expect, it } from "vitest";
 
@@ -48,6 +49,34 @@ describe("browser gateway data-plane mode", () => {
     expect(
       resolveEffectiveBrowserGatewayDataPlaneMode(["on", "shadow", "off"]),
     ).toBe("off");
+  });
+
+  it("fails stale or malformed registered modes safely to legacy off", () => {
+    expect(
+      resolveRegisteredBrowserGatewayDataPlaneModes(["on", undefined]),
+    ).toEqual({
+      mode: "off",
+      missingCount: 1,
+      invalidCount: 0,
+    });
+    expect(
+      resolveRegisteredBrowserGatewayDataPlaneModes([
+        "shadow",
+        "future-mode",
+        1,
+      ]),
+    ).toEqual({
+      mode: "off",
+      missingCount: 0,
+      invalidCount: 2,
+    });
+    expect(resolveRegisteredBrowserGatewayDataPlaneModes(["on", "on"])).toEqual(
+      {
+        mode: "on",
+        missingCount: 0,
+        invalidCount: 0,
+      },
+    );
   });
 
   it("enables owner publication only outside off mode", () => {

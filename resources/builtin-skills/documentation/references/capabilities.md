@@ -67,7 +67,7 @@ Inherited authority does not weaken write safeguards: outside-workspace targets,
 
 ## Browser remote control
 
-A local gateway serves a browser UI that mirrors sessions, approvals, questions, background activity, and read-only diff review — one stable URL (`agentlink.browserGatewayPort`) switches between all open VS Code windows. LAN access for phones/other devices is opt-in (`agentlink.browserGatewayLanAccess`, mDNS name via `agentlink.browserGatewayMdnsName`) and requires per-device pairing (`/pair`). The browser surface is intentionally read-only for diffs and has no shell or write paths. Browser Ask Agent has its own MCP config source.
+A local gateway serves a browser UI that mirrors sessions, approvals, questions, background activity, and read-only diff review — one stable URL (`agentlink.browserGatewayPort`) switches between all open VS Code windows. The bounded helper-owned relay/event data plane is the dogfood default; `agentlink.browserGateway.dataPlane` can select shadow dual-publication or the complete legacy rollback while semantic parity work continues. LAN access for phones/other devices is opt-in (`agentlink.browserGatewayLanAccess`, mDNS name via `agentlink.browserGatewayMdnsName`) and requires per-device pairing (`/pair`). The browser surface is intentionally read-only for diffs and has no shell or write paths. Browser Ask Agent has its own MCP config source.
 
 ## Web access
 

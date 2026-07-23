@@ -16,8 +16,7 @@ import {
 } from "../../shared/agentErrors.js";
 
 import {
-  normalizeBrowserGatewayDataPlaneMode,
-  resolveEffectiveBrowserGatewayDataPlaneMode,
+  resolveRegisteredBrowserGatewayDataPlaneModes,
   type BrowserGatewayDataPlaneMode,
 } from "../browserGatewayDataPlaneMode.js";
 import {
@@ -824,6 +823,7 @@ export class BrowserGatewayHelper {
   private shuttingDown = false;
   private stopPromise: Promise<void> | undefined;
   private lastLeaseActivityAtMs = Date.now();
+  private dataPlaneModeFallbackFingerprint: string | undefined;
   private releaseAskAgentTurnLiveness: (() => void) | undefined;
   private readonly bindHost: string;
 
@@ -7190,11 +7190,22 @@ export class BrowserGatewayHelper {
   private resolveEffectiveDataPlaneModeFromInstances(
     instances: readonly Pick<BrowserGatewayInstanceRecord, "dataPlaneMode">[],
   ): BrowserGatewayDataPlaneMode {
-    return resolveEffectiveBrowserGatewayDataPlaneMode(
-      instances.map((instance) =>
-        normalizeBrowserGatewayDataPlaneMode(instance.dataPlaneMode, "off"),
-      ),
-    );
+    const { mode, missingCount, invalidCount } =
+      resolveRegisteredBrowserGatewayDataPlaneModes(
+        instances.map((instance) => instance.dataPlaneMode),
+      );
+    const fallbackFingerprint = `${missingCount}:${invalidCount}`;
+    if (
+      (missingCount > 0 || invalidCount > 0) &&
+      fallbackFingerprint !== this.dataPlaneModeFallbackFingerprint
+    ) {
+      logHelper(
+        `data-plane mode fallback effective=off missing=${missingCount} invalid=${invalidCount} reason=version-skew-or-stale-registry`,
+      );
+    }
+    this.dataPlaneModeFallbackFingerprint =
+      missingCount > 0 || invalidCount > 0 ? fallbackFingerprint : undefined;
+    return mode;
   }
 
   private async writeDiscovery(): Promise<void> {

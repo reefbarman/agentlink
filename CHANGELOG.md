@@ -15,6 +15,7 @@
 
 ### Changed
 
+- Made the helper-owned browser relay/data plane the dogfood default through `agentlink.browserGateway.dataPlane`; `shadow` retains dual publication with legacy browser traffic, and `off` preserves complete snapshot/proxy rollback while semantic parity work continues.
 - Hide the Agent Fleet panel after every background agent finishes, while keeping paused work visible and adding `/fleet` to reveal completed results again in VS Code or the browser remote.
 - `get_background_result` now returns early with `status: "wait_interrupted"` when a user message is interjected into the waiting session (including steering a blocked background parent), so new instructions no longer wait behind a long-running background agent. The background agent keeps running; the agent handles the message and re-waits.
 - Matched Codex-style sandbox loopback behavior on supported local macOS hosts: baseline commands can connect to loopback services but cannot bind TCP listeners, while a fresh exact-command `allow_local_binding` capability review permits listeners without granting public or private outbound access.

@@ -30,6 +30,37 @@ export function resolveEffectiveBrowserGatewayDataPlaneMode(
   return "on";
 }
 
+export interface BrowserGatewayDataPlaneModeResolution {
+  readonly mode: BrowserGatewayDataPlaneMode;
+  readonly missingCount: number;
+  readonly invalidCount: number;
+}
+
+export function resolveRegisteredBrowserGatewayDataPlaneModes(
+  values: readonly unknown[],
+): BrowserGatewayDataPlaneModeResolution {
+  let missingCount = 0;
+  let invalidCount = 0;
+  const modes = values.map((value) => {
+    if (value === undefined) {
+      missingCount += 1;
+    } else if (
+      typeof value !== "string" ||
+      !BROWSER_GATEWAY_DATA_PLANE_MODES.includes(
+        value as BrowserGatewayDataPlaneMode,
+      )
+    ) {
+      invalidCount += 1;
+    }
+    return normalizeBrowserGatewayDataPlaneMode(value, "off");
+  });
+  return {
+    mode: resolveEffectiveBrowserGatewayDataPlaneMode(modes),
+    missingCount,
+    invalidCount,
+  };
+}
+
 export function isBrowserGatewayOwnerPublicationEnabled(
   mode: BrowserGatewayDataPlaneMode,
 ): boolean {
