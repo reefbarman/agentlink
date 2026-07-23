@@ -142,6 +142,18 @@
         "title": "AgentLink: Set Anthropic API Key"
       },
       {
+        "command": "agentlink.configureOpenAiCompatibleModel",
+        "title": "AgentLink: Configure OpenAI-compatible Model"
+      },
+      {
+        "command": "agentlink.setOpenAiCompatibleApiKey",
+        "title": "AgentLink: Set OpenAI-compatible API Key"
+      },
+      {
+        "command": "agentlink.clearOpenAiCompatibleApiKey",
+        "title": "AgentLink: Clear OpenAI-compatible API Key"
+      },
+      {
         "command": "agentlink.rebuildIndex",
         "title": "AgentLink: Rebuild Codebase Index"
       },
@@ -475,6 +487,158 @@
           "type": "string",
           "default": "http://localhost:6333",
           "description": "Qdrant vector database URL for semantic codebase search"
+        },
+        "agentlink.openaiCompatible.connections": {
+          "scope": "machine",
+          "type": "array",
+          "default": [],
+          "description": "Named OpenAI Chat Completions-compatible connections and models for built-in agent chat and browser Ask Agent. Store credentials with AgentLink's secure key commands; never place secrets in this setting.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "displayName",
+              "baseUrl",
+              "profile",
+              "models"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9._-]*$",
+                "description": "Stable connection ID; creates provider ID openai-compatible:<id>."
+              },
+              "displayName": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Human-readable selector group name."
+              },
+              "baseUrl": {
+                "type": "string",
+                "format": "uri",
+                "description": "API root URL, normally ending in /v1. AgentLink appends /chat/completions and never follows redirects."
+              },
+              "profile": {
+                "type": "string",
+                "enum": [
+                  "generic",
+                  "openrouter"
+                ],
+                "description": "Compatibility profile. generic sends only portable fields; openrouter enables verified OpenRouter extensions."
+              },
+              "authKey": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9._-]*$",
+                "description": "Secret name stored through AgentLink's secure key command. Omit for no-auth local servers."
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 600000,
+                "description": "Whole-request timeout in milliseconds."
+              },
+              "headers": {
+                "type": "object",
+                "description": "Bounded non-secret static headers. Credential and transport-controlled headers are rejected.",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "allowInsecureHttp": {
+                "type": "boolean",
+                "default": false,
+                "description": "Explicitly allow a stored credential over non-loopback HTTP. HTTPS or loopback HTTP is recommended."
+              },
+              "auxiliaryModel": {
+                "type": "string",
+                "description": "Local model ID from this connection used for condense and helper calls. Defaults to the active model."
+              },
+              "models": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "model",
+                    "displayName",
+                    "contextWindow",
+                    "maxOutputTokens",
+                    "supportsToolUse"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Globally unique stable AgentLink model ID; never sent upstream."
+                    },
+                    "model": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Opaque upstream wire model ID."
+                    },
+                    "displayName": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "contextWindow": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "maxInputTokens": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "maxOutputTokens": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "supportsToolUse": {
+                      "type": "boolean"
+                    },
+                    "supportsThinking": {
+                      "type": "boolean",
+                      "default": false
+                    },
+                    "reasoningEfforts": {
+                      "type": "array",
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "minimal",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh",
+                          "max"
+                        ]
+                      }
+                    },
+                    "defaultReasoningEffort": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ]
+                    },
+                    "supportsImages": {
+                      "type": "boolean",
+                      "default": false
+                    }
+                  }
+                }
+              }
+            }
+          }
         },
         "agentlink.openaiCompatible.baseUrl": {
           "scope": "window",

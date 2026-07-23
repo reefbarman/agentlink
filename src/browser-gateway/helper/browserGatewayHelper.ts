@@ -64,7 +64,9 @@ import {
   type BrowserGatewayModelAuthLeaseRevokeRequest,
   type BrowserGatewayModelAuthLeaseValidationRequest,
   type BrowserGatewayModelCatalogPublishRequest,
+  type BrowserGatewayModelCredentialClearRequest,
   type BrowserGatewayModelCredentialClearResponse,
+  type BrowserGatewayOpenAiCompatibleRuntimeProfiles,
   type BrowserGatewayModelCredentialGrantRequest,
   type BrowserGatewayDevicesListResponse,
   type BrowserGatewayHelperDiscoveryRecord,
@@ -134,6 +136,7 @@ import {
   type CoreModelToolDefinition,
   type CoreModelUsage,
 } from "../../core/modelRuntime.js";
+import type { OpenAiCompatibleRuntimeProfile } from "../../core/model/providers/openaiCompatible/types.js";
 import { getCodexModelCapabilities } from "../../core/model/providers/codex/models.js";
 import { normalizeUserQuestionAttachments } from "../../core/capabilities/sessionControl.js";
 import { ANTHROPIC_HOSTED_WEB_CAPABILITIES } from "../../core/model/providers/anthropic/anthropicModels.js";
@@ -759,6 +762,20 @@ function askAgentMediaFromToolResult(result: ToolResult | undefined): {
 
 type AskAgentSessionResponse = { readonly ok: true } & AskAgentControllerState;
 
+type BrowserGatewayPrivateModelCatalogSnapshot = CoreModelCatalogSnapshot & {
+  publishedByOwnerGenerationId: string;
+  openAiCompatibleRuntimeProfiles: BrowserGatewayOpenAiCompatibleRuntimeProfiles;
+};
+
+type AskAgentModelExecutionContext = {
+  ownerId: string;
+  ownerGenerationId: string;
+  providerId: string;
+  model: string;
+  credential?: BrowserGatewayModelCredentialRecord;
+  openAiCompatibleRuntimeProfile?: OpenAiCompatibleRuntimeProfile;
+};
+
 export class BrowserGatewayHelper {
   private readonly startedAt = new Date();
   private readonly startedAtMs = this.startedAt.getTime();
@@ -775,7 +792,8 @@ export class BrowserGatewayHelper {
   });
   private readonly modelCredentialCache =
     new BrowserGatewayModelCredentialCache();
-  private modelCatalogSnapshot: CoreModelCatalogSnapshot | null = null;
+  private modelCatalogSnapshot: BrowserGatewayPrivateModelCatalogSnapshot | null =
+    null;
   private readonly askAgentController: AskAgentController;
   private readonly askAgentOwnerAdapter: AskAgentOwnerAdapter;
   private readonly askAgentSseHub: SseHub<AskAgentControllerSnapshot>;
@@ -1963,8 +1981,8 @@ export class BrowserGatewayHelper {
       const attachments = normalizeUserQuestionAttachments(body?.attachments);
       const now = Date.now();
       const theme = await this.resolveInitialTheme(null);
-      const credential = this.getAskAgentModelCredential(now);
-      if (!credential) {
+      const modelContext = this.getAskAgentModelExecutionContext(now);
+      if (!modelContext) {
         this.logAskAgentEvent("ask-agent.question.response", {
           id,
           ok: false,
@@ -2081,7 +2099,7 @@ export class BrowserGatewayHelper {
         const transcriptMessages =
           this.askAgentSessionStore.getTranscriptMessages();
         const turnResult = await this.runAskAgentModelTurn({
-          credential,
+          modelContext,
           assistantMessageId: answerResult.messageId,
           transcriptMessages,
           initialToolMessages: [answerToolMessage],
@@ -2357,8 +2375,8 @@ export class BrowserGatewayHelper {
       .sessions.find((candidate) => candidate.id === sessionId);
     if (!session || session.messages.length < 2) return;
 
-    const credential = this.getAskAgentModelCredential(Date.now());
-    if (!credential) {
+    const modelContext = this.getAskAgentModelExecutionContext(Date.now());
+    if (!modelContext) {
       this.logAskAgentEvent("ask-agent.memory.summary.skipped", {
         sessionId,
         reason: "credential_unavailable",
@@ -2426,8 +2444,8 @@ export class BrowserGatewayHelper {
     scheduledAt: number;
   }): Promise<void> {
     const { session, revision, scheduledAt } = params;
-    const credential = this.getAskAgentModelCredential(Date.now());
-    if (!credential) {
+    const modelContext = this.getAskAgentModelExecutionContext(Date.now());
+    if (!modelContext) {
       this.logAskAgentEvent("ask-agent.memory.summary.skipped", {
         sessionId: session.id,
         reason: "credential_unavailable",
@@ -2450,8 +2468,11 @@ export class BrowserGatewayHelper {
       }
 
       const summary = await this.askAgentSummarizer.summarize({
-        credential,
-        model: this.askAgentSessionStore.getModel(),
+        credential: modelContext.credential,
+        providerId: modelContext.providerId,
+        openAiCompatibleRuntimeProfile:
+          modelContext.openAiCompatibleRuntimeProfile,
+        model: modelContext.model,
         reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
         messages: session.messages,
         existingSessionSummary: existingSession?.summary,
@@ -2872,25 +2893,85 @@ export class BrowserGatewayHelper {
     });
   }
 
-  private getAskAgentModelProvider(): string {
-    return this.askAgentSessionStore.getModelProvider();
-  }
-
-  private getAskAgentModelCredential(now = Date.now()) {
-    return this.modelCredentialCache.getCredential({
-      providerId: this.getAskAgentModelProvider(),
+  private getAskAgentModelExecutionContext(
+    now = Date.now(),
+  ): AskAgentModelExecutionContext | null {
+    const snapshot = this.modelCatalogSnapshot;
+    const model = this.askAgentSessionStore.getModel();
+    const providerId = this.askAgentSessionStore.getModelProvider();
+    if (!snapshot) return null;
+    if (
+      !snapshot.models.some(
+        (entry) => entry.id === model && entry.providerId === providerId,
+      )
+    ) {
+      return null;
+    }
+    const owner = this.coreOwnerRegistry.get(snapshot.publishedByOwnerId);
+    if (
+      !owner ||
+      owner.status !== "connected" ||
+      owner.ownerGenerationId !== snapshot.publishedByOwnerGenerationId
+    ) {
+      return null;
+    }
+    const openAiCompatibleRuntimeProfile =
+      snapshot.openAiCompatibleRuntimeProfiles[providerId];
+    const credential = this.modelCredentialCache.getCredential({
+      grantedByOwnerId: snapshot.publishedByOwnerId,
+      grantedByOwnerGenerationId: snapshot.publishedByOwnerGenerationId,
+      providerId,
       modelScope: BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE,
       now,
     });
+    if (openAiCompatibleRuntimeProfile) {
+      if (openAiCompatibleRuntimeProfile.authRequired && !credential)
+        return null;
+    } else if (!credential) {
+      return null;
+    }
+    return {
+      ownerId: snapshot.publishedByOwnerId,
+      ownerGenerationId: snapshot.publishedByOwnerGenerationId,
+      providerId,
+      model,
+      credential: credential ?? undefined,
+      openAiCompatibleRuntimeProfile,
+    };
+  }
+
+  private getAskAgentModelCredential(now = Date.now()) {
+    return this.getAskAgentModelExecutionContext(now)?.credential;
   }
 
   private clearAskAgentModelCredential(): void {
-    this.modelCredentialCache.clear(this.getAskAgentModelProvider());
+    const context = this.getAskAgentModelExecutionContext();
+    if (!context) return;
+    this.modelCredentialCache.clear({
+      grantedByOwnerId: context.ownerId,
+      grantedByOwnerGenerationId: context.ownerGenerationId,
+      providerId: context.providerId,
+    });
   }
 
   private getAskAgentModelCredentialStatus(now = Date.now()) {
+    const snapshot = this.modelCatalogSnapshot;
+    const providerId = this.askAgentSessionStore.getModelProvider();
+    if (!snapshot) {
+      return {
+        state: "missing" as const,
+        reason:
+          "Open a VS Code AgentLink window to publish model configuration.",
+      };
+    }
+    const profile = snapshot.openAiCompatibleRuntimeProfiles[providerId];
+    if (profile && !profile.authRequired) {
+      return { state: "not_required" as const, providerId };
+    }
     return this.modelCredentialCache.getStatus({
-      providerId: this.getAskAgentModelProvider(),
+      grantedByOwnerId: snapshot.publishedByOwnerId,
+      grantedByOwnerGenerationId: snapshot.publishedByOwnerGenerationId,
+      providerId,
       modelScope: BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE,
       now,
     });
@@ -2902,6 +2983,8 @@ export class BrowserGatewayHelper {
     writeJson(res, 200, {
       models: this.askAgentSessionStore.getAvailableModels(),
       publishedByOwnerId: publishedCatalog?.publishedByOwnerId,
+      publishedByOwnerGenerationId:
+        publishedCatalog?.publishedByOwnerGenerationId,
       publishedAt: publishedCatalog?.publishedAt,
       source: publishedCatalog ? "cached" : "fallback",
     });
@@ -3756,6 +3839,9 @@ export class BrowserGatewayHelper {
         id: model.id,
         displayName: model.displayName,
         provider: model.providerId,
+        providerDisplayName: model.providerDisplayName,
+        supportsToolUse: model.supportsToolUse,
+        supportsImages: model.supportsImages,
         contextWindow: model.contextWindow,
         maxInputTokens: model.maxInputTokens,
         maxOutputTokens: model.maxOutputTokens,
@@ -3915,7 +4001,7 @@ export class BrowserGatewayHelper {
   }
 
   private async runAskAgentModelTurn(params: {
-    credential: BrowserGatewayModelCredentialRecord;
+    modelContext: AskAgentModelExecutionContext;
     assistantMessageId: string;
     transcriptMessages: ChatMessage[];
     memoryContext?: string;
@@ -3948,8 +4034,7 @@ export class BrowserGatewayHelper {
     };
 
     const preparedWebAccess = await this.prepareAskAgentWebAccess(
-      params.credential,
-      this.askAgentSessionStore.getModel(),
+      params.modelContext,
       params.signal,
     );
     const modelTranscriptMessages =
@@ -3959,8 +4044,11 @@ export class BrowserGatewayHelper {
 
     if (!completeWithToolCalls) {
       const assistantText = await this.askAgentModelClient.complete({
-        credential: params.credential,
-        model: this.askAgentSessionStore.getModel(),
+        credential: params.modelContext.credential,
+        providerId: params.modelContext.providerId,
+        openAiCompatibleRuntimeProfile:
+          params.modelContext.openAiCompatibleRuntimeProfile,
+        model: params.modelContext.model,
         reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
         messages: [],
         memoryContext: params.memoryContext,
@@ -3993,8 +4081,11 @@ export class BrowserGatewayHelper {
       initialToolMessages: params.initialToolMessages,
       callModel: async ({ iterationMessages, toolMessages, onText }) => {
         const result = await completeWithToolCalls({
-          credential: params.credential,
-          model: this.askAgentSessionStore.getModel(),
+          credential: params.modelContext.credential,
+          providerId: params.modelContext.providerId,
+          openAiCompatibleRuntimeProfile:
+            params.modelContext.openAiCompatibleRuntimeProfile,
+          model: params.modelContext.model,
           reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
           messages: [],
           memoryContext: params.memoryContext,
@@ -4070,8 +4161,8 @@ export class BrowserGatewayHelper {
         const executed = await this.executeAskAgentSafeProjectlessTool(
           toolCall,
           preparedWebAccess,
-          params.credential,
-          this.askAgentSessionStore.getModel(),
+          params.modelContext.credential,
+          params.modelContext.model,
           params.signal,
         );
         this.recordAskAgentSemanticDelta();
@@ -4126,8 +4217,7 @@ export class BrowserGatewayHelper {
   }
 
   private async prepareAskAgentWebAccess(
-    credential: BrowserGatewayModelCredentialRecord,
-    model: string,
+    modelContext: AskAgentModelExecutionContext,
     signal: AbortSignal,
   ): Promise<PreparedAskAgentWebAccess> {
     const target = await this.getAskAgentMcpBridgeTarget();
@@ -4152,35 +4242,27 @@ export class BrowserGatewayHelper {
     }
 
     const providerId = normalizeBrowserGatewayModelCredentialProviderId(
-      credential.providerId,
+      modelContext.providerId,
     );
     const providerCapabilities =
-      providerId === "openai-codex"
-        ? getCodexModelCapabilities(model, credential.method).hostedWeb
-        : providerId === "anthropic"
+      providerId === "openai-codex" && modelContext.credential
+        ? getCodexModelCapabilities(
+            modelContext.model,
+            modelContext.credential.method,
+          ).hostedWeb
+        : providerId === "anthropic" && modelContext.credential
           ? ANTHROPIC_HOSTED_WEB_CAPABILITIES
           : undefined;
     const policy = resolveCoreWebAccessPolicy({
       settings,
       providerCapabilities,
     });
-    const unavailableNativeRoute = [
-      policy.routes.search,
-      policy.routes.fetch,
-    ].find(
-      (route) =>
-        settings[route.kind === "search" ? "searchBackend" : "fetchBackend"] ===
-          "native" && !route.available,
-    );
-    if (unavailableNativeRoute) {
-      throw new Error(
-        `browser_gateway_native_web_unavailable:${unavailableNativeRoute.kind}:${unavailableNativeRoute.reason}`,
-      );
-    }
 
-    const nativeTools = policy.enabledKinds.map(
-      (kind) => CORE_NATIVE_WEB_TOOL_DEFINITIONS[kind],
-    );
+    const nativeTools = modelContext.credential
+      ? policy.enabledKinds.map(
+          (kind) => CORE_NATIVE_WEB_TOOL_DEFINITIONS[kind],
+        )
+      : [];
     const tools = [...mcpCatalog.tools, ...nativeTools];
     return Object.freeze({
       target,
@@ -4508,11 +4590,16 @@ export class BrowserGatewayHelper {
     const generatedImages: CodexGeneratedImage[] = [];
     try {
       const input = this.normalizeAskAgentImageInput(toolCall.input);
-      const credential = this.modelCredentialCache.getCredential({
-        providerId: BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID,
-        modelScope: BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE,
-        now: Date.now(),
-      });
+      const snapshot = this.modelCatalogSnapshot;
+      const credential = snapshot
+        ? this.modelCredentialCache.getCredential({
+            grantedByOwnerId: snapshot.publishedByOwnerId,
+            grantedByOwnerGenerationId: snapshot.publishedByOwnerGenerationId,
+            providerId: BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID,
+            modelScope: BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE,
+            now: Date.now(),
+          })
+        : null;
       if (!credential) {
         throw new Error(
           "generate_image requires refreshed Codex/OpenAI credentials from a connected VS Code AgentLink instance",
@@ -4829,12 +4916,17 @@ export class BrowserGatewayHelper {
   private async executeAskAgentSafeProjectlessTool(
     toolCall: BrowserGatewayAskAgentToolCall,
     preparedWebAccess: PreparedAskAgentWebAccess,
-    credential: BrowserGatewayModelCredentialRecord,
+    credential: BrowserGatewayModelCredentialRecord | undefined,
     model: string,
     signal: AbortSignal,
   ): Promise<AskAgentToolExecutionResult> {
     const startedAt = Date.now();
     if (toolCall.name === "web_search" || toolCall.name === "web_fetch") {
+      if (!credential) {
+        throw new Error(
+          "browser_gateway_native_web_unavailable:credential_missing",
+        );
+      }
       return await this.executeAskAgentNativeWebTool(
         toolCall,
         preparedWebAccess.policy,
@@ -5471,8 +5563,8 @@ export class BrowserGatewayHelper {
         writeJson(res, 404, { error: "ask_agent_session_not_found" });
         return;
       }
-      const credential = this.getAskAgentModelCredential(now);
-      if (!credential) {
+      const modelContext = this.getAskAgentModelExecutionContext(now);
+      if (!modelContext) {
         this.logAskAgentEvent("ask-agent.retry", {
           sessionId: requestedSessionId,
           ok: false,
@@ -5591,7 +5683,7 @@ export class BrowserGatewayHelper {
           transcriptMessages,
         });
         const turnResult = await this.runAskAgentModelTurn({
-          credential,
+          modelContext,
           assistantMessageId: assistantMessage.id,
           transcriptMessages,
           memoryContext: memoryContextResult?.context,
@@ -5730,14 +5822,18 @@ export class BrowserGatewayHelper {
       const activeSessionId = this.askAgentSessionStore.getActiveSessionId();
       const priorUserTexts =
         this.askAgentSessionStore.getActiveUserMessageTexts();
-      const credential = this.getAskAgentModelCredential(now);
+      const modelContext = this.getAskAgentModelExecutionContext(now);
       let response: AskAgentSessionResponse | null = null;
       const sendLogFields = {
         sessionId: typeof body.sessionId === "string" ? body.sessionId : "none",
         textChars: body.text.trim().length,
         imageCount: images.length,
         documentCount: documents.length,
-        credential: credential ? "ready" : "missing",
+        credential: modelContext
+          ? modelContext.credential
+            ? "ready"
+            : "no-auth"
+          : "missing",
         model: this.askAgentSessionStore.getModel(),
         reasoning: this.askAgentSessionStore.getReasoningEffort(),
       };
@@ -5752,11 +5848,11 @@ export class BrowserGatewayHelper {
       const duplicateUserMessage =
         typeof body.id === "string" &&
         this.askAgentSessionStore.hasActiveUserMessageId(body.id);
-      let sendOutcome = credential ? "model_success" : "credential_missing";
+      let sendOutcome = modelContext ? "model_success" : "credential_missing";
       if (duplicateUserMessage) {
         response = this.buildAskAgentSnapshotResponse(now, theme);
         sendOutcome = "duplicate_ignored";
-      } else if (credential && this.askAgentController.hasActiveTurn()) {
+      } else if (modelContext && this.askAgentController.hasActiveTurn()) {
         this.logAskAgentEvent("ask-agent.send", {
           ...sendLogFields,
           ok: false,
@@ -5765,7 +5861,7 @@ export class BrowserGatewayHelper {
         writeJson(res, 409, { error: "ask_agent_turn_in_progress" });
         return;
       }
-      if (!duplicateUserMessage && credential) {
+      if (!duplicateUserMessage && modelContext) {
         this.askAgentSessionStore.appendUserMessage({
           id: typeof body.id === "string" ? body.id : undefined,
           text: body.text,
@@ -5798,7 +5894,7 @@ export class BrowserGatewayHelper {
             transcriptMessages,
           });
           const turnResult = await this.runAskAgentModelTurn({
-            credential,
+            modelContext,
             assistantMessageId: assistantMessage.id,
             transcriptMessages,
             memoryContext: memoryContextResult?.context,
@@ -6615,9 +6711,17 @@ export class BrowserGatewayHelper {
         writeJson(res, 409, { error: "owner_not_registered" });
         return;
       }
+      if (
+        owner.status !== "connected" ||
+        owner.ownerGenerationId !== body.publishedByOwnerGenerationId.trim()
+      ) {
+        writeJson(res, 409, { error: "owner_generation_mismatch" });
+        return;
+      }
       const publishedAt = Date.now();
-      this.modelCatalogSnapshot = {
+      const candidateSnapshot: BrowserGatewayPrivateModelCatalogSnapshot = {
         publishedByOwnerId: body.publishedByOwnerId.trim(),
+        publishedByOwnerGenerationId: body.publishedByOwnerGenerationId.trim(),
         publishedAt,
         models: body.models.map((model) => ({
           ...model,
@@ -6625,7 +6729,10 @@ export class BrowserGatewayHelper {
           displayName: model.displayName.trim(),
           providerId: model.providerId.trim(),
         })),
+        openAiCompatibleRuntimeProfiles:
+          body.openAiCompatibleRuntimeProfiles ?? {},
       };
+      this.modelCatalogSnapshot = candidateSnapshot;
       this.applyPublishedModelCatalogToAskAgent();
       this.logAskAgentEvent("model-catalog.published", {
         ownerId: this.modelCatalogSnapshot.publishedByOwnerId,
@@ -6657,11 +6764,17 @@ export class BrowserGatewayHelper {
       body &&
       typeof body.publishedByOwnerId === "string" &&
       body.publishedByOwnerId.trim() &&
+      typeof body.publishedByOwnerGenerationId === "string" &&
+      body.publishedByOwnerGenerationId.trim() &&
       typeof body.helperGenerationId === "string" &&
       body.helperGenerationId.trim() &&
       Array.isArray(body.models) &&
       body.models.length > 0 &&
-      body.models.every((model) => this.isValidModelCatalogEntry(model)),
+      body.models.every((model) => this.isValidModelCatalogEntry(model)) &&
+      this.isValidOpenAiCompatibleRuntimeProfiles(
+        body.openAiCompatibleRuntimeProfiles,
+        body.models,
+      ),
     );
   }
 
@@ -6689,6 +6802,149 @@ export class BrowserGatewayHelper {
     );
   }
 
+  private isValidOpenAiCompatibleRuntimeProfiles(
+    value: BrowserGatewayOpenAiCompatibleRuntimeProfiles | undefined,
+    models: readonly CoreModelCatalogEntry[],
+  ): boolean {
+    if (value === undefined) {
+      return !models.some((model) =>
+        model.providerId.startsWith("openai-compatible:"),
+      );
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return false;
+    const modelProviders = new Map(
+      models.map((model) => [model.id, model.providerId] as const),
+    );
+    const customProviderIds = new Set(
+      models
+        .filter((model) => model.providerId.startsWith("openai-compatible:"))
+        .map((model) => model.providerId),
+    );
+    if (
+      Object.keys(value).some(
+        (providerId) => !customProviderIds.has(providerId),
+      )
+    ) {
+      return false;
+    }
+    for (const providerId of customProviderIds) {
+      const profile = value[providerId];
+      if (!profile || !this.isValidOpenAiCompatibleRuntimeProfile(profile)) {
+        return false;
+      }
+      if (profile.providerId !== providerId) return false;
+      const expectedModelIds = models
+        .filter((model) => model.providerId === providerId)
+        .map((model) => model.id)
+        .sort();
+      const profileModelIds = Object.keys(profile.models).sort();
+      if (
+        expectedModelIds.length !== profileModelIds.length ||
+        expectedModelIds.some(
+          (modelId, index) =>
+            modelId !== profileModelIds[index] ||
+            modelProviders.get(modelId) !== providerId,
+        )
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private isValidOpenAiCompatibleRuntimeProfile(
+    value: unknown,
+  ): value is OpenAiCompatibleRuntimeProfile {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return false;
+    const profile = value as Partial<OpenAiCompatibleRuntimeProfile>;
+    const allowedKeys = new Set([
+      "providerId",
+      "baseUrl",
+      "profile",
+      "headers",
+      "timeoutMs",
+      "authRequired",
+      "models",
+    ]);
+    if (Object.keys(value).some((key) => !allowedKeys.has(key))) return false;
+    let baseUrl: URL;
+    try {
+      baseUrl = new URL(String(profile.baseUrl));
+    } catch {
+      return false;
+    }
+    if (
+      (baseUrl.protocol !== "https:" && baseUrl.protocol !== "http:") ||
+      baseUrl.username ||
+      baseUrl.password ||
+      baseUrl.search ||
+      baseUrl.hash
+    ) {
+      return false;
+    }
+    if (
+      typeof profile.providerId !== "string" ||
+      !profile.providerId.startsWith("openai-compatible:") ||
+      (profile.profile !== "generic" && profile.profile !== "openrouter") ||
+      typeof profile.timeoutMs !== "number" ||
+      !Number.isFinite(profile.timeoutMs) ||
+      profile.timeoutMs < 1_000 ||
+      profile.timeoutMs > 600_000 ||
+      typeof profile.authRequired !== "boolean" ||
+      !profile.models ||
+      typeof profile.models !== "object" ||
+      Array.isArray(profile.models)
+    ) {
+      return false;
+    }
+    if (profile.headers !== undefined) {
+      if (
+        !profile.headers ||
+        typeof profile.headers !== "object" ||
+        Array.isArray(profile.headers) ||
+        Object.keys(profile.headers).length > 32
+      ) {
+        return false;
+      }
+      const forbidden =
+        /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key)$/i;
+      for (const [name, headerValue] of Object.entries(profile.headers)) {
+        if (
+          !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,128}$/.test(name) ||
+          forbidden.test(name) ||
+          typeof headerValue !== "string" ||
+          headerValue.length > 8_192 ||
+          headerValue.includes("\r") ||
+          headerValue.includes("\n") ||
+          headerValue.includes("\0")
+        ) {
+          return false;
+        }
+      }
+    }
+    for (const [modelId, model] of Object.entries(profile.models)) {
+      if (
+        !model ||
+        typeof model !== "object" ||
+        Array.isArray(model) ||
+        Object.keys(model).some(
+          (key) => !["id", "model", "capabilities"].includes(key),
+        ) ||
+        model.id !== modelId ||
+        typeof model.model !== "string" ||
+        !model.model.trim() ||
+        model.model.length > 1_024 ||
+        !model.capabilities ||
+        typeof model.capabilities !== "object"
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   private async handleModelCredentialGrantRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -6705,6 +6961,15 @@ export class BrowserGatewayHelper {
         writeJson(res, 409, { error: "helper_generation_mismatch" });
         return;
       }
+      const owner = this.coreOwnerRegistry.get(body.grantedByOwnerId.trim());
+      if (
+        !owner ||
+        owner.status !== "connected" ||
+        owner.ownerGenerationId !== body.grantedByOwnerGenerationId.trim()
+      ) {
+        writeJson(res, 409, { error: "owner_generation_mismatch" });
+        return;
+      }
       const now = Date.now();
       const ttlMs =
         typeof body.ttlMs === "number" && Number.isFinite(body.ttlMs)
@@ -6715,6 +6980,7 @@ export class BrowserGatewayHelper {
         method: body.method,
         bearerToken: body.bearerToken.trim(),
         grantedByOwnerId: body.grantedByOwnerId.trim(),
+        grantedByOwnerGenerationId: body.grantedByOwnerGenerationId.trim(),
         modelScopes: body.modelScopes.map((scope) => scope.trim()),
         helperGenerationId: body.helperGenerationId.trim(),
         ttlMs,
@@ -6754,12 +7020,37 @@ export class BrowserGatewayHelper {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
-    const body = (await readJsonBody(req).catch(() => ({}))) as {
-      providerId?: unknown;
-    };
-    const providerId =
-      typeof body.providerId === "string" ? body.providerId.trim() : undefined;
-    const removed = this.modelCredentialCache.clear(providerId) !== null;
+    const body = (await readJsonBody(req).catch(
+      () => null,
+    )) as BrowserGatewayModelCredentialClearRequest | null;
+    if (
+      !body ||
+      typeof body.grantedByOwnerId !== "string" ||
+      !body.grantedByOwnerId.trim() ||
+      typeof body.grantedByOwnerGenerationId !== "string" ||
+      !body.grantedByOwnerGenerationId.trim() ||
+      (body.providerId !== undefined &&
+        (typeof body.providerId !== "string" || !body.providerId.trim()))
+    ) {
+      writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const owner = this.coreOwnerRegistry.get(body.grantedByOwnerId.trim());
+    if (
+      !owner ||
+      owner.status !== "connected" ||
+      owner.ownerGenerationId !== body.grantedByOwnerGenerationId.trim()
+    ) {
+      writeJson(res, 409, { error: "owner_generation_mismatch" });
+      return;
+    }
+    const providerId = body.providerId?.trim();
+    const removed =
+      this.modelCredentialCache.clear({
+        grantedByOwnerId: body.grantedByOwnerId.trim(),
+        grantedByOwnerGenerationId: body.grantedByOwnerGenerationId.trim(),
+        providerId,
+      }) !== null;
     const payload: BrowserGatewayModelCredentialClearResponse = {
       ok: true,
       removed,
@@ -6893,6 +7184,8 @@ export class BrowserGatewayHelper {
       body.bearerToken.trim() &&
       typeof body.grantedByOwnerId === "string" &&
       body.grantedByOwnerId.trim() &&
+      typeof body.grantedByOwnerGenerationId === "string" &&
+      body.grantedByOwnerGenerationId.trim() &&
       typeof body.helperGenerationId === "string" &&
       body.helperGenerationId.trim() &&
       Array.isArray(body.modelScopes) &&

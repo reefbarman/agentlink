@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createProjectlessSessionScope,
   createSessionProjectScope,
   createWorkspaceProjectId,
+  isProjectlessSessionScope,
+  PROJECTLESS_SESSION_PROJECT_ID,
+  PROJECTLESS_SESSION_URI,
   SESSION_PROJECT_SCOPE_SCHEMA_VERSION,
   type WorkspaceProject,
 } from "./workspaceProjects.js";
@@ -19,6 +23,25 @@ describe("workspace project values", () => {
     expect(createWorkspaceProjectId("vscode-remote:///workspace/api")).not.toBe(
       createWorkspaceProjectId(uri),
     );
+  });
+
+  it("creates a reserved rootless identity for non-persisted projectless sessions", () => {
+    const scope = createProjectlessSessionScope();
+
+    expect(scope).toEqual({
+      schemaVersion: SESSION_PROJECT_SCOPE_SCHEMA_VERSION,
+      kind: "project",
+      projectId: PROJECTLESS_SESSION_PROJECT_ID,
+      workspaceFolderUri: PROJECTLESS_SESSION_URI,
+      displayName: "No folder",
+    });
+    expect(isProjectlessSessionScope(scope)).toBe(true);
+    expect(
+      isProjectlessSessionScope({
+        ...scope,
+        workspaceFolderUri: "file:///workspace/projectless",
+      }),
+    ).toBe(false);
   });
 
   it("creates a serializable scope without inventing an unavailable root", () => {

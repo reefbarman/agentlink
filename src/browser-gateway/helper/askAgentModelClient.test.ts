@@ -11,6 +11,7 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     bearerToken: "token",
     accountLabel: "acct@example.com",
     grantedByOwnerId: "vscode-owner",
+    grantedByOwnerGenerationId: "vscode-generation-1",
     modelScopes: ["chat"],
     grantedAt: Date.now(),
     expiresAt: Date.now() + 60_000,
@@ -772,6 +773,152 @@ describe("BrowserGatewayAskAgentModelClient", () => {
         endIndex: 9,
       },
     ]);
+  });
+
+  it("executes authenticated OpenAI-compatible models with connection-owned wire settings", async () => {
+    let capturedUrl = "";
+    let capturedHeaders = new Headers();
+    let capturedBody: Record<string, unknown> = {};
+    const onDelta = vi.fn();
+    const client = new BrowserGatewayAskAgentModelClient({
+      sessionId: "session-1",
+      webFetch: async (input, init) => {
+        capturedUrl = String(input);
+        capturedHeaders = new Headers(init?.headers);
+        capturedBody = JSON.parse(String(init?.body)) as Record<
+          string,
+          unknown
+        >;
+        return new Response(
+          [
+            'data: {"id":"response-1","choices":[{"index":0,"delta":{"content":"Need "},"finish_reason":null}]}',
+            "",
+            'data: {"id":"response-1","choices":[{"index":0,"delta":{"content":"input","tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"ask_user","arguments":"{\\\"question\\\":\\\"Continue?\\\"}"}}]},"finish_reason":"tool_calls"}]}',
+            "",
+            'data: {"id":"response-1","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}',
+            "",
+            "data: [DONE]",
+            "",
+          ].join("\n"),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+
+    const result = await client.completeWithToolCalls({
+      credential: {
+        ...baseCredential,
+        providerId: "openai-compatible:openrouter",
+        method: "apiKey",
+      },
+      providerId: "openai-compatible:openrouter",
+      openAiCompatibleRuntimeProfile: {
+        providerId: "openai-compatible:openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        profile: "openrouter",
+        headers: { "HTTP-Referer": "https://example.invalid/agentlink" },
+        timeoutMs: 30_000,
+        authRequired: true,
+        models: {
+          "openrouter-kimi": {
+            id: "openrouter-kimi",
+            model: "moonshotai/kimi-k2.7-code",
+            capabilities: {
+              supportsThinking: true,
+              supportsCaching: false,
+              supportsImages: false,
+              supportsToolUse: true,
+              contextWindow: 131_072,
+              maxOutputTokens: 16_384,
+            },
+          },
+        },
+      },
+      model: "openrouter-kimi",
+      messages: userMessages,
+      reasoningEffort: "medium",
+      tools: [
+        {
+          name: "ask_user",
+          description: "Ask a question",
+          input_schema: { type: "object" },
+        },
+      ],
+      onDelta,
+    });
+
+    expect(capturedUrl).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(capturedHeaders.get("authorization")).toBe("Bearer token");
+    expect(capturedHeaders.get("http-referer")).toBe(
+      "https://example.invalid/agentlink",
+    );
+    expect(capturedHeaders.get("x-openrouter-title")).toBe("AgentLink");
+    expect(capturedBody).toMatchObject({
+      model: "moonshotai/kimi-k2.7-code",
+      reasoning: { effort: "medium" },
+      stream: true,
+    });
+    expect(onDelta).toHaveBeenCalledWith("Need ");
+    expect(onDelta).toHaveBeenCalledWith("input");
+    expect(result).toMatchObject({
+      text: "Need input",
+      stopReason: "tool_use",
+      toolCalls: [
+        {
+          id: "call-1",
+          name: "ask_user",
+          input: { question: "Continue?" },
+        },
+      ],
+      usage: { inputTokens: 12, outputTokens: 5 },
+    });
+  });
+
+  it("executes no-auth generic OpenAI-compatible models without an Authorization header", async () => {
+    let authorization: string | null = "unset";
+    let wireModel = "";
+    const client = new BrowserGatewayAskAgentModelClient({
+      sessionId: "session-1",
+      webFetch: async (_input, init) => {
+        authorization = new Headers(init?.headers).get("authorization");
+        wireModel = (JSON.parse(String(init?.body)) as { model: string }).model;
+        return new Response(
+          'data: {"choices":[{"index":0,"delta":{"content":"local"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+
+    const result = await client.completeWithToolCalls({
+      providerId: "openai-compatible:local",
+      openAiCompatibleRuntimeProfile: {
+        providerId: "openai-compatible:local",
+        baseUrl: "http://127.0.0.1:1234/v1",
+        profile: "generic",
+        timeoutMs: 30_000,
+        authRequired: false,
+        models: {
+          "local-model": {
+            id: "local-model",
+            model: "loaded-model-id",
+            capabilities: {
+              supportsThinking: false,
+              supportsCaching: false,
+              supportsImages: false,
+              supportsToolUse: false,
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+            },
+          },
+        },
+      },
+      model: "local-model",
+      messages: userMessages,
+    });
+
+    expect(authorization).toBeNull();
+    expect(wireModel).toBe("loaded-model-id");
+    expect(result.text).toBe("local");
   });
 
   it("returns streamed tool calls alongside text", async () => {

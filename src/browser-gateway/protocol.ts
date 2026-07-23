@@ -13,8 +13,9 @@ import type {
 import type { BrowserGatewayCoreOwnerRegistrationResolution } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayDataPlaneMode } from "./browserGatewayDataPlaneMode.js";
 import type { CoreModelCatalogEntry } from "../core/modelCatalog.js";
+import type { OpenAiCompatibleRuntimeProfile } from "../core/model/providers/openaiCompatible/types.js";
 
-export const BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION = 1;
+export const BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION = 2;
 
 export interface BrowserGatewayHelperDiscoveryRecord {
   pid: number;
@@ -143,6 +144,7 @@ export interface BrowserGatewayModelCredentialGrantRequest {
   method: CoreModelAuthMethod;
   bearerToken: string;
   grantedByOwnerId: string;
+  grantedByOwnerGenerationId: string;
   modelScopes: string[];
   helperGenerationId: string;
   ttlMs?: number;
@@ -151,10 +153,22 @@ export interface BrowserGatewayModelCredentialGrantRequest {
   canRefresh?: boolean;
 }
 
+export interface BrowserGatewayModelCredentialClearRequest {
+  grantedByOwnerId: string;
+  grantedByOwnerGenerationId: string;
+  providerId?: string;
+}
+
+export type BrowserGatewayOpenAiCompatibleRuntimeProfiles = Readonly<
+  Record<string, OpenAiCompatibleRuntimeProfile>
+>;
+
 export interface BrowserGatewayModelCatalogPublishRequest {
   publishedByOwnerId: string;
+  publishedByOwnerGenerationId: string;
   helperGenerationId: string;
   models: CoreModelCatalogEntry[];
+  openAiCompatibleRuntimeProfiles?: BrowserGatewayOpenAiCompatibleRuntimeProfiles;
 }
 
 export interface BrowserGatewayModelCatalogPublishResponse {
@@ -166,6 +180,7 @@ export interface BrowserGatewayModelCatalogPublishResponse {
 export interface BrowserGatewayModelCatalogResponse {
   models: CoreModelCatalogEntry[];
   publishedByOwnerId?: string;
+  publishedByOwnerGenerationId?: string;
   publishedAt?: number;
   source: "cached" | "fallback";
 }

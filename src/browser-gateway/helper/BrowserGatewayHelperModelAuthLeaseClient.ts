@@ -4,9 +4,11 @@ import type {
   BrowserGatewayModelAuthLeaseRevokeResponse,
   BrowserGatewayModelCatalogPublishRequest,
   BrowserGatewayModelCatalogPublishResponse,
+  BrowserGatewayModelCredentialClearRequest,
   BrowserGatewayModelCredentialClearResponse,
   BrowserGatewayModelCredentialGrantRequest,
   BrowserGatewayModelCredentialGrantResponse,
+  BrowserGatewayOpenAiCompatibleRuntimeProfiles,
 } from "../protocol.js";
 import type {
   CoreModelAuthLease,
@@ -28,6 +30,7 @@ export interface BrowserGatewayHelperModelAuthLeaseClientOptions {
   helperUrl: string;
   clientSharedSecret: string;
   grantedByOwnerId: string;
+  grantedByOwnerGenerationId: string;
   resolveModelAuth: (request?: {
     providerId?: string;
   }) => Promise<BrowserGatewayResolvedModelAuthMetadata | null>;
@@ -98,6 +101,7 @@ export class BrowserGatewayHelperModelAuthLeaseClient implements CoreModelAuthPr
       method: auth.method,
       bearerToken: auth.bearerToken,
       grantedByOwnerId: this.options.grantedByOwnerId,
+      grantedByOwnerGenerationId: this.options.grantedByOwnerGenerationId,
       modelScopes: request.modelScopes,
       helperGenerationId: request.helperGenerationId,
       ttlMs: this.options.defaultTtlMs ?? 55 * 60_000,
@@ -116,11 +120,14 @@ export class BrowserGatewayHelperModelAuthLeaseClient implements CoreModelAuthPr
   async publishModelCatalog(request: {
     helperGenerationId: string;
     models: CoreModelCatalogEntry[];
+    openAiCompatibleRuntimeProfiles?: BrowserGatewayOpenAiCompatibleRuntimeProfiles;
   }): Promise<BrowserGatewayModelCatalogPublishResponse> {
     const body: BrowserGatewayModelCatalogPublishRequest = {
       publishedByOwnerId: this.options.grantedByOwnerId,
+      publishedByOwnerGenerationId: this.options.grantedByOwnerGenerationId,
       helperGenerationId: request.helperGenerationId,
       models: request.models,
+      openAiCompatibleRuntimeProfiles: request.openAiCompatibleRuntimeProfiles,
     };
     return await this.postJson<BrowserGatewayModelCatalogPublishResponse>(
       "/internal/model-catalog",
@@ -129,10 +136,15 @@ export class BrowserGatewayHelperModelAuthLeaseClient implements CoreModelAuthPr
   }
 
   async clearCredential(providerId?: string): Promise<boolean> {
+    const body: BrowserGatewayModelCredentialClearRequest = {
+      grantedByOwnerId: this.options.grantedByOwnerId,
+      grantedByOwnerGenerationId: this.options.grantedByOwnerGenerationId,
+      ...(providerId ? { providerId } : {}),
+    };
     const response =
       await this.postJson<BrowserGatewayModelCredentialClearResponse>(
         "/internal/model-auth/credentials/clear",
-        providerId ? { providerId } : {},
+        body,
       );
     return response.removed;
   }

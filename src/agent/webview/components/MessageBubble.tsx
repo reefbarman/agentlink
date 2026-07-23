@@ -1,4 +1,3 @@
-import type { ChatMessage } from "../types";
 import { ToolCallGroup, segmentBlocks } from "./ToolCallGroup";
 import {
   useCallback,
@@ -12,6 +11,7 @@ import { ApiRequestBlock } from "./ApiRequestBlock";
 import { BgAgentBlock } from "./BgAgentBlock";
 import { BgAgentResultBlock } from "./BgAgentResultBlock";
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
+import type { ChatMessage } from "../types";
 import type { DetectedQuestion } from "../questionDetection";
 import { ErrorBlock } from "./ErrorBlock";
 import type { FinalMarkerToolCall } from "../../../shared/finalStatus";
@@ -478,6 +478,7 @@ export function MessageBubble({
           cacheReadTokens={message.apiRequest.cacheReadTokens}
           cacheCreationTokens={message.apiRequest.cacheCreationTokens}
           outputTokens={message.apiRequest.outputTokens}
+          usageEstimated={message.apiRequest.usageEstimated}
           durationMs={message.apiRequest.durationMs}
           timeToFirstToken={message.apiRequest.timeToFirstToken}
           contextBreakdown={message.apiRequest.contextBreakdown}

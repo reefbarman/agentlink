@@ -1,6 +1,9 @@
 import * as vscode from "vscode";
 
-import type { ModelProvider } from "./providers/types.js";
+import {
+  getProviderAuxiliaryModel,
+  type ModelProvider,
+} from "./providers/types.js";
 import {
   QUESTION_DETECTION_JSON_SCHEMA,
   buildQuestionDetectionMessages,
@@ -152,7 +155,7 @@ async function runAgentDetection(
 
   try {
     const result = await agent.provider.complete({
-      model: agent.provider.condenseModel || agent.model,
+      model: getProviderAuxiliaryModel(agent.provider, agent.model),
       systemPrompt: systemMsg.content,
       messages: [{ role: "user", content: userMsg.content }],
       maxTokens: 300,

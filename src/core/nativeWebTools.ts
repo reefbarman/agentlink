@@ -211,6 +211,7 @@ export function mergeNativeWebUsage(
     ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
     ...(cacheCreationTokens !== undefined ? { cacheCreationTokens } : {}),
     ...(serverToolUsage ? { serverToolUsage } : {}),
+    ...(current?.estimated || next.estimated ? { estimated: true } : {}),
   };
 }
 

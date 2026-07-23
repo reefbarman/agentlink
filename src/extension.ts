@@ -33,6 +33,10 @@ import {
 import { normalizeBackgroundMaxConcurrent } from "./agent/background/backgroundConcurrency.js";
 import { addTrustedCommandViaUi } from "./agent/trustedCommandFlow.js";
 import { registerCodexAuthCommands } from "./agent/codexAuthCommands.js";
+import { registerOpenAiCompatibleAuthCommands } from "./agent/openAiCompatibleAuthCommands.js";
+import { OpenAiCompatibleCredentialService } from "./agent/openAiCompatibleCredentials.js";
+import { registerOpenAiCompatibleModelConfigurationWizard } from "./agent/openAiCompatibleModelConfigurationWizard.js";
+import { getOpenAiCompatibleSecretKey } from "./agent/openAiCompatibleSecrets.js";
 import { createCodexAuthFlows } from "./agent/codexAuthFlows.js";
 import { runLegacyAgentIntegrationCleanup } from "./util/legacyAgentIntegrationCleanup.js";
 
@@ -58,6 +62,8 @@ import type { AgentConfig } from "./agent/types.js";
 import { registerEditorContextCommands } from "./agent/editorContextCommands.js";
 import { registerModelAuthCommands } from "./agent/modelAuthCommands.js";
 import { AnthropicProvider } from "./agent/providers/anthropic/index.js";
+import { OpenAiCompatibleProviderManager } from "./agent/providers/openaiCompatible/index.js";
+import { discoverOpenAiCompatibleModels } from "./agent/providers/openaiCompatible/modelDiscovery.js";
 import {
   providerRegistry,
   CodexProvider,
@@ -98,7 +104,10 @@ import { WorktreeFleetExchangeStore } from "./worktree/WorktreeFleetExchangeStor
 import { createVscodeWorktreeAgentLaunchProvider } from "./adapters/vscode/worktreeAgentLaunchCapabilities.js";
 import { FleetAutomationStore } from "./agent/FleetAutomationStore.js";
 import { createFleetAutomationLifecycle } from "./agent/fleetAutomationLifecycle.js";
-import { installAgentLinkHttpDispatcher } from "./util/httpDispatcher.js";
+import {
+  agentLinkFetch,
+  installAgentLinkHttpDispatcher,
+} from "./util/httpDispatcher.js";
 import { resolveWorkspaceSessionLocation } from "./agent/workspaceSessionIdentity.js";
 import { createSessionProjectScope } from "./core/workspaceProjects.js";
 import { createWorkspaceProjectCatalog } from "./adapters/vscode/workspaceProjectCapabilities.js";
@@ -971,7 +980,9 @@ export function activate(context: vscode.ExtensionContext): void {
   }
   const explicitAgentModel = getExplicitAgentModel(agentConfiguration);
   const configuredMode =
-    agentConfiguration.get<string>("defaultMode")?.trim() || "code";
+    (vscode.workspace.workspaceFolders?.length ?? 0) === 0
+      ? "ask"
+      : agentConfiguration.get<string>("defaultMode")?.trim() || "code";
   const configuredModel =
     explicitAgentModel ??
     resolveModelForMode(
@@ -1037,9 +1048,49 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Register the OpenAI/Codex provider with unified OAuth + API key auth.
   openAiCodexAuthManager.initialize(context);
-  providerRegistry.register(
-    new CodexProvider(openAiCodexAuthManager, agentLog),
+  const codexProvider = new CodexProvider(openAiCodexAuthManager, agentLog);
+  providerRegistry.register(codexProvider);
+
+  const openAiCompatibleConfiguration = vscode.workspace.getConfiguration(
+    "agentlink.openaiCompatible",
   );
+  const openAiCompatibleProviderManager = new OpenAiCompatibleProviderManager({
+    registry: providerRegistry,
+    builtInProviders: [anthropicProvider, codexProvider],
+    configuration: {
+      get: <T>(section: string, defaultValue: T): T =>
+        openAiCompatibleConfiguration.inspect<T>(section)?.globalValue ??
+        defaultValue,
+    },
+    secrets: context.secrets,
+    log: agentLog,
+  });
+  const openAiCompatibleCredentials = new OpenAiCompatibleCredentialService({
+    secrets: context.secrets,
+    state: context.globalState,
+    getConfiguredApiKeyNames: () =>
+      openAiCompatibleProviderManager.listConfiguredAuthKeys(),
+  });
+  chatViewProvider.setOpenAiCompatibleAuthKeyResolver((providerId) =>
+    openAiCompatibleProviderManager.getAuthKey(providerId),
+  );
+  const initialOpenAiCompatibleReconcile =
+    openAiCompatibleProviderManager.reconcile();
+  if (initialOpenAiCompatibleReconcile.issues.length > 0) {
+    void vscode.window
+      .showWarningMessage(
+        `AgentLink kept the previous OpenAI-compatible model configuration because ${initialOpenAiCompatibleReconcile.issues.length} validation issue${initialOpenAiCompatibleReconcile.issues.length === 1 ? " was" : "s were"} found. See the AgentLink output for details.`,
+        "Open Settings",
+      )
+      .then((choice) => {
+        if (choice === "Open Settings") {
+          void vscode.commands.executeCommand(
+            "workbench.action.openSettings",
+            "agentlink.openaiCompatible.connections",
+          );
+        }
+      });
+  }
 
   const getConfiguredThresholdWithCapabilities = (model: string): number =>
     getConfiguredBaseThresholdForModel(
@@ -1051,7 +1102,9 @@ export function activate(context: vscode.ExtensionContext): void {
     agentConfig.model,
   );
   const resolvedStartupModel =
-    startupModelResolution?.model ?? agentConfig.model;
+    startupModelResolution?.model ??
+    providerRegistry.resolveAvailableModel(FALLBACK_AGENT_MODEL)?.model ??
+    FALLBACK_AGENT_MODEL;
   if (startupModelResolution?.migratedFrom) {
     log(
       `[model] migrated retired startup model "${startupModelResolution.migratedFrom}" to "${resolvedStartupModel}"`,
@@ -1080,6 +1133,9 @@ export function activate(context: vscode.ExtensionContext): void {
           maxOutputTokens: model.maxOutputTokens,
           reasoningEfforts: model.reasoningEfforts,
           defaultReasoningEffort: model.defaultReasoningEffort,
+          providerDisplayName: model.providerDisplayName,
+          supportsToolUse: model.supportsToolUse,
+          supportsImages: model.supportsImages,
           authenticated: model.authenticated,
           condenseThreshold: model.condenseThreshold,
         }),
@@ -1087,6 +1143,8 @@ export function activate(context: vscode.ExtensionContext): void {
       const result = await client.publishModelCatalog({
         helperGenerationId: discovery.helperGenerationId,
         models,
+        openAiCompatibleRuntimeProfiles:
+          openAiCompatibleProviderManager.getRuntimeProfiles(),
       });
       log(
         `[browser-gateway-helper] published model catalog to helper modelCount=${result.modelCount}`,
@@ -1096,16 +1154,21 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
-  const publishableBrowserGatewayModelCredentialProviderIds = [
-    "openai-codex",
-    "anthropic",
-  ] as const;
+  const getPublishableBrowserGatewayModelCredentialProviderIds =
+    (): string[] => [
+      "openai-codex",
+      "anthropic",
+      ...openAiCompatibleProviderManager
+        .listProviders()
+        .filter((provider) => provider.authKey !== undefined)
+        .map((provider) => provider.id),
+    ];
 
   const grantBrowserGatewayModelCredentials = async (): Promise<void> => {
     const discovery = browserGatewayHelperDiscovery;
     const client = browserGatewayHelperModelAuthLeaseClient;
     if (!discovery?.helperGenerationId || !client) return;
-    for (const providerId of publishableBrowserGatewayModelCredentialProviderIds) {
+    for (const providerId of getPublishableBrowserGatewayModelCredentialProviderIds()) {
       try {
         const credential = await client.grantCredential({
           helperGenerationId: discovery.helperGenerationId,
@@ -1131,6 +1194,83 @@ export function activate(context: vscode.ExtensionContext): void {
         );
       }
     }
+  };
+
+  let openAiCompatibleRefreshInFlight:
+    | Promise<ReturnType<OpenAiCompatibleProviderManager["reconcile"]>>
+    | undefined;
+  const refreshOpenAiCompatibleProviders = (): Promise<
+    ReturnType<OpenAiCompatibleProviderManager["reconcile"]>
+  > => {
+    if (openAiCompatibleRefreshInFlight) {
+      return openAiCompatibleRefreshInFlight;
+    }
+    const refresh = async () => {
+      const previousProviders = openAiCompatibleProviderManager
+        .listProviders()
+        .map((provider) => provider.id);
+      const result = openAiCompatibleProviderManager.reconcile();
+      if (!result.applied) {
+        void vscode.window
+          .showWarningMessage(
+            `AgentLink kept the previous OpenAI-compatible model configuration because ${result.issues.length} validation issue${result.issues.length === 1 ? " was" : "s were"} found. See the AgentLink output for details.`,
+            "Open Settings",
+          )
+          .then((choice) => {
+            if (choice === "Open Settings") {
+              void vscode.commands.executeCommand(
+                "workbench.action.openSettings",
+                "agentlink.openaiCompatible.connections",
+              );
+            }
+          });
+        return result;
+      }
+
+      const foregroundModel =
+        agentSessionManager?.getForegroundSession()?.model;
+      if (
+        foregroundModel &&
+        !providerRegistry.resolveAvailableModel(foregroundModel)
+      ) {
+        try {
+          const fallback =
+            await agentSessionManager.setModel(FALLBACK_AGENT_MODEL);
+          void vscode.window.showWarningMessage(
+            `The selected model “${foregroundModel}” is no longer configured. AgentLink switched to “${fallback}”.`,
+          );
+        } catch (error) {
+          log(
+            `[openai-compatible] could not migrate unavailable foreground model “${foregroundModel}”: ${error}`,
+          );
+        }
+      }
+
+      const currentProviderIds = new Set(
+        openAiCompatibleProviderManager
+          .listProviders()
+          .map((provider) => provider.id),
+      );
+      for (const removedProviderId of previousProviders.filter(
+        (providerId) => !currentProviderIds.has(providerId),
+      )) {
+        await browserGatewayHelperModelAuthLeaseClient
+          ?.clearCredential(removedProviderId)
+          .catch((error) =>
+            log(
+              `[browser-gateway-helper] failed to clear removed ${removedProviderId} credentials: ${error}`,
+            ),
+          );
+      }
+      chatViewProvider.refreshModels();
+      await publishBrowserGatewayModelCatalog();
+      await grantBrowserGatewayModelCredentials();
+      return result;
+    };
+    openAiCompatibleRefreshInFlight = refresh().finally(() => {
+      openAiCompatibleRefreshInFlight = undefined;
+    });
+    return openAiCompatibleRefreshInFlight;
   };
 
   // Re-send model list to webview when OpenAI/Codex auth state changes.
@@ -1568,6 +1708,7 @@ export function activate(context: vscode.ExtensionContext): void {
             helperUrl: result.discovery.url,
             clientSharedSecret: result.discovery.clientSharedSecret,
             grantedByOwnerId: helperCoreOwner.ownerId,
+            grantedByOwnerGenerationId: helperCoreOwner.ownerGenerationId,
             resolveModelAuth: async (request) => {
               // Legacy lease callers omitted providerId when Codex was the only
               // browser-helper credential family. Preserve that default while
@@ -1598,6 +1739,22 @@ export function activate(context: vscode.ExtensionContext): void {
                   bearerToken: auth.bearerToken,
                   accountLabel: auth.accountLabel,
                   canRefresh: auth.canRefresh,
+                };
+              }
+              if (providerId.startsWith("openai-compatible:")) {
+                const authKey =
+                  openAiCompatibleProviderManager.getAuthKey(providerId);
+                if (!authKey) return null;
+                const bearerToken = await context.secrets.get(
+                  getOpenAiCompatibleSecretKey(authKey),
+                );
+                if (!bearerToken) return null;
+                return {
+                  providerId,
+                  method: "apiKey",
+                  bearerToken,
+                  accountLabel: authKey,
+                  canRefresh: false,
                 };
               }
               return null;
@@ -1969,6 +2126,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // Update agent config when settings change
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("agentlink.openaiCompatible.connections")) {
+        void refreshOpenAiCompatibleProviders();
+      }
       if (
         e.affectsConfiguration("agentlink.agentModel") ||
         e.affectsConfiguration("agentlink.modeModelPreferences") ||
@@ -1996,7 +2156,10 @@ export function activate(context: vscode.ExtensionContext): void {
         const windowConfig = vscode.workspace.getConfiguration("agentlink");
         const fgMode = agentSessionManager.getForegroundSession()?.mode;
         const effectiveMode =
-          fgMode ?? config.get<string>("defaultMode")?.trim() ?? "code";
+          fgMode ??
+          (projectCatalog.listProjects().length === 0
+            ? "ask"
+            : (config.get<string>("defaultMode")?.trim() ?? "code"));
         const configuredModel = resolveModelForMode(
           config,
           effectiveMode,
@@ -2058,6 +2221,52 @@ export function activate(context: vscode.ExtensionContext): void {
       extensionVersion: helperVersion,
       formatError: formatBrowserGatewayHelperError,
       log,
+    }),
+    registerOpenAiCompatibleModelConfigurationWizard({
+      credentials: openAiCompatibleCredentials,
+      getGlobalConnections: () =>
+        openAiCompatibleConfiguration.inspect<unknown>("connections")
+          ?.globalValue ?? [],
+      updateGlobalConnections: async (value) => {
+        await openAiCompatibleConfiguration.update(
+          "connections",
+          value,
+          vscode.ConfigurationTarget.Global,
+        );
+      },
+      validateConnections: (raw) =>
+        openAiCompatibleProviderManager.validateConnections(raw),
+      getReservedModelIds: () =>
+        providerRegistry
+          .listProviders()
+          .flatMap((provider) => [
+            ...provider.listModels().map((model) => model.id),
+            ...(provider.listRoutableModelIds?.() ?? []),
+          ]),
+      refreshProviders: refreshOpenAiCompatibleProviders,
+      discoverModels: (options) =>
+        discoverOpenAiCompatibleModels({
+          ...options,
+          fetch: agentLinkFetch,
+        }),
+      openSettings: async () => {
+        await vscode.commands.executeCommand(
+          "workbench.action.openSettings",
+          "agentlink.openaiCompatible.connections",
+        );
+      },
+      log,
+    }),
+    ...registerOpenAiCompatibleAuthCommands({
+      secrets: context.secrets,
+      state: context.globalState,
+      getConfiguredAuthKeys: () =>
+        openAiCompatibleProviderManager.listConfiguredAuthKeys(),
+      onCredentialChanged: async () => {
+        chatViewProvider.refreshModels();
+        await publishBrowserGatewayModelCatalog();
+        await grantBrowserGatewayModelCredentials();
+      },
     }),
     ...registerModelAuthCommands({
       openAiAuthManager: openAiCodexAuthManager,

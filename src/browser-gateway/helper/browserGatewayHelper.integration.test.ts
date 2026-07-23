@@ -123,12 +123,103 @@ type AskAgentToolLoopTestClient = Pick<
   "complete" | "completeWithToolCalls"
 >;
 
+async function provisionAskAgentModelForTest(params: {
+  helperBase: string;
+  discovery: { clientSharedSecret: string; helperGenerationId: string };
+  grantCredential?: boolean;
+  credentialMethod?: "oauth" | "apiKey";
+  providerId?: string;
+  model?: Record<string, unknown>;
+  openAiCompatibleRuntimeProfiles?: Record<string, unknown>;
+}): Promise<Record<string, string>> {
+  const internalHeaders = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${params.discovery.clientSharedSecret}`,
+  };
+  const ownerRegistration = await fetch(
+    `${params.helperBase}/internal/core-owners/register`,
+    {
+      method: "POST",
+      headers: internalHeaders,
+      body: JSON.stringify({
+        ownerId: "vscode-owner",
+        ownerKind: "vscode",
+        displayName: "VS Code Test Owner",
+        scope: {
+          kind: "workspace",
+          workspaceId: "workspace-test",
+          displayName: "Workspace Test",
+        },
+        ownerGenerationId: "vscode-generation-1",
+        instanceId: "vscode-instance-1",
+        processId: process.pid,
+      }),
+    },
+  );
+  expect(ownerRegistration.ok).toBe(true);
+  const catalogPublication = await fetch(
+    `${params.helperBase}/internal/model-catalog`,
+    {
+      method: "POST",
+      headers: internalHeaders,
+      body: JSON.stringify({
+        publishedByOwnerId: "vscode-owner",
+        publishedByOwnerGenerationId: "vscode-generation-1",
+        helperGenerationId: params.discovery.helperGenerationId,
+        models: [
+          params.model ?? {
+            id: "gpt-5.6-luna",
+            displayName: "GPT-5.6 Luna",
+            providerId: "openai-codex",
+            contextWindow: 481_000,
+            maxInputTokens: 353_000,
+            reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+            defaultReasoningEffort: "medium",
+            authenticated: true,
+          },
+        ],
+        ...(params.openAiCompatibleRuntimeProfiles
+          ? {
+              openAiCompatibleRuntimeProfiles:
+                params.openAiCompatibleRuntimeProfiles,
+            }
+          : {}),
+      }),
+    },
+  );
+  expect(catalogPublication.ok).toBe(true);
+  if (params.grantCredential !== false) {
+    const credentialGrant = await fetch(
+      `${params.helperBase}/internal/model-auth/credentials`,
+      {
+        method: "POST",
+        headers: internalHeaders,
+        body: JSON.stringify({
+          providerId: params.providerId ?? "openai-codex",
+          method: params.credentialMethod ?? "oauth",
+          bearerToken: "test-token",
+          grantedByOwnerId: "vscode-owner",
+          grantedByOwnerGenerationId: "vscode-generation-1",
+          modelScopes: ["chat"],
+          helperGenerationId: params.discovery.helperGenerationId,
+          ttlMs: 60_000,
+        }),
+      },
+    );
+    expect(credentialGrant.ok).toBe(true);
+  }
+  return internalHeaders;
+}
+
 async function makeAskAgentToolLoopTestHarness(params: {
   modelClient: AskAgentToolLoopTestClient;
   helperVersion?: string;
   streamingMetrics?: StreamingBaselineRecorder;
   grantCredential?: boolean;
   credentialMethod?: "oauth" | "apiKey";
+  providerId?: string;
+  model?: Record<string, unknown>;
+  openAiCompatibleRuntimeProfiles?: Record<string, unknown>;
   cachedWebPolicy?: Parameters<
     BrowserGatewayAskAgentPreferencesStore["update"]
   >[0]["webPolicy"];
@@ -190,10 +281,15 @@ async function makeAskAgentToolLoopTestHarness(params: {
   const discovery = JSON.parse(
     await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
   ) as { clientSharedSecret: string; helperGenerationId: string };
-  const internalHeaders = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${discovery.clientSharedSecret}`,
-  };
+  const internalHeaders = await provisionAskAgentModelForTest({
+    helperBase,
+    discovery,
+    grantCredential: params.grantCredential,
+    credentialMethod: params.credentialMethod,
+    providerId: params.providerId,
+    model: params.model,
+    openAiCompatibleRuntimeProfiles: params.openAiCompatibleRuntimeProfiles,
+  });
   const owner = await fetch(`${helperBase}/api/ask-agent/session`, {
     headers: { Cookie: cookie },
   });
@@ -203,39 +299,12 @@ async function makeAskAgentToolLoopTestHarness(params: {
       ownerGenerationId: string;
     };
   };
-  await fetch(`${helperBase}/internal/core-owners/register`, {
-    method: "POST",
-    headers: internalHeaders,
-    body: JSON.stringify({
-      ownerId: "vscode-owner",
-      ownerKind: "vscode",
-      displayName: "VS Code Test Owner",
-      scope: { kind: "workspace", workspaceId: "workspace-test" },
-      ownerGenerationId: "vscode-generation-1",
-      instanceId: "vscode-instance-1",
-      processId: process.pid,
-    }),
-  });
   if (params.grantCredential !== false) {
-    await fetch(`${helperBase}/internal/model-auth/credentials`, {
+    const leaseGrant = await fetch(`${helperBase}/internal/model-auth/leases`, {
       method: "POST",
       headers: internalHeaders,
       body: JSON.stringify({
-        providerId: "openai-codex",
-        method: params.credentialMethod ?? "oauth",
-        bearerToken: "test-token",
-        grantedByOwnerId: "vscode-owner",
-        modelScopes: ["chat"],
-        helperGenerationId: discovery.helperGenerationId,
-        ttlMs: 60_000,
-        now: Date.now(),
-      }),
-    });
-    await fetch(`${helperBase}/internal/model-auth/leases`, {
-      method: "POST",
-      headers: internalHeaders,
-      body: JSON.stringify({
-        providerId: "openai-codex",
+        providerId: params.providerId ?? "openai-codex",
         method: params.credentialMethod ?? "oauth",
         grantedByOwnerId: "vscode-owner",
         grantedToOwnerId: ownerPayload.ownerRegistration.owner.ownerId,
@@ -247,6 +316,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
         auditId: "ask-agent-tool-loop-test",
       }),
     });
+    expect(leaseGrant.ok).toBe(true);
   }
   return {
     helper,
@@ -2108,6 +2178,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
           method: "oauth",
           bearerToken: "oauth-token-secret",
           grantedByOwnerId: "vscode-owner",
+          grantedByOwnerGenerationId: "vscode-generation-1",
           modelScopes: ["chat"],
           helperGenerationId: discovery.helperGenerationId,
           ttlMs: 60_000,
@@ -2139,6 +2210,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
           method: "apiKey",
           bearerToken: "anthropic-token-secret",
           grantedByOwnerId: "vscode-owner",
+          grantedByOwnerGenerationId: "vscode-generation-1",
           modelScopes: ["chat"],
           helperGenerationId: discovery.helperGenerationId,
           ttlMs: 60_000,
@@ -2226,6 +2298,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         headers: internalHeaders,
         body: JSON.stringify({
           publishedByOwnerId: "vscode-owner",
+          publishedByOwnerGenerationId: "vscode-generation-1",
           helperGenerationId: discovery.helperGenerationId,
           models: [
             {
@@ -2241,21 +2314,56 @@ describe("BrowserGatewayHelper proxy routing", () => {
             {
               id: "gpt-5.3-codex",
               displayName: "GPT-5.3 Codex",
-              providerId: "codex",
+              providerId: "openai-codex",
               contextWindow: 200_000,
               maxInputTokens: 200_000,
               reasoningEfforts: ["none", "minimal", "low", "medium", "high"],
               defaultReasoningEffort: "low",
               authenticated: true,
             },
+            {
+              id: "local-gemma",
+              displayName: "Local Gemma",
+              providerId: "openai-compatible:local",
+              providerDisplayName: "Local Server",
+              supportsToolUse: false,
+              supportsImages: true,
+              contextWindow: 32_768,
+              maxOutputTokens: 4_096,
+              authenticated: true,
+            },
           ],
+          openAiCompatibleRuntimeProfiles: {
+            "openai-compatible:local": {
+              providerId: "openai-compatible:local",
+              baseUrl: "http://127.0.0.1:1234/v1",
+              profile: "generic",
+              headers: { "X-Test-Static": "safe-value" },
+              timeoutMs: 30_000,
+              authRequired: false,
+              models: {
+                "local-gemma": {
+                  id: "local-gemma",
+                  model: "private-wire-model",
+                  capabilities: {
+                    supportsThinking: false,
+                    supportsCaching: false,
+                    supportsImages: true,
+                    supportsToolUse: false,
+                    contextWindow: 32_768,
+                    maxOutputTokens: 4_096,
+                  },
+                },
+              },
+            },
+          },
         }),
       },
     );
     expect(catalogResponse.ok).toBe(true);
     await expect(catalogResponse.json()).resolves.toMatchObject({
       ok: true,
-      modelCount: 2,
+      modelCount: 3,
     });
 
     const modelsResponse = await fetch(`${helperBase}/api/ask-agent/models`, {
@@ -2270,10 +2378,24 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(modelsBody.models?.map((model) => model.id)).toEqual([
       "claude-sonnet-4-5",
       "gpt-5.3-codex",
+      "local-gemma",
     ]);
     expect(
       modelsBody.models?.find((model) => model.id === "gpt-5.3-codex"),
-    ).toMatchObject({ provider: "codex" });
+    ).toMatchObject({ provider: "openai-codex" });
+    expect(
+      modelsBody.models?.find((model) => model.id === "local-gemma"),
+    ).toMatchObject({
+      provider: "openai-compatible:local",
+      providerDisplayName: "Local Server",
+      supportsToolUse: false,
+      supportsImages: true,
+    });
+    const publicModelsJson = JSON.stringify(modelsBody);
+    expect(publicModelsJson).not.toContain("private-wire-model");
+    expect(publicModelsJson).not.toContain("127.0.0.1:1234");
+    expect(publicModelsJson).not.toContain("X-Test-Static");
+    expect(publicModelsJson).not.toContain("safe-value");
 
     const modelResponse = await fetch(`${helperBase}/api/ask-agent/model`, {
       method: "POST",
@@ -2823,7 +2945,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
       {
         method: "POST",
         headers: internalHeaders,
-        body: "{}",
+        body: JSON.stringify({
+          grantedByOwnerId: "vscode-owner",
+          grantedByOwnerGenerationId: "vscode-generation-1",
+        }),
       },
     );
     expect(clearCredential.ok).toBe(true);
@@ -2887,7 +3012,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         expect.objectContaining({
           event: "model-catalog.published",
           ownerId: "vscode-owner",
-          modelCount: 2,
+          modelCount: 3,
         }),
         expect.objectContaining({
           event: "ask-agent.model",
@@ -3029,6 +3154,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
         headers: restartedInternalHeaders,
         body: JSON.stringify({
           publishedByOwnerId: "vscode-owner",
+          publishedByOwnerGenerationId: "vscode-generation-2",
           helperGenerationId: restartedDiscovery.helperGenerationId,
           models: [
             {
@@ -3151,22 +3277,9 @@ describe("BrowserGatewayHelper proxy routing", () => {
     const discovery = JSON.parse(
       await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
     ) as { clientSharedSecret: string; helperGenerationId: string };
-    const internalHeaders = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${discovery.clientSharedSecret}`,
-    };
-    await fetch(`${helperBase}/internal/model-auth/credentials`, {
-      method: "POST",
-      headers: internalHeaders,
-      body: JSON.stringify({
-        providerId: "openai-codex",
-        method: "oauth",
-        bearerToken: "oauth-token-secret",
-        grantedByOwnerId: "vscode-owner",
-        modelScopes: ["chat"],
-        helperGenerationId: discovery.helperGenerationId,
-        ttlMs: 60_000,
-      }),
+    const internalHeaders = await provisionAskAgentModelForTest({
+      helperBase,
+      discovery,
     });
     const sendResponse = await fetch(`${helperBase}/api/ask-agent/send`, {
       method: "POST",
@@ -3180,7 +3293,11 @@ describe("BrowserGatewayHelper proxy routing", () => {
       {
         method: "POST",
         headers: internalHeaders,
-        body: "{}",
+        body: JSON.stringify({
+          grantedByOwnerId: "vscode-owner",
+          grantedByOwnerGenerationId: "vscode-generation-1",
+          providerId: "openai-codex",
+        }),
       },
     );
     expect(clearResponse.ok).toBe(true);
@@ -3270,22 +3387,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     const discovery = JSON.parse(
       await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
     ) as { clientSharedSecret: string; helperGenerationId: string };
-    await fetch(`${helperBase}/internal/model-auth/credentials`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${discovery.clientSharedSecret}`,
-      },
-      body: JSON.stringify({
-        providerId: "openai-codex",
-        method: "oauth",
-        bearerToken: "oauth-token-secret",
-        grantedByOwnerId: "vscode-owner",
-        modelScopes: ["chat"],
-        helperGenerationId: discovery.helperGenerationId,
-        ttlMs: 60_000,
-      }),
-    });
+    await provisionAskAgentModelForTest({ helperBase, discovery });
 
     const sendResponse = await fetch(`${helperBase}/api/ask-agent/send`, {
       method: "POST",
@@ -3418,36 +3520,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     const discovery = JSON.parse(
       await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
     ) as { clientSharedSecret: string; helperGenerationId: string };
-    const internalHeaders = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${discovery.clientSharedSecret}`,
-    };
-    await fetch(`${helperBase}/internal/core-owners/register`, {
-      method: "POST",
-      headers: internalHeaders,
-      body: JSON.stringify({
-        ownerId: "vscode-owner",
-        ownerKind: "vscode",
-        displayName: "VS Code Test Owner",
-        scope: { kind: "workspace", workspaceId: "workspace-test" },
-        ownerGenerationId: "vscode-generation-1",
-        instanceId: "vscode-instance-1",
-        processId: process.pid,
-      }),
-    });
-    await fetch(`${helperBase}/internal/model-auth/credentials`, {
-      method: "POST",
-      headers: internalHeaders,
-      body: JSON.stringify({
-        providerId: "openai-codex",
-        method: "oauth",
-        bearerToken: "oauth-token-secret",
-        grantedByOwnerId: "vscode-owner",
-        modelScopes: ["chat"],
-        helperGenerationId: discovery.helperGenerationId,
-        ttlMs: 60_000,
-      }),
-    });
+    await provisionAskAgentModelForTest({ helperBase, discovery });
     const sessionResponse = await fetch(`${helperBase}/api/ask-agent/session`, {
       headers: { Cookie: cookie },
     });
@@ -3567,10 +3640,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     const discovery = JSON.parse(
       await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
     ) as { clientSharedSecret: string; helperGenerationId: string };
-    const internalHeaders = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${discovery.clientSharedSecret}`,
-    };
+    await provisionAskAgentModelForTest({ helperBase, discovery });
     const sessionResponse = await fetch(`${helperBase}/api/ask-agent/session`, {
       headers: { Cookie: cookie },
     });
@@ -3603,20 +3673,6 @@ describe("BrowserGatewayHelper proxy routing", () => {
       entities: ["Ask Agent"],
       createdAt: 100,
       updatedAt: 200,
-    });
-
-    await fetch(`${helperBase}/internal/model-auth/credentials`, {
-      method: "POST",
-      headers: internalHeaders,
-      body: JSON.stringify({
-        providerId: "openai-codex",
-        method: "oauth",
-        bearerToken: "oauth-token-secret",
-        grantedByOwnerId: "vscode-owner",
-        modelScopes: ["chat"],
-        helperGenerationId: discovery.helperGenerationId,
-        ttlMs: 60_000,
-      }),
     });
 
     const response = await fetch(`${helperBase}/api/ask-agent/send`, {
@@ -3783,7 +3839,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
 
     expect(send.ok).toBe(true);
     expect(publication?.snapshot).toEqual(body.snapshot);
-    expect(publication?.revision).toBe(1);
+    expect(publication?.revision).toBeGreaterThan(1);
     expect(publication?.serialized).toBe(JSON.stringify(body.snapshot));
     expect(body.snapshot.session.foreground.streaming).toBe(false);
     expect(body.snapshot.session.foreground.projectedMessages).toEqual(
@@ -3868,6 +3924,38 @@ describe("BrowserGatewayHelper proxy routing", () => {
       },
     );
     expect(ownerResponse.ok).toBe(true);
+    const catalogResponse = await fetch(
+      `${helperBase}/internal/model-catalog`,
+      {
+        method: "POST",
+        headers: internalHeaders,
+        body: JSON.stringify({
+          publishedByOwnerId: "vscode-owner",
+          publishedByOwnerGenerationId: "vscode-generation-1",
+          helperGenerationId: discovery.helperGenerationId,
+          models: [
+            {
+              id: "gpt-5.6-luna",
+              displayName: "GPT-5.6 Luna",
+              providerId: "openai-codex",
+              contextWindow: 481_000,
+              maxInputTokens: 353_000,
+              reasoningEfforts: [
+                "none",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+              ],
+              defaultReasoningEffort: "medium",
+              authenticated: true,
+            },
+          ],
+        }),
+      },
+    );
+    expect(catalogResponse.ok).toBe(true);
     const credentialResponse = await fetch(
       `${helperBase}/internal/model-auth/credentials`,
       {
@@ -3878,6 +3966,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
           method: "oauth",
           bearerToken: "oauth-token-secret",
           grantedByOwnerId: "vscode-owner",
+          grantedByOwnerGenerationId: "vscode-generation-1",
           modelScopes: ["chat"],
           helperGenerationId: discovery.helperGenerationId,
           ttlMs: 60_000,
@@ -4996,6 +5085,92 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(upstreamRequests).not.toContain(
       "/internal/ask-agent/generate-image",
     );
+  });
+
+  it("omits unsupported native web tools for authenticated OpenAI-compatible models", async () => {
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      return { text: "Kimi answered without native web.", toolCalls: [] };
+    });
+    const providerId = "openai-compatible:openrouter-main";
+    const modelId = "openrouter-moonshotai-kimi-k3";
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      credentialMethod: "apiKey",
+      providerId,
+      model: {
+        id: modelId,
+        displayName: "Kimi K3",
+        providerId,
+        providerDisplayName: "OpenRouter",
+        supportsToolUse: true,
+        supportsImages: true,
+        contextWindow: 32_768,
+        maxOutputTokens: 4_096,
+        authenticated: true,
+      },
+      openAiCompatibleRuntimeProfiles: {
+        [providerId]: {
+          providerId,
+          baseUrl: "https://openrouter.ai/api/v1",
+          profile: "openrouter",
+          headers: {},
+          timeoutMs: 30_000,
+          authRequired: true,
+          models: {
+            [modelId]: {
+              id: modelId,
+              model: "moonshotai/kimi-k3",
+              capabilities: {
+                supportsThinking: false,
+                supportsCaching: false,
+                supportsImages: true,
+                supportsToolUse: true,
+                contextWindow: 32_768,
+                maxOutputTokens: 4_096,
+              },
+            },
+          },
+        },
+      },
+      cachedWebPolicy: {
+        settings: {
+          searchBackend: "native",
+          fetchBackend: "native",
+          nativeSearchMode: "cached",
+          allowedDomains: [],
+          blockedDomains: [],
+          maxSearchUsesPerTurn: 5,
+          maxFetchUsesPerTurn: 3,
+          maxFetchContentTokens: 25_000,
+          maxReplayBytesPerTurn: 5_242_880,
+        },
+        sourceInstanceId: "offline-window",
+        sourceRevision: "offline-revision",
+        updatedAt: Date.now(),
+      },
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Answer without web" }),
+    });
+    const body = await send.text();
+
+    expect(send.ok).toBe(true);
+    expect(body).toContain("Kimi answered without native web.");
+    expect(completionParams).toHaveLength(1);
+    expect(completionParams[0]?.model).toBe(modelId);
+    expect(completionParams[0]?.hostedTools).toBeUndefined();
+    const toolNames =
+      completionParams[0]?.tools?.map((tool) => tool.name) ?? [];
+    expect(toolNames).not.toContain("web_search");
+    expect(toolNames).not.toContain("web_fetch");
+    expect(toolNames).toContain("set_task_status");
   });
 
   it("uses cached provider policy for API-key hosted search without a VS Code instance", async () => {

@@ -23,6 +23,9 @@ export interface CoreModelCatalogEntry {
   id: string;
   displayName: string;
   providerId: string;
+  providerDisplayName?: string;
+  supportsToolUse?: boolean;
+  supportsImages?: boolean;
   contextWindow: number;
   maxInputTokens?: number;
   maxOutputTokens?: number;

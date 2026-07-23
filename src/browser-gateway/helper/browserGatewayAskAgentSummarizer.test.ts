@@ -21,6 +21,7 @@ function credential(): BrowserGatewayModelCredentialRecord {
     method: "oauth",
     bearerToken: "token",
     grantedByOwnerId: "vscode-owner",
+    grantedByOwnerGenerationId: "vscode-generation-1",
     modelScopes: ["chat"],
     grantedAt: Date.now(),
     canRefresh: true,

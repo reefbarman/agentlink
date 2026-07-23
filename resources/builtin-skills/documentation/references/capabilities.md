@@ -14,14 +14,16 @@ For any per-tool details (parameters, response shape), read the `## Tools` secti
 | `debug`     | Investigation with commands, language tools, and search                            |
 | `review`    | Focused code review with structured review output                                  |
 
-Switch with `/mode <slug>` or the mode selector. Default mode: `agentlink.defaultMode`. Projects can add or override modes via `modes.json` (see `references/customization.md`).
+Switch with `/mode <slug>` or the mode selector. Default mode: `agentlink.defaultMode`. Projects can add or override modes via `modes.json` (see `references/customization.md`). With no workspace folder open, AgentLink instead starts a non-persistent, Ask-only projectless chat using global model/reasoning/context settings. Self-contained pasted or dropped images/PDFs remain available, but workspace files, path attachments, shell/editor tools, MCP, checkpoints, and approval controls require an open folder.
 
 ## Models and providers
 
 - Model picker is built into the chat UI (`/model`). Per-mode defaults: `agentlink.modeModelPreferences`; per-mode thinking level: `agentlink.modeReasoningEffortPreferences`.
-- Auth: command palette entries **AgentLink: Set Anthropic API Key**, **AgentLink: Set OpenAI API Key**, **AgentLink: Sign In to OpenAI/Codex** (ChatGPT/Codex OAuth, multi-account management available).
+- Auth: command palette entries **AgentLink: Set Anthropic API Key**, **AgentLink: Set OpenAI API Key**, **AgentLink: Sign In to OpenAI/Codex** (ChatGPT/Codex OAuth, multi-account management available), plus secure set/clear commands for named OpenAI-compatible connection keys.
 - Anthropic model metadata (context window, output tokens, reasoning efforts) refreshes lazily from the API; toggle with `agentlink.anthropic.dynamicModelCapabilities`.
-- A local OpenAI-compatible endpoint (`agentlink.openaiCompatible.*`, e.g. LM Studio) powers helper features: question detection and background-agent status summaries.
+- **AgentLink: Configure OpenAI-compatible Model** is the guided, add-only setup path. It selects or creates a named credential, performs bounded user-invoked OpenRouter/generic `/models` discovery with manual fallback and editable conservative defaults, then adds one model backed by one connection. Edit/remove and advanced multi-model settings remain in User Settings JSON.
+- `agentlink.openaiCompatible.connections` configures multiple named OpenAI Chat Completions-compatible endpoints (for example OpenRouter or no-auth LM Studio/vLLM) and multiple declared models per connection. Each has a stable local selector ID separate from the upstream wire model ID. Text, reasoning, images when declared, tool calls, replay, usage estimates, condensing/helper calls, and Browser Ask Agent share the portable runtime. Chat-only models remain selectable but are excluded from automatic background routing. Browser Ask Agent can use wizard-created models but cannot write configuration or credentials.
+- The legacy local OpenAI-compatible helper settings (`agentlink.openaiCompatible.baseUrl`, `.model`, `.apiKey`, `.timeoutMs`) remain separate for question detection and background-agent status summaries.
 - **Polish prompt** — sparkle button in the composer toolbar rewrites the draft (spelling, grammar, wording) with the current provider's fast model before sending; a revert button restores the original text. Available in VS Code chat and the browser remote; uses model quota. See the README "Core built-in agent features" section.
 
 ## Built-in slash commands
@@ -67,7 +69,7 @@ Inherited authority does not weaken write safeguards: outside-workspace targets,
 
 ## Browser remote control
 
-A local gateway serves a browser UI that mirrors sessions, approvals, questions, background activity, and read-only diff review — one stable URL (`agentlink.browserGatewayPort`) switches between all open VS Code windows. The bounded helper-owned relay/event data plane is the dogfood default; `agentlink.browserGateway.dataPlane` can select shadow dual-publication or the complete legacy rollback while semantic parity work continues. LAN access for phones/other devices is opt-in (`agentlink.browserGatewayLanAccess`, mDNS name via `agentlink.browserGatewayMdnsName`) and requires per-device pairing (`/pair`). The browser surface is intentionally read-only for diffs and has no shell or write paths. Browser Ask Agent has its own MCP config source.
+A local gateway serves a browser UI that mirrors sessions, approvals, questions, background activity, and read-only diff review — one stable URL (`agentlink.browserGatewayPort`) switches between all open VS Code windows. The bounded helper-owned relay/event data plane is the dogfood default; `agentlink.browserGateway.dataPlane` can select shadow dual-publication or the complete legacy rollback while semantic parity work continues. LAN access for phones/other devices is opt-in (`agentlink.browserGatewayLanAccess`, mDNS name via `agentlink.browserGatewayMdnsName`) and requires per-device pairing (`/pair`). The browser surface is intentionally read-only for diffs and has no shell or write paths. Browser Ask Agent has its own MCP config source and can use the same configured OpenAI-compatible models; endpoint profiles and credentials stay server-side, owner/generation-bound, and absent from browser snapshots and JavaScript.
 
 ## Web access
 

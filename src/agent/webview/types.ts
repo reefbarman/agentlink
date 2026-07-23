@@ -48,6 +48,9 @@ export interface WebviewModelInfo {
   id: string;
   displayName: string;
   provider: string;
+  providerDisplayName?: string;
+  supportsToolUse?: boolean;
+  supportsImages?: boolean;
   contextWindow: number;
   maxInputTokens?: number;
   maxOutputTokens?: number;
@@ -243,6 +246,7 @@ export type ExtensionMessage =
       outputTokens: number;
       cacheReadTokens: number;
       cacheCreationTokens: number;
+      usageEstimated?: boolean;
       durationMs: number;
       timeToFirstToken: number;
       usedPreviousResponseId?: boolean;
@@ -601,6 +605,7 @@ export type ExtensionMessage =
       outputTokens: number;
       cacheReadTokens: number;
       cacheCreationTokens: number;
+      usageEstimated?: boolean;
       durationMs: number;
       timeToFirstToken: number;
       usedPreviousResponseId?: boolean;
@@ -990,6 +995,7 @@ export interface ChatMessage {
     cacheReadTokens?: number;
     cacheCreationTokens?: number;
     outputTokens: number;
+    usageEstimated?: boolean;
     durationMs: number;
     timeToFirstToken: number;
     usedPreviousResponseId?: boolean;

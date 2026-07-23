@@ -35,9 +35,9 @@ import type { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelCredentialCache.js";
 import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
 import type { CoreModelMessage } from "../core/modelRuntime.js";
-import type { SessionImageReference } from "../core/tools/types.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { MemoryCandidateKind } from "../shared/memoryCandidates.js";
+import type { SessionImageReference } from "../core/tools/types.js";
 import { completeTodos } from "../agent/todoTool.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "./browserGatewayModelProviderIds.js";
 import { randomUUID } from "crypto";
@@ -325,11 +325,17 @@ function getAskAgentCapabilities(
           state: "enabled",
           reason: `Browser gateway has cached ${modelCredentialStatus.providerId} credentials.`,
         }
-      : {
-          capabilityId: "model-auth",
-          state: "unavailable",
-          reason: modelCredentialStatus.reason,
-        };
+      : modelCredentialStatus.state === "not_required"
+        ? {
+            capabilityId: "model-auth",
+            state: "enabled",
+            reason: `${modelCredentialStatus.providerId} does not require model credentials.`,
+          }
+        : {
+            capabilityId: "model-auth",
+            state: "unavailable",
+            reason: modelCredentialStatus.reason,
+          };
   return [modelAuth, ...additionalCapabilities];
 }
 
@@ -1510,6 +1516,9 @@ export class BrowserGatewayAskAgentSessionStore {
   ): string {
     if (modelCredentialStatus.state === "ready") {
       return "I received your message and the browser gateway has cached model credentials, but no model turn was run for this request.";
+    }
+    if (modelCredentialStatus.state === "not_required") {
+      return "I received your message and the browser gateway model is available without credentials, but no model turn was run for this request.";
     }
     if (modelCredentialStatus.state === "refresh_required") {
       return `I received your message, but cached model credentials need refresh before Ask Agent can answer. ${modelCredentialStatus.reason}`;

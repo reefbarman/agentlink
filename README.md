@@ -48,6 +48,8 @@ AgentLink includes these built-in modes:
 | `debug`     | Investigation and troubleshooting with commands, language tools, and search                |
 | `review`    | Focused code review mode with read/search/language tools and structured review output      |
 
+When no workspace folder is open, AgentLink remains available as a projectless chat and defaults to an Ask-only mode. Projectless chats use global model, reasoning, and context settings and accept self-contained pasted or dropped images/PDFs, but they are intentionally non-persistent and expose no workspace files, path attachments, shell, editor tools, MCP, checkpoints, or approval controls. Open a folder to enable the workspace-backed modes and capabilities.
+
 ### How the built-in agent works
 
 ```mermaid
@@ -168,10 +170,147 @@ Useful command-palette entries include:
 - **AgentLink: Switch Active ChatGPT/Codex Account**
 - **AgentLink: Re-sign In / Replace ChatGPT/Codex Account**
 - **AgentLink: Set OpenAI API Key**
+- **AgentLink: Configure OpenAI-compatible Model**
+- **AgentLink: Set OpenAI-compatible API Key** / **AgentLink: Clear OpenAI-compatible API Key**
 - **AgentLink: Rebuild Codebase Index** / **AgentLink: Cancel Indexing**
 - **AgentLink: Clear Built-In Agent Session Approvals**
 - **AgentLink: Add Built-In Agent Trusted Command Pattern**
 - **AgentLink: Complete Tool Call** / **AgentLink: Cancel Tool Call**
+
+### Configure OpenAI-compatible models
+
+Run **AgentLink: Configure OpenAI-compatible Model** for the guided setup path. Each run adds one model backed by one connection so the endpoint/router and credential binding stay explicit:
+
+1. Choose **OpenRouter** or another compatible API root.
+2. Select an existing named API key, create a new SecretStorage key inline, or choose no authentication for a custom/local endpoint.
+3. Let AgentLink query the endpoint's `/models` catalog, then select a discovered model or enter the upstream model ID manually.
+4. Review the context/output limits and declared tool, reasoning, and image capabilities before saving.
+
+OpenRouter discovery maps bounded catalog metadata such as context length, tool parameters, reasoning efforts, and image input. Generic OpenAI-compatible catalogs often expose only model IDs, so AgentLink uses clearly labeled, editable conservative defaults: 32,768 context tokens, 4,096 output tokens, and chat-only text capabilities. Discovery is user-invoked and one-shot; AgentLink does not refresh provider catalogs in the background. Redirects, oversized catalogs, invalid endpoint URLs, and credential-bearing unsafe HTTP are rejected or explicitly gated.
+
+The wizard is add-only and runs in VS Code. Edit or remove entries in User Settings JSON; use raw settings for advanced multi-model connections, custom headers, timeouts, or a separate auxiliary model. Browser Ask Agent receives the refreshed model catalog and credentials server-side but cannot create or edit configuration.
+
+`agentlink.openaiCompatible.connections` is the underlying machine-scoped array of named OpenAI Chat Completions-compatible connections. Each connection owns its endpoint, auth/profile behavior, headers, timeout, and one or more nested models. Each model has two distinct IDs:
+
+- `id` is AgentLink's globally unique, stable selector/session key and is never sent upstream.
+- `model` is the opaque wire ID sent to that connection.
+
+The following advanced Settings JSON example uses OpenRouter IDs verified against its model catalog on **2026-07-23**: `moonshotai/kimi-k2.7-code`, `deepseek/deepseek-v3.2`, and `google/gemma-4-31b-it`. Provider catalogs change; use the wizard or re-check IDs and declared limits/capabilities before copying this example later.
+
+```jsonc
+"agentlink.openaiCompatible.connections": [
+  {
+    "id": "openrouter",
+    "displayName": "OpenRouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "profile": "openrouter",
+    "authKey": "openrouter-main",
+    "timeoutMs": 180000,
+    "headers": {
+      "HTTP-Referer": "https://example.invalid/my-agentlink-install"
+    },
+    "auxiliaryModel": "openrouter-deepseek",
+    "models": [
+      {
+        "id": "openrouter-kimi-code",
+        "model": "moonshotai/kimi-k2.7-code",
+        "displayName": "Kimi K2.7 Code via OpenRouter",
+        "contextWindow": 262144,
+        "maxOutputTokens": 262144,
+        "supportsToolUse": true,
+        "supportsThinking": true,
+        "reasoningEfforts": ["high"],
+        "defaultReasoningEffort": "high",
+        "supportsImages": true
+      },
+      {
+        "id": "openrouter-deepseek",
+        "model": "deepseek/deepseek-v3.2",
+        "displayName": "DeepSeek V3.2 via OpenRouter",
+        "contextWindow": 163840,
+        "maxOutputTokens": 65536,
+        "supportsToolUse": true,
+        "supportsThinking": true,
+        "reasoningEfforts": ["none", "low", "medium", "high"],
+        "defaultReasoningEffort": "medium",
+        "supportsImages": false
+      },
+      {
+        "id": "openrouter-gemma",
+        "model": "google/gemma-4-31b-it",
+        "displayName": "Gemma 4 31B via OpenRouter",
+        "contextWindow": 262144,
+        "maxOutputTokens": 262144,
+        "supportsToolUse": true,
+        "supportsThinking": true,
+        "reasoningEfforts": ["none", "low", "medium", "high"],
+        "defaultReasoningEffort": "medium",
+        "supportsImages": true
+      }
+    ]
+  },
+  {
+    "id": "local-lm-studio",
+    "displayName": "LM Studio",
+    "baseUrl": "http://127.0.0.1:1234/v1",
+    "profile": "generic",
+    "models": [
+      {
+        "id": "local-loaded-model",
+        "model": "loaded-model-id",
+        "displayName": "Local loaded model",
+        "contextWindow": 32768,
+        "maxOutputTokens": 4096,
+        "supportsToolUse": false,
+        "supportsThinking": false,
+        "supportsImages": false
+      }
+    ]
+  }
+]
+```
+
+Run **AgentLink: Set OpenAI-compatible API Key**, select `openrouter-main`, and enter the key in the password field. AgentLink stores it as `openaiCompatibleApiKey:openrouter-main` in VS Code SecretStorage; settings contain only the non-secret key name. Several connections/models may share an `authKey`, while independent connections can use different keys. Use **AgentLink: Clear OpenAI-compatible API Key** to delete one named key. Browser Ask Agent can use configured connections but cannot create or edit credentials.
+
+Connection fields:
+
+| Field               | Required | Behavior                                                                                                           |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `id`                | yes      | Lowercase stable connection key; creates provider ID `openai-compatible:<id>`                                      |
+| `displayName`       | yes      | Selector group label                                                                                               |
+| `baseUrl`           | yes      | API root, normally `/v1`; no user-info/query/fragment; AgentLink appends `/chat/completions`                       |
+| `profile`           | yes      | `generic` sends the minimal portable request; `openrouter` adds only verified OpenRouter fields/headers            |
+| `authKey`           | no       | SecretStorage key name; omit for no-auth local servers                                                             |
+| `timeoutMs`         | no       | Bounded whole-request timeout                                                                                      |
+| `headers`           | no       | Bounded non-secret static headers; credential-bearing, transport-controlled, and CR/LF values are rejected         |
+| `allowInsecureHttp` | no       | Required to send a stored credential over non-loopback HTTP; defaults to `false`                                   |
+| `auxiliaryModel`    | no       | Local model ID from the same connection for condense/polish/detection/review helpers; defaults to the active model |
+| `models`            | yes      | Non-empty nested model array                                                                                       |
+
+Model fields:
+
+| Field                        | Required | Behavior                                                                                                    |
+| ---------------------------- | -------- | ----------------------------------------------------------------------------------------------------------- |
+| `id`, `model`, `displayName` | yes      | Stable local ID, opaque wire ID, and selector label                                                         |
+| `contextWindow`              | yes      | Declared positive context window used for budgeting                                                         |
+| `maxInputTokens`             | no       | Optional stricter positive input limit                                                                      |
+| `maxOutputTokens`            | yes      | Declared positive output limit                                                                              |
+| `supportsToolUse`            | yes      | Controls function definitions and automatic agent/background eligibility; `false` models show **Chat only** |
+| `supportsThinking`           | no       | Enables reasoning UI; defaults to `false`                                                                   |
+| `reasoningEfforts`           | no       | Allowed AgentLink effort values when thinking is enabled                                                    |
+| `defaultReasoningEffort`     | no       | Must be included in `reasoningEfforts`                                                                      |
+| `supportsImages`             | no       | Enables standard `image_url` data-URI input; defaults to `false`                                            |
+
+Security and compatibility notes:
+
+- The setting is machine-scoped and user-owned. Workspace/resource overrides are not consumed, so workspace content cannot redirect a stored connection credential.
+- Authenticated endpoints use HTTPS or loopback HTTP unless `allowInsecureHttp: true` is explicit. Model POSTs use manual redirect handling and reject every redirect.
+- Secrets and private runtime profiles never enter settings, logs, errors, activity traces, transcripts, browser snapshots/SSE/exports, or browser JavaScript.
+- `generic` does not send reasoning controls, `stream_options`, parallel-tool controls, routing extensions, or hosted provider tools. `openrouter` maps AgentLink effort to OpenRouter reasoning and adds `X-OpenRouter-Title: AgentLink` and `X-OpenRouter-Categories: ide-extension`; `HTTP-Referer` remains user-configured.
+- Capabilities are declarations, not probes. A server/model template may still emit malformed tool calls; AgentLink validates completed arguments as JSON objects before execution.
+- Missing usage is locally estimated and marked; `finish_reason: "length"` preserves partial output and surfaces truncation instead of pretending the turn ended normally.
+- Direct-provider model IDs can be short-lived or deprecated. The wizard performs bounded, user-invoked `/models` discovery with manual fallback; it does not probe capabilities with chat requests or refresh catalogs automatically after setup.
+- The legacy window-scoped `agentlink.openaiCompatible.baseUrl`, `.model`, `.apiKey`, and `.timeoutMs` settings remain separate helper-only configuration. Their plaintext `.apiKey` is compatibility debt and is never used by configured chat connections.
 
 ### Built-in chat entry points
 
@@ -311,8 +450,8 @@ AgentLink's native tools are ordinary function tools from the model's perspectiv
 - **Anthropic API-key models** can use hosted search and hosted page fetch where the selected model/transport advertises support.
 - **ChatGPT/Codex OAuth** first uses the same structured standalone search route as Codex CLI for search, exact-URL open, and find-in-page. This avoids a second model completion, applies result/content limits locally, and falls back automatically to constrained hosted search if the alpha route is unavailable or changes.
 - **OpenAI public API-key Responses** uses hosted search. Page open and find-in-page are actions of the combined hosted search capability, so AgentLink delegates `web_fetch` through that capability rather than sending a separate provider `web_fetch` definition.
-- Native selections fail closed before the turn when the selected provider transport cannot perform the operation or enforce configured domain restrictions.
-- AgentLink never silently switches a native operation to MCP after a turn starts.
+- Unsupported native routes, including routes whose configured domain restrictions cannot be enforced, are omitted from that turn's tool list. Unrelated chat continues normally.
+- AgentLink never silently switches an unsupported native operation to MCP.
 
 Provider-hosted execution occurs in the runtime that owns the model request: the extension for VS Code sessions and helper/core for Browser Ask Agent. Browser page JavaScript never performs web fetches and never receives provider credentials.
 

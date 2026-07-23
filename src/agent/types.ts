@@ -170,6 +170,7 @@ export type AgentEvent =
       outputTokens: number;
       cacheReadTokens: number;
       cacheCreationTokens: number;
+      usageEstimated?: boolean;
       durationMs: number;
       timeToFirstToken: number;
       providerQueueWaitMs?: number;

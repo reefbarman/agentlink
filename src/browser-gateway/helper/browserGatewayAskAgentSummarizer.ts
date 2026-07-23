@@ -1,19 +1,12 @@
-import type * as OpenAIResponses from "openai/resources/responses/responses";
-
 import type {
   ChatMessage,
   ReasoningEffort,
 } from "../../agent/webview/types.js";
-import {
-  CodexResponsesAuthError,
-  CodexResponsesStreamAbortedError,
-  executeCodexResolvedCompletion,
-} from "../../core/model/providers/codex/completionFacade.js";
 
+import { BrowserGatewayAskAgentModelClient } from "./askAgentModelClient.js";
 import type { BrowserGatewayModelCredentialRecord } from "../browserGatewayModelCredentialCache.js";
-import OpenAI from "openai";
-import { agentLinkFetch } from "../../util/httpDispatcher.js";
-import { getCodexEndpointConfig } from "../../core/model/providers/codex/openaiClient.js";
+import type OpenAI from "openai";
+import type { OpenAiCompatibleRuntimeProfile } from "../../core/model/providers/openaiCompatible/types.js";
 
 const ASK_AGENT_MEMORY_SUMMARIZER_PROMPT = `You summarize AgentLink Browser Ask Agent conversations for a local derived memory index.
 Return only valid JSON. Do not wrap it in Markdown.
@@ -51,7 +44,9 @@ export interface BrowserGatewayAskAgentSummaryResult {
 
 export interface BrowserGatewayAskAgentSummarizer {
   summarize(params: {
-    credential: BrowserGatewayModelCredentialRecord;
+    credential?: BrowserGatewayModelCredentialRecord;
+    providerId?: string;
+    openAiCompatibleRuntimeProfile?: OpenAiCompatibleRuntimeProfile;
     model?: string;
     reasoningEffort?: ReasoningEffort;
     messages: readonly ChatMessage[];
@@ -241,10 +236,10 @@ export function parseAskAgentSummaryJson(
   };
 }
 
-function toSummarizerInput(params: {
+function toSummarizerMessage(params: {
   messages: readonly ChatMessage[];
   existingSessionSummary?: string;
-}): OpenAIResponses.ResponseInputItem[] {
+}): ChatMessage {
   const transcript = params.messages
     .filter(
       (message) => message.role === "user" || message.role === "assistant",
@@ -262,74 +257,64 @@ function toSummarizerInput(params: {
         : undefined,
     }));
 
-  return [
-    {
-      role: "user",
-      content: [
-        {
-          type: "input_text",
-          text: JSON.stringify({
-            existingSessionSummary: params.existingSessionSummary ?? "",
-            transcript,
-          }),
-        },
-      ],
-    } as OpenAIResponses.ResponseInputItem,
-  ];
+  return {
+    id: "ask-agent-memory-summary-input",
+    role: "user",
+    content: JSON.stringify({
+      existingSessionSummary: params.existingSessionSummary ?? "",
+      transcript,
+    }),
+    blocks: [],
+    timestamp: Date.now(),
+  };
 }
 
 export class BrowserGatewayAskAgentModelSummarizer implements BrowserGatewayAskAgentSummarizer {
+  private readonly modelClient: BrowserGatewayAskAgentModelClient;
+
   constructor(
     private readonly options: BrowserGatewayAskAgentModelSummarizerOptions,
-  ) {}
+  ) {
+    this.modelClient = new BrowserGatewayAskAgentModelClient({
+      sessionId: options.sessionId,
+      createClient: options.createClient,
+    });
+  }
 
   async summarize(params: {
-    credential: BrowserGatewayModelCredentialRecord;
+    credential?: BrowserGatewayModelCredentialRecord;
+    providerId?: string;
+    openAiCompatibleRuntimeProfile?: OpenAiCompatibleRuntimeProfile;
     model?: string;
     reasoningEffort?: ReasoningEffort;
     messages: readonly ChatMessage[];
     existingSessionSummary?: string;
     signal?: AbortSignal;
   }): Promise<BrowserGatewayAskAgentSummaryResult> {
-    const endpoint = getCodexEndpointConfig(
-      params.credential,
-      this.options.sessionId,
-    );
-    const client = this.options.createClient
-      ? this.options.createClient({
-          credential: params.credential,
-          baseURL: endpoint.baseURL,
-          defaultHeaders: endpoint.defaultHeaders,
-        })
-      : new OpenAI({
-          apiKey: params.credential.bearerToken,
-          baseURL: endpoint.baseURL,
-          defaultHeaders: endpoint.defaultHeaders,
-          fetch: agentLinkFetch,
-          maxRetries: 0,
-        });
-
     try {
-      const result = await executeCodexResolvedCompletion({
-        client,
-        authMethod: params.credential.method,
+      const text = await this.modelClient.complete({
+        credential: params.credential,
+        providerId: params.providerId,
+        openAiCompatibleRuntimeProfile: params.openAiCompatibleRuntimeProfile,
         model: params.model,
-        instructions: ASK_AGENT_MEMORY_SUMMARIZER_PROMPT,
-        input: toSummarizerInput({
-          messages: params.messages,
-          existingSessionSummary: params.existingSessionSummary,
-        }),
-        maxTokens: 1200,
-        state: { store: false },
         reasoningEffort: params.reasoningEffort ?? "low",
+        messages: [
+          toSummarizerMessage({
+            messages: params.messages,
+            existingSessionSummary: params.existingSessionSummary,
+          }),
+        ],
+        instructions: ASK_AGENT_MEMORY_SUMMARIZER_PROMPT,
+        maxTokens: 1200,
         signal: params.signal,
       });
-      return parseAskAgentSummaryJson(result.text);
+      return parseAskAgentSummaryJson(text);
     } catch (err) {
-      if (err instanceof CodexResponsesAuthError) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === "browser_gateway_ask_agent_model_auth_failed") {
         throw new Error("browser_gateway_ask_agent_memory_auth_failed");
       }
-      if (err instanceof CodexResponsesStreamAbortedError) {
+      if (message === "browser_gateway_ask_agent_model_aborted") {
         throw new Error("browser_gateway_ask_agent_memory_aborted");
       }
       throw err;

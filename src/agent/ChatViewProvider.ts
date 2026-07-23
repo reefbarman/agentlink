@@ -8,7 +8,10 @@ import {
   type CoreWebAccessSettings,
 } from "../core/webAccess.js";
 import { providerRegistry, queryProviderUsage } from "./providers/index.js";
-import type { ModelProvider } from "./providers/types.js";
+import {
+  getProviderAuxiliaryModel,
+  type ModelProvider,
+} from "./providers/types.js";
 import type {
   BtwBudget,
   ChatMessage,
@@ -172,6 +175,7 @@ import {
 import {
   createSessionProjectScope,
   createWorkspaceProjectId,
+  isProjectlessSessionScope,
   type SessionProjectScope,
 } from "../core/workspaceProjects.js";
 import { normalizeUserQuestionAttachments } from "../core/capabilities/sessionControl.js";
@@ -380,6 +384,7 @@ export type ExtensionToWebview =
       outputTokens: number;
       cacheReadTokens: number;
       cacheCreationTokens: number;
+      usageEstimated?: boolean;
       durationMs: number;
       timeToFirstToken: number;
       usedPreviousResponseId?: boolean;
@@ -479,18 +484,7 @@ export type ExtensionToWebview =
         body?: string;
       }>;
     }
-  | {
-      type: "agentModelsUpdate";
-      models: Array<{
-        id: string;
-        displayName: string;
-        provider: string;
-        contextWindow: number;
-        maxInputTokens?: number;
-        maxOutputTokens?: number;
-        authenticated: boolean;
-      }>;
-    }
+  | { type: "agentModelsUpdate"; models: WebviewModelInfo[] }
   | { type: "agentModeSwitchRequest"; mode: string; reason?: string }
   | { type: "agentFormElicitationRequest"; request: McpFormElicitationRequest }
   | { type: "agentFormElicitationCleared"; id: string }
@@ -698,6 +692,7 @@ export type ExtensionToWebview =
       outputTokens: number;
       cacheReadTokens: number;
       cacheCreationTokens: number;
+      usageEstimated?: boolean;
       durationMs: number;
       timeToFirstToken: number;
       usedPreviousResponseId?: boolean;
@@ -1144,6 +1139,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private toolCallTracker: AgentToolCallTracker | undefined;
   private contextJumpTracker: ContextJumpTracker | undefined;
   private anthropicProvider: ModelProvider | undefined;
+  private openAiCompatibleAuthKeyResolver:
+    | ((providerId: string) => string | undefined)
+    | undefined;
   private notifyBrowserModelsChanged: (() => void) | undefined;
   private anthropicModelsRefreshInFlight: Promise<void> | undefined;
   private browserGatewayAdminClient:
@@ -1660,6 +1658,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.anthropicProvider = provider;
   }
 
+  setOpenAiCompatibleAuthKeyResolver(
+    resolver: (providerId: string) => string | undefined,
+  ): void {
+    this.openAiCompatibleAuthKeyResolver = resolver;
+  }
+
   /**
    * Register a callback (wired to the browser gateway) invoked after a dynamic
    * model refresh so browser clients re-fetch `/api/models`. Keeps the gateway
@@ -1873,17 +1877,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   async initialize(cwd: string): Promise<void> {
     this.cwd = cwd;
-    const workspaceFolderUri = vscode.Uri.file(cwd).toString();
-    this.initialProjectScope = Object.freeze({
-      schemaVersion: 1,
-      kind: "project",
-      projectId: createWorkspaceProjectId(workspaceFolderUri),
-      workspaceFolderUri,
-      displayName:
-        vscode.workspace.getWorkspaceFolder(vscode.Uri.file(cwd))?.name ??
-        path.basename(cwd),
-      rootPath: cwd,
-    });
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(
+      vscode.Uri.file(cwd),
+    );
+    const workspaceFolderUri = workspaceFolder?.uri.toString();
+    this.initialProjectScope = workspaceFolderUri
+      ? Object.freeze({
+          schemaVersion: 1 as const,
+          kind: "project" as const,
+          projectId: createWorkspaceProjectId(workspaceFolderUri),
+          workspaceFolderUri,
+          displayName: workspaceFolder!.name,
+          rootPath: cwd,
+        })
+      : undefined;
 
     const initialCommands = await this.getCurrentSlashCommands();
 
@@ -1904,11 +1911,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.log(`[ask-agent] ${message}`);
     };
     const projectScopes = new Map<string, SessionProjectScope>();
-    projectScopes.set(
-      this.initialProjectScope.projectId,
-      this.initialProjectScope,
-    );
-    for (const project of this.sessionManager?.getWorkspaceProjects() ?? []) {
+    if (this.initialProjectScope) {
+      projectScopes.set(
+        this.initialProjectScope.projectId,
+        this.initialProjectScope,
+      );
+    }
+    for (const project of this.getWorkspaceProjects()) {
       if (project.rootPath) {
         const scope = createSessionProjectScope(project);
         projectScopes.set(scope.projectId, scope);
@@ -2094,7 +2103,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     interactiveForNewServers?: boolean;
   }): Promise<void> {
     await Promise.all(
-      (this.sessionManager?.getWorkspaceProjects() ?? []).flatMap((project) => {
+      this.getWorkspaceProjects().flatMap((project) => {
         if (!project.rootPath || project.availability.status !== "available")
           return [];
         const projectScope = createSessionProjectScope(project);
@@ -2113,16 +2122,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private getMcpManagerProjects(): NonNullable<McpConfigSnapshot["projects"]> {
-    return (this.sessionManager?.getWorkspaceProjects() ?? []).map(
-      (project) => ({
-        projectId: project.id,
-        displayName: project.name,
-        availability:
-          project.availability.status === "available"
-            ? ("available" as const)
-            : ("unavailable" as const),
-      }),
-    );
+    return this.getWorkspaceProjects().map((project) => ({
+      projectId: project.id,
+      displayName: project.name,
+      availability:
+        project.availability.status === "available"
+          ? ("available" as const)
+          : ("unavailable" as const),
+    }));
   }
 
   private getWorkspaceMcpProjects(): Array<{
@@ -2130,9 +2137,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     displayName: string;
     rootPath: string;
   }> {
-    const projects = (
-      this.sessionManager?.getWorkspaceProjects() ?? []
-    ).flatMap((project) =>
+    const projects = this.getWorkspaceProjects().flatMap((project) =>
       project.availability.status === "available" && project.rootPath
         ? [
             {
@@ -2721,7 +2726,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const { systemPrompt, userPrompt, requiredVariants } =
       await buildCommandRegexSuggestionPrompt({ ...args, session: fg });
-    const model = provider.condenseModel || foregroundModel;
+    const model = getProviderAuxiliaryModel(provider, foregroundModel);
     const permit = await providerRegistry.requestScheduler.acquire(
       provider.id,
       "interactive",
@@ -2792,7 +2797,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     const { systemPrompt, userPrompt } = buildPromptPolishPrompt(args.draft);
-    const model = provider.condenseModel || foregroundModel;
+    const model = getProviderAuxiliaryModel(provider, foregroundModel);
     const permit = await providerRegistry.requestScheduler.acquire(
       provider.id,
       "interactive",
@@ -2959,8 +2964,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         )
       : undefined;
     const target = targetPath
-      ? this.sessionManager
-          ?.getWorkspaceProjects()
+      ? this.getWorkspaceProjects()
           .filter((project) => project.rootPath)
           .sort(
             (left, right) =>
@@ -3376,7 +3380,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     error?: string;
   }> {
     const text = input.text;
-    const mode = input.mode ?? "code";
+    const mode = this.hasWorkspaceProjects() ? (input.mode ?? "code") : "ask";
     const sessionId = input.sessionId;
     const reasoningEffort =
       input.reasoningEffort ??
@@ -3422,8 +3426,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     ) {
       return { ok: false, error: "project_state_mismatch" };
     }
+    const projectless = isProjectlessSessionScope(
+      effectiveSession.projectScope,
+    );
+    if (projectless && attachments.length > 0) {
+      return {
+        ok: false,
+        error: "Open a folder before attaching local workspace files.",
+      };
+    }
     const projectRoot = this.getSessionProjectRoot(effectiveSessionId);
-    if (!projectRoot) return { ok: false, error: "project_unavailable" };
+    if (!projectless && !projectRoot) {
+      return { ok: false, error: "project_unavailable" };
+    }
     const isActiveSession =
       effectiveSession?.status === "streaming" ||
       effectiveSession?.status === "tool_executing" ||
@@ -3474,11 +3489,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       };
     }
 
-    const resolved = await this.resolveAttachments(
-      text,
-      attachments,
-      projectRoot,
-    );
+    const resolved = projectless
+      ? { text, images: [], documents: [] }
+      : await this.resolveAttachments(text, attachments, projectRoot!);
     const resolvedImages = [...images, ...resolved.images];
     const resolvedDocuments = [...documents, ...resolved.documents];
 
@@ -3582,19 +3595,41 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return { approved: true, mode };
   }
 
+  private getPreferenceConfigurationTarget(): {
+    config: vscode.WorkspaceConfiguration;
+    target: vscode.ConfigurationTarget;
+    scopeLabel: "workspace folder" | "user";
+  } {
+    const projectScope = this.getCurrentProjectScope();
+    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+    const workspaceFolder =
+      workspaceFolders.find(
+        (folder) =>
+          folder.uri.toString() === projectScope?.workspaceFolderUri ||
+          folder.uri.fsPath === projectScope?.rootPath,
+      ) ?? workspaceFolders[0];
+    return {
+      config: vscode.workspace.getConfiguration(
+        "agentlink",
+        workspaceFolder?.uri,
+      ),
+      target: workspaceFolder
+        ? vscode.ConfigurationTarget.WorkspaceFolder
+        : vscode.ConfigurationTarget.Global,
+      scopeLabel: workspaceFolder ? "workspace folder" : "user",
+    };
+  }
+
   public async submitBrowserSetModel(model: string): Promise<{ ok: boolean }> {
     if (!model || !this.sessionManager) return { ok: false };
     const selectedModel = await this.sessionManager.setModel(model);
+    const fgMode =
+      this.sessionManager.getForegroundSession()?.mode ??
+      (this.hasWorkspaceProjects() ? "code" : "ask");
+    const { config, target, scopeLabel } =
+      this.getPreferenceConfigurationTarget();
+    await config.update("agentModel", selectedModel, target);
 
-    const config = this.getCurrentProjectConfiguration();
-    if (!config) return { ok: false };
-    await config.update(
-      "agentModel",
-      selectedModel,
-      vscode.ConfigurationTarget.WorkspaceFolder,
-    );
-
-    const fgMode = this.sessionManager.getForegroundSession()?.mode ?? "code";
     const modePrefs = getModeModelPreferences(config);
     await config.update(
       "modeModelPreferences",
@@ -3602,11 +3637,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         ...modePrefs,
         [fgMode]: selectedModel,
       },
-      vscode.ConfigurationTarget.WorkspaceFolder,
+      target,
     );
 
     this.sendInitialState();
-    this.log(`Model changed to: ${selectedModel} (saved for mode: ${fgMode})`);
+    this.log(
+      `Model changed to: ${selectedModel} (saved for mode: ${fgMode}, scope: ${scopeLabel})`,
+    );
     return { ok: true };
   }
 
@@ -3685,14 +3722,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!this.sessionManager.setForegroundReasoningEffort(effort)) {
       return { ok: false };
     }
-    const config = this.getCurrentProjectConfiguration();
-    if (!config) return { ok: false };
+    const { config, target } = this.getPreferenceConfigurationTarget();
     const mode = fg.mode ?? "code";
     const preferences = getModeReasoningEffortPreferences(config);
     await config.update(
       "modeReasoningEffortPreferences",
       { ...preferences, [mode]: effort },
-      vscode.ConfigurationTarget.WorkspaceFolder,
+      target,
     );
     this.applyProjectedAction({ type: "SET_REASONING_EFFORT", effort });
     this.sendInitialState();
@@ -5085,6 +5121,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       id: m.id,
       displayName: m.displayName,
       provider: m.provider,
+      providerDisplayName: m.providerDisplayName,
+      supportsToolUse: m.supportsToolUse ?? m.capabilities.supportsToolUse,
+      supportsImages: m.supportsImages ?? m.capabilities.supportsImages,
       contextWindow: m.capabilities.contextWindow,
       maxInputTokens: m.capabilities.maxInputTokens,
       maxOutputTokens: m.capabilities.maxOutputTokens,
@@ -5205,9 +5244,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async sendModesUpdate(): Promise<void> {
     const selection = this.getCustomizationSelection();
     const selectionKey = this.getCustomizationSelectionKey(selection);
+    const hasWorkspaceProjects = this.hasWorkspaceProjects();
     const allModes = selection
       ? await this.projectCustomizationRegistry.getModes(selection.scope)
-      : BUILT_IN_MODES;
+      : hasWorkspaceProjects
+        ? BUILT_IN_MODES
+        : BUILT_IN_MODES.filter((mode) => mode.slug === "ask");
     if (
       selectionKey !==
       this.getCustomizationSelectionKey(this.getCustomizationSelection())
@@ -5229,12 +5271,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({
       type: "agentModelsUpdate",
       models: await this.getBrowserModels(),
-    } as ExtensionToWebview);
+    });
   }
 
   private async sendSlashCommands(): Promise<void> {
     const selection = this.getCustomizationSelection();
-    if (!selection) return;
+    if (!selection) {
+      this.postMessage({
+        type: "agentSlashCommandsUpdate",
+        commands: [],
+      } as ExtensionToWebview);
+      return;
+    }
     const selectionKey = this.getCustomizationSelectionKey(selection);
     const commands = await this.getCurrentSlashCommands(selection);
     if (
@@ -5289,17 +5337,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       : [];
   }
 
+  private getWorkspaceProjects(): ReturnType<
+    AgentSessionManager["getWorkspaceProjects"]
+  > {
+    return this.sessionManager?.getWorkspaceProjects?.() ?? [];
+  }
+
+  private hasWorkspaceProjects(): boolean {
+    const getWorkspaceProjects = this.sessionManager?.getWorkspaceProjects;
+    return typeof getWorkspaceProjects !== "function"
+      ? true
+      : getWorkspaceProjects.call(this.sessionManager).length > 0;
+  }
+
   private getProjectInfos(): ProjectInfo[] {
-    return (this.sessionManager?.getWorkspaceProjects?.() ?? []).map(
-      (project) => ({
-        projectId: project.id,
-        displayName: project.name,
-        availability:
-          project.availability.status === "available"
-            ? "available"
-            : "unavailable",
-      }),
-    );
+    return this.getWorkspaceProjects().map((project) => ({
+      projectId: project.id,
+      displayName: project.name,
+      availability:
+        project.availability.status === "available"
+          ? "available"
+          : "unavailable",
+    }));
   }
 
   private getWebviewSessionSummaries(): WebviewSessionSummary[] {
@@ -5478,7 +5537,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
 
     webviewView.webview.onDidReceiveMessage((msg) => {
-      this.handleWebviewMessage(msg);
+      void this.handleWebviewMessage(msg).catch((error) => {
+        const command =
+          typeof msg?.command === "string" ? msg.command : "unknown";
+        const message = error instanceof Error ? error.message : String(error);
+        this.log(`[webview] ${command} failed: ${message}`);
+        if (command === "agentSetModel") {
+          void vscode.window.showErrorMessage(
+            `Could not select the model: ${message}`,
+          );
+        } else if (command === "agentSend") {
+          void vscode.window.showErrorMessage(
+            `Could not send the message: ${message}`,
+          );
+        }
+      });
     });
   }
 
@@ -5579,7 +5652,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "agentSend": {
         const text = msg.text as string;
-        const mode = (msg.mode as string) ?? "code";
+        const hasWorkspaceProjects = this.hasWorkspaceProjects();
+        const mode = hasWorkspaceProjects
+          ? ((msg.mode as string) ?? "code")
+          : "ask";
         const sessionId = msg.sessionId as string | undefined;
         const reasoningEffort = resolveReasoningEffortMessage(
           msg.reasoningEffort,
@@ -5614,8 +5690,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             effectiveSessionId,
           );
         }
+        const effectiveSession = mgr.getSession(effectiveSessionId);
+        const projectless = effectiveSession
+          ? isProjectlessSessionScope(effectiveSession.projectScope)
+          : false;
         const projectRoot = this.getSessionProjectRoot(effectiveSessionId);
-        if (!projectRoot) {
+        if (!projectRoot && !projectless) {
           vscode.window.showErrorMessage(
             "The selected project is unavailable for local attachments.",
           );
@@ -5633,11 +5713,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               (raw.documents as
                 | Array<{ name: string; mimeType: string; base64: string }>
                 | undefined) ?? [];
-            const resolved = await this.resolveAttachments(
-              messageText,
-              attachments,
-              projectRoot,
-            );
+            if (projectless && attachments.length > 0) {
+              throw new Error(
+                "Open a folder before attaching local workspace files.",
+              );
+            }
+            const resolved = projectRoot
+              ? await this.resolveAttachments(
+                  messageText,
+                  attachments,
+                  projectRoot,
+                )
+              : { text: messageText, images: [], documents: [] };
             return {
               text: resolved.text,
               displayText: raw.displayText as string | undefined,
@@ -5989,41 +6076,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentSetModel": {
         const model = msg.model as string;
         if (!model) break;
-        // Update config, session model, and rebuild system prompt if provider changed
-        const selectedModel = await this.sessionManager.setModel(model);
-        const config = this.getCurrentProjectConfiguration();
-        if (!config) break;
-        await config.update(
-          "agentModel",
-          selectedModel,
-          vscode.ConfigurationTarget.WorkspaceFolder,
-        );
-
-        // Auto-save manual model changes as the default for the current mode.
-        const fgMode =
-          this.sessionManager.getForegroundSession()?.mode ?? "code";
-        const modePrefs = getModeModelPreferences(config);
-        await config.update(
-          "modeModelPreferences",
-          {
-            ...modePrefs,
-            [fgMode]: selectedModel,
-          },
-          vscode.ConfigurationTarget.WorkspaceFolder,
-        );
-
-        this.sendInitialState();
-        this.log(
-          `Model changed to: ${selectedModel} (saved for mode: ${fgMode})`,
-        );
+        await this.submitBrowserSetModel(model);
         break;
       }
 
       case "agentSetCondenseThreshold": {
         const threshold = Number(msg.threshold);
         if (!Number.isFinite(threshold)) break;
-        const config = this.getCurrentProjectConfiguration();
-        if (!config) break;
+        const { config, target } = this.getPreferenceConfigurationTarget();
         const currentModel =
           this.sessionManager.getForegroundSession()?.model ??
           this.sessionManager.getConfig().model;
@@ -6033,11 +6093,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             | undefined),
           [currentModel]: Math.min(1, Math.max(0.1, threshold)),
         };
-        await config.update(
-          "modelCondenseThresholds",
-          thresholds,
-          vscode.ConfigurationTarget.WorkspaceFolder,
-        );
+        await config.update("modelCondenseThresholds", thresholds, target);
         this.sessionManager.updateConfig({
           autoCondenseThreshold: thresholds[currentModel],
         });
@@ -6930,6 +6986,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "agentOpenAiCompatibleSignIn": {
+        const providerId =
+          typeof msg.provider === "string" ? msg.provider.trim() : "";
+        const authKey = this.openAiCompatibleAuthKeyResolver?.(providerId);
+        if (authKey) {
+          vscode.commands.executeCommand(
+            "agentlink.setOpenAiCompatibleApiKey",
+            authKey,
+          );
+        }
+        break;
+      }
+
       case "agentCodexSignOut": {
         vscode.commands.executeCommand("agentlink.codexSignOut");
         break;
@@ -7352,6 +7421,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           outputTokens: extMsg.outputTokens,
           cacheReadTokens: extMsg.cacheReadTokens,
           cacheCreationTokens: extMsg.cacheCreationTokens,
+          usageEstimated: extMsg.usageEstimated,
           durationMs: extMsg.durationMs,
           timeToFirstToken: extMsg.timeToFirstToken,
           usedPreviousResponseId: extMsg.usedPreviousResponseId,
@@ -7881,6 +7951,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           outputTokens: event.outputTokens,
           cacheReadTokens: event.cacheReadTokens,
           cacheCreationTokens: event.cacheCreationTokens,
+          usageEstimated: event.usageEstimated,
           durationMs: event.durationMs,
           timeToFirstToken: event.timeToFirstToken,
           usedPreviousResponseId: event.usedPreviousResponseId,
@@ -9162,8 +9233,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const provider = fg
         ? providerRegistry.tryResolveProvider(fg.model)
         : undefined;
-      if (provider) {
-        agentContext = { provider, model: provider.condenseModel };
+      if (provider && fg) {
+        agentContext = {
+          provider,
+          model: getProviderAuxiliaryModel(provider, fg.model),
+        };
       }
     }
     const outcome = await detectQuestion(text, {
@@ -9222,7 +9296,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
         : (projects.find((project) => project.projectId === defaultProjectId) ??
           null),
-      mode: fg?.mode ?? "code",
+      mode: fg?.mode ?? (this.hasWorkspaceProjects() ? "code" : "ask"),
       model: modelId,
       streaming:
         fg?.status === "streaming" ||

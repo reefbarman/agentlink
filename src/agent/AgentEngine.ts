@@ -591,7 +591,7 @@ export class AgentEngine {
     this.log = log;
   }
 
-  setToolRuntime(runtime: AgentToolRuntime): void {
+  setToolRuntime(runtime: AgentToolRuntime | null): void {
     this.toolRuntime = runtime;
   }
 
@@ -874,6 +874,7 @@ export class AgentEngine {
         let outputTokens = 0;
         let cacheReadTokens = 0;
         let cacheCreationTokens = 0;
+        let usageEstimated: boolean | undefined;
         let providerResponseId: string | undefined;
         let assistantMessage: CoreModelMessage | undefined;
         let modelStopReason: CoreModelStopReason | undefined;
@@ -1228,6 +1229,7 @@ export class AgentEngine {
                   outputTokens = event.outputTokens;
                   cacheReadTokens = event.cacheReadTokens ?? 0;
                   cacheCreationTokens = event.cacheCreationTokens ?? 0;
+                  usageEstimated = event.estimated;
                   providerResponseId = event.providerResponseId;
                   break;
                 case "done":
@@ -1462,6 +1464,7 @@ export class AgentEngine {
           outputTokens,
           cacheReadTokens,
           cacheCreationTokens,
+          ...(usageEstimated !== undefined ? { usageEstimated } : {}),
           durationMs,
           timeToFirstToken,
           providerQueueWaitMs,
@@ -1498,6 +1501,16 @@ export class AgentEngine {
           continue;
         }
         providerPauseTurnCount = 0;
+
+        if (modelStopReason === "max_tokens") {
+          appendCommittedAssistantMessage();
+          yield {
+            type: "warning",
+            message:
+              "The model reached its output-token limit. The partial response was preserved; increase the model output limit or ask it to continue.",
+          };
+          break;
+        }
 
         // Enforce maxApiTurns: when the limit is reached and the model wants
         // more tool calls, inject a "wrap up" message to force a final response.

@@ -545,6 +545,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             outputTokens: msg.outputTokens,
             cacheReadTokens: msg.cacheReadTokens,
             cacheCreationTokens: msg.cacheCreationTokens,
+            usageEstimated: msg.usageEstimated,
             durationMs: msg.durationMs,
             timeToFirstToken: msg.timeToFirstToken,
             usedPreviousResponseId: msg.usedPreviousResponseId,
@@ -2039,6 +2040,11 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         vscodeApi.postMessage({ command: "agentCodexSignIn" });
       } else if (provider.toLowerCase() === "anthropic") {
         vscodeApi.postMessage({ command: "agentAnthropicSignIn" });
+      } else if (provider.toLowerCase().startsWith("openai-compatible:")) {
+        vscodeApi.postMessage({
+          command: "agentOpenAiCompatibleSignIn",
+          provider,
+        });
       }
     },
     [vscodeApi],
@@ -3201,29 +3207,50 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onSelectModel={handleSelectModel}
           onSetCondenseThreshold={handleSetCondenseThreshold}
           onSignIn={handleSignIn}
-          onSwitchMode={handleSwitchMode}
+          onSwitchMode={
+            state.chatState.projects?.length === 0
+              ? undefined
+              : handleSwitchMode
+          }
           agentWriteApproval={state.chatState.agentWriteApproval ?? "prompt"}
-          onSetAgentWriteApproval={handleSetAgentWriteApproval}
+          onSetAgentWriteApproval={
+            state.chatState.projects?.length === 0
+              ? undefined
+              : handleSetAgentWriteApproval
+          }
           commandApprovalPolicy={
             state.chatState.commandApprovalPolicy ?? "safe"
           }
           configuredCommandApprovalPolicy={
             state.chatState.configuredCommandApprovalPolicy ?? "safe"
           }
-          onSetCommandApprovalPolicy={handleSetCommandApprovalPolicy}
-          autoContinueEnabled={autoContinueEnabled}
-          onToggleAutoContinue={handleToggleAutoContinue}
-          autoContinueStatus={autoContinueStatus}
+          onSetCommandApprovalPolicy={
+            state.chatState.projects?.length === 0
+              ? undefined
+              : handleSetCommandApprovalPolicy
+          }
+          autoContinueEnabled={
+            state.chatState.projects?.length === 0 ? false : autoContinueEnabled
+          }
+          onToggleAutoContinue={
+            state.chatState.projects?.length === 0
+              ? undefined
+              : handleToggleAutoContinue
+          }
+          autoContinueStatus={
+            state.chatState.projects?.length === 0 ? "" : autoContinueStatus
+          }
+          allowAttachments={state.chatState.projects?.length !== 0}
+          allowFileMentions={state.chatState.projects?.length !== 0}
           disabled={
-            state.chatState.projects?.length === 0 ||
+            state.chatState.projects?.length !== 0 &&
             state.chatState.project?.availability === "unavailable"
           }
           disabledReason={
-            state.chatState.projects?.length === 0
-              ? "Open a folder to enable local execution."
-              : state.chatState.project?.availability === "unavailable"
-                ? `Project unavailable: ${state.chatState.project.displayName}`
-                : undefined
+            state.chatState.projects?.length !== 0 &&
+            state.chatState.project?.availability === "unavailable"
+              ? `Project unavailable: ${state.chatState.project.displayName}`
+              : undefined
           }
         />
       </div>

@@ -1,5 +1,5 @@
-import type { RequestContextBreakdown } from "../../../shared/types.js";
 import type { ReasoningEffort } from "../types.js";
+import type { RequestContextBreakdown } from "../../../shared/types.js";
 import { useState } from "preact/hooks";
 
 interface ApiRequestBlockProps {
@@ -11,6 +11,7 @@ interface ApiRequestBlockProps {
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
   outputTokens: number;
+  usageEstimated?: boolean;
   durationMs: number;
   timeToFirstToken: number;
   contextBreakdown?: RequestContextBreakdown;
@@ -24,6 +25,7 @@ export function ApiRequestBlock({
   cacheReadTokens = 0,
   cacheCreationTokens = 0,
   outputTokens,
+  usageEstimated,
   durationMs,
   timeToFirstToken,
   contextBreakdown,
@@ -57,7 +59,9 @@ export function ApiRequestBlock({
               </tr>
             )}
             <tr>
-              <td class="api-key">Input tokens</td>
+              <td class="api-key">
+                Input tokens{usageEstimated ? " (estimated)" : ""}
+              </td>
               <td class="api-value">{inputTokens.toLocaleString()}</td>
             </tr>
             {uncachedInputTokens !== undefined && (

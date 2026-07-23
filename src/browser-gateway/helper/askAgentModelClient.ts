@@ -17,6 +17,11 @@ import {
   CodexResponsesStreamAbortedError,
   executeCodexResolvedCompletion,
 } from "../../core/model/providers/codex/completionFacade.js";
+import {
+  collectOpenAiCompatibleCompletion,
+  streamOpenAiCompatibleCompletion,
+  type OpenAiCompatibleRuntimeProfile,
+} from "../../core/model/providers/openaiCompatible/index.js";
 import type {
   CoreModelContentBlock,
   CoreModelMessage,
@@ -99,7 +104,9 @@ export interface BrowserGatewayAskAgentCompletionResult {
 }
 
 export type BrowserGatewayAskAgentCompletionParams = {
-  credential: BrowserGatewayModelCredentialRecord;
+  credential?: BrowserGatewayModelCredentialRecord;
+  providerId?: string;
+  openAiCompatibleRuntimeProfile?: OpenAiCompatibleRuntimeProfile;
   model?: string;
   reasoningEffort?: ReasoningEffort;
   messages: readonly ChatMessage[];
@@ -368,21 +375,87 @@ export class BrowserGatewayAskAgentModelClient {
     params: BrowserGatewayAskAgentCompletionParams,
   ): Promise<BrowserGatewayAskAgentCompletionResult> {
     const providerId = normalizeBrowserGatewayModelCredentialProviderId(
-      params.credential.providerId,
+      params.providerId ?? params.credential?.providerId ?? "",
     );
+    if (providerId.startsWith("openai-compatible:")) {
+      return await this.completeOpenAiCompatibleWithToolCalls({
+        ...params,
+        providerId,
+      });
+    }
+    if (!params.credential) {
+      throw new Error("browser_gateway_ask_agent_model_auth_failed");
+    }
     if (providerId === "anthropic") {
-      return await this.completeAnthropicWithToolCalls(params);
+      return await this.completeAnthropicWithToolCalls({
+        ...params,
+        credential: params.credential,
+      });
     }
     if (providerId !== "openai-codex") {
       throw new Error(
-        `browser_gateway_ask_agent_provider_unsupported:${params.credential.providerId}`,
+        `browser_gateway_ask_agent_provider_unsupported:${providerId}`,
       );
     }
-    return await this.completeWithCodex(params);
+    return await this.completeWithCodex({
+      ...params,
+      credential: params.credential,
+    });
+  }
+
+  private async completeOpenAiCompatibleWithToolCalls(
+    params: BrowserGatewayAskAgentCompletionParams & { providerId: string },
+  ): Promise<BrowserGatewayAskAgentCompletionResult> {
+    const profile = params.openAiCompatibleRuntimeProfile;
+    const model = params.model?.trim();
+    if (!profile || profile.providerId !== params.providerId || !model) {
+      throw new Error("browser_gateway_ask_agent_runtime_profile_unavailable");
+    }
+    if (profile.authRequired && !params.credential?.bearerToken) {
+      throw new Error("browser_gateway_ask_agent_model_auth_failed");
+    }
+    try {
+      const events = streamOpenAiCompatibleCompletion({
+        profile,
+        apiKey: params.credential?.bearerToken,
+        request: {
+          model,
+          systemPrompt:
+            params.instructions ??
+            buildAskAgentInstructions(params.memoryContext),
+          messages: [
+            ...surfaceMessagesToCoreModelMessages(params.messages),
+            ...(params.iterationMessages ?? params.toolMessages ?? []),
+          ],
+          maxTokens: params.maxTokens ?? 2048,
+          reasoningEffort: params.reasoningEffort ?? "low",
+          tools: toMutableTools(params.tools),
+          signal: params.signal,
+        },
+        fetch: this.options.webFetch,
+      });
+      const observedEvents = async function* () {
+        for await (const event of events) {
+          if (event.type === "text_delta") params.onDelta?.(event.text);
+          yield event;
+        }
+      };
+      return await collectOpenAiCompatibleCompletion(observedEvents());
+    } catch (err) {
+      if (params.signal?.aborted) {
+        throw new Error("browser_gateway_ask_agent_model_aborted");
+      }
+      if (isAuthLikeError(err)) {
+        throw new Error("browser_gateway_ask_agent_model_auth_failed");
+      }
+      throw err;
+    }
   }
 
   private async completeWithCodex(
-    params: BrowserGatewayAskAgentCompletionParams,
+    params: BrowserGatewayAskAgentCompletionParams & {
+      credential: BrowserGatewayModelCredentialRecord;
+    },
   ): Promise<BrowserGatewayAskAgentCompletionResult> {
     const endpoint = getCodexEndpointConfig(
       params.credential,
@@ -455,7 +528,9 @@ export class BrowserGatewayAskAgentModelClient {
   }
 
   private async completeAnthropicWithToolCalls(
-    params: BrowserGatewayAskAgentCompletionParams,
+    params: BrowserGatewayAskAgentCompletionParams & {
+      credential: BrowserGatewayModelCredentialRecord;
+    },
   ): Promise<BrowserGatewayAskAgentCompletionResult> {
     const client =
       this.options.createAnthropicClient?.(params.credential) ??

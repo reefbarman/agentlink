@@ -47,6 +47,9 @@ const mockOutputChannel = {
 };
 const mockConfigUpdate = vi.fn();
 const terminalSettings: Record<string, unknown> = {};
+const mockWorkspaceFolders: Array<{
+  uri: { fsPath: string; toString: () => string };
+}> = [];
 
 const mockGetConfiguration = vi.fn((section?: string) => ({
   get: vi.fn((key: string, fallback?: unknown) => {
@@ -122,7 +125,7 @@ describe("worktree startup prompt policy", () => {
     );
     expect(order).toEqual(["policy", "prompt"]);
     vi.useRealTimers();
-  });
+  }, 15_000);
 });
 
 describe("tool terminal reveal messages", () => {
@@ -401,7 +404,9 @@ vi.mock("vscode", () => ({
   },
   workspace: {
     getConfiguration: mockGetConfiguration,
-    workspaceFolders: [],
+    get workspaceFolders() {
+      return mockWorkspaceFolders;
+    },
     findFiles: mockFindFiles,
     openTextDocument: mockOpenTextDocument,
     onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() })),
@@ -1001,8 +1006,247 @@ describe("ChatViewProvider session state sync", () => {
     vi.resetModules();
     vi.clearAllMocks();
     mockGetConfiguration.mockClear();
+    mockWorkspaceFolders.length = 0;
     for (const key of Object.keys(terminalSettings))
       delete terminalSettings[key];
+  });
+
+  it("persists a no-folder model selection as the Ask preference", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const setModel = vi.fn(async () => "openrouter-moonshotai-kimi-k3");
+    provider.setSessionManager({
+      setModel,
+      getForegroundSession: vi.fn(() => undefined),
+      getDefaultProjectScope: vi.fn(() => ({
+        projectId: "synthetic-root",
+        workspaceFolderUri: "file:///",
+        displayName: "/",
+        rootPath: "/",
+      })),
+      getWorkspaceProjects: vi.fn(() => []),
+    } as never);
+    const sendInitialState = vi.fn();
+    (provider as unknown as { sendInitialState: () => void }).sendInitialState =
+      sendInitialState;
+
+    await expect(
+      provider.submitBrowserSetModel("openrouter-moonshotai-kimi-k3"),
+    ).resolves.toEqual({ ok: true });
+
+    expect(setModel).toHaveBeenCalledWith("openrouter-moonshotai-kimi-k3");
+    expect(mockConfigUpdate).toHaveBeenNthCalledWith(
+      1,
+      "agentModel",
+      "openrouter-moonshotai-kimi-k3",
+      1,
+    );
+    expect(mockConfigUpdate).toHaveBeenNthCalledWith(
+      2,
+      "modeModelPreferences",
+      { ask: "openrouter-moonshotai-kimi-k3" },
+      1,
+    );
+    expect(sendInitialState).toHaveBeenCalledOnce();
+  });
+
+  it("persists model selection for the active session mode and publishes state", async () => {
+    mockWorkspaceFolders.push({
+      uri: {
+        fsPath: "/workspace/project",
+        toString: () => "file:///workspace/project",
+      },
+    });
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = {
+      mode: "debug",
+      projectScope: {
+        projectId: "project-1",
+        workspaceFolderUri: "file:///workspace/project",
+        displayName: "Project",
+        rootPath: "/workspace/project",
+      },
+    };
+    const setModel = vi.fn(async () => "openrouter-moonshotai-kimi-k3");
+    provider.setSessionManager({
+      setModel,
+      getForegroundSession: vi.fn(() => session),
+      getWorkspaceProjects: vi.fn(() => []),
+    } as never);
+    const sendInitialState = vi.fn();
+    (provider as unknown as { sendInitialState: () => void }).sendInitialState =
+      sendInitialState;
+
+    await expect(
+      provider.submitBrowserSetModel("openrouter-moonshotai-kimi-k3"),
+    ).resolves.toEqual({ ok: true });
+
+    expect(mockConfigUpdate).toHaveBeenNthCalledWith(
+      1,
+      "agentModel",
+      "openrouter-moonshotai-kimi-k3",
+      3,
+    );
+    expect(mockConfigUpdate).toHaveBeenNthCalledWith(
+      2,
+      "modeModelPreferences",
+      { debug: "openrouter-moonshotai-kimi-k3" },
+      3,
+    );
+    expect(sendInitialState).toHaveBeenCalledOnce();
+  });
+
+  it("forces no-folder sends into projectless Ask mode without local attachments", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const projectlessSession = {
+      id: "projectless-session",
+      mode: "ask",
+      model: "openrouter-moonshotai-kimi-k3",
+      status: "idle",
+      reasoningEffort: "none",
+      activeFilePath: undefined,
+      projectScope: {
+        schemaVersion: 1,
+        kind: "project",
+        projectId: "projectless",
+        workspaceFolderUri: "agentlink://projectless",
+        displayName: "No folder",
+      },
+      projectAvailability: "unavailable",
+    };
+    const createSession = vi.fn(async () => projectlessSession);
+    const sendMessage = vi.fn(async () => undefined);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => undefined),
+      getSession: vi.fn((id: string) =>
+        id === projectlessSession.id ? projectlessSession : undefined,
+      ),
+      getWorkspaceProjects: vi.fn(() => []),
+      createSession,
+      sendMessage,
+    } as never);
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "agentSend",
+      text: "What can you help me with?",
+      mode: "code",
+      images: [
+        { name: "question.png", mimeType: "image/png", base64: "aW1hZ2U=" },
+      ],
+    });
+
+    expect(createSession).toHaveBeenCalledWith("ask", {
+      activeFilePath: undefined,
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      projectlessSession.id,
+      "What can you help me with?",
+      "ask",
+      expect.objectContaining({
+        origin: "vscode",
+        images: [
+          {
+            name: "question.png",
+            mimeType: "image/png",
+            base64: "aW1hZ2U=",
+          },
+        ],
+      }),
+    );
+
+    await expect(
+      (
+        provider as unknown as {
+          handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+        }
+      ).handleWebviewMessage({
+        command: "agentSend",
+        text: "Read this file",
+        mode: "ask",
+        sessionId: projectlessSession.id,
+        attachments: ["README.md"],
+      }),
+    ).rejects.toThrow("Open a folder before attaching local workspace files.");
+
+    await expect(
+      provider.submitBrowserSend({
+        text: "Describe this image",
+        mode: "code",
+        sessionId: projectlessSession.id,
+        images: [
+          { name: "question.png", mimeType: "image/png", base64: "aW1hZ2U=" },
+        ],
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      projectlessSession.id,
+      "Describe this image",
+      "ask",
+      expect.objectContaining({
+        origin: "browser",
+        images: [
+          {
+            name: "question.png",
+            mimeType: "image/png",
+            base64: "aW1hZ2U=",
+          },
+        ],
+      }),
+    );
+    await expect(
+      provider.submitBrowserSend({
+        text: "Read this file",
+        mode: "ask",
+        sessionId: projectlessSession.id,
+        attachments: ["README.md"],
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "Open a folder before attaching local workspace files.",
+    });
+  });
+
+  it("routes VS Code model selections through the shared selection path", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => undefined),
+      getWorkspaceProjects: vi.fn(() => []),
+    } as never);
+    const submitBrowserSetModel = vi
+      .spyOn(provider, "submitBrowserSetModel")
+      .mockResolvedValue({ ok: true });
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "agentSetModel",
+      model: "openrouter-moonshotai-kimi-k3",
+    });
+
+    expect(submitBrowserSetModel).toHaveBeenCalledWith(
+      "openrouter-moonshotai-kimi-k3",
+    );
   });
 
   it("publishes MCP status changes through the existing owner callback", async () => {
@@ -1265,6 +1509,12 @@ describe("ChatViewProvider session state sync", () => {
   });
 
   it("keeps browser reasoning snapshots in sync with the live session", async () => {
+    mockWorkspaceFolders.push({
+      uri: {
+        fsPath: "/workspace/project",
+        toString: () => "file:///workspace/project",
+      },
+    });
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(
       { fsPath: "/tmp/ext" } as never,
@@ -1280,6 +1530,11 @@ describe("ChatViewProvider session state sync", () => {
       lastInputTokens: 0,
       lastOutputTokens: 0,
       estimatedTotalUsed: 0,
+      projectScope: {
+        projectId: "project-a",
+        workspaceFolderUri: "file:///workspace/project",
+        rootPath: "/workspace/project",
+      },
       getAllMessages: () => [],
     };
     const setForegroundReasoningEffort = vi.fn((effort: string) => {
@@ -2625,6 +2880,15 @@ describe("ChatViewProvider session state sync", () => {
       provider.setSessionManager({
         getForegroundSession: vi.fn(() => session),
         getSession: vi.fn(() => session),
+        getWorkspaceProjects: vi.fn(() => [
+          {
+            id: "project-a",
+            name: "Project A",
+            uri: `file://${projectRoot}`,
+            rootPath: projectRoot,
+            availability: { status: "available" },
+          },
+        ]),
         getConfig: vi.fn(() => ({
           model: "claude-sonnet-4-6",
           autoCondenseThreshold: 0.8,
@@ -3165,6 +3429,15 @@ describe("ChatViewProvider session state sync", () => {
             ? newSession
             : undefined,
       ),
+      getWorkspaceProjects: vi.fn(() => [
+        {
+          id: "project-1",
+          name: "Project",
+          uri: "file:///tmp/project",
+          rootPath: "/tmp/project",
+          availability: { status: "available" },
+        },
+      ]),
       getConfig: vi.fn(() => ({
         model: "claude-sonnet-4-6",
         autoCondenseThreshold: 0.8,
@@ -3830,6 +4103,43 @@ describe("ChatViewProvider session state sync", () => {
           ),
       ),
     ).toBe(true);
+  });
+
+  it("projects Ask mode before a session exists when no folder is open", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => undefined),
+      getConfig: vi.fn(() => ({
+        model: "openrouter-moonshotai-kimi-k3",
+        autoCondenseThreshold: 0.8,
+      })),
+      getWorkspaceProjects: vi.fn(() => []),
+      getDefaultProjectScope: vi.fn(() => undefined),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+    } as never);
+    mockPostMessage.mockClear();
+
+    (provider as unknown as { sendInitialState(): void }).sendInitialState();
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "stateUpdate",
+        state: expect.objectContaining({
+          projects: [],
+          project: null,
+          mode: "ask",
+        }),
+      }),
+    );
   });
 
   it("pushes a fresh stateUpdate when sessions change", async () => {
