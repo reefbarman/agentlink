@@ -2437,6 +2437,51 @@ describe("webview App reducer background agent launch blocks", () => {
     ]);
   });
 
+  it("does not restore an interrupted background wait as a final result block", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+    const bgSessionId = "bg-result-wait-interrupted";
+    const interruptedResult = JSON.stringify({
+      status: "wait_interrupted",
+      reason: "user_message_pending",
+      done: false,
+      sessionId: bgSessionId,
+    });
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "keep working" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "bg-result-interrupted-tool",
+            name: "get_background_result",
+            input: { sessionId: bgSessionId },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "bg-result-interrupted-tool",
+            content: interruptedResult,
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    expect(
+      restored
+        .flatMap((message) => message.blocks)
+        .some(
+          (block) =>
+            block.type === "bg_agent_result" && block.sessionId === bgSessionId,
+        ),
+    ).toBe(false);
+  });
+
   it("restores persisted runtime errors on assistant messages with retry metadata", async () => {
     const { agentMessagesToChatMessages } = await import("./App");
 

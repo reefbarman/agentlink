@@ -878,6 +878,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             todos: msg.todos,
             lastInputTokens: msg.lastInputTokens,
             lastOutputTokens: msg.lastOutputTokens,
+            backgroundResults: msg.backgroundResults,
             checkpoints: msg.checkpoints,
             userTurnOffset: (msg.userTurnOffset as number | undefined) ?? 0,
             hasMoreBefore: msg.hasMoreBefore,

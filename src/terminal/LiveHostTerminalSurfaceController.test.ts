@@ -2190,7 +2190,7 @@ describe("LiveHostTerminalSurfaceController", () => {
     });
   });
 
-  it("requests a resync at the render high-water mark without pausing the PTY", async () => {
+  it("drains the PTY and resyncs once after renderer pressure is acknowledged", async () => {
     const test = harness(snapshot(), {
       runtimeWatermarks: { high: 5, low: 2 },
     });
@@ -2202,15 +2202,23 @@ describe("LiveHostTerminalSurfaceController", () => {
     await vi.waitFor(() =>
       expect(
         test.events.filter(
-          (event) => event.type === "terminal-view/resync-required",
+          (event) => event.type === "terminal-view/render-batch",
         ),
       ).toHaveLength(1),
     );
     expect(process.pauseCount).toBe(0);
+    expect(
+      test.events.filter(
+        (event) => event.type === "terminal-view/resync-required",
+      ),
+    ).toHaveLength(0);
 
-    const batchCount = test.events.filter(
+    const batch = test.events.find(
       (event) => event.type === "terminal-view/render-batch",
-    ).length;
+    );
+    if (!batch || batch.type !== "terminal-view/render-batch") {
+      throw new Error("expected render batch");
+    }
     process.emitData("more");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(process.pauseCount).toBe(0);
@@ -2218,7 +2226,18 @@ describe("LiveHostTerminalSurfaceController", () => {
       test.events.filter(
         (event) => event.type === "terminal-view/render-batch",
       ),
-    ).toHaveLength(batchCount);
+    ).toHaveLength(1);
+    expect(
+      test.events.filter(
+        (event) => event.type === "terminal-view/resync-required",
+      ),
+    ).toHaveLength(0);
+
+    await test.controller.handleRequest(test.connection, {
+      type: "terminal-view/output-ack",
+      ...target(test, opened),
+      sequence: batch.sequence,
+    });
     expect(
       test.events.filter(
         (event) => event.type === "terminal-view/resync-required",
@@ -2245,8 +2264,68 @@ describe("LiveHostTerminalSurfaceController", () => {
         test.events.filter(
           (event) => event.type === "terminal-view/render-batch",
         ).length,
-      ).toBeGreaterThan(batchCount),
+      ).toBeGreaterThan(1),
     );
+  });
+
+  it("drops already queued host batches after the high-water batch is delivered", async () => {
+    const firstRender = deferred<boolean>();
+    let blockFirstRender = true;
+    const test = harness(snapshot(), {
+      runtimeWatermarks: { high: 4, low: 2 },
+      postSurfaceEvent: (event) => {
+        if (blockFirstRender && event.type === "terminal-view/render-batch") {
+          blockFirstRender = false;
+          return firstRender.promise;
+        }
+        return true;
+      },
+    });
+    await ready(test);
+    const opened = await create(test);
+    const process = test.processes[0];
+
+    process.emitData("1234");
+    process.emitData("queued-one");
+    process.emitData("queued-two");
+    await vi.waitFor(() =>
+      expect(
+        test.events.filter(
+          (event) => event.type === "terminal-view/render-batch",
+        ),
+      ).toHaveLength(1),
+    );
+
+    firstRender.resolve(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      test.events.filter(
+        (event) => event.type === "terminal-view/render-batch",
+      ),
+    ).toHaveLength(1);
+    expect(process.pauseCount).toBe(0);
+    expect(
+      test.events.filter(
+        (event) => event.type === "terminal-view/resync-required",
+      ),
+    ).toHaveLength(0);
+
+    const batch = test.events.find(
+      (event) => event.type === "terminal-view/render-batch",
+    );
+    if (!batch || batch.type !== "terminal-view/render-batch") {
+      throw new Error("expected render batch");
+    }
+    await test.controller.handleRequest(test.connection, {
+      type: "terminal-view/output-ack",
+      ...target(test, opened),
+      sequence: batch.sequence,
+    });
+
+    expect(test.events.at(-1)).toEqual({
+      type: "terminal-view/resync-required",
+      rendererEpoch: test.connection.rendererEpoch,
+    });
   });
 
   it("replays retained output on renderer reattach and accepts acknowledgments", async () => {

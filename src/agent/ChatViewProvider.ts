@@ -44,6 +44,7 @@ import type { AgentErrorActions, AgentEvent } from "./types.js";
 import type { ComposeTrace } from "../shared/composeTypes.js";
 import type {
   BrowserGatewayThemeSnapshot,
+  BackgroundCompletionResult,
   McpApprovalPromotionMeta,
   RequestContextBreakdown,
   RevertRecoveryNotice,
@@ -613,6 +614,8 @@ export type ExtensionToWebview =
       todos: TodoItem[];
       lastInputTokens: number;
       lastOutputTokens: number;
+      /** Durable child results not already represented in persisted messages. */
+      backgroundResults?: BackgroundCompletionResult[];
       /** True when this came from automatic startup restore rather than explicit user action. */
       restored?: boolean;
       /**
@@ -7322,6 +7325,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           todos: extMsg.todos,
           lastInputTokens: extMsg.lastInputTokens,
           lastOutputTokens: extMsg.lastOutputTokens,
+          backgroundResults: extMsg.backgroundResults,
           checkpoints: extMsg.checkpoints,
           userTurnOffset: extMsg.userTurnOffset ?? 0,
           hasMoreBefore: extMsg.hasMoreBefore,
@@ -9377,6 +9381,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         all,
         opts?.tailTurns ?? RESTORE_TAIL_TURNS,
       );
+      const persistedResultSessionIds = new Set(
+        agentMessagesToChatMessages(all as unknown[]).flatMap((message) =>
+          message.blocks.flatMap((block) =>
+            block.type === "bg_agent_result" ? [block.sessionId] : [],
+          ),
+        ),
+      );
+      const backgroundResults = (
+        this.sessionManager?.getBackgroundCompletionsForParent?.(session.id) ??
+        []
+      ).filter((result) => !persistedResultSessionIds.has(result.sessionId));
       this.postMessage({
         type: "agentSessionLoaded",
         sessionId: session.id,
@@ -9390,6 +9405,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // context bar display. We don't persist this value, so send 0 for
         // loaded sessions to avoid displaying stale cumulative totals.
         lastOutputTokens: 0,
+        backgroundResults:
+          backgroundResults.length > 0 ? backgroundResults : undefined,
         restored: opts?.restored,
         checkpoints: opts?.checkpoints,
         userTurnOffset: tail.userTurnOffset,

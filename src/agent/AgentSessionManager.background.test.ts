@@ -2894,6 +2894,7 @@ describe("AgentSessionManager background agents", () => {
       routingReason: "defaulted to foreground model",
       fallbackUsed: false,
       lifecycle: "running" as const,
+      partialResult: "work preserved before reload",
     };
     const saveSession = vi.fn().mockResolvedValue({
       ok: true,
@@ -2944,6 +2945,22 @@ describe("AgentSessionManager background agents", () => {
         status: "error",
         done: true,
         resultState: "interrupted",
+      }),
+    );
+    const completion = mgr.getBackgroundCompletionsForParent("foreground-1");
+    expect(completion).toHaveLength(1);
+    expect(completion[0]).toEqual(
+      expect.objectContaining({
+        sessionId: "persisted-bg",
+        status: "error",
+      }),
+    );
+    expect(JSON.parse(completion[0].resultText ?? "{}")).toEqual(
+      expect.objectContaining({
+        status: "interrupted",
+        terminalReason: "extension_reloaded_during_run",
+        retrySafe: true,
+        partialOutput: "work preserved before reload",
       }),
     );
     expect(mgr.listPersistedFleetSessions().map((item) => item.id)).toEqual([
@@ -3051,6 +3068,18 @@ describe("AgentSessionManager background agents", () => {
     await expect(
       mgr.waitForAuthorizedBackground(foregroundSummary.id, childSummary.id),
     ).resolves.toBe("durable child result");
+    expect(mgr.getBackgroundCompletionsForParent(foregroundSummary.id)).toEqual(
+      [
+        {
+          sessionId: childSummary.id,
+          task: childSummary.title,
+          status: "completed",
+          resultText: "durable child result",
+          summary: "durable child result",
+          completedAt: now - 1,
+        },
+      ],
+    );
   });
 
   it("only restores background sessions from the current foreground tree", async () => {

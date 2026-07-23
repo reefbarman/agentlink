@@ -68,6 +68,7 @@ interface ManagedSurfaceTerminal {
   bootstrap: MaterializedHostShellBootstrap;
   deliveryQueue: Promise<void>;
   cleaned: boolean;
+  renderPaused: boolean;
   resyncRequested: boolean;
 }
 
@@ -215,6 +216,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     this.deleteConfirmationsForRenderer(connection.rendererEpoch);
     this.interactionGenerations.delete(connection.rendererEpoch);
     for (const terminal of this.terminals.values()) {
+      terminal.renderPaused = false;
       const detached = terminal.runtime.detachRenderer(
         terminal.terminalInstanceId,
         connection.rendererEpoch,
@@ -254,6 +256,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       this.interactionGenerations.delete(connection.rendererEpoch);
       this.readyConnections.delete(connection);
       for (const terminal of this.terminals.values()) {
+        terminal.renderPaused = false;
         const detached = terminal.runtime.detachRenderer(
           terminal.terminalInstanceId,
           connection.rendererEpoch,
@@ -591,6 +594,9 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       );
       if (acknowledged.shouldResume) {
         terminal.service.resumeOutput(request.terminalId);
+        if (terminal.renderPaused) {
+          this.requestHostTerminalResync(terminal, connection);
+        }
       }
     }
   }
@@ -643,6 +649,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     this.refreshSandboxChannels();
     const replay = [];
     for (const terminal of this.terminals.values()) {
+      terminal.renderPaused = false;
       terminal.resyncRequested = false;
       terminal.service.resumeOutput(terminal.terminalId);
       replay.push(terminal.runtime.attachRenderer(connection.rendererEpoch));
@@ -1095,6 +1102,14 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
         if (deliveryGeneration !== terminal.renderDeliveryGeneration) return;
         const connection = this.currentReadyConnection();
         if (!connection) return;
+        if (terminal.renderPaused) {
+          terminal.runtime.discardUndeliveredBatch(
+            terminal.terminalInstanceId,
+            connection.rendererEpoch,
+            batch.sequence,
+          );
+          return;
+        }
         const delivered = await this.post(connection, batch);
         if (!delivered) {
           this.readyConnections.delete(connection);
@@ -1258,6 +1273,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
         bootstrap: materialized,
         deliveryQueue: Promise.resolve(),
         cleaned: false,
+        renderPaused: false,
         resyncRequested: false,
       };
       managed.serviceSubscription = service.onEvent((event) =>
@@ -1310,7 +1326,9 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
         this.state = reduceHostTerminalState(this.state, cwdEvent);
         this.postLifecycle(terminal, cwdEvent);
       }
-      return update.continueOutput;
+      // Renderer pressure pauses delivery, not the PTY. Keep draining the
+      // child process while replay retention records the authoritative tail.
+      return terminal.renderPaused || update.continueOutput;
     }
 
     this.state = reduceHostTerminalState(this.state, event);
@@ -1340,14 +1358,26 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     terminal: ManagedSurfaceTerminal,
     batch: HostTerminalRenderBatch,
   ): void {
+    const connection = this.currentReadyConnection();
+    if (!connection || terminal.resyncRequested || terminal.renderPaused)
+      return;
     terminal.deliveryQueue = terminal.deliveryQueue.then(async () => {
       if (terminal.resyncRequested) return;
       const connection = this.currentReadyConnection();
       if (!connection) return;
+      if (terminal.renderPaused) {
+        terminal.runtime.discardUndeliveredBatch(
+          terminal.terminalInstanceId,
+          connection.rendererEpoch,
+          batch.sequence,
+        );
+        return;
+      }
       const delivered = await this.post(connection, batch);
       if (!delivered) {
         this.readyConnections.delete(connection);
         for (const candidate of this.terminals.values()) {
+          candidate.renderPaused = false;
           const detached = candidate.runtime.detachRenderer(
             candidate.terminalInstanceId,
             connection.rendererEpoch,
@@ -1366,10 +1396,10 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       if (delivery.shouldPause) {
         // Never pause the PTY on renderer backpressure: a throttled or hidden
         // renderer (screen lock marks the window occluded and clamps webview
-        // timers) would otherwise freeze the child process mid-write. Detach
-        // the renderer instead and let it resync from the replay snapshot,
-        // like the sandbox terminal path; the PTY keeps draining host-side.
-        this.requestHostTerminalResync(terminal, connection);
+        // timers) would otherwise freeze the child process mid-write. Stop
+        // sending new render batches, keep draining into replay retention, and
+        // resync once acknowledgements prove xterm has caught up.
+        terminal.renderPaused = true;
       }
     });
   }
@@ -1379,6 +1409,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     connection: HostTerminalSurfaceConnection,
   ): void {
     if (terminal.resyncRequested) return;
+    terminal.renderPaused = false;
     terminal.resyncRequested = true;
     const detached = terminal.runtime.detachRenderer(
       terminal.terminalInstanceId,

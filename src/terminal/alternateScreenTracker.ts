@@ -13,10 +13,30 @@ export interface AlternateScreenScanResult {
   readonly transitions: readonly AlternateScreenTransition[];
 }
 
+export interface AlternateScreenTransitionBoundary {
+  /** UTF-16 offset immediately after the control sequence that changed modes. */
+  readonly offset: number;
+  readonly transition: AlternateScreenTransition;
+}
+
+export interface AlternateScreenReplaySegment {
+  readonly data: string;
+  /** Plain ground-state text may be trimmed at any UTF-8 character boundary. */
+  readonly splittable: boolean;
+  /** Whether the parser returned to ground at the end of this segment. */
+  readonly endsAtGround: boolean;
+}
+
+export interface AlternateScreenDetailedScanResult extends AlternateScreenScanResult {
+  readonly transitionBoundaries: readonly AlternateScreenTransitionBoundary[];
+  readonly replaySegments: readonly AlternateScreenReplaySegment[];
+}
+
 export interface AlternateScreenTracker {
   readonly alternateScreen: boolean;
   readonly atGround: boolean;
   push(data: string): AlternateScreenScanResult;
+  scan(data: string): AlternateScreenDetailedScanResult;
   reset(): void;
 }
 
@@ -67,8 +87,34 @@ class StreamingAlternateScreenTracker implements AlternateScreenTracker {
   }
 
   push(data: string): AlternateScreenScanResult {
+    const result = this.scan(data);
+    return {
+      data: result.data,
+      alternateScreen: result.alternateScreen,
+      transitions: result.transitions,
+    };
+  }
+
+  scan(data: string): AlternateScreenDetailedScanResult {
     const transitions: AlternateScreenTransition[] = [];
+    const transitionBoundaries: AlternateScreenTransitionBoundary[] = [];
+    const replaySegments: AlternateScreenReplaySegment[] = [];
+    let segmentStart = 0;
+    let segmentSplittable: boolean | undefined;
+    let previousEndsAtGround = this.atGround;
+
+    const flushReplaySegment = (end: number): void => {
+      if (segmentSplittable === undefined || end <= segmentStart) return;
+      replaySegments.push({
+        data: data.slice(segmentStart, end),
+        splittable: segmentSplittable,
+        endsAtGround: previousEndsAtGround,
+      });
+      segmentStart = end;
+    };
+
     for (let index = 0; index < data.length; index += 1) {
+      const wasAtGround = this.atGround;
       const code = data.charCodeAt(index);
       const character = data[index];
 
@@ -80,10 +126,7 @@ class StreamingAlternateScreenTracker implements AlternateScreenTracker {
         } else if (code === 0x18 || code === 0x1a) {
           this.state = "ground";
         }
-        continue;
-      }
-
-      if (this.state === "osc-escape") {
+      } else if (this.state === "osc-escape") {
         if (character === "\\" || code === 0x07 || code === 0x9c) {
           this.state = "ground";
         } else if (code === 0x1b) {
@@ -93,10 +136,7 @@ class StreamingAlternateScreenTracker implements AlternateScreenTracker {
         } else {
           this.state = "osc";
         }
-        continue;
-      }
-
-      if (this.state === "string") {
+      } else if (this.state === "string") {
         if (code === 0x9c) {
           this.state = "ground";
         } else if (code === 0x1b) {
@@ -104,10 +144,7 @@ class StreamingAlternateScreenTracker implements AlternateScreenTracker {
         } else if (code === 0x18 || code === 0x1a) {
           this.state = "ground";
         }
-        continue;
-      }
-
-      if (this.state === "string-escape") {
+      } else if (this.state === "string-escape") {
         if (character === "\\" || code === 0x9c) {
           this.state = "ground";
         } else if (code === 0x1b) {
@@ -117,10 +154,7 @@ class StreamingAlternateScreenTracker implements AlternateScreenTracker {
         } else {
           this.state = "string";
         }
-        continue;
-      }
-
-      if (this.state === "escape") {
+      } else if (this.state === "escape") {
         if (character === "[") {
           this.startCsi();
         } else if (character === "]") {
@@ -132,19 +166,12 @@ class StreamingAlternateScreenTracker implements AlternateScreenTracker {
         } else {
           this.state = "ground";
         }
-        continue;
-      }
-
-      if (this.state === "csi") {
+      } else if (this.state === "csi") {
         if (code === 0x18 || code === 0x1a) {
           this.state = "ground";
-          continue;
-        }
-        if (code === 0x1b) {
+        } else if (code === 0x1b) {
           this.state = "escape";
-          continue;
-        }
-        if (isCsiFinal(code)) {
+        } else if (isCsiFinal(code)) {
           if (!this.csiOverflow && (character === "h" || character === "l")) {
             const modes = parseAlternateScreenModes(this.csiParameters);
             if (modes.length > 0) {
@@ -156,24 +183,27 @@ class StreamingAlternateScreenTracker implements AlternateScreenTracker {
               }
               const active = this.activeModes.size > 0;
               if (active !== wasActive) {
-                transitions.push({ type: active ? "enter" : "exit", modes });
+                const transition: AlternateScreenTransition = {
+                  type: active ? "enter" : "exit",
+                  modes,
+                };
+                transitions.push(transition);
+                transitionBoundaries.push({
+                  offset: index + 1,
+                  transition,
+                });
               }
             }
           }
           this.state = "ground";
-          continue;
-        }
-        if (!this.csiOverflow) {
+        } else if (!this.csiOverflow) {
           this.csiParameters += character;
           if (this.csiParameters.length > MAX_CSI_PARAMETER_BYTES) {
             this.csiOverflow = true;
             this.csiParameters = "";
           }
         }
-        continue;
-      }
-
-      if (code === 0x1b) {
+      } else if (code === 0x1b) {
         this.state = "escape";
       } else if (code === 0x9b) {
         this.startCsi();
@@ -187,12 +217,23 @@ class StreamingAlternateScreenTracker implements AlternateScreenTracker {
       ) {
         this.state = "string";
       }
+
+      const endsAtGround = this.atGround;
+      const splittable = wasAtGround && endsAtGround;
+      if (segmentSplittable !== undefined && splittable !== segmentSplittable) {
+        flushReplaySegment(index);
+      }
+      segmentSplittable = splittable;
+      previousEndsAtGround = endsAtGround;
     }
+    flushReplaySegment(data.length);
 
     return {
       data,
       alternateScreen: this.alternateScreen,
       transitions,
+      transitionBoundaries,
+      replaySegments,
     };
   }
 

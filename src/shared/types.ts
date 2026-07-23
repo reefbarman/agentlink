@@ -232,6 +232,16 @@ export interface BrowserGatewayThemeSnapshot {
   source?: "webview-dom" | "vscode-theme-api" | "baked-default";
 }
 
+/** Durable background completion projected back into its parent transcript. */
+export interface BackgroundCompletionResult {
+  sessionId: string;
+  task: string;
+  status: "completed" | "error" | "cancelled";
+  resultText?: string;
+  summary?: string;
+  completedAt: number;
+}
+
 export interface BgSessionInfo {
   id: string;
   task: string;

@@ -316,4 +316,92 @@ describe("BG_AGENT_DONE result placement", () => {
       "bg_agent_result",
     ]);
   });
+
+  it("rehydrates durable results missing from persisted parent messages", () => {
+    const next = reducer(initialState, {
+      type: "LOAD_SESSION",
+      sessionId: "foreground-1",
+      title: "Restored session",
+      mode: "code",
+      model: "gpt-5.6-sol",
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "",
+          timestamp: 1,
+          blocks: [{ type: "text", text: "Foreground response" }],
+        },
+      ],
+      todos: [],
+      backgroundResults: [
+        {
+          sessionId: "bg-restored",
+          task: "Review implementation",
+          status: "completed",
+          resultText: "Found one issue.",
+          summary: "One issue found",
+          completedAt: 2,
+        },
+      ],
+    });
+
+    expect(next.messages[0].blocks).toEqual([
+      { type: "text", text: "Foreground response" },
+      {
+        type: "bg_agent_result",
+        sessionId: "bg-restored",
+        task: "Review implementation",
+        status: "completed",
+        resultText: "Found one issue.",
+        summary: "One issue found",
+      },
+    ]);
+  });
+
+  it("does not duplicate a background result already restored from tool history", () => {
+    const existingResult = {
+      type: "bg_agent_result" as const,
+      sessionId: "bg-restored",
+      task: "Review implementation",
+      status: "completed" as const,
+      resultText: "Found one issue.",
+    };
+    const next = reducer(initialState, {
+      type: "LOAD_SESSION",
+      sessionId: "foreground-1",
+      title: "Restored session",
+      mode: "code",
+      model: "gpt-5.6-sol",
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "",
+          timestamp: 1,
+          blocks: [existingResult],
+        },
+      ],
+      todos: [],
+      backgroundResults: [
+        {
+          sessionId: "bg-restored",
+          task: "Review implementation",
+          status: "completed",
+          resultText: "Found one issue.",
+          completedAt: 2,
+        },
+      ],
+    });
+
+    expect(
+      next.messages.flatMap((message) =>
+        message.blocks.filter(
+          (block) =>
+            block.type === "bg_agent_result" &&
+            block.sessionId === "bg-restored",
+        ),
+      ),
+    ).toHaveLength(1);
+  });
 });

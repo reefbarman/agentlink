@@ -3088,6 +3088,99 @@ describe("ChatViewProvider session state sync", () => {
     );
   });
 
+  it("rehydrates unpulled durable background results when loading a parent session", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+    const session = {
+      id: "foreground-1",
+      title: "Foreground",
+      mode: "code",
+      model: "gpt-5.6-sol",
+      lastInputTokens: 0,
+      getAllMessages: () => [
+        { role: "user", content: "Run both reviews" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "pulled-result",
+              name: "get_background_result",
+              input: { sessionId: "bg-pulled" },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "pulled-result",
+              content: "Already persisted",
+            },
+          ],
+        },
+      ],
+    };
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getConfig: vi.fn(() => ({
+        model: "gpt-5.6-sol",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      getBackgroundCompletionsForParent: vi.fn(() => [
+        {
+          sessionId: "bg-pulled",
+          task: "Pulled review",
+          status: "completed",
+          resultText: "Already persisted",
+          completedAt: 1,
+        },
+        {
+          sessionId: "bg-pushed",
+          task: "Pushed review",
+          status: "completed",
+          resultText: "Recover me",
+          completedAt: 2,
+        },
+      ]),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    } as never);
+
+    (
+      provider as unknown as {
+        postSessionLoaded: (session: unknown) => void;
+      }
+    ).postSessionLoaded(session);
+
+    const loadedMessage = mockPostMessage.mock.calls.find(
+      ([message]) => message.type === "agentSessionLoaded",
+    )?.[0];
+    expect(loadedMessage?.backgroundResults).toEqual([
+      expect.objectContaining({
+        sessionId: "bg-pushed",
+        resultText: "Recover me",
+      }),
+    ]);
+    expect(
+      provider
+        .getBrowserProjectedForegroundState()
+        ?.projectedMessages.flatMap((message) => message.blocks)
+        .filter((block) => block.type === "bg_agent_result")
+        .map((block) => block.sessionId),
+    ).toEqual(["bg-pulled", "bg-pushed"]);
+  });
+
   it("fails closed when a background completion has no current parent metadata", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(

@@ -64,7 +64,10 @@ import {
   type QuestionResponse,
 } from "./toolAdapter.js";
 import type { SessionStore, SessionSummary } from "./SessionStore.js";
-import type { BgSessionInfo } from "../shared/types.js";
+import type {
+  BackgroundCompletionResult,
+  BgSessionInfo,
+} from "../shared/types.js";
 import type { Checkpoint, RevertPreview } from "./CheckpointManager.js";
 import type {
   PromptResponse,
@@ -6920,6 +6923,7 @@ export class AgentSessionManager {
   private resolveBackgroundResult(
     session: AgentSession,
     fallbackText: string,
+    options?: { preferDurableMetadata?: boolean },
   ): {
     resultText: string;
     structuredResult: import("./FleetWorkflows.js").FleetResultEnvelope;
@@ -6940,43 +6944,59 @@ export class AgentSessionManager {
     const durablePartialResult =
       this.bgPartialResults.get(session.id) ??
       session.fleetMetadata?.partialResult;
-    const partialResult =
-      session.fleetMetadata?.placement === "worktree"
+    const partialResult = options?.preferDurableMetadata
+      ? (durablePartialResult ??
+        session.getLastAssistantText() ??
+        marker?.summary)
+      : session.fleetMetadata?.placement === "worktree"
         ? (durablePartialResult ??
           session.getLastAssistantText() ??
           marker?.summary)
         : (session.getLastAssistantText() ??
           marker?.summary ??
           durablePartialResult);
-    const rawText = partialResult ?? fallbackText;
+    const rawText =
+      (options?.preferDurableMetadata
+        ? session.fleetMetadata?.finalResult
+        : undefined) ??
+      partialResult ??
+      fallbackText;
     const expected = session.fleetMetadata?.delegation
       ?.expectedResult as SpawnBackgroundRequest["expectedResult"];
     const structuredResult = parseFleetResultEnvelope(expected, rawText);
-    let resultState: BackgroundResultState = "completed";
-    if (this.bgCancelled.has(session.id)) {
-      resultState = "cancelled";
-    } else if (
-      session.fleetMetadata?.terminalReason?.startsWith("budget_exhausted:")
+    let resultState: BackgroundResultState =
+      (options?.preferDurableMetadata
+        ? session.fleetMetadata?.resultState
+        : undefined) ?? "completed";
+    if (
+      !options?.preferDurableMetadata ||
+      !session.fleetMetadata?.resultState
     ) {
-      resultState = "budget_exhausted";
-    } else if (session.fleetMetadata?.lifecycle === "interrupted") {
-      resultState = "interrupted";
-    } else if (
-      expected &&
-      expected !== "text" &&
-      structuredResult.type === expected
-    ) {
-      // A valid expected envelope is authoritative even if a late provider error
-      // changed the transport status after the response was captured.
-      resultState = "completed";
-    } else if (session.status === "error") {
-      resultState = "failed";
-    } else if (
-      expected &&
-      expected !== "text" &&
-      structuredResult.type !== expected
-    ) {
-      resultState = "incomplete_expected_result";
+      if (this.bgCancelled.has(session.id)) {
+        resultState = "cancelled";
+      } else if (
+        session.fleetMetadata?.terminalReason?.startsWith("budget_exhausted:")
+      ) {
+        resultState = "budget_exhausted";
+      } else if (session.fleetMetadata?.lifecycle === "interrupted") {
+        resultState = "interrupted";
+      } else if (
+        expected &&
+        expected !== "text" &&
+        structuredResult.type === expected
+      ) {
+        // A valid expected envelope is authoritative even if a late provider error
+        // changed the transport status after the response was captured.
+        resultState = "completed";
+      } else if (session.status === "error") {
+        resultState = "failed";
+      } else if (
+        expected &&
+        expected !== "text" &&
+        structuredResult.type !== expected
+      ) {
+        resultState = "incomplete_expected_result";
+      }
     }
 
     if (resultState === "completed") {
@@ -7553,6 +7573,58 @@ export class AgentSessionManager {
         minSentenceLength: 20,
       },
     );
+  }
+
+  /**
+   * Return terminal direct-child results that can be projected back into a
+   * restored parent transcript. These are read from durable child metadata,
+   * rather than the age-bounded fleet shelf projection.
+   */
+  getBackgroundCompletionsForParent(
+    parentSessionId: string,
+  ): BackgroundCompletionResult[] {
+    return Array.from(this.sessions.values())
+      .filter((session) => {
+        if (!session.background) return false;
+        if (this.getBackgroundParentSessionId(session.id) !== parentSessionId) {
+          return false;
+        }
+        return this.getProjectedBgStatus(session).done;
+      })
+      .map((session): BackgroundCompletionResult => {
+        const resultState = this.getBackgroundResultState(session, true);
+        const status =
+          resultState === "cancelled"
+            ? "cancelled"
+            : resultState === "completed"
+              ? "completed"
+              : "error";
+        const displayResult = this.getBackgroundResult(session.id);
+        const terminalResult = this.resolveBackgroundResult(
+          session,
+          displayResult.resultText ?? displayResult.summary ?? "",
+          { preferDurableMetadata: true },
+        );
+        return {
+          sessionId: session.id,
+          task: session.fleetMetadata?.task ?? session.title,
+          status,
+          resultText: terminalResult.resultText,
+          summary:
+            displayResult.summary ??
+            this.getBackgroundResultSummary(session.id),
+          completedAt:
+            this.bgCompletedAt.get(session.id) ??
+            session.fleetMetadata?.completedAt ??
+            session.lastActiveAt ??
+            session.createdAt,
+        };
+      })
+      .sort(
+        (a, b) =>
+          a.completedAt - b.completedAt ||
+          a.sessionId.localeCompare(b.sessionId),
+      );
   }
 
   getBackgroundParentSessionId(sessionId: string): string | undefined {

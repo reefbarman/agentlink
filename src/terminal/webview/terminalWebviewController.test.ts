@@ -145,6 +145,23 @@ function harness() {
   };
 }
 
+function mountView(
+  controller: TerminalWebviewController,
+  { focused }: { focused: boolean },
+): { setFocused(focused: boolean): void } {
+  const listeners = new Map<string, () => void>();
+  controller.mount({
+    document: { hasFocus: () => focused },
+    addEventListener: (type: string, listener: (...args: never[]) => void) =>
+      void listeners.set(type, listener as () => void),
+    removeEventListener: (type: string) => void listeners.delete(type),
+  });
+  return {
+    setFocused: (nowFocused) =>
+      listeners.get(nowFocused ? "focus" : "blur")?.(),
+  };
+}
+
 beforeEach(() => vi.restoreAllMocks());
 
 describe("TerminalWebviewController", () => {
@@ -245,6 +262,7 @@ describe("TerminalWebviewController", () => {
 
   it("opens agent terminals quietly and tracks running and unread activity", async () => {
     const test = harness();
+    mountView(test.controller, { focused: true });
     await test.controller.receive(
       bootstrap([tab("terminal-1")], [replay("terminal-1", "instance-1")]),
     );
@@ -308,6 +326,57 @@ describe("TerminalWebviewController", () => {
       activeTabId: "agent-1",
       focusRequest: initialFocusRequest + 1,
       tabs: [{ id: "terminal-1" }, { id: "agent-1" }],
+    });
+  });
+
+  it("never requests focus while the terminal view is unfocused", async () => {
+    const test = harness();
+    const view = mountView(test.controller, { focused: false });
+
+    await test.controller.receive(
+      bootstrap([tab("terminal-1")], [replay("terminal-1", "instance-1")]),
+    );
+    expect(test.controller.getSnapshot()).toMatchObject({
+      activeTabId: "terminal-1",
+      focusRequest: 0,
+    });
+
+    await test.controller.receive({
+      type: "host-terminal/opened",
+      terminalInstanceId: "instance-2",
+      terminal: tab("terminal-2"),
+    });
+    expect(test.controller.getSnapshot()).toMatchObject({
+      activeTabId: "terminal-2",
+      focusRequest: 0,
+    });
+
+    view.setFocused(true);
+    await test.controller.receive({
+      type: "host-terminal/opened",
+      terminalInstanceId: "instance-3",
+      terminal: tab("terminal-3"),
+    });
+    expect(test.controller.getSnapshot()).toMatchObject({
+      activeTabId: "terminal-3",
+      focusRequest: 1,
+    });
+  });
+
+  it("does not take focus when an agent terminal opens into an empty unfocused view", async () => {
+    const test = harness();
+    mountView(test.controller, { focused: false });
+    await test.controller.receive(bootstrap([], []));
+
+    await test.controller.receive({
+      type: "host-terminal/opened",
+      terminalInstanceId: "agent-instance-1",
+      activate: false,
+      terminal: { ...tab("agent-1"), channelKind: "agent-native" },
+    });
+    expect(test.controller.getSnapshot()).toMatchObject({
+      activeTabId: "agent-1",
+      focusRequest: 0,
     });
   });
 

@@ -42,6 +42,7 @@ import {
 const DEFAULT_MAX_RENDER_REPLAY_BYTES = 1024 * 1024;
 const DEFAULT_RENDER_HIGH_WATER_BYTES = 256 * 1024;
 const DEFAULT_RENDER_LOW_WATER_BYTES = 128 * 1024;
+const MAX_SPLITTABLE_REPLAY_UNIT_BYTES = 16 * 1024;
 const MAX_COPY_TEXT_BYTES = 256 * 1024;
 const PHASE_1_ACTIONS = new Set<HostTerminalSurfaceAction>([
   "rerun-command",
@@ -108,6 +109,7 @@ interface ReplayUnit {
 
 interface RenderReplayState {
   units: ReplayUnit[];
+  startIndex: number;
   byteLength: number;
   droppedBytes: number;
 }
@@ -148,6 +150,7 @@ export class HostTerminalRuntime {
   private presentation: HostTerminalPresentationState;
   private replay: RenderReplayState = {
     units: [],
+    startIndex: 0,
     byteLength: 0,
     droppedBytes: 0,
   };
@@ -376,6 +379,23 @@ export class HostTerminalRuntime {
     return { accepted: true, shouldResume };
   }
 
+  discardUndeliveredBatch(
+    terminalInstanceId: string,
+    rendererEpoch: string,
+    sequence: number,
+  ): boolean {
+    if (
+      terminalInstanceId !== this.terminalInstanceId ||
+      rendererEpoch !== this.rendererEpoch ||
+      !Number.isSafeInteger(sequence) ||
+      sequence <= this.lastDeliveredSequence ||
+      sequence >= this.nextSequence
+    ) {
+      return false;
+    }
+    return this.batchWriteBytes.delete(sequence);
+  }
+
   acknowledge(
     terminalInstanceId: string,
     rendererEpoch: string,
@@ -447,7 +467,10 @@ export class HostTerminalRuntime {
       terminalId: this.terminalId,
       terminalInstanceId: this.terminalInstanceId,
       sequence: this.nextSequence - 1,
-      data: this.replay.units.map((unit) => unit.data).join(""),
+      data: this.replay.units
+        .slice(this.replay.startIndex)
+        .map((unit) => unit.data)
+        .join(""),
       byteLength: this.replay.byteLength,
       droppedBytes: this.replay.droppedBytes,
       replayTruncated: this.replay.droppedBytes > 0,
@@ -618,55 +641,49 @@ export class HostTerminalRuntime {
       state: this.blocks,
     });
 
-    let pendingWrite = "";
-    let pendingReplayText = "";
-    const flushReplayText = () => {
-      if (!pendingReplayText) return;
-      this.appendReplayUnit(pendingReplayText, true);
-      pendingReplayText = "";
-    };
-    for (const character of data) {
-      pendingWrite += character;
-      const wasAtGround = this.alternateScreenTracker.atGround;
-      const tracked = this.alternateScreenTracker.push(character);
-      const isAtGround = this.alternateScreenTracker.atGround;
-      if (wasAtGround && isAtGround) {
-        pendingReplayText += character;
+    const tracked = this.alternateScreenTracker.scan(data);
+    for (const segment of tracked.replaySegments) {
+      if (segment.splittable) {
+        this.appendReplayUnit(segment.data, true);
       } else {
-        flushReplayText();
-        this.appendReplayControlCharacter(character, isAtGround);
-      }
-      if (tracked.transitions.length === 0) continue;
-      operations.push({ type: "write", data: pendingWrite });
-      pendingWrite = "";
-      for (const transition of tracked.transitions) {
-        this.presentation = reduceHostTerminalPresentation(this.presentation, {
-          type: "alternate-screen",
-          transition,
-        });
-        operations.push({ type: "alternate-screen", transition });
+        this.appendReplayControlData(segment.data, segment.endsAtGround);
       }
     }
-    flushReplayText();
-    if (pendingWrite) operations.push({ type: "write", data: pendingWrite });
+
+    let writeStart = 0;
+    for (const boundary of tracked.transitionBoundaries) {
+      operations.push({
+        type: "write",
+        data: data.slice(writeStart, boundary.offset),
+      });
+      writeStart = boundary.offset;
+      this.presentation = reduceHostTerminalPresentation(this.presentation, {
+        type: "alternate-screen",
+        transition: boundary.transition,
+      });
+      operations.push({
+        type: "alternate-screen",
+        transition: boundary.transition,
+      });
+    }
+    if (writeStart < data.length) {
+      operations.push({ type: "write", data: data.slice(writeStart) });
+    }
     return Buffer.byteLength(data, "utf8");
   }
 
-  private appendReplayControlCharacter(
-    character: string,
-    isAtGround: boolean,
-  ): void {
-    const characterBytes = Buffer.byteLength(character, "utf8");
-    this.replayControlPendingBytes += characterBytes;
+  private appendReplayControlData(data: string, endsAtGround: boolean): void {
+    const dataBytes = Buffer.byteLength(data, "utf8");
+    this.replayControlPendingBytes += dataBytes;
     if (!this.replayControlOverflow) {
       if (this.replayControlPendingBytes <= this.maxRenderReplayBytes) {
-        this.replayControlPending += character;
+        this.replayControlPending += data;
       } else {
         this.replayControlPending = "";
         this.replayControlOverflow = true;
       }
     }
-    if (isAtGround) {
+    if (endsAtGround) {
       if (this.replayControlOverflow) {
         this.replay.droppedBytes += this.replayControlPendingBytes;
       } else {
@@ -678,8 +695,44 @@ export class HostTerminalRuntime {
 
   private appendReplayUnit(data: string, splittable: boolean): void {
     const byteLength = Buffer.byteLength(data, "utf8");
-    const last = this.replay.units.at(-1);
-    if (splittable && last?.splittable) {
+    if (splittable && byteLength > MAX_SPLITTABLE_REPLAY_UNIT_BYTES) {
+      const buffer = Buffer.from(data, "utf8");
+      let offset = 0;
+      while (offset < buffer.byteLength) {
+        let end = Math.min(
+          offset + MAX_SPLITTABLE_REPLAY_UNIT_BYTES,
+          buffer.byteLength,
+        );
+        while (
+          end < buffer.byteLength &&
+          end > offset &&
+          (buffer[end] & 0xc0) === 0x80
+        ) {
+          end -= 1;
+        }
+        const chunk = buffer.subarray(offset, end);
+        this.appendReplayUnitChunk(chunk.toString("utf8"), chunk.byteLength);
+        offset = end;
+      }
+      return;
+    }
+    this.appendReplayUnitChunk(data, byteLength, splittable);
+  }
+
+  private appendReplayUnitChunk(
+    data: string,
+    byteLength: number,
+    splittable = true,
+  ): void {
+    const last =
+      this.replay.startIndex < this.replay.units.length
+        ? this.replay.units.at(-1)
+        : undefined;
+    if (
+      splittable &&
+      last?.splittable &&
+      last.byteLength + byteLength <= MAX_SPLITTABLE_REPLAY_UNIT_BYTES
+    ) {
       last.data += data;
       last.byteLength += byteLength;
     } else {
@@ -688,11 +741,11 @@ export class HostTerminalRuntime {
     this.replay.byteLength += byteLength;
 
     while (this.replay.byteLength > this.maxRenderReplayBytes) {
-      const first = this.replay.units[0];
+      const first = this.replay.units[this.replay.startIndex];
       if (!first) break;
       const excess = this.replay.byteLength - this.maxRenderReplayBytes;
       if (!first.splittable || first.byteLength <= excess) {
-        this.replay.units.shift();
+        this.replay.startIndex += 1;
         this.replay.byteLength -= first.byteLength;
         this.replay.droppedBytes += first.byteLength;
         continue;
@@ -705,6 +758,20 @@ export class HostTerminalRuntime {
       this.replay.byteLength -= dropped;
       this.replay.droppedBytes += dropped;
     }
+    this.compactReplayUnits();
+  }
+
+  private compactReplayUnits(): void {
+    if (
+      this.replay.startIndex === 0 ||
+      (this.replay.startIndex !== this.replay.units.length &&
+        (this.replay.startIndex < 4_096 ||
+          this.replay.startIndex * 2 < this.replay.units.length))
+    ) {
+      return;
+    }
+    this.replay.units = this.replay.units.slice(this.replay.startIndex);
+    this.replay.startIndex = 0;
   }
 
   private blockIdForBoundary(
@@ -785,7 +852,7 @@ export class HostTerminalRuntime {
       suppressedOutputCharacters,
       outputPolicyDecisions: decisions,
     };
-    if (this.rendererEpoch !== undefined) {
+    if (this.rendererEpoch !== undefined && !this.backpressured) {
       this.batchWriteBytes.set(sequence, writtenBytes);
     }
     return { batch, continueOutput: !this.backpressured };

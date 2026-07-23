@@ -15,6 +15,7 @@ import type { ComposeChildStatus, ComposeTrace } from "./composeTypes.js";
 import type { DetectedQuestion } from "./questionDetection.js";
 import { randomId } from "./randomId.js";
 import type {
+  BackgroundCompletionResult,
   McpApprovalPromotionMeta,
   RequestContextBreakdown,
   RevertRecoveryNotice,
@@ -313,8 +314,13 @@ function inferBgResultStatus(
   return "completed";
 }
 
-function isContinuedInBackgroundResult(resultText: string): boolean {
-  return parseJsonObject(resultText)?.status === "continued-in-background";
+function isNonTerminalBackgroundResult(resultText: string): boolean {
+  const parsed = parseJsonObject(resultText);
+  return (
+    parsed?.done === false ||
+    parsed?.status === "continued-in-background" ||
+    parsed?.status === "wait_interrupted"
+  );
 }
 
 function getBgSessionIdFromToolInput(
@@ -609,6 +615,8 @@ export type AppAction =
       todos: TodoItem[];
       lastInputTokens?: number;
       lastOutputTokens?: number;
+      /** Durable child results not already represented in persisted messages. */
+      backgroundResults?: BackgroundCompletionResult[];
       /**
        * Checkpoints are keyed by user-turn count at snapshot time.
        * `turnIndex=1` maps to the first user message row, `2` to the second, etc.
@@ -1063,7 +1071,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
                 toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
             });
 
-            if (sessionId && !isContinuedInBackgroundResult(toolResult)) {
+            if (sessionId && !isNonTerminalBackgroundResult(toolResult)) {
               const status = inferBgResultStatus(toolResult);
               let task = "Background Agent";
               for (let i = blocks.length - 1; i >= 0; i--) {
@@ -1867,7 +1875,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       // the output is not only available inside the raw tool-call details.
       if (
         action.toolName === "get_background_result" &&
-        !isContinuedInBackgroundResult(action.result)
+        !isNonTerminalBackgroundResult(action.result)
       ) {
         const toolBlock = target.blocks.find(
           (b) => b.type === "tool_call" && b.id === action.toolCallId,
@@ -2699,9 +2707,52 @@ export function reducer(state: AppState, action: AppAction): AppState {
         action.checkpoints,
         userTurnOffset,
       );
+      let restoredMessages = applied.messages;
+      for (const result of action.backgroundResults ?? []) {
+        if (
+          restoredMessages.some((message) =>
+            message.blocks.some(
+              (block) =>
+                block.type === "bg_agent_result" &&
+                block.sessionId === result.sessionId,
+            ),
+          )
+        ) {
+          continue;
+        }
+        const resultBlock: ContentBlock = {
+          type: "bg_agent_result",
+          sessionId: result.sessionId,
+          task: result.task,
+          status: result.status,
+          resultText: result.resultText,
+          summary: result.summary,
+        };
+        const lastMessage = restoredMessages.at(-1);
+        if (lastMessage?.role === "assistant") {
+          restoredMessages = [
+            ...restoredMessages.slice(0, -1),
+            {
+              ...lastMessage,
+              blocks: [...lastMessage.blocks, resultBlock],
+            },
+          ];
+        } else {
+          restoredMessages = [
+            ...restoredMessages,
+            {
+              id: `bg-result-restored-${result.sessionId}`,
+              role: "assistant",
+              content: "",
+              timestamp: result.completedAt,
+              blocks: [resultBlock],
+            },
+          ];
+        }
+      }
       return {
         ...state,
-        messages: applied.messages,
+        messages: restoredMessages,
         streaming: false,
         restoringSession: false,
         loadedUserTurnOffset: userTurnOffset,

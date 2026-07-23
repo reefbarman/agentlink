@@ -226,11 +226,18 @@ export class TerminalWebviewController {
   private resyncPending = false;
   private eventQueue: Promise<void> = Promise.resolve();
   private messageHost: MessageHost | undefined;
+  private viewFocused = false;
   private readonly messageListener = (event: MessageEvent<unknown>) => {
     void this.receive(event.data);
   };
-  private readonly focusListener = () => this.postFocusChanged(true);
-  private readonly blurListener = () => this.postFocusChanged(false);
+  private readonly focusListener = () => {
+    this.viewFocused = true;
+    this.postFocusChanged(true);
+  };
+  private readonly blurListener = () => {
+    this.viewFocused = false;
+    this.postFocusChanged(false);
+  };
 
   constructor(options: TerminalWebviewControllerOptions) {
     this.vscodeApi = options.vscodeApi;
@@ -259,7 +266,8 @@ export class TerminalWebviewController {
       type: "terminal-view/ready",
       protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
     });
-    this.postFocusChanged(messageHost.document?.hasFocus() ?? false);
+    this.viewFocused = messageHost.document?.hasFocus() ?? false;
+    this.postFocusChanged(this.viewFocused);
     return () => this.unmount();
   }
 
@@ -427,6 +435,7 @@ export class TerminalWebviewController {
     this.messageHost?.removeEventListener("focus", this.focusListener);
     this.messageHost?.removeEventListener("blur", this.blurListener);
     this.messageHost = undefined;
+    this.viewFocused = false;
   }
 
   private postFocusChanged(focused: boolean): void {
@@ -672,8 +681,11 @@ export class TerminalWebviewController {
       phase: "ready",
       tabs,
       activeTabId: message.state.activeTabId,
+      // Only take keyboard focus when the terminal view already owns it. A
+      // bootstrap can be triggered by an agent revealing the view with
+      // preserveFocus, and grabbing focus then steals typing from the editor.
       focusRequest:
-        initialBootstrap && message.state.activeTabId
+        initialBootstrap && message.state.activeTabId && this.viewFocused
           ? this.state.focusRequest + 1
           : this.state.focusRequest,
       fallback: message.fallback,
@@ -883,8 +895,12 @@ export class TerminalWebviewController {
       tabs,
       activeTabId:
         activate || !this.state.activeTabId ? tab.id : this.state.activeTabId,
+      // Activation switches the tab, but keyboard focus is only taken when the
+      // terminal view already owns it — agent-opened terminals (including the
+      // first one, when no tab is active yet) must not steal focus from
+      // wherever the user is typing.
       focusRequest:
-        activate || !this.state.activeTabId
+        (activate || !this.state.activeTabId) && this.viewFocused
           ? this.state.focusRequest + 1
           : this.state.focusRequest,
       fallback: undefined,

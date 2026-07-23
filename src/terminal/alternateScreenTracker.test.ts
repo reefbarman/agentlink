@@ -160,6 +160,64 @@ describe("alternate screen tracker", () => {
     expect(tracker.atGround).toBe(true);
   });
 
+  it("reports render boundaries and replay-safe segments in one scan", () => {
+    const tracker = createAlternateScreenTracker();
+    const input = "before\x1b[?1049hinside\x1b[?1049lafter";
+    const enterEnd = "before\x1b[?1049h".length;
+    const exitEnd = "before\x1b[?1049hinside\x1b[?1049l".length;
+
+    expect(tracker.scan(input)).toEqual({
+      data: input,
+      alternateScreen: false,
+      transitions: [
+        { type: "enter", modes: [1049] },
+        { type: "exit", modes: [1049] },
+      ],
+      transitionBoundaries: [
+        {
+          offset: enterEnd,
+          transition: { type: "enter", modes: [1049] },
+        },
+        {
+          offset: exitEnd,
+          transition: { type: "exit", modes: [1049] },
+        },
+      ],
+      replaySegments: [
+        { data: "before", splittable: true, endsAtGround: true },
+        {
+          data: "\x1b[?1049h",
+          splittable: false,
+          endsAtGround: true,
+        },
+        { data: "inside", splittable: true, endsAtGround: true },
+        {
+          data: "\x1b[?1049l",
+          splittable: false,
+          endsAtGround: true,
+        },
+        { data: "after", splittable: true, endsAtGround: true },
+      ],
+    });
+  });
+
+  it("keeps replay control segments whole across input chunks", () => {
+    const tracker = createAlternateScreenTracker();
+
+    expect(tracker.scan("text\x1b[")).toMatchObject({
+      replaySegments: [
+        { data: "text", splittable: true, endsAtGround: true },
+        { data: "\x1b[", splittable: false, endsAtGround: false },
+      ],
+    });
+    expect(tracker.scan("?1049hafter")).toMatchObject({
+      replaySegments: [
+        { data: "?1049h", splittable: false, endsAtGround: true },
+        { data: "after", splittable: true, endsAtGround: true },
+      ],
+    });
+  });
+
   it("reset clears parser and alternate-screen state", () => {
     const tracker = createAlternateScreenTracker();
     tracker.push("\x1b[?1049h\x1b[");

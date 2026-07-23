@@ -357,6 +357,57 @@ describe("HostTerminalRuntime", () => {
     });
   });
 
+  it("evicts sustained ANSI replay through a bounded head cursor", () => {
+    const runtime = raw({
+      maxRenderReplayBytes: 128,
+      blockStateOptions: { maxBlockOutputBytes: 128 },
+    });
+
+    for (let index = 0; index < 10_000; index += 1) {
+      runtime.processData("\x1b[31mx\x1b[0m");
+    }
+
+    const replay = (
+      runtime as unknown as {
+        replay: {
+          units: unknown[];
+          startIndex: number;
+        };
+      }
+    ).replay;
+    const snapshot = runtime.snapshot();
+    expect(replay.startIndex).toBeGreaterThan(0);
+    expect(replay.units.length - replay.startIndex).toBeLessThan(100);
+    expect(snapshot.byteLength).toBeLessThanOrEqual(128);
+    expect(snapshot.droppedBytes).toBeGreaterThan(0);
+    expect(snapshot.replayPendingControl).toBe(false);
+  });
+
+  it("splits long printable replay into bounded eviction units", () => {
+    const runtime = raw({ maxRenderReplayBytes: 1024 * 1024 });
+    runtime.processData("x".repeat(2 * 1024 * 1024));
+
+    const replay = (
+      runtime as unknown as {
+        replay: {
+          units: Array<{ byteLength: number; splittable: boolean }>;
+          startIndex: number;
+        };
+      }
+    ).replay;
+    expect(
+      replay.units
+        .slice(replay.startIndex)
+        .filter((unit) => unit.splittable)
+        .every((unit) => unit.byteLength <= 16 * 1024),
+    ).toBe(true);
+    expect(runtime.snapshot()).toMatchObject({
+      data: "x".repeat(1024 * 1024),
+      byteLength: 1024 * 1024,
+      droppedBytes: 1024 * 1024,
+    });
+  });
+
   it("requires explicit detach before a different renderer epoch attaches", () => {
     const runtime = raw();
     runtime.attachRenderer("renderer-1");
@@ -417,6 +468,15 @@ describe("HostTerminalRuntime", () => {
         second.batch!.sequence,
       ),
     ).toEqual({ accepted: true, shouldPause: true });
+    const retainedWhilePaused = runtime.processData("retained");
+    expect(retainedWhilePaused.continueOutput).toBe(false);
+    expect(
+      runtime.markBatchDelivered(
+        terminalInstanceId,
+        "renderer-1",
+        retainedWhilePaused.batch!.sequence,
+      ),
+    ).toEqual({ accepted: false, shouldPause: false });
     expect(
       runtime.acknowledge(
         terminalInstanceId,
@@ -457,6 +517,39 @@ describe("HostTerminalRuntime", () => {
       shouldResume: false,
     });
     expect(runtime.processData("more output").continueOutput).toBe(true);
+  });
+
+  it("can discard queued batches after renderer pressure stops delivery", () => {
+    const runtime = raw({
+      renderHighWaterBytes: 4,
+      renderLowWaterBytes: 2,
+    });
+    runtime.attachRenderer("renderer-1");
+    const first = runtime.processData("1234");
+    const queued = runtime.processData("queued");
+
+    expect(
+      runtime.markBatchDelivered(
+        terminalInstanceId,
+        "renderer-1",
+        first.batch!.sequence,
+      ),
+    ).toEqual({ accepted: true, shouldPause: true });
+    expect(
+      runtime.discardUndeliveredBatch(
+        terminalInstanceId,
+        "renderer-1",
+        queued.batch!.sequence,
+      ),
+    ).toBe(true);
+    expect(
+      runtime.markBatchDelivered(
+        terminalInstanceId,
+        "renderer-1",
+        queued.batch!.sequence,
+      ),
+    ).toEqual({ accepted: false, shouldPause: false });
+    expect(runtime.snapshot().data).toBe("1234queued");
   });
 
   it("detaches and clears renderer debt after delivery failure", () => {

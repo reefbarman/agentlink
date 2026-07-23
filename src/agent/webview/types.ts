@@ -1,4 +1,5 @@
 import type {
+  BackgroundCompletionResult,
   McpApprovalPromotionMeta,
   RequestContextBreakdown,
   RevertRecoveryNotice,
@@ -432,6 +433,8 @@ export type ExtensionMessage =
       todos: TodoItem[];
       lastInputTokens: number;
       lastOutputTokens: number;
+      /** Durable child results not already represented in persisted messages. */
+      backgroundResults?: BackgroundCompletionResult[];
       /** True when this came from automatic startup restore rather than explicit user action. */
       restored?: boolean;
       /**
