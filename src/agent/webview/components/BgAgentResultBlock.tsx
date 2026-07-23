@@ -1,5 +1,4 @@
 import { StreamingText } from "./StreamingText";
-import { summarizeTextForPreview } from "../../../shared/textSummary";
 
 interface BgAgentResultBlockProps {
   sessionId: string;
@@ -41,14 +40,6 @@ export function BgAgentResultBlock({
 
   const trimmedResultText = resultText?.trim();
   const trimmedSummary = summary?.trim();
-  const visibleSummary = trimmedResultText
-    ? trimmedSummary ||
-      summarizeTextForPreview(trimmedResultText, {
-        maxLength: 220,
-        minSentenceLength: 20,
-      }) ||
-      null
-    : null;
   const visibleResult = trimmedResultText || trimmedSummary;
 
   return (
@@ -60,8 +51,6 @@ export function BgAgentResultBlock({
           {task} — {statusText}
         </span>
       </div>
-
-      {visibleSummary && <div class="bg-result-preview">{visibleSummary}</div>}
 
       <div class="bg-result-content">
         {visibleResult ? (

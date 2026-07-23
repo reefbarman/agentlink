@@ -1796,6 +1796,15 @@ export function activate(context: vscode.ExtensionContext): void {
     chatViewProvider.sendApprovalIdle();
   builtinApprovalPanel.onForwardApprovalCancelled = (id) =>
     chatViewProvider.cancelForwardedApproval(id);
+  // Enabling Approve for Me while a command approval card is open re-resolves
+  // the card; the command flow detects the policy drift and the retried
+  // command is reviewed automatically by the guardian under the new policy.
+  chatViewProvider.setCommandApprovalRequeueHandler((sessionId) =>
+    builtinApprovalPanel.requeueCommandApprovalsForPolicyChange(
+      sessionId,
+      "Approve for Me was enabled while this command was awaiting approval. Retry the command so it can be reviewed automatically under the new policy.",
+    ),
+  );
 
   const fleetAutomationLifecycle = createFleetAutomationLifecycle({
     store: new FleetAutomationStore(

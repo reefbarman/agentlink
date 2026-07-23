@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
 import type { ContentBlock } from "../types";
+import { ThinkingContent } from "./ThinkingContent";
 
 type ThinkingData = ContentBlock & { type: "thinking" };
 
@@ -11,24 +12,22 @@ export function ThinkingBlock({ block }: ThinkingBlockProps) {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div class={`thinking-block ${expanded ? "expanded" : "collapsed"}`}>
+    <div
+      class={`thinking-block thinking-block-complete ${expanded ? "expanded" : "collapsed"}`}
+    >
       <button
         class="thinking-header"
         onClick={() => setExpanded(!expanded)}
         type="button"
+        aria-expanded={expanded}
       >
         <i class={`codicon codicon-chevron-${expanded ? "down" : "right"}`} />
         <i class="codicon codicon-lightbulb thinking-icon" />
-        <span class="thinking-label">
-          {block.complete ? "Thinking" : "Thinking..."}
-        </span>
-        {!block.complete && (
-          <i class="codicon codicon-loading thinking-spinner" />
-        )}
+        <span class="thinking-label">Thinking</span>
       </button>
       {expanded && (
         <div class="thinking-content">
-          <pre>{block.text}</pre>
+          <ThinkingContent text={block.text} />
         </div>
       )}
     </div>

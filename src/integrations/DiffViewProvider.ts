@@ -518,6 +518,10 @@ export class DiffViewProvider {
               id: this.requestId,
               title: `${operation} \`${this.relPath}\`?`,
               targetPath: this.absolutePath,
+              fileWrite: {
+                operation: this.editType === "create" ? "create" : "modify",
+                outsideWorkspace: this.outsideWorkspace,
+              },
               choices: [],
             },
             sessionId,

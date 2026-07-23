@@ -32,6 +32,13 @@ export interface InlineApprovalRequest {
   backgroundTask?: string;
   /** Optional exact target path for project/cross-project attribution. */
   targetPath?: string;
+  /**
+   * Set only for real file-write review cards (diff review). Marks the card
+   * as auto-acceptable if the session is later granted write authority that
+   * covers the target while the card is still pending. Other `kind: "write"`
+   * cards (e.g. image-generation billing) must not set this.
+   */
+  fileWrite?: { operation: "create" | "modify"; outsideWorkspace: boolean };
 }
 
 /**

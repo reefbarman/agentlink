@@ -269,23 +269,48 @@ describe("xtermRendererFactory", () => {
     vi.unstubAllGlobals();
   });
 
-  it("suppresses color queries only while replay is active", async () => {
+  it("suppresses terminal replies only while replay is active", async () => {
     const terminal = new Terminal();
-    const colorHandler = vi.fn(() => true);
-    terminal.parser.registerOscHandler(11, colorHandler);
-    const query = "\x1b]11;?\x1b\\";
+    const data = vi.fn();
+    terminal.onData(data);
+    const queries = [
+      "\x1b]11;?\x1b\\",
+      "\x1b[6n",
+      "\x1b[?6n",
+      "\x1b[c",
+      "\x1b[>c",
+      "\x1b[4$p",
+      "\x1b[?25$p",
+      "\x1bP$qm\x1b\\",
+    ].join("");
 
     const suppression = registerReplayResponseSuppression(terminal);
-    await writeTerminal(terminal, query);
-    await writeTerminal(terminal, "\x1b]11;#112233;?\x1b\\");
-    expect(colorHandler).not.toHaveBeenCalled();
+    await writeTerminal(terminal, queries);
+    expect(data).not.toHaveBeenCalled();
 
-    await writeTerminal(terminal, "\x1b]11;#112233\x1b\\");
-    expect(colorHandler).toHaveBeenCalledOnce();
+    await writeTerminal(terminal, "\x1b[2J");
+    expect(data).not.toHaveBeenCalled();
 
     suppression.dispose();
-    await writeTerminal(terminal, query);
-    expect(colorHandler).toHaveBeenCalledTimes(2);
+    await writeTerminal(terminal, queries);
+    expect(data).toHaveBeenCalled();
+    terminal.dispose();
+  });
+
+  it("suppresses window reports during replay", async () => {
+    const terminal = new Terminal({
+      windowOptions: { getWinSizeChars: true },
+    });
+    const data = vi.fn();
+    terminal.onData(data);
+    const suppression = registerReplayResponseSuppression(terminal);
+
+    await writeTerminal(terminal, "\x1b[18t");
+    expect(data).not.toHaveBeenCalled();
+
+    suppression.dispose();
+    await writeTerminal(terminal, "\x1b[18t");
+    expect(data.mock.calls[0]?.[0]).toBe("\x1b[8;24;80t");
     terminal.dispose();
   });
 

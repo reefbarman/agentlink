@@ -662,6 +662,97 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     document.documentElement.removeAttribute("style");
   });
 
+  for (const dataPlaneMode of ["on", "off"] as const) {
+    it(`reloads once when helper authentication expires in ${dataPlaneMode} mode`, async () => {
+      vi.useFakeTimers();
+      const legacyFetch = globalThis.fetch;
+      const reloadPage = vi.fn();
+      globalThis.fetch = vi.fn(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          if (String(input).includes("/api/instances")) {
+            return jsonResponse({ error: "unauthorized" }, 401);
+          }
+          return legacyFetch(input, init);
+        },
+      ) as unknown as typeof fetch;
+
+      try {
+        render(
+          h(BrowserGatewayApp, {
+            authToken: "test-token",
+            currentInstanceId: "instance-1",
+            workspaceName: "Workspace",
+            routeByInstance: true,
+            dataPlaneMode,
+            reloadPage,
+          }),
+        );
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(15_000);
+        });
+
+        expect(reloadPage).toHaveBeenCalledTimes(1);
+        expect(
+          vi
+            .mocked(globalThis.fetch)
+            .mock.calls.filter(([input]) =>
+              String(input).includes("/api/instances"),
+            ).length,
+        ).toBeGreaterThan(1);
+      } finally {
+        cleanup();
+        vi.useRealTimers();
+      }
+    });
+  }
+
+  it("opens workspace file mentions through the owning VS Code instance", async () => {
+    const snapshot = createSnapshot();
+    snapshot.session.foreground.projectedMessages = [
+      {
+        id: "user-file-mention",
+        role: "user",
+        content: "Review @README.md",
+        timestamp: 1,
+        blocks: [],
+      },
+    ];
+    const legacyFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+        if (url.includes("/api/open-file")) return jsonResponse({ ok: true });
+        return legacyFetch(input, init);
+      },
+    ) as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        dataPlaneMode: "off",
+      }),
+    );
+
+    await selectWorkspaceTab();
+    fireEvent.click(await screen.findByText("@README.md"));
+
+    await waitFor(() => {
+      const openCall = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.find(([input]) => String(input).includes("/api/open-file"));
+      expect(openCall).toBeTruthy();
+      expect(JSON.parse(String(openCall?.[1]?.body))).toEqual({
+        path: "README.md",
+        projectId: "project-1",
+      });
+    });
+  });
+
   it("uses one relay EventSource across collision-safe tab subscriptions when mode is on", async () => {
     const legacyFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(
@@ -768,6 +859,350 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(source.close).not.toHaveBeenCalled();
     expect(source.url).not.toContain("/events?instanceId=");
     expect(source.url).not.toBe("/api/ask-agent/events");
+  });
+
+  it("waits for the selected relay project before fetching workspace modes and slash commands", async () => {
+    const legacyFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/instances")) {
+          return jsonResponse({
+            currentInstanceId: "openapi-generation-oss",
+            instances: [
+              {
+                instanceId: "openapi-generation-oss",
+                workspaceName: "Workspace",
+                workspacePath: "/workspace",
+                url: "http://127.0.0.1:3333",
+                status: { kind: "idle", label: "Idle" },
+              },
+            ],
+          });
+        }
+        if (url.includes("/api/relay/subscription")) {
+          const request = JSON.parse(String(init?.body)) as {
+            browserConnectionId: string;
+            ownerId: string;
+            ownerGenerationId: string;
+          };
+          return jsonResponse(
+            {
+              ok: true,
+              protocolVersion: "1",
+              helperGenerationId: "helper-1",
+              browserConnectionId: request.browserConnectionId,
+              subscriptionId: `subscription-${request.ownerId}`,
+              ownerId: request.ownerId,
+              ownerGenerationId: request.ownerGenerationId,
+            },
+            202,
+          );
+        }
+        return legacyFetch(input, init);
+      },
+    ) as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "openapi-generation-oss",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        dataPlaneMode: "on",
+      }),
+    );
+
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+    const source = MockEventSource.instances[0]!;
+    await act(async () => {
+      source.emit("hello", {
+        protocolVersion: "1",
+        helperGenerationId: "helper-1",
+        browserConnectionId: "connection-1",
+        csrfNonce: "nonce-1",
+        emittedAt: 1,
+      });
+      source.emit("catalog", {
+        protocolVersion: "1",
+        helperGenerationId: "helper-1",
+        emittedAt: 1,
+        owners: [
+          {
+            ownerId: BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+            ownerGenerationId: "ask-generation",
+            ownerKind: "browser-gateway",
+            displayName: "Ask Agent",
+            scope: {
+              kind: "projectless",
+              scopeId: "ask-agent",
+              displayName: "Ask Agent",
+            },
+            status: "connected",
+            capabilities: [],
+            lastHeartbeatAt: 1,
+          },
+          {
+            ownerId: "openapi-owner",
+            ownerGenerationId: "openapi-generation",
+            ownerKind: "vscode",
+            displayName: "Workspace",
+            instanceId: "openapi-generation-oss",
+            scope: {
+              kind: "workspace",
+              workspaceId: "openapi-workspace",
+              displayName: "Workspace",
+            },
+            status: "connected",
+            capabilities: [],
+            lastHeartbeatAt: 1,
+          },
+        ],
+      });
+    });
+    await selectWorkspaceTab();
+    await waitFor(() => {
+      expect(
+        vi
+          .mocked(globalThis.fetch)
+          .mock.calls.some(([url]) =>
+            String(url).includes(
+              "/api/models?instanceId=openapi-generation-oss",
+            ),
+          ),
+      ).toBe(true);
+    });
+
+    const requestedUrls = () =>
+      vi.mocked(globalThis.fetch).mock.calls.map(([url]) => String(url));
+    expect(requestedUrls()).not.toContain(
+      "/api/modes?instanceId=openapi-generation-oss",
+    );
+    expect(requestedUrls()).not.toContain(
+      "/api/slash-commands?instanceId=openapi-generation-oss",
+    );
+
+    await act(async () => {
+      source.emit("checkpoint", {
+        protocolVersion: "1",
+        helperGenerationId: "helper-1",
+        subscriptionId: "subscription-openapi-owner",
+        ownerId: "openapi-owner",
+        ownerGenerationId: "openapi-generation",
+        record: {
+          kind: "checkpoint",
+          relaySequence: 1,
+          ownerSequence: 1,
+          checkpoint: {
+            protocolVersion: "1",
+            helperGenerationId: "helper-1",
+            ownerId: "openapi-owner",
+            ownerGenerationId: "openapi-generation",
+            checkpointId: "checkpoint-openapi",
+            checkpointSequence: 1,
+            emittedAt: 2,
+            foreground: {
+              sessionId: "session-openapi",
+              title: "OpenAPI Session",
+              mode: "code",
+              model: "gpt-5.6-sol",
+              status: "idle",
+              streaming: false,
+            },
+            catalog: {
+              projects: [
+                {
+                  projectId: "project-other",
+                  displayName: "Other",
+                  availability: "available",
+                },
+                {
+                  projectId: "project-openapi",
+                  displayName: "OpenAPI",
+                  availability: "available",
+                },
+              ],
+              sessions: [
+                {
+                  sessionId: "session-openapi",
+                  projectId: "project-openapi",
+                  title: "OpenAPI Session",
+                  mode: "code",
+                  model: "gpt-5.6-sol",
+                  messageCount: 0,
+                  createdAt: 1,
+                  updatedAt: 2,
+                },
+              ],
+              defaultProjectId: "project-openapi",
+              foregroundSessionId: "session-openapi",
+            },
+            transcript: {
+              messages: [],
+              earlierCursor: null,
+              hasEarlier: false,
+            },
+            ui: {
+              interaction: null,
+              queue: [],
+              todos: [],
+              operations: [],
+            },
+            background: [],
+            fleet: [],
+            diffs: [],
+            repository: null,
+            theme: {
+              revision: "theme-openapi",
+              colorScheme: "dark",
+              variables: [],
+            },
+            modelCatalogRevision: "models-openapi",
+            capabilities: [],
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(requestedUrls()).toContain(
+        "/api/modes?projectId=project-openapi&instanceId=openapi-generation-oss",
+      );
+      expect(requestedUrls()).toContain(
+        "/api/slash-commands?projectId=project-openapi&instanceId=openapi-generation-oss",
+      );
+    });
+    expect(requestedUrls()).not.toContain(
+      "/api/modes?instanceId=openapi-generation-oss",
+    );
+    expect(requestedUrls()).not.toContain(
+      "/api/slash-commands?instanceId=openapi-generation-oss",
+    );
+  });
+
+  it("fetches project-scoped workspace metadata after a legacy SSE snapshot", async () => {
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        dataPlaneMode: "off",
+      }),
+    );
+
+    await selectWorkspaceTab();
+    const source = MockEventSource.instances.at(-1)!;
+    const snapshot = createSnapshot();
+    snapshot.session.defaultProjectId = "project-legacy";
+    snapshot.session.foreground.project.projectId = "project-legacy";
+    snapshot.session.projects = [
+      {
+        projectId: "project-legacy",
+        displayName: "Legacy",
+        availability: "available",
+      },
+    ];
+    source.emit("update", snapshot);
+
+    await waitFor(() => {
+      const urls = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.map(([url]) => String(url));
+      expect(urls).toContain(
+        "/api/modes?projectId=project-legacy&instanceId=instance-1",
+      );
+      expect(urls).toContain(
+        "/api/slash-commands?projectId=project-legacy&instanceId=instance-1",
+      );
+    });
+  });
+
+  it("ignores stale workspace metadata responses after an in-tab project switch", async () => {
+    const legacyFetch = globalThis.fetch;
+    let resolveProjectOneCommands!: (response: Response) => void;
+    const projectOneCommands = new Promise<Response>((resolve) => {
+      resolveProjectOneCommands = resolve;
+    });
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/slash-commands?projectId=project-1")) {
+          return projectOneCommands;
+        }
+        if (url.includes("/api/slash-commands?projectId=project-2")) {
+          return jsonResponse({
+            commands: [
+              {
+                name: "project-two",
+                description: "Project two command",
+                source: "builtin",
+                builtin: true,
+              },
+            ],
+          });
+        }
+        return legacyFetch(input, init);
+      },
+    ) as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        dataPlaneMode: "off",
+      }),
+    );
+
+    await selectWorkspaceTab();
+    const source = MockEventSource.instances.at(-1)!;
+    const projectOneSnapshot = createSnapshot();
+    source.emit("update", projectOneSnapshot);
+    await waitFor(() => {
+      expect(
+        vi
+          .mocked(globalThis.fetch)
+          .mock.calls.some(([url]) =>
+            String(url).includes("/api/slash-commands?projectId=project-1"),
+          ),
+      ).toBe(true);
+    });
+
+    const projectTwoSnapshot = createSnapshot();
+    projectTwoSnapshot.session.defaultProjectId = "project-2";
+    projectTwoSnapshot.session.foreground.project.projectId = "project-2";
+    projectTwoSnapshot.session.projects = [
+      {
+        projectId: "project-2",
+        displayName: "Project Two",
+        availability: "available",
+      },
+    ];
+    source.emit("update", projectTwoSnapshot);
+    await waitFor(() => {
+      expect(screen.getByTestId("slash-command-names").textContent).toBe(
+        "project-two",
+      );
+    });
+
+    resolveProjectOneCommands(
+      jsonResponse({
+        commands: [
+          {
+            name: "stale-project-one",
+            description: "Stale project one command",
+            source: "builtin",
+            builtin: true,
+          },
+        ],
+      }),
+    );
+    await act(async () => {});
+    expect(screen.getByTestId("slash-command-names").textContent).toBe(
+      "project-two",
+    );
   });
 
   it("rolls a relay selection to a live workspace replacement without stale model errors or EventSource churn", async () => {

@@ -320,7 +320,8 @@ export class RelayConnectionManager {
     this.bufferedOwnerFrames.length = 0;
     source.onopen = () => {
       if (this.source !== source || this.closed) return;
-      this.options.onStatus?.("connected");
+      // Authentication and helper identity are established by the first valid
+      // hello frame, not by the transport opening.
     };
     source.onerror = () => {
       if (this.source !== source || this.closed) return;
@@ -379,6 +380,7 @@ export class RelayConnectionManager {
       csrfNonce: value.csrfNonce,
     };
     this.reconnectAttempt = 0;
+    this.options.onStatus?.("connected");
     if (this.selectedOwner) void this.subscribeCurrentOwner();
   }
 

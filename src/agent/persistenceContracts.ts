@@ -112,6 +112,8 @@ export interface PersistedFleetMetadata {
   partialResult?: string;
   /** Whether the provider/engine classified a failed run as retryable. */
   agentRetryable?: boolean;
+  /** Timestamp when the terminal result was surfaced in the parent transcript. */
+  resultAnnouncedAt?: number;
   goalId?: string;
   workflowId?: string;
   delegation?: {

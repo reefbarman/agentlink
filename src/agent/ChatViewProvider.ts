@@ -120,11 +120,13 @@ import type {
 } from "../approvals/webview/types.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import {
+  classifyGuardianPathRisk,
   createOneShotActionApproval,
   type ActionApprovalPolicySnapshot,
   type ActionApprovalReviewer,
   type ModeSwitchActionApprovalReviewInput,
 } from "../approvals/actionApprovalReview.js";
+import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";
 import { buildCommandReviewContext } from "../approvals/commandApprovalReview.js";
 import type { AgentToolCallTracker } from "./AgentToolCallTracker.js";
 import { ContextJumpTracker } from "../telemetry/ContextJumpTracker.js";
@@ -139,6 +141,7 @@ import {
   canonicalizePath,
   getRelativePath,
   isPathWithinRoot,
+  resolveAndValidatePath,
 } from "../util/paths.js";
 import {
   detectQuestion,
@@ -1089,6 +1092,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       respond: (msg: DecisionMessage) => boolean;
     }
   >();
+  /**
+   * Ids of pending inline approvals that are real file-write review cards
+   * (marked via `fileWrite` on the request), eligible for auto-accept when
+   * the session is granted covering write authority while they are open.
+   */
+  private pendingFileWriteApprovalIds = new Set<string>();
   /** In-flight /btw side questions, keyed by requestId, for cancellation. */
   private pendingBtwRequests = new Map<string, AbortController>();
   private pendingWorktreeSetups = new Map<
@@ -1126,6 +1135,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private streamDropLogTimer: ReturnType<typeof setTimeout> | null = null;
   private approvalManager: ApprovalManager | undefined;
   private actionApprovalReviewer: ActionApprovalReviewer | undefined;
+  private commandApprovalRequeueHandler:
+    | ((sessionId: string) => number)
+    | undefined;
   private approvalManagerListener: vscode.Disposable | undefined;
   private approvalStateTransitionDepth = 0;
   private approvalStatePublishPending = false;
@@ -1286,6 +1298,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this.pendingApprovals.clear();
     this.approvalSessionIndex.clear();
+    this.pendingFileWriteApprovalIds.clear();
 
     for (const [id, pending] of this.pendingForwardedApprovals) {
       // Send a synthetic rejection so the approval chain unblocks.
@@ -1414,6 +1427,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.actionApprovalReviewer = reviewer;
   }
 
+  /**
+   * Register the callback (wired to the built-in approval panel) that
+   * re-resolves a session's pending command approval cards when its command
+   * approval policy changes, so the retried commands run under the new policy.
+   */
+  setCommandApprovalRequeueHandler(
+    handler: (sessionId: string) => number,
+  ): void {
+    this.commandApprovalRequeueHandler = handler;
+  }
+
   private getSessionApprovalPolicyCoordinator():
     | SessionApprovalPolicyCoordinator
     | undefined {
@@ -1474,13 +1498,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): SessionApprovalPolicyTransitionResult | undefined {
     const coordinator = this.getSessionApprovalPolicyCoordinator();
     if (!coordinator) return undefined;
+    const configured = this.getConfiguredCommandApprovalPolicy();
+    const previousPolicy = this.sessionManager!.getCommandApprovalPolicy(
+      sessionId,
+      configured,
+    );
     return this.withApprovalStateTransition(() => {
       const result = coordinator.setCommandApprovalPolicy(
         sessionId,
         policy,
-        this.getConfiguredCommandApprovalPolicy(),
+        configured,
         targetPath,
       );
+      if (
+        result.ok &&
+        policy === "approve-for-me" &&
+        previousPolicy !== "approve-for-me"
+      ) {
+        const requeued = this.commandApprovalRequeueHandler?.(sessionId) ?? 0;
+        if (requeued > 0) {
+          this.log(
+            `[approval] re-resolving ${requeued} pending command approval(s) under Approve for Me`,
+          );
+        }
+        const acceptedWrites =
+          this.resolveWriteApprovalsCoveredByAuthority(sessionId);
+        if (acceptedWrites > 0) {
+          this.log(
+            `[approval] auto-accepted ${acceptedWrites} pending write approval(s) under Approve for Me`,
+          );
+        }
+      }
       this.sendInitialState();
       return result;
     });
@@ -1500,9 +1548,69 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.getConfiguredCommandApprovalPolicy(),
         targetPath,
       );
+      if (result.ok && selection !== "prompt") {
+        const acceptedWrites =
+          this.resolveWriteApprovalsCoveredByAuthority(sessionId);
+        if (acceptedWrites > 0) {
+          this.log(
+            `[approval] auto-accepted ${acceptedWrites} pending write approval(s) covered by ${selection} write approval`,
+          );
+        }
+      }
       this.sendInitialState();
       return result;
     });
+  }
+
+  /**
+   * Auto-accept pending file-write review cards whose target the session's
+   * write authority now covers (e.g. Approve for Me or a session/project/
+   * global write approval was granted while a card was open). Mirrors the
+   * auto-approval gate the write path applies before prompting: guardian
+   * path-risk eligibility plus agent-write (in-workspace) or file-write
+   * (outside-workspace) authorization. Cards not covered stay pending.
+   */
+  private resolveWriteApprovalsCoveredByAuthority(sessionId: string): number {
+    if (!this.approvalManager) return 0;
+    const ids = this.approvalSessionIndex.get(sessionId);
+    if (!ids || ids.size === 0) return 0;
+    let accepted = 0;
+    for (const id of ids) {
+      if (!this.pendingFileWriteApprovalIds.has(id)) continue;
+      const targetPath = this.activeApprovalRequests.get(id)?.targetPath;
+      if (!targetPath) continue;
+      let target: { absolutePath: string; inWorkspace: boolean };
+      try {
+        target = resolveAndValidatePath(targetPath);
+      } catch {
+        continue;
+      }
+      if (
+        isMemoryProtectedPath(target.absolutePath) ||
+        !classifyGuardianPathRisk({
+          status: "resolved",
+          canonicalPath: target.absolutePath,
+        }).guardianEligible
+      ) {
+        continue;
+      }
+      const covered = target.inWorkspace
+        ? this.approvalManager.isAgentWriteApproved(
+            sessionId,
+            target.absolutePath,
+          )
+        : this.approvalManager.isFileWriteApproved(
+            sessionId,
+            target.absolutePath,
+          );
+      if (!covered) continue;
+      const resolve = this.pendingApprovals.get(id);
+      if (!resolve) continue;
+      this.pendingApprovals.delete(id);
+      resolve({ decision: "accept" });
+      accepted += 1;
+    }
+    return accepted;
   }
 
   private reconcileSessionApprovalAfterModeSwitch(sessionId: string): void {
@@ -2763,6 +2871,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       id?: string;
       backgroundTask?: string;
       targetPath?: string;
+      fileWrite?: { operation: "create" | "modify"; outsideWorkspace: boolean };
     },
     sessionId?: string,
   ): Promise<
@@ -2790,6 +2899,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       sessionSet.add(id);
       this.approvalSessionIndex.set(sessionId, sessionSet);
     }
+    if (request.kind === "write" && request.fileWrite && sessionId) {
+      this.pendingFileWriteApprovalIds.add(id);
+    }
 
     return new Promise((resolve) => {
       this.pendingApprovals.set(id, (result) => {
@@ -2797,6 +2909,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (sessionId) {
           this.approvalSessionIndex.get(sessionId)?.delete(id);
         }
+        this.pendingFileWriteApprovalIds.delete(id);
         resolve(result);
       });
       this.showApprovalRequest(approvalRequest);
@@ -4364,6 +4477,52 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  public async submitBrowserOpenFile(
+    filePath: string,
+    line: number | undefined,
+    projectId: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const scope = this.getAvailableBrowserProjectScope(projectId);
+    if (!scope?.rootPath) {
+      return { ok: false, error: "project_unavailable" };
+    }
+
+    try {
+      const canonicalRoot = fs.realpathSync(scope.rootPath) as string;
+      const requestedPath = path.isAbsolute(filePath)
+        ? filePath
+        : path.resolve(scope.rootPath, filePath);
+      const canonicalPath = fs.realpathSync(requestedPath) as string;
+      if (!isPathWithinRoot(canonicalPath, canonicalRoot)) {
+        return { ok: false, error: "path_outside_project" };
+      }
+      await this.revealPathInEditor(canonicalPath, line);
+      return { ok: true };
+    } catch (err) {
+      this.log(`[error] Failed to open browser path: ${err}`);
+      return { ok: false, error: "path_unavailable" };
+    }
+  }
+
+  private async revealPathInEditor(
+    absolutePath: string,
+    line?: number,
+  ): Promise<void> {
+    const uri = vscode.Uri.file(absolutePath);
+    const stat = await fs.promises.stat(absolutePath);
+    if (stat.isDirectory()) {
+      await vscode.commands.executeCommand("revealInExplorer", uri);
+      return;
+    }
+
+    const options: vscode.TextDocumentShowOptions = withPrimaryEditorColumn();
+    if (line !== undefined && Number.isInteger(line) && line > 0) {
+      const pos = new vscode.Position(line - 1, 0);
+      options.selection = new vscode.Range(pos, pos);
+    }
+    await vscode.window.showTextDocument(uri, options);
+  }
+
   /**
    * Stop a running session and clear any pending UI prompts (questions,
    * approvals, elicitations) that belong to it, then notify the webview so it
@@ -4858,16 +5017,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     try {
       const pattern = query === "*" ? "**/*" : `**/*${query}*`;
-      const uris = await vscode.workspace.findFiles(
-        new vscode.RelativePattern(scope.rootPath, pattern),
-        "**/node_modules/**",
-        50,
-      );
+      const include = new vscode.RelativePattern(scope.rootPath, pattern);
+      // VS Code can opt workspace.findFiles into respecting .gitignore. Keep
+      // the normal query for fast/common results, then merge a documented
+      // `exclude: null` query so ignored project files remain mentionable.
+      const [normalUris, allUris] = await Promise.all([
+        vscode.workspace.findFiles(include, "**/node_modules/**", 50),
+        vscode.workspace.findFiles(include, null, 200),
+      ]);
 
-      const files = uris.map((uri) => ({
-        path: path.relative(scope.rootPath!, uri.fsPath),
-        kind: "file" as const,
-      }));
+      const filesByPath = new Map<string, { path: string; kind: "file" }>();
+      for (const uri of [...normalUris, ...allUris]) {
+        const relativePath = path.relative(scope.rootPath, uri.fsPath);
+        const segments = relativePath.split(path.sep);
+        if (
+          !relativePath ||
+          path.isAbsolute(relativePath) ||
+          relativePath === ".." ||
+          relativePath.startsWith(`..${path.sep}`) ||
+          segments.includes(".git") ||
+          segments.includes("node_modules")
+        ) {
+          continue;
+        }
+        const displayPath = relativePath.split(path.sep).join("/");
+        filesByPath.set(displayPath, {
+          path: displayPath,
+          kind: "file",
+        });
+      }
+      const files = [...filesByPath.values()];
 
       const lowerQuery = query.toLowerCase();
       files.sort((a, b) => {
@@ -6411,26 +6590,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const absPath = path.isAbsolute(filePath)
           ? filePath
           : path.join(workspaceRoot, filePath);
-        const uri = vscode.Uri.file(absPath);
-        fs.promises
-          .stat(absPath)
-          .then(async (stat) => {
-            if (stat.isDirectory()) {
-              await vscode.commands.executeCommand("revealInExplorer", uri);
-              return;
-            }
-
-            const options: vscode.TextDocumentShowOptions =
-              withPrimaryEditorColumn();
-            if (line) {
-              const pos = new vscode.Position(line - 1, 0);
-              options.selection = new vscode.Range(pos, pos);
-            }
-            await vscode.window.showTextDocument(uri, options);
-          })
-          .then(undefined, (err) => {
-            this.log(`[error] Failed to open path: ${err}`);
-          });
+        this.revealPathInEditor(absPath, line).then(undefined, (err) => {
+          this.log(`[error] Failed to open path: ${err}`);
+        });
         break;
       }
 
@@ -7946,6 +8108,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               this.sessionManager?.getBackgroundResultSummary(sessionId),
           }),
         });
+        if (
+          isBackground &&
+          shouldProjectBackgroundCompletion(
+            parentSessionId ?? null,
+            this.sessionManager?.getForegroundSession()?.id ?? null,
+          )
+        ) {
+          this.sessionManager?.markBackgroundResultsAnnounced?.([sessionId]);
+        }
         if (!isBackground) {
           this.drainBrowserQueuedMessage(sessionId);
         }
@@ -9411,6 +9582,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.sessionManager?.getBackgroundCompletionsForParent?.(session.id) ??
         []
       ).filter((result) => !persistedResultSessionIds.has(result.sessionId));
+      if (backgroundResults.length > 0) {
+        this.sessionManager?.markBackgroundResultsAnnounced?.(
+          backgroundResults.map((result) => result.sessionId),
+        );
+      }
       this.postMessage({
         type: "agentSessionLoaded",
         sessionId: session.id,

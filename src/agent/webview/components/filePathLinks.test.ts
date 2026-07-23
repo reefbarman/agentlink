@@ -46,6 +46,29 @@ describe("matchFilePaths", () => {
     ]);
   });
 
+  it("matches @-prefixed files in the project root", () => {
+    const text = "Check @README.md and @package.json before release";
+
+    expect(matchFilePaths(text)).toEqual([
+      {
+        fullMatch: "@README.md",
+        filePath: "README.md",
+        line: undefined,
+        index: 6,
+      },
+      {
+        fullMatch: "@package.json",
+        filePath: "package.json",
+        line: undefined,
+        index: 21,
+      },
+    ]);
+  });
+
+  it("does not treat usernames or version numbers as project-root files", () => {
+    expect(matchFilePaths("Ask @ted about v1.2")).toEqual([]);
+  });
+
   it("matches @-prefixed relative paths with line numbers", () => {
     const text = "Look at @src/agent/webview/components/InputArea.tsx:42 next";
 

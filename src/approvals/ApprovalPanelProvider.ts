@@ -424,6 +424,52 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     }
   }
 
+  /**
+   * Re-resolve pending command approvals for a session whose command approval
+   * policy just changed (e.g. Approve for Me was enabled while a card was
+   * open). Each affected request resolves as a rejection with an explanatory
+   * reason; the command flow detects the policy drift, returns
+   * `retry_required` to the agent, and the retried command is approved under
+   * the new policy — under Approve for Me that means the guardian reviews it
+   * automatically instead of leaving the stale card waiting on the user.
+   */
+  requeueCommandApprovalsForPolicyChange(
+    sessionId: string,
+    rejectionReason: string,
+  ): number {
+    const matches = (entry: QueueEntry) =>
+      entry.request.kind === "command" && entry.request.sessionId === sessionId;
+    const makeResponse = (): CommandApprovalResponse => ({
+      decision: "reject",
+      rejectionReason,
+    });
+    let resolved = 0;
+
+    const queued = this.queue.filter(matches);
+    if (queued.length > 0) {
+      this.queue = this.queue.filter((entry) => !matches(entry));
+      for (const entry of queued) {
+        this.onForwardApprovalCancelled?.(entry.request.id);
+        entry.resolve(makeResponse());
+        resolved += 1;
+      }
+      this.updatePendingCount();
+    }
+
+    if (this.currentEntry && matches(this.currentEntry)) {
+      const entry = this.currentEntry;
+      this.alertDisposable?.dispose();
+      this.alertDisposable = undefined;
+      this.currentEntry = undefined;
+      this.onForwardApprovalCancelled?.(entry.request.id);
+      entry.resolve(makeResponse());
+      resolved += 1;
+      this.processQueue();
+    }
+
+    return resolved;
+  }
+
   private makeRejectResponse(
     kind: InternalRequest["kind"],
   ):

@@ -7595,7 +7595,21 @@ export class AgentSessionManager {
         if (this.getBackgroundParentSessionId(session.id) !== parentSessionId) {
           return false;
         }
-        return this.getProjectedBgStatus(session).done;
+        if (!this.getProjectedBgStatus(session).done) return false;
+        const fleet = session.fleetMetadata;
+        // Already surfaced in the parent transcript (live or on a prior
+        // restore) — re-announcing on every reload would duplicate it.
+        if (fleet?.resultAnnouncedAt) return false;
+        // User-initiated cancellations were witnessed when they happened;
+        // redelivering them as fresh results on restore is noise.
+        if (
+          this.bgCancelled.has(session.id) ||
+          fleet?.lifecycle === "cancelled" ||
+          fleet?.terminalReason === "cancelled_by_user"
+        ) {
+          return false;
+        }
+        return true;
       })
       .map((session): BackgroundCompletionResult => {
         const resultState = this.getBackgroundResultState(session, true);
@@ -7631,6 +7645,19 @@ export class AgentSessionManager {
           a.completedAt - b.completedAt ||
           a.sessionId.localeCompare(b.sessionId),
       );
+  }
+
+  /**
+   * Durably record that terminal background results were surfaced in the
+   * parent transcript, so restores do not re-announce them.
+   */
+  markBackgroundResultsAnnounced(sessionIds: string[]): void {
+    for (const sessionId of sessionIds) {
+      const fleet = this.sessions.get(sessionId)?.fleetMetadata;
+      if (!fleet || fleet.resultAnnouncedAt !== undefined) continue;
+      fleet.resultAnnouncedAt = Date.now();
+      void this.saveSessionNow(sessionId);
+    }
   }
 
   getBackgroundParentSessionId(sessionId: string): string | undefined {

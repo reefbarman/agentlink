@@ -219,6 +219,7 @@ function makeChatViewProviderStub() {
     submitBrowserAttachFile: vi.fn(async () => ({
       files: ["/tmp/from-picker.txt"],
     })),
+    submitBrowserOpenFile: vi.fn(async () => ({ ok: true })),
     submitBrowserSteerQueuedMessage: vi.fn(async () => ({ ok: true })),
     submitBrowserInterjectQueuedMessage: vi.fn(() => ({ ok: true })),
     submitBrowserStop: vi.fn(() => ({ ok: true })),
@@ -2041,6 +2042,32 @@ describe("BrowserGatewayServer", () => {
     expect(chatViewProvider.submitBrowserAttachFile).toHaveBeenCalledWith(
       "project-a",
     );
+
+    const authorizedOpenFile = await fetch(`${baseUrl}/api/open-file`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ path: "src/index.ts", line: 12 }),
+    });
+    expect(authorizedOpenFile.status).toBe(200);
+    expect(await authorizedOpenFile.json()).toEqual({ ok: true });
+    expect(chatViewProvider.submitBrowserOpenFile).toHaveBeenCalledWith(
+      "src/index.ts",
+      12,
+      "project-a",
+    );
+
+    const invalidOpenFile = await fetch(`${baseUrl}/api/open-file`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ path: "src/index.ts", line: 0 }),
+    });
+    expect(invalidOpenFile.status).toBe(400);
 
     const authorizedNewSession = await fetch(`${baseUrl}/api/session/new`, {
       method: "POST",

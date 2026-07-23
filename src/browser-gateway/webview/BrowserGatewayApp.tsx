@@ -685,6 +685,7 @@ interface BrowserGatewayAppProps {
   routeByInstance?: boolean;
   initialTheme?: BrowserGatewayThemeSnapshot;
   dataPlaneMode?: BrowserGatewayDataPlaneMode;
+  reloadPage?: () => void;
 }
 
 function readCachedTheme(): BrowserGatewayThemeSnapshot | null {
@@ -930,6 +931,7 @@ export function BrowserGatewayApp({
   routeByInstance = false,
   initialTheme,
   dataPlaneMode: initialDataPlaneMode,
+  reloadPage = () => window.location.reload(),
 }: BrowserGatewayAppProps) {
   const [snapshot, setSnapshot] = useState<GatewaySnapshot | null>(null);
   const [dataPlaneMode, setDataPlaneMode] =
@@ -948,6 +950,7 @@ export function BrowserGatewayApp({
     BrowserGatewayInstanceOption[]
   >([]);
   const instanceOptionsRef = useRef<BrowserGatewayInstanceOption[]>([]);
+  const authRecoveryPendingRef = useRef(false);
   const initialSelectedTabId = BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
   const [selectedTabId, setSelectedTabId] =
     useState<string>(initialSelectedTabId);
@@ -969,6 +972,12 @@ export function BrowserGatewayApp({
 
   const isAskAgentSelected = selectedTabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
   const selectedInstanceId = isAskAgentSelected ? "" : selectedTabId;
+  const selectedProjectId =
+    snapshot?.session.foreground?.project.projectId ??
+    snapshot?.session.defaultProjectId ??
+    snapshot?.session.projects[0]?.projectId;
+  const selectedProjectIdRef = useRef<string | undefined>(selectedProjectId);
+  selectedProjectIdRef.current = selectedProjectId;
 
   function logAskAgentBrowserEvent(
     event: string,
@@ -1318,14 +1327,11 @@ export function BrowserGatewayApp({
       ) {
         return;
       }
-      void fetchModes(selectedInstanceId, tabId, generation);
+      if (isAskAgentSelected) {
+        void fetchModes(selectedInstanceId, tabId, generation);
+        void fetchSlashCommands(selectedInstanceId, true, tabId, generation);
+      }
       void fetchModels(
-        selectedInstanceId,
-        isAskAgentSelected,
-        tabId,
-        generation,
-      );
-      void fetchSlashCommands(
         selectedInstanceId,
         isAskAgentSelected,
         tabId,
@@ -1339,6 +1345,22 @@ export function BrowserGatewayApp({
     const timer = window.setInterval(() => void fetchInstances(), 5_000);
     return () => window.clearInterval(timer);
   }, [relayClientEnabled, selectedTabId]);
+
+  useEffect(() => {
+    if (isAskAgentSelected || !selectedProjectId) {
+      return;
+    }
+    const tabId = selectedTabId;
+    const generation = selectedTabGenerationRef.current;
+    void fetchModes(selectedInstanceId, tabId, generation, selectedProjectId);
+    void fetchSlashCommands(
+      selectedInstanceId,
+      false,
+      tabId,
+      generation,
+      selectedProjectId,
+    );
+  }, [selectedTabId, selectedProjectId]);
 
   // Re-fetch the model list when the gateway signals a model-metadata change
   // (e.g. Anthropic dynamic capability refresh). Keeps browser models in parity
@@ -1820,7 +1842,17 @@ export function BrowserGatewayApp({
     options: { commitSelection?: boolean } = {},
   ): Promise<string | null> {
     try {
-      const response = await fetch(buildApiPath("/api/instances"));
+      const response = await fetch(buildApiPath("/api/instances"), {
+        credentials: "same-origin",
+      });
+      if (response.status === 401) {
+        if (!authRecoveryPendingRef.current) {
+          authRecoveryPendingRef.current = true;
+          setStatus("Authentication expired — reloading…");
+          reloadPage();
+        }
+        return null;
+      }
       if (!response.ok) {
         setStatus(`Instance list failed: ${response.status}`);
         return null;
@@ -1925,11 +1957,10 @@ export function BrowserGatewayApp({
     askAgentSelected = isAskAgentSelected,
     tabId = askAgentSelected ? BROWSER_GATEWAY_ASK_AGENT_TAB_ID : instanceId,
     generation = selectedTabGenerationRef.current,
+    projectId = selectedProjectId,
   ): Promise<void> {
+    if (!askAgentSelected && !projectId) return;
     try {
-      const projectId =
-        snapshot?.session.foreground?.project.projectId ??
-        snapshot?.session.defaultProjectId;
       const response = await fetch(
         askAgentSelected
           ? "/api/ask-agent/slash-commands"
@@ -1951,7 +1982,8 @@ export function BrowserGatewayApp({
       if (
         Array.isArray(body.commands) &&
         selectedTabIdRef.current === tabId &&
-        selectedTabGenerationRef.current === generation
+        selectedTabGenerationRef.current === generation &&
+        (askAgentSelected || selectedProjectIdRef.current === projectId)
       ) {
         setSlashCommands(body.commands);
       }
@@ -1964,11 +1996,10 @@ export function BrowserGatewayApp({
     instanceId = selectedInstanceId,
     tabId = isAskAgentSelected ? BROWSER_GATEWAY_ASK_AGENT_TAB_ID : instanceId,
     generation = selectedTabGenerationRef.current,
+    projectId = selectedProjectId,
   ): Promise<void> {
+    if (instanceId && !projectId) return;
     try {
-      const projectId =
-        snapshot?.session.foreground?.project.projectId ??
-        snapshot?.session.defaultProjectId;
       const response = await fetch(
         buildApiPathForInstance(
           `/api/modes${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
@@ -1983,7 +2014,8 @@ export function BrowserGatewayApp({
       if (!response.ok) {
         if (
           selectedTabIdRef.current === tabId &&
-          selectedTabGenerationRef.current === generation
+          selectedTabGenerationRef.current === generation &&
+          selectedProjectIdRef.current === projectId
         ) {
           setModeStatus(`Mode list unavailable (${response.status})`);
         }
@@ -1992,7 +2024,8 @@ export function BrowserGatewayApp({
       const body = (await response.json()) as { modes?: ModeInfo[] };
       if (
         selectedTabIdRef.current !== tabId ||
-        selectedTabGenerationRef.current !== generation
+        selectedTabGenerationRef.current !== generation ||
+        selectedProjectIdRef.current !== projectId
       ) {
         return;
       }
@@ -2005,7 +2038,8 @@ export function BrowserGatewayApp({
     } catch {
       if (
         selectedTabIdRef.current === tabId &&
-        selectedTabGenerationRef.current === generation
+        selectedTabGenerationRef.current === generation &&
+        selectedProjectIdRef.current === projectId
       ) {
         setModeStatus("Mode list unavailable");
       }
@@ -4294,6 +4328,43 @@ export function BrowserGatewayApp({
         return;
       }
 
+      if (command === "agentOpenFile") {
+        const filePath = String(data.path ?? "").trim();
+        const line =
+          typeof data.line === "number" && Number.isInteger(data.line)
+            ? data.line
+            : undefined;
+        if (!filePath || !selectedProjectId) {
+          setModeStatus("File cannot be opened without an available project.");
+          return;
+        }
+        void fetch(buildApiPath("/api/open-file"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            path: filePath,
+            line,
+            projectId: selectedProjectId,
+          }),
+        })
+          .then(async (response) => {
+            if (response.ok) return;
+            const body = (await response.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            setModeStatus(
+              `Could not open ${filePath}: ${body.error ?? response.status}`,
+            );
+          })
+          .catch(() => {
+            setModeStatus(`Could not open ${filePath}.`);
+          });
+        return;
+      }
+
       if (command === "agentToast") {
         void postBrowserToast(
           String(data.message ?? ""),
@@ -5327,6 +5398,16 @@ export function BrowserGatewayApp({
                       void handleSend(payload, []);
                     }}
                     onDismissDetectedQuestion={() => undefined}
+                    onOpenFile={
+                      isAskAgentSelected
+                        ? undefined
+                        : (filePath, line) =>
+                            browserVscodeApi.postMessage({
+                              command: "agentOpenFile",
+                              path: filePath,
+                              line,
+                            })
+                    }
                     onRetry={handleRetry}
                     onSignIn={() => handleSignIn("codex")}
                     onSignInAnotherAccount={() =>

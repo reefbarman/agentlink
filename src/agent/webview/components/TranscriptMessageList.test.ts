@@ -382,7 +382,8 @@ describe("TranscriptMessageList final marker rendering", () => {
     expect(container.querySelectorAll(".final-marker-tool-call")).toHaveLength(
       1,
     );
-    expect(container.querySelectorAll(".streaming-indicator")).toHaveLength(1);
+    expect(container.querySelector(".thinking-block")).toBeNull();
+    expect(container.querySelector(".streaming-indicator")).toBeNull();
     unmount();
   });
 
@@ -567,13 +568,16 @@ describe("TranscriptMessageList background result rendering", () => {
     expect(rows[0].textContent).toContain("I am checking the foreground path.");
     expect(rows[1].textContent).toContain("Background Result");
     expect(rows[1].textContent).toContain("Review implementation");
-    expect(rows[1].textContent).toContain("No blocking issues found.");
     expect(rows[1].textContent).toContain("Looks good overall.");
+    // The plain-text summary preview is not rendered when the full result
+    // is available — only the markdown-rendered result body is shown.
+    expect(rows[1].textContent).not.toContain("No blocking issues found.");
+    expect(rows[1].querySelector(".bg-result-preview")).toBeNull();
     expect(rows[2].textContent).toContain("I will incorporate that result.");
     expect(container.querySelector(".tool-group-block")).toBeNull();
   });
 
-  it("keeps the streaming indicator below a trailing background result card", () => {
+  it("leaves transient streaming activity to the shared activity shelf", () => {
     const messages: ChatMessage[] = [
       {
         id: "assistant-streaming-with-bg-result",
@@ -597,17 +601,10 @@ describe("TranscriptMessageList background result rendering", () => {
       h(TranscriptMessageList, { messages, streaming: true }),
     );
 
-    const indicator = container.querySelector(".streaming-indicator");
-    const activeRow = indicator?.closest(".assistant-message");
     const rows = Array.from(container.querySelectorAll(".assistant-message"));
-    expect(indicator).toBeTruthy();
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(2);
     expect(rows[1].textContent).toContain("Background Result");
-    // The live indicator renders on a tail row after the card, so the
-    // transcript never ends on a static completed card mid-turn.
-    expect(activeRow).toBe(rows[2]);
-    expect(activeRow?.textContent).not.toContain("Background Result");
-    expect(container.querySelectorAll(".streaming-indicator")).toHaveLength(1);
+    expect(container.querySelector(".streaming-indicator")).toBeNull();
   });
 
   it("does not add a tail row after a trailing background result when idle", () => {
@@ -640,7 +637,7 @@ describe("TranscriptMessageList background result rendering", () => {
     expect(container.querySelector(".empty-response")).toBeNull();
   });
 
-  it("keeps the streaming indicator with active blocks that follow a background result", () => {
+  it("renders active blocks after a background result without a second activity row", () => {
     const messages: ChatMessage[] = [
       {
         id: "assistant-streaming-after-bg-result",
@@ -674,8 +671,8 @@ describe("TranscriptMessageList background result rendering", () => {
     const rows = Array.from(container.querySelectorAll(".assistant-message"));
     expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain("Background Result");
-    const indicator = container.querySelector(".streaming-indicator");
-    expect(indicator?.closest(".assistant-message")).toBe(rows[1]);
+    expect(rows[1].textContent).toContain("read_file");
+    expect(container.querySelector(".streaming-indicator")).toBeNull();
   });
 
   it("renders a set_task_status summary as the result when no prose is available", () => {
@@ -1261,12 +1258,12 @@ describe("TranscriptMessageList streaming baseline metrics", () => {
       }),
     );
 
-    // Text segment + card render as history; the synthetic streaming tail
-    // row below the card is the only active row.
+    // The text segment remains the active transcript row while the completed
+    // background result is historical. Live activity lives in the shelf.
     expect(recorder.summarize("browser-webview", "ask-agent")).toMatchObject({
-      historyRenders: 2,
+      historyRenders: 1,
       activeRenders: 1,
-      historyCommits: 2,
+      historyCommits: 1,
       activeCommits: 1,
     });
     cleanup();

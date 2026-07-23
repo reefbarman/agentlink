@@ -75,6 +75,77 @@ function projectContext(input: { sessionId?: string; targetPath?: string }) {
   };
 }
 
+describe("requeueCommandApprovalsForPolicyChange", () => {
+  it("re-resolves the session's pending command approvals and advances the queue", async () => {
+    const { provider } = createProvider();
+    const forwarded: ApprovalRequest[] = [];
+    const cancelled: string[] = [];
+    provider.onForwardApproval = (request) => {
+      forwarded.push(request);
+    };
+    provider.onForwardApprovalCancelled = (id) => cancelled.push(id);
+
+    const first = provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "session-a",
+    });
+    const second = provider.enqueueCommandApproval(
+      "npm run build",
+      "npm run build",
+      { sessionId: "session-a" },
+    );
+    const other = provider.enqueueCommandApproval("ls", "ls", {
+      sessionId: "session-b",
+    });
+    expect(forwarded.map((request) => request.id)).toEqual([first.id]);
+
+    const resolved = provider.requeueCommandApprovalsForPolicyChange(
+      "session-a",
+      "Policy changed; retry the command.",
+    );
+
+    expect(resolved).toBe(2);
+    await expect(first.promise).resolves.toEqual({
+      decision: "reject",
+      rejectionReason: "Policy changed; retry the command.",
+    });
+    await expect(second.promise).resolves.toEqual({
+      decision: "reject",
+      rejectionReason: "Policy changed; retry the command.",
+    });
+    expect([...cancelled].sort()).toEqual([first.id, second.id].sort());
+
+    // The untouched session's command becomes the visible card.
+    expect(forwarded.map((request) => request.id)).toEqual([
+      first.id,
+      other.id,
+    ]);
+    provider.dispose();
+  });
+
+  it("leaves other sessions and non-command approvals pending", () => {
+    const { provider } = createProvider();
+    const cancelled: string[] = [];
+    provider.onForwardApproval = () => {};
+    provider.onForwardApprovalCancelled = (id) => cancelled.push(id);
+
+    provider.enqueueWriteApproval("src/file.ts", {
+      operation: "modify",
+      outsideWorkspace: false,
+      sessionId: "session-a",
+    });
+    provider.enqueueCommandApproval("ls", "ls", { sessionId: "session-b" });
+
+    expect(
+      provider.requeueCommandApprovalsForPolicyChange(
+        "session-a",
+        "Policy changed; retry the command.",
+      ),
+    ).toBe(0);
+    expect(cancelled).toEqual([]);
+    provider.dispose();
+  });
+});
+
 describe("ApprovalPanelProvider webview shell", () => {
   it("renders the shared shell with approval resources", async () => {
     const { provider } = createProvider();

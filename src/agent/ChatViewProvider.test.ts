@@ -464,7 +464,8 @@ describe("browser project discovery", () => {
     await expect(
       provider.searchBrowserFiles("project", "project-b"),
     ).resolves.toEqual([{ path: "src/project-b.ts", kind: "file" }]);
-    expect(mockFindFiles).toHaveBeenCalledWith(
+    expect(mockFindFiles).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         base: "/workspace/b",
         pattern: "**/*project*",
@@ -472,6 +473,86 @@ describe("browser project discovery", () => {
       "**/node_modules/**",
       50,
     );
+    expect(mockFindFiles).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        base: "/workspace/b",
+        pattern: "**/*project*",
+      }),
+      null,
+      200,
+    );
+  });
+
+  it("includes gitignored files while still filtering dependency and Git internals", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getWorkspaceProjects: () => [
+        {
+          id: "project-a",
+          name: "Project A",
+          uri: "file:///workspace/a",
+          rootPath: "/workspace/a",
+          availability: { status: "available" },
+        },
+      ],
+    };
+    mockFindFiles
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { fsPath: "/workspace/a/.ignored/generated.ts" },
+        { fsPath: "/workspace/a/node_modules/pkg/generated.ts" },
+        { fsPath: "/workspace/a/.git/generated.ts" },
+      ]);
+
+    await expect(
+      provider.searchBrowserFiles("generated", "project-a"),
+    ).resolves.toEqual([{ path: ".ignored/generated.ts", kind: "file" }]);
+  });
+
+  it("opens browser-requested files only when they resolve inside the selected project", async () => {
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-browser-open-file-"),
+    );
+    const projectRoot = path.join(workspace, "project");
+    const projectFile = path.join(projectRoot, "README.md");
+    const outsideFile = path.join(workspace, "outside.md");
+    fs.mkdirSync(projectRoot);
+    fs.writeFileSync(projectFile, "inside", "utf8");
+    fs.writeFileSync(outsideFile, "outside", "utf8");
+
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getWorkspaceProjects: () => [
+        {
+          id: "project-a",
+          name: "Project A",
+          uri: `file://${projectRoot}`,
+          rootPath: projectRoot,
+          availability: { status: "available" },
+        },
+      ],
+    };
+
+    await expect(
+      provider.submitBrowserOpenFile("README.md", undefined, "project-a"),
+    ).resolves.toEqual({ ok: true });
+    expect(mockShowTextDocument).toHaveBeenCalledWith(
+      { fsPath: fs.realpathSync(projectFile) },
+      expect.any(Object),
+    );
+
+    await expect(
+      provider.submitBrowserOpenFile(outsideFile, undefined, "project-a"),
+    ).resolves.toEqual({ ok: false, error: "path_outside_project" });
   });
 });
 
@@ -1285,6 +1366,195 @@ describe("ChatViewProvider session state sync", () => {
     expect(resetSessionAgentWriteApproval).toHaveBeenCalledWith(
       "foreground-session",
     );
+  });
+
+  it("requeues pending command approvals only when Approve for Me becomes active", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    let commandApprovalPolicy: "safe" | "approve-for-me" = "safe";
+    let writeApproval: "prompt" | "session" = "prompt";
+    provider.setApprovalManager({
+      getAgentWriteApprovalState: vi.fn(() => writeApproval),
+      setAgentWriteApprovalSelection: vi.fn(
+        (_sessionId: string, selection: typeof writeApproval) => {
+          writeApproval = selection;
+          return true;
+        },
+      ),
+      resetSessionAgentWriteApproval: vi.fn(() => {
+        writeApproval = "prompt";
+      }),
+      onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+    } as never);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => ({
+        id: "foreground-session",
+        projectScope: { rootPath: "/workspace/project" },
+      })),
+      getCommandApprovalPolicy: vi.fn(() => commandApprovalPolicy),
+      setCommandApprovalPolicy: vi.fn(
+        (_sessionId: string, policy: typeof commandApprovalPolicy) => {
+          commandApprovalPolicy = policy;
+        },
+      ),
+    } as never);
+    (provider as unknown as { sendInitialState: () => void }).sendInitialState =
+      vi.fn();
+    const requeue = vi.fn(() => 1);
+    provider.setCommandApprovalRequeueHandler(requeue);
+
+    expect(
+      provider.submitBrowserSetCommandApprovalPolicy("approve-for-me"),
+    ).toEqual({ ok: true });
+    expect(requeue).toHaveBeenCalledTimes(1);
+    expect(requeue).toHaveBeenCalledWith("foreground-session");
+
+    requeue.mockClear();
+    expect(
+      provider.submitBrowserSetCommandApprovalPolicy("approve-for-me"),
+    ).toEqual({ ok: true });
+    expect(requeue).not.toHaveBeenCalled();
+
+    expect(provider.submitBrowserSetCommandApprovalPolicy("safe")).toEqual({
+      ok: true,
+    });
+    expect(requeue).not.toHaveBeenCalled();
+  });
+
+  async function makeWriteApprovalSweepProvider() {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    let commandApprovalPolicy: "safe" | "approve-for-me" = "safe";
+    let writeApproval: "prompt" | "session" = "prompt";
+    provider.setApprovalManager({
+      getAgentWriteApprovalState: vi.fn(() => writeApproval),
+      setAgentWriteApprovalSelection: vi.fn(
+        (_sessionId: string, selection: typeof writeApproval) => {
+          writeApproval = selection;
+          return true;
+        },
+      ),
+      resetSessionAgentWriteApproval: vi.fn(),
+      isAgentWriteApproved: vi.fn(() => writeApproval !== "prompt"),
+      isFileWriteApproved: vi.fn(() => false),
+      onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+    } as never);
+    const session = {
+      id: "foreground-session",
+      projectScope: {
+        projectId: "project-a",
+        displayName: "Project A",
+        rootPath: "/workspace/project",
+      },
+      projectAvailability: "available",
+    };
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+      getWorkspaceProjects: vi.fn(() => []),
+      getCommandApprovalPolicy: vi.fn(() => commandApprovalPolicy),
+      setCommandApprovalPolicy: vi.fn(
+        (_sessionId: string, policy: typeof commandApprovalPolicy) => {
+          commandApprovalPolicy = policy;
+        },
+      ),
+    } as never);
+    (provider as unknown as { sendInitialState: () => void }).sendInitialState =
+      vi.fn();
+    return provider;
+  }
+
+  it("auto-accepts pending file write cards when Approve for Me becomes active", async () => {
+    const { withWorkspaceRoots } = await import("../util/paths.js");
+    const provider = await makeWriteApprovalSweepProvider();
+
+    const writeCard = provider.requestApproval(
+      {
+        kind: "write",
+        title: "Modify `file.ts`?",
+        targetPath: "/workspace/project/file.ts",
+        fileWrite: { operation: "modify", outsideWorkspace: false },
+        choices: [],
+      },
+      "foreground-session",
+    );
+    // Same kind but no fileWrite marker (e.g. image-generation billing card):
+    // a write-authority grant must never resolve it.
+    let billingResolved = false;
+    void provider
+      .requestApproval(
+        {
+          kind: "write",
+          title: "Generate 1 image?",
+          targetPath: "/workspace/project/out.png",
+          choices: [
+            { label: "Generate", value: "accept", isPrimary: true },
+            { label: "Deny", value: "reject", isDanger: true },
+          ],
+        },
+        "foreground-session",
+      )
+      .then(() => {
+        billingResolved = true;
+      });
+
+    expect(
+      withWorkspaceRoots(["/workspace/project"], () =>
+        provider.submitBrowserSetCommandApprovalPolicy("approve-for-me"),
+      ),
+    ).toEqual({ ok: true });
+
+    await expect(writeCard).resolves.toEqual({ decision: "accept" });
+    await Promise.resolve();
+    expect(billingResolved).toBe(false);
+  });
+
+  it("auto-accepts pending file write cards when session write approval is granted", async () => {
+    const { withWorkspaceRoots } = await import("../util/paths.js");
+    const provider = await makeWriteApprovalSweepProvider();
+
+    const writeCard = provider.requestApproval(
+      {
+        kind: "write",
+        title: "Create `new.ts`?",
+        targetPath: "/workspace/project/new.ts",
+        fileWrite: { operation: "create", outsideWorkspace: false },
+        choices: [],
+      },
+      "foreground-session",
+    );
+    // Outside-workspace targets are not covered by session write approval.
+    let outsideResolved = false;
+    void provider
+      .requestApproval(
+        {
+          kind: "write",
+          title: "Modify `outside.ts`?",
+          targetPath: "/elsewhere/outside.ts",
+          fileWrite: { operation: "modify", outsideWorkspace: true },
+          choices: [],
+        },
+        "foreground-session",
+      )
+      .then(() => {
+        outsideResolved = true;
+      });
+
+    expect(
+      withWorkspaceRoots(["/workspace/project"], () =>
+        provider.submitBrowserSetWriteApproval("session"),
+      ),
+    ).toEqual({ ok: true });
+
+    await expect(writeCard).resolves.toEqual({ decision: "accept" });
+    await Promise.resolve();
+    expect(outsideResolved).toBe(false);
   });
 
   it("updates browser write approval without resetting unrelated sessions", async () => {
@@ -3155,13 +3425,15 @@ describe("ChatViewProvider session state sync", () => {
       resultText: "full structured report",
       summary: "one-line summary",
     }));
+    const markBackgroundResultsAnnounced = vi.fn();
     (provider as unknown as { sessionManager: unknown }).sessionManager = {
       getSession: () => ({ background: true }),
-      getForegroundSession: () => undefined,
+      getForegroundSession: () => ({ id: "foreground-1" }),
       getBgSessionInfos: () => [{ id: "bg-1" }],
       getBackgroundParentSessionId: () => "foreground-1",
       getBackgroundResult,
       getBackgroundResultSummary: () => "Reviewed the plan",
+      markBackgroundResultsAnnounced,
       listPersistedSessions: () => [],
     };
 
@@ -3188,6 +3460,7 @@ describe("ChatViewProvider session state sync", () => {
         resultSummary: "one-line summary",
       }),
     );
+    expect(markBackgroundResultsAnnounced).toHaveBeenCalledWith(["bg-1"]);
   });
 
   it("rehydrates unpulled durable background results when loading a parent session", async () => {
@@ -3200,6 +3473,7 @@ describe("ChatViewProvider session state sync", () => {
       webview: { postMessage: mockPostMessage },
     };
     (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+    const markBackgroundResultsAnnounced = vi.fn();
     const session = {
       id: "foreground-1",
       title: "Foreground",
@@ -3255,6 +3529,7 @@ describe("ChatViewProvider session state sync", () => {
           completedAt: 2,
         },
       ]),
+      markBackgroundResultsAnnounced,
       onEvent: undefined,
       onSessionsChanged: undefined,
     } as never);
@@ -3274,6 +3549,7 @@ describe("ChatViewProvider session state sync", () => {
         resultText: "Recover me",
       }),
     ]);
+    expect(markBackgroundResultsAnnounced).toHaveBeenCalledWith(["bg-pushed"]);
     expect(
       provider
         .getBrowserProjectedForegroundState()

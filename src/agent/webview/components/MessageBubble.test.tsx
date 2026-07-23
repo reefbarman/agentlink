@@ -86,6 +86,63 @@ describe("MessageBubble memory disclosure rendering", () => {
   });
 });
 
+describe("MessageBubble thinking rendering", () => {
+  it("keeps in-progress thinking out of the transcript activity blocks", () => {
+    const message: ChatMessage = {
+      id: "assistant-thinking-live",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "thinking",
+          id: "thinking-live",
+          text: "Inspecting the implementation.",
+          complete: false,
+        },
+      ],
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={true} />,
+    );
+
+    expect(container.querySelector(".thinking-block")).toBeNull();
+    expect(container.querySelector(".streaming-indicator")).toBeNull();
+  });
+
+  it("renders completed thinking as a subtle expandable step list", () => {
+    const message: ChatMessage = {
+      id: "assistant-thinking-complete",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "thinking",
+          id: "thinking-complete",
+          text: "**Inspecting state\\*\\*\\*\\*Planning the fix**",
+          complete: true,
+        },
+      ],
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+
+    const summary = screen.getByRole("button", { name: "Thinking" });
+    expect(container.querySelector(".thinking-block-complete")).toBeTruthy();
+    expect(container.querySelector(".thinking-steps")).toBeNull();
+
+    fireEvent.click(summary);
+
+    expect(
+      screen.getAllByRole("listitem").map((item) => item.textContent),
+    ).toEqual(["Inspecting state", "Planning the fix"]);
+  });
+});
+
 describe("MessageBubble slash-command rendering", () => {
   it("renders standalone slash command as a tool-call-style block with args", () => {
     const message: ChatMessage = {
@@ -154,6 +211,28 @@ describe("MessageBubble slash-command rendering", () => {
       screen.queryByText("[Attached: src/agent/webview/App.tsx]"),
     ).toBeNull();
     expect(screen.getByText("Please inspect this file")).toBeTruthy();
+  });
+
+  it("opens an attached file chip in the editor", () => {
+    const onOpenFile = vi.fn();
+    const message: ChatMessage = {
+      id: "user-attached-file",
+      role: "user",
+      content: "Please inspect this file\n[Attached: README.md]",
+      timestamp: Date.now(),
+      blocks: [],
+    };
+
+    render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("README.md"));
+    expect(onOpenFile).toHaveBeenCalledWith("README.md");
   });
 
   it("renders attached image previews above user message text", () => {

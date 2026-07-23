@@ -5,10 +5,11 @@ export interface MatchedFilePath {
   index: number;
 }
 
-// Matches file and directory path candidates like `src/foo.ts`, `/abs/path.ts`,
-// `src/foo.ts:42`, `@src/foo.ts`, `src/agent/webview/`, and `@src/agent/webview`.
+// Matches file and directory path candidates like `@README.md`, `src/foo.ts`,
+// `/abs/path.ts`, `src/foo.ts:42`, `@src/foo.ts`, `src/agent/webview/`, and
+// `@src/agent/webview`.
 const FILE_PATH_RE =
-  /(^|[^@.:/\w-])(@?((?:\/[\w.-]+(?:\/[\w.-]+)+\/?|(?:\.?[\w][\w.-]*)(?:\/[\w.-]+)+\/?))(?::(\d+)(?:-\d+)?)?)/g;
+  /(^|[^@.:/\w-])(@?((?:\/[\w.-]+(?:\/[\w.-]+)+\/?|(?:\.?[\w][\w.-]*)(?:\/[\w.-]+)+\/?|(?:\.?[\w][\w.-]*)))(?::(\d+)(?:-\d+)?)?)/g;
 
 const TRAILING_PATH_PUNCTUATION_RE = /[),.;!?]+$/;
 const FILE_EXTENSION_RE = /(?:^|\/)\.?[^/]+\.\w{1,8}$/;
@@ -41,6 +42,9 @@ function slashCount(path: string): number {
 }
 
 function isLikelyPath(path: string, fullMatch: string): boolean {
+  if (!path.includes("/")) {
+    return fullMatch.startsWith("@") && FILE_EXTENSION_RE.test(path);
+  }
   if (FILE_EXTENSION_RE.test(path.replace(/\/$/, ""))) return true;
   if (path.endsWith("/")) return true;
   if (path.startsWith("/")) return true;

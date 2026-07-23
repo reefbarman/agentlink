@@ -15,14 +15,12 @@ import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { DetectedQuestion } from "../questionDetection";
 import { ErrorBlock } from "./ErrorBlock";
 import type { FinalMarkerToolCall } from "../../../shared/finalStatus";
-import { LiveLinkIndicator } from "./LiveLinkIndicator";
 import { PairingCodeBlock } from "./PairingCodeBlock";
 import { QuestionAnswerBlock } from "./QuestionAnswerBlock";
 import { SkillLoadBlock } from "./SkillLoadBlock";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallBlock } from "./ToolCallBlock";
-import { getStreamingActivity } from "./activityPresentation";
 import { getFinalMessageContinueAction } from "../../../shared/finalStatus";
 
 const TOOL_GROUP_SETTLE_MS = 350;
@@ -100,7 +98,9 @@ export function MessageBubble({
             (b) =>
               !(
                 b.type === "tool_call" && b.name === "spawn_background_agent"
-              ) && !(b.type === "tool_call" && b.id === finalMarkerToolId),
+              ) &&
+              !(b.type === "tool_call" && b.id === finalMarkerToolId) &&
+              !(b.type === "thinking" && !b.complete),
           )
         : [],
     [message.role, message.blocks, finalMarkerToolId],
@@ -266,10 +266,6 @@ export function MessageBubble({
 
   const lastIdx = blocks.length - 1;
 
-  // Keep a live activity row visible through every streaming gap.
-  const streamingActivity = streaming
-    ? getStreamingActivity(blocks)
-    : undefined;
   const finalMarker = !streaming ? message.finalMarker : undefined;
   const finalContinueAction = finalMarker
     ? getFinalMessageContinueAction(finalMarker)
@@ -385,16 +381,6 @@ export function MessageBubble({
               );
           }
         })}
-
-        {/* Streaming indicator with activity label */}
-        {streamingActivity && (
-          <div class="streaming-indicator">
-            <LiveLinkIndicator motion={streamingActivity.motion} />
-            <span class="streaming-activity-label">
-              {streamingActivity.label}
-            </span>
-          </div>
-        )}
 
         {/* Empty response fallback — shown when streaming ended with no visible content */}
         {!streaming &&

@@ -170,6 +170,25 @@ async function flushPromises(): Promise<void> {
 describe("RelayConnectionManager", () => {
   beforeEach(() => vi.useRealTimers());
 
+  it("reports connected only after a valid authenticated hello", () => {
+    const statuses: string[] = [];
+    const source = new EventSourceFixture("/api/relay/events");
+    const manager = new RelayConnectionManager({
+      store: new RelayOwnerStore(),
+      eventSourceFactory: () => source,
+      onStatus: (status) => statuses.push(status),
+    });
+
+    manager.start();
+    expect(statuses.at(-1)).toBe("connecting");
+    source.onopen?.({} as Event);
+    expect(statuses).not.toContain("connected");
+
+    source.emit("hello", hello());
+    expect(statuses.at(-1)).toBe("connected");
+    manager.close();
+  });
+
   it("keeps one EventSource across owner selection and applies only the authoritative subscription", async () => {
     const sources: EventSourceFixture[] = [];
     const subscriptionResponse = deferredResponse();

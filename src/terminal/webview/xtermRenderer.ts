@@ -255,12 +255,35 @@ function isColorQuery(command: number, data: string): boolean {
     : values.includes("?");
 }
 
+const REPLAY_RESPONSE_CSI_HANDLERS = [
+  { final: "c" },
+  { prefix: ">", final: "c" },
+  { final: "n" },
+  { prefix: "?", final: "n" },
+  { intermediates: "$", final: "p" },
+  { prefix: "?", intermediates: "$", final: "p" },
+] as const;
+
+const WINDOW_REPORT_PARAMETERS = new Set([11, 13, 14, 15, 16, 18, 19, 20, 21]);
+
 export function registerReplayResponseSuppression(
   terminal: Terminal,
 ): IDisposable {
-  const subscriptions = [4, 10, 11, 12].map((command) =>
+  const subscriptions: IDisposable[] = [4, 10, 11, 12].map((command) =>
     terminal.parser.registerOscHandler(command, (data) =>
       isColorQuery(command, data),
+    ),
+  );
+  subscriptions.push(
+    ...REPLAY_RESPONSE_CSI_HANDLERS.map((identifier) =>
+      terminal.parser.registerCsiHandler(identifier, () => true),
+    ),
+    terminal.parser.registerCsiHandler({ final: "t" }, (params) =>
+      WINDOW_REPORT_PARAMETERS.has(Number(params[0])),
+    ),
+    terminal.parser.registerDcsHandler(
+      { intermediates: "$", final: "q" },
+      () => true,
     ),
   );
   return {

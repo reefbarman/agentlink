@@ -236,6 +236,8 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
       initialSnapshotTimer = undefined;
       void fetchFallbackSnapshot();
     }, 500);
+    // Workspace modes and slash commands defer until the first snapshot supplies
+    // an explicit project ID; Ask Agent remains projectless and loads immediately.
     void fetchModes(instanceId);
     void fetchModels(instanceId, askAgentSelected);
     void fetchSlashCommands(instanceId, askAgentSelected);

@@ -1101,7 +1101,18 @@ body.chat-activity-shelf-resizing * {
 /* ── Thinking Block ── */
 
 .thinking-block {
-  margin: 2px 0;
+  margin: 6px 0;
+}
+
+.thinking-block-complete {
+  border-left: 2px solid
+    color-mix(in srgb, #4ec9b0 42%, var(--vscode-panel-border));
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, #4ec9b0 5%, transparent),
+    transparent 72%
+  );
+  border-radius: 2px;
 }
 
 .thinking-header {
@@ -1112,11 +1123,11 @@ body.chat-activity-shelf-resizing * {
   border: none;
   color: var(--vscode-descriptionForeground);
   cursor: pointer;
-  padding: 2px 4px;
+  padding: 4px 7px 4px 5px;
   font-size: 12px;
   font-family: inherit;
   text-align: left;
-  opacity: 0.7;
+  opacity: 0.78;
   border-radius: 3px;
 }
 
@@ -1126,18 +1137,13 @@ body.chat-activity-shelf-resizing * {
 }
 
 .thinking-icon {
-  color: var(--vscode-editorLightBulb-foreground, #ffcc00);
-  font-size: 14px;
+  color: color-mix(in srgb, #4ec9b0 72%, var(--vscode-descriptionForeground));
+  font-size: 13px;
 }
 
 .thinking-label {
-  font-style: italic;
-}
-
-.thinking-spinner {
-  font-size: 14px;
-  color: var(--vscode-progressBar-background);
-  animation: spin 1s linear infinite;
+  font-size: 11px;
+  letter-spacing: 0.02em;
 }
 
 @keyframes spin {
@@ -1150,9 +1156,7 @@ body.chat-activity-shelf-resizing * {
 }
 
 .thinking-content {
-  padding: 4px 0 4px 18px;
-  border-left: 2px solid var(--vscode-panel-border);
-  margin-left: 4px;
+  padding: 3px 12px 8px 28px;
 }
 
 .thinking-content pre {
@@ -1164,6 +1168,22 @@ body.chat-activity-shelf-resizing * {
   font-style: italic;
   margin: 0;
   line-height: 1.4;
+}
+
+.thinking-steps {
+  display: grid;
+  gap: 5px;
+  margin: 2px 0 0;
+  padding-left: 18px;
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.thinking-steps li::marker {
+  color: color-mix(in srgb, #4ec9b0 65%, var(--vscode-descriptionForeground));
 }
 
 /* ── Error Notice ── */
@@ -2124,6 +2144,66 @@ body.chat-activity-shelf-resizing * {
   );
 }
 
+.streaming-status-bar-expandable {
+  display: block;
+  padding: 0;
+}
+
+.streaming-status-summary {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.streaming-status-summary:hover {
+  background: color-mix(
+    in srgb,
+    var(--vscode-list-hoverBackground) 55%,
+    transparent
+  );
+}
+
+.streaming-status-summary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.streaming-status-chevron {
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+.streaming-thinking-content {
+  max-height: min(180px, 28vh);
+  overflow-y: auto;
+  padding: 5px 12px 9px 32px;
+  border-top: 1px solid
+    color-mix(in srgb, var(--vscode-panel-border) 35%, transparent);
+}
+
+.streaming-thinking-content pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.streaming-thinking-content .thinking-steps {
+  font-size: 11px;
+}
+
 .streaming-status-bar .codicon {
   font-size: 11px;
   color: var(--vscode-progressBar-background);
@@ -2289,22 +2369,6 @@ body.chat-activity-shelf-resizing * {
     color: CanvasText;
     filter: none;
   }
-}
-
-/* ── Streaming activity ── */
-
-.streaming-indicator {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 0;
-}
-
-.streaming-activity-label {
-  font-size: 11px;
-  color: var(--vscode-descriptionForeground);
-  opacity: 0.6;
-  white-space: nowrap;
 }
 
 .empty-response {
@@ -7298,14 +7362,6 @@ body.approval-resizing {
   white-space: nowrap;
   color: var(--vscode-descriptionForeground);
   font-weight: 500;
-}
-
-.bg-result-preview {
-  padding: 6px 10px 0;
-  font-size: 0.85em;
-  color: var(--vscode-descriptionForeground);
-  line-height: 1.4;
-  overflow-wrap: anywhere;
 }
 
 .bg-result-content {

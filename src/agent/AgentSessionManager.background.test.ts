@@ -2971,6 +2971,109 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("excludes cancelled and already-announced results from parent completions", async () => {
+    const makeSummary = (id: string, title: string) => ({
+      schemaVersion: 1,
+      id,
+      mode: "review",
+      model: "claude-sonnet-4-6",
+      title,
+      messageCount: 1,
+      totalInputTokens: 20,
+      totalOutputTokens: 10,
+      createdAt: 1,
+      lastActiveAt: 2,
+      background: true,
+    });
+    const baseFleet = {
+      schemaVersion: 1 as const,
+      placement: "background" as const,
+      parentSessionId: "foreground-1",
+      rootSessionId: "foreground-1",
+      depth: 1,
+      backend: "native" as const,
+      resolvedMode: "review",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: "review_code",
+      routingReason: "defaulted to foreground model",
+      fallbackUsed: false,
+    };
+    const fleetById: Record<string, unknown> = {
+      "cancelled-bg": {
+        ...baseFleet,
+        task: "Cancelled review",
+        lifecycle: "cancelled" as const,
+        terminalReason: "cancelled_by_user",
+        resultState: "cancelled" as const,
+        completedAt: 3,
+      },
+      "interrupted-bg": {
+        ...baseFleet,
+        task: "Interrupted review",
+        lifecycle: "running" as const,
+        partialResult: "work preserved before reload",
+      },
+    };
+    const summaries = [
+      makeSummary("cancelled-bg", "Cancelled review"),
+      makeSummary("interrupted-bg", "Interrupted review"),
+    ];
+    const saveSession = vi.fn().mockResolvedValue({ ok: true, revision: "2" });
+    const store = {
+      list: vi.fn(() => []),
+      listAll: vi.fn(() => summaries),
+      readSession: vi.fn(async (id: string) => {
+        const summary = summaries.find((candidate) => candidate.id === id);
+        return {
+          ok: true,
+          revision: "1",
+          value: {
+            summary,
+            messages: [{ role: "user", content: "review" }],
+            metadata: {
+              mode: "review",
+              model: "claude-sonnet-4-6",
+              totalInputTokens: 20,
+              totalOutputTokens: 10,
+              fleet: fleetById[id],
+            },
+          },
+        };
+      }),
+      saveSession,
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    await mgr.restorePersistedBackgroundSessions("foreground-1");
+
+    // The user-cancelled child was witnessed when cancelled; only the
+    // reload-interrupted child is redelivered.
+    expect(
+      mgr
+        .getBackgroundCompletionsForParent("foreground-1")
+        .map((completion) => completion.sessionId),
+    ).toEqual(["interrupted-bg"]);
+
+    saveSession.mockClear();
+    mgr.markBackgroundResultsAnnounced(["interrupted-bg"]);
+    expect(
+      mgr.getSession("interrupted-bg")?.fleetMetadata?.resultAnnouncedAt,
+    ).toEqual(expect.any(Number));
+    expect(saveSession).toHaveBeenCalledTimes(1);
+    expect(mgr.getBackgroundCompletionsForParent("foreground-1")).toEqual([]);
+
+    // Idempotent: an already-announced result is not re-stamped or re-saved.
+    mgr.markBackgroundResultsAnnounced(["interrupted-bg"]);
+    expect(saveSession).toHaveBeenCalledTimes(1);
+  });
+
   it("restores and authorizes a persisted child when its foreground is loaded", async () => {
     const now = Date.now();
     const foregroundSummary = {

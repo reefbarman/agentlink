@@ -490,6 +490,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/open-file"),
+        ({ req, res }) => this.handleOpenFileAction(req, res),
+        json("open file action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/project/default"),
         ({ req, res }) => this.handleDefaultProjectAction(req, res),
         json("default project action failed"),
@@ -1572,6 +1578,41 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const result =
       await this.chatViewProvider.submitBrowserAttachFile(projectId);
     this.writeJson(res, 200, result);
+  }
+
+  private async handleOpenFileAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as {
+      path?: unknown;
+      line?: unknown;
+      projectId?: unknown;
+    };
+    if (
+      typeof body?.path !== "string" ||
+      !body.path.trim() ||
+      (body.line !== undefined &&
+        (typeof body.line !== "number" ||
+          !Number.isInteger(body.line) ||
+          body.line < 1))
+    ) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const projectId = this.resolveRequestedProjectId(body.projectId, res);
+    if (!projectId) return;
+    const result = await this.chatViewProvider.submitBrowserOpenFile(
+      body.path,
+      body.line === undefined ? undefined : Number(body.line),
+      projectId,
+    );
+    this.writeJson(res, result.ok ? 200 : 404, result);
   }
 
   private async handleDefaultProjectAction(

@@ -234,6 +234,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   retainedHttp(
     "vscode_gateway",
     "POST",
+    "/api/open-file",
+    "Project-bound editor reveal remains an authenticated HTTP UI action.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
     "/api/project/default",
     "Requires a project-selection command before Stage 5.",
   ),
