@@ -190,7 +190,7 @@ describe("handleStartWorktreeAgent", () => {
     expect(textPayload(result)).toMatchObject({ status: "rejected" });
     expect(onApprovalRequest).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "command",
+        kind: "worktree",
         targetPath: worktreePath,
       }),
       undefined,

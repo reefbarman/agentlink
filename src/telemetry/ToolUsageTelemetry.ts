@@ -1,9 +1,8 @@
-import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 
 import { randomUUID } from "crypto";
-import { sleep } from "../util/sleep.js";
+import { appendJsonlLinesWithLock } from "./jsonlAppend.js";
 
 export type ToolUsageSource = "agent" | "mcp";
 export type ToolUsageOutcome =
@@ -12,6 +11,7 @@ export type ToolUsageOutcome =
   | "error"
   | "cancelled"
   | "rejected";
+export type ToolUsageMetrics = Record<string, number | string | boolean>;
 
 export interface ToolUsageEvent {
   toolName: string;
@@ -21,7 +21,7 @@ export interface ToolUsageEvent {
   projectId?: string;
   outcome: ToolUsageOutcome;
   durationMs?: number;
-  metrics?: Record<string, number | string | boolean>;
+  metrics?: ToolUsageMetrics;
 }
 
 interface ToolUsageBucket {
@@ -86,18 +86,8 @@ function createBucket(): ToolUsageBucket {
   };
 }
 
-function isAlreadyExistsError(err: unknown): boolean {
-  return (
-    err !== null &&
-    typeof err === "object" &&
-    "code" in err &&
-    String((err as { code?: unknown }).code) === "EEXIST"
-  );
-}
-
 export class ToolUsageTelemetry {
   private readonly telemetryPath: string;
-  private readonly lockPath: string;
   private readonly instanceId = randomUUID();
   private readonly extensionVersion: string;
   private readonly lockTimeoutMs: number;
@@ -112,7 +102,6 @@ export class ToolUsageTelemetry {
 
   constructor(options: ToolUsageTelemetryOptions = {}) {
     this.telemetryPath = options.telemetryPath ?? getDefaultTelemetryPath();
-    this.lockPath = `${this.telemetryPath}.lock`;
     this.extensionVersion = options.extensionVersion ?? "unknown";
     this.lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
     this.staleLockMs = options.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
@@ -155,7 +144,31 @@ export class ToolUsageTelemetry {
       }
     }
 
-    for (const [key, value] of Object.entries(event.metrics ?? {}).sort()) {
+    this.addMetrics(bucket, event.metrics);
+
+    if (Number.isFinite(event.durationMs)) {
+      const durationMs = Math.max(0, Math.round(event.durationMs ?? 0));
+      bucket.totalDurationMs += durationMs;
+      bucket.maxDurationMs = Math.max(bucket.maxDurationMs, durationMs);
+    }
+  }
+
+  /** Record a diagnostic observation without inflating the tool call count. */
+  recordMetrics(toolName: string, metrics: ToolUsageMetrics): void {
+    if (this.disposed) return;
+    const normalizedToolName = toolName.trim();
+    if (!normalizedToolName) return;
+
+    const bucket = this.buckets.get(normalizedToolName) ?? createBucket();
+    this.buckets.set(normalizedToolName, bucket);
+    this.addMetrics(bucket, metrics);
+  }
+
+  private addMetrics(
+    bucket: ToolUsageBucket,
+    metrics: ToolUsageMetrics | undefined,
+  ): void {
+    for (const [key, value] of Object.entries(metrics ?? {}).sort()) {
       if (typeof value === "number" && Number.isFinite(value)) {
         bucket.numericMetrics[key] = (bucket.numericMetrics[key] ?? 0) + value;
       } else if (typeof value === "string" || typeof value === "boolean") {
@@ -163,12 +176,6 @@ export class ToolUsageTelemetry {
         bucket.categoricalMetrics[category] =
           (bucket.categoricalMetrics[category] ?? 0) + 1;
       }
-    }
-
-    if (Number.isFinite(event.durationMs)) {
-      const durationMs = Math.max(0, Math.round(event.durationMs ?? 0));
-      bucket.totalDurationMs += durationMs;
-      bucket.maxDurationMs = Math.max(bucket.maxDurationMs, durationMs);
     }
   }
 
@@ -206,13 +213,15 @@ export class ToolUsageTelemetry {
     };
 
     try {
-      await this.withAppendLock(async () => {
-        await fs.mkdir(path.dirname(this.telemetryPath), { recursive: true });
-        await fs.appendFile(this.telemetryPath, JSON.stringify(record) + "\n", {
-          encoding: "utf-8",
-          mode: 0o600,
-        });
-      });
+      await appendJsonlLinesWithLock(
+        this.telemetryPath,
+        [JSON.stringify(record)],
+        {
+          lockTimeoutMs: this.lockTimeoutMs,
+          staleLockMs: this.staleLockMs,
+          lockTimeoutError: "tool_usage_telemetry_lock_timeout",
+        },
+      );
     } catch (err) {
       this.mergeBucketsBack(buckets, periodStartedAt);
       throw err;
@@ -264,40 +273,6 @@ export class ToolUsageTelemetry {
         current.maxDurationMs,
         failed.maxDurationMs,
       );
-    }
-  }
-
-  private async withAppendLock<T>(operation: () => Promise<T>): Promise<T> {
-    const startedAt = Date.now();
-    const deadline = startedAt + this.lockTimeoutMs;
-
-    await fs.mkdir(path.dirname(this.telemetryPath), { recursive: true });
-    while (true) {
-      try {
-        await fs.mkdir(this.lockPath);
-        break;
-      } catch (err) {
-        if (!isAlreadyExistsError(err)) throw err;
-        try {
-          const stat = await fs.stat(this.lockPath);
-          if (Date.now() - stat.mtimeMs > this.staleLockMs) {
-            await fs.rm(this.lockPath, { recursive: true, force: true });
-            continue;
-          }
-        } catch {
-          continue;
-        }
-        if (Date.now() >= deadline) {
-          throw new Error("tool_usage_telemetry_lock_timeout");
-        }
-        await sleep(50);
-      }
-    }
-
-    try {
-      return await operation();
-    } finally {
-      await fs.rm(this.lockPath, { recursive: true, force: true });
     }
   }
 

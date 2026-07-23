@@ -883,6 +883,9 @@ function projectForeground(
       : {}),
     agentWriteApproval: policies.agentWriteApproval,
     commandApprovalPolicy: policies.commandApprovalPolicy,
+    approvalPolicy: policies.approvalPolicy,
+    approvalReviewer: policies.approvalReviewer,
+    executionPreset: policies.executionPreset,
     configuredCommandApprovalPolicy: policies.configuredCommandApprovalPolicy,
     restoringSession: foreground.restoringSession,
     revertRecoveryNotice: foreground.revertRecoveryNotice

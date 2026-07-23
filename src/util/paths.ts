@@ -92,14 +92,20 @@ export interface ResolvedPath {
 /** Canonicalize an existing path, or its nearest existing parent for new files. */
 export function canonicalizePath(inputPath: string): string {
   const resolved = path.resolve(inputPath);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    const parentDir = path.dirname(resolved);
+  const missingSegments: string[] = [];
+  let candidate = resolved;
+
+  while (true) {
     try {
-      return path.join(fs.realpathSync(parentDir), path.basename(resolved));
+      return path.resolve(
+        fs.realpathSync(candidate),
+        ...missingSegments.reverse(),
+      );
     } catch {
-      return resolved;
+      const parent = path.dirname(candidate);
+      if (parent === candidate) return resolved;
+      missingSegments.push(path.basename(candidate));
+      candidate = parent;
     }
   }
 }
@@ -140,9 +146,12 @@ export function resolveAndValidatePath(inputPath: string): ResolvedPath {
   const real = canonicalizePath(resolved);
 
   // Check workspace boundary
-  const inWorkspace = roots.some(
-    (root) => pathsEqual(real, root) || pathStartsWith(real, root),
-  );
+  const inWorkspace = roots.some((root) => {
+    const canonicalRoot = canonicalizePath(root);
+    return (
+      pathsEqual(real, canonicalRoot) || pathStartsWith(real, canonicalRoot)
+    );
+  });
 
   return { absolutePath: real, inWorkspace };
 }

@@ -1,4 +1,4 @@
-import type { ChatMessage, ContentBlock } from "../types";
+import type { ChatMessage } from "../types";
 import { ToolCallGroup, segmentBlocks } from "./ToolCallGroup";
 import {
   useCallback,
@@ -15,42 +15,20 @@ import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { DetectedQuestion } from "../questionDetection";
 import { ErrorBlock } from "./ErrorBlock";
 import type { FinalMarkerToolCall } from "../../../shared/finalStatus";
+import { LiveLinkIndicator } from "./LiveLinkIndicator";
 import { PairingCodeBlock } from "./PairingCodeBlock";
 import { QuestionAnswerBlock } from "./QuestionAnswerBlock";
 import { SkillLoadBlock } from "./SkillLoadBlock";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallBlock } from "./ToolCallBlock";
+import { getStreamingActivity } from "./activityPresentation";
 import { getFinalMessageContinueAction } from "../../../shared/finalStatus";
 
 const TOOL_GROUP_SETTLE_MS = 350;
 
 function getToolSettleKey(messageId: string, toolCallId: string): string {
   return `${messageId}:${toolCallId}`;
-}
-
-/**
- * Derive a short activity label from the current message blocks.
- * Covers: thinking, writing, running tools, and the gaps between
- * (waiting for API, processing tool results, etc.)
- */
-export function getStreamingActivity(blocks: ContentBlock[]): string {
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const b = blocks[i];
-    if (b.type === "text") return "Writing…";
-    if (b.type === "tool_call" || b.type === "skill_load") {
-      if (!b.complete) return "Running tool…";
-      // Last block is a completed tool → agent is sending results back to the API
-      return "Waiting for response…";
-    }
-    if (b.type === "thinking") {
-      if (!b.complete) return "Thinking…";
-      // Finished thinking, waiting for the model to start responding
-      return "Waiting for response…";
-    }
-  }
-  // No blocks yet → initial API call in flight
-  return "Waiting for response…";
 }
 
 interface MessageBubbleProps {
@@ -115,14 +93,28 @@ export function MessageBubble({
   // Keep get_background_status/result/kill visible so users can see what the foreground
   // agent is doing (e.g. waiting for bg results vs actually stuck).
   const finalMarkerToolId = message.finalMarker?.toolCall?.id;
-  const blocks =
-    message.role === "assistant"
-      ? (message.blocks ?? []).filter(
-          (b) =>
-            !(b.type === "tool_call" && b.name === "spawn_background_agent") &&
-            !(b.type === "tool_call" && b.id === finalMarkerToolId),
-        )
-      : [];
+  const blocks = useMemo(
+    () =>
+      message.role === "assistant"
+        ? (message.blocks ?? []).filter(
+            (b) =>
+              !(
+                b.type === "tool_call" && b.name === "spawn_background_agent"
+              ) && !(b.type === "tool_call" && b.id === finalMarkerToolId),
+          )
+        : [],
+    [message.role, message.blocks, finalMarkerToolId],
+  );
+
+  const blockSegments = useMemo(
+    () =>
+      segmentBlocks(blocks, {
+        shouldGroupToolCall: (block) =>
+          !streaming ||
+          settledToolIds.has(getToolSettleKey(message.id, block.id)),
+      }),
+    [blocks, streaming, settledToolIds, message.id],
+  );
 
   const parsedAttachments = useMemo(
     () =>
@@ -273,14 +265,11 @@ export function MessageBubble({
   }
 
   const lastIdx = blocks.length - 1;
-  const blockSegments = segmentBlocks(blocks, {
-    shouldGroupToolCall: (block) =>
-      !streaming || settledToolIds.has(getToolSettleKey(message.id, block.id)),
-  });
 
-  // Show dots while streaming — always visible at the bottom until response completes.
-  // This ensures there's always a visible loading indicator during any streaming gap.
-  const showDots = streaming;
+  // Keep a live activity row visible through every streaming gap.
+  const streamingActivity = streaming
+    ? getStreamingActivity(blocks)
+    : undefined;
   const finalMarker = !streaming ? message.finalMarker : undefined;
   const finalContinueAction = finalMarker
     ? getFinalMessageContinueAction(finalMarker)
@@ -398,13 +387,11 @@ export function MessageBubble({
         })}
 
         {/* Streaming indicator with activity label */}
-        {showDots && (
+        {streamingActivity && (
           <div class="streaming-indicator">
-            <span class="dot" />
-            <span class="dot" />
-            <span class="dot" />
+            <LiveLinkIndicator motion={streamingActivity.motion} />
             <span class="streaming-activity-label">
-              {getStreamingActivity(blocks)}
+              {streamingActivity.label}
             </span>
           </div>
         )}
@@ -971,12 +958,50 @@ function TextBlock({
   );
 }
 
+function extractStandaloneFencedCode(text: string): string | null {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  let openingIndex = 0;
+  while (openingIndex < lines.length && lines[openingIndex]?.trim() === "") {
+    openingIndex++;
+  }
+
+  const opening = lines[openingIndex]?.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+  if (!opening) return null;
+
+  const fence = opening[1]!;
+  if (fence[0] === "`" && opening[2]?.includes("`")) return null;
+
+  for (
+    let closingIndex = openingIndex + 1;
+    closingIndex < lines.length;
+    closingIndex++
+  ) {
+    const closing = lines[closingIndex]?.match(/^ {0,3}(`+|~+)[ \t]*$/)?.[1];
+    if (
+      closing === undefined ||
+      closing[0] !== fence[0] ||
+      closing.length < fence.length
+    ) {
+      continue;
+    }
+
+    if (lines.slice(closingIndex + 1).some((line) => line.trim() !== "")) {
+      return null;
+    }
+    return lines.slice(openingIndex + 1, closingIndex).join("\n");
+  }
+
+  return null;
+}
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  const standaloneCode = extractStandaloneFencedCode(text);
+  const clipboardText = standaloneCode ?? text;
 
   const handleCopy = useCallback(() => {
     navigator.clipboard
-      ?.writeText(text)
+      ?.writeText(clipboardText)
       .then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
@@ -985,13 +1010,19 @@ function CopyButton({ text }: { text: string }) {
         // Clipboard can be unavailable or reject (e.g. denied permission).
         // Don't surface an unhandled rejection for a copy button.
       });
-  }, [text]);
+  }, [clipboardText]);
 
   return (
     <button
       class={`copy-button ${copied ? "copied" : ""}`}
       onClick={handleCopy}
-      title={copied ? "Copied!" : "Copy as Markdown"}
+      title={
+        copied
+          ? "Copied!"
+          : standaloneCode !== null
+            ? "Copy code block"
+            : "Copy as Markdown"
+      }
     >
       <i class={`codicon codicon-${copied ? "check" : "copy"}`} />
     </button>

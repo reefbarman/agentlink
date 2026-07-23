@@ -43,7 +43,7 @@ function passingChecks(): SandboxBehaviorSyntheticCheckResult {
     workspaceConfinement: {
       workspaceCreateAllowed: true,
       workspaceModifyAllowed: true,
-      outsideReadDenied: true,
+      outsideReadAllowed: true,
       outsideWriteDenied: true,
     },
     protectedMetadata: {
@@ -53,22 +53,30 @@ function passingChecks(): SandboxBehaviorSyntheticCheckResult {
       nonexistentDescendantWriteDenied: true,
     },
     processInheritance: {
-      childOutsideAccessDenied: true,
+      childOutsideReadAllowed: true,
       grandchildProtectedAccessDenied: true,
       ownedProcessGroupCleaned: true,
     },
     privateEnvironment: {
-      homeIsPrivate: true,
-      tmpIsPrivate: true,
+      homeMatchesHost: true,
+      hostHomeReadAllowed: true,
+      hostHomeWriteDenied: true,
+      hostTmpEnvironmentMatched: true,
+      hostTmpWriteAllowed: true,
+      slashTmpWriteAllowed: true,
       cacheIsPrivate: true,
-      hostSentinelAbsent: true,
-      realHomeCredentialUnreadable: true,
+      credentialEnvironmentInherited: true,
     },
-    blockedNetwork: {
-      loopbackConnectDenied: true,
+    networkConfinement: {
+      baselineIpv4LoopbackConnectAllowed: true,
+      baselineIpv6LoopbackConnectAllowedOrUnavailable: true,
+      baselineListenerBindDenied: true,
       privateConnectDenied: true,
       publicConnectDenied: true,
-      loopbackFixtureUntouched: true,
+      listenerCapabilityBindAllowed: true,
+      listenerCapabilityPrivateConnectDenied: true,
+      listenerCapabilityPublicConnectDenied: true,
+      loopbackFixtureReached: true,
       proxyEndpointsLoopbackOnly: true,
     },
     denialEvidence: {
@@ -143,7 +151,7 @@ describe("SandboxBehaviorAttestationService", () => {
           "protected_metadata",
           "process_inheritance",
           "private_environment",
-          "blocked_network",
+          "network_confinement",
           "denial_evidence",
         ],
       },
@@ -163,17 +171,21 @@ describe("SandboxBehaviorAttestationService", () => {
     ["helperLifecycle", "readyObserved", "helper_protocol_failed"],
     [
       "workspaceConfinement",
-      "outsideReadDenied",
+      "outsideReadAllowed",
       "filesystem_confinement_failed",
     ],
     ["protectedMetadata", "symlinkWriteDenied", "protected_metadata_failed"],
     [
       "processInheritance",
-      "childOutsideAccessDenied",
+      "childOutsideReadAllowed",
       "process_inheritance_failed",
     ],
-    ["privateEnvironment", "hostSentinelAbsent", "private_environment_failed"],
-    ["blockedNetwork", "loopbackFixtureUntouched", "network_block_failed"],
+    [
+      "privateEnvironment",
+      "credentialEnvironmentInherited",
+      "private_environment_failed",
+    ],
+    ["networkConfinement", "loopbackFixtureReached", "network_block_failed"],
     [
       "denialEvidence",
       "successIndependentOfExitCode",
@@ -197,8 +209,8 @@ describe("SandboxBehaviorAttestationService", () => {
   it("fails closed when a required field is omitted and maps cleanup evidence separately", async () => {
     const incomplete = passingChecks();
     delete (
-      incomplete.blockedNetwork as Partial<
-        SandboxBehaviorSyntheticCheckResult["blockedNetwork"]
+      incomplete.networkConfinement as Partial<
+        SandboxBehaviorSyntheticCheckResult["networkConfinement"]
       >
     ).publicConnectDenied;
     const incompleteService = new SandboxBehaviorAttestationService({

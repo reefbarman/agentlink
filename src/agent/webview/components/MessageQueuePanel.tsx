@@ -9,12 +9,14 @@ export function MessageQueuePanel({
   onSteer,
   onInterject,
   onEdit,
+  onEditingChange,
   onRemove,
 }: {
   queue: MessageQueueItem[];
   onSteer: (item: MessageQueueItem) => void;
   onInterject: (item: MessageQueueItem) => void;
   onEdit?: (item: MessageQueueItem, text: string) => void;
+  onEditingChange?: (item: MessageQueueItem, editing: boolean) => void;
   onRemove?: (item: MessageQueueItem) => void;
 }) {
   const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
@@ -51,8 +53,10 @@ export function MessageQueuePanel({
                     onEdit(item, trimmed);
                   }
                   setEditingQueueId(null);
+                  onEditingChange?.(item, false);
                 } else if (e.key === "Escape") {
                   setEditingQueueId(null);
+                  onEditingChange?.(item, false);
                 }
               }}
               autoFocus
@@ -76,29 +80,46 @@ export function MessageQueuePanel({
           <div class="queue-item-actions">
             <button
               class="icon-button queue-item-steer"
-              title="Steer now"
-              onClick={() => onSteer(item)}
+              title={
+                editingQueueId === item.id
+                  ? "Finish editing before steering"
+                  : "Steer now"
+              }
+              disabled={editingQueueId === item.id}
+              onClick={() => {
+                if (editingQueueId !== item.id) onSteer(item);
+              }}
             >
               <i class="codicon codicon-compass-active" />
             </button>
             <button
               class={`icon-button queue-item-interject${item.interjectionReady ? " active" : ""}`}
               title={
-                item.interjectionReady
-                  ? "Ready to interject at next break"
-                  : "Interject at next break"
+                editingQueueId === item.id
+                  ? "Finish editing before interjecting"
+                  : item.interjectionReady
+                    ? "Ready to interject at next break"
+                    : "Interject at next break"
               }
-              onClick={() => onInterject(item)}
+              disabled={editingQueueId === item.id}
+              onClick={() => {
+                if (editingQueueId !== item.id) onInterject(item);
+              }}
             >
               <i class="codicon codicon-reply" />
             </button>
             {onEdit && editingQueueId !== item.id && (
               <button
                 class="icon-button queue-item-edit"
-                title="Edit"
+                title={
+                  editingQueueId === null ? "Edit" : "Finish current edit first"
+                }
+                disabled={editingQueueId !== null}
                 onClick={() => {
+                  if (editingQueueId !== null) return;
                   setEditingQueueText(item.text);
                   setEditingQueueId(item.id);
+                  onEditingChange?.(item, true);
                 }}
               >
                 <i class="codicon codicon-edit" />
@@ -107,8 +128,15 @@ export function MessageQueuePanel({
             {onRemove && (
               <button
                 class="icon-button queue-item-remove"
-                title="Remove"
-                onClick={() => onRemove(item)}
+                title={
+                  editingQueueId === item.id
+                    ? "Finish editing before removing"
+                    : "Remove"
+                }
+                disabled={editingQueueId === item.id}
+                onClick={() => {
+                  if (editingQueueId !== item.id) onRemove(item);
+                }}
               >
                 <i class="codicon codicon-close" />
               </button>

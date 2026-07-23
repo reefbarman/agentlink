@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import { LiveLinkIndicator } from "./LiveLinkIndicator";
 import { formatBackgroundRuntimeStatus } from "./backgroundRuntimeStatus";
 
 export interface BgSessionInfoProps {
@@ -143,6 +144,8 @@ interface Props {
   sessions: BgSessionInfoProps[];
   /** Incremented when a newly admitted agent should reveal the active fleet view. */
   openToActiveRequest?: number;
+  /** Incremented when the user explicitly asks to reveal the full fleet. */
+  showFleetRequest?: number;
   onStop: (sessionId: string) => void;
   onOpenTranscript?: (sessionId: string) => void;
   onSteer?: (sessionId: string, message: string) => void;
@@ -171,10 +174,7 @@ function formatElapsed(startMs: number, now: number): string {
 function statusIcon(status: BgSessionInfoProps["status"]): string {
   switch (status) {
     case "queued":
-    case "pending":
-    case "streaming":
-    case "tool_executing":
-      return "codicon-loading codicon-modifier-spin";
+      return "codicon-clock";
     case "awaiting_approval":
       return "codicon-bell";
     case "idle":
@@ -183,7 +183,42 @@ function statusIcon(status: BgSessionInfoProps["status"]): string {
       return "codicon-circle-slash";
     case "error":
       return "codicon-error";
+    case "pending":
+    case "streaming":
+    case "tool_executing":
+      return "codicon-circle-outline";
   }
+}
+
+function liveLinkMotion(
+  status: BgSessionInfoProps["status"],
+): "moving" | "attention" | null {
+  switch (status) {
+    case "pending":
+    case "streaming":
+    case "tool_executing":
+      return "moving";
+    case "awaiting_approval":
+      return "attention";
+    default:
+      return null;
+  }
+}
+
+function BackgroundStatusIcon({
+  status,
+}: {
+  status: BgSessionInfoProps["status"];
+}) {
+  const motion = liveLinkMotion(status);
+  return motion ? (
+    <LiveLinkIndicator motion={motion} className="bg-session-icon" />
+  ) : (
+    <i
+      class={`codicon ${statusIcon(status)} bg-session-icon`}
+      aria-hidden="true"
+    />
+  );
 }
 
 function statusText(
@@ -209,11 +244,11 @@ function statusText(
     case "pending":
       return "Starting…";
     case "streaming":
-      return displayStatus ?? (currentTool ? currentTool : "Thinking…");
+      return displayStatus ?? (currentTool ? currentTool : "Working…");
     case "tool_executing":
-      return displayStatus ?? (currentTool ? currentTool : "Running…");
+      return displayStatus ?? (currentTool ? currentTool : "Running tool…");
     case "awaiting_approval":
-      return "Awaiting approval";
+      return "Approval needed";
     case "idle":
       return "Done";
     case "cancelled":
@@ -226,6 +261,7 @@ function statusText(
 export function BackgroundSessionStrip({
   sessions,
   openToActiveRequest = 0,
+  showFleetRequest = 0,
   onStop,
   onOpenTranscript,
   onSteer,
@@ -235,6 +271,11 @@ export function BackgroundSessionStrip({
   onPause,
   onResume,
 }: Props) {
+  const hasUnfinished = sessions.some(
+    (session) =>
+      ACTIVE_STATUSES.has(session.status) || session.lifecycle === "paused",
+  );
+  const [hidden, setHidden] = useState(!hasUnfinished);
   const [collapsed, setCollapsed] = useState(true);
   const [filter, setFilter] = useState<
     "all" | "active" | "attention" | "completed" | "archived"
@@ -246,13 +287,36 @@ export function BackgroundSessionStrip({
   const [startedAt, setStartedAt] = useState<Map<string, number>>(new Map());
   const [now, setNow] = useState(Date.now());
   const previousOpenRequestRef = useRef(openToActiveRequest);
+  const previousShowRequestRef = useRef(showFleetRequest);
+  const previouslyHadUnfinishedRef = useRef(hasUnfinished);
+
+  useEffect(() => {
+    const previouslyHadUnfinished = previouslyHadUnfinishedRef.current;
+    previouslyHadUnfinishedRef.current = hasUnfinished;
+
+    if (hasUnfinished) {
+      setHidden(false);
+    } else if (previouslyHadUnfinished) {
+      setHidden(true);
+      setCollapsed(true);
+    }
+  }, [hasUnfinished]);
 
   useEffect(() => {
     if (openToActiveRequest === previousOpenRequestRef.current) return;
     previousOpenRequestRef.current = openToActiveRequest;
+    setHidden(false);
     setCollapsed(false);
     setFilter("active");
   }, [openToActiveRequest]);
+
+  useEffect(() => {
+    if (showFleetRequest === previousShowRequestRef.current) return;
+    previousShowRequestRef.current = showFleetRequest;
+    setHidden(false);
+    setCollapsed(false);
+    setFilter("all");
+  }, [showFleetRequest]);
 
   // Prefer the authoritative runtime start so reconnecting browser/webview
   // clients do not reset the elapsed clock to zero.
@@ -307,7 +371,7 @@ export function BackgroundSessionStrip({
     if (filter === "archived") return Boolean(session.archivedAt);
     return !session.archivedAt;
   });
-  if (sessions.length === 0) return null;
+  if (sessions.length === 0 || hidden) return null;
 
   const runningCount = visibleSessions.filter(
     (s) => s.status === "streaming" || s.status === "tool_executing",
@@ -483,7 +547,7 @@ export function BackgroundSessionStrip({
               {(s.depth ?? 1) > 1 && (
                 <i class="codicon codicon-debug-step-into bg-session-parent-link" />
               )}
-              <i class={`codicon ${statusIcon(s.status)} bg-session-icon`} />
+              <BackgroundStatusIcon status={s.status} />
               <span class="bg-session-task" title={s.task}>
                 {s.task}
               </span>

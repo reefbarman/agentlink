@@ -16,7 +16,10 @@ import {
 } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
+import {
+  approveOutsideWorkspaceAccess,
+  type GuardianOutsideReadOptions,
+} from "./pathAccessUI.js";
 import { SYMBOL_KIND_NAMES } from "./languageFeatures.js";
 import { Semaphore } from "../util/Semaphore.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
@@ -658,6 +661,8 @@ export async function handleReadFile(
   sessionId: string,
   advertisedSkills: AdvertisedSkillFileAccess[] = [],
   enrichmentProvider = createLegacyReadFileEnrichmentProvider(),
+  signal?: AbortSignal,
+  guardian?: GuardianOutsideReadOptions,
 ): Promise<ToolResult> {
   const release = await readSemaphore.acquire();
   let released = false;
@@ -681,6 +686,8 @@ export async function handleReadFile(
         approvalManager,
         approvalPanel,
         sessionId,
+        signal,
+        ...(guardian ? [guardian] : []),
       );
       if (!approved) {
         return {

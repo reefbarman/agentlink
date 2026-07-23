@@ -23,11 +23,9 @@ export interface ApprovalLayoutProps {
   primaryWithRulesLabel: string;
   onAccept: () => void;
   onSaveAndAccept: () => void;
+  secondaryAction?: { label: string; onClick: () => void };
   onReject: (reason?: string) => void;
   followUpRef: RefObject<string>;
-  followUpLabel?: string;
-  followUpPlaceholder?: string;
-  rejectLabel?: string;
 }
 
 export function ProjectContextBanner({
@@ -90,11 +88,9 @@ export function ApprovalLayout({
   primaryWithRulesLabel,
   onAccept,
   onSaveAndAccept,
+  secondaryAction,
   onReject,
   followUpRef,
-  followUpLabel = "Follow Up / Rejection Reason",
-  followUpPlaceholder = "Add a message to follow up on accept or provide a reason for rejection...",
-  rejectLabel = "Reject",
 }: ApprovalLayoutProps) {
   const [rulesOpen, setRulesOpen] = useState(false);
 
@@ -155,20 +151,24 @@ export function ApprovalLayout({
           </div>
         )}
 
-        {/* Message textarea (follow-up on accept, rejection reason on reject) */}
-        <div class="follow-up-section">
-          <div class="follow-up-label">
-            <span class="codicon codicon-comment" /> {followUpLabel}
+        {/* Optional message (follow-up on accept, rejection reason on reject) */}
+        <details class="follow-up-section">
+          <summary class="follow-up-label">
+            <span class="codicon codicon-comment" />
+            <span>Add follow-up or rejection reason</span>
+          </summary>
+          <div class="follow-up-body">
+            <textarea
+              class="text-input textarea follow-up-input"
+              rows={2}
+              aria-label="Follow-up or rejection reason"
+              placeholder="Add a message to follow up on accept or provide a reason for rejection..."
+              onInput={(e) => {
+                followUpRef.current = (e.target as HTMLTextAreaElement).value;
+              }}
+            />
           </div>
-          <textarea
-            class="text-input textarea follow-up-input"
-            rows={2}
-            placeholder={followUpPlaceholder}
-            onInput={(e) => {
-              followUpRef.current = (e.target as HTMLTextAreaElement).value;
-            }}
-          />
-        </div>
+        </details>
       </div>
 
       {/* Action buttons */}
@@ -183,8 +183,13 @@ export function ApprovalLayout({
               {primaryLabel}
             </button>
           )}
+          {secondaryAction && (
+            <button class="btn btn-secondary" onClick={secondaryAction.onClick}>
+              {secondaryAction.label}
+            </button>
+          )}
           <button class="btn btn-danger" onClick={handleReject}>
-            {rejectLabel}
+            Reject
           </button>
         </div>
       </div>

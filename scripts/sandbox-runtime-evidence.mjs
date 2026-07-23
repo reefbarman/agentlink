@@ -34,8 +34,9 @@ const MAX_TIMEOUT_MS = 120_000;
 const MAX_CHILD_OUTPUT_BYTES = 4 * 1024 * 1024;
 const PACKAGE_PREFIX = "dist/sandbox-runtime";
 const packagedPath = (relativePath) => `${PACKAGE_PREFIX}/${relativePath}`;
-const REQUIRED_PACKAGE_PATHS = {
+export const REQUIRED_PACKAGE_PATHS = {
   sandboxHelper: [
+    "scripts/sandbox-interactive-helper.mjs",
     "scripts/sandbox-network-policy.mjs",
     "scripts/sandbox-network-proxy.mjs",
     "scripts/sandbox-process-reaper.mjs",
@@ -325,7 +326,7 @@ function parseJsonLine(text) {
 
 function makeSandboxRequest(root) {
   return {
-    version: 1,
+    version: 3,
     operation: "execute",
     command: "/usr/bin/true",
     cwd: root,
@@ -343,6 +344,7 @@ function makeSandboxRequest(root) {
     },
     network: { allowedDomains: [] },
     protectedRoots: [],
+    structurallyProtectedRoots: [],
     timeoutMs: 10_000,
   };
 }
@@ -981,10 +983,10 @@ terminal.onExit(({ exitCode, signal }) => {
     conformanceEstablished:
       focusedOutcome.exitCode === 0 &&
       !focusedOutcome.timedOut &&
-      /tests 45/.test(stripAnsi(focusedOutcome.stdout)) &&
-      /pass 45/.test(stripAnsi(focusedOutcome.stdout)) &&
+      /tests 51/.test(stripAnsi(focusedOutcome.stdout)) &&
+      /pass 51/.test(stripAnsi(focusedOutcome.stdout)) &&
       /fail 0/.test(stripAnsi(focusedOutcome.stdout)),
-    expectedTests: 45,
+    expectedTests: 51,
     scope:
       "the complete focused resolver/proxy/reaper/protected-root/helper suite under signed Node 22.19.0 x64 via Rosetta",
     ...boundedOutcomeEvidence(focusedOutcome),
@@ -1021,11 +1023,18 @@ terminal.onExit(({ exitCode, signal }) => {
   return evidence;
 }
 
+/* eslint-disable no-control-regex -- Terminal package listings can contain ANSI and C0 control bytes. */
+const ANSI_OSC_SEQUENCE = /\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g;
+const ANSI_CSI_SEQUENCE = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+const TERMINAL_CONTROL_CHARACTER =
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+/* eslint-enable no-control-regex */
+
 function stripAnsi(value) {
   return value
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "")
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+    .replace(ANSI_OSC_SEQUENCE, "")
+    .replace(ANSI_CSI_SEQUENCE, "")
+    .replace(TERMINAL_CONTROL_CHARACTER, "");
 }
 
 function normalizePackageListing(stdout, prefix = "") {
@@ -1064,7 +1073,7 @@ async function inspectPackagedSpawnHelperModes(root) {
   };
 }
 
-function classifyPackageListing(entries) {
+export function classifyPackageListing(entries) {
   const entrySet = new Set(entries);
   const assets = Object.fromEntries(
     Object.entries(REQUIRED_PACKAGE_PATHS).map(([name, requiredPaths]) => {
@@ -1670,24 +1679,27 @@ async function main() {
   process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`);
 }
 
-try {
-  await main();
-} catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(
-    `sandbox runtime evidence collection failed: ${message}\n`,
-  );
-  process.stdout.write(
-    `${JSON.stringify(
-      {
-        schemaVersion: 1,
-        generatedAt: new Date().toISOString(),
-        collector: path.relative(REPO_ROOT, SCRIPT_PATH),
-        fatalError: message,
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  process.exitCode = 1;
+const isMain = process.argv[1] && SCRIPT_PATH === path.resolve(process.argv[1]);
+if (isMain) {
+  try {
+    await main();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(
+      `sandbox runtime evidence collection failed: ${message}\n`,
+    );
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          generatedAt: new Date().toISOString(),
+          collector: path.relative(REPO_ROOT, SCRIPT_PATH),
+          fatalError: message,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    process.exitCode = 1;
+  }
 }

@@ -62,6 +62,69 @@ const mockGetConfiguration = vi.fn((section?: string) => ({
   update: mockConfigUpdate,
 }));
 
+describe("worktree startup prompt policy", () => {
+  it("applies inherited Approve for Me before submitting the startup prompt exactly once", async () => {
+    vi.useFakeTimers();
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const order: string[] = [];
+    const session = {
+      id: "worktree-session",
+      mode: "code",
+      reasoningEffort: "low",
+      activeFilePath: undefined,
+    };
+    const setSessionApprovalMode = vi.fn(() => order.push("policy"));
+    const sendMessage = vi.fn(async () => {
+      order.push("prompt");
+    });
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: () => session,
+      getSession: () => session,
+      setSessionApprovalMode,
+      sendMessage,
+    };
+    (provider as unknown as { sendInitialState: () => void }).sendInitialState =
+      vi.fn();
+    vi.spyOn(provider, "injectPrompt");
+
+    await provider.startPromptInMode({
+      prompt: "Run the isolated task",
+      autoSubmit: true,
+      commandApprovalPolicy: "approve-for-me",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
+    });
+
+    expect(setSessionApprovalMode).toHaveBeenCalledWith("worktree-session", {
+      commandApprovalPolicy: "approve-for-me",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
+    });
+    expect(order).toEqual(["policy"]);
+    expect(provider.injectPrompt).not.toHaveBeenCalled();
+
+    await vi.runAllTimersAsync();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "worktree-session",
+      "Run the isolated task",
+      "code",
+      expect.objectContaining({
+        displayText: "Run the isolated task",
+        origin: "vscode",
+      }),
+    );
+    expect(order).toEqual(["policy", "prompt"]);
+    vi.useRealTimers();
+  });
+});
+
 describe("tool terminal reveal messages", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -90,6 +153,167 @@ describe("tool terminal reveal messages", () => {
     });
 
     expect(revealTerminal).toHaveBeenCalledWith("tool-running");
+  }, 15_000);
+
+  it("projects MCP parallel opt-ins to Browser Ask Agent", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (
+      provider as unknown as {
+        askAgentMcpHub: {
+          getToolDefs(): unknown[];
+          getParallelToolCallServerNames(): string[];
+        };
+      }
+    ).askAgentMcpHub = {
+      getToolDefs: () => [
+        {
+          name: "parallel__read",
+          description: "Parallel read",
+          input_schema: { type: "object" },
+        },
+        {
+          name: "serial__read",
+          description: "Serial read",
+          input_schema: { type: "object" },
+        },
+      ],
+      getParallelToolCallServerNames: () => ["parallel"],
+    };
+
+    expect(provider.submitBrowserAskAgentMcpTools()).toMatchObject({
+      ok: true,
+      parallelSafeToolNames: ["parallel__read"],
+      parallelSafeServerNames: ["parallel"],
+    });
+  }, 15_000);
+
+  it("uses the selected provider's fast model and enforces selector variants", async () => {
+    const { providerRegistry } = await import("./providers/index.js");
+    const complete = vi.fn(async () => ({
+      text: String.raw`^TARGET=[A-Za-z0-9_.-]+[ \t]+make[ \t]+test-[A-Za-z0-9_.-]+$`,
+    }));
+    providerRegistry.register({
+      id: "regex-suggestion-test",
+      displayName: "Regex suggestion test",
+      condenseModel: "regex-fast",
+      listModels: () => [
+        {
+          id: "regex-foreground",
+          displayName: "Regex foreground",
+          provider: "regex-suggestion-test",
+          capabilities: {},
+        },
+      ],
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => ({})),
+      stream: vi.fn(),
+      complete,
+    } as never);
+
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (
+      provider as unknown as {
+        sessionManager: unknown;
+      }
+    ).sessionManager = {
+      getForegroundSession: () => ({
+        model: "regex-foreground",
+        projectScope: { displayName: "compiler" },
+        title: "Test language targets",
+        mode: "code",
+        filesRead: new Set(),
+        getAllMessages: () => [
+          { role: "user", content: "Run the Go test target" },
+        ],
+      }),
+      getConfig: () => ({ model: "regex-foreground" }),
+    };
+
+    await expect(
+      provider.suggestRegexForCommand({
+        fullCommand: "TARGET=tertiary make test-go",
+        subCommand: "TARGET=tertiary make test-go",
+      }),
+    ).resolves.toBe(
+      String.raw`^TARGET=[A-Za-z0-9_.-]+[ \t]+make[ \t]+test-[A-Za-z0-9_.-]+$`,
+    );
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "regex-fast",
+        reasoningEffort: "none",
+        messages: [
+          expect.objectContaining({
+            content: expect.stringContaining(
+              "TARGET=tertiary make test-agentlink-variant",
+            ),
+          }),
+        ],
+      }),
+    );
+  }, 15_000);
+
+  it("polishes the composer draft with the provider's fast model", async () => {
+    const { providerRegistry } = await import("./providers/index.js");
+    const complete = vi.fn(async () => ({
+      text: "Please fix the login bug in auth.ts.\n",
+    }));
+    providerRegistry.register({
+      id: "polish-test",
+      displayName: "Polish test",
+      condenseModel: "polish-fast",
+      listModels: () => [
+        {
+          id: "polish-foreground",
+          displayName: "Polish foreground",
+          provider: "polish-test",
+          capabilities: {},
+        },
+      ],
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => ({})),
+      stream: vi.fn(),
+      complete,
+    } as never);
+
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (
+      provider as unknown as {
+        sessionManager: unknown;
+      }
+    ).sessionManager = {
+      getForegroundSession: () => ({ model: "polish-foreground" }),
+      getConfig: () => ({ model: "polish-foreground" }),
+    };
+
+    await expect(
+      provider.polishPrompt({ draft: "plese fix the login bug in auth.ts" }),
+    ).resolves.toBe("Please fix the login bug in auth.ts.");
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "polish-fast",
+        reasoningEffort: "none",
+        temperature: 0,
+        messages: [
+          expect.objectContaining({
+            content: expect.stringContaining(
+              "plese fix the login bug in auth.ts",
+            ),
+          }),
+        ],
+      }),
+    );
   }, 15_000);
 });
 
@@ -323,7 +547,19 @@ describe("session artifact routing", () => {
             text: string,
             attachments: string[],
             projectRoot: string,
-          ): Promise<string>;
+          ): Promise<{
+            text: string;
+            images: Array<{
+              name: string;
+              mimeType: string;
+              base64: string;
+            }>;
+            documents: Array<{
+              name: string;
+              mimeType: string;
+              base64: string;
+            }>;
+          }>;
         }
       ).resolveAttachments(
         "[Attached: link.txt]\n\nInspect this",
@@ -331,8 +567,10 @@ describe("session artifact routing", () => {
         projectRoot,
       );
 
-      expect(result).toContain("[Error: could not read file]");
-      expect(result).not.toContain("must-not-leak");
+      expect(result.text).toContain("[Error: could not read file]");
+      expect(result.text).not.toContain("must-not-leak");
+      expect(result.images).toEqual([]);
+      expect(result.documents).toEqual([]);
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
@@ -890,6 +1128,125 @@ describe("ChatViewProvider session state sync", () => {
     );
   });
 
+  it("couples browser Approve for Me changes to session write approval in order", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const order: string[] = [];
+    let commandApprovalPolicy: "safe" | "approve-for-me" = "safe";
+    let writeApproval: "prompt" | "session" = "prompt";
+    const setCommandApprovalPolicy = vi.fn(
+      (_sessionId: string, policy: typeof commandApprovalPolicy) => {
+        order.push(`policy:${policy}`);
+        commandApprovalPolicy = policy;
+      },
+    );
+    const resetSessionAgentWriteApproval = vi.fn(() => {
+      order.push("write:prompt");
+      writeApproval = "prompt";
+    });
+    provider.setApprovalManager({
+      getAgentWriteApprovalState: vi.fn(() => writeApproval),
+      setAgentWriteApprovalSelection: vi.fn(
+        (_sessionId: string, selection: typeof writeApproval) => {
+          order.push(`write:${selection}`);
+          writeApproval = selection;
+          return true;
+        },
+      ),
+      resetSessionAgentWriteApproval,
+      onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+    } as never);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => ({
+        id: "foreground-session",
+        projectScope: { rootPath: "/workspace/project" },
+      })),
+      getCommandApprovalPolicy: vi.fn(() => commandApprovalPolicy),
+      setCommandApprovalPolicy,
+    } as never);
+    (provider as unknown as { sendInitialState: () => void }).sendInitialState =
+      vi.fn();
+
+    expect(
+      provider.submitBrowserSetCommandApprovalPolicy("approve-for-me"),
+    ).toEqual({ ok: true });
+    expect(order).toEqual(["write:session", "policy:approve-for-me"]);
+
+    order.length = 0;
+    expect(provider.submitBrowserSetCommandApprovalPolicy("safe")).toEqual({
+      ok: true,
+    });
+    expect(order).toEqual(["policy:safe", "write:prompt"]);
+    expect(resetSessionAgentWriteApproval).toHaveBeenCalledWith(
+      "foreground-session",
+    );
+  });
+
+  it("updates browser write approval without resetting unrelated sessions", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    let commandApprovalPolicy: "safe" | "approve-for-me" = "approve-for-me";
+    let writeApproval: "prompt" | "session" | "project" | "global" = "prompt";
+    const setAgentWriteApprovalSelection = vi.fn(
+      (_sessionId: string, selection: typeof writeApproval) => {
+        writeApproval = selection;
+        return true;
+      },
+    );
+    const setCommandApprovalPolicy = vi.fn(
+      (_sessionId: string, policy: typeof commandApprovalPolicy) => {
+        commandApprovalPolicy = policy;
+      },
+    );
+    provider.setApprovalManager({
+      getAgentWriteApprovalState: vi.fn(() => writeApproval),
+      setAgentWriteApprovalSelection,
+      resetSessionAgentWriteApproval: vi.fn(),
+      onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+    } as never);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => ({
+        id: "foreground-session",
+        projectScope: { rootPath: "/workspace/project" },
+      })),
+      getCommandApprovalPolicy: vi.fn(() => commandApprovalPolicy),
+      setCommandApprovalPolicy,
+    } as never);
+    (provider as unknown as { sendInitialState: () => void }).sendInitialState =
+      vi.fn();
+
+    expect(provider.submitBrowserSetWriteApproval("session")).toEqual({
+      ok: true,
+    });
+    expect(setAgentWriteApprovalSelection).toHaveBeenCalledWith(
+      "foreground-session",
+      "session",
+      "/workspace/project",
+    );
+    expect(provider.submitBrowserSetWriteApproval("prompt")).toEqual({
+      ok: true,
+    });
+    expect(setCommandApprovalPolicy).toHaveBeenCalledWith(
+      "foreground-session",
+      "safe",
+    );
+    expect(commandApprovalPolicy).toBe("safe");
+
+    setAgentWriteApprovalSelection.mockReturnValueOnce(false);
+    expect(provider.submitBrowserSetWriteApproval("project")).toEqual({
+      ok: false,
+    });
+    expect(provider.submitBrowserSetWriteApproval("invalid")).toEqual({
+      ok: false,
+    });
+  });
+
   it("rejects non-MCP native tools from the Ask Agent MCP bridge", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
@@ -1081,6 +1438,55 @@ describe("ChatViewProvider session state sync", () => {
           message.id === "question-1",
       ),
     ).toBe(true);
+  });
+
+  it("does not mark a restored ask_user question as an interrupted session", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+
+    const session = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle",
+      reasoningEffort: "high",
+      runState: {
+        phase: "awaiting_question",
+        startedAt: 123,
+        question: { questionRequestId: "question-1" },
+      },
+    };
+    const manager = {
+      getForegroundSession: vi.fn(() => session),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+
+    (
+      provider as unknown as { sendInitialState: () => void }
+    ).sendInitialState();
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "stateUpdate",
+        state: expect.objectContaining({ interrupted: false }),
+      }),
+    );
   });
 
   it("keeps a restored ask_user question visible when recovery rejects the answer", async () => {
@@ -1733,6 +2139,163 @@ describe("ChatViewProvider session state sync", () => {
     ]);
   });
 
+  it("sends browser workspace image attachments as model media", async () => {
+    const projectRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-browser-image-"),
+    );
+    const imageBytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00,
+    ]);
+    fs.writeFileSync(path.join(projectRoot, "canteen.png"), imageBytes);
+
+    try {
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      const session = {
+        id: "session-1",
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        status: "idle",
+        reasoningEffort: "high",
+        estimatedTotalUsed: 0,
+        lastInputTokens: 0,
+        lastOutputTokens: 0,
+        activeFilePath: undefined,
+        projectScope: {
+          projectId: "project-a",
+          workspaceFolderUri: `file://${projectRoot}`,
+          displayName: "Project A",
+          rootPath: projectRoot,
+        },
+        projectAvailability: "available",
+      };
+      const sendMessage = vi.fn(async () => undefined);
+      provider.setSessionManager({
+        getForegroundSession: vi.fn(() => session),
+        getSession: vi.fn(() => session),
+        getConfig: vi.fn(() => ({
+          model: "claude-sonnet-4-6",
+          autoCondenseThreshold: 0.8,
+        })),
+        getSessionInfos: vi.fn(() => []),
+        getBgSessionInfos: vi.fn(() => []),
+        sendMessage,
+      } as never);
+
+      await expect(
+        provider.submitBrowserSend({
+          text: "[Attached: canteen.png]\n\nInspect this image",
+          displayText: "[Attached: canteen.png]\n\nInspect this image",
+          attachments: ["canteen.png"],
+          sessionId: "session-1",
+          projectId: "project-a",
+          mode: "code",
+        }),
+      ).resolves.toEqual({ ok: true });
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        "session-1",
+        "Inspect this image",
+        "code",
+        expect.objectContaining({
+          images: [
+            {
+              name: "canteen.png",
+              mimeType: "image/png",
+              base64: imageBytes.toString("base64"),
+            },
+          ],
+        }),
+      );
+      expect(JSON.stringify(sendMessage.mock.calls)).not.toContain("\uFFFD");
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("sends VS Code workspace image attachments as model media", async () => {
+    const projectRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-vscode-image-"),
+    );
+    const imageBytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00,
+    ]);
+    fs.writeFileSync(path.join(projectRoot, "canteen.png"), imageBytes);
+
+    try {
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      const session = {
+        id: "session-1",
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        status: "idle",
+        reasoningEffort: "high",
+        estimatedTotalUsed: 0,
+        lastInputTokens: 0,
+        lastOutputTokens: 0,
+        activeFilePath: undefined,
+        projectScope: {
+          projectId: "project-a",
+          workspaceFolderUri: `file://${projectRoot}`,
+          displayName: "Project A",
+          rootPath: projectRoot,
+        },
+        projectAvailability: "available",
+      };
+      const sendMessage = vi.fn(async () => undefined);
+      provider.setSessionManager({
+        getForegroundSession: vi.fn(() => session),
+        getSession: vi.fn(() => session),
+        getConfig: vi.fn(() => ({
+          model: "claude-sonnet-4-6",
+          autoCondenseThreshold: 0.8,
+        })),
+        getSessionInfos: vi.fn(() => []),
+        getBgSessionInfos: vi.fn(() => []),
+        sendMessage,
+      } as never);
+
+      await (
+        provider as unknown as {
+          handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+        }
+      ).handleWebviewMessage({
+        command: "agentSend",
+        text: "[Attached: canteen.png]\n\nInspect this image",
+        displayText: "[Attached: canteen.png]\n\nInspect this image",
+        attachments: ["canteen.png"],
+        sessionId: "session-1",
+        mode: "code",
+      });
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        "session-1",
+        "Inspect this image",
+        "code",
+        expect.objectContaining({
+          origin: "vscode",
+          images: [
+            {
+              name: "canteen.png",
+              mimeType: "image/png",
+              base64: imageBytes.toString("base64"),
+            },
+          ],
+        }),
+      );
+      expect(JSON.stringify(sendMessage.mock.calls)).not.toContain("\uFFFD");
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it("marks a browser composer message as an interjection when queueing it", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
@@ -1863,6 +2426,213 @@ describe("ChatViewProvider session state sync", () => {
       undefined,
       undefined,
     );
+  });
+
+  it("pauses a pending interjection while its queued message is edited", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const clearPendingInterjectionIf = vi.fn();
+    (
+      provider as unknown as {
+        sessionManager: { getSession: ReturnType<typeof vi.fn> };
+      }
+    ).sessionManager = {
+      getSession: vi.fn(() => ({ clearPendingInterjectionIf })),
+    };
+    const postMessage = vi.fn();
+    (provider as unknown as { postMessage: typeof postMessage }).postMessage =
+      postMessage;
+
+    (
+      provider as unknown as {
+        pauseQueuedMessageInterjectionFromUi(
+          sessionId: string,
+          queueId: string,
+        ): void;
+      }
+    ).pauseQueuedMessageInterjectionFromUi("session-1", "queue-1");
+
+    expect(clearPendingInterjectionIf).toHaveBeenCalledWith("queue-1");
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "agentQueueInterjectionReady",
+      sessionId: "session-1",
+      queueId: "queue-1",
+      ready: false,
+    });
+  });
+
+  /**
+   * Session stub replicating AgentSession's pending-interjection FIFO
+   * semantics so webview message sequences can be verified end to end.
+   */
+  function createPendingInterjectionSession() {
+    type Entry = {
+      text: string;
+      queueId: string;
+      messageId?: string;
+      displayText?: string;
+      isSlashCommand?: boolean;
+      slashCommandLabel?: string;
+      attachments?: string[];
+      images?: Array<{ name: string; mimeType: string; base64: string }>;
+      documents?: Array<{ name: string; mimeType: string; base64: string }>;
+    };
+    const pending: Entry[] = [];
+    return {
+      id: "session-1",
+      status: "tool_executing",
+      setPendingInterjection(
+        text: string,
+        queueId: string,
+        messageId?: string,
+        displayText?: string,
+        isSlashCommand?: boolean,
+        slashCommandLabel?: string,
+        attachments?: string[],
+        images?: Entry["images"],
+        documents?: Entry["documents"],
+      ): boolean {
+        const entry: Entry = {
+          text,
+          queueId,
+          messageId,
+          displayText,
+          isSlashCommand,
+          slashCommandLabel,
+          attachments,
+          images,
+          documents,
+        };
+        const index = pending.findIndex((item) => item.queueId === queueId);
+        if (index >= 0) pending[index] = entry;
+        else pending.push(entry);
+        return true;
+      },
+      updatePendingInterjection(
+        queueId: string,
+        updates: Omit<Entry, "queueId">,
+      ): boolean {
+        const index = pending.findIndex((item) => item.queueId === queueId);
+        if (index < 0) return false;
+        pending[index] = { queueId, ...updates };
+        return true;
+      },
+      clearPendingInterjectionIf(queueId: string): Entry | null {
+        const index = pending.findIndex((item) => item.queueId === queueId);
+        if (index < 0) return null;
+        return pending.splice(index, 1)[0];
+      },
+      consumePendingInterjection(): Entry | null {
+        return pending.shift() ?? null;
+      },
+      setQueuedUiMessageCount: vi.fn(),
+      pending,
+    };
+  }
+
+  it("consumes the edited text after the webview edit sequence for a pending interjection", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = createPendingInterjectionSession();
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+    } as never);
+    (
+      provider as unknown as { postMessage: ReturnType<typeof vi.fn> }
+    ).postMessage = vi.fn();
+
+    const handle = (msg: Record<string, unknown>) =>
+      (
+        provider as unknown as {
+          handleWebviewMessage(msg: Record<string, unknown>): Promise<void>;
+        }
+      ).handleWebviewMessage(msg);
+
+    // Interject → pause (edit starts) → update (edit saved) → resume.
+    await handle({
+      command: "agentInterjectQueuedMessage",
+      sessionId: "session-1",
+      queueId: "queue-1",
+      text: "original message",
+      displayText: "original message",
+    });
+    await handle({
+      command: "agentPauseQueuedMessageInterjection",
+      sessionId: "session-1",
+      queueId: "queue-1",
+    });
+    await handle({
+      command: "agentUpdateQueuedMessage",
+      sessionId: "session-1",
+      queueId: "queue-1",
+      text: "edited message",
+      displayText: "edited message",
+    });
+    await handle({
+      command: "agentInterjectQueuedMessage",
+      sessionId: "session-1",
+      queueId: "queue-1",
+      text: "edited message",
+      displayText: "edited message",
+    });
+
+    const consumed = session.consumePendingInterjection();
+    expect(consumed).toMatchObject({
+      queueId: "queue-1",
+      text: "edited message",
+    });
+    expect(session.consumePendingInterjection()).toBeNull();
+  });
+
+  it("clears a pending interjection when the webview removes the queued message", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = createPendingInterjectionSession();
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+    } as never);
+    (
+      provider as unknown as { postMessage: ReturnType<typeof vi.fn> }
+    ).postMessage = vi.fn();
+
+    const handle = (msg: Record<string, unknown>) =>
+      (
+        provider as unknown as {
+          handleWebviewMessage(msg: Record<string, unknown>): Promise<void>;
+        }
+      ).handleWebviewMessage(msg);
+
+    await handle({
+      command: "agentInterjectQueuedMessage",
+      sessionId: "session-1",
+      queueId: "queue-1",
+      text: "delete me",
+      displayText: "delete me",
+    });
+    expect(session.pending).toHaveLength(1);
+
+    await handle({
+      command: "agentRemoveQueuedMessage",
+      sessionId: "session-1",
+      queueId: "queue-1",
+    });
+
+    expect(session.pending).toHaveLength(0);
+    expect(session.consumePendingInterjection()).toBeNull();
   });
 
   it("clears the projected transcript when creating a new browser session", async () => {
@@ -2133,6 +2903,85 @@ describe("ChatViewProvider session state sync", () => {
             "Provider returned empty responses 3 times in a row. Please retry.",
       ),
     ).toBe(true);
+  });
+
+  it("refreshes the context budget snapshot when the foreground session condenses", async () => {
+    const { providerRegistry } = await import("./providers/index.js");
+    providerRegistry.register({
+      id: "ctx-budget-test",
+      displayName: "Context budget test",
+      condenseModel: "ctx-test-model",
+      listModels: () => [
+        {
+          id: "ctx-test-model",
+          displayName: "Ctx test",
+          provider: "ctx-budget-test",
+          capabilities: {},
+        },
+      ],
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => ({
+        contextWindow: 200_000,
+        maxOutputTokens: 8_000,
+      })),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as never);
+
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+
+    // Post-condense session state: usage already reset to the new estimate.
+    const session = {
+      id: "fg-1",
+      background: false,
+      status: "streaming",
+      title: "Chat",
+      mode: "code",
+      model: "ctx-test-model",
+      lastInputTokens: 12_000,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      estimatedInputUsed: 12_000,
+      estimatedTotalUsed: 12_000,
+      getAllMessages: vi.fn(() => []),
+    };
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getSession: (sessionId: string) =>
+        sessionId === session.id ? session : undefined,
+      getForegroundSession: () => session,
+      getConfig: () => ({ maxTokens: 8_000, thinkingBudget: 0 }),
+    };
+
+    const handleAgentEvent = (
+      provider as unknown as {
+        handleAgentEvent: (sessionId: string, event: unknown) => void;
+      }
+    ).handleAgentEvent;
+    handleAgentEvent.call(provider, "fg-1", {
+      type: "condense",
+      summary: "summary",
+      prevInputTokens: 180_000,
+      newInputTokens: 12_000,
+      durationMs: 500,
+    });
+
+    const stateUpdate = mockPostMessage.mock.calls
+      .map(([message]) => message)
+      .find((message) => message.type === "stateUpdate");
+    expect(stateUpdate).toBeDefined();
+    expect(stateUpdate.state.sessionId).toBe("fg-1");
+    expect(stateUpdate.state.contextBudget).toMatchObject({
+      usedInputTokens: 12_000,
+      contextWindow: 200_000,
+    });
   });
 
   it("emits background-only transcript events for background sessions", async () => {
@@ -2594,6 +3443,9 @@ describe("ChatViewProvider session state sync", () => {
         thinkingEnabled: false,
         agentWriteApproval: undefined,
         commandApprovalPolicy: "safe",
+        approvalPolicy: "on-request",
+        approvalReviewer: "user",
+        executionPreset: "native-manual",
         configuredCommandApprovalPolicy: "safe",
         revertRecoveryNotice: null,
       },
@@ -2747,6 +3599,7 @@ describe("ChatViewProvider session state sync", () => {
             kind: string;
             title: string;
             targetPath?: string;
+            backgroundTask?: string;
             choices: Array<{ label: string; value: string }>;
           },
           sessionId?: string,
@@ -2764,6 +3617,7 @@ describe("ChatViewProvider session state sync", () => {
         kind: "write",
         title: "Modify `src/output.ts`?",
         targetPath: "src/output.ts",
+        backgroundTask: "Review implementation",
         choices: [{ label: "Accept", value: "accept" }],
       },
       "session-b",
@@ -2773,6 +3627,7 @@ describe("ChatViewProvider session state sync", () => {
         projectId: "project-b",
         displayName: "Project B",
       },
+      backgroundTask: "Review implementation",
       targetPath: "/workspace/b/src/output.ts",
     });
     expect(backgroundApproval.targetProject).toBeUndefined();
@@ -2829,6 +3684,7 @@ describe("ChatViewProvider session state sync", () => {
 
     const ok = provider.submitBrowserApprovalDecision({
       id: "approval-inline",
+      approvalKind: "write",
       decision: "accept",
     });
 
@@ -2837,6 +3693,73 @@ describe("ChatViewProvider session state sync", () => {
     });
     expect(ok).toBe(true);
     expect(publishApprovalIdleSpy).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a worktree launch approval distinct from an overlapping main-agent approval", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const uiPublisher = (
+      provider as unknown as {
+        uiPublisher: { publishApproval: (request: unknown) => void };
+      }
+    ).uiPublisher;
+    const publishApprovalSpy = vi.spyOn(uiPublisher, "publishApproval");
+
+    const mainRespond = vi.fn(() => true);
+    provider.forwardApproval(
+      {
+        kind: "command",
+        id: "main-command",
+        command: "npm test",
+        subCommands: [],
+      },
+      mainRespond,
+    );
+
+    const worktreePromise = provider.requestApproval({
+      kind: "worktree",
+      id: "worktree-launch",
+      title: "Start worktree agent: Reliability pass",
+      detail: "Destination: /workspace/reliability",
+      choices: [
+        {
+          label: "Approve and autosubmit prompt",
+          value: "approve-autosubmit",
+          isPrimary: true,
+        },
+        {
+          label: "Approve, prefill only",
+          value: "approve-prefill",
+        },
+        { label: "Deny", value: "deny", isDanger: true },
+      ],
+    });
+
+    expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: "worktree-launch",
+        kind: "worktree",
+      }),
+    );
+
+    const ok = provider.submitBrowserApprovalDecision({
+      id: "worktree-launch",
+      approvalKind: "worktree",
+      decision: "approve-autosubmit",
+    });
+
+    await expect(worktreePromise).resolves.toMatchObject({
+      decision: "approve-autosubmit",
+    });
+    expect(ok).toBe(true);
+    expect(mainRespond).not.toHaveBeenCalled();
+    expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "main-command" }),
+    );
   });
 
   it("restores an older forwarded approval after resolving an overlapping newer inline approval", async () => {
@@ -2858,7 +3781,7 @@ describe("ChatViewProvider session state sync", () => {
     const publishApprovalSpy = vi.spyOn(uiPublisher, "publishApproval");
     const publishApprovalIdleSpy = vi.spyOn(uiPublisher, "publishApprovalIdle");
 
-    const forwardedRespond = vi.fn();
+    const forwardedRespond = vi.fn(() => true);
     provider.forwardApproval(
       {
         kind: "command",
@@ -2885,6 +3808,7 @@ describe("ChatViewProvider session state sync", () => {
 
     const ok = provider.submitBrowserApprovalDecision({
       id: "foreground-write",
+      approvalKind: "write",
       decision: "accept",
     });
 
@@ -2927,7 +3851,7 @@ describe("ChatViewProvider session state sync", () => {
         { label: "Reject", value: "reject", isDanger: true },
       ],
     });
-    const forwardedRespond = vi.fn();
+    const forwardedRespond = vi.fn(() => true);
     provider.forwardApproval(
       {
         kind: "command",
@@ -2944,6 +3868,7 @@ describe("ChatViewProvider session state sync", () => {
 
     const ok = provider.submitBrowserApprovalDecision({
       id: "background-command",
+      approvalKind: "command",
       decision: "accept",
     });
 
@@ -2958,11 +3883,81 @@ describe("ChatViewProvider session state sync", () => {
 
     provider.submitBrowserApprovalDecision({
       id: "foreground-write",
+      approvalKind: "write",
       decision: "reject",
     });
     await expect(foregroundPromise).resolves.toMatchObject({
       decision: "reject",
     });
+  });
+
+  it("keeps a forwarded native command approval pending until the owner accepts it", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const respond = vi
+      .fn<
+        (
+          message: import("../approvals/webview/types.js").DecisionMessage,
+        ) => boolean
+      >()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+
+    provider.forwardApproval(
+      {
+        kind: "command",
+        id: "native-escalation",
+        command: "dotnet build",
+        cwd: "/workspace",
+        reason: "Needs a host facility.",
+      },
+      respond,
+    );
+
+    expect(
+      provider.submitBrowserApprovalDecision({
+        id: "native-escalation",
+        approvalKind: "write",
+        decision: "run-once",
+      }),
+    ).toBe(false);
+    expect(respond).not.toHaveBeenCalled();
+
+    expect(
+      provider.submitBrowserApprovalDecision({
+        id: "native-escalation",
+        approvalKind: "command",
+        decision: "edit",
+        editedCommand: "dotnet test",
+      }),
+    ).toBe(false);
+    expect(respond).toHaveBeenCalledTimes(1);
+
+    expect(
+      provider.submitBrowserApprovalDecision({
+        id: "native-escalation",
+        approvalKind: "command",
+        decision: "run-once",
+      }),
+    ).toBe(true);
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(respond).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: "native-escalation",
+        approvalKind: "command",
+        decision: "run-once",
+      }),
+    );
+    expect(
+      provider.submitBrowserApprovalDecision({
+        id: "native-escalation",
+        approvalKind: "command",
+        decision: "run-once",
+      }),
+    ).toBe(false);
   });
 
   it("publishes question cleared after resolving a browser question response", async () => {
@@ -3117,6 +4112,95 @@ describe("handleModeSwitch resume queueing", () => {
     return provider;
   }
 
+  it("uses a one-shot Guardian approval for an exact project mode switch", async () => {
+    const sourceMode = {
+      slug: "architect",
+      name: "Architect",
+      icon: "organization",
+      toolGroups: ["read", "search"],
+    };
+    const targetMode = {
+      slug: "code",
+      name: "Code",
+      icon: "code",
+      toolGroups: ["read", "search", "edit", "command"],
+    };
+    const fg = {
+      ...session(),
+      agentMode: sourceMode,
+      isAborted: false,
+      getAllMessages: () => [
+        { role: "user", content: "Implement the requested change" },
+      ],
+    };
+    const switchSessionMode = vi.fn(async () => ({ ...fg, mode: "code" }));
+    const queueModeSwitchResume = vi.fn();
+    const manager = {
+      getForegroundSession: vi.fn(() => fg),
+      getSession: vi.fn(() => fg),
+      getSessionApprovalMode: vi.fn(() => ({
+        commandApprovalPolicy: "approve-for-me",
+        approvalPolicy: "on-request",
+        approvalReviewer: "auto-review",
+        executionPreset: "workspace-write",
+      })),
+      resolveSessionMode: vi.fn(async () => targetMode),
+      switchSessionMode,
+      queueModeSwitchResume,
+      getCommandApprovalPolicy: vi.fn(() => "approve-for-me"),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+    };
+    const provider = await makeProvider(manager);
+    provider.setApprovalManager({
+      getAgentWriteApprovalState: vi.fn(() => "session"),
+      setAgentWriteApprovalSelection: vi.fn(() => true),
+      resetSessionAgentWriteApproval: vi.fn(),
+      onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+    } as never);
+    provider.setActionApprovalReviewer({
+      review: vi.fn(async (input) => ({
+        disposition: "reviewed" as const,
+        binding: {
+          sessionId: input.sessionId,
+          policyKey: (
+            await import("../approvals/actionApprovalReview.js")
+          ).actionApprovalPolicyKey(input.policy),
+          actionKey: (
+            await import("../approvals/actionApprovalReview.js")
+          ).actionApprovalActionKey(input)!,
+          kind: input.kind,
+        },
+        result: {
+          outcome: "allow" as const,
+          risk: "low" as const,
+          userAuthorization: "high" as const,
+          rationale: "Allowed",
+          status: "reviewed" as const,
+          model: "guardian-model",
+        },
+      })),
+    });
+    const requestApproval = vi.spyOn(provider, "requestApproval");
+
+    const result = await provider.handleModeSwitch(
+      "code",
+      "Implement now",
+      false,
+      fg.id,
+    );
+
+    expect(result).toMatchObject({ approved: true, mode: "code" });
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(switchSessionMode).toHaveBeenCalledWith("session-1", "code", {
+      agentMode: targetMode,
+    });
+  });
+
   it("queues a mode-switch resume after an in-place silent switch", async () => {
     const fg = session();
     const queueModeSwitchResume = vi.fn();
@@ -3145,6 +4229,49 @@ describe("handleModeSwitch resume queueing", () => {
       followUp: undefined,
     });
   });
+
+  it.each([
+    ["approve-for-me", 0],
+    ["safe", 1],
+  ] as const)(
+    "reconciles session writes after a %s mode switch",
+    async (policy, expectedResets) => {
+      const fg = session();
+      const queueModeSwitchResume = vi.fn();
+      const resetSessionAgentWriteApproval = vi.fn();
+      const provider = await makeProvider({
+        getForegroundSession: vi.fn(() => fg),
+        switchSessionMode: vi.fn(async () => fg),
+        queueModeSwitchResume,
+        getCommandApprovalPolicy: vi.fn(() => policy),
+        getConfig: vi.fn(() => ({
+          model: "claude-sonnet-4-6",
+          autoCondenseThreshold: 0.8,
+        })),
+        getSessionInfos: vi.fn(() => []),
+        getBgSessionInfos: vi.fn(() => []),
+      });
+      provider.setApprovalManager({
+        getAgentWriteApprovalState: vi.fn(() => "session"),
+        setAgentWriteApprovalSelection: vi.fn(() => true),
+        resetSessionAgentWriteApproval,
+        onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+      } as never);
+
+      const result = await provider.handleModeSwitch(
+        "code",
+        "change implementation mode",
+        true,
+        fg.id,
+      );
+
+      expect(result).toMatchObject({ approved: true, mode: "code" });
+      expect(resetSessionAgentWriteApproval).toHaveBeenCalledTimes(
+        expectedResets,
+      );
+      expect(queueModeSwitchResume).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not report success when the target session no longer exists", async () => {
     const queueModeSwitchResume = vi.fn();

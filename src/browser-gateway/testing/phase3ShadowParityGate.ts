@@ -449,6 +449,9 @@ function createReadSet(): BrowserGatewayOwnerProjectionReadSet {
     policies: {
       agentWriteApproval: "prompt",
       commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "user",
+      executionPreset: "native-manual",
       configuredCommandApprovalPolicy: "safe",
     },
   };
@@ -530,6 +533,9 @@ function createLegacySnapshot(
           : null,
         agentWriteApproval: readSet.policies.agentWriteApproval,
         commandApprovalPolicy: readSet.policies.commandApprovalPolicy,
+        approvalPolicy: readSet.policies.approvalPolicy,
+        approvalReviewer: readSet.policies.approvalReviewer,
+        executionPreset: readSet.policies.executionPreset,
         configuredCommandApprovalPolicy:
           readSet.policies.configuredCommandApprovalPolicy,
       },

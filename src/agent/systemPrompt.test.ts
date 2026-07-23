@@ -125,6 +125,23 @@ describe("buildSystemPrompt", () => {
     );
   });
 
+  it("requires TODO state to stay synchronized with actual work", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain("## TODO Discipline");
+    expect(result).toContain(
+      "Once a list exists, it is user-visible execution state and must stay synchronized with reality",
+    );
+    expect(result).toContain(
+      "Before moving to another item, update the list in the same transition",
+    );
+    expect(result).toContain(
+      "Treat stale status as bookkeeping to repair, not evidence that work must be repeated",
+    );
+    expect(result).toContain(
+      "Before any final `set_task_status`, verify the TODO list matches the claimed outcome",
+    );
+  });
+
   it("includes code mode section for 'code' mode", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).toContain("Code mode");
@@ -140,6 +157,23 @@ describe("buildSystemPrompt", () => {
     );
     expect(result).toContain(
       "Request a follow-up review only when the fixes or subsequent work are substantial enough to form a new body of work",
+    );
+  });
+
+  it("defaults to early background delegation for parallelizable work", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain(
+      "Treat useful parallelism as the default for non-trivial tasks, not as a last resort",
+    );
+    expect(result).toContain(
+      "before substantial investigation or implementation, identify independent work lanes",
+    );
+    expect(result).toContain("default to spawning a background agent early");
+    expect(result).toContain(
+      "spawn background agents before or during implementation rather than handling every lane sequentially",
+    );
+    expect(result).toContain(
+      "Avoid background agents when the task is strictly sequential",
     );
   });
 
@@ -904,7 +938,12 @@ describe("buildSystemPrompt", () => {
     });
     expect(result).toContain("Provider-Specific Behavior");
     expect(result).toContain("Visible progress and rationale");
+    expect(result).toContain("interactive, collaborative partner");
     expect(result).toContain("do not rely on hidden thinking");
+    expect(result).toContain("After at most 2-3 consecutive tool calls");
+    expect(result).toContain(
+      "do not bundle investigation, implementation, and validation into one silent tool-only sequence",
+    );
   });
 
   it("gives anthropic models high-level code tool guidance", async () => {

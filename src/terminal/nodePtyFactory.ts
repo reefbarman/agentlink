@@ -19,6 +19,7 @@ export interface NodePtyForkOptions {
 }
 
 export interface NodePtyProcess {
+  readonly pid?: number;
   onData(listener: (data: string) => void): HostPtyDisposable;
   onExit(listener: (event: HostPtyExitEvent) => void): HostPtyDisposable;
   write(data: string): void;

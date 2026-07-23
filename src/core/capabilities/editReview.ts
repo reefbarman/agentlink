@@ -26,6 +26,23 @@ export type EditReviewPrepareResult =
   | { status: "continue"; content: string }
   | { status: "abort"; result: EditReviewResult };
 
+export interface PreparedWriteProposal {
+  absolutePath: string;
+  baselineExists: boolean;
+  baselineContent: string;
+  proposedContent: string;
+}
+
+/** One exact proposal or an atomic set that must be consumed together. */
+export type PreparedWriteProposalInput =
+  | PreparedWriteProposal
+  | readonly PreparedWriteProposal[];
+
+export interface OneShotWriteAuthorization {
+  authorization: WriteAuthorizationDecision;
+  consume(current: PreparedWriteProposalInput): boolean;
+}
+
 export interface EditSaveFailureRecovery {
   document_dirty: boolean;
   disk_state: "unchanged" | "changed" | "missing" | "unreadable";
@@ -45,6 +62,8 @@ export interface EditReviewParams {
   diagnosticDelay: number;
   approvalPanel?: unknown;
   onApprovalRequest?: OnApprovalRequest;
+  /** Called only after the interactive approval UI has been enqueued. */
+  onApprovalPresented?: () => void;
   sessionId: string;
   /**
    * Optional portable content refresh that runs inside the provider-owned write
@@ -54,6 +73,16 @@ export interface EditReviewParams {
   prepareContent?: (
     currentContent: string,
   ) => EditReviewPrepareResult | Promise<EditReviewPrepareResult>;
+  /**
+   * Optional one-shot authorization prepared from the exact locked proposal.
+   * Providers must rebuild the proposal and consume immediately before writing.
+   */
+  prepareOneShotAuthorization?: (
+    proposal: PreparedWriteProposalInput,
+  ) =>
+    | OneShotWriteAuthorization
+    | undefined
+    | Promise<OneShotWriteAuthorization | undefined>;
   /** Whether the provider may create a missing file before writing. Defaults to true. */
   allowCreate?: boolean;
   operation?: EditReviewResult["operation"];
@@ -87,6 +116,7 @@ export interface EditReviewResult {
   warnings?: string[];
   decision?: EditReviewDecision;
   writeApprovalResponse?: unknown;
+  authorization?: WriteAuthorizationDecision;
 }
 
 export interface EditReviewProvider {
@@ -128,6 +158,7 @@ export interface MultiFileEditReviewParams {
   sessionId: string;
   approvalPanel?: unknown;
   onApprovalRequest?: OnApprovalRequest;
+  prepareOneShotAuthorization?: EditReviewParams["prepareOneShotAuthorization"];
 }
 
 export interface MultiFileEditReviewProvider {
@@ -142,6 +173,8 @@ export interface RenameSymbolParams {
   sessionId: string;
   approvalPanel?: unknown;
   onApprovalRequest?: OnApprovalRequest;
+  /** The calling tool already authorized reading the source document. */
+  sourceReadAuthorized?: boolean;
 }
 
 export interface RenameSymbolProvider {
@@ -156,7 +189,33 @@ export interface WriteApprovalQuery {
   mode?: string;
 }
 
+export type WriteAuthorizationBasis =
+  | "master_bypass"
+  | "architect_plan"
+  | "blanket_approval"
+  | "write_rule"
+  | "settings_rule"
+  | "guardian"
+  | "human"
+  | "none";
+
+export interface WriteAuthorizationDecision {
+  allowed: boolean;
+  basis: WriteAuthorizationBasis;
+  scope?: "session" | "project" | "global" | "workspace_setting";
+  rule?: { pattern: string; mode: "glob" | "prefix" | "exact" };
+  reason?: string;
+  decision?: EditReviewDecision;
+}
+
+export interface WriteApprovalPromptEvent extends WriteApprovalQuery {
+  authorization: WriteAuthorizationDecision;
+}
+
 export interface WriteApprovalPolicyProvider {
+  /** Explain the exact policy basis used for the automatic-write decision. */
+  getAuthorization?(query: WriteApprovalQuery): WriteAuthorizationDecision;
+  /** Compatibility convenience for callers that only need the decision bit. */
   canAutoApprove(query: WriteApprovalQuery): boolean;
   recordDecision(params: {
     decision: EditReviewDecision;
@@ -166,4 +225,18 @@ export interface WriteApprovalPolicyProvider {
     inWorkspace: boolean;
     writeApprovalResponse?: unknown;
   }): void;
+}
+
+export function evaluateWriteAuthorization(
+  provider: WriteApprovalPolicyProvider | undefined,
+  query: WriteApprovalQuery,
+): WriteAuthorizationDecision {
+  if (!provider) return { allowed: false, basis: "none" };
+  return (
+    provider.getAuthorization?.(query) ?? {
+      allowed: provider.canAutoApprove(query),
+      basis: "none",
+      reason: "legacy_policy_provider",
+    }
+  );
 }

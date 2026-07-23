@@ -420,6 +420,27 @@ describe("AgentSession", () => {
     it("injects canonical resume context into provider history after a condense summary", async () => {
       const session = await makeSession();
       session.replaceMessages([
+        { role: "user", content: "Fix issue" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "todo-before-condense",
+              name: "todo_write",
+              input: {
+                todos: [
+                  {
+                    id: "fix",
+                    content: "Fix the issue",
+                    activeForm: "Fixing the issue",
+                    status: "in_progress",
+                  },
+                ],
+              },
+            },
+          ],
+        },
         {
           role: "user",
           isSummary: true,
@@ -455,6 +476,11 @@ describe("AgentSession", () => {
         text?: string;
       }>;
       expect(injected[0]?.text).toContain("## Resume Anchor (deterministic)");
+      expect(injected[0]?.text).toContain(
+        "### Current structured TODO state (authoritative)",
+      );
+      expect(injected[0]?.text).toContain('"content": "Fix the issue"');
+      expect(injected[0]?.text).toContain('"status": "in_progress"');
       expect(msgs[3]).toEqual({
         role: "user",
         content: "Continue fixing the issue.",
@@ -553,6 +579,24 @@ describe("AgentSession", () => {
 
       expect(session.estimatedInputUsed).toBe(1600);
       expect(session.estimatedTotalUsed).toBe(2100);
+    });
+
+    it("attributes estimated accumulation per source and resets on fresh usage", async () => {
+      const session = await makeSession();
+      session.addEstimatedTokens(400, "tool:read_file");
+      session.addEstimatedTokens(800, "tool:read_file");
+      session.addEstimatedTokens(400);
+
+      // 4 chars ≈ 1 token
+      expect(session.estimatedAccumulationBySource).toEqual({
+        "tool:read_file": 300,
+        other: 100,
+      });
+      expect(session.estimatedAccumulatedTokens).toBe(400);
+
+      session.addUsage(1000, 500);
+      expect(session.estimatedAccumulatedTokens).toBe(0);
+      expect(session.estimatedAccumulationBySource).toEqual({});
     });
 
     it("restoreFromStore restores cache totals and last token snapshot", async () => {
@@ -805,6 +849,22 @@ describe("AgentSession", () => {
       expect(session.hasPendingInterjections).toBe(true);
       session.consumePendingInterjection();
       expect(session.hasPendingInterjections).toBe(false);
+    });
+
+    it("notifies queued listeners until they unsubscribe", async () => {
+      const session = await makeSession();
+      const seen: number[] = [];
+      const unsubscribe = session.onPendingInterjectionQueued(() =>
+        seen.push(seen.length + 1),
+      );
+
+      session.setPendingInterjection("first", "q1");
+      session.setPendingInterjection("first edited", "q1");
+      expect(seen).toEqual([1, 2]);
+
+      unsubscribe();
+      session.setPendingInterjection("second", "q2");
+      expect(seen).toEqual([1, 2]);
     });
   });
 

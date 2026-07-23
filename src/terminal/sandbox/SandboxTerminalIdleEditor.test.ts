@@ -48,24 +48,48 @@ describe("SandboxTerminalIdleEditor", () => {
     expect(editor.handle("\r")).toEqual([{ type: "write", data: "\r\n" }]);
   });
 
-  it("recalls submitted command history without emitting escape bytes", () => {
-    const editor = new SandboxTerminalIdleEditor();
-    editor.handle("pwd\r");
-    editor.handle("git status\r");
+  it.each(["\x1b[A", "\x1bOA"])(
+    "recalls submitted command history for %j without emitting escape bytes",
+    (arrowUp) => {
+      const editor = new SandboxTerminalIdleEditor();
+      editor.handle("pwd\r");
+      editor.handle("git status\r");
 
-    expect(editor.handle("\x1b[A")).toEqual([
-      { type: "write", data: "\r\x1b[2K$ git status" },
-    ]);
-    expect(editor.handle("\r")).toContainEqual({
-      type: "submit",
-      command: "git status",
-    });
+      expect(editor.handle(arrowUp)).toEqual([
+        { type: "write", data: "\r\x1b[2K$ git status" },
+      ]);
+      expect(editor.handle("\r")).toContainEqual({
+        type: "submit",
+        command: "git status",
+      });
+    },
+  );
+
+  it.each(["\x1b[B", "\x1bOB"])(
+    "moves forward through submitted command history for %j",
+    (arrowDown) => {
+      const editor = new SandboxTerminalIdleEditor();
+      editor.handle("pwd\r");
+      editor.handle("git status\r");
+      editor.handle("\x1b[A");
+      editor.handle("\x1b[A");
+
+      expect(editor.handle(arrowDown)).toEqual([
+        { type: "write", data: "\r\x1b[2K$ git status" },
+      ]);
+    },
+  );
+
+  it("drops unsupported control and cursor sequences without leaking printable tails", () => {
+    const editor = new SandboxTerminalIdleEditor();
+
+    expect(editor.handle("\x00\x1a\x1b[C\x1b[D\x1bOC\x1bOD")).toEqual([]);
+    expect(editor.handle("\r")).toEqual([{ type: "write", data: "\r\n" }]);
   });
 
-  it("drops unsupported control input and bounds the editable command", () => {
+  it("bounds the editable command", () => {
     const editor = new SandboxTerminalIdleEditor();
 
-    expect(editor.handle("\x00\x1a")).toEqual([]);
     const actions = editor.handle("x".repeat(70 * 1024));
     expect(actions).toHaveLength(64 * 1024);
     expect(editor.handle("\r").at(-1)).toEqual({

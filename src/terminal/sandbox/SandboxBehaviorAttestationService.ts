@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-export const SANDBOX_BEHAVIOR_ATTESTATION_VERSION = "sandbox-behavior-v1";
+export const SANDBOX_BEHAVIOR_ATTESTATION_VERSION = "sandbox-behavior-v3";
 export const DEFAULT_SANDBOX_BEHAVIOR_PROBE_TIMEOUT_MS = 15_000;
 export const DEFAULT_SANDBOX_BEHAVIOR_PROBE_MAX_OUTPUT_BYTES = 256 * 1024;
 
@@ -35,7 +35,7 @@ export interface SandboxBehaviorHelperLifecycleCheckResult {
 export interface SandboxBehaviorWorkspaceConfinementCheckResult {
   workspaceCreateAllowed: boolean;
   workspaceModifyAllowed: boolean;
-  outsideReadDenied: boolean;
+  outsideReadAllowed: boolean;
   outsideWriteDenied: boolean;
 }
 
@@ -47,24 +47,32 @@ export interface SandboxBehaviorProtectedMetadataCheckResult {
 }
 
 export interface SandboxBehaviorProcessInheritanceCheckResult {
-  childOutsideAccessDenied: boolean;
+  childOutsideReadAllowed: boolean;
   grandchildProtectedAccessDenied: boolean;
   ownedProcessGroupCleaned: boolean;
 }
 
 export interface SandboxBehaviorPrivateEnvironmentCheckResult {
-  homeIsPrivate: boolean;
-  tmpIsPrivate: boolean;
+  homeMatchesHost: boolean;
+  hostHomeReadAllowed: boolean;
+  hostHomeWriteDenied: boolean;
+  hostTmpEnvironmentMatched: boolean;
+  hostTmpWriteAllowed: boolean;
+  slashTmpWriteAllowed: boolean;
   cacheIsPrivate: boolean;
-  hostSentinelAbsent: boolean;
-  realHomeCredentialUnreadable: boolean;
+  credentialEnvironmentInherited: boolean;
 }
 
-export interface SandboxBehaviorBlockedNetworkCheckResult {
-  loopbackConnectDenied: boolean;
+export interface SandboxBehaviorNetworkConfinementCheckResult {
+  baselineIpv4LoopbackConnectAllowed: boolean;
+  baselineIpv6LoopbackConnectAllowedOrUnavailable: boolean;
+  baselineListenerBindDenied: boolean;
   privateConnectDenied: boolean;
   publicConnectDenied: boolean;
-  loopbackFixtureUntouched: boolean;
+  listenerCapabilityBindAllowed: boolean;
+  listenerCapabilityPrivateConnectDenied: boolean;
+  listenerCapabilityPublicConnectDenied: boolean;
+  loopbackFixtureReached: boolean;
   proxyEndpointsLoopbackOnly: boolean;
 }
 
@@ -81,7 +89,7 @@ export interface SandboxBehaviorSyntheticCheckResult {
   protectedMetadata: SandboxBehaviorProtectedMetadataCheckResult;
   processInheritance: SandboxBehaviorProcessInheritanceCheckResult;
   privateEnvironment: SandboxBehaviorPrivateEnvironmentCheckResult;
-  blockedNetwork: SandboxBehaviorBlockedNetworkCheckResult;
+  networkConfinement: SandboxBehaviorNetworkConfinementCheckResult;
   denialEvidence: SandboxBehaviorDenialEvidenceCheckResult;
 }
 
@@ -139,7 +147,7 @@ export interface SandboxBehaviorAttestationSummary {
     "protected_metadata",
     "process_inheritance",
     "private_environment",
-    "blocked_network",
+    "network_confinement",
     "denial_evidence",
   ];
 }
@@ -190,7 +198,7 @@ const VERIFIED_CHECKS = Object.freeze([
   "protected_metadata",
   "process_inheritance",
   "private_environment",
-  "blocked_network",
+  "network_confinement",
   "denial_evidence",
 ] as const);
 
@@ -336,7 +344,7 @@ function checkFailureCode(
     !hasExplicitTrueFields(checks.workspaceConfinement, [
       "workspaceCreateAllowed",
       "workspaceModifyAllowed",
-      "outsideReadDenied",
+      "outsideReadAllowed",
       "outsideWriteDenied",
     ])
   ) {
@@ -354,7 +362,7 @@ function checkFailureCode(
   }
   if (
     !hasExplicitTrueFields(checks.processInheritance, [
-      "childOutsideAccessDenied",
+      "childOutsideReadAllowed",
       "grandchildProtectedAccessDenied",
       "ownedProcessGroupCleaned",
     ])
@@ -366,21 +374,29 @@ function checkFailureCode(
   }
   if (
     !hasExplicitTrueFields(checks.privateEnvironment, [
-      "homeIsPrivate",
-      "tmpIsPrivate",
+      "homeMatchesHost",
+      "hostHomeReadAllowed",
+      "hostHomeWriteDenied",
+      "hostTmpEnvironmentMatched",
+      "hostTmpWriteAllowed",
+      "slashTmpWriteAllowed",
       "cacheIsPrivate",
-      "hostSentinelAbsent",
-      "realHomeCredentialUnreadable",
+      "credentialEnvironmentInherited",
     ])
   ) {
     return "private_environment_failed";
   }
   if (
-    !hasExplicitTrueFields(checks.blockedNetwork, [
-      "loopbackConnectDenied",
+    !hasExplicitTrueFields(checks.networkConfinement, [
+      "baselineIpv4LoopbackConnectAllowed",
+      "baselineIpv6LoopbackConnectAllowedOrUnavailable",
+      "baselineListenerBindDenied",
       "privateConnectDenied",
       "publicConnectDenied",
-      "loopbackFixtureUntouched",
+      "listenerCapabilityBindAllowed",
+      "listenerCapabilityPrivateConnectDenied",
+      "listenerCapabilityPublicConnectDenied",
+      "loopbackFixtureReached",
       "proxyEndpointsLoopbackOnly",
     ])
   ) {

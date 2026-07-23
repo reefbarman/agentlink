@@ -1,7 +1,13 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/preact";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./xtermRenderer.js", () => ({
   xtermRendererFactory: { create: vi.fn() },
@@ -13,6 +19,8 @@ import {
   type TerminalRenderer,
 } from "./terminalWebviewController.js";
 
+const resizeObserverCallbacks: ResizeObserverCallback[] = [];
+
 function controller() {
   const renderer: TerminalRenderer = {
     open: vi.fn(),
@@ -23,6 +31,7 @@ function controller() {
     findNext: vi.fn(() => true),
     findPrevious: vi.fn(() => true),
     clearSearch: vi.fn(),
+    isBracketedPasteMode: vi.fn(() => true),
     registerBlockBoundary: vi.fn(() => true),
     retainBlockAnchors: vi.fn(),
     updateConfiguration: vi.fn(),
@@ -38,7 +47,32 @@ function controller() {
   return { postMessage, renderer, terminalController };
 }
 
-afterEach(() => cleanup());
+beforeEach(() => {
+  resizeObserverCallbacks.length = 0;
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: ResizeObserverCallback) {
+        resizeObserverCallbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+    },
+  );
+  vi.stubGlobal("localStorage", {
+    getItem: vi.fn(() => null),
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
+    clear: vi.fn(),
+    key: vi.fn(() => null),
+    length: 0,
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("terminal App", () => {
   it("renders the empty state while automatically creating the first terminal", async () => {
@@ -101,6 +135,75 @@ describe("terminal App", () => {
       type: "terminal-view/open-native-fallback",
       rendererEpoch: "renderer-1",
     });
+  });
+
+  it("uses the teal AgentLink icon for Native Agent terminals", async () => {
+    const test = controller();
+    render(
+      <App
+        vscodeApi={{ postMessage: test.postMessage }}
+        controller={test.terminalController}
+      />,
+    );
+    await test.terminalController.receive({
+      type: "terminal-view/bootstrap",
+      protocolVersion: 1,
+      rendererEpoch: "renderer-1",
+      state: {
+        tabs: [
+          {
+            id: "native-agent-1",
+            title: "AgentLink",
+            channelKind: "agent-native",
+            cwd: "/workspace",
+            profileName: "AgentLink Native",
+            dimensions: { columns: 80, rows: 24 },
+            status: "running",
+          },
+        ],
+        activeTabId: "native-agent-1",
+      },
+      configuration: { scrollback: 1000 },
+      replay: [
+        {
+          terminalId: "native-agent-1",
+          terminalInstanceId: "native-instance-1",
+          sequence: 0,
+          data: "$ ",
+          byteLength: 2,
+          droppedBytes: 0,
+          replayTruncated: false,
+          replayPendingControl: false,
+          blocks: {
+            blocks: [],
+            currentCwd: "/workspace",
+            mode: "raw",
+            droppedBlocks: 0,
+            nextBlockNumber: 1,
+            maxBlockOutputBytes: 1024,
+            maxBlocks: 20,
+          },
+          presentation: {
+            alternateScreen: false,
+            terminalRunning: true,
+            blocks: [],
+          },
+        },
+      ],
+    });
+
+    const nativeIcons = screen.getAllByTitle("Unsandboxed agent command");
+    expect(nativeIcons).toHaveLength(2);
+    expect(
+      nativeIcons.every((icon) =>
+        icon.classList.contains("terminal-agentlink-icon"),
+      ),
+    ).toBe(true);
+    expect(
+      screen.getByRole("button", {
+        name: "Focus AgentLink (Native Agent)",
+      }),
+    ).toBeTruthy();
   });
 
   it("labels sandbox tabs without changing their host-authoritative routing", async () => {
@@ -356,6 +459,162 @@ describe("terminal App", () => {
     ).toBeNull();
   });
 
+  it("reveals the terminal list when a second terminal opens in a narrow panel", async () => {
+    const media = {
+      matches: false,
+      media: "(min-width: 700px)",
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(() => true),
+    } satisfies MediaQueryList;
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => media),
+    );
+    const test = controller();
+    render(
+      <App
+        vscodeApi={{ postMessage: test.postMessage }}
+        controller={test.terminalController}
+      />,
+    );
+    await test.terminalController.receive({
+      type: "terminal-view/bootstrap",
+      protocolVersion: 1,
+      rendererEpoch: "renderer-1",
+      state: { tabs: [] },
+      configuration: { scrollback: 1000 },
+      replay: [],
+    });
+    await test.terminalController.receive({
+      type: "host-terminal/opened",
+      terminalInstanceId: "instance-1",
+      terminal: {
+        id: "host-1",
+        title: "zsh",
+        cwd: "/workspace",
+        profileName: "zsh",
+        dimensions: { columns: 80, rows: 24 },
+        status: "running",
+      },
+    });
+    expect(
+      screen.queryByRole("complementary", { name: "Open terminals" }),
+    ).toBeNull();
+
+    await test.terminalController.receive({
+      type: "host-terminal/opened",
+      terminalInstanceId: "instance-2",
+      terminal: {
+        id: "host-2",
+        title: "zsh",
+        cwd: "/workspace",
+        profileName: "zsh",
+        dimensions: { columns: 80, rows: 24 },
+        status: "running",
+      },
+    });
+    expect(
+      screen.getByRole("complementary", { name: "Open terminals" }),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("2 open terminals")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Toggle terminal list" }),
+    );
+    expect(
+      screen.queryByRole("complementary", { name: "Open terminals" }),
+    ).toBeNull();
+  });
+
+  it("fits a host-activated terminal without moving keyboard focus", async () => {
+    const test = controller();
+    render(
+      <App
+        vscodeApi={{ postMessage: test.postMessage }}
+        controller={test.terminalController}
+      />,
+    );
+    await test.terminalController.receive({
+      type: "terminal-view/bootstrap",
+      protocolVersion: 1,
+      rendererEpoch: "renderer-1",
+      state: {
+        tabs: [
+          {
+            id: "host-1",
+            title: "zsh",
+            cwd: "/workspace",
+            profileName: "zsh",
+            dimensions: { columns: 80, rows: 24 },
+            status: "running",
+          },
+        ],
+        activeTabId: "host-1",
+      },
+      configuration: { scrollback: 1000 },
+      replay: [
+        {
+          terminalId: "host-1",
+          terminalInstanceId: "host-instance-1",
+          sequence: 0,
+          data: "",
+          byteLength: 0,
+          droppedBytes: 0,
+          replayTruncated: false,
+          replayPendingControl: false,
+          blocks: {
+            blocks: [],
+            currentCwd: "/workspace",
+            mode: "integrated",
+            droppedBlocks: 0,
+            nextBlockNumber: 1,
+            maxBlockOutputBytes: 1000,
+            maxBlocks: 20,
+          },
+          presentation: {
+            alternateScreen: false,
+            terminalRunning: true,
+            blocks: [],
+          },
+        },
+      ],
+    });
+    await test.terminalController.receive({
+      type: "host-terminal/opened",
+      terminalInstanceId: "agent-instance-1",
+      activate: false,
+      terminal: {
+        id: "agent-1",
+        title: "AgentLink",
+        channelKind: "agent-native",
+        cwd: "/workspace",
+        profileName: "AgentLink",
+        dimensions: { columns: 80, rows: 24 },
+        status: "running",
+      },
+    });
+    const fitsBeforeActivation = vi.mocked(test.renderer.fit).mock.calls.length;
+    const focusBeforeActivation = vi.mocked(test.renderer.focus).mock.calls
+      .length;
+
+    await act(async () => {
+      await test.terminalController.receive({
+        type: "host-terminal/activated",
+        terminalId: "agent-1",
+        terminalInstanceId: "agent-instance-1",
+      });
+    });
+
+    expect(vi.mocked(test.renderer.fit).mock.calls.length).toBeGreaterThan(
+      fitsBeforeActivation,
+    );
+    expect(test.renderer.focus).toHaveBeenCalledTimes(focusBeforeActivation);
+  });
+
   it("renders the native-style terminal list and delegates selection, close, and visibility", async () => {
     const test = controller();
     render(
@@ -386,6 +645,7 @@ describe("terminal App", () => {
             profileName: "AgentLink Sandbox",
             dimensions: { columns: 80, rows: 24 },
             status: "running",
+            agentActivity: "running",
           },
         ],
         activeTabId: "host-1",
@@ -447,11 +707,80 @@ describe("terminal App", () => {
       screen.getByRole("complementary", { name: "Open terminals" }),
     ).toBeTruthy();
     expect(screen.getByLabelText("2 open terminals")).toBeTruthy();
+    const workbench = document.querySelector(".terminal-workbench");
+    if (!(workbench instanceof HTMLDivElement)) {
+      throw new Error("expected terminal workbench");
+    }
+    vi.spyOn(workbench, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 800,
+      bottom: 400,
+      width: 800,
+      height: 400,
+      toJSON: () => ({}),
+    });
+    const resizeHandle = screen.getByRole("separator", {
+      name: "Resize terminal list",
+    });
+    fireEvent.mouseDown(resizeHandle, { button: 0, clientX: 580 });
+    fireEvent.mouseMove(window, { clientX: 500 });
+    fireEvent.mouseUp(window);
+    expect(
+      (document.querySelector(".terminal-list-shell") as HTMLElement).style
+        .width,
+    ).toBe("300px");
+    expect(resizeHandle.getAttribute("aria-valuenow")).toBe("300");
+    expect(resizeHandle.getAttribute("aria-valuetext")).toBe(
+      "300 pixels; Left or Up expands, Right or Down contracts",
+    );
+    expect(localStorage.setItem).toHaveBeenCalledWith(
+      "agentlink.terminal.listWidth.v1",
+      "300",
+    );
+
+    fireEvent.keyDown(resizeHandle, { key: "ArrowDown" });
+    expect(
+      (document.querySelector(".terminal-list-shell") as HTMLElement).style
+        .width,
+    ).toBe("284px");
+    fireEvent.keyDown(resizeHandle, { key: "Home" });
+    expect(
+      (document.querySelector(".terminal-list-shell") as HTMLElement).style
+        .width,
+    ).toBe("150px");
+
+    vi.spyOn(workbench, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 360,
+      bottom: 400,
+      width: 360,
+      height: 400,
+      toJSON: () => ({}),
+    });
+    act(() => {
+      for (const callback of resizeObserverCallbacks) {
+        callback([], {} as ResizeObserver);
+      }
+    });
+    expect(
+      (document.querySelector(".terminal-list-shell") as HTMLElement).style
+        .width,
+    ).toBe("120px");
+    expect(resizeHandle.getAttribute("aria-valuenow")).toBe("120");
+    expect(resizeHandle.getAttribute("aria-valuemin")).toBe("120");
+    expect(resizeHandle.getAttribute("aria-valuemax")).toBe("120");
+
     const hostButton = screen.getByRole("button", {
       name: "Focus zsh (Host Shell)",
     });
     const sandboxButton = screen.getByRole("button", {
-      name: "Focus Unit tests (Sandbox)",
+      name: "Focus Unit tests (Sandbox). Agent command running",
     });
     expect(hostButton.getAttribute("aria-current")).toBe("true");
     expect(sandboxButton.getAttribute("aria-current")).toBeNull();
@@ -462,6 +791,9 @@ describe("terminal App", () => {
     expect(
       sandboxButton.querySelector(".terminal-list-sandbox-badge"),
     ).toBeNull();
+    expect(
+      sandboxButton.querySelector(".terminal-status.agent-running"),
+    ).toBeTruthy();
     expect(
       screen.queryByRole("combobox", { name: "Active terminal" }),
     ).toBeNull();
@@ -573,6 +905,7 @@ describe("terminal App", () => {
       terminalId: "terminal-1",
       terminalInstanceId: "instance-1",
       rendererEpoch: "renderer-1",
+      bracketedPasteMode: true,
     });
     expect(
       screen.queryByRole("textbox", { name: "Search terminal" }),
@@ -614,6 +947,7 @@ describe("terminal App", () => {
       rendererEpoch: "renderer-1",
       confirmationId: "confirmation-1",
       accept: true,
+      bracketedPasteMode: true,
     });
   });
 });

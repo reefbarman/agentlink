@@ -1,12 +1,16 @@
 import type {
   ClosedTerminalSnapshot,
   ConfinementPreparingTerminalProvider,
+  NativePreparingTerminalProvider,
   PreparedTerminalExecution,
   TerminalCloseResult,
   TerminalExecuteOptions,
   TerminalExecutionAuditEvent,
+  TerminalExecutionRouteContext,
   TerminalExecutionSecuritySummary,
   TerminalProvider,
+  TerminalRetainedOutput,
+  TerminalRetainedOutputLease,
   TerminalSandboxAttestationSummary,
 } from "../../core/capabilities/terminal.js";
 
@@ -30,7 +34,10 @@ export type SandboxPreparationAvailability =
 export interface AgentTerminalProviderRouterOptions {
   isEnabled(): boolean;
   getHost(): AgentTerminalProviderHost;
+  /** Legacy VS Code compatibility provider for hosts without the custom terminal. */
   createNativeProvider(): TerminalProvider;
+  /** Phase 3+ custom-terminal Native Agent provider. Omit until implemented. */
+  createNativeAgentProvider?(): TerminalProvider;
   createSandboxProvider(): ConfinementPreparingTerminalProvider;
   getSandboxAvailability():
     | PromiseLike<SandboxPreparationAvailability>
@@ -38,6 +45,7 @@ export interface AgentTerminalProviderRouterOptions {
   now?: () => number;
   createAuditId?: () => string;
   recordExecutionAudit?: (event: TerminalExecutionAuditEvent) => void;
+  revealCustomTerminal?(terminalId: string): boolean;
   log?: (message: string) => void;
 }
 
@@ -48,16 +56,35 @@ type RouteDecision =
         | "feature-disabled"
         | "unsupported-host"
         | "remote-host"
-        | "runtime-unavailable";
+        | "runtime-unavailable"
+        | "verified-local-macos";
+      executionSurface: "agentlink-native" | "vscode-compatibility";
     }
   | { route: "sandbox"; attestation: TerminalSandboxAttestationSummary }
-  | { route: "unavailable"; reason: "untrusted" | "attestation-failed" };
+  | {
+      route: "unavailable";
+      reason:
+        | "untrusted"
+        | "attestation-failed"
+        | "native-runtime-unavailable"
+        | "required-sandbox-unavailable";
+    };
 
 function closeResult(names?: string[]): TerminalCloseResult {
   return {
     closed: 0,
     ...(names && names.length > 0 ? { not_found: [...names] } : {}),
   };
+}
+
+function snapshotSandboxAttestation(
+  attestation: TerminalSandboxAttestationSummary,
+): TerminalSandboxAttestationSummary {
+  const warnings = [...attestation.capabilities.warnings];
+  Object.freeze(warnings);
+  const capabilities = { ...attestation.capabilities, warnings };
+  Object.freeze(capabilities);
+  return Object.freeze({ ...attestation, capabilities });
 }
 
 function snapshotOptions(
@@ -94,6 +121,15 @@ function isConfinementPreparingProvider(
   );
 }
 
+function isNativePreparingProvider(
+  provider: TerminalProvider,
+): provider is NativePreparingTerminalProvider {
+  return (
+    "prepareNativeExecution" in provider &&
+    typeof provider.prepareNativeExecution === "function"
+  );
+}
+
 interface TerminalChannelEventProvider {
   onChannelEvent(
     listener: (update: { snapshot: { status: string } }) => void,
@@ -113,14 +149,20 @@ function isTerminalChannelEventProvider(
 
 export class AgentTerminalProviderRouter implements TerminalProvider {
   private nativeProvider: TerminalProvider | undefined;
+  private nativeAgentProvider: TerminalProvider | undefined;
   private sandboxProvider: ConfinementPreparingTerminalProvider | undefined;
+  private readonly retiredNativeAgentProviders = new Set<TerminalProvider>();
   private readonly retiredSandboxProviders =
     new Set<ConfinementPreparingTerminalProvider>();
-  private readonly sandboxLifecycleSubscriptions = new Map<
-    ConfinementPreparingTerminalProvider,
+  private readonly channelLifecycleSubscriptions = new Map<
+    TerminalProvider,
     { dispose(): void }
   >();
   private readonly retiredRecentlyClosed: ClosedTerminalSnapshot[] = [];
+  private readonly retiredRetainedOutput = new Map<
+    string,
+    TerminalRetainedOutputLease
+  >();
   private activeProvider: TerminalProvider | undefined;
   private sandboxFailure: Error | undefined;
   private readonly pendingExecutions = new Set<() => void>();
@@ -144,48 +186,136 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
   set log(value: ((message: string) => void) | undefined) {
     this.logSink = value;
     if (this.nativeProvider) this.nativeProvider.log = value;
+    if (this.nativeAgentProvider) this.nativeAgentProvider.log = value;
     if (this.sandboxProvider) this.sandboxProvider.log = value;
+    for (const provider of this.retiredNativeAgentProviders)
+      provider.log = value;
+    for (const provider of this.retiredSandboxProviders) provider.log = value;
   }
 
   async prepareExecution(
     options: TerminalExecuteOptions,
+    routeContext?: TerminalExecutionRouteContext,
   ): Promise<PreparedTerminalExecution> {
     this.assertActive();
     const descriptor = snapshotOptions(options);
+    if (
+      descriptor.sandboxCapabilityRequest?.unrestrictedPublicNetwork &&
+      !descriptor.onManagedNetworkRequest
+    ) {
+      throw new Error(
+        "Managed public network requires an interactive destination authorization callback",
+      );
+    }
+    const suppliedRouteContext = routeContext
+      ? Object.freeze({
+          approvalPolicySnapshot: routeContext.approvalPolicySnapshot,
+          approvalReviewerSnapshot: routeContext.approvalReviewerSnapshot,
+          executionPresetSnapshot: routeContext.executionPresetSnapshot,
+          requiredAuthority: routeContext.requiredAuthority,
+          permissionIntent: routeContext.permissionIntent,
+          approvalRequirement: routeContext.approvalRequirement,
+          authorityReason: routeContext.authorityReason,
+          commandApprovalPolicySnapshot:
+            routeContext.commandApprovalPolicySnapshot,
+          ...(routeContext.commandExecutionPolicySnapshot
+            ? {
+                commandExecutionPolicySnapshot:
+                  routeContext.commandExecutionPolicySnapshot,
+              }
+            : {}),
+        })
+      : undefined;
     const generation = this.generation;
-    const decision = await this.decideRoute();
+    const decision = await this.decideRoute(suppliedRouteContext);
     this.assertGeneration(generation);
 
+    const frozenRouteContext: TerminalExecutionRouteContext =
+      suppliedRouteContext ??
+      Object.freeze({
+        approvalPolicySnapshot: "on-request",
+        approvalReviewerSnapshot:
+          decision.route === "sandbox" ? "auto-review" : "user",
+        executionPresetSnapshot:
+          decision.route === "sandbox" ? "workspace-write" : "native-manual",
+        requiredAuthority:
+          decision.route === "sandbox" ? "sandbox" : "native-agent",
+        permissionIntent: "default",
+        approvalRequirement: "policy",
+        authorityReason: "approval-policy",
+        commandApprovalPolicySnapshot:
+          decision.route === "sandbox" ? "approve-for-me" : "manual",
+      });
+
     if (decision.route === "unavailable") {
+      const failure =
+        decision.reason === "untrusted"
+          ? "untrusted_workspace"
+          : decision.reason === "native-runtime-unavailable"
+            ? "native_runtime_unavailable"
+            : decision.reason === "required-sandbox-unavailable"
+              ? "required_sandbox_unavailable"
+              : "attestation_failed";
+      this.options.recordExecutionAudit?.({
+        type: "execution_failed",
+        occurredAt: this.now(),
+        auditId: this.createAuditId(),
+        resultStatus: decision.reason,
+        failure,
+      });
       throw this.unavailableError(decision.reason);
     }
 
-    const security: TerminalExecutionSecuritySummary =
+    const security: TerminalExecutionSecuritySummary = Object.freeze(
       decision.route === "native"
         ? {
             auditId: this.createAuditId(),
             route: "native",
+            executionSurface: decision.executionSurface,
             confinement: "native-unsandboxed",
             routeReason: decision.reason,
-            approvalPolicy: "native-legacy-v1",
+            ...frozenRouteContext,
+            executionPolicy: "native-legacy-v1",
             preparedAt: this.now(),
           }
         : {
             auditId: this.createAuditId(),
             route: "sandbox",
+            executionSurface: "verified-sandbox",
             confinement: "verified-baseline",
             routeReason: "verified-local-macos",
-            approvalPolicy: "sandbox-baseline-v1",
+            ...frozenRouteContext,
+            executionPolicy: "sandbox-baseline-v2",
             preparedAt: this.now(),
-            sandbox: decision.attestation,
-          };
+            sandbox: snapshotSandboxAttestation(decision.attestation),
+          },
+    );
 
     if (decision.route === "native") {
-      const provider = this.resolveNativeProvider();
+      let provider: TerminalProvider;
+      try {
+        provider =
+          decision.executionSurface === "agentlink-native"
+            ? this.resolveNativeAgentProvider()
+            : this.resolveNativeProvider();
+      } catch (error) {
+        this.audit("execution_failed", security, {
+          failure: "native_runtime_unavailable",
+        });
+        throw error;
+      }
+      this.assertExecutionTarget(descriptor, provider);
+      const inner = await this.prepareNative(
+        provider,
+        descriptor,
+        frozenRouteContext,
+        security,
+      );
+      this.assertGeneration(generation, inner);
       const prepared = this.wrapPreparedExecution(
         generation,
         security,
-        this.prepareNative(provider, descriptor, security),
+        inner,
         provider,
       );
       this.audit("execution_prepared", security);
@@ -193,6 +323,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     }
 
     const provider = this.resolveSandboxProvider();
+    this.assertExecutionTarget(descriptor, provider);
     const prepared = await provider.prepareConfinementExecution(
       descriptor,
       security,
@@ -202,9 +333,28 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       prepared.dispose();
       throw new Error("Prepared sandbox attestation changed before approval");
     }
+    if (
+      prepared.security.route !== "sandbox" ||
+      prepared.security.auditId !== security.auditId ||
+      prepared.security.approvalPolicySnapshot !==
+        security.approvalPolicySnapshot ||
+      prepared.security.approvalReviewerSnapshot !==
+        security.approvalReviewerSnapshot ||
+      prepared.security.executionPresetSnapshot !==
+        security.executionPresetSnapshot ||
+      prepared.security.requiredAuthority !== security.requiredAuthority ||
+      prepared.security.permissionIntent !== security.permissionIntent ||
+      prepared.security.approvalRequirement !== security.approvalRequirement ||
+      prepared.security.authorityReason !== security.authorityReason ||
+      prepared.security.commandApprovalPolicySnapshot !==
+        security.commandApprovalPolicySnapshot
+    ) {
+      prepared.dispose();
+      throw new Error("Sandbox authorizer changed the prepared approval basis");
+    }
     const wrapped = this.wrapPreparedExecution(
       generation,
-      security,
+      prepared.security,
       prepared,
       provider,
       decision.attestation.attestationId,
@@ -230,10 +380,42 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     return this.ownerForTerminal(terminalId)?.getBackgroundState(terminalId);
   }
 
+  getCurrentOutput(
+    terminalId: string,
+    options?: { force?: boolean },
+  ): string | undefined {
+    return this.ownerForTerminal(terminalId)?.getCurrentOutput?.(
+      terminalId,
+      options,
+    );
+  }
+
+  getRetainedOutput(terminalId: string): TerminalRetainedOutput | undefined {
+    const owner = this.ownerForRetainedOutput(terminalId);
+    return (
+      owner?.getRetainedOutput?.(terminalId) ??
+      this.retiredRetainedOutput.get(terminalId)?.read()
+    );
+  }
+
   interruptTerminal(terminalId: string): boolean {
     return (
       this.ownerForTerminal(terminalId)?.interruptTerminal(terminalId) ?? false
     );
+  }
+
+  detachTerminal(terminalId: string): boolean {
+    return (
+      this.ownerForTerminal(terminalId)?.detachTerminal?.(terminalId) ?? false
+    );
+  }
+
+  revealTerminal(terminalId: string): boolean {
+    const owner = this.ownerForTerminal(terminalId);
+    if (!owner) return false;
+    return owner.revealTerminal
+      ? owner.revealTerminal(terminalId)
+      : (this.options.revealCustomTerminal?.(terminalId) ?? false);
   }
 
   getRecentlyClosedTerminals(
@@ -241,9 +423,10 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
   ): ReturnType<TerminalProvider["getRecentlyClosedTerminals"]> {
     this.assertActive();
     const boundedLimit = Math.max(0, limit);
-    const current =
-      this.currentProvider()?.getRecentlyClosedTerminals(boundedLimit);
-    return [...(current ?? []), ...this.retiredRecentlyClosed]
+    const current = this.allProviders().flatMap((provider) =>
+      provider.getRecentlyClosedTerminals(boundedLimit),
+    );
+    return [...current, ...this.retiredRecentlyClosed]
       .sort((left, right) => right.closedAt - left.closedAt)
       .filter(
         (terminal, index, terminals) =>
@@ -278,22 +461,38 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
           0,
         ),
       };
-      this.pruneRetiredSandboxes();
+      this.pruneRetiredChannelProviders();
       return result;
     }
-    let remaining = [...names];
+    const notFound: string[] = [];
     let closed = 0;
-    for (const provider of providers) {
-      const result = provider.closeTerminals(remaining);
+    for (const target of names) {
+      if (target.startsWith("host-terminal-")) {
+        notFound.push(target);
+        continue;
+      }
+      const owners = providers.filter((provider) =>
+        provider
+          .listTerminals()
+          .some(
+            (terminal) => terminal.id === target || terminal.name === target,
+          ),
+      );
+      if (owners.length !== 1) {
+        notFound.push(target);
+        continue;
+      }
+      const result = owners[0].closeTerminals([target]);
       closed += result.closed;
-      remaining = result.not_found ?? [];
-      if (remaining.length === 0) break;
+      if (result.not_found?.includes(target) || result.closed === 0) {
+        notFound.push(target);
+      }
     }
     const result = {
       closed,
-      ...(remaining.length > 0 ? { not_found: remaining } : {}),
+      ...(notFound.length > 0 ? { not_found: notFound } : {}),
     };
-    this.pruneRetiredSandboxes();
+    this.pruneRetiredChannelProviders();
     return result;
   }
 
@@ -303,6 +502,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     this.revokePendingExecutions();
     this.currentAttestationId = undefined;
     this.retireSandbox();
+    this.retireNativeAgent();
     this.sandboxFailure = undefined;
   }
 
@@ -312,27 +512,84 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     this.generation += 1;
     this.revokePendingExecutions();
     this.currentAttestationId = undefined;
-    this.disposeAllSandboxes();
+    this.disposeAllChannelProviders();
   }
 
-  private async decideRoute(): Promise<RouteDecision> {
+  private async decideRoute(
+    routeContext?: TerminalExecutionRouteContext,
+  ): Promise<RouteDecision> {
     const host = this.options.getHost();
+    if (routeContext?.requiredAuthority === "native-agent") {
+      this.currentAttestationId = undefined;
+      if (!host.workspaceTrusted) {
+        return { route: "unavailable", reason: "untrusted" };
+      }
+      if (
+        !this.options.isEnabled() ||
+        host.remoteName ||
+        host.platform !== "darwin" ||
+        !this.options.createNativeAgentProvider
+      ) {
+        return { route: "unavailable", reason: "native-runtime-unavailable" };
+      }
+      return {
+        route: "native",
+        reason: "verified-local-macos",
+        executionSurface: "agentlink-native",
+      };
+    }
+    if (routeContext?.requiredAuthority === "sandbox") {
+      if (!host.workspaceTrusted) {
+        this.currentAttestationId = undefined;
+        return { route: "unavailable", reason: "untrusted" };
+      }
+      if (
+        !this.options.isEnabled() ||
+        host.remoteName ||
+        host.platform !== "darwin"
+      ) {
+        this.currentAttestationId = undefined;
+        return {
+          route: "unavailable",
+          reason: "required-sandbox-unavailable",
+        };
+      }
+      return this.decideSandboxRoute();
+    }
     if (!this.options.isEnabled()) {
       this.currentAttestationId = undefined;
-      return { route: "native", reason: "feature-disabled" };
+      return {
+        route: "native",
+        reason: "feature-disabled",
+        executionSurface: "vscode-compatibility",
+      };
     }
     if (host.remoteName) {
       this.currentAttestationId = undefined;
-      return { route: "native", reason: "remote-host" };
+      return {
+        route: "native",
+        reason: "remote-host",
+        executionSurface: "vscode-compatibility",
+      };
     }
     if (host.platform !== "darwin") {
       this.currentAttestationId = undefined;
-      return { route: "native", reason: "unsupported-host" };
+      return {
+        route: "native",
+        reason: "unsupported-host",
+        executionSurface: "vscode-compatibility",
+      };
     }
     if (!host.workspaceTrusted) {
       this.currentAttestationId = undefined;
       return { route: "unavailable", reason: "untrusted" };
     }
+    return this.decideSandboxRoute(true);
+  }
+
+  private async decideSandboxRoute(
+    allowNativeFallback = false,
+  ): Promise<RouteDecision> {
     if (this.sandboxFailure) {
       this.currentAttestationId = undefined;
       return { route: "unavailable", reason: "attestation-failed" };
@@ -348,7 +605,13 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
         );
         return { route: "unavailable", reason: "attestation-failed" };
       }
-      return { route: "native", reason: "runtime-unavailable" };
+      return allowNativeFallback
+        ? {
+            route: "native",
+            reason: "runtime-unavailable",
+            executionSurface: "vscode-compatibility",
+          }
+        : { route: "unavailable", reason: "required-sandbox-unavailable" };
     }
     if (availability.status === "failed") {
       this.sandboxFailure = new Error(
@@ -365,11 +628,18 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     return this.options.getSandboxAvailability();
   }
 
-  private prepareNative(
+  private async prepareNative(
     provider: TerminalProvider,
     descriptor: TerminalExecuteOptions,
+    routeContext: TerminalExecutionRouteContext,
     security: TerminalExecutionSecuritySummary,
-  ): PreparedTerminalExecution {
+  ): Promise<PreparedTerminalExecution> {
+    if (isNativePreparingProvider(provider)) {
+      return provider.prepareNativeExecution(descriptor, security);
+    }
+    if (provider.prepareExecution) {
+      return provider.prepareExecution(descriptor, routeContext);
+    }
     let state: "prepared" | "consumed" | "disposed" = "prepared";
     return {
       security,
@@ -463,6 +733,28 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     return this.nativeProvider;
   }
 
+  private resolveNativeAgentProvider(): TerminalProvider {
+    this.assertActive();
+    const createProvider = this.options.createNativeAgentProvider;
+    if (!createProvider) {
+      throw this.unavailableError("native-runtime-unavailable");
+    }
+    try {
+      this.nativeAgentProvider ??= createProvider();
+      this.nativeAgentProvider.log = this.logSink;
+      return this.nativeAgentProvider;
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      this.logSink?.(
+        `[native-agent-terminal] Initialization failed closed: ${failure.message}`,
+      );
+      throw new Error(
+        `Required Native Agent execution is unavailable: ${failure.message}. No compatibility terminal fallback was attempted.`,
+        { cause: failure },
+      );
+    }
+  }
+
   private resolveSandboxProvider(): ConfinementPreparingTerminalProvider {
     this.assertActive();
     if (this.sandboxFailure) throw this.unavailableError("attestation-failed");
@@ -489,26 +781,104 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     }
   }
 
-  private ownerForTerminal(terminalId: string): TerminalProvider | undefined {
-    this.assertActive();
-    for (const provider of [
-      this.sandboxProvider,
-      ...this.retiredSandboxProviders,
-    ]) {
-      if (
-        provider?.listTerminals().some((terminal) => terminal.id === terminalId)
-      ) {
-        return provider;
+  private assertExecutionTarget(
+    descriptor: TerminalExecuteOptions,
+    expectedProvider: TerminalProvider,
+  ): void {
+    for (const [kind, target] of [
+      ["terminal_id", descriptor.terminal_id],
+      ["split_from", descriptor.split_from],
+    ] as const) {
+      if (!target) continue;
+      if (target.startsWith("host-terminal-")) {
+        this.rejectExecutionTarget("host_target", kind);
+      }
+      const matches = this.providersForTerminalId(target);
+      if (matches.length === 0) this.rejectExecutionTarget("not_found", kind);
+      if (matches.length > 1)
+        this.rejectExecutionTarget("ambiguous_name", kind);
+      const owner = matches[0];
+      if (this.isRetiredChannelProvider(owner)) {
+        this.rejectExecutionTarget("provider_retired", kind);
+      }
+      if (owner !== expectedProvider) {
+        this.rejectExecutionTarget("wrong_authority", kind);
       }
     }
-    if (
-      this.nativeProvider
-        ?.listTerminals()
-        .some((terminal) => terminal.id === terminalId)
-    ) {
-      return this.nativeProvider;
+
+    if (!descriptor.terminal_name) return;
+    const namedMatches = this.allProviders().filter((provider) =>
+      provider
+        .listTerminals()
+        .some((terminal) => terminal.name === descriptor.terminal_name),
+    );
+    if (namedMatches.length === 0) return;
+    if (namedMatches.length > 1) {
+      this.rejectExecutionTarget("ambiguous_name", "terminal_name");
     }
-    return this.activeProvider;
+    const owner = namedMatches[0];
+    if (this.isRetiredChannelProvider(owner)) {
+      this.rejectExecutionTarget("provider_retired", "terminal_name");
+    }
+    if (owner !== expectedProvider) {
+      this.rejectExecutionTarget("wrong_authority", "terminal_name");
+    }
+  }
+
+  private rejectExecutionTarget(
+    failure:
+      | "host_target"
+      | "wrong_authority"
+      | "provider_retired"
+      | "ambiguous_name"
+      | "not_found",
+    targetKind: string,
+  ): never {
+    this.options.recordExecutionAudit?.({
+      type: "execution_failed",
+      occurredAt: this.now(),
+      auditId: this.createAuditId(),
+      resultStatus: `target_${failure}`,
+      failure,
+    });
+    throw new Error(
+      `Terminal target ${targetKind} was rejected: ${failure.replaceAll("_", " ")}`,
+    );
+  }
+
+  private providersForTerminalId(terminalId: string): TerminalProvider[] {
+    return this.allProviders().filter((provider) =>
+      provider.listTerminals().some((terminal) => terminal.id === terminalId),
+    );
+  }
+
+  private isRetiredChannelProvider(provider: TerminalProvider): boolean {
+    return (
+      this.retiredNativeAgentProviders.has(provider) ||
+      this.retiredSandboxProviders.has(
+        provider as ConfinementPreparingTerminalProvider,
+      )
+    );
+  }
+
+  private ownerForTerminal(terminalId: string): TerminalProvider | undefined {
+    this.assertActive();
+    if (terminalId.startsWith("host-terminal-")) return undefined;
+    const matches = this.providersForTerminalId(terminalId);
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+
+  private ownerForRetainedOutput(
+    terminalId: string,
+  ): TerminalProvider | undefined {
+    const liveOwner = this.ownerForTerminal(terminalId);
+    if (liveOwner) return liveOwner;
+    const matches = this.allProviders().filter((provider) =>
+      provider
+        .getRecentlyClosedTerminals(20)
+        .some((terminal) => terminal.id === terminalId),
+    );
+    return matches.length === 1 ? matches[0] : undefined;
   }
 
   private currentProvider(): TerminalProvider | undefined {
@@ -516,10 +886,26 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     return this.activeProvider;
   }
 
-  private unavailableError(reason: "untrusted" | "attestation-failed"): Error {
+  private unavailableError(
+    reason:
+      | "untrusted"
+      | "attestation-failed"
+      | "native-runtime-unavailable"
+      | "required-sandbox-unavailable",
+  ): Error {
     if (reason === "untrusted") {
       return new Error(
-        "AgentLink sandbox command execution is unavailable until the workspace is trusted. Disable agentlink.terminal.enabled to use the native VS Code terminal provider.",
+        "Agent command execution is unavailable until the workspace is trusted. No terminal fallback was attempted.",
+      );
+    }
+    if (reason === "native-runtime-unavailable") {
+      return new Error(
+        "Required Native Agent execution is unavailable. No compatibility terminal fallback was attempted.",
+      );
+    }
+    if (reason === "required-sandbox-unavailable") {
+      return new Error(
+        "Required Sandbox execution is unavailable. No native terminal fallback was attempted.",
       );
     }
     return new Error(
@@ -569,6 +955,8 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     return [
       this.sandboxProvider,
       ...this.retiredSandboxProviders,
+      this.nativeAgentProvider,
+      ...this.retiredNativeAgentProviders,
       this.nativeProvider,
     ].filter(
       (provider): provider is TerminalProvider => provider !== undefined,
@@ -580,69 +968,106 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     this.sandboxProvider = undefined;
     if (!provider) return;
     this.retiredSandboxProviders.add(provider);
-    this.pruneRetiredSandboxes();
+    this.pruneRetiredChannelProviders();
+  }
+
+  private retireNativeAgent(): void {
+    const provider = this.nativeAgentProvider;
+    this.nativeAgentProvider = undefined;
+    if (!provider) return;
+    this.retiredNativeAgentProviders.add(provider);
+    this.observeChannelLifecycle(provider);
+    this.pruneRetiredChannelProviders();
   }
 
   private observeSandboxLifecycle(
     provider: ConfinementPreparingTerminalProvider,
   ): void {
+    this.observeChannelLifecycle(provider);
+  }
+
+  private observeChannelLifecycle(provider: TerminalProvider): void {
     if (
       !isTerminalChannelEventProvider(provider) ||
-      this.sandboxLifecycleSubscriptions.has(provider)
+      this.channelLifecycleSubscriptions.has(provider)
     ) {
       return;
     }
     const subscription = provider.onChannelEvent((update) => {
       if (update.snapshot.status !== "closed") return;
       queueMicrotask(() => {
-        if (!this.disposed) this.pruneRetiredSandboxes();
+        if (!this.disposed) this.pruneRetiredChannelProviders();
       });
     });
-    this.sandboxLifecycleSubscriptions.set(provider, subscription);
+    this.channelLifecycleSubscriptions.set(provider, subscription);
   }
 
-  private pruneRetiredSandboxes(): void {
-    for (const provider of this.retiredSandboxProviders) {
+  private pruneRetiredChannelProviders(): void {
+    const retired = [
+      ...this.retiredSandboxProviders,
+      ...this.retiredNativeAgentProviders,
+    ];
+    for (const provider of retired) {
       if (provider.listTerminals().length > 0) continue;
-      this.retiredSandboxProviders.delete(provider);
-      this.rememberRecentlyClosed(provider.getRecentlyClosedTerminals(20));
-      this.sandboxLifecycleSubscriptions.get(provider)?.dispose();
-      this.sandboxLifecycleSubscriptions.delete(provider);
+      this.retiredSandboxProviders.delete(
+        provider as ConfinementPreparingTerminalProvider,
+      );
+      this.retiredNativeAgentProviders.delete(provider);
+      const recentlyClosed = provider.getRecentlyClosedTerminals(20);
+      this.rememberRecentlyClosed(recentlyClosed, provider);
+      this.channelLifecycleSubscriptions.get(provider)?.dispose();
+      this.channelLifecycleSubscriptions.delete(provider);
       if (this.activeProvider === provider) this.activeProvider = undefined;
       if ("dispose" in provider) {
-        (
-          provider as ConfinementPreparingTerminalProvider & { dispose(): void }
-        ).dispose();
+        (provider as TerminalProvider & { dispose(): void }).dispose();
       }
     }
   }
 
-  private rememberRecentlyClosed(terminals: ClosedTerminalSnapshot[]): void {
+  private rememberRecentlyClosed(
+    terminals: ClosedTerminalSnapshot[],
+    provider?: TerminalProvider,
+  ): void {
     for (const terminal of terminals) {
       const existing = this.retiredRecentlyClosed.findIndex(
         (candidate) => candidate.id === terminal.id,
       );
       if (existing >= 0) this.retiredRecentlyClosed.splice(existing, 1);
+      const retained = provider?.detachRetainedOutput?.(terminal.id);
+      if (retained) {
+        this.retiredRetainedOutput.get(terminal.id)?.dispose();
+        this.retiredRetainedOutput.set(terminal.id, retained);
+      }
       this.retiredRecentlyClosed.push({ ...terminal });
     }
     this.retiredRecentlyClosed.sort(
       (left, right) => right.closedAt - left.closedAt,
     );
-    this.retiredRecentlyClosed.splice(20);
+    const removed = this.retiredRecentlyClosed.splice(20);
+    for (const terminal of removed) {
+      this.retiredRetainedOutput.get(terminal.id)?.dispose();
+      this.retiredRetainedOutput.delete(terminal.id);
+    }
   }
 
-  private disposeAllSandboxes(): void {
-    const providers = new Set([
+  private disposeAllChannelProviders(): void {
+    const providers = new Set<TerminalProvider>([
       ...(this.sandboxProvider ? [this.sandboxProvider] : []),
       ...this.retiredSandboxProviders,
+      ...(this.nativeAgentProvider ? [this.nativeAgentProvider] : []),
+      ...this.retiredNativeAgentProviders,
     ]);
     this.sandboxProvider = undefined;
+    this.nativeAgentProvider = undefined;
     this.retiredSandboxProviders.clear();
-    for (const subscription of this.sandboxLifecycleSubscriptions.values()) {
+    this.retiredNativeAgentProviders.clear();
+    for (const subscription of this.channelLifecycleSubscriptions.values()) {
       subscription.dispose();
     }
-    this.sandboxLifecycleSubscriptions.clear();
+    this.channelLifecycleSubscriptions.clear();
     this.retiredRecentlyClosed.length = 0;
+    for (const lease of this.retiredRetainedOutput.values()) lease.dispose();
+    this.retiredRetainedOutput.clear();
     if (this.activeProvider && providers.has(this.activeProvider as never)) {
       this.activeProvider = undefined;
     }

@@ -140,6 +140,12 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     builtin: true,
   },
   {
+    name: "fleet",
+    description: "Show the Agent Fleet panel",
+    source: "builtin",
+    builtin: true,
+  },
+  {
     name: "remember",
     description:
       "Review this session for durable learnings and propose approved memory/config updates",
@@ -174,6 +180,13 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   {
     name: "btw",
     description: "Ask a quick side question: /btw <question>",
+    source: "builtin",
+    builtin: true,
+  },
+  {
+    name: "worktree",
+    description:
+      "Configure and start isolated work: /worktree [task] [--branch <name>]",
     source: "builtin",
     builtin: true,
   },

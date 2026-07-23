@@ -23,6 +23,7 @@ import { AgentSession } from "./AgentSession.js";
 import { ProviderRegistry } from "./providers/index.js";
 import { AgentToolCallTracker } from "./AgentToolCallTracker.js";
 import type { AgentToolExecutionRequest } from "../core/tools/types.js";
+import type { CoreModelContentBlock } from "../core/modelRuntime.js";
 import { CORE_NATIVE_WEB_MAX_PAUSE_TURNS } from "../core/nativeWebTools.js";
 import {
   createAgentToolRuntime,
@@ -303,7 +304,34 @@ describe("AgentEngine", () => {
   describe("auto-condense threshold behavior", () => {
     it("triggers auto-condense at 90% of usable input by default", async () => {
       const session = await makeSession();
-      session.addUserMessage("hello");
+      const todos = [
+        {
+          id: "inspect",
+          content: "Inspect the failure",
+          activeForm: "Inspecting the failure",
+          status: "completed" as const,
+        },
+        {
+          id: "fix",
+          content: "Fix the failure",
+          activeForm: "Fixing the failure",
+          status: "in_progress" as const,
+        },
+      ];
+      session.replaceMessages([
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "todo-1",
+              name: "todo_write",
+              input: { todos },
+            },
+          ],
+        },
+      ]);
       session.lastInputTokens = 173_000; // >90% of 191,808 usable input tokens
       session.lastCacheReadTokens = 0;
 
@@ -323,6 +351,12 @@ describe("AgentEngine", () => {
 
       const events = await collectEvents(engine.run(session));
       expect(condenseSpy).toHaveBeenCalledTimes(1);
+      expect(condenseSpy).toHaveBeenCalledWith(
+        session,
+        true,
+        expect.anything(),
+        expect.objectContaining({ todos }),
+      );
       expect(events.some((e) => e.type === "condense")).toBe(true);
     });
 
@@ -399,6 +433,97 @@ describe("AgentEngine", () => {
 
       await collectEvents(engine.run(session));
       expect(condenseSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("parallel tool dispatch", () => {
+    it("runs adjacent safe calls concurrently without crossing ordered barriers", async () => {
+      const toolCalls = [
+        { id: "read-before-a", name: "read", input: {} },
+        { id: "read-before-b", name: "read", input: {} },
+        { id: "write-barrier", name: "write", input: {} },
+        { id: "read-after-a", name: "read", input: {} },
+        { id: "read-after-b", name: "read", input: {} },
+      ];
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCount += 1;
+        if (streamCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: toolCalls.map((call) => ({
+              type: "tool_use" as const,
+              ...call,
+            })),
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const releases = new Map<string, () => void>();
+      const gates = new Map(
+        toolCalls.map((call) => [
+          call.id,
+          new Promise<void>((resolve) => releases.set(call.id, resolve)),
+        ]),
+      );
+      const started: string[] = [];
+      const session = await makeSession();
+      session.addUserMessage("run an ordered mixed batch");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "read",
+            description: "read",
+            input_schema: { type: "object" },
+          },
+          {
+            name: "write",
+            description: "write",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: (name) => name === "read",
+        executeTool: async (request) => {
+          started.push(request.context.toolCallId ?? request.name);
+          await gates.get(request.context.toolCallId ?? "");
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+      });
+
+      const run = collectEvents(engine.run(session));
+      await vi.waitFor(() =>
+        expect(started).toEqual(["read-before-a", "read-before-b"]),
+      );
+      releases.get("read-before-a")?.();
+      releases.get("read-before-b")?.();
+      await vi.waitFor(() =>
+        expect(started).toEqual([
+          "read-before-a",
+          "read-before-b",
+          "write-barrier",
+        ]),
+      );
+      releases.get("write-barrier")?.();
+      await vi.waitFor(() =>
+        expect(started).toEqual([
+          "read-before-a",
+          "read-before-b",
+          "write-barrier",
+          "read-after-a",
+          "read-after-b",
+        ]),
+      );
+      releases.get("read-after-a")?.();
+      releases.get("read-after-b")?.();
+      await expect(run).resolves.toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "done" })]),
+      );
     });
   });
 
@@ -839,6 +964,85 @@ describe("AgentEngine", () => {
         role: "user",
         content:
           '<file path="note.md">\n```md\n# Note\nhello\n```\n</file>\n\nfollow up',
+      });
+    });
+
+    it("injects queued image path attachments as image media instead of text", async () => {
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "agent-engine-"));
+      const imageBytes = Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00,
+      ]);
+      await fs.writeFile(path.join(cwd, "canteen.png"), imageBytes);
+
+      const requests: StreamRequest[] = [];
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        callCount += 1;
+        if (callCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call_read",
+                name: "read_file",
+                input: { path: "src/a.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const session = await AgentSession.createForLegacyCwd({
+        mode: "code",
+        config: testConfig,
+        cwd,
+      });
+      session.addUserMessage("read then inspect the image");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const toolCtx: ToolDispatchContext = {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      };
+      setEngineToolContext(engine, toolCtx, async () => {
+        session.setPendingInterjection(
+          "[Attached: canteen.png]\n\ninspect this image",
+          "queue-image",
+          undefined,
+          undefined,
+          false,
+          undefined,
+          ["canteen.png"],
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+        };
+      });
+
+      await collectEvents(engine.run(session));
+
+      expect(requests).toHaveLength(2);
+      expect(requests[1].messages.at(-1)).toEqual({
+        role: "user",
+        content: [
+          { type: "text", text: "inspect this image" },
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: imageBytes.toString("base64"),
+            },
+          },
+        ],
       });
     });
 
@@ -1637,6 +1841,107 @@ describe("AgentEngine", () => {
     });
   });
 
+  describe("pending question recovery arming", () => {
+    const runAskUserTurn = async (blocks: CoreModelContentBlock[]) => {
+      let streamCall = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCall += 1;
+        if (streamCall === 1) {
+          yield { type: "content_blocks", blocks };
+        } else {
+          yield {
+            type: "content_blocks",
+            blocks: [{ type: "text", text: "done" }],
+          };
+        }
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("configure providers");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const executeTool = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+      }));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "ask_user",
+            description: "ask the user",
+            input_schema: { type: "object", properties: {} },
+          },
+          {
+            name: "get_context",
+            description: "read a file",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+        isParallelSafe: () => true,
+        executeTool,
+      });
+      await collectEvents(engine.run(session));
+      return executeTool;
+    };
+
+    it("arms recovery for an ask_user call even when the turn has sibling tool calls", async () => {
+      const executeTool = await runAskUserTurn([
+        {
+          type: "tool_use",
+          id: "call_ctx",
+          name: "get_context",
+          input: { path: "a.ts" },
+        },
+        {
+          type: "tool_use",
+          id: "call_ask",
+          name: "ask_user",
+          input: { questions: [] },
+        },
+      ]);
+
+      expect(executeTool).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "ask_user",
+          context: expect.objectContaining({
+            pendingQuestionRecovery: expect.objectContaining({
+              toolUseId: "call_ask",
+              toolName: "ask_user",
+              assistantContent: [
+                expect.objectContaining({ id: "call_ctx" }),
+                expect.objectContaining({ id: "call_ask" }),
+              ],
+            }),
+          }),
+        }),
+      );
+    });
+
+    it("does not arm recovery when a turn contains multiple ask_user calls", async () => {
+      const executeTool = await runAskUserTurn([
+        {
+          type: "tool_use",
+          id: "call_ask_1",
+          name: "ask_user",
+          input: { questions: [] },
+        },
+        {
+          type: "tool_use",
+          id: "call_ask_2",
+          name: "ask_user",
+          input: { questions: [] },
+        },
+      ]);
+
+      for (const call of executeTool.mock.calls as unknown as Array<
+        [AgentToolExecutionRequest]
+      >) {
+        expect(call[0].context.pendingQuestionRecovery).toBeUndefined();
+      }
+    });
+  });
+
   describe("tool assembly", () => {
     it("omits deferred MCP tools from provider requests while retaining discovery/call meta-tools", async () => {
       const streamCalls: StreamRequest[] = [];
@@ -1915,6 +2220,70 @@ describe("AgentEngine", () => {
     });
   });
 
+  describe("reasoning effort normalization", () => {
+    it("downgrades an unsupported effort to the model default and logs it once", async () => {
+      const capabilities: ModelCapabilities = {
+        ...TEST_CAPABILITIES,
+        supportsThinking: true,
+        reasoningEfforts: ["none", "low", "medium", "high"],
+        defaultReasoningEffort: "medium",
+      };
+      const provider = {
+        ...makeMockProvider(),
+        getCapabilities: () => capabilities,
+      };
+      const session = await makeSession();
+      session.reasoningEffort = "max";
+      session.addUserMessage("hello");
+      const logs: string[] = [];
+      const engine = new AgentEngine(makeRegistry(provider), (msg) =>
+        logs.push(msg),
+      );
+
+      const events = await collectEvents(engine.run(session));
+
+      const apiRequest = events.find((e) => e.type === "api_request");
+      expect(apiRequest).toMatchObject({
+        type: "api_request",
+        reasoningEffort: "medium",
+      });
+      expect(logs.filter((msg) => msg.includes("reasoning effort"))).toEqual([
+        `[agent] reasoning effort "max" is not supported by ${TEST_MODEL}; sending "medium" instead`,
+      ]);
+      expect(session.reasoningEffort).toBe("max");
+    });
+
+    it("does not log when the selected effort is supported", async () => {
+      const capabilities: ModelCapabilities = {
+        ...TEST_CAPABILITIES,
+        supportsThinking: true,
+        reasoningEfforts: ["none", "low", "medium", "high", "max"],
+      };
+      const provider = {
+        ...makeMockProvider(),
+        getCapabilities: () => capabilities,
+      };
+      const session = await makeSession();
+      session.reasoningEffort = "max";
+      session.addUserMessage("hello");
+      const logs: string[] = [];
+      const engine = new AgentEngine(makeRegistry(provider), (msg) =>
+        logs.push(msg),
+      );
+
+      const events = await collectEvents(engine.run(session));
+
+      const apiRequest = events.find((e) => e.type === "api_request");
+      expect(apiRequest).toMatchObject({
+        type: "api_request",
+        reasoningEffort: "max",
+      });
+      expect(logs.filter((msg) => msg.includes("reasoning effort"))).toEqual(
+        [],
+      );
+    });
+  });
+
   describe("token accounting", () => {
     it("reports api_request inputTokens as uncached + cache_read + cache_creation", async () => {
       const provider = makeMockProvider(
@@ -2064,6 +2433,7 @@ describe("AgentEngine", () => {
             settings: {
               searchBackend: "native",
               fetchBackend: "disabled",
+              nativeSearchMode: "cached",
               allowedDomains: [],
               blockedDomains: [],
               maxSearchUsesPerTurn: 5,
@@ -3356,6 +3726,68 @@ describe("AgentEngine", () => {
         expect((error as { error?: string }).error).toContain(
           "connection timed out",
         );
+      } finally {
+        backoffSpy.mockRestore();
+      }
+    });
+
+    it("aborts and retries a stream that stays transport-active but never yields events", async () => {
+      let attempts = 0;
+      const requestSignals: AbortSignal[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        attempts += 1;
+        if (request.signal) requestSignals.push(request.signal);
+        // Warm-but-dead stream: keepalive bytes flow, but no parsed events
+        // ever arrive. Before the no-progress watchdog this hung forever.
+        const heartbeat = setInterval(() => {
+          request.onTransportActivity?.({
+            kind: "body",
+            at: Date.now(),
+            bytes: 1,
+          });
+        }, 2);
+        try {
+          await new Promise((_, reject) => {
+            request.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("request aborted")),
+              { once: true },
+            );
+          });
+        } finally {
+          clearInterval(heartbeat);
+        }
+        yield { type: "done" };
+      };
+      const backoffSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((fn: TimerHandler) => {
+          if (typeof fn === "function") fn();
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        });
+
+      try {
+        const session = await makeSession();
+        session.addUserMessage("hello");
+        const engine = new AgentEngine(makeRegistry(provider));
+
+        const events = await collectEvents(
+          engine.run(session, { providerNoProgressTimeoutMs: 10 }),
+        );
+        const error = events.find((event) => event.type === "error");
+
+        // Transport activity classifies these as stream failures:
+        // 1 initial attempt + MAX_STREAM_RETRIES (5).
+        expect(attempts).toBe(6);
+        expect(requestSignals.every((signal) => signal.aborted)).toBe(true);
+        expect(error).toEqual(
+          expect.objectContaining({
+            type: "error",
+            retryable: true,
+          }),
+        );
+        expect((error as { error?: string }).error).toContain("no progress");
       } finally {
         backoffSpy.mockRestore();
       }

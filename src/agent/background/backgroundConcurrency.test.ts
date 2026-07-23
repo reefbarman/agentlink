@@ -4,9 +4,9 @@ import { normalizeBackgroundMaxConcurrent } from "./backgroundConcurrency.js";
 
 describe("normalizeBackgroundMaxConcurrent", () => {
   it.each([
-    [undefined, 3],
-    [Number.NaN, 3],
-    [Number.POSITIVE_INFINITY, 3],
+    [undefined, 8],
+    [Number.NaN, 8],
+    [Number.POSITIVE_INFINITY, 8],
     [0, 1],
     [-4, 1],
     [2.9, 2],

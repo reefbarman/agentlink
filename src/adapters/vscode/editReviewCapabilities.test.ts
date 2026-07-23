@@ -11,12 +11,20 @@ import {
   createVscodeWriteApprovalPolicyProvider,
 } from "./editReviewCapabilities.js";
 
+import { DiffViewProvider } from "../../integrations/DiffViewProvider.js";
+
 const openTextDocument = vi.hoisted(() => vi.fn());
 const showTextDocument = vi.hoisted(() => vi.fn());
 const getConfiguration = vi.hoisted(() => vi.fn());
 const applyEdit = vi.hoisted(() => vi.fn(async () => true));
 const executeCommand = vi.hoisted(() => vi.fn());
 const stat = vi.hoisted(() => vi.fn());
+const resolveAndValidatePath = vi.hoisted(() =>
+  vi.fn((inputPath: string) => ({
+    absolutePath: inputPath,
+    inWorkspace: !inputPath.startsWith("/outside/"),
+  })),
+);
 const acceptedMatchIds = vi.hoisted(() => new Set<string>(["0:0"]));
 const textDocuments = vi.hoisted(
   () =>
@@ -27,7 +35,16 @@ const textDocuments = vi.hoisted(
     }>,
 );
 const workspaceEditInstances = vi.hoisted(
-  () => [] as Array<{ replace: ReturnType<typeof vi.fn> }>,
+  () =>
+    [] as Array<{
+      replace: ReturnType<typeof vi.fn>;
+      entries: () => Array<
+        readonly [
+          { fsPath: string },
+          Array<{ range: unknown; newText: string }>,
+        ]
+      >;
+    }>,
 );
 
 vi.mock("fs/promises", async (importOriginal) => {
@@ -57,7 +74,21 @@ vi.mock("vscode", () => {
   class Selection extends Range {}
 
   class WorkspaceEdit {
-    replace = vi.fn();
+    private readonly edits = new Map<
+      string,
+      Array<{ range: unknown; newText: string }>
+    >();
+    replace = vi.fn(
+      (uri: { fsPath: string }, range: unknown, newText: string) => {
+        const edits = this.edits.get(uri.fsPath) ?? [];
+        edits.push({ range, newText });
+        this.edits.set(uri.fsPath, edits);
+      },
+    );
+    entries = () =>
+      [...this.edits.entries()].map(
+        ([fsPath, edits]) => [{ fsPath }, edits] as const,
+      );
 
     constructor() {
       workspaceEditInstances.push(this);
@@ -103,13 +134,11 @@ vi.mock("../../integrations/DiffViewProvider.js", () => ({
 }));
 
 vi.mock("../../util/paths.js", () => ({
+  canonicalizePath: vi.fn((absolutePath: string) => absolutePath),
   getRelativePath: vi.fn((absolutePath: string) =>
     absolutePath.replace("/workspace/", ""),
   ),
-  resolveAndValidatePath: vi.fn((inputPath: string) => ({
-    absolutePath: inputPath,
-    inWorkspace: true,
-  })),
+  resolveAndValidatePath,
 }));
 
 vi.mock("../../findReplace/FindReplacePreviewPanel.js", () => ({
@@ -276,6 +305,63 @@ describe("createVscodeEditReviewProvider", () => {
     }
   });
 
+  it("consumes an exact one-shot outside-write authorization under the file lock", async () => {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, "unchanged", "utf-8");
+    const doc = {
+      getText: vi.fn(() => "unchanged"),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { fsPath: filePath },
+      isDirty: false,
+      save: vi.fn(async () => true),
+    };
+    openTextDocument.mockResolvedValue(doc);
+    const consume = vi.fn(() => true);
+    const prepareOneShotAuthorization = vi.fn(async () => ({
+      authorization: {
+        allowed: true as const,
+        basis: "guardian" as const,
+        reason: "Reviewed exact proposal",
+      },
+      consume,
+    }));
+
+    try {
+      const provider = createVscodeEditReviewProvider();
+      const result = await provider.reviewAndApply({
+        mode: "interactive",
+        absolutePath: filePath,
+        relativePath: filePath,
+        content: "unchanged",
+        outsideWorkspace: true,
+        diagnosticDelay: 0,
+        sessionId: "session-1",
+        prepareOneShotAuthorization,
+        operation: "modified",
+      });
+
+      expect(result).toMatchObject({
+        status: "accepted",
+        path: filePath,
+        operation: "modified",
+        authorization: { allowed: true, basis: "guardian" },
+      });
+      expect(prepareOneShotAuthorization).toHaveBeenCalledWith({
+        absolutePath: filePath,
+        baselineExists: true,
+        baselineContent: "unchanged",
+        proposedContent: "unchanged",
+      });
+      expect(consume).toHaveBeenCalledOnce();
+      expect(DiffViewProvider).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("runs prepareContent inside the provider before auto-approved writes", async () => {
     const tempDir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
@@ -351,6 +437,7 @@ describe("createVscodeMultiFileEditReviewProvider", () => {
     const filePath = "/workspace/src/example.ts";
     const doc = {
       uri: { fsPath: filePath },
+      getText: vi.fn(() => "xoldy"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
       isDirty: true,
       save: vi.fn(async () => true),
@@ -380,7 +467,19 @@ describe("createVscodeMultiFileEditReviewProvider", () => {
           replacements: [
             { startOffset: 1, endOffset: 4, newText: "new", matchId: "0:0" },
           ],
-          matches: [],
+          matches: [
+            {
+              id: "0:0",
+              line: 1,
+              columnStart: 1,
+              columnEnd: 4,
+              matchText: "old",
+              replaceText: "new",
+              contextBefore: [],
+              matchLine: { lineNumber: 1, text: "xoldy" },
+              contextAfter: [],
+            },
+          ],
         },
       ],
     });
@@ -404,10 +503,207 @@ describe("createVscodeMultiFileEditReviewProvider", () => {
     expect(doc.save).toHaveBeenCalled();
   });
 
+  it("consumes an exact atomic Guardian proposal for an outside replacement", async () => {
+    const filePath = "/outside/project/example.ts";
+    const text = "xoldy";
+    const doc = {
+      uri: { fsPath: filePath },
+      getText: vi.fn(() => text),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      offsetAt: vi.fn((position: { character: number }) => position.character),
+      isDirty: false,
+      save: vi.fn(async () => true),
+    };
+    openTextDocument.mockResolvedValue(doc);
+    const consume = vi.fn(() => true);
+    const prepareOneShotAuthorization = vi.fn(async () => ({
+      authorization: {
+        allowed: true as const,
+        basis: "guardian" as const,
+        reason: "Reviewed complete affected set",
+      },
+      consume,
+    }));
+    const onApprovalRequest = vi.fn(async () => "accept");
+    const approvalManager = {
+      isAgentWriteApproved: vi.fn(() => true),
+      isFileWriteApproved: vi.fn(() => false),
+    };
+    const provider = createVscodeMultiFileEditReviewProvider(
+      approvalManager as never,
+      {} as never,
+    );
+
+    const result = await provider.reviewAndApply({
+      find: "old",
+      replace: "new",
+      isRegex: false,
+      sessionId: "session-1",
+      totalMatches: 1,
+      onApprovalRequest,
+      prepareOneShotAuthorization,
+      files: [
+        {
+          absolutePath: filePath,
+          relativePath: filePath,
+          replacements: [
+            { startOffset: 1, endOffset: 4, newText: "new", matchId: "0:0" },
+          ],
+          matches: [
+            {
+              id: "0:0",
+              line: 1,
+              columnStart: 1,
+              columnEnd: 4,
+              matchText: "old",
+              replaceText: "new",
+              contextBefore: [],
+              matchLine: { lineNumber: 1, text },
+              contextAfter: [],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(approvalManager.isAgentWriteApproved).not.toHaveBeenCalled();
+    expect(approvalManager.isFileWriteApproved).toHaveBeenCalledWith(
+      "session-1",
+      filePath,
+    );
+    expect(prepareOneShotAuthorization).toHaveBeenCalledWith([
+      {
+        absolutePath: filePath,
+        baselineExists: true,
+        baselineContent: text,
+        proposedContent: "xnewy",
+      },
+    ]);
+    expect(consume).toHaveBeenCalledWith([
+      {
+        absolutePath: filePath,
+        baselineExists: true,
+        baselineContent: text,
+        proposedContent: "xnewy",
+      },
+    ]);
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+    expect(
+      JSON.parse((result.content[0] as { text: string }).text),
+    ).toMatchObject({
+      status: "applied",
+      authorization: { allowed: true, basis: "guardian" },
+    });
+  });
+
+  it("falls back to human review when an outside match no longer matches its captured text", async () => {
+    const filePath = "/outside/project/example.ts";
+    const doc = {
+      uri: { fsPath: filePath },
+      getText: vi.fn(() => "xother"),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      offsetAt: vi.fn((position: { character: number }) => position.character),
+      isDirty: false,
+      save: vi.fn(async () => true),
+    };
+    openTextDocument.mockResolvedValue(doc);
+    const prepareOneShotAuthorization = vi.fn();
+    const onApprovalRequest = vi.fn(async () => "accept");
+    const provider = createVscodeMultiFileEditReviewProvider(
+      {
+        isAgentWriteApproved: vi.fn(() => true),
+        isFileWriteApproved: vi.fn(() => false),
+      } as never,
+      {} as never,
+    );
+
+    await provider.reviewAndApply({
+      find: "old",
+      replace: "new",
+      isRegex: false,
+      sessionId: "session-1",
+      totalMatches: 1,
+      onApprovalRequest,
+      prepareOneShotAuthorization,
+      files: [
+        {
+          absolutePath: filePath,
+          relativePath: filePath,
+          replacements: [
+            { startOffset: 1, endOffset: 4, newText: "new", matchId: "0:0" },
+          ],
+          matches: [
+            {
+              id: "0:0",
+              line: 1,
+              columnStart: 1,
+              columnEnd: 4,
+              matchText: "old",
+              replaceText: "new",
+              contextBefore: [],
+              matchLine: { lineNumber: 1, text: "xoldy" },
+              contextAfter: [],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(prepareOneShotAuthorization).not.toHaveBeenCalled();
+    expect(onApprovalRequest).toHaveBeenCalled();
+  });
+
+  it("falls back to human review when an outside replacement document is dirty", async () => {
+    const filePath = "/outside/project/example.ts";
+    const doc = {
+      uri: { fsPath: filePath },
+      getText: vi.fn(() => "xoldy"),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      offsetAt: vi.fn((position: { character: number }) => position.character),
+      isDirty: true,
+      save: vi.fn(async () => true),
+    };
+    textDocuments.push(doc);
+    openTextDocument.mockResolvedValue(doc);
+    const prepareOneShotAuthorization = vi.fn();
+    const onApprovalRequest = vi.fn(async () => "accept");
+    const provider = createVscodeMultiFileEditReviewProvider(
+      {
+        isAgentWriteApproved: vi.fn(() => true),
+        isFileWriteApproved: vi.fn(() => false),
+      } as never,
+      {} as never,
+    );
+
+    await provider.reviewAndApply({
+      find: "old",
+      replace: "new",
+      isRegex: false,
+      sessionId: "session-1",
+      totalMatches: 1,
+      onApprovalRequest,
+      prepareOneShotAuthorization,
+      files: [
+        {
+          absolutePath: filePath,
+          relativePath: filePath,
+          replacements: [
+            { startOffset: 1, endOffset: 4, newText: "new", matchId: "0:0" },
+          ],
+          matches: [],
+        },
+      ],
+    });
+
+    expect(prepareOneShotAuthorization).not.toHaveBeenCalled();
+    expect(onApprovalRequest).toHaveBeenCalled();
+  });
+
   it("applies only accepted interactive preview matches and reports exclusions", async () => {
     const filePath = "/workspace/src/example.ts";
     const doc = {
       uri: { fsPath: filePath },
+      getText: vi.fn(() => "xoldxxxxold"),
       positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
       isDirty: false,
       save: vi.fn(async () => true),
@@ -630,6 +926,47 @@ describe("createVscodeRenameSymbolProvider", () => {
     expect(applyEdit).toHaveBeenCalledWith(renameEdit);
   });
 
+  it("does not let blanket write approval authorize an outside rename target", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((_key: string, fallback?: unknown) => fallback),
+    });
+    const sourcePath = "/workspace/src/example.ts";
+    const outsidePath = "/outside/project/example.ts";
+    openTextDocument.mockResolvedValue({
+      uri: { fsPath: sourcePath },
+      getWordRangeAtPosition: vi.fn(() => ({ start: 0, end: 3 })),
+      getText: vi.fn(() => "oldName"),
+      lineAt: vi.fn(() => ({ text: "const oldName = 1;" })),
+    });
+    const renameEdit = {
+      entries: vi.fn(() => [[{ fsPath: outsidePath }, [{}]]]),
+    };
+    executeCommand.mockResolvedValue(renameEdit);
+    const onApprovalRequest = vi.fn(async () => "accept");
+    const approvalManager = {
+      isAgentWriteApproved: vi.fn(() => true),
+      isFileWriteApproved: vi.fn(() => false),
+    };
+    const provider = createVscodeRenameSymbolProvider(approvalManager as never);
+
+    await provider.rename({
+      path: sourcePath,
+      line: 1,
+      column: 7,
+      newName: "newName",
+      sessionId: "session-1",
+      approvalPanel: {} as never,
+      onApprovalRequest,
+    });
+
+    expect(approvalManager.isAgentWriteApproved).not.toHaveBeenCalled();
+    expect(approvalManager.isFileWriteApproved).toHaveBeenCalledWith(
+      "session-1",
+      outsidePath,
+    );
+    expect(onApprovalRequest).toHaveBeenCalled();
+  });
+
   it("returns actionable context when the language service rejects the rename", async () => {
     const filePath =
       "/workspace/Assets/Scripts/Presentation/CartridgeVisual.cs";
@@ -778,6 +1115,105 @@ describe("createVscodeWriteApprovalPolicyProvider", () => {
       }),
     ).toBe(true);
     expect(approvalManager.isAgentWriteApproved).not.toHaveBeenCalled();
+    expect(
+      provider.getAuthorization?.({
+        sessionId: "session-1",
+        absolutePath: "/workspace/plans/example.md",
+        relativePath: "plans/example.md",
+        inWorkspace: true,
+        mode: "architect",
+      }),
+    ).toEqual({ allowed: true, basis: "architect_plan" });
+  });
+
+  it("treats Code-mode plan files as ordinary in-workspace writes", () => {
+    const decision = {
+      allowed: true as const,
+      basis: "blanket_approval" as const,
+      scope: "session" as const,
+    };
+    const approvalManager = {
+      getAgentWriteAuthorization: vi.fn(() => decision),
+    };
+    const provider = createVscodeWriteApprovalPolicyProvider(
+      approvalManager as never,
+    );
+    const request = {
+      sessionId: "session-1",
+      absolutePath: "/workspace/plans/example.md",
+      relativePath: "plans/example.md",
+      inWorkspace: true,
+      mode: "code",
+    } as const;
+
+    expect(provider.getAuthorization?.(request)).toEqual(decision);
+    expect(approvalManager.getAgentWriteAuthorization).toHaveBeenCalledWith(
+      "session-1",
+      "/workspace/plans/example.md",
+    );
+  });
+
+  it("preserves the matching write rule in authorization evidence", () => {
+    const decision = {
+      allowed: true as const,
+      basis: "write_rule" as const,
+      scope: "project" as const,
+      rule: { pattern: "src/**", mode: "glob" as const },
+    };
+    const approvalManager = {
+      getAgentWriteAuthorization: vi.fn(() => decision),
+    };
+    const provider = createVscodeWriteApprovalPolicyProvider(
+      approvalManager as never,
+    );
+
+    expect(
+      provider.getAuthorization?.({
+        sessionId: "session-1",
+        absolutePath: "/workspace/src/example.ts",
+        relativePath: "src/example.ts",
+        inWorkspace: true,
+        mode: "code",
+      }),
+    ).toEqual(decision);
+  });
+
+  it("explains ordinary and outside-workspace write prompt reasons", () => {
+    const denied = { allowed: false as const, basis: "none" as const };
+    const approvalManager = {
+      getAgentWriteAuthorization: vi.fn(() => denied),
+      getFileWriteAuthorization: vi.fn(() => denied),
+    };
+    const provider = createVscodeWriteApprovalPolicyProvider(
+      approvalManager as never,
+    );
+
+    expect(
+      provider.getAuthorization?.({
+        sessionId: "session-1",
+        absolutePath: "/workspace/src/example.ts",
+        relativePath: "src/example.ts",
+        inWorkspace: true,
+        mode: "code",
+      }),
+    ).toEqual({
+      ...denied,
+      reason: "no_matching_write_authority",
+    });
+    expect(
+      provider.getAuthorization?.({
+        sessionId: "session-1",
+        absolutePath: "/outside/example.ts",
+        relativePath: "/outside/example.ts",
+        inWorkspace: false,
+        mode: "code",
+      }),
+    ).toEqual({
+      ...denied,
+      reason: "outside_workspace_requires_matching_rule",
+    });
+    expect(approvalManager.getAgentWriteAuthorization).toHaveBeenCalledOnce();
+    expect(approvalManager.getFileWriteAuthorization).toHaveBeenCalledOnce();
   });
 
   it("does not auto-approve protected memory paths even with masterBypass", () => {
@@ -803,6 +1239,19 @@ describe("createVscodeWriteApprovalPolicyProvider", () => {
         mode: "code",
       }),
     ).toBe(false);
+    expect(
+      provider.getAuthorization?.({
+        sessionId: "session-1",
+        absolutePath: "/workspace/CLAUDE.md",
+        relativePath: "CLAUDE.md",
+        inWorkspace: true,
+        mode: "code",
+      }),
+    ).toEqual({
+      allowed: false,
+      basis: "none",
+      reason: "protected_memory_path",
+    });
   });
 
   it("records accept-session decisions through the approval manager", () => {

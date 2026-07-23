@@ -3,6 +3,7 @@ import type * as OpenAIResponses from "openai/resources/responses/responses";
 
 import { BrowserGatewayAskAgentModelClient } from "./askAgentModelClient.js";
 import type { BrowserGatewayModelCredentialRecord } from "../browserGatewayModelCredentialCache.js";
+import { normalizeCoreWebAccessSettings } from "../../core/webAccess.js";
 
 describe("BrowserGatewayAskAgentModelClient", () => {
   const baseCredential = {
@@ -25,6 +26,56 @@ describe("BrowserGatewayAskAgentModelClient", () => {
       blocks: [{ type: "text" as const, text: "hello" }],
     },
   ];
+
+  it("uses the standalone Codex web transport for OAuth credentials", async () => {
+    let requestUrl = "";
+    let requestBody: Record<string, unknown> | undefined;
+    const webFetch: typeof globalThis.fetch = async (input, init) => {
+      requestUrl = String(input);
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(
+        JSON.stringify({
+          output: "result",
+          results: [
+            {
+              type: "text_result",
+              ref_id: "turn0search0",
+              url: "https://example.com/result",
+              title: "Example result",
+              snippet: "Fast path",
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    };
+    const client = new BrowserGatewayAskAgentModelClient({
+      sessionId: "session-1",
+      webFetch,
+    });
+
+    const result = await client.executeNativeWebTool({
+      credential: { ...baseCredential, method: "oauth", accountId: "acct" },
+      model: "gpt-5.5",
+      kind: "search",
+      input: { query: "AgentLink", max_results: 1 },
+      settings: normalizeCoreWebAccessSettings(),
+    });
+
+    expect(requestUrl).toBe(
+      "https://chatgpt.com/backend-api/codex/alpha/search",
+    );
+    expect(requestBody).toMatchObject({
+      model: "gpt-5.5",
+      commands: { search_query: [{ q: "AgentLink" }] },
+      settings: { external_web_access: false },
+    });
+    expect(result).toMatchObject({
+      provider: "codex",
+      operation: "search",
+      content: expect.stringContaining("Example result"),
+    });
+  });
 
   async function captureRequestBody(
     method: "oauth" | "apiKey",
@@ -304,6 +355,7 @@ describe("BrowserGatewayAskAgentModelClient", () => {
       "list_files",
       "search_files",
       "generate_image",
+      "present_images",
     ]);
     const askUserTool = (
       (body.tools as
@@ -328,6 +380,14 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     );
     expect(generateImageParameters.parameters?.properties).not.toHaveProperty(
       "reference_image_paths",
+    );
+    const presentImagesTool = (
+      (body.tools as
+        | Array<{ name?: string; description?: string }>
+        | undefined) ?? []
+    ).find((tool) => tool.name === "present_images");
+    expect(presentImagesTool?.description).toContain(
+      "main browser chat transcript",
     );
     expect(toolNames).not.toContain("execute_command");
     expect(toolNames).not.toContain("write_file");

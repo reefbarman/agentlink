@@ -7,11 +7,13 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 import { CommandCard } from "./components/CommandCard.js";
 import { IdleState } from "./components/IdleState.js";
-import { MemoryCard } from "./components/MemoryCard.js";
 import { McpCard } from "./components/McpCard.js";
+import { MemoryCard } from "./components/MemoryCard.js";
 import { ModeSwitchCard } from "./components/ModeSwitchCard.js";
+import { NetworkCard } from "./components/NetworkCard.js";
 import { PathCard } from "./components/PathCard.js";
 import { RenameCard } from "./components/RenameCard.js";
+import { WorktreeCard } from "./components/WorktreeCard.js";
 import { WriteCard } from "./components/WriteCard.js";
 
 interface VsCodeApi {
@@ -32,11 +34,12 @@ export function App({ vscodeApi }: AppProps) {
       vscodeApi.postMessage({
         type: "decision",
         ...data,
+        approvalKind: request?.kind,
         ...(followUp && { followUp }),
       });
       followUpRef.current = "";
     },
-    [vscodeApi],
+    [request?.kind, vscodeApi],
   );
 
   useEffect(() => {
@@ -59,6 +62,15 @@ export function App({ vscodeApi }: AppProps) {
     case "command":
       return (
         <CommandCard
+          request={request}
+          submit={submit}
+          followUpRef={followUpRef}
+        />
+      );
+
+    case "network":
+      return (
+        <NetworkCard
           request={request}
           submit={submit}
           followUpRef={followUpRef}
@@ -99,6 +111,14 @@ export function App({ vscodeApi }: AppProps) {
     case "mode-switch":
       return (
         <ModeSwitchCard
+          request={request}
+          submit={submit}
+          followUpRef={followUpRef}
+        />
+      );
+    case "worktree":
+      return (
+        <WorktreeCard
           request={request}
           submit={submit}
           followUpRef={followUpRef}

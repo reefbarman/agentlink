@@ -76,6 +76,14 @@ input:focus-visible {
   color: #4ec9b0;
 }
 
+.terminal-agentlink-icon {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  background: var(--agentlink-terminal-icon) center / 16px 16px no-repeat;
+}
+
 .terminal-active-label {
   display: flex;
   min-width: 0;
@@ -126,6 +134,23 @@ input:focus-visible {
 
 .terminal-status.running {
   background: var(--vscode-testing-iconPassed, #4ec9b0);
+}
+
+.terminal-status.agent-running {
+  background: #4ec9b0;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #4ec9b0 28%, transparent);
+  animation: terminal-activity-pulse 1.4s ease-in-out infinite;
+}
+
+.terminal-status.agent-unread {
+  background: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 20%, transparent);
+}
+
+@keyframes terminal-activity-pulse {
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, #4ec9b0 12%, transparent);
+  }
 }
 
 .terminal-status.exited {
@@ -181,15 +206,58 @@ input:focus-visible {
   overflow: hidden;
 }
 
-.terminal-list {
+.terminal-list-shell {
   display: flex;
-  width: clamp(190px, 24vw, 280px);
-  min-width: 170px;
+  min-width: 0;
   min-height: 0;
   flex: 0 0 auto;
+}
+
+.terminal-list-resize-handle {
+  position: relative;
+  z-index: 4;
+  width: 11px;
+  margin-right: -6px;
+  margin-left: -5px;
+  flex: 0 0 11px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.terminal-list-resize-handle::before {
+  content: "";
+  display: block;
+  width: 1px;
+  height: 100%;
+  margin-left: 5px;
+  background: var(--vscode-panel-border);
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.terminal-list-resize-handle:hover::before,
+.terminal-list-resize-handle:focus-visible::before,
+.terminal-workbench.resizing .terminal-list-resize-handle::before {
+  background: var(--vscode-focusBorder, #4ec9b0);
+  box-shadow: 0 0 0 1px
+    color-mix(in srgb, var(--vscode-focusBorder, #4ec9b0) 35%, transparent);
+}
+
+.terminal-workbench.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.terminal-list {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
   flex-direction: column;
   overflow: hidden;
-  border-left: 1px solid var(--vscode-panel-border);
   background: var(--vscode-sideBar-background, var(--vscode-panel-background));
 }
 
@@ -248,6 +316,11 @@ input:focus-visible {
   color: var(--vscode-list-activeSelectionForeground);
 }
 
+.terminal-list-item.agent-unread:not(.active) {
+  color: var(--vscode-list-highlightForeground, inherit);
+  font-weight: 600;
+}
+
 .terminal-list-select,
 .terminal-list-close {
   height: 24px;
@@ -292,6 +365,12 @@ input:focus-visible {
 .terminal-list .terminal-status {
   width: 7px;
   height: 7px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-status.agent-running {
+    animation: none;
+  }
 }
 
 .terminal-pane {
@@ -383,6 +462,31 @@ input:focus-visible {
 
 .terminal-xterm-host .xterm-viewport {
   background: transparent !important;
+  scrollbar-color: var(--vscode-scrollbarSlider-background) transparent;
+  scrollbar-width: thin;
+}
+
+.terminal-xterm-host .xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+
+.terminal-xterm-host .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.terminal-xterm-host .xterm-viewport::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 5px;
+  background: var(--vscode-scrollbarSlider-background);
+  background-clip: padding-box;
+}
+
+.terminal-xterm-host .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background-color: var(--vscode-scrollbarSlider-hoverBackground);
+}
+
+.terminal-xterm-host .xterm-viewport::-webkit-scrollbar-thumb:active {
+  background-color: var(--vscode-scrollbarSlider-activeBackground);
 }
 
 .terminal-confirmation-backdrop {
@@ -516,13 +620,6 @@ input:focus-visible {
   bottom: 8px;
   border-color: var(--vscode-panel-border);
   color: var(--vscode-descriptionForeground);
-}
-
-@media (max-width: 700px) {
-  .terminal-list {
-    width: min(210px, 42vw);
-    min-width: 150px;
-  }
 }
 
 @media (max-width: 520px) {

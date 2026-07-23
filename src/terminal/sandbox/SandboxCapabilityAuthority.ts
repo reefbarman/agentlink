@@ -41,6 +41,18 @@ export type SandboxCapabilityConsumeResult =
   | { ok: true; grant: ApprovedSandboxCapabilityGrant }
   | { ok: false; reason: SandboxCapabilityConsumeInvalidReason };
 
+export type SandboxCapabilityPreparedValidationResult =
+  | { ok: true; grant: ApprovedSandboxCapabilityGrant }
+  | {
+      ok: false;
+      reason:
+        | "unknown_grant"
+        | "not_consumed"
+        | "expired"
+        | "revoked"
+        | "wrong_binding";
+    };
+
 export interface SandboxCapabilityAuthorityOptions {
   now?: () => number;
   createId?: () => string;
@@ -70,7 +82,7 @@ export class SandboxCapabilityAuthority {
     this.createId = options.createId ?? randomUUID;
   }
 
-  issuePublicNetworkGrant(input: {
+  issueCapabilityGrant(input: {
     binding: SandboxLaunchBindingInput;
     expiresAt: number;
     auditId?: string;
@@ -78,8 +90,13 @@ export class SandboxCapabilityAuthority {
     grant: ApprovedSandboxCapabilityGrant;
     handle: SandboxCapabilityConsumptionHandle;
   } {
-    if (!input.binding.capability.publicNetwork) {
-      throw new Error("Public-network grant requires publicNetwork capability");
+    if (
+      !input.binding.capability.publicNetwork &&
+      !input.binding.capability.localBinding
+    ) {
+      throw new Error(
+        "Sandbox capability grant requires an additional capability",
+      );
     }
 
     const issuedAt = this.now();
@@ -112,6 +129,21 @@ export class SandboxCapabilityAuthority {
     });
 
     return { grant: { ...grant }, handle };
+  }
+
+  /** Backward-compatible name for callers issuing the original public-network grant. */
+  issuePublicNetworkGrant(input: {
+    binding: SandboxLaunchBindingInput;
+    expiresAt: number;
+    auditId?: string;
+  }): {
+    grant: ApprovedSandboxCapabilityGrant;
+    handle: SandboxCapabilityConsumptionHandle;
+  } {
+    if (!input.binding.capability.publicNetwork) {
+      throw new Error("Public-network grant requires publicNetwork capability");
+    }
+    return this.issueCapabilityGrant(input);
   }
 
   consume(
@@ -159,6 +191,31 @@ export class SandboxCapabilityAuthority {
       auditId: entry.grant.auditId,
       bindingDigest,
     });
+    return { ok: true, grant: { ...entry.grant } };
+  }
+
+  validateConsumed(
+    grantId: string,
+    binding: SandboxLaunchBindingInput,
+  ): SandboxCapabilityPreparedValidationResult {
+    const entry = this.grants.get(grantId);
+    if (!entry) return { ok: false, reason: "unknown_grant" };
+    if (entry.grant.revokedAt !== undefined) {
+      return { ok: false, reason: "revoked" };
+    }
+    if (entry.grant.consumedAt === undefined) {
+      return { ok: false, reason: "not_consumed" };
+    }
+    if (this.now() >= entry.grant.expiresAt) {
+      return { ok: false, reason: "expired" };
+    }
+    if (
+      entry.grant.bindingDigest !== createSandboxLaunchBindingDigest(binding) ||
+      entry.grant.sessionId !== binding.sessionId ||
+      entry.grant.policyVersion !== binding.policyVersion
+    ) {
+      return { ok: false, reason: "wrong_binding" };
+    }
     return { ok: true, grant: { ...entry.grant } };
   }
 

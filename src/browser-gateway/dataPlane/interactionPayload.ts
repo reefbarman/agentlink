@@ -229,14 +229,20 @@ function commandReview(value: unknown): CommandReviewSummary {
       "cancelled",
       "invalid",
     ] as const),
-    decision: enumValue(source.decision, ["approve", "ask_user"] as const),
-    confidence: enumValue(source.confidence, [
-      "high",
-      "medium",
+    outcome: enumValue(source.outcome, ["allow", "deny"] as const),
+    risk: enumValue(source.risk, [
       "low",
+      "medium",
+      "high",
+      "critical",
     ] as const),
-    risk: enumValue(source.risk, ["low", "medium", "high"] as const),
-    reason: stringValue(source.reason),
+    userAuthorization: enumValue(source.userAuthorization, [
+      "unknown",
+      "low",
+      "medium",
+      "high",
+    ] as const),
+    rationale: stringValue(source.rationale),
     model: stringValue(source.model),
   };
 }
@@ -246,6 +252,11 @@ function terminalSecurity(value: unknown): TerminalExecutionSecuritySummary {
   const result: TerminalExecutionSecuritySummary = {
     auditId: stringValue(source.auditId),
     route: enumValue(source.route, ["sandbox", "native"] as const),
+    executionSurface: enumValue(source.executionSurface, [
+      "verified-sandbox",
+      "agentlink-native",
+      "vscode-compatibility",
+    ] as const),
     confinement: enumValue(source.confinement, [
       "verified-baseline",
       "native-unsandboxed",
@@ -257,12 +268,53 @@ function terminalSecurity(value: unknown): TerminalExecutionSecuritySummary {
       "remote-host",
       "runtime-unavailable",
     ] as const),
-    approvalPolicy: enumValue(source.approvalPolicy, [
-      "sandbox-baseline-v1",
+    approvalPolicySnapshot: enumValue(source.approvalPolicySnapshot, [
+      "on-request",
+    ] as const),
+    approvalReviewerSnapshot: enumValue(source.approvalReviewerSnapshot, [
+      "user",
+      "auto-review",
+    ] as const),
+    executionPresetSnapshot: enumValue(source.executionPresetSnapshot, [
+      "native-manual",
+      "workspace-write",
+    ] as const),
+    requiredAuthority: enumValue(source.requiredAuthority, [
+      "native-agent",
+      "sandbox",
+    ] as const),
+    permissionIntent: enumValue(source.permissionIntent, [
+      "default",
+      "additional-permissions",
+      "native-escalation",
+    ] as const),
+    approvalRequirement: enumValue(source.approvalRequirement, [
+      "policy",
+      "explicit-permissions",
+      "explicit-escalation",
+    ] as const),
+    authorityReason: enumValue(source.authorityReason, [
+      "approval-policy",
+      "additional-permissions",
+      "explicit-escalation",
+      "explicit-rule",
+    ] as const),
+    commandApprovalPolicySnapshot: enumValue(
+      source.commandApprovalPolicySnapshot,
+      ["manual", "safe", "sensitive", "approve-for-me"] as const,
+    ),
+    executionPolicy: enumValue(source.executionPolicy, [
+      "sandbox-baseline-v2",
       "native-legacy-v1",
     ] as const),
     preparedAt: finiteNumberValue(source.preparedAt),
   };
+  copyOptional(
+    result,
+    "commandExecutionPolicySnapshot",
+    source.commandExecutionPolicySnapshot,
+    (item) => enumValue(item, ["read-only"] as const),
+  );
   copyOptional(result, "sandbox", source.sandbox, (item) => {
     const sandbox = recordValue(item);
     return {

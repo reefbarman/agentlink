@@ -113,6 +113,8 @@ interface ConnectedServer {
   config: McpServerConfig;
   client: Client;
   tools: ToolDefinition[];
+  /** Bare tool names whose MCP annotations declare read-only behavior. */
+  parallelSafeToolNames: Set<string>;
   outputValidators: Map<string, McpOutputValidator>;
   resources: McpResource[];
   prompts: McpPrompt[];
@@ -449,6 +451,7 @@ export class McpClientHub {
   ): Promise<
     | {
         tools: ToolDefinition[];
+        parallelSafeToolNames: Set<string>;
         outputValidators: Map<string, McpOutputValidator>;
       }
     | McpResource[]
@@ -490,6 +493,11 @@ export class McpClientHub {
             properties: {},
           }) as JsonSchema,
         })),
+        parallelSafeToolNames: new Set(
+          tools
+            .filter((tool) => tool.annotations?.readOnlyHint === true)
+            .map((tool) => tool.name),
+        ),
         outputValidators,
       };
     }
@@ -541,9 +549,11 @@ export class McpClientHub {
       if (kind === "tools") {
         const toolCatalog = catalog as {
           tools: ToolDefinition[];
+          parallelSafeToolNames: Set<string>;
           outputValidators: Map<string, McpOutputValidator>;
         };
         entry.tools = toolCatalog.tools;
+        entry.parallelSafeToolNames = toolCatalog.parallelSafeToolNames;
         entry.outputValidators = toolCatalog.outputValidators;
       } else if (kind === "resources") {
         entry.resources = catalog as McpResource[];
@@ -673,6 +683,7 @@ export class McpClientHub {
       config: cfg,
       client: undefined as unknown as Client,
       tools: [],
+      parallelSafeToolNames: new Set(),
       outputValidators: new Map(),
       resources: [],
       prompts: [],
@@ -1220,6 +1231,34 @@ export class McpClientHub {
       this.servers.get(serverName)?.config ??
       this.disabledServers.get(serverName)
     );
+  }
+
+  /** Whether a server has explicitly opted into concurrent tool calls. */
+  supportsParallelToolCalls(serverName: string): boolean {
+    return this.getServerConfig(serverName)?.supportsParallelToolCalls === true;
+  }
+
+  /**
+   * Whether one MCP tool may overlap other parallel-safe calls. A server-wide
+   * opt-in wins; otherwise trust the protocol's explicit read-only annotation.
+   */
+  isToolParallelSafe(serverName: string, toolName: string): boolean {
+    return (
+      this.supportsParallelToolCalls(serverName) ||
+      (this.servers.get(serverName)?.parallelSafeToolNames.has(toolName) ??
+        false)
+    );
+  }
+
+  /** Connected servers that explicitly permit concurrent tool calls. */
+  getParallelToolCallServerNames(): string[] {
+    return Array.from(this.servers.values())
+      .filter(
+        (server) =>
+          server.status === "connected" &&
+          server.config.supportsParallelToolCalls === true,
+      )
+      .map((server) => server.name);
   }
 
   /**

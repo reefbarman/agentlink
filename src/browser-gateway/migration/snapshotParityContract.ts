@@ -279,6 +279,21 @@ export const BROWSER_GATEWAY_SNAPSHOT_PARITY_CONTRACT = {
         "checkpoint",
         "owner_event",
       ),
+      approvalPolicy: covered(
+        "Projected from the coherent owner policy read into checkpoint.foreground.approvalPolicy.",
+        "checkpoint",
+        "owner_event",
+      ),
+      approvalReviewer: covered(
+        "Projected from the coherent owner policy read into checkpoint.foreground.approvalReviewer.",
+        "checkpoint",
+        "owner_event",
+      ),
+      executionPreset: covered(
+        "Projected from the coherent owner policy read into checkpoint.foreground.executionPreset.",
+        "checkpoint",
+        "owner_event",
+      ),
       configuredCommandApprovalPolicy: covered(
         "Projected from the coherent owner policy read into checkpoint.foreground.configuredCommandApprovalPolicy.",
         "checkpoint",

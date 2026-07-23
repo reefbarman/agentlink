@@ -1,17 +1,13 @@
 import type { ConfigStore } from "./ConfigStore.js";
-import {
-  ScopedRuleStore,
-  type RuleSessionHost,
-  type ScopedRules,
-} from "./ScopedRuleStore.js";
+import type { CommandRule } from "./commandRuleTypes.js";
+import { ScopedRuleStore, type RuleSessionHost } from "./ScopedRuleStore.js";
 
-export interface CommandRule {
-  pattern: string;
-  mode: "prefix" | "regex" | "exact";
-}
-
-export type { RuleScope } from "./ScopedRuleStore.js";
-export type ScopedCommandRules = ScopedRules<CommandRule>;
+export type {
+  CommandRule,
+  CommandRuleDecision,
+  ScopedCommandRules,
+} from "./commandRuleTypes.js";
+export type { RuleScope } from "./ruleTypes.js";
 
 export interface SessionCommandRuleState {
   commandRules: CommandRule[];

@@ -1,3 +1,10 @@
+import type {
+  TerminalApprovalPolicy,
+  TerminalApprovalReviewer,
+  TerminalCommandApprovalPolicySnapshot,
+  TerminalExecutionPreset,
+} from "../core/capabilities/terminal.js";
+
 import type { AgentMessage } from "./types.js";
 import type { BackgroundResultState } from "../core/capabilities/background.js";
 import type { Checkpoint } from "./CheckpointManager.js";
@@ -179,6 +186,14 @@ export interface PersistedSessionMetadata {
   activeContextResourceUri?: string;
   mode: string;
   model: string;
+  /** Legacy bundled mode retained for backward compatibility and UI migration. */
+  commandApprovalPolicy?: TerminalCommandApprovalPolicySnapshot;
+  /** Independent Codex-style approval policy dimension. */
+  approvalPolicy?: TerminalApprovalPolicy;
+  /** Independent reviewer selection for approval requests. */
+  approvalReviewer?: TerminalApprovalReviewer;
+  /** Independent execution capability preset. */
+  executionPreset?: TerminalExecutionPreset;
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCacheReadTokens?: number;

@@ -53,8 +53,10 @@ interface PendingTerminalConfirmation {
   terminalInstanceId: string;
   rendererEpoch: string;
   operation: "close" | "paste";
+  targetKind: "host" | "native-agent";
   interactionStateKey: string;
   pasteData?: string;
+  bracketedPasteMode?: boolean;
 }
 
 interface ManagedSurfaceTerminal {
@@ -66,9 +68,12 @@ interface ManagedSurfaceTerminal {
   bootstrap: MaterializedHostShellBootstrap;
   deliveryQueue: Promise<void>;
   cleaned: boolean;
+  resyncRequested: boolean;
 }
 
 const MAX_SANDBOX_PENDING_RENDER_BATCHES = 256;
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
 
 interface ManagedSandboxSurfaceTerminal {
   terminalId: string;
@@ -106,6 +111,7 @@ export interface LiveHostTerminalSurfaceControllerOptions {
   ensureRuntimeRoot?(): Promise<void>;
   materializeBootstrap?: typeof materializeHostShellBootstrap;
   sandboxChannelHub?: SandboxTerminalChannelHub;
+  requestTerminalViewReveal?(): void;
   log?(message: string): void;
 }
 
@@ -126,6 +132,38 @@ function fallbackReason(reason: string): HostTerminalFallbackState["reason"] {
     : "shell-unsupported";
 }
 
+type TerminalPasteDecision =
+  | { action: "paste"; data: string }
+  | { action: "confirm"; data: string };
+
+export function decideTerminalPaste(
+  data: string,
+  warning: "auto" | "always" | "never",
+  bracketedPasteMode: boolean,
+): TerminalPasteDecision {
+  const lines = data.split(/\r?\n/);
+  if (lines.length === 1 || warning === "never") {
+    return { action: "paste", data };
+  }
+  if (warning === "auto") {
+    if (bracketedPasteMode) return { action: "paste", data };
+    if (lines.length === 2 && lines[1].trim().length === 0) {
+      return { action: "paste", data: lines[0] };
+    }
+  }
+  return { action: "confirm", data };
+}
+
+function prepareTerminalPaste(
+  data: string,
+  bracketedPasteMode: boolean,
+): string {
+  const normalized = data.replace(/\r?\n/g, "\r");
+  return bracketedPasteMode
+    ? `${BRACKETED_PASTE_START}${normalized}${BRACKETED_PASTE_END}`
+    : normalized;
+}
+
 export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceController {
   private readonly connections = new Set<HostTerminalSurfaceConnection>();
   private readonly readyConnections = new Set<HostTerminalSurfaceConnection>();
@@ -135,6 +173,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     ManagedSandboxSurfaceTerminal
   >();
   private readonly sandboxSubscription: { dispose(): void } | undefined;
+  private readonly agentRawDataSubscription: { dispose(): void } | undefined;
   private readonly pendingConfirmations = new Map<
     string,
     PendingTerminalConfirmation
@@ -142,6 +181,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
   private readonly interactionGenerations = new Map<string, number>();
   private nextConnectionGeneration = 1;
   private state: HostTerminalState = EMPTY_HOST_TERMINAL_STATE;
+  private terminalViewFocused = false;
   private fallback: HostTerminalFallbackState | undefined;
   private disposed = false;
 
@@ -150,6 +190,9 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
   ) {
     this.sandboxSubscription = options.sandboxChannelHub?.subscribe((update) =>
       this.handleSandboxEvent(update),
+    );
+    this.agentRawDataSubscription = options.sandboxChannelHub?.subscribeRawData(
+      (update) => this.handleAgentRawData(update),
     );
   }
 
@@ -168,6 +211,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
   detach(connection: HostTerminalSurfaceConnection): void {
     if (!this.connections.delete(connection)) return;
     this.readyConnections.delete(connection);
+    if (this.readyConnections.size === 0) this.terminalViewFocused = false;
     this.deleteConfirmationsForRenderer(connection.rendererEpoch);
     this.interactionGenerations.delete(connection.rendererEpoch);
     for (const terminal of this.terminals.values()) {
@@ -200,6 +244,10 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     }
     if (!this.readyConnections.has(connection)) return;
 
+    if (request.type === "terminal-view/focus-changed") {
+      this.terminalViewFocused = request.focused;
+      return;
+    }
     if (request.type === "terminal-view/resync") {
       if (request.rendererEpoch !== connection.rendererEpoch) return;
       this.deleteConfirmationsForRenderer(connection.rendererEpoch);
@@ -266,7 +314,23 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     if (request.type === "host-terminal/write") {
       const sandboxTerminal = this.sandboxTarget(connection, request);
       if (sandboxTerminal) {
-        this.handleSandboxInput(sandboxTerminal, request.data);
+        if (this.isNativeAgentTerminal(sandboxTerminal)) {
+          this.beginInteraction(connection.rendererEpoch);
+          this.deleteConfirmationsForTerminal(sandboxTerminal.terminalId);
+          if (
+            !sandboxTerminal.runtime.noteUserInput(
+              sandboxTerminal.terminalInstanceId,
+            )
+          ) {
+            return;
+          }
+          this.options.sandboxChannelHub?.write(
+            sandboxTerminal.terminalId,
+            request.data,
+          );
+        } else {
+          this.handleSandboxInput(sandboxTerminal, request.data);
+        }
         return;
       }
       const terminal = this.target(connection, request);
@@ -326,7 +390,15 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     if (request.type === "host-terminal/paste-intent") {
       const sandboxTerminal = this.sandboxTarget(connection, request);
       if (sandboxTerminal) {
-        await this.pasteSandboxTerminal(connection, sandboxTerminal);
+        if (this.isNativeAgentTerminal(sandboxTerminal)) {
+          await this.pasteNativeAgentTerminal(
+            connection,
+            sandboxTerminal,
+            request.bracketedPasteMode === true,
+          );
+        } else {
+          await this.pasteSandboxTerminal(connection, sandboxTerminal);
+        }
         return;
       }
       const terminal = this.target(connection, request);
@@ -375,8 +447,16 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
         }
         return;
       }
-      if (!/[\r\n]/.test(data)) {
-        this.writeUserInput(terminal, data);
+      const paste = decideTerminalPaste(
+        data,
+        this.options.getSurfaceConfiguration().multiLinePasteWarning ?? "auto",
+        request.bracketedPasteMode === true,
+      );
+      if (paste.action === "paste") {
+        this.writeUserInput(
+          terminal,
+          prepareTerminalPaste(paste.data, request.bracketedPasteMode === true),
+        );
         return;
       }
       await this.requestConfirmation(connection, terminal, {
@@ -385,30 +465,56 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
         message:
           "The clipboard contains multiple lines. Pasting may run commands immediately in this terminal.",
         confirmLabel: "Paste",
-        pasteData: data,
+        pasteData: paste.data,
+        bracketedPasteMode: request.bracketedPasteMode === true,
       });
       return;
     }
     if (request.type === "terminal-view/confirm") {
-      const terminal = this.target(connection, request);
       const pending = this.pendingConfirmations.get(request.confirmationId);
       this.pendingConfirmations.delete(request.confirmationId);
+      if (!pending || pending.rendererEpoch !== connection.rendererEpoch)
+        return;
+      const terminal =
+        pending.targetKind === "host"
+          ? this.target(connection, request)
+          : this.sandboxTarget(connection, request);
       if (
         !terminal ||
-        !pending ||
         pending.terminalId !== terminal.terminalId ||
         pending.terminalInstanceId !== terminal.terminalInstanceId ||
-        pending.rendererEpoch !== connection.rendererEpoch ||
         pending.interactionStateKey !== terminal.runtime.interactionStateKey ||
         !request.accept
       ) {
         return;
       }
       if (pending.operation === "close") {
+        if (pending.targetKind !== "host" || !("service" in terminal)) return;
         if (!terminal.runtime.closeRequiresConfirmation) return;
         await this.closeTerminal(terminal);
       } else if (pending.pasteData) {
-        this.writeUserInput(terminal, pending.pasteData);
+        if (pending.targetKind === "host" && "service" in terminal) {
+          this.writeUserInput(
+            terminal,
+            prepareTerminalPaste(
+              pending.pasteData,
+              request.bracketedPasteMode ?? pending.bracketedPasteMode === true,
+            ),
+          );
+        } else if (
+          pending.targetKind === "native-agent" &&
+          !("service" in terminal) &&
+          this.isNativeAgentTerminal(terminal)
+        ) {
+          terminal.runtime.noteUserInput(terminal.terminalInstanceId);
+          this.options.sandboxChannelHub?.write(
+            terminal.terminalId,
+            prepareTerminalPaste(
+              pending.pasteData,
+              request.bracketedPasteMode ?? pending.bracketedPasteMode === true,
+            ),
+          );
+        }
       }
       return;
     }
@@ -505,6 +611,13 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     }
   }
 
+  revealTerminal(terminalId: string): boolean {
+    const terminal = this.sandboxTerminals.get(terminalId);
+    if (!terminal) return false;
+    this.activateAgentTerminal(terminal);
+    return true;
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -513,6 +626,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     this.pendingConfirmations.clear();
     this.interactionGenerations.clear();
     this.sandboxSubscription?.dispose();
+    this.agentRawDataSubscription?.dispose();
     for (const terminal of this.terminals.values()) {
       this.disposeTerminal(terminal);
     }
@@ -529,6 +643,8 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     this.refreshSandboxChannels();
     const replay = [];
     for (const terminal of this.terminals.values()) {
+      terminal.resyncRequested = false;
+      terminal.service.resumeOutput(terminal.terminalId);
       replay.push(terminal.runtime.attachRenderer(connection.rendererEpoch));
     }
     for (const terminal of this.sandboxTerminals.values()) {
@@ -547,6 +663,34 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     });
   }
 
+  private handleAgentRawData(update: {
+    channelId: string;
+    data: string;
+  }): void {
+    if (this.disposed) return;
+    const snapshot = this.options.sandboxChannelHub?.getSnapshot(
+      update.channelId,
+    );
+    const terminal = snapshot
+      ? this.ensureSandboxTerminal(snapshot)
+      : this.sandboxTerminals.get(update.channelId);
+    if (!terminal || !this.isNativeAgentTerminal(terminal)) return;
+    if (snapshot && terminal.snapshot.cwd !== snapshot.cwd) {
+      terminal.snapshot = snapshot;
+      this.state = reduceHostTerminalState(this.state, {
+        type: "host-terminal/cwd",
+        terminalId: terminal.terminalId,
+        cwd: snapshot.cwd,
+      });
+      void this.postSandboxLifecycle(terminal, {
+        type: "host-terminal/cwd",
+        terminalId: terminal.terminalId,
+        cwd: snapshot.cwd,
+      });
+    }
+    this.processSandboxRenderData(terminal, update.data);
+  }
+
   private handleSandboxEvent(update: SandboxTerminalChannelEvent): void {
     if (this.disposed) return;
     const terminal = this.ensureSandboxTerminal(update.snapshot);
@@ -556,7 +700,13 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     if (update.event.type === "command-started") {
       terminal.submitting = false;
       terminal.editor.reset();
-      if (update.event.command.origin !== "user") {
+      if (update.event.command.origin === "agent") {
+        this.handleAgentCommandStarted(terminal);
+      }
+      if (
+        !this.isNativeAgentTerminal(terminal) &&
+        update.event.command.origin !== "user"
+      ) {
         this.processSandboxRenderData(
           terminal,
           `\r\x1b[2K$ ${update.event.command.command}\r\n`,
@@ -565,7 +715,9 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       return;
     }
     if (update.event.type === "data") {
-      this.processSandboxRenderData(terminal, update.event.data);
+      if (!this.isNativeAgentTerminal(terminal)) {
+        this.processSandboxRenderData(terminal, update.event.data);
+      }
       return;
     }
     if (update.event.type === "cwd") {
@@ -589,17 +741,23 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       return;
     }
     if (update.event.type === "command-exited") {
-      this.resetSandboxProcessBoundary(terminal);
-      this.processSandboxRenderData(terminal, "\r\n$ ");
+      this.handleAgentCommandFinished(terminal, update.event.commandId);
+      if (!this.isNativeAgentTerminal(terminal)) {
+        this.resetSandboxProcessBoundary(terminal);
+        this.processSandboxRenderData(terminal, "\r\n$ ");
+      }
       return;
     }
     if (update.event.type === "command-failed") {
       terminal.submitting = false;
-      this.resetSandboxProcessBoundary(terminal);
-      this.processSandboxRenderData(
-        terminal,
-        `\r\n\x1b[31m${update.event.error}\x1b[0m\r\n$ `,
-      );
+      this.handleAgentCommandFinished(terminal, update.event.commandId);
+      if (!this.isNativeAgentTerminal(terminal)) {
+        this.resetSandboxProcessBoundary(terminal);
+        this.processSandboxRenderData(
+          terminal,
+          `\r\n\x1b[31m${update.event.error}\x1b[0m\r\n$ `,
+        );
+      }
       return;
     }
     if (update.event.type === "resized") {
@@ -661,7 +819,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       renderPaused: false,
       resyncRequested: false,
     };
-    if (reconstruct) {
+    if (reconstruct && !this.isNativeAgentTerminal(terminal)) {
       const initialRender = [
         snapshot.replay,
         snapshot.status === "idle" ? (snapshot.replay ? "\r\n$ " : "$ ") : "",
@@ -673,12 +831,21 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     this.sandboxTerminals.set(terminal.terminalId, terminal);
     const opened: HostTerminalEvent = {
       type: "host-terminal/opened",
+      activate: reconstruct,
       terminal: {
         id: terminal.terminalId,
         title: snapshot.title,
-        channelKind: "agent-sandbox",
+        channelKind:
+          this.options.sandboxChannelHub?.getAuthority(snapshot.channelId) ===
+          "native"
+            ? "agent-native"
+            : "agent-sandbox",
         cwd: snapshot.cwd,
-        profileName: "AgentLink Sandbox",
+        profileName:
+          this.options.sandboxChannelHub?.getAuthority(snapshot.channelId) ===
+          "native"
+            ? "AgentLink Native"
+            : "AgentLink Sandbox",
         dimensions: snapshot.dimensions,
         status: "running",
       },
@@ -686,6 +853,64 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     this.state = reduceHostTerminalState(this.state, opened);
     if (!reconstruct) void this.postSandboxLifecycle(terminal, opened);
     return terminal;
+  }
+
+  private handleAgentCommandStarted(
+    terminal: ManagedSandboxSurfaceTerminal,
+  ): void {
+    const activityEvent: HostTerminalEvent = {
+      type: "host-terminal/agent-activity",
+      terminalId: terminal.terminalId,
+      activity: "running",
+    };
+    this.state = reduceHostTerminalState(this.state, activityEvent);
+    void this.postSandboxLifecycle(terminal, activityEvent);
+    if (this.terminalViewFocused && this.activeUserTerminalThatMayBeBusy())
+      return;
+    this.activateAgentTerminal(terminal);
+  }
+
+  private activateAgentTerminal(terminal: ManagedSandboxSurfaceTerminal): void {
+    const activated: HostTerminalEvent = {
+      type: "host-terminal/activated",
+      terminalId: terminal.terminalId,
+    };
+    this.state = reduceHostTerminalState(this.state, activated);
+    void this.postSandboxLifecycle(terminal, activated);
+    try {
+      this.options.requestTerminalViewReveal?.();
+    } catch (error) {
+      this.options.log?.(
+        `Unable to reveal AgentLink Terminal: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private handleAgentCommandFinished(
+    terminal: ManagedSandboxSurfaceTerminal,
+    commandId: string,
+  ): void {
+    const command = terminal.snapshot.commands.find(
+      (candidate) => candidate.commandId === commandId,
+    );
+    if (command?.origin !== "agent") return;
+    const activityEvent: HostTerminalEvent = {
+      type: "host-terminal/agent-activity",
+      terminalId: terminal.terminalId,
+      activity:
+        this.state.activeTabId === terminal.terminalId ? "none" : "unread",
+    };
+    this.state = reduceHostTerminalState(this.state, activityEvent);
+    void this.postSandboxLifecycle(terminal, activityEvent);
+  }
+
+  private activeUserTerminalThatMayBeBusy():
+    | ManagedSurfaceTerminal
+    | undefined {
+    const activeTabId = this.state.activeTabId;
+    if (!activeTabId) return undefined;
+    const terminal = this.terminals.get(activeTabId);
+    return terminal?.runtime.userMayBeBusy ? terminal : undefined;
   }
 
   private handleSandboxInput(
@@ -732,6 +957,59 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
           );
       }
     }
+  }
+
+  private isNativeAgentTerminal(
+    terminal: ManagedSandboxSurfaceTerminal,
+  ): boolean {
+    return (
+      this.options.sandboxChannelHub?.getAuthority(terminal.terminalId) ===
+      "native"
+    );
+  }
+
+  private async pasteNativeAgentTerminal(
+    connection: HostTerminalSurfaceConnection,
+    terminal: ManagedSandboxSurfaceTerminal,
+    bracketedPasteMode: boolean,
+  ): Promise<void> {
+    if (!this.options.readClipboard) return;
+    let data: string;
+    try {
+      data = await this.options.readClipboard();
+    } catch (error) {
+      await this.post(connection, {
+        type: "host-terminal/error",
+        terminalId: terminal.terminalId,
+        terminalInstanceId: terminal.terminalInstanceId,
+        message: `Unable to read the clipboard: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      return;
+    }
+    if (!this.isValidPaste(data)) return;
+    const paste = decideTerminalPaste(
+      data,
+      this.options.getSurfaceConfiguration().multiLinePasteWarning ?? "auto",
+      bracketedPasteMode,
+    );
+    if (paste.action === "confirm") {
+      await this.requestConfirmation(connection, terminal, {
+        operation: "paste",
+        title: "Paste multiple lines?",
+        message:
+          "The clipboard contains multiple lines. Pasting may run commands immediately in this terminal.",
+        confirmLabel: "Paste",
+        pasteData: paste.data,
+        targetKind: "native-agent",
+        bracketedPasteMode,
+      });
+      return;
+    }
+    terminal.runtime.noteUserInput(terminal.terminalInstanceId);
+    this.options.sandboxChannelHub?.write(
+      terminal.terminalId,
+      prepareTerminalPaste(paste.data, bracketedPasteMode),
+    );
   }
 
   private async pasteSandboxTerminal(
@@ -862,6 +1140,9 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
             type: event.type,
             terminalInstanceId: terminal.terminalInstanceId,
             terminal: event.terminal,
+            ...(event.activate === undefined
+              ? {}
+              : { activate: event.activate }),
           }
         : ({
             ...event,
@@ -977,6 +1258,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
         bootstrap: materialized,
         deliveryQueue: Promise.resolve(),
         cleaned: false,
+        resyncRequested: false,
       };
       managed.serviceSubscription = service.onEvent((event) =>
         this.handleServiceEvent(managed!, event),
@@ -1059,6 +1341,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     batch: HostTerminalRenderBatch,
   ): void {
     terminal.deliveryQueue = terminal.deliveryQueue.then(async () => {
+      if (terminal.resyncRequested) return;
       const connection = this.currentReadyConnection();
       if (!connection) return;
       const delivered = await this.post(connection, batch);
@@ -1081,8 +1364,32 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
         batch.sequence,
       );
       if (delivery.shouldPause) {
-        terminal.service.pauseOutput(terminal.terminalId);
+        // Never pause the PTY on renderer backpressure: a throttled or hidden
+        // renderer (screen lock marks the window occluded and clamps webview
+        // timers) would otherwise freeze the child process mid-write. Detach
+        // the renderer instead and let it resync from the replay snapshot,
+        // like the sandbox terminal path; the PTY keeps draining host-side.
+        this.requestHostTerminalResync(terminal, connection);
       }
+    });
+  }
+
+  private requestHostTerminalResync(
+    terminal: ManagedSurfaceTerminal,
+    connection: HostTerminalSurfaceConnection,
+  ): void {
+    if (terminal.resyncRequested) return;
+    terminal.resyncRequested = true;
+    const detached = terminal.runtime.detachRenderer(
+      terminal.terminalInstanceId,
+      connection.rendererEpoch,
+    );
+    if (detached.shouldResume) {
+      terminal.service.resumeOutput(terminal.terminalId);
+    }
+    void this.post(connection, {
+      type: "terminal-view/resync-required",
+      rendererEpoch: connection.rendererEpoch,
     });
   }
 
@@ -1115,13 +1422,15 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
 
   private async requestConfirmation(
     connection: HostTerminalSurfaceConnection,
-    terminal: ManagedSurfaceTerminal,
+    terminal: ManagedSurfaceTerminal | ManagedSandboxSurfaceTerminal,
     confirmation: {
       operation: "close" | "paste";
       title: string;
       message: string;
       confirmLabel: string;
       pasteData?: string;
+      targetKind?: "host" | "native-agent";
+      bracketedPasteMode?: boolean;
     },
   ): Promise<void> {
     this.deleteConfirmationsForRenderer(connection.rendererEpoch);
@@ -1132,10 +1441,14 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       terminalInstanceId: terminal.terminalInstanceId,
       rendererEpoch: connection.rendererEpoch,
       operation: confirmation.operation,
+      targetKind: confirmation.targetKind ?? "host",
       interactionStateKey: terminal.runtime.interactionStateKey,
       ...(confirmation.pasteData === undefined
         ? {}
         : { pasteData: confirmation.pasteData }),
+      ...(confirmation.bracketedPasteMode === undefined
+        ? {}
+        : { bracketedPasteMode: confirmation.bracketedPasteMode }),
     };
     this.pendingConfirmations.set(confirmationId, pending);
     const delivered = await this.post(connection, {

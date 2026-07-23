@@ -1,20 +1,34 @@
-export const CURRENT_SANDBOX_POLICY_VERSION = "2026-07.sandbox.v1";
+export const CURRENT_SANDBOX_POLICY_VERSION = "2026-07.sandbox.v4";
 
 export type SandboxNetworkPolicy =
-  | { mode: "blocked" }
+  | { mode: "loopback"; allowLocalBinding?: true }
   | {
       mode: "domain-proxy";
       allowedDomains: string[];
       allowedPrivateTargets?: string[];
+      allowLocalBinding?: true;
     }
   | {
       mode: "public-proxy";
       allowedPrivateTargets?: string[];
+      allowLocalBinding?: true;
     };
+
+export type SandboxEnvironmentInheritance = "all" | "core" | "none";
+
+export interface SandboxEnvironmentPolicySummary {
+  inherit: SandboxEnvironmentInheritance;
+  ignoreDefaultExcludes: boolean;
+  exclude: string[];
+  setKeys: string[];
+  includeOnly: string[];
+  useProfile: boolean;
+}
 
 export interface SandboxEnvironmentPolicy {
   inheritHost: false;
   values: Record<string, string>;
+  summary?: SandboxEnvironmentPolicySummary;
 }
 
 export interface SandboxResourceLimits {
@@ -35,6 +49,8 @@ export interface SandboxPolicy {
   deniedWriteRoots?: string[];
   /** Existing denied-write roots that also receive hard-link/race revalidation. */
   protectedReadOnlyRoots: string[];
+  /** Existing denied-write trees checked for symlink, hard-link, and node-type aliases before spawn. */
+  structurallyProtectedRoots?: string[];
   network: SandboxNetworkPolicy;
   environment: SandboxEnvironmentPolicy;
   allowedUnixSockets: string[];
@@ -47,6 +63,8 @@ export interface SandboxCapabilityRequest {
   networkDomains?: string[];
   unrestrictedPublicNetwork?: boolean;
   privateNetworkTargets?: string[];
+  /** Permit TCP listeners. On macOS Seatbelt this necessarily allows wildcard local binds. */
+  allowLocalBinding?: boolean;
 }
 
 export interface ApprovedSandboxCapabilityGrant {
@@ -75,11 +93,12 @@ export interface SandboxLaunchBindingInput {
   profileId: string;
   capability: {
     publicNetwork: boolean;
+    localBinding: boolean;
   };
 }
 
 export type CheckpointBSandboxCapabilityValidationResult =
-  | { ok: true; publicNetwork: boolean }
+  | { ok: true; publicNetwork: boolean; localBinding: boolean }
   | {
       ok: false;
       reason: "unsupported_capability";
@@ -89,7 +108,9 @@ export type CheckpointBSandboxCapabilityValidationResult =
 export function validateCheckpointBSandboxCapabilityRequest(
   request: SandboxCapabilityRequest | undefined,
 ): CheckpointBSandboxCapabilityValidationResult {
-  if (!request) return { ok: true, publicNetwork: false };
+  if (!request) {
+    return { ok: true, publicNetwork: false, localBinding: false };
+  }
 
   const unsupported = [
     request.readPaths !== undefined && "readPaths",
@@ -107,6 +128,7 @@ export function validateCheckpointBSandboxCapabilityRequest(
   return {
     ok: true,
     publicNetwork: request.unrestrictedPublicNetwork === true,
+    localBinding: request.allowLocalBinding === true,
   };
 }
 
@@ -140,6 +162,7 @@ export function serializeSandboxLaunchBinding(
     environment,
     inlineFiles,
     ["public-network", input.capability.publicNetwork],
+    ["local-binding", input.capability.localBinding],
   ]);
 }
 
@@ -197,7 +220,13 @@ export interface SandboxBackendCapabilities {
   processTree: boolean;
   filesystemRead: "isolated" | "policy-denied" | "host-visible";
   filesystemWrite: "strict" | "partial" | "none";
-  network: "blocked" | "proxy-only" | "partial" | "unrestricted";
+  network:
+    | "blocked"
+    | "loopback"
+    | "loopback-listener"
+    | "proxy-only"
+    | "partial"
+    | "unrestricted";
   privateHome: boolean;
   privateTmp: boolean;
   hostIpcBlocked: boolean;
@@ -237,5 +266,8 @@ export interface SandboxExecutionMetadata {
     grantId: string;
     auditId: string;
   };
+  environmentPolicy?: SandboxEnvironmentPolicySummary;
+  /** Exact token-free additional capability delta bound to this launch. */
+  capabilityRequest?: SandboxCapabilityRequest;
   violations?: SandboxViolation[];
 }

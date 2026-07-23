@@ -1,19 +1,28 @@
 import {
   type ClosedTerminalSnapshot,
   type ConfinementPreparingTerminalProvider,
+  type ManagedNetworkRequest,
   type PreparedTerminalExecution,
   type TerminalBackgroundState,
   type TerminalCloseResult,
   type TerminalCommandResult,
   type TerminalExecutionSecuritySummary,
   type TerminalExecuteOptions,
+  type TerminalInteractivePromptDetection,
   type TerminalMetadata,
+  type TerminalRetainedOutput,
+  type TerminalRetainedOutputLease,
+  type TerminalRetainedOutputMetadata,
 } from "../../core/capabilities/terminal.js";
 import type {
   SandboxExecutionMetadata,
   SandboxLaunchAuthorization,
 } from "../../core/sandboxPolicy.js";
 import type { TerminalDimensions } from "../../core/terminalProtocol.js";
+import {
+  detectInteractivePrompt,
+  INTERACTIVE_PROMPT_MAX_INPUT_CHARS,
+} from "../interactivePromptDetector.js";
 import {
   cleanTerminalOutput,
   cleanTerminalRawOutput,
@@ -26,6 +35,8 @@ import type {
 import {
   SandboxTerminalSession,
   type SandboxCommandOrigin,
+  type SandboxTerminalCommandOutput,
+  type SandboxTerminalCommandOutputLease,
   type SandboxTerminalSessionEvent,
   type SandboxTerminalSessionSnapshot,
 } from "./SandboxTerminalSession.js";
@@ -33,11 +44,13 @@ import {
 const DEFAULT_DIMENSIONS: TerminalDimensions = { columns: 80, rows: 24 };
 const DEFAULT_RECENTLY_CLOSED_LIMIT = 20;
 const DEFAULT_SANDBOX_TITLE = "Agent command";
+export const SANDBOX_INTERACTIVE_PROMPT_GRACE_MS = 1_500;
 
 export interface AuthorizedSandboxLaunch {
   authorization: SandboxLaunchAuthorization;
   helperRequest: SandboxHelperLaunchRequest;
   metadata: SandboxExecutionMetadata;
+  assertLaunchValid?: () => void;
   finalize?: () => void;
 }
 
@@ -73,11 +86,29 @@ interface ManagedSandboxChannel {
   session: SandboxTerminalSession;
   active?: {
     commandId: string;
+    generation: number;
     process: SandboxCommandProcess;
     metadata: SandboxExecutionMetadata;
     finalizer?: () => void;
+    networkAbortController: AbortController;
+    onManagedNetworkRequest?: TerminalExecuteOptions["onManagedNetworkRequest"];
+    networkContext: Pick<
+      ManagedNetworkRequest,
+      "sessionId" | "terminalId" | "command" | "cwd" | "reason"
+    > & {
+      auditId?: string;
+    };
+    interactivePromptWatchdog?: {
+      outputTail: string;
+      timer?: ReturnType<typeof setTimeout>;
+    };
   };
   latestMetadata?: SandboxExecutionMetadata;
+  latestTermination?: {
+    commandId: string;
+    reason: "interactive_prompt";
+    detection: TerminalInteractivePromptDetection;
+  };
 }
 
 function finalizedOnce(
@@ -106,6 +137,10 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
   ) => void;
   private readonly channels = new Map<string, ManagedSandboxChannel>();
   private readonly recentlyClosed: ClosedTerminalSnapshot[] = [];
+  private readonly recentlyClosedOutput = new Map<
+    string,
+    SandboxTerminalCommandOutputLease
+  >();
   private readonly channelListeners = new Set<
     (update: SandboxTerminalChannelEvent) => void
   >();
@@ -143,9 +178,61 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       reservation,
     );
     let state: "prepared" | "consumed" | "disposed" = "prepared";
+    const preparedSecurity: TerminalExecutionSecuritySummary = Object.freeze({
+      ...security,
+      ...(security.sandbox
+        ? {
+            sandbox: Object.freeze({
+              ...security.sandbox,
+              policyVersion: prepared.authorized.metadata.policyVersion,
+              profileId: prepared.authorized.metadata.profileId,
+              backend: prepared.authorized.metadata.backend as "seatbelt",
+              capabilities: Object.freeze({
+                ...prepared.authorized.metadata.capabilities,
+                warnings: Object.freeze([
+                  ...prepared.authorized.metadata.capabilities.warnings,
+                ]) as unknown as string[],
+              }),
+              ...(prepared.authorized.metadata.grant
+                ? {
+                    grant: Object.freeze({
+                      ...prepared.authorized.metadata.grant,
+                    }),
+                  }
+                : {}),
+              ...(prepared.authorized.metadata.capabilityRequest
+                ? {
+                    capabilityRequest: Object.freeze({
+                      ...prepared.authorized.metadata.capabilityRequest,
+                    }),
+                  }
+                : {}),
+              ...(prepared.authorized.metadata.environmentPolicy
+                ? {
+                    environmentPolicy: Object.freeze({
+                      ...prepared.authorized.metadata.environmentPolicy,
+                      exclude: Object.freeze([
+                        ...prepared.authorized.metadata.environmentPolicy
+                          .exclude,
+                      ]) as unknown as string[],
+                      setKeys: Object.freeze([
+                        ...prepared.authorized.metadata.environmentPolicy
+                          .setKeys,
+                      ]) as unknown as string[],
+                      includeOnly: Object.freeze([
+                        ...prepared.authorized.metadata.environmentPolicy
+                          .includeOnly,
+                      ]) as unknown as string[],
+                    }),
+                  }
+                : {}),
+            }),
+          }
+        : {}),
+    });
 
     return {
-      security,
+      security: preparedSecurity,
       execute: async () => {
         if (state !== "prepared") {
           throw new Error("Prepared sandbox execution is no longer available");
@@ -162,6 +249,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         if (
           current.status === "launching" ||
           current.status === "running" ||
+          current.status === "closed" ||
           current.nextGeneration !== prepared.before.nextGeneration
         ) {
           state = "disposed";
@@ -169,10 +257,15 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
           prepared.authorized.finalize?.();
           throw new Error("Prepared sandbox terminal target changed");
         }
+        prepared.authorized.assertLaunchValid?.();
         state = "consumed";
         this.channelReservations.delete(prepared.before.channelId);
-        const result = await this.executeAuthorized(descriptor, prepared);
-        return { ...result, security };
+        const result = await this.executeAuthorized(
+          descriptor,
+          prepared,
+          preparedSecurity,
+        );
+        return { ...result, security: preparedSecurity };
       },
       dispose: () => {
         if (state !== "prepared") return;
@@ -192,8 +285,20 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     options: TerminalExecuteOptions,
   ): Promise<TerminalCommandResult> {
     const descriptor = this.snapshotOptions(options);
-    const prepared = await this.prepareAuthorizedLaunch(descriptor);
-    return this.executeAuthorized(descriptor, prepared);
+    const reservation = Symbol("sandbox-execution");
+    const prepared = await this.prepareAuthorizedLaunch(
+      descriptor,
+      reservation,
+    );
+    try {
+      return await this.executeAuthorized(descriptor, prepared);
+    } finally {
+      if (
+        this.channelReservations.get(prepared.before.channelId) === reservation
+      ) {
+        this.channelReservations.delete(prepared.before.channelId);
+      }
+    }
   }
 
   private async executeAuthorized(
@@ -204,12 +309,24 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       commandId: string;
       authorized: AuthorizedSandboxLaunch;
     },
+    security?: TerminalExecutionSecuritySummary,
   ): Promise<TerminalCommandResult> {
     this.assertActive();
     const { channel, before, commandId, authorized } = prepared;
     const sandboxSessionId = options.sandboxSessionId as string;
+    const networkAuditId =
+      security?.auditId ?? authorized.metadata.grant?.auditId;
     let process: SandboxCommandProcess;
     try {
+      if (
+        authorized.helperRequest.network.mode === "public-proxy" &&
+        !networkAuditId
+      ) {
+        throw new Error(
+          "Managed sandbox networking requires command audit attribution",
+        );
+      }
+      authorized.assertLaunchValid?.();
       process = this.runtime.launch(authorized.helperRequest);
     } catch (error) {
       authorized.finalize?.();
@@ -224,11 +341,28 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     });
     channel.active = {
       commandId,
+      generation: authorized.helperRequest.generation,
       process,
       metadata: authorized.metadata,
       finalizer,
+      networkAbortController: new AbortController(),
+      onManagedNetworkRequest: options.onManagedNetworkRequest,
+      networkContext: {
+        sessionId: sandboxSessionId,
+        auditId: networkAuditId,
+        terminalId: before.channelId,
+        command: options.command,
+        cwd: options.cwd,
+        reason: options.sandboxCapabilityRequest?.unrestrictedPublicNetwork
+          ? "Managed public network requested"
+          : undefined,
+      },
+      interactivePromptWatchdog: options.background
+        ? undefined
+        : { outputTail: "" },
     };
     channel.latestMetadata = authorized.metadata;
+    channel.latestTermination = undefined;
 
     try {
       channel.session.startCommand({
@@ -275,6 +409,8 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         if (timer) clearTimeout(timer);
       });
       if (timedOut) {
+        this.disableInteractivePromptWatchdog(channel.active);
+        channel.active?.networkAbortController.abort();
         options.onCommandFinalizationDeferred?.();
         void completion.catch((error) =>
           this.log?.(`[sandbox-terminal] Timed-out command failed: ${error}`),
@@ -294,7 +430,13 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     if (!completed) {
       throw new Error("Sandbox command completed without a command record");
     }
-    return this.completedResult(snapshot, completed, authorized.metadata);
+    return this.completedResult(
+      channel,
+      snapshot,
+      completed,
+      authorized.metadata,
+      channel.session.getCommandOutput(commandId),
+    );
   }
 
   private async prepareAuthorizedLaunch(
@@ -393,12 +535,40 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
   getBackgroundState(terminalId: string): TerminalBackgroundState | undefined {
     const channel = this.channels.get(terminalId);
     return channel
-      ? this.backgroundStateFromSnapshot(channel.session.snapshot())
+      ? this.backgroundStateFromSnapshot(
+          channel.session.snapshot(),
+          false,
+          channel.latestTermination,
+        )
       : undefined;
   }
 
+  getRetainedOutput(terminalId: string): TerminalRetainedOutput | undefined {
+    const channel = this.channels.get(terminalId);
+    if (channel) {
+      const commandId = channel.session.snapshot().commands.at(-1)?.commandId;
+      return commandId
+        ? this.retainedOutput(channel.session.getCommandOutput(commandId))
+        : undefined;
+    }
+    return this.retainedOutput(
+      this.recentlyClosedOutput.get(terminalId)?.read(),
+    );
+  }
+
+  detachRetainedOutput(
+    terminalId: string,
+  ): TerminalRetainedOutputLease | undefined {
+    const lease = this.recentlyClosedOutput.get(terminalId);
+    if (!lease) return undefined;
+    this.recentlyClosedOutput.delete(terminalId);
+    return this.retainedOutputLease(lease);
+  }
+
   interruptTerminal(terminalId: string): boolean {
-    return this.channels.get(terminalId)?.session.interrupt() ?? false;
+    const channel = this.channels.get(terminalId);
+    this.clearInteractivePromptWatchdog(channel?.active);
+    return channel?.session.interrupt() ?? false;
   }
 
   getRecentlyClosedTerminals(limit = 5): ClosedTerminalSnapshot[] {
@@ -435,10 +605,17 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       requested?.delete(snapshot.title);
       notFound?.delete(channelId);
       notFound?.delete(snapshot.title);
+      this.clearInteractivePromptWatchdog(channel.active);
+      channel.active?.networkAbortController.abort();
+      const commandId = snapshot.commands.at(-1)?.commandId;
+      const outputLease = commandId
+        ? channel.session.detachCommandOutput(commandId)
+        : undefined;
       channel.session.close();
       channel.active?.finalizer?.();
       this.channels.delete(channelId);
-      this.rememberClosed(snapshot);
+      this.channelReservations.delete(channelId);
+      this.rememberClosed(snapshot, outputLease, channel.latestTermination);
       closed += 1;
     }
     return {
@@ -468,7 +645,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
   }
 
   write(channelId: string, data: string): boolean {
-    return this.channels.get(channelId)?.session.write(data) ?? false;
+    const channel = this.channels.get(channelId);
+    this.clearInteractivePromptWatchdog(channel?.active);
+    return channel?.session.write(data) ?? false;
   }
 
   resize(channelId: string, dimensions: TerminalDimensions): boolean {
@@ -479,12 +658,16 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     if (this.disposed) return;
     this.disposed = true;
     for (const channel of this.channels.values()) {
+      this.clearInteractivePromptWatchdog(channel.active);
+      channel.active?.networkAbortController.abort();
       channel.session.close();
       channel.active?.finalizer?.();
     }
     this.channels.clear();
     this.channelReservations.clear();
     this.channelListeners.clear();
+    for (const lease of this.recentlyClosedOutput.values()) lease.dispose();
+    this.recentlyClosedOutput.clear();
     this.runtime.dispose();
     for (const listener of this.disposeListeners) listener();
     this.disposeListeners.clear();
@@ -512,9 +695,13 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     if (options.split_from) {
       return this.createChannel(DEFAULT_SANDBOX_TITLE, options.cwd);
     }
-    const idleDefault = [...this.channels.values()].find(
-      ({ session }) => session.snapshot().status === "idle",
-    );
+    const idleDefault = [...this.channels.values()].find(({ session }) => {
+      const snapshot = session.snapshot();
+      return (
+        snapshot.status === "idle" &&
+        !this.channelReservations.has(snapshot.channelId)
+      );
+    });
     return (
       idleDefault ?? this.createChannel(DEFAULT_SANDBOX_TITLE, options.cwd)
     );
@@ -539,6 +726,11 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     });
     const channel: ManagedSandboxChannel = { session };
     session.onEvent((event) => {
+      if (event.type === "network-request") {
+        void this.handleManagedNetworkRequest(channel, event);
+      } else if (event.type === "data") {
+        this.handleInteractivePromptOutput(channel, event);
+      }
       const snapshot = session.snapshot();
       this.onChannelChanged?.(snapshot);
       const update: SandboxTerminalChannelEvent = { event, snapshot };
@@ -578,27 +770,43 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       is_running:
         command?.status === "launching" || command?.status === "running",
       execution_mode: "sandbox_pty",
+      command_sent: command !== undefined,
+      process_launched: command?.startedAt !== undefined,
+      retry_safe: command === undefined,
       sandbox: metadata,
     };
   }
 
   private completedResult(
+    channel: ManagedSandboxChannel,
     snapshot: SandboxTerminalSessionSnapshot,
     command: SandboxTerminalSessionSnapshot["commands"][number],
     metadata: SandboxExecutionMetadata,
+    retained: SandboxTerminalCommandOutput | undefined,
   ): TerminalCommandResult {
+    const output = retained?.output ?? command.output;
     return {
       exit_code: command.exitCode ?? null,
-      output: cleanTerminalOutput(command.output),
-      terminal_raw_output: cleanTerminalRawOutput(command.output),
+      output: cleanTerminalOutput(output),
+      terminal_raw_output: cleanTerminalRawOutput(output),
+      ...this.outputMetadata(retained),
       output_captured: true,
       terminal_id: snapshot.channelId,
       terminal_name: snapshot.title,
       cwd: snapshot.cwd,
       command: command.command,
       timed_out: command.timedOut,
+      ...(channel.latestTermination?.commandId === command.commandId
+        ? {
+            termination_reason: channel.latestTermination.reason,
+            interactive_prompt: { ...channel.latestTermination.detection },
+          }
+        : {}),
       is_running: false,
       execution_mode: "sandbox_pty",
+      command_sent: true,
+      process_launched: command.startedAt !== undefined,
+      retry_safe: false,
       sandbox: {
         ...metadata,
         violations: command.violations.map((violation) => ({ ...violation })),
@@ -606,11 +814,125 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     };
   }
 
+  private handleInteractivePromptOutput(
+    channel: ManagedSandboxChannel,
+    event: Extract<SandboxTerminalSessionEvent, { type: "data" }>,
+  ): void {
+    const active = channel.active;
+    const watchdog = active?.interactivePromptWatchdog;
+    if (
+      !active ||
+      !watchdog ||
+      active.commandId !== event.commandId ||
+      active.generation !== event.generation
+    ) {
+      return;
+    }
+    this.clearInteractivePromptWatchdog(active);
+    watchdog.outputTail = `${watchdog.outputTail}${event.data}`.slice(
+      -INTERACTIVE_PROMPT_MAX_INPUT_CHARS,
+    );
+    const detection = detectInteractivePrompt(watchdog.outputTail);
+    if (detection?.confidence !== "high") return;
+
+    watchdog.timer = setTimeout(() => {
+      if (
+        channel.active !== active ||
+        active.interactivePromptWatchdog !== watchdog
+      ) {
+        return;
+      }
+      watchdog.timer = undefined;
+      channel.latestTermination = {
+        commandId: active.commandId,
+        reason: "interactive_prompt",
+        detection: { ...detection },
+      };
+      active.networkAbortController.abort();
+      const terminated = active.process.terminate();
+      if (!terminated) {
+        channel.latestTermination = undefined;
+        this.log?.(
+          `[sandbox-terminal] Failed to terminate command ${active.commandId} after interactive prompt detection`,
+        );
+      }
+    }, SANDBOX_INTERACTIVE_PROMPT_GRACE_MS);
+    watchdog.timer.unref();
+  }
+
+  private clearInteractivePromptWatchdog(
+    active: ManagedSandboxChannel["active"] | undefined,
+  ): void {
+    const watchdog = active?.interactivePromptWatchdog;
+    if (!watchdog?.timer) return;
+    clearTimeout(watchdog.timer);
+    watchdog.timer = undefined;
+  }
+
+  private disableInteractivePromptWatchdog(
+    active: ManagedSandboxChannel["active"] | undefined,
+  ): void {
+    this.clearInteractivePromptWatchdog(active);
+    if (active) active.interactivePromptWatchdog = undefined;
+  }
+
+  private async handleManagedNetworkRequest(
+    channel: ManagedSandboxChannel,
+    event: Extract<SandboxTerminalSessionEvent, { type: "network-request" }>,
+  ): Promise<void> {
+    const active = channel.active;
+    if (
+      !active ||
+      active.commandId !== event.commandId ||
+      active.generation !== event.generation
+    ) {
+      return;
+    }
+    let decision: "allow-once" | "reject" = "reject";
+    try {
+      if (
+        active.networkContext.auditId &&
+        active.onManagedNetworkRequest &&
+        !active.networkAbortController.signal.aborted
+      ) {
+        const networkContext = {
+          ...active.networkContext,
+          auditId: active.networkContext.auditId,
+        };
+        decision = await active.onManagedNetworkRequest(
+          {
+            ...networkContext,
+            commandId: event.commandId,
+            generation: event.generation,
+            ...event.request,
+            dnsAnswers: event.request.dnsAnswers.map((answer) => ({
+              ...answer,
+            })),
+          },
+          active.networkAbortController.signal,
+        );
+      }
+    } catch (error) {
+      this.log?.(`[sandbox-terminal] Network request review failed: ${error}`);
+    }
+    if (channel.active !== active) return;
+    const responded = active.process.respondToNetworkRequest?.(
+      event.request.requestId,
+      active.networkAbortController.signal.aborted ? "reject" : decision,
+    );
+    if (responded !== true) {
+      active.networkAbortController.abort();
+      active.process.terminate();
+    }
+  }
+
   private finishActive(
     channel: ManagedSandboxChannel,
     commandId: string,
   ): void {
     if (channel.active?.commandId !== commandId) return;
+    this.clearInteractivePromptWatchdog(channel.active);
+    channel.active.networkAbortController.abort();
     channel.active.finalizer?.();
     channel.active = undefined;
   }
@@ -618,6 +940,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
   private backgroundStateFromSnapshot(
     snapshot: SandboxTerminalSessionSnapshot,
     closed = false,
+    termination?: ManagedSandboxChannel["latestTermination"],
   ): TerminalBackgroundState {
     const command = snapshot.commands.at(-1);
     if (!command) {
@@ -634,31 +957,108 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       command.status === "launching" || command.status === "running";
     return {
       is_running: !closed && running,
-      state: running
-        ? closed
-          ? "unknown_termination"
-          : "running"
-        : command.status === "exited"
-          ? command.timedOut
-            ? "timed_out"
-            : "completed"
-          : "unknown_termination",
+      state:
+        termination?.commandId === command.commandId
+          ? "interactive_prompt"
+          : running
+            ? closed
+              ? "unknown_termination"
+              : "running"
+            : command.status === "exited"
+              ? command.timedOut
+                ? "timed_out"
+                : "completed"
+              : "unknown_termination",
       exit_code:
         command.status === "exited" ? (command.exitCode ?? null) : null,
       output: cleanTerminalOutput(command.output),
       output_captured: true,
       terminal_raw_output: cleanTerminalRawOutput(command.output),
+      ...(termination?.commandId === command.commandId
+        ? {
+            termination_reason: termination.reason,
+            interactive_prompt: { ...termination.detection },
+          }
+        : {}),
     };
   }
 
-  private rememberClosed(snapshot: SandboxTerminalSessionSnapshot): void {
+  private retainedOutput(
+    retained: SandboxTerminalCommandOutput | undefined,
+  ): TerminalRetainedOutput | undefined {
+    if (!retained) return undefined;
+    return {
+      output: cleanTerminalOutput(retained.output),
+      complete: retained.complete,
+      finalized: retained.finalized,
+      total_bytes: retained.totalBytes,
+      retained_bytes: retained.retainedBytes,
+      dropped_bytes: retained.droppedBytes,
+    };
+  }
+
+  private retainedOutputMetadata(
+    retained: Omit<SandboxTerminalCommandOutput, "output">,
+  ): TerminalRetainedOutputMetadata {
+    return {
+      complete: retained.complete,
+      finalized: retained.finalized,
+      total_bytes: retained.totalBytes,
+      retained_bytes: retained.retainedBytes,
+      dropped_bytes: retained.droppedBytes,
+    };
+  }
+
+  private retainedOutputLease(
+    lease: SandboxTerminalCommandOutputLease,
+  ): TerminalRetainedOutputLease {
+    return {
+      metadata: () => this.retainedOutputMetadata(lease.metadata()),
+      read: () => this.retainedOutput(lease.read())!,
+      dispose: () => lease.dispose(),
+    };
+  }
+
+  private outputMetadata(
+    retained: Omit<SandboxTerminalCommandOutput, "output"> | undefined,
+  ): Pick<
+    TerminalCommandResult,
+    | "output_complete"
+    | "output_finalized"
+    | "output_total_bytes"
+    | "output_retained_bytes"
+    | "output_dropped_bytes"
+  > {
+    return retained
+      ? {
+          output_complete: retained.complete,
+          output_finalized: retained.finalized,
+          output_total_bytes: retained.totalBytes,
+          output_retained_bytes: retained.retainedBytes,
+          output_dropped_bytes: retained.droppedBytes,
+        }
+      : {};
+  }
+
+  private rememberClosed(
+    snapshot: SandboxTerminalSessionSnapshot,
+    outputLease?: SandboxTerminalCommandOutputLease,
+    termination?: ManagedSandboxChannel["latestTermination"],
+  ): void {
+    if (outputLease)
+      this.recentlyClosedOutput.set(snapshot.channelId, outputLease);
     this.recentlyClosed.unshift({
       id: snapshot.channelId,
       name: snapshot.title,
       closedAt: this.now(),
-      ...this.backgroundStateFromSnapshot(snapshot, true),
+      ...this.backgroundStateFromSnapshot(snapshot, true, termination),
+      ...this.outputMetadata(outputLease?.metadata()),
     });
-    this.recentlyClosed.splice(DEFAULT_RECENTLY_CLOSED_LIMIT);
+    const removed = this.recentlyClosed.splice(DEFAULT_RECENTLY_CLOSED_LIMIT);
+    for (const terminal of removed) {
+      this.recentlyClosedOutput.get(terminal.id)?.dispose();
+      this.recentlyClosedOutput.delete(terminal.id);
+    }
   }
 
   private assertActive(): void {

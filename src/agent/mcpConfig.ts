@@ -52,6 +52,8 @@ export interface McpServerConfig {
    * "deferred"       — advertise in a compact catalog instead of inlining schemas.
    */
   toolDisclosure?: "inline" | "deferred" | "auto";
+  /** Whether this server safely accepts concurrent tool calls. Default false. */
+  supportsParallelToolCalls?: boolean;
   /**
    * Tools that are always auto-approved regardless of toolPolicy.
    * Use the bare tool name (without server prefix), e.g. "search_issues".
@@ -59,6 +61,18 @@ export interface McpServerConfig {
   allowedTools?: string[];
   /** Persistently prevent this server from connecting. */
   disabled?: boolean;
+  /** Original config key before workspace-level collision disambiguation. */
+  sourceServerName?: string;
+  /** Workspace projects whose effective config produced this runtime server. */
+  sourceProjectIds?: string[];
+  /** Project roots corresponding to sourceProjectIds. */
+  sourceProjectRoots?: string[];
+}
+
+export interface WorkspaceMcpProject {
+  projectId: string;
+  displayName: string;
+  rootPath: string;
 }
 
 interface McpConfigFile {
@@ -284,6 +298,7 @@ async function loadMcpConfigsFromSources(
       const entry = raw as McpServerConfig & {
         toolPolicy?: string;
         toolDisclosure?: string;
+        supportsParallelToolCalls?: boolean;
         allowedTools?: string[];
       };
       const existing = merged.get(name);
@@ -303,6 +318,7 @@ async function loadMcpConfigsFromSources(
         headers: existing?.headers,
         toolPolicy: existing?.toolPolicy ?? "ask",
         toolDisclosure: existing?.toolDisclosure ?? "auto",
+        supportsParallelToolCalls: existing?.supportsParallelToolCalls ?? false,
         allowedTools: existing?.allowedTools,
         disabled: existing?.disabled ?? false,
       };
@@ -326,6 +342,10 @@ async function loadMcpConfigsFromSources(
           entry.toolDisclosure === "auto"
             ? entry.toolDisclosure
             : "auto";
+      }
+      if (entry.supportsParallelToolCalls !== undefined) {
+        next.supportsParallelToolCalls =
+          entry.supportsParallelToolCalls === true;
       }
       if (raw.disabled !== undefined) next.disabled = raw.disabled === true;
       if (Array.isArray(entry.allowedTools)) {
@@ -358,6 +378,7 @@ function redactConfig(config: McpServerConfig): McpManagerServerDraft {
     timeout: config.timeout,
     toolPolicy: config.toolPolicy,
     toolDisclosure: config.toolDisclosure,
+    supportsParallelToolCalls: config.supportsParallelToolCalls,
     allowedTools: config.allowedTools,
     disabled: config.disabled,
   };
@@ -392,6 +413,7 @@ async function buildConfigEntries(
       const entry = raw as McpServerConfig & {
         toolPolicy?: string;
         toolDisclosure?: string;
+        supportsParallelToolCalls?: boolean;
         allowedTools?: string[];
       };
       const existing = merged.get(name);
@@ -406,6 +428,8 @@ async function buildConfigEntries(
         headers: existing?.config.headers,
         toolPolicy: existing?.config.toolPolicy ?? "ask",
         toolDisclosure: existing?.config.toolDisclosure ?? "auto",
+        supportsParallelToolCalls:
+          existing?.config.supportsParallelToolCalls ?? false,
         allowedTools: existing?.config.allowedTools,
         disabled: existing?.config.disabled ?? false,
       };
@@ -427,6 +451,10 @@ async function buildConfigEntries(
           entry.toolDisclosure === "auto"
             ? entry.toolDisclosure
             : "auto";
+      }
+      if (entry.supportsParallelToolCalls !== undefined) {
+        next.supportsParallelToolCalls =
+          entry.supportsParallelToolCalls === true;
       }
       if (raw.disabled !== undefined) next.disabled = raw.disabled === true;
       if (Array.isArray(entry.allowedTools)) {
@@ -511,6 +539,103 @@ async function buildConfigEntries(
  */
 export async function loadMcpConfigs(cwd: string): Promise<McpServerConfig[]> {
   return loadMcpConfigsFromSources(getMainMcpConfigSources(cwd));
+}
+
+function workspaceConfigFingerprint(config: McpServerConfig): string {
+  const {
+    name: _name,
+    sourceServerName: _sourceServerName,
+    sourceProjectIds: _sourceProjectIds,
+    sourceProjectRoots: _sourceProjectRoots,
+    ...effective
+  } = config;
+  const canonicalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .filter(([, entry]) => entry !== undefined)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, entry]) => [key, canonicalize(entry)]),
+      );
+    }
+    return value;
+  };
+  return JSON.stringify(canonicalize(effective));
+}
+
+function workspaceRuntimeServerName(
+  project: WorkspaceMcpProject,
+  serverName: string,
+): string {
+  const normalize = (value: string) =>
+    value
+      .replaceAll("__", "_")
+      .replace(/[^a-zA-Z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "project";
+  const suffix = project.projectId.replace(/^project-/, "").slice(0, 6);
+  const projectPart = normalize(project.displayName).slice(0, 20);
+  const serverPart = normalize(serverName).slice(0, 32);
+  return `${projectPart}_${serverPart}_${suffix}`.slice(0, 63);
+}
+
+/**
+ * Load the union of every workspace project's effective MCP configuration.
+ * Identical servers are connected once. Conflicting same-name definitions are
+ * assigned stable project-qualified runtime names so every project remains
+ * available to the agent without silent precedence between workspace roots.
+ */
+export async function loadWorkspaceMcpConfigs(
+  projects: readonly WorkspaceMcpProject[],
+): Promise<McpServerConfig[]> {
+  const loaded = await Promise.all(
+    projects.map(async (project) => ({
+      project,
+      configs: await loadMcpConfigs(project.rootPath),
+    })),
+  );
+  const byName = new Map<
+    string,
+    Array<{ project: WorkspaceMcpProject; config: McpServerConfig }>
+  >();
+  for (const item of loaded) {
+    for (const config of item.configs) {
+      const variants = byName.get(config.name) ?? [];
+      variants.push({ project: item.project, config });
+      byName.set(config.name, variants);
+    }
+  }
+
+  const result: McpServerConfig[] = [];
+  for (const [sourceServerName, candidates] of byName) {
+    const variants = new Map<
+      string,
+      Array<{ project: WorkspaceMcpProject; config: McpServerConfig }>
+    >();
+    for (const candidate of candidates) {
+      const fingerprint = workspaceConfigFingerprint(candidate.config);
+      const matches = variants.get(fingerprint) ?? [];
+      matches.push(candidate);
+      variants.set(fingerprint, matches);
+    }
+    for (const matches of variants.values()) {
+      const representative = matches[0]!;
+      result.push({
+        ...representative.config,
+        name:
+          variants.size === 1
+            ? sourceServerName
+            : workspaceRuntimeServerName(
+                representative.project,
+                sourceServerName,
+              ),
+        sourceServerName,
+        sourceProjectIds: matches.map((match) => match.project.projectId),
+        sourceProjectRoots: matches.map((match) => match.project.rootPath),
+      });
+    }
+  }
+  return result;
 }
 
 /**

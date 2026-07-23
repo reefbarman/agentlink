@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import {
   prepareProtectedRoots,
   revalidateProtectedRoots,
+  validateStructurallyProtectedRoots,
 } from "./sandbox-protected-roots.mjs";
 
 import { fileURLToPath } from "node:url";
@@ -10,7 +11,7 @@ import { realpath } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { startTrustedNetworkProxies } from "./sandbox-network-proxy.mjs";
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 3;
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const MAX_CAPTURED_BYTES = 512 * 1024;
 const DEFAULT_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -30,6 +31,7 @@ const ALLOWED_TOP_LEVEL_KEYS = new Set([
   "filesystem",
   "network",
   "protectedRoots",
+  "structurallyProtectedRoots",
   "timeoutMs",
 ]);
 const ALLOWED_FILESYSTEM_KEYS = new Set([
@@ -38,7 +40,11 @@ const ALLOWED_FILESYSTEM_KEYS = new Set([
   "allowWrite",
   "denyWrite",
 ]);
-const ALLOWED_NETWORK_KEYS = new Set(["allowedDomains"]);
+const ALLOWED_NETWORK_KEYS = new Set(["allowedDomains", "allowLocalBinding"]);
+const LOCAL_BIND_RULE = '(allow network-bind (local ip "*:*"))';
+const LOCAL_INBOUND_RULE = '(allow network-inbound (local ip "*:*"))';
+const LOOPBACK_OUTBOUND_RULE =
+  '(allow network-outbound (remote ip "localhost:*"))';
 const FORBIDDEN_ENV_NAMES = new Set([
   "ALL_PROXY",
   "all_proxy",
@@ -158,9 +164,13 @@ function assertEnvironment(value) {
 }
 
 function isWithinAnyRoot(candidate, roots) {
-  return roots.some(
-    (root) => candidate === root || candidate.startsWith(`${root}${path.sep}`),
-  );
+  return roots.some((root) => {
+    const relative = path.relative(root, candidate);
+    return (
+      relative === "" ||
+      (!relative.startsWith("..") && !path.isAbsolute(relative))
+    );
+  });
 }
 
 export function parseSandboxRuntimeRequest(value) {
@@ -190,6 +200,10 @@ export function parseSandboxRuntimeRequest(value) {
   }
 
   const environment = assertEnvironment(request.environment);
+  const allowRead = assertPathArray(
+    filesystem.allowRead,
+    "filesystem.allowRead",
+  );
   const allowWrite = assertPathArray(
     filesystem.allowWrite,
     "filesystem.allowWrite",
@@ -202,14 +216,26 @@ export function parseSandboxRuntimeRequest(value) {
     request.protectedRoots ?? [],
     "request.protectedRoots",
   );
-  for (const protectedRoot of protectedRoots) {
-    if (!isWithinAnyRoot(protectedRoot, denyWrite)) {
-      throw new Error(
-        `protected root must be covered by filesystem.denyWrite: ${protectedRoot}`,
-      );
+  const structurallyProtectedRoots = assertPathArray(
+    request.structurallyProtectedRoots,
+    "request.structurallyProtectedRoots",
+  );
+  for (const [label, roots] of [
+    ["protected", protectedRoots],
+    ["structurally protected", structurallyProtectedRoots],
+  ]) {
+    for (const protectedRoot of roots) {
+      if (!isWithinAnyRoot(protectedRoot, denyWrite)) {
+        throw new Error(
+          `${label} root must be covered by filesystem.denyWrite: ${protectedRoot}`,
+        );
+      }
     }
   }
-  for (const name of ["HOME", "TMPDIR", "XDG_CACHE_HOME"]) {
+  if (!isWithinAnyRoot(environment.HOME, allowRead)) {
+    throw new Error("environment.HOME must be within filesystem.allowRead");
+  }
+  for (const name of ["TMPDIR", "XDG_CACHE_HOME"]) {
     const candidate = environment[name];
     if (candidate !== undefined && !isWithinAnyRoot(candidate, allowWrite)) {
       throw new Error(
@@ -227,14 +253,16 @@ export function parseSandboxRuntimeRequest(value) {
     environment,
     filesystem: {
       denyRead: assertPathArray(filesystem.denyRead, "filesystem.denyRead"),
-      allowRead: assertPathArray(filesystem.allowRead, "filesystem.allowRead"),
+      allowRead,
       allowWrite,
       denyWrite,
     },
     network: {
       allowedDomains: assertDomainArray(network.allowedDomains),
+      allowLocalBinding: network.allowLocalBinding === true,
     },
     protectedRoots,
+    structurallyProtectedRoots,
     timeoutMs,
   };
 }
@@ -265,6 +293,44 @@ function replaceExactCount(source, search, replacement, expectedCount, label) {
     );
   }
   return parts.join(replacement);
+}
+
+export function constrainLoopbackRuntimeDescriptor(argv, request) {
+  if (!isSandboxRuntimeDescriptor(argv, request)) {
+    throw new Error(
+      "cannot constrain an unexpected sandbox runtime descriptor",
+    );
+  }
+  let wrapper = argv[2];
+  for (const [rule, label] of [
+    [LOCAL_BIND_RULE, "local bind"],
+    [LOCAL_INBOUND_RULE, "local inbound"],
+    [LOOPBACK_OUTBOUND_RULE, "loopback outbound"],
+  ]) {
+    const count = wrapper.split(rule).length - 1;
+    if (count !== 1) {
+      throw new Error(
+        `sandbox runtime loopback contract drifted for ${label}: expected 1, found ${count}`,
+      );
+    }
+  }
+  if (!request.network.allowLocalBinding) {
+    // Removing the exact rule text leaves only blank profile lines, which SBPL
+    // ignores while preserving the surrounding shell/profile quoting.
+    wrapper = replaceExactCount(wrapper, LOCAL_BIND_RULE, "", 1, "local bind");
+    wrapper = replaceExactCount(
+      wrapper,
+      LOCAL_INBOUND_RULE,
+      "",
+      1,
+      "local inbound",
+    );
+  }
+  const constrained = [argv[0], argv[1], wrapper];
+  if (!isSandboxRuntimeDescriptor(constrained, request)) {
+    throw new Error("constrained sandbox runtime descriptor failed validation");
+  }
+  return constrained;
 }
 
 export function bindProxyCredentialsToRuntimeDescriptor(
@@ -563,7 +629,9 @@ export async function runSandboxRuntimeRequest(request) {
       strictAllowlist: true,
       allowUnixSockets: [],
       allowAllUnixSockets: false,
-      allowLocalBinding: false,
+      // SRT emits loopback client and listener clauses as one option. AgentLink
+      // constrains the generated descriptor below before adding proxy secrets.
+      allowLocalBinding: true,
       allowMachLookup: [],
       httpProxyPort: networkProxies.httpPort,
       socksProxyPort: networkProxies.socksPort,
@@ -571,7 +639,11 @@ export async function runSandboxRuntimeRequest(request) {
     filesystem: {
       ...request.filesystem,
       denyWrite: [
-        ...new Set([...request.filesystem.denyWrite, ...protectedRoots.roots]),
+        ...new Set([
+          ...request.filesystem.denyWrite,
+          ...protectedRoots.roots,
+          ...request.structurallyProtectedRoots,
+        ]),
       ],
     },
     allowPty: false,
@@ -593,14 +665,21 @@ export async function runSandboxRuntimeRequest(request) {
         "sandbox runtime returned an unexpected launch descriptor",
       );
     }
-    const authenticatedArgv = bindProxyCredentialsToRuntimeDescriptor(
+    const constrainedArgv = constrainLoopbackRuntimeDescriptor(
       descriptor.argv,
+      request,
+    );
+    const authenticatedArgv = bindProxyCredentialsToRuntimeDescriptor(
+      constrainedArgv,
       request,
       networkProxies,
     );
     const launch = describeLaunch(authenticatedArgv, environment, cwd);
     if (request.operation === "describe") {
       await revalidateProtectedRoots(protectedRoots);
+      await validateStructurallyProtectedRoots(
+        request.structurallyProtectedRoots,
+      );
       return { ok: true, launch };
     }
     const result = await executeLaunch(
@@ -608,7 +687,12 @@ export async function runSandboxRuntimeRequest(request) {
       environment,
       cwd,
       request.timeoutMs,
-      () => revalidateProtectedRoots(protectedRoots),
+      async () => {
+        await revalidateProtectedRoots(protectedRoots);
+        await validateStructurallyProtectedRoots(
+          request.structurallyProtectedRoots,
+        );
+      },
     );
     return { ok: true, launch, result };
   } finally {

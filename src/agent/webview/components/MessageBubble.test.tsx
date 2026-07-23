@@ -290,6 +290,40 @@ describe("MessageBubble slash-command rendering", () => {
     });
   });
 
+  it("copies a standalone fenced code response without its Markdown fences", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const message: ChatMessage = {
+      id: "assistant-standalone-code-copy",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "text",
+          text: "\n````ts\nconst fence = '```';\n````\n",
+        },
+      ],
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+    const messageCopyButton = container.querySelector(
+      '.assistant-content > .copy-button[title="Copy code block"]',
+    ) as HTMLButtonElement;
+    expect(messageCopyButton).toBeTruthy();
+
+    fireEvent.click(messageCopyButton);
+
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("const fence = '```';");
+    });
+  });
+
   it("does not add copy controls until a fenced code block is closed", () => {
     const message: ChatMessage = {
       id: "assistant-open-code-fence",
@@ -708,7 +742,7 @@ describe("MessageBubble slash-command rendering", () => {
     expect(button).toBeTruthy();
     fireEvent.click(button);
     expect(onContinue).toHaveBeenCalledWith(
-      "Continue working from where you left off. If the original request or plan has remaining phases, plan items, subtasks, or validation steps, proceed with the next one; if everything is complete, briefly confirm that no further work is needed.",
+      "Continue working from where you left off. Before deciding the overall task is complete, re-check the original user request. If the completed work is a phase, handover, or scoped subtask, treat that boundary as a navigation point—not proof of overall completion—and locate and inspect its parent/source-of-truth plan, following references outward through higher-level plans if nested. Within the user-approved scope, identify and begin the next explicit unfinished phase, plan item, subtask, or validation step. If it needs a missing decision or prerequisite, surface that blocker. Do not invent work or broaden scope. Only if the full approved scope is complete, briefly confirm that no work remains.",
     );
   });
 
@@ -1309,21 +1343,25 @@ describe("MessageBubble slash-command rendering", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /notion__search/i }));
-    expect(
-      screen.getByText(/promote this one-time mcp approval/i),
-    ).toBeTruthy();
+    expect(screen.getByText("Remember this approval")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /allow for global/i }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Allow whenever any project uses the tool",
+      }),
+    );
     expect(onPromote).toHaveBeenCalledWith({
       serverName: "notion",
       bareToolName: "search",
       scope: "global",
     });
     expect(
-      screen.queryByRole("button", { name: /allow for global/i }),
+      screen.queryByRole("button", {
+        name: "Allow whenever any project uses the tool",
+      }),
     ).toBeNull();
     expect(
-      screen.getByRole("button", { name: /allow for session/i }),
+      screen.getByRole("button", { name: "Allow for this chat session" }),
     ).toBeTruthy();
   });
 });

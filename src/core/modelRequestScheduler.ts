@@ -27,7 +27,18 @@ const PRIORITY_ORDER: Record<ModelRequestPriority, number> = {
   maintenance: 2,
 };
 
-export const DEFAULT_MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER = 2;
+export const DEFAULT_MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER = 6;
+export const MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER = 32;
+
+export function normalizeMaxConcurrentModelRequests(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER;
+  }
+  return Math.min(
+    MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER,
+    Math.max(1, Math.floor(value)),
+  );
+}
 
 /**
  * Admission control shared by all model requests using one provider registry.
@@ -39,7 +50,7 @@ export class ModelRequestScheduler {
   private sequence = 0;
 
   constructor(
-    private readonly maxConcurrentPerProvider = DEFAULT_MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER,
+    private maxConcurrentPerProvider = DEFAULT_MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER,
     private readonly now: () => number = Date.now,
   ) {
     if (
@@ -47,6 +58,25 @@ export class ModelRequestScheduler {
       maxConcurrentPerProvider < 1
     ) {
       throw new Error("maxConcurrentPerProvider must be a positive integer");
+    }
+  }
+
+  /**
+   * Resize provider admission without interrupting active requests. Raising the
+   * limit drains queued work immediately; lowering it takes effect as existing
+   * permits are released.
+   */
+  setMaxConcurrentPerProvider(maxConcurrentPerProvider: number): void {
+    if (
+      !Number.isInteger(maxConcurrentPerProvider) ||
+      maxConcurrentPerProvider < 1
+    ) {
+      throw new Error("maxConcurrentPerProvider must be a positive integer");
+    }
+    if (maxConcurrentPerProvider === this.maxConcurrentPerProvider) return;
+    this.maxConcurrentPerProvider = maxConcurrentPerProvider;
+    for (const [providerId, queue] of this.queues) {
+      this.drain(providerId, queue);
     }
   }
 

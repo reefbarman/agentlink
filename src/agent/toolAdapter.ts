@@ -41,6 +41,11 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
 import type { CommandApprovalReviewer } from "../approvals/commandApprovalReview.js";
+import type { NetworkApprovalReviewer } from "../approvals/networkApprovalReview.js";
+import type {
+  ActionApprovalReviewer,
+  OutsideReadOperation,
+} from "../approvals/actionApprovalReview.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { McpClientHub } from "./McpClientHub.js";
 import type { Question } from "./webview/types.js";
@@ -63,10 +68,12 @@ import { handleDeleteFeedback } from "../tools/deleteFeedback.js";
 import { handleExecuteCommand } from "../tools/executeCommand.js";
 import { handleFindAndReplace } from "../tools/findAndReplace.js";
 import { handleGenerateImage } from "../tools/generateImage.js";
+import { handlePresentImages } from "../tools/presentImages.js";
 import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
 import { handleGetCompletions } from "../tools/getCompletions.js";
 import { handleGetContext } from "../tools/context/getContext.js";
 import { handleGetDiagnostics } from "../tools/getDiagnostics.js";
+import { handleDiagnoseActivity } from "../tools/diagnoseActivity.js";
 import { handleGetFeedback } from "../tools/getFeedback.js";
 import { handleGetHover } from "../tools/getHover.js";
 import { handleGetInlayHints } from "../tools/getInlayHints.js";
@@ -114,6 +121,8 @@ import { getConfiguredDiagnosticDelay } from "../adapters/vscode/agentLinkConfig
 import { handleLoadRule } from "../tools/loadRule.js";
 import { handleLoadSkill } from "../tools/loadSkill.js";
 import { handleOpenFile } from "../tools/openFile.js";
+import type { GuardianOutsideReadOptions } from "../tools/pathAccessUI.js";
+import { createGuardianOutsideWriteAuthorizationPreparer } from "../tools/actionWriteApproval.js";
 import { handleProposeMemory } from "../tools/proposeMemory.js";
 // --- Handler imports ---
 import { handleReadFile } from "../tools/readFile.js";
@@ -132,6 +141,7 @@ import type {
   EditorRevealProvider,
   MultiFileEditReviewProvider,
   RenameSymbolProvider,
+  WriteApprovalPromptEvent,
   WriteApprovalPolicyProvider,
 } from "../core/capabilities/editReview.js";
 import type {
@@ -167,6 +177,7 @@ import type {
 } from "../core/capabilities/mcp.js";
 import type {
   ToolUsageOutcome,
+  ToolUsageMetrics,
   ToolUsageTelemetry,
 } from "../telemetry/ToolUsageTelemetry.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
@@ -185,7 +196,7 @@ import { createComposeExecutionScope } from "./compose/composeScope.js";
 import type { ComposeParams } from "./compose/composeRuntime.js";
 import { loadComposeRuntime } from "./compose/composeRuntimeLoader.js";
 
-// --- Read-only tools (safe to execute in parallel) ---
+// --- Tools whose implementations support overlapping execution ---
 
 export const READ_ONLY_TOOLS = new Set(PARALLEL_SAFE_TOOLS);
 
@@ -245,9 +256,11 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   search_files: schemas.searchFilesSchema,
   search_session_history: schemas.searchSessionHistorySchema,
   read_session_excerpt: schemas.readSessionExcerptSchema,
+  diagnose_activity: schemas.diagnoseActivitySchema,
   get_diagnostics: schemas.getDiagnosticsSchema,
   write_file: schemas.writeFileSchema,
   generate_image: schemas.generateImageSchema,
+  present_images: schemas.presentImagesSchema,
   apply_diff: schemas.applyDiffSchema,
   find_and_replace: schemas.findAndReplaceSchema,
   rename_symbol: schemas.renameSymbolSchema,
@@ -865,7 +878,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "get_background_result",
     description:
-      "Wait for a background agent to finish and return its final response. Successful runs return the expected response; failed, interrupted, cancelled, unauthorized, or incomplete expected-result runs return structured JSON with status, terminalReason, retrySafe, agentRetryable, and preserved partialOutput when available. Use this for explicit pull/wait flows; skip it when a completion result was already pushed into context.",
+      "Wait for a background agent to finish and return its final response. Successful runs return the expected response; failed, interrupted, cancelled, unauthorized, or incomplete expected-result runs return structured JSON with status, terminalReason, retrySafe, agentRetryable, and preserved partialOutput when available. Use this for explicit pull/wait flows; skip it when a completion result was already pushed into context. Waiting releases your own background concurrency slot, so it is safe to block on a spawned agent that is still queued. If a user or steering message arrives for your own session while you wait, the call returns early with status wait_interrupted; the background agent keeps running untouched — handle the user's message first, then call get_background_result again.",
     input_schema: {
       type: "object",
       properties: {
@@ -1034,7 +1047,11 @@ export type BgStatusResult = BackgroundAgentStatusResult;
  */
 const MCP_ENABLED_TOOL_PROFILES = new Set(["review", "readonly-research"]);
 
-const READ_ONLY_COMMAND_PROFILES = new Set(["review", "readonly-research"]);
+const READ_ONLY_COMMAND_PROFILES = new Set([
+  "review",
+  "readonly-research",
+  "worktree-setup",
+]);
 
 const TOOL_PROFILES: Record<string, Set<string>> = {
   review: new Set([
@@ -1055,6 +1072,7 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "execute_command",
     "search_session_history",
     "read_session_excerpt",
+    "diagnose_activity",
   ]),
   "readonly-research": new Set([
     "read_file",
@@ -1076,6 +1094,7 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "execute_command",
     "search_session_history",
     "read_session_excerpt",
+    "diagnose_activity",
   ]),
   btw: new Set([
     "read_file",
@@ -1096,6 +1115,16 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "get_type_hierarchy",
     "search_session_history",
     "read_session_excerpt",
+    "diagnose_activity",
+  ]),
+  "worktree-setup": new Set([
+    "read_file",
+    "get_context",
+    "get_repo_map",
+    "get_module_neighbors",
+    "search_files",
+    "list_files",
+    "execute_command",
   ]),
 };
 
@@ -1662,6 +1691,8 @@ export interface ToolDispatchContext {
   approvalManager: ApprovalManager;
   approvalPanel: ApprovalPanelProvider;
   sessionId: string;
+  /** Whether this request belongs to an in-process background session. */
+  isBackgroundSession?: boolean;
   /** Immutable project identity captured for this request's tool runtime. */
   projectScope?: Readonly<
     import("../core/workspaceProjects.js").SessionProjectScope
@@ -1674,6 +1705,10 @@ export interface ToolDispatchContext {
   prepareWorkspaceMutation?: () => Promise<void>;
   /** Resolves the active session command policy at dispatch time. */
   getCommandApprovalPolicy?: (sessionId: string) => CommandApprovalPolicy;
+  /** Resolves the independent host-owned approval mode at dispatch time. */
+  getCommandApprovalMode?: (
+    sessionId: string,
+  ) => import("../core/capabilities/terminal.js").TerminalApprovalModeSnapshot;
   /** Restricts execute_command independently of user approval settings. */
   commandExecutionPolicy?: import("../core/capabilities/terminal.js").CommandExecutionPolicy;
   /** Snapshots session-scoped approvals from a spawning session into its child. */
@@ -1682,6 +1717,10 @@ export interface ToolDispatchContext {
     childSessionId: string,
   ) => void;
   commandApprovalReviewer?: CommandApprovalReviewer;
+  networkApprovalReviewer?: NetworkApprovalReviewer;
+  actionApprovalReviewer?: ActionApprovalReviewer;
+  commandReviewTurnCircuit?: import("../approvals/commandApprovalReview.js").CommandReviewTurnCircuit;
+  retainedCommandReviewDenials?: import("../approvals/commandApprovalReview.js").RetainedCommandReviewDenials;
   isSessionActive?: (sessionId: string) => boolean;
   getCommandReviewObjective?: (sessionId: string) => string | undefined;
   getCommandReviewContext?: (
@@ -1740,6 +1779,8 @@ export interface ToolDispatchContext {
   getSessionImages?: () => SessionImageReference[];
   /** Returns an immutable projection of the executing session's full transcript. */
   getSessionTranscript?: AgentToolExecutionRequest["context"]["getSessionTranscript"];
+  /** Returns bounded, redacted operation evidence for the executing session. */
+  sessionActivityDiagnosticsProvider?: import("../core/sessionActivityDiagnostics.js").SessionActivityDiagnosticsProvider;
   /** Returns the set of skills explicitly advertised to the current session. */
   getAdvertisedSkills?: () => Array<{ name: string; skillPath: string }>;
   /** Returns the set of deferred rules explicitly advertised to the current session. */
@@ -1977,6 +2018,8 @@ export function createAgentToolRuntime(
                   | undefined,
                 getSessionImages: request.context.getSessionImages,
                 getSessionTranscript: request.context.getSessionTranscript,
+                pendingQuestionRecovery:
+                  request.context.pendingQuestionRecovery,
               });
         const result = operationRoots
           ? await withWorkspaceRoots(operationRoots, execute)
@@ -2025,8 +2068,29 @@ export function createAgentToolRuntime(
         throw err;
       }
     },
-    isParallelSafe(toolName) {
-      return READ_ONLY_TOOLS.has(toolName);
+    isParallelSafe(toolName, input) {
+      if (READ_ONLY_TOOLS.has(toolName)) return true;
+      if (toolName === "call_mcp_tool") {
+        const serverName =
+          typeof input?.server === "string" ? input.server.trim() : "";
+        const bareToolName =
+          typeof input?.tool === "string" ? input.tool.trim() : "";
+        return Boolean(
+          serverName &&
+          bareToolName &&
+          (ctx.mcpHub?.isToolParallelSafe?.(serverName, bareToolName) ??
+            ctx.mcpHub?.supportsParallelToolCalls?.(serverName)),
+        );
+      }
+      const parsedMcpTool = parseMcpToolName(toolName);
+      return parsedMcpTool
+        ? (ctx.mcpHub?.isToolParallelSafe?.(
+            parsedMcpTool.serverName,
+            parsedMcpTool.bareToolName,
+          ) ??
+            ctx.mcpHub?.supportsParallelToolCalls?.(parsedMcpTool.serverName) ??
+            false)
+        : false;
     },
     getToolCallTracker() {
       return ctx.toolCallTracker;
@@ -2238,10 +2302,119 @@ function enforceDelegatedPathPolicy(
   }
 }
 
+function writeApprovalStateAgeBucket(ageMs: number | undefined): string {
+  if (ageMs === undefined) return "absent";
+  if (ageMs < 60_000) return "under_1m";
+  if (ageMs < 60 * 60_000) return "1m_to_1h";
+  if (ageMs < 24 * 60 * 60_000) return "1h_to_24h";
+  return "over_24h";
+}
+
+function writeApprovalPromptReason(reason: string | undefined): string {
+  switch (reason) {
+    case "protected_memory_path":
+    case "no_matching_write_authority":
+    case "outside_workspace_requires_matching_rule":
+    case "legacy_policy_provider":
+      return reason;
+    default:
+      return reason ? "other_policy_denial" : "unspecified_policy_denial";
+  }
+}
+
+function recordWriteApprovalPrompt(
+  toolName: "write_file" | "apply_diff",
+  event: WriteApprovalPromptEvent,
+  ctx: ToolDispatchContext,
+): void {
+  const telemetry = ctx.toolUsageTelemetry;
+  if (!telemetry) return;
+
+  const metrics: ToolUsageMetrics = {
+    writeApprovalPrompt: true,
+    writeApprovalPromptReason: writeApprovalPromptReason(
+      event.authorization.reason,
+    ),
+    writeApprovalAuthorizationBasis: event.authorization.basis,
+    writeApprovalInWorkspace: event.inWorkspace,
+    writeApprovalSessionKind: ctx.isBackgroundSession
+      ? "background"
+      : "foreground",
+    writeApprovalMode: event.mode ?? ctx.mode ?? "unknown",
+  };
+  try {
+    const diagnostics = ctx.approvalManager.getAgentWriteApprovalDiagnostics(
+      event.sessionId,
+      event.absolutePath,
+    );
+    Object.assign(metrics, {
+      writeApprovalBlanketScope: diagnostics.effectiveScope,
+      writeApprovalGlobalBlanketApproved: diagnostics.globalBlanketApproved,
+      writeApprovalProjectBlanketApproved: diagnostics.projectBlanketApproved,
+      writeApprovalSessionBlanketApproved: diagnostics.sessionBlanketApproved,
+      writeApprovalLegacyGlobalBlanketApproved:
+        diagnostics.legacyGlobalBlanketApproved,
+      writeApprovalLegacyProjectBlanketApproved:
+        diagnostics.legacyProjectBlanketApproved,
+      writeApprovalLegacySessionBlanketApproved:
+        diagnostics.legacySessionBlanketApproved,
+      writeApprovalSessionProjectBound: diagnostics.sessionProjectBound,
+      writeApprovalSessionStatePresent: diagnostics.sessionStatePresent,
+      writeApprovalSessionStateAgeBucket: writeApprovalStateAgeBucket(
+        diagnostics.sessionStateAgeMs,
+      ),
+      writeApprovalSessionRuleCount: diagnostics.writeRuleCounts.session,
+      writeApprovalProjectRuleCount: diagnostics.writeRuleCounts.project,
+      writeApprovalGlobalRuleCount: diagnostics.writeRuleCounts.global,
+      writeApprovalSettingsRuleCount: diagnostics.writeRuleCounts.settings,
+    });
+  } catch {
+    metrics.writeApprovalDiagnostics = "unavailable";
+  }
+  telemetry.recordMetrics(toolName, metrics);
+}
+
 /**
  * Dispatch a tool call to the appropriate handler.
  * Returns ToolResult compatible with the Anthropic SDK.
  */
+export function createGuardianOutsideWritePreparer(
+  ctx: ToolDispatchContext,
+  sessionId: string,
+  requestingTool: string,
+  signal?: AbortSignal,
+) {
+  if (!ctx.actionApprovalReviewer) return undefined;
+  return createGuardianOutsideWriteAuthorizationPreparer({
+    reviewer: ctx.actionApprovalReviewer,
+    sessionId,
+    requestingTool,
+    getPolicy: () => ctx.getCommandApprovalMode?.(sessionId),
+    isSessionActive: () => ctx.isSessionActive?.(sessionId) ?? false,
+    getUserObjective: () => ctx.getCommandReviewObjective?.(sessionId),
+    getContext: () => ctx.getCommandReviewContext?.(sessionId) ?? [],
+    signal,
+  });
+}
+
+function createGuardianOutsideReadOptions(
+  ctx: ToolDispatchContext,
+  sessionId: string,
+  requestingTool: string,
+  operation: OutsideReadOperation,
+): GuardianOutsideReadOptions | undefined {
+  if (!ctx.actionApprovalReviewer) return undefined;
+  return {
+    reviewer: ctx.actionApprovalReviewer,
+    requestingTool,
+    operation,
+    getPolicy: () => ctx.getCommandApprovalMode?.(sessionId),
+    isSessionActive: () => ctx.isSessionActive?.(sessionId) ?? false,
+    getUserObjective: () => ctx.getCommandReviewObjective?.(sessionId),
+    getContext: () => ctx.getCommandReviewContext?.(sessionId) ?? [],
+  };
+}
+
 export async function dispatchToolCall(
   toolName: string,
   input: Record<string, unknown>,
@@ -2322,6 +2495,22 @@ export async function dispatchToolCall(
     }
     const { serverName, bareToolName } = parsedToolName;
     const serverConfig = mcpToolInvocationProvider.getServerConfig(serverName);
+    const sourceConfig = serverConfig as
+      | (typeof serverConfig & {
+          sourceServerName?: string;
+          sourceProjectIds?: string[];
+          sourceProjectRoots?: string[];
+        })
+      | undefined;
+    const sourceServerName = sourceConfig?.sourceServerName ?? serverName;
+    const sourceProjectIndex = ctx.projectScope
+      ? sourceConfig?.sourceProjectIds?.indexOf(ctx.projectScope.projectId)
+      : -1;
+    const sourceProjectRoot =
+      sourceProjectIndex !== undefined && sourceProjectIndex >= 0
+        ? sourceConfig?.sourceProjectRoots?.[sourceProjectIndex]
+        : sourceConfig?.sourceProjectRoots?.[0];
+    const projectApprovalRoot = sourceProjectRoot ?? ctx.projectRoot;
     const isAutoApproved =
       serverConfig?.toolPolicy === "allow" ||
       serverConfig?.allowedTools?.includes(bareToolName) ||
@@ -2339,8 +2528,8 @@ export async function dispatchToolCall(
       let rejectionReason: string | undefined;
 
       if (onApprovalRequest) {
-        const projectConfigPath = ctx.projectRoot
-          ? getMcpConfigFilePaths(ctx.projectRoot).project
+        const projectConfigPath = projectApprovalRoot
+          ? getMcpConfigFilePaths(projectApprovalRoot).project
           : undefined;
         const raw = await onApprovalRequest(
           {
@@ -2439,8 +2628,8 @@ export async function dispatchToolCall(
         };
       }
 
-      const projectConfigPath = ctx.projectRoot
-        ? getMcpConfigFilePaths(ctx.projectRoot).project
+      const projectConfigPath = projectApprovalRoot
+        ? getMcpConfigFilePaths(projectApprovalRoot).project
         : undefined;
       const globalConfigPath = path.join(
         os.homedir(),
@@ -2474,15 +2663,17 @@ export async function dispatchToolCall(
             );
           }
           approvalManager.approveMcpTool(sessionId, toolName);
-          persistMcpToolApproval(serverName, bareToolName, filePath).catch(
-            () => undefined,
-          );
+          persistMcpToolApproval(
+            sourceServerName,
+            bareToolName,
+            filePath,
+          ).catch(() => undefined);
           break;
         }
         case "always-tool-global":
           approvalManager.approveMcpTool(sessionId, toolName);
           persistMcpToolApproval(
-            serverName,
+            sourceServerName,
             bareToolName,
             globalConfigPath,
           ).catch(() => undefined);
@@ -2495,12 +2686,14 @@ export async function dispatchToolCall(
             );
           }
           approvalManager.approveMcpServer(sessionId, serverName);
-          persistMcpServerApproval(serverName, filePath).catch(() => undefined);
+          persistMcpServerApproval(sourceServerName, filePath).catch(
+            () => undefined,
+          );
           break;
         }
         case "always-server-global":
           approvalManager.approveMcpServer(sessionId, serverName);
-          persistMcpServerApproval(serverName, globalConfigPath).catch(
+          persistMcpServerApproval(sourceServerName, globalConfigPath).catch(
             () => undefined,
           );
           break;
@@ -2653,6 +2846,45 @@ export async function dispatchToolCall(
         sessionId,
         ctx.getAdvertisedSkills?.() ?? [],
         createVscodeReadFileEnrichmentProvider(),
+        toolAbortSignal,
+        ...(ctx.actionApprovalReviewer
+          ? [
+              createGuardianOutsideReadOptions(ctx, sessionId, "read_file", {
+                kind: "read-file",
+                offset: params.offset,
+                limit: params.limit,
+                includeSymbols: params.include_symbols !== false,
+                autoFollowSuggestion: params.auto_follow_suggestion === true,
+                ...(params.offset === undefined
+                  ? params.anchor !== undefined
+                    ? {
+                        selector: {
+                          kind: "anchor" as const,
+                          value: params.anchor,
+                          offset: params.anchor_offset,
+                        },
+                      }
+                    : params.anchor_regex !== undefined
+                      ? {
+                          selector: {
+                            kind: "regex" as const,
+                            value: params.anchor_regex,
+                            offset: params.anchor_offset,
+                          },
+                        }
+                      : params.query !== undefined
+                        ? {
+                            selector: {
+                              kind: "query" as const,
+                              value: params.query,
+                              offset: params.anchor_offset,
+                            },
+                          }
+                        : {}
+                  : {}),
+              })!,
+            ]
+          : []),
       );
     case "get_context":
       if (ctx.onFileRead && typeof params.path === "string") {
@@ -2662,6 +2894,7 @@ export async function dispatchToolCall(
         documentProvider: createVscodeContextDocumentProvider(
           approvalManager,
           approvalPanel,
+          toolAbortSignal,
         ),
         workingSetProvider: createVscodeContextWorkingSetProvider(),
         enrichmentProvider: createVscodeContextEnrichmentProvider(),
@@ -2725,6 +2958,15 @@ export async function dispatchToolCall(
           pathAccessProvider: createVscodePathAccessProvider(
             approvalManager,
             approvalPanel,
+            toolAbortSignal,
+            createGuardianOutsideReadOptions(ctx, sessionId, "list_files", {
+              kind: "list",
+              recursive: params.recursive === true,
+              includeIgnored: params.include_ignored === true,
+              depth: params.depth,
+              pattern: params.pattern,
+              query: params.query,
+            }),
           ),
         },
       );
@@ -2739,6 +2981,21 @@ export async function dispatchToolCall(
           pathAccessProvider: createVscodePathAccessProvider(
             approvalManager,
             approvalPanel,
+            toolAbortSignal,
+            createGuardianOutsideReadOptions(ctx, sessionId, "search_files", {
+              kind: "search",
+              pattern: params.regex,
+              patternKind: params.semantic ? "semantic" : "regex",
+              filePattern: params.file_pattern,
+              caseInsensitive: params.case_insensitive,
+              context: params.context,
+              contextBefore: params.context_before,
+              contextAfter: params.context_after,
+              multiline: params.multiline === true,
+              maxResults: params.max_results,
+              offset: params.offset,
+              outputMode: params.output_mode,
+            }),
           ),
         },
       );
@@ -2746,6 +3003,11 @@ export async function dispatchToolCall(
       return handleSearchSessionHistory(params, ctx.getSessionTranscript);
     case "read_session_excerpt":
       return handleReadSessionExcerpt(params, ctx.getSessionTranscript);
+    case "diagnose_activity":
+      return handleDiagnoseActivity(
+        params,
+        ctx.sessionActivityDiagnosticsProvider,
+      );
 
     // --- File writing ---
     case "write_file":
@@ -2762,6 +3024,18 @@ export async function dispatchToolCall(
           writeApprovalPolicyProvider:
             ctx.writeApprovalPolicyProvider ??
             createVscodeWriteApprovalPolicyProvider(approvalManager),
+          ...(ctx.toolUsageTelemetry
+            ? {
+                onApprovalPrompt: (event: WriteApprovalPromptEvent) =>
+                  recordWriteApprovalPrompt("write_file", event, ctx),
+              }
+            : {}),
+          prepareOneShotAuthorization: createGuardianOutsideWritePreparer(
+            ctx,
+            sessionId,
+            "write_file",
+            toolAbortSignal,
+          ),
           diagnosticDelay: getConfiguredDiagnosticDelay(),
         },
       );
@@ -2773,6 +3047,8 @@ export async function dispatchToolCall(
         onApprovalRequest,
         ctx.getSessionImages,
       );
+    case "present_images":
+      return handlePresentImages(params, ctx.getSessionImages);
     case "apply_diff":
       return handleApplyDiff(
         params,
@@ -2787,6 +3063,18 @@ export async function dispatchToolCall(
           writeApprovalPolicyProvider:
             ctx.writeApprovalPolicyProvider ??
             createVscodeWriteApprovalPolicyProvider(approvalManager),
+          ...(ctx.toolUsageTelemetry
+            ? {
+                onApprovalPrompt: (event: WriteApprovalPromptEvent) =>
+                  recordWriteApprovalPrompt("apply_diff", event, ctx),
+              }
+            : {}),
+          prepareOneShotAuthorization: createGuardianOutsideWritePreparer(
+            ctx,
+            sessionId,
+            "apply_diff",
+            toolAbortSignal,
+          ),
           diagnosticDelay: getConfiguredDiagnosticDelay(),
         },
       );
@@ -2805,6 +3093,29 @@ export async function dispatchToolCall(
               approvalManager,
               extensionUri,
             ),
+          pathAccessProvider: createVscodePathAccessProvider(
+            approvalManager,
+            approvalPanel,
+            toolAbortSignal,
+            createGuardianOutsideReadOptions(
+              ctx,
+              sessionId,
+              "find_and_replace",
+              {
+                kind: "search",
+                pattern: params.find,
+                patternKind: params.regex ? "regex" : "literal",
+                multiline: false,
+                outputMode: "content",
+              },
+            ),
+          ),
+          prepareOneShotAuthorization: createGuardianOutsideWritePreparer(
+            ctx,
+            sessionId,
+            "find_and_replace",
+            toolAbortSignal,
+          ),
         },
       );
     case "rename_symbol":
@@ -2817,6 +3128,17 @@ export async function dispatchToolCall(
           renameSymbolProvider:
             ctx.renameSymbolProvider ??
             createVscodeRenameSymbolProvider(approvalManager),
+          pathAccessProvider: createVscodePathAccessProvider(
+            approvalManager,
+            approvalPanel,
+            toolAbortSignal,
+            createGuardianOutsideReadOptions(ctx, sessionId, "rename_symbol", {
+              kind: "language-intelligence",
+              feature: "references",
+              line: params.line,
+              column: params.column,
+            }),
+          ),
         },
       );
     case "propose_memory":
@@ -2838,7 +3160,11 @@ export async function dispatchToolCall(
         {
           terminalProvider: ctx.terminalProvider,
           getCommandApprovalPolicy: ctx.getCommandApprovalPolicy,
+          getCommandApprovalMode: ctx.getCommandApprovalMode,
           commandApprovalReviewer: ctx.commandApprovalReviewer,
+          networkApprovalReviewer: ctx.networkApprovalReviewer,
+          commandReviewTurnCircuit: ctx.commandReviewTurnCircuit,
+          retainedCommandReviewDenials: ctx.retainedCommandReviewDenials,
           isSessionActive: ctx.isSessionActive,
           toolAbortSignal,
           getUserObjective: ctx.getCommandReviewObjective,
@@ -2917,6 +3243,14 @@ export async function dispatchToolCall(
         pathAccessProvider: createVscodePathAccessProvider(
           approvalManager,
           approvalPanel,
+          toolAbortSignal,
+          createGuardianOutsideReadOptions(ctx, sessionId, "open_file", {
+            kind: "open-file",
+            line: params.line,
+            column: params.column,
+            endLine: params.end_line,
+            endColumn: params.end_column,
+          }),
         ),
         editorRevealProvider:
           ctx.editorRevealProvider ?? createVscodeEditorRevealProvider(),

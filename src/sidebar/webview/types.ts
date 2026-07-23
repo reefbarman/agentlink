@@ -6,6 +6,7 @@ import type { SemanticReadinessReason } from "../../shared/semanticReadiness.js"
 export interface CommandRule {
   pattern: string;
   mode: "prefix" | "regex" | "exact";
+  decision?: "allow" | "prompt" | "forbidden";
 }
 
 export interface PathRule {
@@ -135,12 +136,14 @@ type RuleEditMessage =
         command: C;
         pattern: string;
         mode: string;
+        decision?: "allow" | "prompt" | "forbidden";
       };
     }[NonSessionRuleEditCommand]
   | {
       command: SessionRuleEditCommand;
       pattern: string;
       mode: string;
+      decision?: "allow" | "prompt" | "forbidden";
       sessionId: string;
     };
 
@@ -157,12 +160,16 @@ type RuleRemoveMessage =
       [C in NonSessionRuleRemoveCommand]: {
         command: C;
         pattern: string;
+        mode?: string;
+        decision?: "allow" | "prompt" | "forbidden";
       };
     }[NonSessionRuleRemoveCommand]
   | {
       [C in SessionRuleRemoveCommand]: {
         command: C;
         pattern: string;
+        mode?: string;
+        decision?: "allow" | "prompt" | "forbidden";
         sessionId: string;
       };
     }[SessionRuleRemoveCommand];

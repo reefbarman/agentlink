@@ -3,6 +3,7 @@ import {
   canonicalizeProtectedRoots,
   prepareProtectedRoots,
   revalidateProtectedRoots,
+  validateStructurallyProtectedRoots,
 } from "./sandbox-protected-roots.mjs";
 import {
   access,
@@ -113,9 +114,145 @@ test("detects protected content mutations during pre-spawn revalidation", async 
 
     await writeFile(protectedFile, "mutated");
 
+    await assert.rejects(revalidateProtectedRoots(prepared), (error) => {
+      assert.match(
+        error.message,
+        /protected root contents changed before spawn: root=.*\/protected path=policy\.json change=modified/,
+      );
+      assert.doesNotMatch(error.message, /original|mutated/);
+      return true;
+    });
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("reports structural additions without exposing protected content", async () => {
+  const fixture = await makeRoot("addition-diagnostic");
+  try {
+    const protectedRoot = path.join(fixture, "protected");
+    await mkdir(protectedRoot);
+    const prepared = await prepareProtectedRoots([protectedRoot]);
+    await writeFile(path.join(protectedRoot, "secret.txt"), "sensitive-value");
+
+    await assert.rejects(revalidateProtectedRoots(prepared), (error) => {
+      assert.match(
+        error.message,
+        /root=.*\/protected path=secret\.txt change=added/,
+      );
+      assert.doesNotMatch(error.message, /sensitive-value/);
+      return true;
+    });
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("reports structural removals without exposing protected content", async () => {
+  const fixture = await makeRoot("removal-diagnostic");
+  try {
+    const protectedRoot = path.join(fixture, "protected");
+    const protectedFile = path.join(protectedRoot, "secret.txt");
+    await mkdir(protectedRoot);
+    await writeFile(protectedFile, "sensitive-value");
+    const prepared = await prepareProtectedRoots([protectedRoot]);
+    await rm(protectedFile);
+
+    await assert.rejects(revalidateProtectedRoots(prepared), (error) => {
+      assert.match(
+        error.message,
+        /root=.*\/protected path=secret\.txt change=removed/,
+      );
+      assert.doesNotMatch(error.message, /sensitive-value/);
+      return true;
+    });
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("allows volatile history replacement when only stable AgentLink children are protected", async () => {
+  const fixture = await makeRoot("agentlink-history");
+  try {
+    const agentlinkRoot = path.join(fixture, ".agentlink");
+    const policyFile = path.join(agentlinkRoot, "policy.json");
+    const historyDir = path.join(agentlinkRoot, "history");
+    const historyFile = path.join(historyDir, "sessions.json");
+    const historyTemp = path.join(historyDir, ".sessions.atomic.tmp");
+    await mkdir(historyDir, { recursive: true });
+    await writeFile(policyFile, "policy-original");
+    await writeFile(historyFile, "[]");
+    const prepared = await prepareProtectedRoots([policyFile]);
+
+    await writeFile(historyTemp, '[{"id":"session-1"}]');
+    await rename(historyTemp, historyFile);
+
+    await revalidateProtectedRoots(prepared);
+
+    await writeFile(policyFile, "policy-mutated");
     await assert.rejects(
       revalidateProtectedRoots(prepared),
       /protected root contents changed before spawn/,
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("allows atomic Git ref replacement under structural protection", async () => {
+  const fixture = await makeRoot("git-ref-replacement");
+  try {
+    const gitRoot = path.join(fixture, ".git");
+    const refRoot = path.join(gitRoot, "refs", "remotes", "origin");
+    const ref = path.join(refRoot, "main");
+    const temporaryRef = path.join(refRoot, ".main.lock");
+    await mkdir(refRoot, { recursive: true });
+    await writeFile(ref, "a".repeat(40));
+
+    await writeFile(temporaryRef, "b".repeat(40));
+    await rename(temporaryRef, ref);
+
+    await assert.doesNotReject(validateStructurallyProtectedRoots([gitRoot]));
+    assert.equal(await readFile(ref, "utf8"), "b".repeat(40));
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("rejects nested symbolic links under structural protection", async () => {
+  const fixture = await makeRoot("git-structural-symlink");
+  try {
+    const gitRoot = path.join(fixture, ".git");
+    const refRoot = path.join(gitRoot, "refs", "heads");
+    await mkdir(refRoot, { recursive: true });
+    await writeFile(path.join(fixture, "outside-ref"), "a".repeat(40));
+    await symlink(
+      path.join(fixture, "outside-ref"),
+      path.join(refRoot, "main"),
+    );
+
+    await assert.rejects(
+      validateStructurallyProtectedRoots([gitRoot]),
+      /structurally protected tree contains a symbolic link/,
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("rejects hard-linked files under structural protection", async () => {
+  const fixture = await makeRoot("git-structural-hard-link");
+  try {
+    const gitRoot = path.join(fixture, ".git");
+    const refRoot = path.join(gitRoot, "refs", "heads");
+    const ref = path.join(refRoot, "main");
+    await mkdir(refRoot, { recursive: true });
+    await writeFile(ref, "a".repeat(40));
+    await link(ref, path.join(fixture, "ref-alias"));
+
+    await assert.rejects(
+      validateStructurallyProtectedRoots([gitRoot]),
+      /structurally protected file has unexpected hard-link count 2/,
     );
   } finally {
     await rm(fixture, { recursive: true, force: true });

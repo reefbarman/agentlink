@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BrowserGatewayService } from "./BrowserGatewayService.js";
 import { InMemoryAgentUiEventHub } from "../agent/AgentUiPublisher.js";
+import type { SessionApprovalMode } from "../agent/AgentSessionManager.js";
 import type { SessionSummary } from "../agent/SessionStore.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
 import { normalizeLegacyBrowserGatewaySnapshot } from "./testing/stateEquivalenceOracle.js";
@@ -106,6 +107,12 @@ function makeSessionManagerStub() {
       { role: "assistant", content: [{ type: "text", text: "world" }] },
     ]),
     getBgSessionInfos: vi.fn(() => []),
+    getSessionApprovalMode: vi.fn<() => SessionApprovalMode>(() => ({
+      commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "user",
+      executionPreset: "native-manual",
+    })),
   };
 }
 
@@ -294,6 +301,9 @@ describe("BrowserGatewayService", () => {
     expect(readSet.policies).toEqual({
       agentWriteApproval: "prompt",
       commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "user",
+      executionPreset: "native-manual",
       configuredCommandApprovalPolicy: "safe",
     });
 
@@ -406,6 +416,48 @@ describe("BrowserGatewayService", () => {
     expect(second.bytes).toBe(Buffer.byteLength(second.serialized, "utf8"));
 
     subscription.dispose();
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("serializes managed-network approval evidence for the browser surface", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const service = makeService(hub);
+    hub.publishApproval({
+      kind: "network",
+      id: "network-approval-1",
+      managedNetwork: {
+        requestId: "network-1",
+        sessionId: "session-1",
+        auditId: "audit-1",
+        terminalId: "sandbox-1",
+        commandId: "command-1",
+        generation: 1,
+        command: "npm view vite version",
+        cwd: "/workspace",
+        host: "registry.npmjs.org",
+        protocol: "https",
+        port: 443,
+        address: "104.16.24.34",
+        family: 4,
+        dnsAnswers: [{ address: "104.16.24.34", family: 4 }],
+        destinationClass: "public",
+      },
+    });
+
+    const publication = service.createSnapshotPublication();
+    expect(JSON.parse(publication.serialized).ui.approval).toMatchObject({
+      kind: "network",
+      id: "network-approval-1",
+      managedNetwork: {
+        host: "registry.npmjs.org",
+        protocol: "https",
+        port: 443,
+        address: "104.16.24.34",
+        dnsAnswers: [{ address: "104.16.24.34", family: 4 }],
+      },
+    });
+
     service.dispose();
     hub.dispose();
   });
@@ -588,6 +640,9 @@ describe("BrowserGatewayService", () => {
         condenseThreshold: 0.8,
         agentWriteApproval: "prompt",
         commandApprovalPolicy: "safe",
+        approvalPolicy: "on-request",
+        approvalReviewer: "user",
+        executionPreset: "native-manual",
         configuredCommandApprovalPolicy: "safe",
       },
     });
@@ -959,6 +1014,12 @@ describe("BrowserGatewayService", () => {
       let theme = themeSnapshotStub;
       let effectivePolicy: "safe" | "approve-for-me" = "safe";
       let configuredPolicy: "safe" | "sensitive" = "safe";
+      sessionManager.getSessionApprovalMode.mockReturnValue({
+        commandApprovalPolicy: "approve-for-me",
+        approvalPolicy: "on-request",
+        approvalReviewer: "auto-review",
+        executionPreset: "workspace-write",
+      });
       let surfaceListener:
         | ((kind: "background" | "mcp" | "theme") => void)
         | undefined;
@@ -971,7 +1032,10 @@ describe("BrowserGatewayService", () => {
         () => "high",
         () =>
           projectedForeground({
-            commandApprovalPolicy: "safe",
+            commandApprovalPolicy: "approve-for-me",
+            approvalPolicy: "on-request",
+            approvalReviewer: "auto-review",
+            executionPreset: "workspace-write",
             configuredCommandApprovalPolicy: "safe",
           }) as never,
         () => [],
@@ -1006,6 +1070,9 @@ describe("BrowserGatewayService", () => {
       ).toMatchObject({
         agentWriteApproval: "project",
         commandApprovalPolicy: "approve-for-me",
+        approvalPolicy: "on-request",
+        approvalReviewer: "auto-review",
+        executionPreset: "workspace-write",
         configuredCommandApprovalPolicy: "sensitive",
       });
 

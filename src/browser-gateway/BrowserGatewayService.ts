@@ -146,6 +146,9 @@ export interface BrowserGatewaySessionState {
         contextBudget?: ChatState["contextBudget"];
         condenseThreshold?: number;
         commandApprovalPolicy: CommandApprovalPolicy;
+        approvalPolicy: NonNullable<ChatState["approvalPolicy"]>;
+        approvalReviewer: NonNullable<ChatState["approvalReviewer"]>;
+        executionPreset: NonNullable<ChatState["executionPreset"]>;
         configuredCommandApprovalPolicy: Exclude<
           CommandApprovalPolicy,
           "approve-for-me"
@@ -193,6 +196,9 @@ export interface BrowserGatewayWireSessionState {
     condenseThreshold?: number;
     agentWriteApproval: "prompt" | "session" | "project" | "global";
     commandApprovalPolicy: CommandApprovalPolicy;
+    approvalPolicy: NonNullable<ChatState["approvalPolicy"]>;
+    approvalReviewer: NonNullable<ChatState["approvalReviewer"]>;
+    executionPreset: NonNullable<ChatState["executionPreset"]>;
     configuredCommandApprovalPolicy: Exclude<
       CommandApprovalPolicy,
       "approve-for-me"
@@ -545,6 +551,10 @@ export class BrowserGatewayService implements vscode.Disposable {
     const projected = this.getProjectedForegroundState();
     const projectedMatchesForeground =
       projected && projected.sessionId === foreground.id;
+    const approvalMode = this.sessionManager.getSessionApprovalMode(
+      foreground.id,
+      this.getConfiguredCommandApprovalPolicy(),
+    );
 
     const projectionStartedAt = this.streamingMetrics.enabled
       ? performance.now()
@@ -639,7 +649,19 @@ export class BrowserGatewayService implements vscode.Disposable {
         condenseThreshold: projectedMatchesForeground
           ? projected.condenseThreshold
           : undefined,
-        commandApprovalPolicy: this.getCommandApprovalPolicy(),
+        commandApprovalPolicy: projectedMatchesForeground
+          ? (projected.commandApprovalPolicy ??
+            approvalMode.commandApprovalPolicy)
+          : approvalMode.commandApprovalPolicy,
+        approvalPolicy: projectedMatchesForeground
+          ? (projected.approvalPolicy ?? approvalMode.approvalPolicy)
+          : approvalMode.approvalPolicy,
+        approvalReviewer: projectedMatchesForeground
+          ? (projected.approvalReviewer ?? approvalMode.approvalReviewer)
+          : approvalMode.approvalReviewer,
+        executionPreset: projectedMatchesForeground
+          ? (projected.executionPreset ?? approvalMode.executionPreset)
+          : approvalMode.executionPreset,
         configuredCommandApprovalPolicy:
           this.getConfiguredCommandApprovalPolicy(),
       },
@@ -702,6 +724,9 @@ export class BrowserGatewayService implements vscode.Disposable {
             agentWriteApproval: this.getAgentWriteApprovalState(),
             commandApprovalPolicy:
               sessionState.foreground.commandApprovalPolicy,
+            approvalPolicy: sessionState.foreground.approvalPolicy,
+            approvalReviewer: sessionState.foreground.approvalReviewer,
+            executionPreset: sessionState.foreground.executionPreset,
             configuredCommandApprovalPolicy:
               sessionState.foreground.configuredCommandApprovalPolicy,
           }
@@ -934,6 +959,9 @@ export class BrowserGatewayService implements vscode.Disposable {
       policies: {
         agentWriteApproval: foreground?.agentWriteApproval ?? "prompt",
         commandApprovalPolicy: foreground?.commandApprovalPolicy ?? "safe",
+        approvalPolicy: foreground?.approvalPolicy ?? "on-request",
+        approvalReviewer: foreground?.approvalReviewer ?? "user",
+        executionPreset: foreground?.executionPreset ?? "native-manual",
         configuredCommandApprovalPolicy:
           foreground?.configuredCommandApprovalPolicy ?? "safe",
       },
@@ -1054,9 +1082,13 @@ export class BrowserGatewayService implements vscode.Disposable {
         break;
     }
 
-    this.recentEvents = [...this.recentEvents, event].slice(
-      -this.maxRecentEvents,
-    );
+    this.recentEvents.push(event);
+    if (this.recentEvents.length > this.maxRecentEvents) {
+      this.recentEvents.splice(
+        0,
+        this.recentEvents.length - this.maxRecentEvents,
+      );
+    }
     this.invalidateBrowserSnapshot({ immediate: true });
   }
 

@@ -19,10 +19,12 @@ describe("normalizeCoreWebAccessSettings", () => {
       normalizeCoreWebAccessSettings({
         searchBackend: "mcp",
         fetchBackend: "disabled",
+        nativeSearchMode: "live",
       }),
     ).toMatchObject({
       searchBackend: "mcp",
       fetchBackend: "disabled",
+      nativeSearchMode: "live",
     });
   });
 
@@ -63,6 +65,11 @@ describe("normalizeCoreWebAccessSettings", () => {
     expect(() =>
       normalizeCoreWebAccessSettings({ maxFetchUsesPerTurn: 0 }),
     ).toThrow("positive integer");
+    expect(() =>
+      normalizeCoreWebAccessSettings({
+        nativeSearchMode: "fresh" as "cached",
+      }),
+    ).toThrow("Invalid web access nativeSearchMode");
   });
 });
 

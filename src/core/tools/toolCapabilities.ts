@@ -126,6 +126,14 @@ const toolCapabilities = [
     "never",
     true,
   ),
+  metadata(
+    "diagnose_activity",
+    "session",
+    ["session.activity.read", "session.diagnostics"],
+    "read",
+    "never",
+    true,
+  ),
 
   // Edit/write/review
   metadata(
@@ -177,6 +185,14 @@ const toolCapabilities = [
     false,
   ),
   metadata(
+    "present_images",
+    "media",
+    ["media.present", "session.images.read", "ui.chat.display"],
+    "control",
+    "never",
+    false,
+  ),
+  metadata(
     "propose_memory",
     "memory",
     ["memory.propose", "edit.review"],
@@ -192,7 +208,7 @@ const toolCapabilities = [
     ["process.execute"],
     "execute",
     "policy",
-    false,
+    true,
   ),
   metadata(
     "get_terminal_output",
@@ -319,7 +335,7 @@ const toolCapabilities = [
     ["mcp.resource.list"],
     "read",
     "never",
-    false,
+    true,
   ),
   metadata(
     "read_mcp_resource",
@@ -327,7 +343,7 @@ const toolCapabilities = [
     ["mcp.resource.read"],
     "read",
     "never",
-    false,
+    true,
   ),
   metadata(
     "list_mcp_prompts",
@@ -335,16 +351,9 @@ const toolCapabilities = [
     ["mcp.prompt.list"],
     "read",
     "never",
-    false,
+    true,
   ),
-  metadata(
-    "get_mcp_prompt",
-    "mcp",
-    ["mcp.prompt.read"],
-    "read",
-    "never",
-    false,
-  ),
+  metadata("get_mcp_prompt", "mcp", ["mcp.prompt.read"], "read", "never", true),
   metadata("ask_user", "session", ["user.question"], "control", "never", true),
   metadata(
     "todo_write",

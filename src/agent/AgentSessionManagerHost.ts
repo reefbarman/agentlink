@@ -102,6 +102,10 @@ export interface ActivityTraceRecorderLike {
     projectId: string,
     event: BackgroundSummaryTraceEvent,
   ): void;
+  diagnoseSessionActivity?(
+    sessionId: string,
+    query: import("../core/sessionActivityDiagnostics.js").SessionActivityQuery,
+  ): import("../core/sessionActivityDiagnostics.js").SessionActivityDiagnosis;
 }
 
 export interface TimerHost {
@@ -251,6 +255,7 @@ export function createDefaultAgentSessionManagerHost(args: {
         return {
           searchBackend: stringValue("webAccess.searchBackend"),
           fetchBackend: stringValue("webAccess.fetchBackend"),
+          nativeSearchMode: stringValue("webAccess.nativeSearchMode"),
           allowedDomains: stringArrayValue("webAccess.allowedDomains"),
           blockedDomains: stringArrayValue("webAccess.blockedDomains"),
           maxSearchUsesPerTurn: numberValue("webAccess.maxSearchUsesPerTurn"),
@@ -264,7 +269,8 @@ export function createDefaultAgentSessionManagerHost(args: {
     createEngine: (registry, log) => new AgentEngine(registry, log),
     createSession: (opts) => AgentSession.create(opts),
     createCheckpointManager: (opts) => new CheckpointManager(opts),
-    createActivityTraceRecorder: (opts) => new ActivityTraceRecorder(opts),
+    createActivityTraceRecorder: (opts) =>
+      new ActivityTraceRecorder({ ...opts, log: args.log }),
     captureProjectToolContext: (ctx, scope) => ({
       ...ctx,
       projectScope: scope,

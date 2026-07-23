@@ -69,12 +69,21 @@ describe("ProjectSettingsAccessor", () => {
     };
     const properties = manifest.contributes.configuration.properties;
 
-    expect(classifications).toHaveLength(53);
+    expect(classifications).toHaveLength(56);
+    expect(MACHINE_SCOPED_AGENTLINK_SETTINGS).toContain(
+      "terminal.environmentPolicy",
+    );
+    expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain(
+      "provider.maxConcurrentRequests",
+    );
     expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain(
       "webAccess.searchBackend",
     );
     expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain(
       "webAccess.fetchBackend",
+    );
+    expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain(
+      "webAccess.nativeSearchMode",
     );
     for (const removedSetting of [
       "webAccess.strategy",

@@ -1,3 +1,5 @@
+import type { PreservedRuntimeContext } from "./types.js";
+
 export interface CondenseResumeAnchor {
   latestUserMessage: string;
   currentTask: string;
@@ -19,11 +21,7 @@ export interface CondenseRecallAnchors {
 
 export interface DeterministicCondenseSectionsOptions extends CondensePromptContext {
   recallAnchors?: CondenseRecallAnchors;
-  preservedContext?: {
-    toolNames: string[];
-    mcpServerNames?: string[];
-    activeSkills?: string[];
-  };
+  preservedContext?: PreservedRuntimeContext;
 }
 
 function renderQuotedMessages(
@@ -43,6 +41,20 @@ function renderQuotedMessages(
 
 function renderBulletList(items: string[], empty: string): string {
   return items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : empty;
+}
+
+function renderTodoState(context?: PreservedRuntimeContext): string {
+  if (!context?.todos) return "Not captured for this checkpoint.";
+  const serialized = JSON.stringify(context.todos, null, 2).replace(
+    /</g,
+    "\\u003c",
+  );
+  return [
+    "Treat this exact list as the authoritative task-tracking starting point. Preserve every item and completed progress, then reconcile statuses against the checkpoint summary and current workspace before continuing. Repair stale statuses with `todo_write`; do not redo completed work merely because an item still says pending or in_progress. When calling `todo_write`, include the complete list because that tool replaces all prior TODO state.",
+    "<todo-state>",
+    serialized,
+    "</todo-state>",
+  ].join("\n");
 }
 
 export function extractCondenseResumeAnchor(options: {
@@ -107,6 +119,9 @@ export function renderDeterministicSections(
     "",
     "### Active loaded skills",
     skillLines,
+    "",
+    "### Current structured TODO state (authoritative)",
+    renderTodoState(options.preservedContext),
     "</system-reminder>",
   ].join("\n");
 }

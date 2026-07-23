@@ -61,6 +61,9 @@ interface ProbeFixtures {
   credentialFile: string;
   gitFile: string;
   policyFile: string;
+  agentsFile: string;
+  codexFile: string;
+  instructionsFile: string;
   symlinkPath: string;
   nonexistentProtectedPath: string;
   scriptPath: string;
@@ -78,23 +81,37 @@ interface CommandEvidence {
 interface ScriptEvidence {
   workspaceCreateAllowed: boolean;
   workspaceModifyAllowed: boolean;
-  outsideReadDenied: boolean;
+  outsideReadAllowed: boolean;
   outsideWriteDenied: boolean;
   gitWriteDenied: boolean;
   policyWriteDenied: boolean;
+  agentsWriteDenied: boolean;
+  codexWriteDenied: boolean;
+  instructionsWriteDenied: boolean;
   symlinkWriteDenied: boolean;
   nonexistentDescendantWriteDenied: boolean;
-  childOutsideAccessDenied: boolean;
+  childOutsideReadAllowed: boolean;
   grandchildProtectedAccessDenied: boolean;
-  homeIsPrivate: boolean;
-  tmpIsPrivate: boolean;
+  homeMatchesHost: boolean;
+  hostHomeReadAllowed: boolean;
+  hostHomeWriteDenied: boolean;
+  hostTmpEnvironmentMatched: boolean;
+  hostTmpWriteAllowed: boolean;
+  slashTmpWriteAllowed: boolean;
   cacheIsPrivate: boolean;
-  hostSentinelAbsent: boolean;
-  realHomeCredentialUnreadable: boolean;
-  loopbackConnectDenied: boolean;
+  credentialEnvironmentInherited: boolean;
+  baselineIpv4LoopbackConnectAllowed: boolean;
+  baselineIpv6LoopbackConnectAllowedOrUnavailable: boolean;
+  baselineListenerBindDenied: boolean;
   privateConnectDenied: boolean;
   publicConnectDenied: boolean;
   proxyEndpointsLoopbackOnly: boolean;
+}
+
+interface ListenerCapabilityEvidence {
+  listenerCapabilityBindAllowed: boolean;
+  listenerCapabilityPrivateConnectDenied: boolean;
+  listenerCapabilityPublicConnectDenied: boolean;
 }
 
 const PROBE_SCRIPT = String.raw`
@@ -108,7 +125,27 @@ function denied(operation) {
   try { operation(); return false; } catch { return true; }
 }
 
-function connectDenied(host, port) {
+function connectAllowed(host, port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host, port });
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(value);
+    };
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    socket.setTimeout(700, () => finish(false));
+  });
+}
+
+function policyDenied(error) {
+  return error && (error.code === "EPERM" || error.code === "EACCES");
+}
+
+function connectPolicyDenied(host, port) {
   return new Promise((resolve) => {
     const socket = net.connect({ host, port });
     let settled = false;
@@ -119,8 +156,37 @@ function connectDenied(host, port) {
       resolve(value);
     };
     socket.once("connect", () => finish(false));
-    socket.once("error", () => finish(true));
-    socket.setTimeout(700, () => finish(true));
+    socket.once("error", (error) => finish(policyDenied(error)));
+    socket.setTimeout(700, () => finish(false));
+  });
+}
+
+function bindAllowed(host) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      server.close(() => resolve(value));
+    };
+    server.once("error", () => finish(false));
+    server.listen(0, host, () => finish(true));
+  });
+}
+
+function bindPolicyDenied(host) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (server.listening) server.close(() => resolve(value));
+      else resolve(value);
+    };
+    server.once("error", (error) => finish(policyDenied(error)));
+    server.listen(0, host, () => finish(false));
   });
 }
 
@@ -153,14 +219,23 @@ if (mode === "child") {
   let parsed = {};
   try { parsed = JSON.parse(grandchild.stdout || "{}"); } catch {}
   process.stdout.write(JSON.stringify({
-    outsideDenied: denied(() => fs.readFileSync(outsideFile)),
+    outsideReadAllowed: !denied(() => fs.readFileSync(outsideFile)),
     grandchildProtectedDenied: parsed.protectedDenied === true,
   }));
   process.exit(0);
 }
 
 (async () => {
-  const [workspace, credentialFile, gitFile, policyFile, symlinkPath, nonexistentProtectedPath, portText, sentinelName, realHome, privateDirectoryPrefix] = process.argv.slice(4);
+  if (mode === "listener-capability") {
+    const evidence = {
+      listenerCapabilityBindAllowed: await bindAllowed("127.0.0.1"),
+      listenerCapabilityPrivateConnectDenied: await connectPolicyDenied("10.255.255.1", 9),
+      listenerCapabilityPublicConnectDenied: await connectPolicyDenied("1.1.1.1", 53),
+    };
+    process.stdout.write(MARKER + JSON.stringify(evidence) + "\n");
+    return;
+  }
+  const [workspace, credentialFile, gitFile, policyFile, agentsFile, codexFile, instructionsFile, symlinkPath, nonexistentProtectedPath, ipv4PortText, ipv6PortText, sentinelName, realHome, privateDirectoryPrefix, hostTemporaryDirectory] = process.argv.slice(4);
   const created = path.join(workspace, "created.txt");
   const modified = path.join(workspace, "modified.txt");
   fs.writeFileSync(created, "created");
@@ -169,27 +244,44 @@ if (mode === "child") {
   const child = spawnSync(process.execPath, [__filename, "child", outsideFile, gitFile], { encoding: "utf8" });
   let childEvidence = {};
   try { childEvidence = JSON.parse(child.stdout || "{}"); } catch {}
-  const privateRoot = path.dirname(process.env.HOME || "");
-  const privateRootIsExpected = privateRoot.startsWith(privateDirectoryPrefix);
+  const privateCacheRoot = path.dirname(process.env.XDG_CACHE_HOME || "");
+  const privateCacheRootIsExpected = privateCacheRoot.startsWith(privateDirectoryPrefix);
   const evidence = {
     workspaceCreateAllowed: fs.readFileSync(created, "utf8") === "created",
     workspaceModifyAllowed: fs.readFileSync(modified, "utf8") === "after",
-    outsideReadDenied: denied(() => fs.readFileSync(outsideFile)),
+    outsideReadAllowed: !denied(() => fs.readFileSync(outsideFile)),
     outsideWriteDenied: denied(() => fs.writeFileSync(outsideFile, "bad")),
     gitWriteDenied: denied(() => fs.writeFileSync(gitFile, "bad")),
     policyWriteDenied: denied(() => fs.writeFileSync(policyFile, "bad")),
+    agentsWriteDenied: denied(() => fs.writeFileSync(agentsFile, "bad")),
+    codexWriteDenied: denied(() => fs.writeFileSync(codexFile, "bad")),
+    instructionsWriteDenied: denied(() => fs.writeFileSync(instructionsFile, "bad")),
     symlinkWriteDenied: denied(() => fs.writeFileSync(symlinkPath, "bad")),
     nonexistentDescendantWriteDenied: denied(() => fs.writeFileSync(nonexistentProtectedPath, "bad")),
-    childOutsideAccessDenied: childEvidence.outsideDenied === true,
+    childOutsideReadAllowed: childEvidence.outsideReadAllowed === true,
     grandchildProtectedAccessDenied: childEvidence.grandchildProtectedDenied === true,
-    homeIsPrivate: privateRootIsExpected && process.env.HOME === path.join(privateRoot, "h") && process.env.HOME !== realHome,
-    tmpIsPrivate: privateRootIsExpected && process.env.TMPDIR === path.join(privateRoot, "t"),
-    cacheIsPrivate: privateRootIsExpected && process.env.XDG_CACHE_HOME === path.join(privateRoot, "c"),
-    hostSentinelAbsent: process.env[sentinelName] === undefined,
-    realHomeCredentialUnreadable: denied(() => fs.readFileSync(credentialFile)),
-    loopbackConnectDenied: await connectDenied("127.0.0.1", Number(portText)),
-    privateConnectDenied: await connectDenied("10.255.255.1", 9),
-    publicConnectDenied: await connectDenied("1.1.1.1", 53),
+    homeMatchesHost: process.env.HOME === realHome,
+    hostHomeReadAllowed: !denied(() => fs.readFileSync(credentialFile)),
+    hostHomeWriteDenied: denied(() => fs.writeFileSync(credentialFile, "bad")),
+    hostTmpEnvironmentMatched: process.env.TMPDIR === hostTemporaryDirectory,
+    hostTmpWriteAllowed: !denied(() => {
+      const probe = path.join(process.env.TMPDIR, "agentlink-attest-" + process.pid);
+      fs.writeFileSync(probe, "tmp");
+      fs.unlinkSync(probe);
+    }),
+    slashTmpWriteAllowed: !denied(() => {
+      const probe = path.join("/tmp", "agentlink-attest-" + process.pid);
+      fs.writeFileSync(probe, "tmp");
+      fs.unlinkSync(probe);
+    }),
+    cacheIsPrivate: privateCacheRootIsExpected && process.env.XDG_CACHE_HOME === path.join(privateCacheRoot, "c"),
+    credentialEnvironmentInherited: process.env[sentinelName] === "host-secret-sentinel",
+    baselineIpv4LoopbackConnectAllowed: await connectAllowed("127.0.0.1", Number(ipv4PortText)),
+    baselineIpv6LoopbackConnectAllowedOrUnavailable:
+      ipv6PortText === "unavailable" || await connectAllowed("::1", Number(ipv6PortText)),
+    baselineListenerBindDenied: await bindPolicyDenied("127.0.0.1"),
+    privateConnectDenied: await connectPolicyDenied("10.255.255.1", 9),
+    publicConnectDenied: await connectPolicyDenied("1.1.1.1", 53),
     proxyEndpointsLoopbackOnly: proxyEndpointsLoopbackOnly(),
   };
   process.stdout.write(MARKER + JSON.stringify(evidence) + "\n");
@@ -205,7 +297,7 @@ function shellQuote(value: string): string {
 
 async function createFixtures(): Promise<ProbeFixtures> {
   const root = await realpath(
-    await mkdtemp(path.join(os.tmpdir(), "al-sandbox-attest-")),
+    await mkdtemp(path.join(os.homedir(), ".agentlink-sandbox-attest-")),
   );
   const workspace = path.join(root, "workspace");
   const outside = path.join(root, "outside");
@@ -213,6 +305,8 @@ async function createFixtures(): Promise<ProbeFixtures> {
   await Promise.all([
     mkdir(path.join(workspace, ".git"), { recursive: true }),
     mkdir(path.join(workspace, ".agentlink"), { recursive: true }),
+    mkdir(path.join(workspace, ".agents"), { recursive: true }),
+    mkdir(path.join(workspace, ".codex"), { recursive: true }),
     mkdir(outside, { recursive: true }),
     mkdir(fakeHome, { recursive: true }),
   ]);
@@ -220,6 +314,9 @@ async function createFixtures(): Promise<ProbeFixtures> {
   const credentialFile = path.join(fakeHome, ".credential-sentinel");
   const gitFile = path.join(workspace, ".git", "config");
   const policyFile = path.join(workspace, ".agentlink", "policy.md");
+  const agentsFile = path.join(workspace, ".agents", "config.json");
+  const codexFile = path.join(workspace, ".codex", "config.toml");
+  const instructionsFile = path.join(workspace, "AGENTS.md");
   const symlinkPath = path.join(workspace, "outside-link");
   const nonexistentProtectedPath = path.join(
     workspace,
@@ -233,6 +330,9 @@ async function createFixtures(): Promise<ProbeFixtures> {
     writeFile(credentialFile, "credential-sentinel", { mode: 0o600 }),
     writeFile(gitFile, "git-sentinel", { mode: 0o600 }),
     writeFile(policyFile, "policy-sentinel", { mode: 0o600 }),
+    writeFile(agentsFile, "agents-sentinel", { mode: 0o600 }),
+    writeFile(codexFile, "codex-sentinel", { mode: 0o600 }),
+    writeFile(instructionsFile, "instructions-sentinel", { mode: 0o600 }),
     writeFile(scriptPath, PROBE_SCRIPT, { mode: 0o700 }),
     symlink(outsideFile, symlinkPath),
   ]);
@@ -244,13 +344,16 @@ async function createFixtures(): Promise<ProbeFixtures> {
     credentialFile,
     gitFile,
     policyFile,
+    agentsFile,
+    codexFile,
+    instructionsFile,
     symlinkPath,
     nonexistentProtectedPath,
     scriptPath,
   };
 }
 
-async function listenLoopback(): Promise<{
+async function listenLoopback(host: "127.0.0.1" | "::1"): Promise<{
   port: number;
   hits(): number;
   close(): Promise<void>;
@@ -262,7 +365,7 @@ async function listenLoopback(): Promise<{
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
+    server.listen(0, host, () => resolve());
   });
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -299,6 +402,7 @@ async function runAuthorizedCommand(
   cwd: string,
   request: SandboxBehaviorProbeRequest,
   commandLabel: string,
+  allowLocalBinding = false,
 ): Promise<CommandEvidence> {
   const channelId = `attest-${randomUUID()}`;
   const commandId = `attest-${commandLabel}-${randomUUID()}`;
@@ -308,6 +412,9 @@ async function runAuthorizedCommand(
       command,
       cwd,
       sandboxSessionId: "sandbox-behavior-attestation",
+      ...(allowLocalBinding
+        ? { sandboxCapabilityRequest: { allowLocalBinding: true } }
+        : {}),
     },
     channelId,
     commandId,
@@ -347,7 +454,7 @@ async function runAuthorizedCommand(
   };
 }
 
-function parseScriptEvidence(output: string): ScriptEvidence | undefined {
+function parseScriptEvidence<T>(output: string): T | undefined {
   const marker = output.lastIndexOf(MARKER);
   if (marker < 0) return undefined;
   const line = output
@@ -356,7 +463,7 @@ function parseScriptEvidence(output: string): ScriptEvidence | undefined {
     ?.trim();
   if (!line) return undefined;
   try {
-    return JSON.parse(line) as ScriptEvidence;
+    return JSON.parse(line) as T;
   } catch {
     return undefined;
   }
@@ -371,8 +478,16 @@ export function createProductionSandboxBehaviorProbe(
       request.registerCleanup(() =>
         rm(fixtures.root, { recursive: true, force: true }),
       );
-      const listener = await listenLoopback();
-      request.registerCleanup(() => listener.close());
+      const ipv4Listener = await listenLoopback("127.0.0.1");
+      request.registerCleanup(() => ipv4Listener.close());
+      let ipv6Listener: Awaited<ReturnType<typeof listenLoopback>> | undefined;
+      try {
+        ipv6Listener = await listenLoopback("::1");
+        request.registerCleanup(() => ipv6Listener?.close());
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EADDRNOTAVAIL" && code !== "EAFNOSUPPORT") throw error;
+      }
       const runtime = new SandboxHelperClient(
         createNodeSandboxHelperTransportFactory({
           extensionRoot: options.extensionRoot,
@@ -380,22 +495,23 @@ export function createProductionSandboxBehaviorProbe(
         }),
       );
       request.registerCleanup(() => runtime.dispose());
+      const sentinelName = `AL_ATTEST_HOST_${randomUUID().replaceAll("-", "")}`;
       const authorizer = new BaselineSandboxLaunchAuthorizer({
         workspaceRoots: [fixtures.workspace],
         homeDirectory:
           options.homeDirectory ?? path.dirname(fixtures.credentialFile),
         privateDirectoryPrefix: PRIVATE_PREFIX,
         trustedRuntimeRoots: [path.dirname(options.nodeExecutable)],
+        hostEnvironment: {
+          ...process.env,
+          [sentinelName]: "host-secret-sentinel",
+        },
       });
-      const sentinelName = `AL_ATTEST_HOST_${randomUUID().replaceAll("-", "")}`;
       const privateDirectoryPrefix = path.join(
         await realpath(path.dirname(PRIVATE_PREFIX)),
         path.basename(PRIVATE_PREFIX),
       );
-      process.env[sentinelName] = "host-secret-sentinel";
-      request.registerCleanup(() => {
-        delete process.env[sentinelName];
-      });
+
       const command = [
         options.nodeExecutable,
         fixtures.scriptPath,
@@ -405,12 +521,17 @@ export function createProductionSandboxBehaviorProbe(
         fixtures.credentialFile,
         fixtures.gitFile,
         fixtures.policyFile,
+        fixtures.agentsFile,
+        fixtures.codexFile,
+        fixtures.instructionsFile,
         fixtures.symlinkPath,
         fixtures.nonexistentProtectedPath,
-        String(listener.port),
+        String(ipv4Listener.port),
+        ipv6Listener ? String(ipv6Listener.port) : "unavailable",
         sentinelName,
         options.homeDirectory ?? path.dirname(fixtures.credentialFile),
         privateDirectoryPrefix,
+        await realpath(os.tmpdir()),
       ]
         .map(shellQuote)
         .join(" ");
@@ -422,8 +543,30 @@ export function createProductionSandboxBehaviorProbe(
         request,
         "conformance",
       );
-      const evidence = parseScriptEvidence(conformance.output);
+      const evidence = parseScriptEvidence<ScriptEvidence>(conformance.output);
       if (!evidence) {
+        return { outcome: "failed", failureCode: "helper_protocol_failed" };
+      }
+      const listenerCommand = [
+        options.nodeExecutable,
+        fixtures.scriptPath,
+        "listener-capability",
+      ]
+        .map(shellQuote)
+        .join(" ");
+      const listenerCapability = await runAuthorizedCommand(
+        runtime,
+        authorizer,
+        listenerCommand,
+        fixtures.workspace,
+        request,
+        "listener-capability",
+        true,
+      );
+      const listenerEvidence = parseScriptEvidence<ListenerCapabilityEvidence>(
+        listenerCapability.output,
+      );
+      if (!listenerEvidence) {
         return { outcome: "failed", failureCode: "helper_protocol_failed" };
       }
       const interrupt = await runInterruptProbe(
@@ -448,50 +591,80 @@ export function createProductionSandboxBehaviorProbe(
           interruptCompleted:
             interrupt.exitCode === 130 && interrupt.signal === 2,
           helperCleanupCompleted:
-            conformance.pgidCleaned && interrupt.pgidCleaned,
+            conformance.pgidCleaned &&
+            listenerCapability.pgidCleaned &&
+            interrupt.pgidCleaned,
         },
         workspaceConfinement: {
           workspaceCreateAllowed: evidence.workspaceCreateAllowed,
           workspaceModifyAllowed: evidence.workspaceModifyAllowed,
-          outsideReadDenied: evidence.outsideReadDenied,
+          outsideReadAllowed: evidence.outsideReadAllowed,
           outsideWriteDenied: evidence.outsideWriteDenied,
         },
         protectedMetadata: {
           gitWriteDenied: evidence.gitWriteDenied,
-          policyWriteDenied: evidence.policyWriteDenied,
+          policyWriteDenied:
+            evidence.policyWriteDenied &&
+            evidence.agentsWriteDenied &&
+            evidence.codexWriteDenied &&
+            evidence.instructionsWriteDenied,
           symlinkWriteDenied: evidence.symlinkWriteDenied,
           nonexistentDescendantWriteDenied:
             evidence.nonexistentDescendantWriteDenied,
         },
         processInheritance: {
-          childOutsideAccessDenied: evidence.childOutsideAccessDenied,
+          childOutsideReadAllowed: evidence.childOutsideReadAllowed,
           grandchildProtectedAccessDenied:
             evidence.grandchildProtectedAccessDenied,
           ownedProcessGroupCleaned:
-            conformance.pgidCleaned && interrupt.pgidCleaned,
+            conformance.pgidCleaned &&
+            listenerCapability.pgidCleaned &&
+            interrupt.pgidCleaned,
         },
         privateEnvironment: {
-          homeIsPrivate: evidence.homeIsPrivate,
-          tmpIsPrivate: evidence.tmpIsPrivate,
+          homeMatchesHost: evidence.homeMatchesHost,
+          hostHomeReadAllowed: evidence.hostHomeReadAllowed,
+          hostHomeWriteDenied: evidence.hostHomeWriteDenied,
+          hostTmpEnvironmentMatched: evidence.hostTmpEnvironmentMatched,
+          hostTmpWriteAllowed: evidence.hostTmpWriteAllowed,
+          slashTmpWriteAllowed: evidence.slashTmpWriteAllowed,
           cacheIsPrivate: evidence.cacheIsPrivate,
-          hostSentinelAbsent: evidence.hostSentinelAbsent,
-          realHomeCredentialUnreadable: evidence.realHomeCredentialUnreadable,
+          credentialEnvironmentInherited:
+            evidence.credentialEnvironmentInherited,
         },
-        blockedNetwork: {
-          loopbackConnectDenied: evidence.loopbackConnectDenied,
+        networkConfinement: {
+          baselineIpv4LoopbackConnectAllowed:
+            evidence.baselineIpv4LoopbackConnectAllowed,
+          baselineIpv6LoopbackConnectAllowedOrUnavailable:
+            evidence.baselineIpv6LoopbackConnectAllowedOrUnavailable,
+          baselineListenerBindDenied: evidence.baselineListenerBindDenied,
           privateConnectDenied: evidence.privateConnectDenied,
           publicConnectDenied: evidence.publicConnectDenied,
-          loopbackFixtureUntouched: listener.hits() === 0,
+          listenerCapabilityBindAllowed:
+            listenerEvidence.listenerCapabilityBindAllowed,
+          listenerCapabilityPrivateConnectDenied:
+            listenerEvidence.listenerCapabilityPrivateConnectDenied,
+          listenerCapabilityPublicConnectDenied:
+            listenerEvidence.listenerCapabilityPublicConnectDenied,
+          loopbackFixtureReached:
+            ipv4Listener.hits() > 0 &&
+            (!ipv6Listener || ipv6Listener.hits() > 0),
           proxyEndpointsLoopbackOnly: evidence.proxyEndpointsLoopbackOnly,
         },
         denialEvidence: {
           expectedDenialsObserved:
-            evidence.outsideReadDenied &&
+            evidence.outsideReadAllowed &&
             evidence.outsideWriteDenied &&
             evidence.gitWriteDenied &&
-            evidence.loopbackConnectDenied,
+            evidence.baselineListenerBindDenied &&
+            evidence.privateConnectDenied &&
+            evidence.publicConnectDenied &&
+            listenerEvidence.listenerCapabilityPrivateConnectDenied &&
+            listenerEvidence.listenerCapabilityPublicConnectDenied,
           evidenceBounded:
-            Buffer.byteLength(conformance.output, "utf8") <= 256 * 1024,
+            Buffer.byteLength(conformance.output, "utf8") +
+              Buffer.byteLength(listenerCapability.output, "utf8") <=
+            256 * 1024,
           evidenceNormalized: violations.every(
             (event) =>
               event.type !== "violation" ||
@@ -500,7 +673,9 @@ export function createProductionSandboxBehaviorProbe(
           ),
           successIndependentOfExitCode:
             conformance.exitCode === 0 &&
-            Object.values(evidence).every(Boolean),
+            listenerCapability.exitCode === 0 &&
+            Object.values(evidence).every(Boolean) &&
+            Object.values(listenerEvidence).every(Boolean),
         },
       };
       return { outcome: "checks", checks };

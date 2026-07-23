@@ -29,6 +29,10 @@ import type {
 
 import type { CoreReasoningEffort } from "../../core/modelCatalog.js";
 import { toCoreModelImageMediaType } from "../../core/modelRuntime.js";
+import type {
+  CoreWebAccessSettings,
+  CoreWebToolKind,
+} from "../../core/webAccess.js";
 
 export type ContentBlock = CoreModelContentBlock;
 export type TextBlock = CoreModelTextBlock;
@@ -112,6 +116,18 @@ export interface ModelProvider {
    * that just need a final result.
    */
   complete(request: CompleteRequest): Promise<CompleteResult>;
+
+  /**
+   * Optional low-latency native web transport. Returning null asks the caller
+   * to use the provider's delegated hosted-tool implementation instead.
+   */
+  executeNativeWebTool?(request: {
+    model: string;
+    kind: CoreWebToolKind;
+    input: Record<string, unknown>;
+    settings: CoreWebAccessSettings;
+    signal?: AbortSignal;
+  }): Promise<unknown | null>;
 }
 
 export interface ModelInfo {

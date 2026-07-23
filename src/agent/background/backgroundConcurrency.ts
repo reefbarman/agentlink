@@ -1,4 +1,5 @@
-export const DEFAULT_BACKGROUND_MAX_CONCURRENT = 3;
+export const DEFAULT_BACKGROUND_MAX_CONCURRENT = 8;
+export const DEFAULT_BACKGROUND_MAX_CHILDREN_PER_PARENT = 8;
 export const MAX_BACKGROUND_MAX_CONCURRENT = 16;
 
 export function normalizeBackgroundMaxConcurrent(value: unknown): number {

@@ -201,6 +201,35 @@ describe("McpClientHub protocol correctness", () => {
     ]);
   });
 
+  it("treats MCP read-only annotations as per-tool parallel opt-ins", async () => {
+    setCatalogPages(mocks.listTools, "tools", {
+      first: {
+        items: [
+          {
+            ...tool("read"),
+            annotations: { readOnlyHint: true },
+          },
+          tool("write"),
+        ],
+      },
+    });
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([config]);
+
+    expect(hub.isToolParallelSafe("fixture", "read")).toBe(true);
+    expect(hub.isToolParallelSafe("fixture", "write")).toBe(false);
+  });
+
+  it("lets a server-wide opt-in make every MCP tool parallel-safe", async () => {
+    setCatalogPages(mocks.listTools, "tools", {
+      first: { items: [tool("write")] },
+    });
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([{ ...config, supportsParallelToolCalls: true }]);
+
+    expect(hub.isToolParallelSafe("fixture", "write")).toBe(true);
+  });
+
   it("validates output schemas from every paginated tool page", async () => {
     setCatalogPages(mocks.listTools, "tools", {
       first: {

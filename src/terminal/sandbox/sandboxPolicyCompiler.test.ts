@@ -18,8 +18,12 @@ function authorization(
       writableRoots: ["/workspace", "/private/tmp/session"],
       deniedRoots: ["/Users"],
       deniedWriteRoots: ["/workspace/.git", "/workspace/.agentlink"],
-      protectedReadOnlyRoots: ["/workspace/.git", "/workspace/.agentlink"],
-      network: { mode: "blocked" },
+      protectedReadOnlyRoots: [
+        "/workspace/.git/config",
+        "/workspace/.agentlink",
+      ],
+      structurallyProtectedRoots: ["/workspace/.git"],
+      network: { mode: "loopback" },
       environment: {
         inheritHost: false,
         values: {
@@ -49,9 +53,9 @@ function compile(auth = authorization()) {
 }
 
 describe("compileSandboxHelperLaunchRequest", () => {
-  it("compiles a deterministic blocked-network baseline", () => {
+  it("compiles a deterministic loopback baseline without a grant", () => {
     expect(compile()).toEqual({
-      version: 1,
+      version: 3,
       type: "launch",
       channelId: "channel-1",
       commandId: "command-1",
@@ -72,8 +76,9 @@ describe("compileSandboxHelperLaunchRequest", () => {
         denyRead: ["/Users"],
         denyWrite: ["/workspace/.agentlink", "/workspace/.git"],
       },
-      network: { mode: "blocked" },
-      protectedRoots: ["/workspace/.agentlink", "/workspace/.git"],
+      network: { mode: "loopback" },
+      protectedRoots: ["/workspace/.agentlink", "/workspace/.git/config"],
+      structurallyProtectedRoots: ["/workspace/.git"],
     });
   });
 
@@ -96,6 +101,40 @@ describe("compileSandboxHelperLaunchRequest", () => {
 
     expect(compile(elevated).network).toEqual({ mode: "public-proxy" });
   });
+
+  it.each([
+    [
+      "local binding",
+      { allowLocalBinding: true },
+      { mode: "loopback", allowLocalBinding: true },
+    ],
+    [
+      "public proxy and local binding",
+      { unrestrictedPublicNetwork: true, allowLocalBinding: true },
+      { mode: "public-proxy", allowLocalBinding: true },
+    ],
+  ] as const)(
+    "compiles %s with one consumed matching grant",
+    (_label, request, network) => {
+      const base = authorization();
+      const elevated = authorization({
+        capabilityRequest: request,
+        grant: {
+          grantId: "grant-1",
+          bindingDigest: base.bindingDigest,
+          policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
+          sessionId: "session-1",
+          issuedAt: 100,
+          expiresAt: 200,
+          auditId: "audit-1",
+          consumedAt: 125,
+        },
+        policy: { ...base.policy, network },
+      });
+
+      expect(compile(elevated).network).toEqual(network);
+    },
+  );
 
   it.each([
     [
@@ -161,7 +200,44 @@ describe("compileSandboxHelperLaunchRequest", () => {
       "does not match",
     ],
     [
-      "grant on blocked policy",
+      "local-binding request without local-binding policy",
+      (base: SandboxLaunchAuthorization) => ({
+        ...base,
+        capabilityRequest: { allowLocalBinding: true },
+      }),
+      "does not match",
+    ],
+    [
+      "local-binding policy without request",
+      (base: SandboxLaunchAuthorization) => ({
+        ...base,
+        policy: {
+          ...base.policy,
+          network: {
+            mode: "loopback" as const,
+            allowLocalBinding: true as const,
+          },
+        },
+      }),
+      "does not match",
+    ],
+    [
+      "local-binding capability without grant",
+      (base: SandboxLaunchAuthorization) => ({
+        ...base,
+        capabilityRequest: { allowLocalBinding: true },
+        policy: {
+          ...base.policy,
+          network: {
+            mode: "loopback" as const,
+            allowLocalBinding: true as const,
+          },
+        },
+      }),
+      "requires an approved grant",
+    ],
+    [
+      "grant on baseline policy",
       (base: SandboxLaunchAuthorization) => ({
         ...base,
         grant: {
@@ -222,6 +298,26 @@ describe("compileSandboxHelperLaunchRequest", () => {
     ).toThrow("Unsupported sandbox policy version");
   });
 
+  it("allows a read-only HOME when the host filesystem is readable", () => {
+    const base = authorization();
+    const hostVisible = authorization({
+      policy: {
+        ...base.policy,
+        readableRoots: ["/"],
+        deniedRoots: [],
+        environment: {
+          inheritHost: false,
+          values: {
+            ...base.policy.environment.values,
+            HOME: "/Users/me",
+          },
+        },
+      },
+    });
+
+    expect(compile(hostVisible).environment.HOME).toBe("/Users/me");
+  });
+
   it("rejects unsafe roots, cwd, private directories, and environment values", () => {
     const base = authorization();
     expect(() =>
@@ -234,6 +330,30 @@ describe("compileSandboxHelperLaunchRequest", () => {
         }),
       ),
     ).toThrow("protected root is not covered by denied-write roots");
+    expect(() =>
+      compile(
+        authorization({
+          policy: {
+            ...base.policy,
+            deniedWriteRoots: ["/workspace/.agentlink"],
+            protectedReadOnlyRoots: ["/workspace/.agentlink"],
+          },
+        }),
+      ),
+    ).toThrow(
+      "structurally protected root is not covered by denied-write roots",
+    );
+    expect(() =>
+      compile(
+        authorization({
+          policy: {
+            ...base.policy,
+            readableRoots: ["/usr", "/private/tmp/session"],
+            protectedReadOnlyRoots: [],
+          },
+        }),
+      ),
+    ).toThrow("structurally protected root is not covered by readable roots");
     expect(() =>
       compileSandboxHelperLaunchRequest({
         channelId: "channel-1",
@@ -251,6 +371,7 @@ describe("compileSandboxHelperLaunchRequest", () => {
         authorization({
           policy: {
             ...base.policy,
+            readableRoots: ["/usr", "/workspace", "/private/tmp/session"],
             environment: {
               inheritHost: false,
               values: { ...base.policy.environment.values, HOME: "/Users/me" },
@@ -258,7 +379,23 @@ describe("compileSandboxHelperLaunchRequest", () => {
           },
         }),
       ),
-    ).toThrow("HOME must be within a writable root");
+    ).toThrow("HOME must be within a readable root");
+    expect(() =>
+      compile(
+        authorization({
+          policy: {
+            ...base.policy,
+            environment: {
+              inheritHost: false,
+              values: {
+                ...base.policy.environment.values,
+                TMPDIR: "/Users/me/tmp",
+              },
+            },
+          },
+        }),
+      ),
+    ).toThrow("TMPDIR must be within a writable root");
     expect(() =>
       compile(
         authorization({

@@ -47,6 +47,30 @@ describe("applyWorkspaceEditAndSave", () => {
     expect(buildSuccess).not.toHaveBeenCalled();
   });
 
+  it("returns the owning save failure when an affected document cannot be saved", async () => {
+    applyEdit.mockResolvedValue(true);
+    const dirtyDocument = {
+      uri: { fsPath: "/workspace/dirty.ts" },
+      isDirty: true,
+      save: vi.fn(async () => false),
+    };
+    textDocuments.push(dirtyDocument);
+    const buildSuccess = vi.fn(() => ({ status: "accepted" }));
+    const saveFailure = { error: "save failed" };
+
+    const result = await applyWorkspaceEditAndSave({
+      edit: {} as never,
+      affectedPaths: [dirtyDocument.uri.fsPath],
+      applyFailure: { error: "apply failed" },
+      saveFailure,
+      buildSuccess,
+    });
+
+    expect(result).toBe(saveFailure);
+    expect(dirtyDocument.save).toHaveBeenCalledOnce();
+    expect(buildSuccess).not.toHaveBeenCalled();
+  });
+
   it("saves only dirty affected documents before building the success result", async () => {
     applyEdit.mockResolvedValue(true);
     const dirtyAffected = {

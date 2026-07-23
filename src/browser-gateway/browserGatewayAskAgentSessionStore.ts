@@ -35,6 +35,7 @@ import type { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelCredentialCache.js";
 import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
 import type { CoreModelMessage } from "../core/modelRuntime.js";
+import type { SessionImageReference } from "../core/tools/types.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { MemoryCandidateKind } from "../shared/memoryCandidates.js";
 import { completeTodos } from "../agent/todoTool.js";
@@ -300,11 +301,12 @@ function generatedImageExtensionForMimeType(mimeType: string): string {
 function generatedResultImagesToDisplayMedia(
   images: Array<{ mimeType: string; data: string }> | undefined,
   startIndex = 0,
+  namePrefix = "generated-image",
 ): BrowserGatewayAskAgentDisplayMedia | undefined {
   if (!images?.length) return undefined;
   return {
     images: images.map((image, index) => ({
-      name: `generated-image-${startIndex + index + 1}.${generatedImageExtensionForMimeType(image.mimeType)}`,
+      name: `${namePrefix}-${startIndex + index + 1}.${generatedImageExtensionForMimeType(image.mimeType)}`,
       mimeType: image.mimeType,
       src: `data:${image.mimeType};base64,${image.data}`,
     })),
@@ -607,6 +609,54 @@ export class BrowserGatewayAskAgentSessionStore {
 
   getTranscriptMessages(): ChatMessage[] {
     return [...this.getActiveSession().messages];
+  }
+
+  getSessionImages(): SessionImageReference[] {
+    const images: SessionImageReference[] = [];
+    const append = (params: {
+      name?: string;
+      mimeType: string;
+      base64: string;
+      messageIndex: number;
+      imageIndex: number;
+    }) => {
+      const id = `image_${images.length + 1}`;
+      images.push({
+        id,
+        name:
+          params.name ||
+          `${id}.${generatedImageExtensionForMimeType(params.mimeType)}`,
+        mimeType: params.mimeType,
+        base64: params.base64,
+        messageIndex: params.messageIndex,
+        imageIndex: params.imageIndex,
+      });
+    };
+
+    this.getActiveSession().messages.forEach((message, messageIndex) => {
+      let imageIndex = 0;
+      for (const image of message.media?.images ?? []) {
+        append({
+          name: image.name,
+          mimeType: image.mimeType,
+          base64: image.base64,
+          messageIndex,
+          imageIndex: imageIndex++,
+        });
+      }
+      for (const block of message.blocks) {
+        if (block.type !== "tool_call") continue;
+        for (const image of block.resultImages ?? []) {
+          append({
+            mimeType: image.mimeType,
+            base64: image.data,
+            messageIndex,
+            imageIndex: imageIndex++,
+          });
+        }
+      }
+    });
+    return images;
   }
 
   getModelTranscriptMessages(excludeMessageId?: string): CoreModelMessage[] {
@@ -1096,18 +1146,22 @@ export class BrowserGatewayAskAgentSessionStore {
         durationMs: params.durationMs,
       });
     }
-    const generatedDisplayMedia =
-      params.toolName === "generate_image"
+    const promotedDisplayMedia =
+      params.toolName === "generate_image" ||
+      params.toolName === "present_images"
         ? generatedResultImagesToDisplayMedia(
             params.resultImages,
             message.displayMedia?.images.length ?? 0,
+            params.toolName === "present_images"
+              ? "presented-image"
+              : "generated-image",
           )
         : undefined;
-    if (generatedDisplayMedia) {
+    if (promotedDisplayMedia) {
       message.displayMedia = {
         images: [
           ...(message.displayMedia?.images ?? []),
-          ...generatedDisplayMedia.images,
+          ...promotedDisplayMedia.images,
         ],
         documents: message.displayMedia?.documents ?? [],
       };

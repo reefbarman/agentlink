@@ -14,6 +14,26 @@ interface Props {
   sessionId?: string;
 }
 
+function commandRuleAuthorityLabel(rule: CommandRule): string {
+  if (rule.decision === "allow") {
+    return rule.mode === "regex" ? "allow (sandboxed)" : "allow (native)";
+  }
+  return rule.decision ?? "legacy approval only";
+}
+
+function commandRuleAuthorityTitle(rule: CommandRule): string {
+  if (rule.decision === "allow" && rule.mode !== "regex") {
+    return "Skips approval and may run outside the Protected Terminal with normal user permissions when every command segment matches an exact or prefix allow rule.";
+  }
+  if (rule.decision === "allow") {
+    return "Skips approval when this regex matches, but does not grant native execution authority.";
+  }
+  if (rule.decision === undefined) {
+    return "Legacy approval-only rule; skips repeat approval cards without granting native execution authority.";
+  }
+  return `${rule.decision} command rule`;
+}
+
 export function RuleList({
   rules,
   editCommand,
@@ -26,8 +46,17 @@ export function RuleList({
   return (
     <>
       {rules.map((r, i) => (
-        <div key={`${r.pattern}\0${r.mode}\0${i}`} class="rule-row">
-          <span class="rule-mode">{r.mode}</span>
+        <div
+          key={`${r.pattern}\0${r.mode}\0${"decision" in r ? (r.decision ?? "legacy") : "path"}\0${i}`}
+          class="rule-row"
+        >
+          <span
+            class="rule-mode"
+            title={"decision" in r ? commandRuleAuthorityTitle(r) : undefined}
+          >
+            {"decision" in r ? `${commandRuleAuthorityLabel(r)} · ` : ""}
+            {r.mode}
+          </span>
           <span
             class="rule-pattern"
             title={editCommand ? "Click to edit" : r.pattern}
@@ -37,6 +66,7 @@ export function RuleList({
                     postCommand(editCommand, {
                       pattern: r.pattern,
                       mode: r.mode,
+                      ...("decision" in r ? { decision: r.decision } : {}),
                       ...(sessionId ? { sessionId } : {}),
                     })
                 : undefined
@@ -55,6 +85,7 @@ export function RuleList({
                 postCommand(editCommand, {
                   pattern: r.pattern,
                   mode: r.mode,
+                  ...("decision" in r ? { decision: r.decision } : {}),
                   ...(sessionId ? { sessionId } : {}),
                 })
               }
@@ -71,6 +102,8 @@ export function RuleList({
             onClick={() =>
               postCommand(removeCommand, {
                 pattern: r.pattern,
+                mode: r.mode,
+                ...("decision" in r ? { decision: r.decision } : {}),
                 ...(sessionId ? { sessionId } : {}),
               })
             }

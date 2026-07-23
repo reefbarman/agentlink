@@ -216,6 +216,58 @@ describe("SessionStore", () => {
     expect(reloadedStore.get("background-1")?.background).toBe(true);
   });
 
+  it("round-trips independent approval dimensions and leaves legacy records optional", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+
+    await expect(
+      store.saveSession({
+        session: createRecord({
+          metadata: {
+            commandApprovalPolicy: "safe",
+            approvalPolicy: "on-request",
+            approvalReviewer: "auto-review",
+            executionPreset: "workspace-write",
+          },
+        }),
+        expectedRevision: null,
+      }),
+    ).resolves.toEqual({ ok: true, revision: "1" });
+
+    const reloaded = new SessionStore(tmpDir);
+    const saved = await reloaded.readSession("session-1");
+    expect(saved).toEqual(
+      expect.objectContaining({
+        ok: true,
+        value: expect.objectContaining({
+          metadata: expect.objectContaining({
+            commandApprovalPolicy: "safe",
+            approvalPolicy: "on-request",
+            approvalReviewer: "auto-review",
+            executionPreset: "workspace-write",
+          }),
+        }),
+      }),
+    );
+
+    writeLegacySession(tmpDir, "legacy-approval");
+    const legacyStore = new SessionStore(tmpDir);
+    const legacy = await legacyStore.readSession("legacy-approval");
+    expect(legacy).toEqual(
+      expect.objectContaining({
+        ok: true,
+        value: expect.objectContaining({
+          metadata: expect.not.objectContaining({
+            commandApprovalPolicy: expect.anything(),
+            approvalPolicy: expect.anything(),
+            approvalReviewer: expect.anything(),
+            executionPreset: expect.anything(),
+          }),
+        }),
+      }),
+    );
+  });
+
   it("round-trips durable fleet metadata", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
     const store = new SessionStore(tmpDir);

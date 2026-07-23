@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { ModelRequestScheduler } from "./modelRequestScheduler.js";
+import {
+  ModelRequestScheduler,
+  normalizeMaxConcurrentModelRequests,
+} from "./modelRequestScheduler.js";
 
 describe("ModelRequestScheduler", () => {
   it("limits requests independently per provider", async () => {
@@ -79,5 +82,51 @@ describe("ModelRequestScheduler", () => {
     expect(scheduler.hasCapacity("codex")).toBe(false);
     second.release();
     expect(scheduler.hasCapacity("codex")).toBe(true);
+  });
+
+  it("admits queued work immediately when the live limit is raised", async () => {
+    const scheduler = new ModelRequestScheduler(1);
+    const first = await scheduler.acquire("codex", "interactive");
+    const secondPromise = scheduler.acquire("codex", "interactive");
+    const thirdPromise = scheduler.acquire("codex", "background");
+
+    scheduler.setMaxConcurrentPerProvider(3);
+
+    const [second, third] = await Promise.all([secondPromise, thirdPromise]);
+    expect(second.queued).toBe(true);
+    expect(third.queued).toBe(true);
+    first.release();
+    second.release();
+    third.release();
+  });
+
+  it("lets active work finish when the live limit is lowered", async () => {
+    const scheduler = new ModelRequestScheduler(2);
+    const first = await scheduler.acquire("codex", "interactive");
+    const second = await scheduler.acquire("codex", "background");
+
+    scheduler.setMaxConcurrentPerProvider(1);
+    const thirdPromise = scheduler.acquire("codex", "interactive");
+    let thirdStarted = false;
+    void thirdPromise.then(() => {
+      thirdStarted = true;
+    });
+
+    first.release();
+    await Promise.resolve();
+    expect(thirdStarted).toBe(false);
+    second.release();
+    const third = await thirdPromise;
+    third.release();
+  });
+
+  it.each([
+    [undefined, 6],
+    [Number.NaN, 6],
+    [0, 1],
+    [3.9, 3],
+    [64, 32],
+  ])("normalizes configured concurrency %s to %s", (value, expected) => {
+    expect(normalizeMaxConcurrentModelRequests(value)).toBe(expected);
   });
 });

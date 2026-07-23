@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ActivityTraceRecorder } from "./ActivityTraceRecorder.js";
 import type { AgentEvent } from "./types.js";
@@ -22,6 +22,46 @@ afterEach(() => {
 });
 
 describe("ActivityTraceRecorder", () => {
+  it("keeps tracing in memory when persistence becomes unavailable", () => {
+    const workspace = makeTempWorkspace();
+    fs.writeFileSync(path.join(workspace, ".agentlink"), "not a directory");
+    const log = vi.fn();
+    const recorder = new ActivityTraceRecorder({
+      workspaceDir: workspace,
+      log,
+    });
+
+    expect(() =>
+      recorder.appendAgentEvent(
+        "session-1",
+        "project-1",
+        { type: "warning", message: "trace persistence unavailable" },
+        "background_agent",
+      ),
+    ).not.toThrow();
+    expect(recorder.getSummary("session-1")).toMatchObject({
+      eventCount: 1,
+      warningCount: 1,
+      recordedEventCount: 0,
+      droppedEventCount: 1,
+      traceTruncated: true,
+    });
+    expect(log).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Disabled persistence after write failure"),
+    );
+
+    recorder.appendAgentEvent(
+      "session-1",
+      "project-1",
+      { type: "warning", message: "second warning" },
+      "background_agent",
+    );
+    expect(recorder.getSummary("session-1").warningCount).toBe(2);
+    expect(recorder.getSummary("session-1").droppedEventCount).toBe(2);
+    expect(log).toHaveBeenCalledOnce();
+  });
+
   it("persists trace events as JSONL and writes a derived summary", () => {
     const workspace = makeTempWorkspace();
     const recorder = new ActivityTraceRecorder({ workspaceDir: workspace });
@@ -344,6 +384,68 @@ describe("ActivityTraceRecorder", () => {
       mcpApprovalPromoted: true,
       mcpServerName: "linear",
     });
+  });
+
+  it("returns newest-first diagnostic evidence with write authorization provenance", () => {
+    const workspace = makeTempWorkspace();
+    const recorder = new ActivityTraceRecorder({ workspaceDir: workspace });
+
+    recorder.appendAgentEvent(
+      "session-1",
+      "project-1",
+      {
+        type: "tool_result",
+        toolCallId: "tool-1",
+        toolName: "write_file",
+        result: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "accepted",
+              path: "src/example.ts",
+              operation: "auto-approved",
+              authorization: {
+                allowed: true,
+                basis: "write_rule",
+                scope: "project",
+                rule: { pattern: "src/**", mode: "glob" },
+              },
+              user_edits: "file contents must not enter the trace",
+            }),
+          },
+        ],
+        durationMs: 12,
+        input: { path: "src/example.ts", content: "secret file body" },
+      },
+      "foreground_agent",
+    );
+
+    const diagnosis = recorder.diagnoseSessionActivity("session-1", {
+      toolName: "write_file",
+      path: "src/example.ts",
+    });
+
+    expect(diagnosis.evidence).toMatchObject([
+      {
+        toolCallId: "tool-1",
+        toolName: "write_file",
+        outcome: "ok",
+        input: { path: "src/example.ts" },
+        result: {
+          status: "accepted",
+          path: "src/example.ts",
+          operation: "auto-approved",
+          authorization: {
+            allowed: true,
+            basis: "write_rule",
+            scope: "project",
+            rule: { pattern: "src/**", mode: "glob" },
+          },
+        },
+      },
+    ]);
+    expect(JSON.stringify(diagnosis)).not.toContain("file contents");
+    expect(JSON.stringify(diagnosis)).not.toContain("secret file body");
   });
 
   it("records condense, interjection, final marker, warning, and error counts", () => {

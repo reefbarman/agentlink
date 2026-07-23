@@ -1,6 +1,11 @@
 const MAX_HOST_TERMINAL_INPUT_BYTES = 64 * 1024;
 
-export type TerminalChannelKind = "user-host" | "agent-sandbox";
+export type TerminalChannelKind =
+  | "user-host"
+  | "agent-native"
+  | "agent-sandbox";
+
+export type TerminalAgentActivity = "running" | "unread";
 
 export interface TerminalDimensions {
   columns: number;
@@ -15,6 +20,7 @@ export interface HostTerminalTab {
   profileName: string;
   dimensions: TerminalDimensions;
   status: "starting" | "running" | "exited";
+  agentActivity?: TerminalAgentActivity;
   exitCode?: number;
   signal?: number;
 }
@@ -41,7 +47,11 @@ export type HostTerminalRequest =
   | { type: "host-terminal/close"; terminalId: string };
 
 export type HostTerminalEvent =
-  | { type: "host-terminal/opened"; terminal: HostTerminalTab }
+  | {
+      type: "host-terminal/opened";
+      terminal: HostTerminalTab;
+      activate?: boolean;
+    }
   | { type: "host-terminal/data"; terminalId: string; data: string }
   | { type: "host-terminal/cwd"; terminalId: string; cwd: string }
   | {
@@ -50,6 +60,11 @@ export type HostTerminalEvent =
       dimensions: TerminalDimensions;
     }
   | { type: "host-terminal/activated"; terminalId: string }
+  | {
+      type: "host-terminal/agent-activity";
+      terminalId: string;
+      activity: TerminalAgentActivity | "none";
+    }
   | {
       type: "host-terminal/exited";
       terminalId: string;
@@ -150,7 +165,10 @@ export function reduceHostTerminalState(
     }
     return {
       tabs: [...state.tabs, event.terminal],
-      activeTabId: event.terminal.id,
+      activeTabId:
+        event.activate === false && state.activeTabId
+          ? state.activeTabId
+          : event.terminal.id,
     };
   }
   if (event.type === "host-terminal/closed") {
@@ -170,9 +188,18 @@ export function reduceHostTerminalState(
     };
   }
   if (event.type === "host-terminal/activated") {
-    return state.tabs.some((terminal) => terminal.id === event.terminalId)
-      ? { ...state, activeTabId: event.terminalId }
-      : state;
+    if (!state.tabs.some((terminal) => terminal.id === event.terminalId)) {
+      return state;
+    }
+    return {
+      ...state,
+      tabs: state.tabs.map((terminal) =>
+        terminal.id === event.terminalId && terminal.agentActivity === "unread"
+          ? { ...terminal, agentActivity: undefined }
+          : terminal,
+      ),
+      activeTabId: event.terminalId,
+    };
   }
   if (
     event.type === "host-terminal/data" ||
@@ -190,6 +217,12 @@ export function reduceHostTerminalState(
     }
     if (event.type === "host-terminal/resized") {
       return { ...terminal, dimensions: event.dimensions };
+    }
+    if (event.type === "host-terminal/agent-activity") {
+      return {
+        ...terminal,
+        agentActivity: event.activity === "none" ? undefined : event.activity,
+      };
     }
     return {
       ...terminal,

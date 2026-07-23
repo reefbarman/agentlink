@@ -533,6 +533,9 @@ function snapshotToReadSet(
     policies: {
       agentWriteApproval: foreground.agentWriteApproval,
       commandApprovalPolicy: "manual",
+      approvalPolicy: "on-request",
+      approvalReviewer: "user",
+      executionPreset: "native-manual",
       configuredCommandApprovalPolicy: "manual",
     },
   };

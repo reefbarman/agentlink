@@ -172,6 +172,48 @@ describe("ToolUsageTelemetry", () => {
     expect(JSON.stringify(record)).not.toContain("SECRET_CHILD_RESULT");
   });
 
+  it("records diagnostic metrics without inflating tool call counts", async () => {
+    const telemetryPath = path.join(tmpDir, "tool-usage.jsonl");
+    const telemetry = new ToolUsageTelemetry({
+      telemetryPath,
+      flushIntervalMs: 0,
+    });
+
+    telemetry.recordMetrics("write_file", {
+      writeApprovalPrompt: true,
+      writeApprovalPromptReason: "no_matching_write_authority",
+      writeApprovalSessionRuleCount: 2,
+    });
+    telemetry.record({
+      toolName: "write_file",
+      params: { path: "/sensitive/project/file.ts", content: "SECRET" },
+      source: "agent",
+      outcome: "ok",
+    });
+    await telemetry.flush();
+
+    const [record] = (await readJsonLines(telemetryPath)) as Array<{
+      tools: Record<
+        string,
+        {
+          calls: number;
+          numericMetrics: Record<string, number>;
+          categoricalMetrics: Record<string, number>;
+        }
+      >;
+    }>;
+    expect(record.tools.write_file).toMatchObject({
+      calls: 1,
+      numericMetrics: { writeApprovalSessionRuleCount: 2 },
+      categoricalMetrics: {
+        "writeApprovalPrompt:true": 1,
+        "writeApprovalPromptReason:no_matching_write_authority": 1,
+      },
+    });
+    expect(JSON.stringify(record)).not.toContain("/sensitive/project/file.ts");
+    expect(JSON.stringify(record)).not.toContain("SECRET");
+  });
+
   it("appends a new JSONL record for each non-empty flush", async () => {
     const telemetryPath = path.join(tmpDir, "tool-usage.jsonl");
     const telemetry = new ToolUsageTelemetry({

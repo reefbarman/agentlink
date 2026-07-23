@@ -2,10 +2,18 @@ import {
   createSandboxInteractiveHelper,
   parseSandboxInteractiveControl,
 } from "./sandbox-interactive-helper.mjs";
+import { link, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import {
+  prepareProtectedRoots,
+  revalidateProtectedRoots,
+  validateStructurallyProtectedRoots,
+} from "./sandbox-protected-roots.mjs";
 
 import { PassThrough } from "node:stream";
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
+import { tmpdir } from "node:os";
 
 const identity = {
   channelId: "channel-1",
@@ -17,7 +25,7 @@ function launch(overrides = {}) {
   const root = "/private/tmp/agentlink-interactive";
   return {
     ...identity,
-    version: 1,
+    version: 3,
     type: "launch",
     command: "/usr/bin/true",
     cwd: root,
@@ -33,8 +41,9 @@ function launch(overrides = {}) {
       allowWrite: [root],
       denyWrite: [],
     },
-    network: { mode: "blocked" },
+    network: { mode: "loopback" },
     protectedRoots: [],
+    structurallyProtectedRoots: [],
     dimensions: { columns: 80, rows: 24 },
     ...overrides,
   };
@@ -45,11 +54,22 @@ function disposable(set, listener) {
   return { dispose: () => set.delete(listener) };
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function createHarness({
   initialData,
   initialExit,
   throwOnDataDispose = false,
   runtimeOverrides = {},
+  dependencyOverrides = {},
 } = {}) {
   const input = new PassThrough();
   const output = new PassThrough();
@@ -64,11 +84,16 @@ function createHarness({
     initialize: [],
     prepared: [],
     revalidated: [],
+    structurallyValidated: [],
     proxyAllowlist: [],
+    proxyOptions: [],
     proxyClose: 0,
     replacedEnvironment: [],
+    pauses: 0,
+    resumes: 0,
     cleanup: 0,
     reset: 0,
+    order: [],
   };
   let outputText = "";
   let errorText = "";
@@ -85,6 +110,12 @@ function createHarness({
     },
     kill(signal) {
       signals.push([this.pid, signal, "pty"]);
+    },
+    pause() {
+      calls.pauses += 1;
+    },
+    resume() {
+      calls.resumes += 1;
     },
     onData(listener) {
       const registration = disposable(dataListeners, listener);
@@ -111,18 +142,25 @@ function createHarness({
     },
   };
 
+  const loopbackRules = [
+    '(allow network-bind (local ip "*:*"))',
+    '(allow network-inbound (local ip "*:*"))',
+    '(allow network-outbound (remote ip "localhost:*"))',
+  ].join("\n");
   const runtime = {
     async initialize(config) {
+      calls.order.push("initialize");
       calls.initialize.push(config);
     },
     async wrapWithSandboxArgv() {
+      calls.order.push("wrap");
       const httpProxy = "http://localhost:43101";
       const socksProxy = "socks5h://localhost:43102";
       return {
         argv: [
           "/bin/bash",
           "-c",
-          `env ${Array.from({ length: 8 }, () => httpProxy).join(" ")} ${Array.from({ length: 4 }, () => socksProxy).join(" ")} /usr/bin/sandbox-exec -p profile /bin/bash -c /usr/bin/true`,
+          `env ${Array.from({ length: 8 }, () => httpProxy).join(" ")} ${Array.from({ length: 4 }, () => socksProxy).join(" ")} /usr/bin/sandbox-exec -p '${loopbackRules}' /bin/bash -c /usr/bin/true`,
         ],
       };
     },
@@ -135,6 +173,7 @@ function createHarness({
     ...runtimeOverrides,
   };
   const timers = new Set();
+  let networkRequestIdsCreated = 0;
   const helper = createSandboxInteractiveHelper({
     input,
     output,
@@ -145,17 +184,28 @@ function createHarness({
         return value;
       },
       async prepareProtectedRoots(roots) {
+        calls.order.push("prepare");
         calls.prepared.push(roots);
         return { roots, snapshots: [] };
       },
       async revalidateProtectedRoots(prepared) {
+        calls.order.push("revalidate");
         calls.revalidated.push(prepared);
+      },
+      async validateStructurallyProtectedRoots(roots) {
+        calls.order.push("validate-structural");
+        calls.structurallyValidated.push(roots);
       },
       replaceProcessEnvironment(environment) {
         calls.replacedEnvironment.push(environment);
       },
-      async startTrustedNetworkProxies(allowedDomains) {
+      async startTrustedNetworkProxies(
+        allowedDomains,
+        _resolverOptions,
+        options,
+      ) {
         calls.proxyAllowlist.push(allowedDomains);
+        calls.proxyOptions.push(options);
         return {
           httpPort: 43101,
           socksPort: 43102,
@@ -168,12 +218,15 @@ function createHarness({
           },
         };
       },
+      createNetworkRequestId: () => `network-${++networkRequestIdsCreated}`,
       async loadRuntime() {
         return runtime;
       },
       async loadNodePty() {
+        calls.order.push("load-node-pty");
         return {
           spawn(...args) {
+            calls.order.push("spawn");
             calls.spawn.push(args);
             return terminal;
           },
@@ -190,6 +243,7 @@ function createHarness({
       clearTimeout(timer) {
         timers.delete(timer);
       },
+      ...dependencyOverrides,
     },
   });
 
@@ -210,12 +264,14 @@ function createHarness({
 
   return {
     input,
+    output,
     helper,
     terminal,
     calls,
     signals,
     timers,
     frames,
+    networkRequestIdsCreated: () => networkRequestIdsCreated,
     send,
     waitFor,
     errorText: () => errorText,
@@ -230,12 +286,48 @@ test("validates exact control-frame keys and bounds", () => {
   );
   assert.throws(
     () =>
+      parseSandboxInteractiveControl(
+        launch({
+          network: {
+            mode: "public-proxy",
+            allowedDomains: ["private.example"],
+          },
+        }),
+      ),
+    /invalid sandbox helper launch frame/,
+  );
+  assert.throws(
+    () =>
       parseSandboxInteractiveControl({
         ...identity,
         type: "resize",
         dimensions: { columns: 80, rows: 24, pixels: 1 },
       }),
     /invalid sandbox helper resize frame/,
+  );
+  assert.deepEqual(
+    parseSandboxInteractiveControl({
+      ...identity,
+      type: "network-decision",
+      requestId: "network-1",
+      decision: "allow-once",
+    }),
+    {
+      ...identity,
+      type: "network-decision",
+      requestId: "network-1",
+      decision: "allow-once",
+    },
+  );
+  assert.throws(
+    () =>
+      parseSandboxInteractiveControl({
+        ...identity,
+        type: "network-decision",
+        requestId: "network-1",
+        decision: "allow",
+      }),
+    /invalid sandbox helper network decision frame/,
   );
   assert.throws(
     () => parseSandboxInteractiveControl({ ...identity, type: "unknown" }),
@@ -252,7 +344,89 @@ test("validates exact control-frame keys and bounds", () => {
   );
 });
 
-test("launches blocked networking with a private environment and emits ready before data", async (t) => {
+test("cancels delayed startup before PTY spawn", async (t) => {
+  const runtimeLoaded = deferred();
+  const harness = createHarness({
+    dependencyOverrides: {
+      loadRuntime: () => runtimeLoaded.promise,
+    },
+  });
+  t.after(() => harness.helper.close());
+
+  harness.send(launch());
+  await harness.waitFor(
+    () => harness.helper.activeIdentity?.commandId === identity.commandId,
+    "active launch identity",
+  );
+  harness.send({ ...identity, type: "terminate" });
+  runtimeLoaded.resolve({
+    async initialize() {},
+    async wrapWithSandboxArgv() {
+      throw new Error("cancelled startup must not prepare a PTY");
+    },
+    cleanupAfterCommand() {
+      harness.calls.cleanup += 1;
+    },
+    async reset() {
+      harness.calls.reset += 1;
+    },
+  });
+
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "error"),
+    "startup cancellation error",
+  );
+  assert.match(
+    harness.frames().find((frame) => frame.type === "error").message,
+    /cancelled before initialization/,
+  );
+  assert.equal(harness.calls.spawn.length, 0);
+  assert.equal(harness.calls.proxyAllowlist.length, 0);
+  assert.equal(harness.calls.cleanup, 1);
+  assert.equal(harness.calls.reset, 1);
+});
+
+test("waits for delayed startup before helper shutdown completes", async () => {
+  const runtimeLoaded = deferred();
+  const harness = createHarness({
+    dependencyOverrides: {
+      loadRuntime: () => runtimeLoaded.promise,
+    },
+  });
+
+  harness.send(launch());
+  await harness.waitFor(
+    () => harness.helper.activeIdentity?.commandId === identity.commandId,
+    "active launch identity",
+  );
+  const closing = harness.helper.close();
+  let closed = false;
+  void closing.then(() => {
+    closed = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(closed, false);
+
+  runtimeLoaded.resolve({
+    async initialize() {},
+    async wrapWithSandboxArgv() {
+      throw new Error("closed startup must not prepare a PTY");
+    },
+    cleanupAfterCommand() {
+      harness.calls.cleanup += 1;
+    },
+    async reset() {
+      harness.calls.reset += 1;
+    },
+  });
+  await closing;
+
+  assert.equal(harness.calls.spawn.length, 0);
+  assert.equal(harness.calls.cleanup, 1);
+  assert.equal(harness.calls.reset, 1);
+});
+
+test("launches loopback networking with a private environment and emits ready before data", async (t) => {
   const harness = createHarness({ initialData: "early output" });
   t.after(() => harness.helper.close());
 
@@ -287,6 +461,9 @@ test("launches blocked networking with a private environment and emits ready bef
     harness.calls.spawn[0][1][1],
     /socks5h:\/\/agentlink:a{64}@localhost:43102/,
   );
+  assert.doesNotMatch(harness.calls.spawn[0][1][1], /allow network-bind/);
+  assert.doesNotMatch(harness.calls.spawn[0][1][1], /allow network-inbound/);
+  assert.match(harness.calls.spawn[0][1][1], /allow network-outbound/);
   assert.deepEqual(harness.calls.replacedEnvironment, [
     {
       HOME: "/private/tmp/agentlink-interactive/home",
@@ -312,13 +489,384 @@ test("launches blocked networking with a private environment and emits ready bef
     strictAllowlist: true,
     allowUnixSockets: [],
     allowAllUnixSockets: false,
-    allowLocalBinding: false,
+    allowLocalBinding: true,
     allowMachLookup: [],
     httpProxyPort: 43101,
     socksProxyPort: 43102,
   });
   assert.deepEqual(harness.calls.proxyAllowlist, [[]]);
   assert.equal(harness.calls.revalidated.length, 1);
+  assert.deepEqual(harness.calls.order, [
+    "initialize",
+    "wrap",
+    "load-node-pty",
+    "prepare",
+    "revalidate",
+    "validate-structural",
+    "spawn",
+  ]);
+});
+
+test("allows host history bootstrap to settle before the late protected-root snapshot", async (t) => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "al-h-"));
+  const agentlinkRoot = path.join(fixture, ".agentlink");
+  const historyRoot = path.join(agentlinkRoot, "history");
+  const historyFile = path.join(historyRoot, "sessions.json");
+  const policyFile = path.join(agentlinkRoot, "policy.json");
+  const gitignoreFile = path.join(agentlinkRoot, ".gitignore");
+  await mkdir(historyRoot, { recursive: true });
+  await writeFile(historyFile, "[]");
+  await writeFile(policyFile, "policy-original");
+  await writeFile(gitignoreFile, "history/\n");
+
+  const harness = createHarness({
+    runtimeOverrides: {
+      async initialize(config) {
+        harness.calls.order.push("initialize");
+        harness.calls.initialize.push(config);
+        const historyTemp = path.join(historyRoot, ".sessions.atomic.tmp");
+        await writeFile(historyTemp, '[{"id":"session-1"}]');
+        await rename(historyTemp, historyFile);
+        await writeFile(
+          gitignoreFile,
+          "history/\ntranscripts/\ndebug/\ncheckpoints/\n",
+        );
+      },
+    },
+    dependencyOverrides: {
+      async prepareProtectedRoots(roots) {
+        harness.calls.order.push("prepare");
+        harness.calls.prepared.push(roots);
+        return prepareProtectedRoots(roots);
+      },
+      async revalidateProtectedRoots(prepared) {
+        harness.calls.order.push("revalidate");
+        harness.calls.revalidated.push(prepared);
+        return revalidateProtectedRoots(prepared);
+      },
+    },
+  });
+  t.after(async () => {
+    harness.helper.close();
+    await rm(fixture, { recursive: true, force: true });
+  });
+
+  harness.send(
+    launch({
+      cwd: fixture,
+      environment: {
+        HOME: path.join(fixture, "home"),
+        TMPDIR: path.join(fixture, "tmp"),
+        TERM: "xterm-256color",
+      },
+      filesystem: {
+        denyRead: [],
+        allowRead: [fixture],
+        allowWrite: [fixture],
+        denyWrite: [agentlinkRoot],
+      },
+      protectedRoots: [gitignoreFile, policyFile],
+    }),
+  );
+  await harness.waitFor(() => harness.frames().length > 0);
+  assert.equal(
+    harness.frames()[0]?.type,
+    "ready",
+    JSON.stringify(harness.frames()[0]),
+  );
+
+  assert.equal(harness.calls.spawn.length, 1);
+  assert.deepEqual(harness.calls.initialize[0].filesystem.denyWrite, [
+    agentlinkRoot,
+    gitignoreFile,
+    policyFile,
+  ]);
+  assert.deepEqual(harness.calls.order, [
+    "initialize",
+    "wrap",
+    "load-node-pty",
+    "prepare",
+    "revalidate",
+    "validate-structural",
+    "spawn",
+  ]);
+});
+
+test("allows host Git ref replacement before late structural validation", async (t) => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "al-g-"));
+  const gitRoot = path.join(fixture, ".git");
+  const refRoot = path.join(gitRoot, "refs", "remotes", "origin");
+  const ref = path.join(refRoot, "main");
+  await mkdir(refRoot, { recursive: true });
+  await writeFile(ref, "a".repeat(40));
+
+  const harness = createHarness({
+    runtimeOverrides: {
+      async initialize(config) {
+        harness.calls.order.push("initialize");
+        harness.calls.initialize.push(config);
+        const temporaryRef = path.join(refRoot, ".main.lock");
+        await writeFile(temporaryRef, "b".repeat(40));
+        await rename(temporaryRef, ref);
+      },
+    },
+    dependencyOverrides: {
+      async validateStructurallyProtectedRoots(roots) {
+        harness.calls.order.push("validate-structural");
+        harness.calls.structurallyValidated.push(roots);
+        return validateStructurallyProtectedRoots(roots);
+      },
+    },
+  });
+  t.after(async () => {
+    harness.helper.close();
+    await rm(fixture, { recursive: true, force: true });
+  });
+
+  harness.send(
+    launch({
+      cwd: fixture,
+      environment: {
+        HOME: path.join(fixture, "home"),
+        TMPDIR: path.join(fixture, "tmp"),
+        TERM: "xterm-256color",
+      },
+      filesystem: {
+        denyRead: [],
+        allowRead: [fixture],
+        allowWrite: [fixture],
+        denyWrite: [gitRoot],
+      },
+      structurallyProtectedRoots: [gitRoot],
+    }),
+  );
+  await harness.waitFor(() => harness.frames()[0]?.type === "ready");
+
+  assert.equal(harness.calls.spawn.length, 1);
+  assert.deepEqual(harness.calls.structurallyValidated, [[gitRoot]]);
+  assert.deepEqual(harness.calls.order, [
+    "initialize",
+    "wrap",
+    "load-node-pty",
+    "prepare",
+    "revalidate",
+    "validate-structural",
+    "spawn",
+  ]);
+});
+
+test("fails closed when structural validation finds a Git hard-link alias", async (t) => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "al-a-"));
+  const gitRoot = path.join(fixture, ".git");
+  const refRoot = path.join(gitRoot, "refs", "heads");
+  const ref = path.join(refRoot, "main");
+  await mkdir(refRoot, { recursive: true });
+  await writeFile(ref, "a".repeat(40));
+  await link(ref, path.join(fixture, "ref-alias"));
+
+  const harness = createHarness({
+    dependencyOverrides: {
+      async validateStructurallyProtectedRoots(roots) {
+        harness.calls.order.push("validate-structural");
+        harness.calls.structurallyValidated.push(roots);
+        return validateStructurallyProtectedRoots(roots);
+      },
+    },
+  });
+  t.after(async () => {
+    harness.helper.close();
+    await rm(fixture, { recursive: true, force: true });
+  });
+
+  harness.send(
+    launch({
+      cwd: fixture,
+      environment: {
+        HOME: path.join(fixture, "home"),
+        TMPDIR: path.join(fixture, "tmp"),
+        TERM: "xterm-256color",
+      },
+      filesystem: {
+        denyRead: [],
+        allowRead: [fixture],
+        allowWrite: [fixture],
+        denyWrite: [gitRoot],
+      },
+      structurallyProtectedRoots: [gitRoot],
+    }),
+  );
+  await harness.waitFor(() => harness.frames()[0]?.type === "error");
+
+  assert.match(
+    harness.frames()[0].message,
+    /structurally protected file has unexpected hard-link count 2/,
+  );
+  assert.equal(harness.calls.spawn.length, 0);
+  assert.deepEqual(harness.calls.order, [
+    "initialize",
+    "wrap",
+    "load-node-pty",
+    "prepare",
+    "revalidate",
+    "validate-structural",
+  ]);
+});
+
+test("fails closed when a protected file changes after the late snapshot", async (t) => {
+  const fixture = await mkdtemp(path.join(tmpdir(), "al-p-"));
+  const policyFile = path.join(fixture, "policy.json");
+  await writeFile(policyFile, "policy-original");
+
+  const harness = createHarness({
+    dependencyOverrides: {
+      async prepareProtectedRoots(roots) {
+        harness.calls.order.push("prepare");
+        harness.calls.prepared.push(roots);
+        const prepared = await prepareProtectedRoots(roots);
+        await writeFile(policyFile, "policy-mutated");
+        return prepared;
+      },
+      async revalidateProtectedRoots(prepared) {
+        harness.calls.order.push("revalidate");
+        harness.calls.revalidated.push(prepared);
+        return revalidateProtectedRoots(prepared);
+      },
+    },
+  });
+  t.after(async () => {
+    harness.helper.close();
+    await rm(fixture, { recursive: true, force: true });
+  });
+
+  harness.send(
+    launch({
+      cwd: fixture,
+      environment: {
+        HOME: path.join(fixture, "home"),
+        TMPDIR: path.join(fixture, "tmp"),
+        TERM: "xterm-256color",
+      },
+      filesystem: {
+        denyRead: [],
+        allowRead: [fixture],
+        allowWrite: [fixture],
+        denyWrite: [policyFile],
+      },
+      protectedRoots: [policyFile],
+    }),
+  );
+  await harness.waitFor(() => harness.frames()[0]?.type === "error");
+
+  assert.match(
+    harness.frames()[0].message,
+    /protected root contents changed before spawn: root=.*policy\.json path=\. change=modified/,
+  );
+  assert.equal(harness.calls.spawn.length, 0);
+  assert.deepEqual(harness.calls.order, [
+    "initialize",
+    "wrap",
+    "load-node-pty",
+    "prepare",
+    "revalidate",
+  ]);
+});
+
+test("pauses PTY output on protocol backpressure and resumes in frame order", async (t) => {
+  const harness = createHarness();
+  t.after(() => harness.helper.close());
+  const originalWrite = harness.output.write.bind(harness.output);
+  let backpressureOnce = true;
+  harness.output.write = (chunk, ...args) => {
+    originalWrite(chunk, ...args);
+    if (!backpressureOnce) return true;
+    backpressureOnce = false;
+    return false;
+  };
+
+  harness.send(launch());
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "ready"),
+    "ready frame",
+  );
+  assert.equal(harness.calls.pauses, 1);
+
+  harness.terminal.emitData("first");
+  harness.terminal.emitData("second");
+  assert.deepEqual(
+    harness.frames().filter((frame) => frame.type === "data"),
+    [],
+  );
+
+  harness.output.emit("drain");
+  await harness.waitFor(
+    () =>
+      harness.frames().filter((frame) => frame.type === "data").length === 2,
+    "queued data frames",
+  );
+  assert.deepEqual(
+    harness
+      .frames()
+      .filter((frame) => frame.type === "data")
+      .map((frame) => frame.data),
+    ["first", "second"],
+  );
+  assert.equal(harness.calls.resumes, 1);
+});
+
+test("fails closed when pre-ready PTY output exceeds the bounded buffer", async (t) => {
+  const harness = createHarness({
+    initialData: "x".repeat(2 * 1024 * 1024 + 1),
+  });
+  t.after(() => harness.helper.close());
+
+  harness.send(launch());
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "error"),
+    "pre-ready overflow error",
+  );
+
+  assert.match(
+    harness.frames().find((frame) => frame.type === "error").message,
+    /pre-ready output buffer limit exceeded/,
+  );
+  assert.deepEqual(harness.signals[0], [-4242, "SIGTERM", "group"]);
+});
+
+test("fails closed when queued output exceeds the backpressure bound", async (t) => {
+  const harness = createHarness();
+  t.after(() => harness.helper.close());
+  const originalWrite = harness.output.write.bind(harness.output);
+  let backpressureOnce = true;
+  harness.output.write = (chunk, ...args) => {
+    originalWrite(chunk, ...args);
+    if (!backpressureOnce) return true;
+    backpressureOnce = false;
+    return false;
+  };
+
+  harness.send(launch());
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "ready"),
+    "ready frame",
+  );
+  for (let index = 0; index < 9; index += 1) {
+    harness.terminal.emitData("x".repeat(256 * 1024));
+  }
+  await harness.waitFor(
+    () => harness.signals.length > 0,
+    "overflow termination",
+  );
+  harness.output.emit("drain");
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "error"),
+    "backpressure overflow error",
+  );
+
+  assert.match(
+    harness.frames().find((frame) => frame.type === "error").message,
+    /output backpressure limit exceeded/,
+  );
+  assert.deepEqual(harness.signals[0], [-4242, "SIGTERM", "group"]);
 });
 
 test("chunks PTY data at the protocol byte bound", async (t) => {
@@ -545,13 +1093,327 @@ test("resets the runtime when subscription disposal fails", async (t) => {
   await harness.waitFor(() => /data disposal failed/.test(harness.errorText()));
 });
 
-test("fails public-proxy closed before runtime initialization", async (t) => {
+test("retains all localhost clauses for local binding", async (t) => {
   const harness = createHarness();
+  t.after(() => harness.helper.close());
+  harness.send(
+    launch({ network: { mode: "loopback", allowLocalBinding: true } }),
+  );
+  await harness.waitFor(() => harness.frames()[0]?.type === "ready");
+
+  const wrapper = harness.calls.spawn[0][1][1];
+  assert.match(wrapper, /allow network-bind/);
+  assert.match(wrapper, /allow network-inbound/);
+  assert.match(wrapper, /allow network-outbound/);
+  assert.equal(harness.calls.initialize[0].network.allowLocalBinding, true);
+});
+
+test("launches public-proxy with a host-owned wildcard and redacts credentials from frames", async (t) => {
+  const harness = createHarness();
+  t.after(() => harness.helper.close());
+  harness.send(launch({ network: { mode: "public-proxy" } }));
+  await harness.waitFor(() => harness.frames()[0]?.type === "ready");
+
+  assert.deepEqual(harness.calls.proxyAllowlist, [["*"]]);
+  assert.deepEqual(harness.calls.initialize[0].network, {
+    allowedDomains: ["*"],
+    deniedDomains: [],
+    strictAllowlist: true,
+    allowUnixSockets: [],
+    allowAllUnixSockets: false,
+    allowLocalBinding: true,
+    allowMachLookup: [],
+    httpProxyPort: 43101,
+    socksProxyPort: 43102,
+  });
+  assert.equal(harness.calls.spawn.length, 1);
+  const credential = "a".repeat(64);
+  assert.match(harness.calls.spawn[0][1][1], new RegExp(credential));
+  assert.equal(JSON.stringify(harness.frames()).includes(credential), false);
+  assert.equal(harness.errorText().includes(credential), false);
+
+  harness.terminal.emitExit({ exitCode: 0 });
+  await harness.waitFor(() => harness.calls.proxyClose === 1);
+  assert.equal(harness.calls.cleanup, 1);
+  assert.equal(harness.calls.reset, 1);
+});
+
+test("pauses managed destinations until matching allow or reject decisions", async (t) => {
+  const harness = createHarness();
+  t.after(() => harness.helper.close());
+  harness.send(launch({ network: { mode: "public-proxy" } }));
+  await harness.waitFor(() => harness.frames()[0]?.type === "ready");
+  const authorize = harness.calls.proxyOptions[0].authorizeDestination;
+  const destination = {
+    host: "example.com",
+    protocol: "https:",
+    port: 443,
+    address: "93.184.216.34",
+    family: 4,
+    answers: [
+      { address: "93.184.216.34", family: 4 },
+      { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 },
+    ],
+  };
+
+  const allowed = authorize(destination, new AbortController().signal);
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "network-request"),
+    "managed network request",
+  );
+  const request = harness
+    .frames()
+    .find((frame) => frame.type === "network-request");
+  assert.deepEqual(request, {
+    ...identity,
+    type: "network-request",
+    request: {
+      requestId: "network-1",
+      host: "example.com",
+      protocol: "https",
+      port: 443,
+      address: "93.184.216.34",
+      family: 4,
+      dnsAnswers: destination.answers,
+      destinationClass: "public",
+    },
+  });
+  harness.send({
+    ...identity,
+    type: "network-decision",
+    requestId: "network-1",
+    decision: "allow-once",
+  });
+  await assert.doesNotReject(
+    allowed.then((decision) => assert.equal(decision, "allow")),
+  );
+
+  const rejected = authorize(
+    { ...destination, protocol: "connect:", port: 8443 },
+    new AbortController().signal,
+  );
+  await harness.waitFor(() =>
+    harness
+      .frames()
+      .some(
+        (frame) =>
+          frame.type === "network-request" &&
+          frame.request.requestId === "network-2",
+      ),
+  );
+  const secondRequest = harness
+    .frames()
+    .find(
+      (frame) =>
+        frame.type === "network-request" &&
+        frame.request.requestId === "network-2",
+    );
+  assert.equal(secondRequest.request.protocol, "tcp");
+  harness.send({
+    ...identity,
+    type: "network-decision",
+    requestId: "network-2",
+    decision: "reject",
+  });
+  assert.equal(await rejected, "reject");
+});
+
+test("binds concurrent managed network decisions to exact request IDs", async (t) => {
+  const harness = createHarness();
+  t.after(() => harness.helper.close());
+  harness.send(launch({ network: { mode: "public-proxy" } }));
+  await harness.waitFor(() => harness.frames()[0]?.type === "ready");
+  const authorize = harness.calls.proxyOptions[0].authorizeDestination;
+  const first = authorize(
+    {
+      host: "first.example",
+      protocol: "https:",
+      port: 443,
+      address: "93.184.216.34",
+      family: 4,
+      answers: [{ address: "93.184.216.34", family: 4 }],
+    },
+    new AbortController().signal,
+  );
+  const second = authorize(
+    {
+      host: "second.example",
+      protocol: "socks5:",
+      port: 8443,
+      address: "1.1.1.1",
+      family: 4,
+      answers: [{ address: "1.1.1.1", family: 4 }],
+    },
+    new AbortController().signal,
+  );
+  await harness.waitFor(
+    () =>
+      harness.frames().filter((frame) => frame.type === "network-request")
+        .length === 2,
+    "two managed network requests",
+  );
+  assert.deepEqual(
+    harness
+      .frames()
+      .filter((frame) => frame.type === "network-request")
+      .map((frame) => ({
+        requestId: frame.request.requestId,
+        host: frame.request.host,
+      })),
+    [
+      { requestId: "network-1", host: "first.example" },
+      { requestId: "network-2", host: "second.example" },
+    ],
+  );
+
+  harness.send({
+    ...identity,
+    type: "network-decision",
+    requestId: "network-2",
+    decision: "allow-once",
+  });
+  assert.equal(await second, "allow");
+  let firstSettled = false;
+  void first.finally(() => {
+    firstSettled = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(firstSettled, false);
+
+  harness.send({
+    ...identity,
+    type: "network-decision",
+    requestId: "network-1",
+    decision: "reject",
+  });
+  assert.equal(await first, "reject");
+});
+
+test("validates managed destinations before allocating request IDs", async (t) => {
+  const harness = createHarness();
+  t.after(() => harness.helper.close());
+  harness.send(launch({ network: { mode: "public-proxy" } }));
+  await harness.waitFor(() => harness.frames()[0]?.type === "ready");
+  const authorize = harness.calls.proxyOptions[0].authorizeDestination;
+
+  await assert.rejects(
+    authorize(
+      {
+        host: "example.com",
+        protocol: "https:",
+        port: 443,
+        address: "93.184.216.34",
+        family: 4,
+        answers: [],
+      },
+      new AbortController().signal,
+    ),
+    /invalid managed network request/,
+  );
+  assert.equal(harness.networkRequestIdsCreated(), 0);
+  assert.equal(
+    harness.frames().some((frame) => frame.type === "network-request"),
+    false,
+  );
+});
+
+test("fails closed for stale-identity managed network decisions", async (t) => {
+  const harness = createHarness();
+  t.after(() => harness.helper.close());
+  harness.send(launch({ network: { mode: "public-proxy" } }));
+  await harness.waitFor(() => harness.frames()[0]?.type === "ready");
+  const pending = harness.calls.proxyOptions[0].authorizeDestination(
+    {
+      host: "example.com",
+      protocol: "socks5:",
+      port: 443,
+      address: "93.184.216.34",
+      family: 4,
+      answers: [{ address: "93.184.216.34", family: 4 }],
+    },
+    new AbortController().signal,
+  );
+  await harness.waitFor(() =>
+    harness.frames().some((frame) => frame.type === "network-request"),
+  );
+  const rejected = assert.rejects(
+    pending,
+    /managed network request was cancelled/,
+  );
+
+  harness.send({
+    ...identity,
+    generation: identity.generation + 1,
+    type: "network-decision",
+    requestId: "network-1",
+    decision: "allow-once",
+  });
+  await harness.waitFor(
+    () => harness.frames().some((frame) => frame.type === "error"),
+    "stale-decision failure",
+  );
+  assert.match(
+    harness.frames().find((frame) => frame.type === "error").message,
+    /stale command identity/,
+  );
+  assert.deepEqual(harness.signals, [[-4242, "SIGTERM", "group"]]);
+  harness.terminal.emitExit({ exitCode: 143, signal: 15 });
+  await rejected;
+});
+
+test("cancels pending managed network requests when the helper closes", async () => {
+  const harness = createHarness();
+  harness.send(launch({ network: { mode: "public-proxy" } }));
+  await harness.waitFor(() => harness.frames()[0]?.type === "ready");
+  const pending = harness.calls.proxyOptions[0].authorizeDestination(
+    {
+      host: "example.com",
+      protocol: "http:",
+      port: 80,
+      address: "93.184.216.34",
+      family: 4,
+      answers: [{ address: "93.184.216.34", family: 4 }],
+    },
+    new AbortController().signal,
+  );
+  await harness.waitFor(() =>
+    harness.frames().some((frame) => frame.type === "network-request"),
+  );
+
+  await harness.helper.close();
+  await assert.rejects(pending, /managed network request was cancelled/);
+  assert.equal(harness.calls.proxyClose, 1);
+});
+
+test("closes public-proxy once when the helper is closed repeatedly", async () => {
+  const harness = createHarness();
+  harness.send(launch({ network: { mode: "public-proxy" } }));
+  await harness.waitFor(() => harness.frames()[0]?.type === "ready");
+
+  await harness.helper.close();
+  await harness.helper.close();
+  assert.equal(harness.calls.cleanup, 1);
+  assert.equal(harness.calls.reset, 1);
+  assert.equal(harness.calls.proxyClose, 1);
+});
+
+test("closes public-proxy when runtime initialization fails", async (t) => {
+  const harness = createHarness({
+    runtimeOverrides: {
+      async initialize(config) {
+        harness.calls.order.push("initialize");
+        harness.calls.initialize.push(config);
+        throw new Error("initialization failed");
+      },
+    },
+  });
   t.after(() => harness.helper.close());
   harness.send(launch({ network: { mode: "public-proxy" } }));
   await harness.waitFor(() => harness.frames()[0]?.type === "error");
 
-  assert.match(harness.frames()[0].message, /public-proxy mode is unavailable/);
-  assert.equal(harness.calls.initialize.length, 0);
+  assert.match(harness.frames()[0].message, /initialization failed/);
   assert.equal(harness.calls.spawn.length, 0);
+  assert.equal(harness.calls.cleanup, 1);
+  assert.equal(harness.calls.reset, 1);
+  assert.equal(harness.calls.proxyClose, 1);
 });

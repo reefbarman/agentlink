@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from "crypto";
 import * as fs from "fs/promises";
 import * as path from "path";
-import {
-  clearTimeout as clearNodeTimeout,
-  setTimeout as setNodeTimeout,
-} from "timers";
 import type { AgentSession } from "./AgentSession.js";
-import type { AgentEvent, AgentMessage } from "./types.js";
+import type {
+  AgentEvent,
+  AgentMessage,
+  PreservedRuntimeContext,
+} from "./types.js";
 import {
   buildAgentErrorMessage,
   getAgentErrorActions,
@@ -57,8 +57,14 @@ import {
   toCoreModelDocumentMediaType,
   type CoreModelMessage,
   type CoreModelStopReason,
-  type CoreModelTransportActivity,
 } from "../core/modelRuntime.js";
+import {
+  DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS,
+  DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS,
+  DEFAULT_PROVIDER_NO_PROGRESS_TIMEOUT_MS,
+  ProviderStreamActivityMonitor,
+  ProviderStreamTimeoutError,
+} from "../core/providerStreamWatchdog.js";
 import { sleep } from "../util/sleep.js";
 import type {
   SessionTranscriptMessage,
@@ -67,6 +73,7 @@ import type {
 import { truncateMiddle } from "../util/truncateMiddle.js";
 import { getAgentLinkHttpDiagnostics } from "../util/httpDispatcher.js";
 import { collectSessionImages } from "./sessionImages.js";
+import { resolveProjectAttachments } from "./attachmentResolver.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import type { ModelRequestPermit } from "../core/modelRequestScheduler.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
@@ -121,61 +128,6 @@ const TRANSIENT_RETRY_CATEGORIES: ReadonlySet<AgentRetryCategory> = new Set([
   "server",
 ]);
 const MAX_EMPTY_RESPONSE_RETRIES = 2;
-const DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS = 300_000;
-const DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS = 300_000;
-
-class ProviderStreamTimeoutError extends Error {
-  constructor(kind: "connection" | "inactivity", timeoutMs: number) {
-    super(`Provider stream ${kind} timed out after ${timeoutMs}ms`);
-    this.name = "ProviderStreamTimeoutError";
-  }
-}
-
-class ProviderStreamActivityMonitor {
-  private timer: ReturnType<typeof setNodeTimeout> | undefined;
-  private readonly timeoutPromise: Promise<never>;
-  private rejectTimeout: (error: Error) => void = () => undefined;
-  private disposed = false;
-  hasTransportActivity = false;
-  lastActivityAt: number | undefined;
-
-  constructor(
-    connectionTimeoutMs: number,
-    private readonly inactivityTimeoutMs: number,
-    private readonly requestController: AbortController,
-  ) {
-    this.timeoutPromise = new Promise<never>((_, reject) => {
-      this.rejectTimeout = reject;
-    });
-    this.arm("connection", connectionTimeoutMs);
-  }
-
-  readonly recordActivity = (activity: CoreModelTransportActivity): void => {
-    if (this.disposed) return;
-    this.hasTransportActivity = true;
-    this.lastActivityAt = activity.at;
-    this.arm("inactivity", this.inactivityTimeoutMs);
-  };
-
-  async next<T>(iterator: AsyncIterator<T>): Promise<IteratorResult<T>> {
-    return Promise.race([iterator.next(), this.timeoutPromise]);
-  }
-
-  dispose(): void {
-    this.disposed = true;
-    if (this.timer) clearNodeTimeout(this.timer);
-    this.timer = undefined;
-  }
-
-  private arm(kind: "connection" | "inactivity", timeoutMs: number): void {
-    if (this.timer) clearNodeTimeout(this.timer);
-    this.timer = setNodeTimeout(() => {
-      const error = new ProviderStreamTimeoutError(kind, timeoutMs);
-      this.rejectTimeout(error);
-      this.requestController.abort();
-    }, timeoutMs);
-  }
-}
 
 const buildErrorMessage = buildAgentErrorMessage;
 
@@ -662,6 +614,12 @@ export class AgentEngine {
       providerFirstEventTimeoutMs?: number;
       /** Maximum silence between raw response body chunks/provider events. */
       providerInactivityTimeoutMs?: number;
+      /**
+       * Maximum time between parsed provider stream events, regardless of raw
+       * transport activity. Bounds "warm but dead" streams that keepalives
+       * would otherwise keep alive forever.
+       */
+      providerNoProgressTimeoutMs?: number;
     },
   ): AsyncGenerator<AgentEvent> {
     const ac = session.createAbortController();
@@ -707,6 +665,7 @@ export class AgentEngine {
       // state to full local replay, keep reporting that on the eventual
       // successful api_request for this turn.
       let previousResponseIdFallback = false;
+      let lastLoggedEffortDowngrade = "";
       const MAX_CREDENTIAL_REFRESHES = 3;
       const logTiming = (label: string, startedAt: number, details = "") => {
         this.log?.(
@@ -782,6 +741,8 @@ export class AgentEngine {
                 .filter((name) => name.length > 0),
             ),
           ],
+          activeSkills: [...session.loadedSkills],
+          todos: currentTodos,
         };
         logTiming(
           "tool setup",
@@ -795,28 +756,21 @@ export class AgentEngine {
           text: string,
           attachments?: string[],
         ) => {
-          if (!attachments?.length) return text;
+          if (!attachments?.length) {
+            return { text, images: [], documents: [] };
+          }
           const attachmentStartedAt = Date.now();
-          const blocks = await Promise.all(
-            attachments.map(async (filePath) => {
-              try {
-                const absPath = path.isAbsolute(filePath)
-                  ? filePath
-                  : path.join(session.requireProjectRoot(), filePath);
-                const content = await fs.readFile(absPath, "utf-8");
-                const ext = path.extname(filePath).slice(1) || "";
-                return `<file path="${filePath}">\n\`\`\`${ext}\n${content}\n\`\`\`\n</file>`;
-              } catch {
-                return `<file path="${filePath}">\n[Error: could not read file]\n</file>`;
-              }
-            }),
+          const resolved = await resolveProjectAttachments(
+            text,
+            attachments,
+            session.requireProjectRoot(),
           );
           logTiming(
             "queued attachments",
             attachmentStartedAt,
             `count=${attachments.length}`,
           );
-          return `${blocks.join("\n\n")}\n\n${text}`;
+          return resolved;
         };
 
         if (
@@ -837,16 +791,24 @@ export class AgentEngine {
             interjection !== null;
             interjection = session.consumePendingInterjection()
           ) {
-            const resolvedInterjectionText = await resolveQueuedAttachments(
+            const resolvedInterjection = await resolveQueuedAttachments(
               interjection.text,
               interjection.attachments,
             );
-            session.addUserMessage(resolvedInterjectionText, {
+            const images = [
+              ...(interjection.images ?? []),
+              ...resolvedInterjection.images,
+            ];
+            const documents = [
+              ...(interjection.documents ?? []),
+              ...resolvedInterjection.documents,
+            ];
+            session.addUserMessage(resolvedInterjection.text, {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
-              images: interjection.images,
-              documents: interjection.documents,
+              images: images.length > 0 ? images : undefined,
+              documents: documents.length > 0 ? documents : undefined,
             });
             yield {
               type: "user_interjection" as const,
@@ -855,8 +817,8 @@ export class AgentEngine {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
-              images: interjection.images,
-              documents: interjection.documents,
+              images: images.length > 0 ? images : undefined,
+              documents: documents.length > 0 ? documents : undefined,
             };
           }
         }
@@ -871,6 +833,15 @@ export class AgentEngine {
           session.reasoningEffort,
           capabilities,
         );
+        if (reasoningEffort !== session.reasoningEffort) {
+          const downgradeKey = `${session.model}:${session.reasoningEffort}->${reasoningEffort}`;
+          if (downgradeKey !== lastLoggedEffortDowngrade) {
+            lastLoggedEffortDowngrade = downgradeKey;
+            this.log?.(
+              `[agent] reasoning effort "${session.reasoningEffort}" is not supported by ${session.model}; sending "${reasoningEffort}" instead`,
+            );
+          }
+        }
         const useThinking = reasoningEffort !== "none";
 
         // When budget-based thinking is enabled, max_tokens must exceed budget_tokens.
@@ -1130,6 +1101,8 @@ export class AgentEngine {
               DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS,
             opts?.providerInactivityTimeoutMs ??
               DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS,
+            opts?.providerNoProgressTimeoutMs ??
+              DEFAULT_PROVIDER_NO_PROGRESS_TIMEOUT_MS,
             requestController,
           );
           const streamGen = provider.stream({
@@ -1157,12 +1130,10 @@ export class AgentEngine {
               const event = next.value;
               if (signal.aborted) break;
 
-              // Custom/test providers may not use agentLinkFetch. Treat their
-              // raw provider event as liveness before interpreting it.
-              transportMonitor.recordActivity({
-                kind: "provider_event",
-                at: Date.now(),
-              });
+              // A yielded event is both transport liveness (custom/test
+              // providers may not use agentLinkFetch) and parsed progress —
+              // the only signal that re-arms the no-progress timer.
+              transportMonitor.recordProgress();
 
               if (!firstTokenReceived) {
                 firstTokenReceived = true;
@@ -1279,7 +1250,7 @@ export class AgentEngine {
           if (streamErr instanceof ProviderStreamTimeoutError) {
             const http = getAgentLinkHttpDiagnostics();
             this.log?.(
-              `[provider-timeout] ${streamErr.message} transportEstablished=${transportMonitor?.hasTransportActivity ?? false} lastActivityAt=${transportMonitor?.lastActivityAt ?? "none"} activeHttp=${http.activeRequests} peakHttp=${http.peakActiveRequests} bodyChunks=${http.bodyChunks} transportErrors=${http.transportErrors}`,
+              `[provider-timeout] ${streamErr.message} transportEstablished=${transportMonitor?.hasTransportActivity ?? false} lastActivityAt=${transportMonitor?.lastActivityAt ?? "none"} lastProgressAt=${transportMonitor?.lastProgressAt ?? "none"} activeHttp=${http.activeRequests} peakHttp=${http.peakActiveRequests} bodyChunks=${http.bodyChunks} transportErrors=${http.transportErrors}`,
             );
           }
 
@@ -1462,6 +1433,12 @@ export class AgentEngine {
 
         // Always record usage and emit api_request — even for capped turns.
         const durationMs = Date.now() - startTime;
+        // Snapshot the running accumulation before addUsage() resets it — the
+        // api_request event carries it so consumers can attribute usage jumps.
+        const accumulatedEstimatedTokens = session.estimatedAccumulatedTokens;
+        const accumulatedEstimatedTokensBySource = {
+          ...session.estimatedAccumulationBySource,
+        };
         session.addUsage(
           inputTokens,
           outputTokens,
@@ -1495,6 +1472,8 @@ export class AgentEngine {
           storeResponseState,
           providerResponseId,
           contextBreakdown,
+          accumulatedEstimatedTokens,
+          accumulatedEstimatedTokensBySource,
         };
 
         const committedAssistantMessage: CoreModelMessage =
@@ -1697,17 +1676,23 @@ export class AgentEngine {
           }
         }
 
+        // Arm recovery for the turn's ask_user call even when the model issued
+        // sibling tool calls in parallel — the whole turn lives only in memory
+        // until every tool resolves, so a reload while the question is pending
+        // would otherwise lose it. Recovery replay substitutes synthetic
+        // results for the sibling calls.
+        const askUserBlocks = toolUseBlocks.filter(
+          (block) => block.name === "ask_user",
+        );
         const pendingQuestionRecovery =
-          !opts?.isBackground &&
-          toolUseBlocks.length === 1 &&
-          toolUseBlocks[0]?.name === "ask_user"
+          !opts?.isBackground && askUserBlocks.length === 1
             ? {
                 schemaVersion: 1 as const,
                 assistantContent: structuredClone(contentBlocks),
-                toolUseId: toolUseBlocks[0].id,
+                toolUseId: askUserBlocks[0]!.id,
                 toolName: "ask_user" as const,
                 toolInput: structuredClone(
-                  toolUseBlocks[0].input as Record<string, unknown>,
+                  askUserBlocks[0]!.input as Record<string, unknown>,
                 ),
               }
             : undefined;
@@ -1950,10 +1935,14 @@ export class AgentEngine {
           })),
         );
 
-        // Feed estimated token size of tool results to the running accumulator.
-        session.addEstimatedTokens(
-          estimateToolResultContentChars(toolResultContents),
-        );
+        // Feed estimated token size of tool results to the running accumulator,
+        // attributed per tool so jump telemetry can name the contributors.
+        toolResults.forEach((tr, index) => {
+          session.addEstimatedTokens(
+            estimateToolResultContentChars([toolResultContents[index]!]),
+            `tool:${tr.toolName}`,
+          );
+        });
 
         // Internal tools (todo_write) don't flow through executeToolCalls, so emit
         // their completion events now. Dispatch-tool completion events are emitted
@@ -2014,16 +2003,24 @@ export class AgentEngine {
             interjection !== null;
             interjection = session.consumePendingInterjection()
           ) {
-            const resolvedInterjectionText = await resolveQueuedAttachments(
+            const resolvedInterjection = await resolveQueuedAttachments(
               interjection.text,
               interjection.attachments,
             );
-            session.addUserMessage(resolvedInterjectionText, {
+            const images = [
+              ...(interjection.images ?? []),
+              ...resolvedInterjection.images,
+            ];
+            const documents = [
+              ...(interjection.documents ?? []),
+              ...resolvedInterjection.documents,
+            ];
+            session.addUserMessage(resolvedInterjection.text, {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
-              images: interjection.images,
-              documents: interjection.documents,
+              images: images.length > 0 ? images : undefined,
+              documents: documents.length > 0 ? documents : undefined,
             });
             yield {
               type: "user_interjection" as const,
@@ -2032,8 +2029,8 @@ export class AgentEngine {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
-              images: interjection.images,
-              documents: interjection.documents,
+              images: images.length > 0 ? images : undefined,
+              documents: documents.length > 0 ? documents : undefined,
             };
           }
         }
@@ -2232,19 +2229,6 @@ export class AgentEngine {
       }
     };
 
-    // Partition into read-only (parallel) and write (sequential)
-    const readOnlyIndices: number[] = [];
-    const writeIndices: number[] = [];
-    for (let i = 0; i < calls.length; i++) {
-      const name = calls[i].name;
-      const isReadOnly = this.toolRuntime?.isParallelSafe(name) ?? false;
-      if (isReadOnly) {
-        readOnlyIndices.push(i);
-      } else {
-        writeIndices.push(i);
-      }
-    }
-
     const executeAtIndex = async (i: number): Promise<void> => {
       if (signal.aborted) return;
       const call = calls[i];
@@ -2264,40 +2248,67 @@ export class AgentEngine {
       onToolComplete?.(callResult);
     };
 
-    // Execute read-only tools in parallel
-    await Promise.all(readOnlyIndices.map((i) => executeAtIndex(i)));
-
-    if (signal.aborted) {
-      for (let i = 0; i < resultSlots.length; i++) {
-        if (!resultSlots[i]) tracker?.completeAgentCall(calls[i].id);
+    // Preserve model order with exclusive barriers: adjacent parallel-safe
+    // calls may overlap, while every non-parallel call waits for prior work and
+    // blocks later work. This matches Codex's shared/exclusive dispatch gate.
+    let nextIndex = 0;
+    while (nextIndex < calls.length && !signal.aborted) {
+      const call = calls[nextIndex];
+      const parallelSafe =
+        this.toolRuntime?.isParallelSafe(
+          call.name,
+          call.input as Record<string, unknown>,
+        ) ?? false;
+      if (parallelSafe) {
+        const batch: number[] = [];
+        while (nextIndex < calls.length) {
+          const candidate = calls[nextIndex];
+          if (
+            !(
+              this.toolRuntime?.isParallelSafe(
+                candidate.name,
+                candidate.input as Record<string, unknown>,
+              ) ?? false
+            )
+          ) {
+            break;
+          }
+          batch.push(nextIndex);
+          nextIndex += 1;
+        }
+        await Promise.all(batch.map((index) => executeAtIndex(index)));
+        continue;
       }
-    }
 
-    // Execute write tools sequentially
-    for (let wi = 0; wi < writeIndices.length; wi++) {
-      const i = writeIndices[wi];
-      if (signal.aborted) break;
-      await executeAtIndex(i);
+      const completedIndex = nextIndex;
+      nextIndex += 1;
+      await executeAtIndex(completedIndex);
 
-      const completed = resultSlots[i];
+      const completed = resultSlots[completedIndex];
       if (!completed) continue;
       const modeSwitch = getSuccessfulModeSwitch(completed);
       const finalStatusSet = completed.toolName === "set_task_status";
       if (!modeSwitch && !finalStatusSet) continue;
 
       // A successful mode switch or final status marker is a turn boundary.
-      // Skip trailing non-read-only tools from this batch.
-      for (let r = wi + 1; r < writeIndices.length; r++) {
-        const skipIdx = writeIndices[r];
-        if (resultSlots[skipIdx]) continue;
+      // Skip every trailing call, including parallel-safe calls that are now
+      // correctly held behind this ordered barrier.
+      for (let index = nextIndex; index < calls.length; index++) {
+        if (resultSlots[index]) continue;
         const skipped = modeSwitch
-          ? buildModeSwitchSkippedResult(calls[skipIdx], modeSwitch.mode)
-          : buildFinalStatusSkippedResult(calls[skipIdx]);
-        resultSlots[skipIdx] = skipped;
-        tracker?.completeAgentCall(calls[skipIdx].id);
+          ? buildModeSwitchSkippedResult(calls[index], modeSwitch.mode)
+          : buildFinalStatusSkippedResult(calls[index]);
+        resultSlots[index] = skipped;
+        tracker?.completeAgentCall(calls[index].id);
         onToolComplete?.(skipped);
       }
       break;
+    }
+
+    if (signal.aborted) {
+      for (let i = 0; i < resultSlots.length; i++) {
+        if (!resultSlots[i]) tracker?.completeAgentCall(calls[i].id);
+      }
     }
 
     signal.removeEventListener("abort", forceAbortTrackedCalls);
@@ -2329,7 +2340,7 @@ export class AgentEngine {
     session: AgentSession,
     isAutomatic: boolean,
     provider?: ModelProvider,
-    preservedContext?: { toolNames: string[]; mcpServerNames?: string[] },
+    preservedContext?: PreservedRuntimeContext,
   ): AsyncGenerator<AgentEvent, boolean> {
     const condenseStartedAt = Date.now();
     yield { type: "condense_start", isAutomatic };
@@ -2390,6 +2401,7 @@ export class AgentEngine {
     session.lastOutputTokens = 0;
     session.lastCacheReadTokens = 0;
     session.estimatedAccumulatedTokens = 0;
+    session.estimatedAccumulationBySource = {};
 
     yield {
       type: "condense",

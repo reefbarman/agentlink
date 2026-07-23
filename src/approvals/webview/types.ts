@@ -1,6 +1,9 @@
 // Shared types between ApprovalPanelProvider (Node) and approval webview (browser).
 
-import type { TerminalExecutionSecuritySummary } from "../../core/capabilities/terminal.js";
+import type {
+  ManagedNetworkRequest,
+  TerminalExecutionSecuritySummary,
+} from "../../core/capabilities/terminal.js";
 
 export type CommandTierLevel = "safe" | "sensitive" | "dangerous";
 
@@ -27,16 +30,26 @@ export interface SubCommandEntry {
   existingRule?: {
     pattern: string;
     mode: "prefix" | "exact" | "regex";
+    decision?: "allow" | "prompt" | "forbidden";
     scope: "session" | "project" | "global";
   };
 }
 
+export interface NetworkReviewSummary {
+  status: "reviewed" | "unavailable" | "timed_out" | "cancelled" | "invalid";
+  outcome: "allow" | "deny";
+  risk: "low" | "medium" | "high" | "critical";
+  userAuthorization: "unknown" | "low" | "medium" | "high";
+  rationale: string;
+  model: string;
+}
+
 export interface CommandReviewSummary {
   status: "reviewed" | "unavailable" | "timed_out" | "cancelled" | "invalid";
-  decision: "approve" | "ask_user";
-  confidence: "high" | "medium" | "low";
-  risk: "low" | "medium" | "high";
-  reason: string;
+  outcome: "allow" | "deny";
+  risk: "low" | "medium" | "high" | "critical";
+  userAuthorization: "unknown" | "low" | "medium" | "high";
+  rationale: string;
   model: string;
 }
 
@@ -50,16 +63,22 @@ export interface ApprovalProjectContext {
   availability: "available" | "missing" | "unavailable" | "invalid";
 }
 
+export type ApprovalKind =
+  | "command"
+  | "network"
+  | "path"
+  | "write"
+  | "rename"
+  | "mcp"
+  | "mode-switch"
+  | "memory"
+  | "worktree";
+
 export interface ApprovalRequest {
-  kind:
-    | "command"
-    | "path"
-    | "write"
-    | "rename"
-    | "mcp"
-    | "mode-switch"
-    | "memory";
+  kind: ApprovalKind;
   id: string;
+  /** Background task that initiated this approval, when applicable. */
+  backgroundTask?: string;
   /** Project that initiated this approval. */
   sourceProject?: ApprovalProjectContext;
   /** Project containing the requested target, when it differs from the source. */
@@ -101,6 +120,10 @@ export interface ApprovalRequest {
   humanOnlyReason?: string;
   /** Host-owned token-free route/confinement evidence for this exact command. */
   security?: TerminalExecutionSecuritySummary;
+  /** For managed network: exact live destination and owning command evidence. */
+  managedNetwork?: ManagedNetworkRequest;
+  /** For managed network: automatic Guardian result when user review is required. */
+  networkReview?: NetworkReviewSummary;
   /** For MCP: detail text (input preview) */
   mcpDetail?: string;
   /** For MCP: structured server identity (avoids parsing display text). */
@@ -109,6 +132,13 @@ export interface ApprovalRequest {
   mcpToolName?: string;
   /** For MCP: approval choices */
   mcpChoices?: Array<{
+    label: string;
+    value: string;
+    isPrimary?: boolean;
+    isDanger?: boolean;
+  }>;
+  /** For worktree launch approvals: autosubmit, prefill, and deny choices. */
+  worktreeChoices?: Array<{
     label: string;
     value: string;
     isPrimary?: boolean;
@@ -135,6 +165,8 @@ export interface ApprovalRequest {
 export interface RuleEntry {
   pattern: string;
   mode: "prefix" | "exact" | "regex" | "skip";
+  /** Missing preserves a legacy approval-only rule with no native authority. */
+  decision?: "allow" | "prompt" | "forbidden";
   scope: "session" | "project" | "global" | "skip";
 }
 
@@ -153,6 +185,8 @@ export type ExtensionMessage =
 export interface DecisionMessage {
   type: "decision";
   id: string;
+  /** Must match the host-owned pending request before the decision is consumed. */
+  approvalKind?: ApprovalKind;
   decision: string;
   editedCommand?: string;
   rejectionReason?: string;

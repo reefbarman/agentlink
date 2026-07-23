@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AgentToolCallTracker } from "./AgentToolCallTracker.js";
+import type { TerminalProvider } from "../core/capabilities/terminal.js";
 
 const mocks = vi.hoisted(() => ({
   detachTerminal: vi.fn<(terminalId: string) => boolean>(),
   revealTerminal: vi.fn<(terminalId: string) => boolean>(),
-  interruptTerminal: vi.fn<(terminalId: string) => void>(),
+  interruptTerminal: vi.fn<(terminalId: string) => boolean>(),
   getCurrentOutput: vi.fn<(terminalId: string) => string | undefined>(),
   getBackgroundState: vi.fn(),
   resolveCurrentDiff: vi.fn<(decision: "accept" | "reject") => boolean>(),
@@ -25,6 +26,25 @@ vi.mock("../integrations/DiffViewProvider.js", () => ({
   resolveCurrentDiff: mocks.resolveCurrentDiff,
 }));
 
+function createTerminalProvider(): TerminalProvider {
+  return {
+    executeCommand: vi.fn(),
+    getBackgroundState: mocks.getBackgroundState,
+    getCurrentOutput: mocks.getCurrentOutput,
+    interruptTerminal: mocks.interruptTerminal,
+    detachTerminal: mocks.detachTerminal,
+    revealTerminal: mocks.revealTerminal,
+    getRecentlyClosedTerminals: vi.fn(() => []),
+    listTerminals: vi.fn(() => []),
+    closeTerminals: vi.fn(() => ({ closed: 0 })),
+  };
+}
+
+function createTracker(): AgentToolCallTracker {
+  const terminalProvider = createTerminalProvider();
+  return new AgentToolCallTracker(undefined, () => terminalProvider);
+}
+
 describe("AgentToolCallTracker continueInBackground", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -33,6 +53,7 @@ describe("AgentToolCallTracker continueInBackground", () => {
     mocks.revealTerminal.mockReset();
     mocks.revealTerminal.mockReturnValue(true);
     mocks.interruptTerminal.mockReset();
+    mocks.interruptTerminal.mockReturnValue(true);
     mocks.getCurrentOutput.mockReset();
     mocks.getBackgroundState.mockReset();
     mocks.resolveCurrentDiff.mockReset();
@@ -40,7 +61,7 @@ describe("AgentToolCallTracker continueInBackground", () => {
   });
 
   it("detaches immediately when execute_command already has a terminal", async () => {
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const context = tracker.registerAgentCall(
       "call-1",
       "execute_command",
@@ -57,7 +78,7 @@ describe("AgentToolCallTracker continueInBackground", () => {
   });
 
   it("waits for terminal assignment when background is requested early", async () => {
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const context = tracker.registerAgentCall(
       "call-2",
       "execute_command",
@@ -77,7 +98,7 @@ describe("AgentToolCallTracker continueInBackground", () => {
   });
 
   it("detaches execute_command calls that use inline files", async () => {
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const context = tracker.registerAgentCall(
       "call-files",
       "execute_command",
@@ -101,7 +122,7 @@ describe("AgentToolCallTracker continueInBackground", () => {
   });
 
   it("returns control from get_background_result without stopping the background agent", () => {
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const forceResolve = vi.fn();
     tracker.registerAgentCall(
       "call-background-result",
@@ -130,7 +151,7 @@ describe("AgentToolCallTracker continueInBackground", () => {
   });
 
   it("ignores background requests for other tools", async () => {
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     tracker.registerAgentCall(
       "call-3",
       "read_file",
@@ -153,7 +174,7 @@ describe("AgentToolCallTracker revealTerminal", () => {
   });
 
   it("reveals the terminal assigned to a running execute_command", async () => {
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const context = tracker.registerAgentCall(
       "call-reveal",
       "execute_command",
@@ -171,7 +192,7 @@ describe("AgentToolCallTracker revealTerminal", () => {
   });
 
   it("honors a reveal click made before terminal assignment", async () => {
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const context = tracker.registerAgentCall(
       "call-pending-reveal",
       "execute_command",
@@ -191,7 +212,7 @@ describe("AgentToolCallTracker revealTerminal", () => {
   });
 
   it("does not reveal terminals for other running tools", () => {
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     tracker.registerAgentCall(
       "call-read",
       "read_file",
@@ -211,6 +232,7 @@ describe("AgentToolCallTracker lifecycle", () => {
     vi.useRealTimers();
     mocks.detachTerminal.mockReset();
     mocks.interruptTerminal.mockReset();
+    mocks.interruptTerminal.mockReturnValue(true);
     mocks.getCurrentOutput.mockReset();
     mocks.getBackgroundState.mockReset();
     mocks.resolveCurrentDiff.mockReset();
@@ -219,7 +241,7 @@ describe("AgentToolCallTracker lifecycle", () => {
 
   it("emits registration/completion changes and expires recent calls", () => {
     vi.useFakeTimers();
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const onChange = vi.fn();
     tracker.on("change", onChange);
 
@@ -256,7 +278,7 @@ describe("AgentToolCallTracker lifecycle", () => {
   });
 
   it("clears only agent calls belonging to the stopped session", () => {
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const onChange = vi.fn();
     tracker.on("change", onChange);
     tracker.registerAgentCall("call-a", "read_file", "a", "session-a", vi.fn());
@@ -272,7 +294,7 @@ describe("AgentToolCallTracker lifecycle", () => {
   });
 
   it("cancels the linked terminal, diff, and force resolver", async () => {
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const forceResolve = vi.fn();
     const context = tracker.registerAgentCall(
       "call-cancel",
@@ -298,7 +320,7 @@ describe("AgentToolCallTracker lifecycle", () => {
   });
 
   it("cancels all active descendants with their parent", () => {
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const parentResolve = vi.fn();
     const childResolve = vi.fn();
     const grandchildResolve = vi.fn();
@@ -318,15 +340,16 @@ describe("AgentToolCallTracker lifecycle", () => {
       undefined,
       "parent",
     );
-    tracker.registerAgentCall(
+    const grandchildContext = tracker.registerAgentCall(
       "grandchild",
-      "get_hover",
+      "execute_command",
       "",
       "session-a",
       grandchildResolve,
       undefined,
       "child",
     );
+    grandchildContext.setTerminalId("sandbox-descendant");
 
     tracker.cancelCall("parent");
 
@@ -341,10 +364,11 @@ describe("AgentToolCallTracker lifecycle", () => {
         data: expect.objectContaining({ status: "cancelled" }),
       }),
     );
+    expect(mocks.interruptTerminal).toHaveBeenCalledWith("sandbox-descendant");
   });
 
   it("force-completes generic tools with the existing fallback", async () => {
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const forceResolve = vi.fn();
     tracker.registerAgentCall(
       "call-generic",
@@ -365,7 +389,7 @@ describe("AgentToolCallTracker lifecycle", () => {
 
   it("force-completes execute_command with captured output", async () => {
     mocks.getCurrentOutput.mockReturnValue("partial output");
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const forceResolve = vi.fn();
     const context = tracker.registerAgentCall(
       "call-complete",
@@ -400,7 +424,7 @@ describe("AgentToolCallTracker lifecycle", () => {
       output_captured: true,
       output: "managed output",
     });
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const forceResolve = vi.fn();
     tracker.registerAgentCall(
       "call-output",
@@ -428,7 +452,7 @@ describe("AgentToolCallTracker lifecycle", () => {
   it("force-reads output when the terminal is no longer managed", async () => {
     mocks.getBackgroundState.mockReturnValue(undefined);
     mocks.getCurrentOutput.mockReturnValue("direct output");
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const forceResolve = vi.fn();
     tracker.registerAgentCall(
       "call-output-direct",
@@ -458,7 +482,7 @@ describe("AgentToolCallTracker lifecycle", () => {
     "auto-accepts pending diffs for %s without force-resolving",
     async (toolName) => {
       mocks.resolveCurrentDiff.mockReturnValue(true);
-      const tracker = new AgentToolCallTracker();
+      const tracker = createTracker();
       const forceResolve = vi.fn();
       tracker.registerAgentCall(
         `call-${toolName}`,
@@ -476,7 +500,7 @@ describe("AgentToolCallTracker lifecycle", () => {
   );
 
   it("force-completes a write tool when no diff is pending", async () => {
-    const tracker = new AgentToolCallTracker();
+    const tracker = createTracker();
     const forceResolve = vi.fn();
     tracker.registerAgentCall(
       "call-write-fallback",

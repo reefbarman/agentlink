@@ -25,12 +25,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   web_search: {
     label: "Native web search",
     description:
-      "Search the public web using the selected model provider's hosted web capability. Available only when agentlink.webAccess.searchBackend is native and the authenticated provider supports it. Returns the provider-visible search actions, result text, citations, and usage as an ordinary tool result.",
+      "Search the public web using the selected model provider's native web transport. Codex OAuth uses a low-latency structured search path with automatic hosted-tool fallback; other supported providers use their hosted web capability. Available only when agentlink.webAccess.searchBackend is native. Returns search actions, bounded result text, citations, and usage when available as an ordinary tool result.",
   },
   web_fetch: {
     label: "Native web fetch",
     description:
-      "Open and read a public HTTP or HTTPS URL using the selected model provider's hosted web capability. Available only when agentlink.webAccess.fetchBackend is native and the authenticated provider supports page access. Returns provider-visible actions, content, citations, and usage as an ordinary tool result.",
+      "Open and read a public HTTP or HTTPS URL using the selected model provider's native page-access transport. Codex OAuth uses low-latency structured open/find commands with automatic hosted-tool fallback; other supported providers use their hosted capability. Available only when agentlink.webAccess.fetchBackend is native. Returns bounded content, citations, and usage when available as an ordinary tool result.",
   },
 
   // --- File operations ---
@@ -85,6 +85,11 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     description:
       "Read a bounded exact excerpt from the current agent session using message indices and the snapshot identity returned by search_session_history. Allows normal append-only continuation but rejects stale ranges after transcript rewrite or revert. Excludes generated summaries, thinking, and media payloads.",
   },
+  diagnose_activity: {
+    label: "Diagnose session activity",
+    description:
+      "Inspect bounded, redacted evidence for recent tool results, warnings, and errors in the current session. Use when the user asks why an operation happened, how a write or command was authorized, or what caused a tool/runtime failure. Filter by tool name, path, or tool-call ID. Evidence is newest-first and may be incomplete when the trace reports traceTruncated=true.",
+  },
   write_file: {
     label: "Create/overwrite with diff review",
     description:
@@ -94,6 +99,11 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     label: "Generate image",
     description:
       "Generate PNG images via OpenAI/Codex auth and show them inline in chat. Uses ChatGPT/Codex OAuth image quota when signed in with OAuth, or OpenAI API-key billing when using an API key. Always requests approval before generation because quota is consumed before images are returned; pass output_path in VS Code to also save files into the workspace.",
+  },
+  present_images: {
+    label: "Present session images",
+    description:
+      "Show one or more images already available in the current session directly in the main chat transcript. Use when the user explicitly asks to see an image, screenshot, or visual output; do not use for routine agent-only image inspection because image-returning tool calls already retain their results. Select exact image_N IDs or recent images; with no selector, presents the most recent image. This is display-only, writes no files, and requires no approval.",
   },
   propose_memory: {
     label: "Propose durable memory",
@@ -189,7 +199,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   execute_command: {
     label: "Integrated terminal",
     description:
-      "Run a command in AgentLink's managed terminal. Sequential calls automatically reuse an idle default terminal. When intentionally creating a separate terminal for parallel/background work or temporary environment isolation, give `terminal_name` a short purpose-based label such as 'Dev server', 'Unit tests', or 'Build'. Use `background` for long-running processes and `timeout` for quick commands. If the response includes `output_file`, read that file instead of re-running the command. Piped `grep`/`head`/`tail` patterns are rejected; use `output_grep`, `output_head`, or `output_tail` instead. When the sandboxed terminal is active, commands run without network access.",
+      "Run a command in AgentLink's managed terminal. Sequential calls automatically reuse an idle compatible terminal; overlapping implicit calls allocate separate terminals when needed. Use `terminal_name` when a terminal should have a stable purpose-based label such as 'Dev server', 'Unit tests', or 'Build', or `terminal_id` to target a specific existing terminal. Use `background` for long-running processes and `timeout` for quick commands. Foreground sandbox commands that stop at a high-confidence interactive prompt are terminated after a short inactivity grace; background commands remain observable with get_terminal_output. Submit the simplest review-friendly command: AgentLink already disables interactive pagers consistently, so do not add `GIT_PAGER=cat`, `PAGER=cat`, or routine `--no-pager` workarounds. If the response includes `output_file`, read that file instead of re-running the command. Piped `grep`/`head`/`tail` patterns are rejected; use `output_grep`, `output_head`, or `output_tail` instead. Commands use the normal policy-selected route with loopback client access but public/LAN egress and listener binding blocked by default. Use `sandbox_permissions=with_additional_permissions` with `additional_permissions.network.allow_local_binding=true` and a non-empty `reason` for one exact sandboxed command that needs to start a local listener. Use `require_managed_network` for reviewed public network access, or `require_escalated` only when execution must occur outside the sandbox; every non-default intent requires approval.",
   },
   get_terminal_output: {
     label: "Read background terminal output",

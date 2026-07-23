@@ -5,6 +5,7 @@ import {
   getMcpConfigSources,
   loadAskAgentMcpConfigs,
   loadMcpConfigs,
+  loadWorkspaceMcpConfigs,
   mutateMcpConfigBatch,
   removeMcpConfigServer,
   upsertMcpConfigServer,
@@ -57,7 +58,7 @@ describe("loadMcpConfigs", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("defaults toolDisclosure to auto", async () => {
+  it("defaults toolDisclosure to auto and parallel tool calls to false", async () => {
     await writeJson(join(cwd, ".agentlink", "mcp.json"), {
       mcpServers: {
         linear: {
@@ -72,6 +73,89 @@ describe("loadMcpConfigs", () => {
         command: "linear-mcp",
         toolPolicy: "ask",
         toolDisclosure: "auto",
+        supportsParallelToolCalls: false,
+      },
+    ]);
+  });
+
+  it("deduplicates identical effective servers across workspace projects", async () => {
+    const secondCwd = join(root, "workspace-b");
+    await mkdir(secondCwd, { recursive: true });
+    await writeJson(join(home, ".agentlink", "mcp.json"), {
+      mcpServers: {
+        shared: { command: "shared-mcp", args: ["--stdio"] },
+      },
+    });
+
+    const configs = await loadWorkspaceMcpConfigs([
+      { projectId: "project-a", displayName: "Project A", rootPath: cwd },
+      {
+        projectId: "project-b",
+        displayName: "Project B",
+        rootPath: secondCwd,
+      },
+    ]);
+
+    expect(configs).toHaveLength(1);
+    expect(configs[0]).toMatchObject({
+      name: "shared",
+      sourceServerName: "shared",
+      sourceProjectIds: ["project-a", "project-b"],
+      sourceProjectRoots: [cwd, secondCwd],
+    });
+  });
+
+  it("keeps conflicting same-name project servers available with stable runtime names", async () => {
+    const secondCwd = join(root, "workspace-b");
+    await mkdir(secondCwd, { recursive: true });
+    await writeJson(join(cwd, ".agentlink", "mcp.json"), {
+      mcpServers: { local: { command: "server-a" } },
+    });
+    await writeJson(join(secondCwd, ".agentlink", "mcp.json"), {
+      mcpServers: { local: { command: "server-b" } },
+    });
+
+    const configs = await loadWorkspaceMcpConfigs([
+      { projectId: "project-aaaaaa", displayName: "Project A", rootPath: cwd },
+      {
+        projectId: "project-bbbbbb",
+        displayName: "Project B",
+        rootPath: secondCwd,
+      },
+    ]);
+
+    expect(configs).toHaveLength(2);
+    expect(configs.map((config) => config.command).sort()).toEqual([
+      "server-a",
+      "server-b",
+    ]);
+    expect(configs.every((config) => config.sourceServerName === "local")).toBe(
+      true,
+    );
+    expect(configs.every((config) => !config.name.includes("__"))).toBe(true);
+    expect(new Set(configs.map((config) => config.name)).size).toBe(2);
+  });
+
+  it("merges explicit parallel tool call support from higher-priority config", async () => {
+    await writeJson(join(home, ".agentlink", "mcp.json"), {
+      mcpServers: {
+        linear: {
+          command: "linear-mcp",
+          supportsParallelToolCalls: false,
+        },
+      },
+    });
+    await writeJson(join(cwd, ".agentlink", "mcp.json"), {
+      mcpServers: {
+        linear: { supportsParallelToolCalls: true },
+      },
+    });
+
+    expect(await loadMcpConfigs(cwd)).toMatchObject([
+      {
+        name: "linear",
+        command: "linear-mcp",
+        supportsParallelToolCalls: true,
       },
     ]);
   });

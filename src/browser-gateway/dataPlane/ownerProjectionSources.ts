@@ -7,6 +7,11 @@ import type {
   ChatState,
   TodoItem,
 } from "../../agent/webview/types.js";
+import type {
+  TerminalApprovalPolicy,
+  TerminalApprovalReviewer,
+  TerminalExecutionPreset,
+} from "../../core/capabilities/terminal.js";
 
 import type { BrowserGatewayOwnerInteractionPayload } from "./interactionPayload.js";
 import type { BrowserGatewayRepositoryInfo } from "../BrowserGatewayRepositoryObserver.js";
@@ -118,6 +123,9 @@ export interface BrowserGatewayOwnerMcpSource {
 export interface BrowserGatewayOwnerPolicySource {
   agentWriteApproval: "prompt" | "session" | "project" | "global";
   commandApprovalPolicy: CommandApprovalPolicy;
+  approvalPolicy: TerminalApprovalPolicy;
+  approvalReviewer: TerminalApprovalReviewer;
+  executionPreset: TerminalExecutionPreset;
   configuredCommandApprovalPolicy: Exclude<
     CommandApprovalPolicy,
     "approve-for-me"

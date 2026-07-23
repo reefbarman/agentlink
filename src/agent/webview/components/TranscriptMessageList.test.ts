@@ -573,7 +573,7 @@ describe("TranscriptMessageList background result rendering", () => {
     expect(container.querySelector(".tool-group-block")).toBeNull();
   });
 
-  it("keeps the streaming indicator on the foreground assistant row", () => {
+  it("keeps the streaming indicator below a trailing background result card", () => {
     const messages: ChatMessage[] = [
       {
         id: "assistant-streaming-with-bg-result",
@@ -601,9 +601,81 @@ describe("TranscriptMessageList background result rendering", () => {
     const activeRow = indicator?.closest(".assistant-message");
     const rows = Array.from(container.querySelectorAll(".assistant-message"));
     expect(indicator).toBeTruthy();
-    expect(activeRow).toBe(rows[0]);
-    expect(activeRow?.textContent).not.toContain("Background Result");
+    expect(rows).toHaveLength(3);
     expect(rows[1].textContent).toContain("Background Result");
+    // The live indicator renders on a tail row after the card, so the
+    // transcript never ends on a static completed card mid-turn.
+    expect(activeRow).toBe(rows[2]);
+    expect(activeRow?.textContent).not.toContain("Background Result");
+    expect(container.querySelectorAll(".streaming-indicator")).toHaveLength(1);
+  });
+
+  it("does not add a tail row after a trailing background result when idle", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "assistant-idle-with-bg-result",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [
+          { type: "text", text: "Foreground work finished." },
+          {
+            type: "bg_agent_result",
+            sessionId: "bg-3",
+            task: "Check tests",
+            status: "completed",
+            resultText: "Tests look covered.",
+          },
+        ],
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    const rows = Array.from(container.querySelectorAll(".assistant-message"));
+    expect(rows).toHaveLength(2);
+    expect(container.querySelector(".streaming-indicator")).toBeNull();
+    expect(container.querySelector(".empty-response")).toBeNull();
+  });
+
+  it("keeps the streaming indicator with active blocks that follow a background result", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "assistant-streaming-after-bg-result",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [
+          {
+            type: "bg_agent_result",
+            sessionId: "bg-4",
+            task: "Check tests",
+            status: "completed",
+            resultText: "Tests look covered.",
+          },
+          {
+            type: "tool_call",
+            id: "tool-after-bg",
+            name: "read_file",
+            inputJson: JSON.stringify({ path: "src/index.ts" }),
+            result: "",
+            complete: false,
+          },
+        ],
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: true }),
+    );
+
+    const rows = Array.from(container.querySelectorAll(".assistant-message"));
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain("Background Result");
+    const indicator = container.querySelector(".streaming-indicator");
+    expect(indicator?.closest(".assistant-message")).toBe(rows[1]);
   });
 
   it("renders a set_task_status summary as the result when no prose is available", () => {
@@ -640,6 +712,38 @@ describe("TranscriptMessageList background result rendering", () => {
 });
 
 describe("TranscriptMessageList retry error rendering", () => {
+  it("stacks condense validation warnings beneath the status badge", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "condense-warning",
+        role: "condense",
+        content: "",
+        timestamp: 1,
+        blocks: [],
+        condenseInfo: {
+          prevInputTokens: 329_200,
+          newInputTokens: 18_500,
+          durationMs: 61_400,
+          validationWarnings: [
+            "Condense source exceeded the request budget; older messages remain available through search_session_history.",
+          ],
+        },
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    const content = container.querySelector(".condense-row-content");
+    expect(content?.querySelector(":scope > .condense-row-badge")).toBeTruthy();
+    expect(
+      content?.querySelector(":scope > .condense-row-warning"),
+    ).toBeTruthy();
+    expect(container.querySelector(".condense-row")?.children).toHaveLength(3);
+    cleanup();
+  });
+
   it("renders condense failures through the bounded standard error notice", () => {
     const requestId = "req_" + "a".repeat(240);
     const messages: ChatMessage[] = [
@@ -1157,10 +1261,12 @@ describe("TranscriptMessageList streaming baseline metrics", () => {
       }),
     );
 
+    // Text segment + card render as history; the synthetic streaming tail
+    // row below the card is the only active row.
     expect(recorder.summarize("browser-webview", "ask-agent")).toMatchObject({
-      historyRenders: 1,
+      historyRenders: 2,
       activeRenders: 1,
-      historyCommits: 1,
+      historyCommits: 2,
       activeCommits: 1,
     });
     cleanup();

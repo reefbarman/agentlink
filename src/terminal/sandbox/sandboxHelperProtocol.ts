@@ -5,7 +5,7 @@ import type {
 
 import type { TerminalDimensions } from "../../core/terminalProtocol.js";
 
-export const SANDBOX_HELPER_PROTOCOL_VERSION = 1;
+export const SANDBOX_HELPER_PROTOCOL_VERSION = 3;
 export const MAX_SANDBOX_HELPER_FRAME_BYTES = 1024 * 1024;
 export const MAX_SANDBOX_HELPER_DATA_BYTES = 256 * 1024;
 
@@ -13,6 +13,19 @@ export interface SandboxCommandIdentity {
   channelId: string;
   commandId: string;
   generation: number;
+}
+
+export type SandboxManagedNetworkProtocol = "http" | "https" | "tcp";
+
+export interface SandboxManagedNetworkDestination {
+  requestId: string;
+  host: string;
+  protocol: SandboxManagedNetworkProtocol;
+  port: number;
+  address: string;
+  family: 4 | 6;
+  dnsAnswers: Array<{ address: string; family: 4 | 6 }>;
+  destinationClass: "public";
 }
 
 export interface SandboxHelperLaunchRequest extends SandboxCommandIdentity {
@@ -30,6 +43,7 @@ export interface SandboxHelperLaunchRequest extends SandboxCommandIdentity {
   };
   network: SandboxNetworkPolicy;
   protectedRoots: string[];
+  structurallyProtectedRoots: string[];
   dimensions: TerminalDimensions;
 }
 
@@ -41,7 +55,12 @@ export type SandboxHelperControlFrame =
       dimensions: TerminalDimensions;
     })
   | (SandboxCommandIdentity & { type: "interrupt" })
-  | (SandboxCommandIdentity & { type: "terminate" });
+  | (SandboxCommandIdentity & { type: "terminate" })
+  | (SandboxCommandIdentity & {
+      type: "network-decision";
+      requestId: string;
+      decision: "allow-once" | "reject";
+    });
 
 export type SandboxHelperEventFrame =
   | (SandboxCommandIdentity & {
@@ -60,6 +79,10 @@ export type SandboxHelperEventFrame =
   | (SandboxCommandIdentity & {
       type: "violation";
       violation: SandboxViolation;
+    })
+  | (SandboxCommandIdentity & {
+      type: "network-request";
+      request: SandboxManagedNetworkDestination;
     })
   | (SandboxCommandIdentity & {
       type: "exit";
@@ -158,13 +181,51 @@ function isFilesystem(
 
 function isNetworkPolicy(value: unknown): value is SandboxNetworkPolicy {
   if (!isRecord(value) || typeof value.mode !== "string") return false;
-  if (value.mode === "blocked") return hasOnlyKeys(value, ["mode"]);
-  if (value.mode === "public-proxy") {
+  if (value.mode === "loopback" || value.mode === "public-proxy") {
     return (
-      hasOnlyKeys(value, ["mode"]) && value.allowedPrivateTargets === undefined
+      hasOnlyKeys(value, ["mode", "allowLocalBinding"]) &&
+      (value.allowLocalBinding === undefined ||
+        value.allowLocalBinding === true) &&
+      value.allowedPrivateTargets === undefined
     );
   }
   return false;
+}
+
+function isManagedNetworkDestination(
+  value: unknown,
+): value is SandboxManagedNetworkDestination {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, [
+      "requestId",
+      "host",
+      "protocol",
+      "port",
+      "address",
+      "family",
+      "dnsAnswers",
+      "destinationClass",
+    ]) &&
+    isNonEmptyString(value.requestId) &&
+    isNonEmptyString(value.host) &&
+    ["http", "https", "tcp"].includes(String(value.protocol)) &&
+    Number.isSafeInteger(value.port) &&
+    (value.port as number) >= 1 &&
+    (value.port as number) <= 65_535 &&
+    isNonEmptyString(value.address) &&
+    (value.family === 4 || value.family === 6) &&
+    Array.isArray(value.dnsAnswers) &&
+    value.dnsAnswers.length > 0 &&
+    value.dnsAnswers.every(
+      (answer) =>
+        isRecord(answer) &&
+        hasOnlyKeys(answer, ["address", "family"]) &&
+        isNonEmptyString(answer.address) &&
+        (answer.family === 4 || answer.family === 6),
+    ) &&
+    value.destinationClass === "public"
+  );
 }
 
 function isViolation(value: unknown): value is SandboxViolation {
@@ -212,6 +273,13 @@ export function isSandboxHelperControlFrame(
   if (value.type === "interrupt" || value.type === "terminate") {
     return hasOnlyKeys(value, identityKeys);
   }
+  if (value.type === "network-decision") {
+    return (
+      hasOnlyKeys(value, [...identityKeys, "requestId", "decision"]) &&
+      isNonEmptyString(value.requestId) &&
+      (value.decision === "allow-once" || value.decision === "reject")
+    );
+  }
   if (value.type !== "launch") return false;
 
   return (
@@ -225,6 +293,7 @@ export function isSandboxHelperControlFrame(
       "filesystem",
       "network",
       "protectedRoots",
+      "structurallyProtectedRoots",
       "dimensions",
     ]) &&
     value.version === SANDBOX_HELPER_PROTOCOL_VERSION &&
@@ -236,6 +305,7 @@ export function isSandboxHelperControlFrame(
     isFilesystem(value.filesystem) &&
     isNetworkPolicy(value.network) &&
     isStringArray(value.protectedRoots, true) &&
+    isStringArray(value.structurallyProtectedRoots, true) &&
     isDimensions(value.dimensions)
   );
 }
@@ -269,6 +339,12 @@ export function isSandboxHelperEventFrame(
     return (
       hasOnlyKeys(value, [...identityKeys, "violation"]) &&
       isViolation(value.violation)
+    );
+  }
+  if (value.type === "network-request") {
+    return (
+      hasOnlyKeys(value, [...identityKeys, "request"]) &&
+      isManagedNetworkDestination(value.request)
     );
   }
   if (value.type === "error") {

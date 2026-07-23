@@ -9,6 +9,7 @@ describe("isForwardedBuiltinCommand", () => {
     "mcp-config",
     "mcp-refresh",
     "btw",
+    "worktree",
     "pair",
     "usage",
     "condense",
@@ -44,6 +45,7 @@ describe("isForwardedBuiltinCommand", () => {
     ["browser", "model"],
     ["browser", "mcp"],
     ["browser", "pair"],
+    ["browser", "worktree"],
   ] as const)("does not forward %s command %s", (surface, name) => {
     expect(isForwardedBuiltinCommand(surface, name)).toBe(false);
   });

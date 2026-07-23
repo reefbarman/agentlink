@@ -4,6 +4,7 @@ export interface WorkspaceEditOrchestration<TFailure, TSuccess> {
   edit: vscode.WorkspaceEdit;
   affectedPaths: readonly string[];
   applyFailure: TFailure;
+  saveFailure?: TFailure;
   buildSuccess(): TSuccess;
 }
 
@@ -17,8 +18,12 @@ export async function applyWorkspaceEditAndSave<TFailure, TSuccess>(
 
   const affectedPaths = new Set(params.affectedPaths);
   for (const document of vscode.workspace.textDocuments) {
-    if (affectedPaths.has(document.uri.fsPath) && document.isDirty) {
-      await document.save();
+    if (
+      affectedPaths.has(document.uri.fsPath) &&
+      document.isDirty &&
+      !(await document.save())
+    ) {
+      return params.saveFailure ?? params.applyFailure;
     }
   }
 

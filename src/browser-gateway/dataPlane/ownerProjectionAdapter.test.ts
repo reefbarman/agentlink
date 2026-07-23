@@ -205,6 +205,9 @@ function readSet(): BrowserGatewayOwnerProjectionReadSet {
     policies: {
       agentWriteApproval: "prompt",
       commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "user",
+      executionPreset: "native-manual",
       configuredCommandApprovalPolicy: "safe",
     },
   };
@@ -464,6 +467,9 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
       condenseThreshold: 0.8,
       agentWriteApproval: "prompt",
       commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "user",
+      executionPreset: "native-manual",
       configuredCommandApprovalPolicy: "safe",
       restoringSession: true,
       revertRecoveryNotice: {

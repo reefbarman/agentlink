@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import type { CommandRule } from "../approvals/ApprovalManager.js";
+import { isBannedCommandRulePrefixSuggestion } from "../approvals/commandRulePolicy.js";
 
 interface TrustedCommandRuleTarget {
   addCommandRule(
@@ -14,8 +15,9 @@ export async function addTrustedCommandViaUi(
   approvalManager: TrustedCommandRuleTarget,
 ): Promise<void> {
   const pattern = await vscode.window.showInputBox({
-    title: "Built-In Agent Trusted Command Pattern",
-    prompt: "Enter a command pattern to trust for built-in agent sessions",
+    title: "Built-In Agent Command Policy Pattern",
+    prompt:
+      "Enter a command pattern. Exact and prefix allow rules may run outside the Protected Terminal with normal user permissions.",
     ignoreFocusOut: true,
     validateInput: (value) => (value.trim() ? null : "Pattern cannot be empty"),
   });
@@ -25,17 +27,17 @@ export async function addTrustedCommandViaUi(
   const modes: Array<vscode.QuickPickItem & { mode: CommandRule["mode"] }> = [
     {
       label: "Prefix Match",
-      description: `Trust commands starting with "${trimmedPattern}"`,
+      description: `Native authority for commands starting with "${trimmedPattern}"`,
       mode: "prefix",
     },
     {
       label: "Exact Match",
-      description: `Trust only "${trimmedPattern}"`,
+      description: `Native authority only for "${trimmedPattern}"`,
       mode: "exact",
     },
     {
       label: "Regex Match",
-      description: `Trust commands matching /${trimmedPattern}/`,
+      description: `Approval shortcut only for commands matching /${trimmedPattern}/`,
       mode: "regex",
     },
   ];
@@ -46,6 +48,18 @@ export async function addTrustedCommandViaUi(
     ignoreFocusOut: true,
   });
   if (!picked) return;
+
+  if (
+    picked.mode === "prefix" &&
+    isBannedCommandRulePrefixSuggestion(trimmedPattern)
+  ) {
+    const confirmed = await vscode.window.showWarningMessage(
+      `Broad native prefix: "${trimmedPattern}" can authorize any matching command outside the Protected Terminal with your normal user permissions.`,
+      { modal: true },
+      "Add Broad Native Rule",
+    );
+    if (confirmed !== "Add Broad Native Rule") return;
+  }
 
   const scopeItems: Array<
     vscode.QuickPickItem & { scope: "project" | "global" }
@@ -72,10 +86,14 @@ export async function addTrustedCommandViaUi(
 
   approvalManager.addCommandRule(
     "_global",
-    { pattern: trimmedPattern, mode: picked.mode },
+    { pattern: trimmedPattern, mode: picked.mode, decision: "allow" },
     scopePick.scope,
   );
+  const authority =
+    picked.mode === "regex"
+      ? "approval only; sandbox retained"
+      : "native authority; every command segment must match";
   vscode.window.showInformationMessage(
-    `Added trusted command (${scopePick.scope}): ${picked.mode} "${trimmedPattern}"`,
+    `Added command policy (${scopePick.scope}): allow ${picked.mode} "${trimmedPattern}" (${authority})`,
   );
 }

@@ -13,6 +13,21 @@ describe("todoTool", () => {
     expect(todoTool.description).toContain("completeTodos=true");
     expect(todoTool.description).toContain("instead of a final todo_write");
   });
+
+  it("requires continuous reconciliation instead of stale end-of-turn updates", () => {
+    expect(todoTool.description).toContain(
+      "Treat the list as user-visible execution state",
+    );
+    expect(todoTool.description).toContain(
+      "Before moving from one item to the next",
+    );
+    expect(todoTool.description).toContain(
+      "Never silently drop unfinished items",
+    );
+    expect(todoTool.description).toContain(
+      "do not redo completed work merely because an item still says pending",
+    );
+  });
 });
 
 function makeItem(
@@ -43,6 +58,18 @@ describe("handleTodoWrite", () => {
     ];
     const { content } = handleTodoWrite({ todos });
     expect(content).toBe("Updated: 1/3 complete, 1 in progress, 1 pending");
+  });
+
+  it("warns when multiple items are simultaneously in progress", () => {
+    const todos: TodoItem[] = [
+      makeItem({ id: "1", content: "A", status: "in_progress" }),
+      makeItem({ id: "2", content: "B", status: "in_progress" }),
+    ];
+    const { content } = handleTodoWrite({ todos });
+    expect(content).toContain("2 items are in_progress");
+    expect(content).toContain(
+      "exactly one actual current item is in_progress before continuing",
+    );
   });
 
   it("produces correct summary with empty list", () => {

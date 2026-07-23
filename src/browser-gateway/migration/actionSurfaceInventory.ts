@@ -115,6 +115,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
     "/api/suggest-regex",
     "Non-authoritative helper computation remains HTTP.",
   ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/polish-prompt",
+    "Non-authoritative composer transformation remains HTTP.",
+  ),
   protocolCommand(
     "vscode_gateway",
     "POST",

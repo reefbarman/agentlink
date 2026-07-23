@@ -11,6 +11,7 @@ import type {
   ReasoningEffort,
   SessionSummary,
   TodoItem,
+  WorktreeSetupState,
 } from "./types";
 import type {
   McpConfigBatchMutation,
@@ -40,11 +41,16 @@ import {
   useState,
 } from "preact/hooks";
 
-import { ApprovalPanelEmbed } from "./components/ApprovalPanelEmbed";
+import {
+  ApprovalPanelEmbed,
+  DEFAULT_APPROVAL_PANEL_HEIGHT,
+  MIN_APPROVAL_PANEL_HEIGHT,
+} from "./components/ApprovalPanelEmbed";
 import { BackgroundSessionStrip } from "./components/BackgroundSessionStrip";
 import type { BgSessionInfoProps } from "./components/BackgroundSessionStrip";
 import { BtwPanel } from "./components/BtwPanel";
 import type { BtwState } from "./components/BtwPanel";
+import { WorktreeSetupPanel } from "./components/WorktreeSetupPanel";
 import { ChatHeader } from "./components/ChatHeader";
 import { ChatView } from "./components/ChatView";
 import { ContextUsageRow } from "./components/ContextUsageRow";
@@ -62,7 +68,10 @@ import type {
   McpFormElicitationRequest,
 } from "../../shared/mcpElicitation";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
-import { MessageQueuePanel } from "./components/MessageQueuePanel";
+import {
+  MessageQueuePanel,
+  type MessageQueueItem,
+} from "./components/MessageQueuePanel";
 import { ProviderUsagePanel } from "./components/ProviderUsageBlock";
 import {
   QuestionCard,
@@ -87,6 +96,7 @@ import { useWebviewMessageConnection } from "./useWebviewMessageConnection";
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
 const MCP_CONFIG_MUTATION_TIMEOUT_MS = 30_000;
+const PROMPT_POLISH_TIMEOUT_MS = 60_000;
 
 interface OpenTranscriptState {
   sessionId: string;
@@ -223,6 +233,15 @@ export {
   shouldProjectBackgroundCompletion,
 };
 
+export function queuedMessagesReadyToDrain(
+  queue: MessageQueueItem[],
+  editingQueueId: string | null,
+): MessageQueueItem[] {
+  return queue.filter(
+    (item) => item.source !== "browser" && item.id !== editingQueueId,
+  );
+}
+
 export interface Injection {
   type: "prompt" | "attachment" | "context";
   prompt?: string;
@@ -253,6 +272,10 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const historyLoadPendingRef = useRef(false);
   const messageQueueRef = useRef(state.messageQueue);
   messageQueueRef.current = state.messageQueue;
+  const editingQueuedMessageRef = useRef<{
+    id: string;
+    resumeInterjection: boolean;
+  } | null>(null);
   const reasoningEffortRef = useRef<ReasoningEffort>(
     state.chatState.reasoningEffort ??
       (state.thinkingEnabled ? "high" : "none"),
@@ -302,7 +325,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const [forwardedApproval, setForwardedApproval] =
     useState<ApprovalRequest | null>(null);
   const forwardedApprovalRef = useRef<ApprovalRequest | null>(null);
-  const [approvalPanelHeight, setApprovalPanelHeight] = useState(360);
+  const [approvalPanelHeight, setApprovalPanelHeight] = useState(
+    DEFAULT_APPROVAL_PANEL_HEIGHT,
+  );
   const [approvalResizing, setApprovalResizing] = useState(false);
   const approvalResizeCleanupRef = useRef<(() => void) | null>(null);
   const forwardedFollowUpRef = useRef("");
@@ -330,9 +355,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const bgSessionsRef = useRef<BgSessionInfoProps[]>([]);
   bgSessionsRef.current = bgSessions;
   const [openFleetToActiveRequest, setOpenFleetToActiveRequest] = useState(0);
+  const [showFleetRequest, setShowFleetRequest] = useState(0);
   const [transcriptView, setTranscriptView] =
     useState<OpenTranscriptState | null>(null);
   const [btwState, setBtwState] = useState<BtwState | null>(null);
+  const [worktreeSetupState, setWorktreeSetupState] =
+    useState<WorktreeSetupState | null>(null);
 
   useEffect(() => {
     const sendThemeSnapshot = () => {
@@ -570,12 +598,13 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           flushDeltasNow();
           streamingRef.current = false;
           dispatch({ type: "DONE" });
-          const queue = messageQueueRef.current.filter(
-            (q) => q.source !== "browser",
+          const queue = queuedMessagesReadyToDrain(
+            messageQueueRef.current,
+            editingQueuedMessageRef.current?.id ?? null,
           );
           if (queue.length > 0) {
             messageQueueRef.current = messageQueueRef.current.filter(
-              (q) => q.source === "browser",
+              (q) => !queue.some((item) => item.id === q.id),
             );
             for (const item of queue) {
               dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
@@ -761,6 +790,21 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               pending.resolve(msg.pattern);
             } else {
               pending.reject(new Error("No suggestion returned"));
+            }
+          }
+          break;
+        }
+
+        case "promptPolishResult": {
+          const pending = pendingPromptPolishRef.current.get(msg.requestId);
+          if (pending) {
+            pendingPromptPolishRef.current.delete(msg.requestId);
+            if (msg.error) {
+              pending.reject(new Error(msg.error));
+            } else if (msg.polished) {
+              pending.resolve(msg.polished);
+            } else {
+              pending.reject(new Error("No polished text returned"));
             }
           }
           break;
@@ -1288,6 +1332,88 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               budget: msg.budget ?? prev.budget,
             };
           });
+          break;
+
+        case "agentWorktreeSetupStarted":
+          setWorktreeSetupState({
+            requestId: msg.requestId,
+            input: msg.input,
+            answer: "",
+            phase: "configuring",
+            tools: [],
+            warnings: [],
+          });
+          break;
+
+        case "agentWorktreeSetupProgress":
+          setWorktreeSetupState((previous) =>
+            previous?.requestId === msg.requestId
+              ? {
+                  ...previous,
+                  answer: msg.answer,
+                  tools: msg.tools,
+                  warnings: msg.warnings,
+                  budget: msg.budget,
+                }
+              : previous,
+          );
+          break;
+
+        case "agentWorktreeSetupAwaitingInput":
+          setWorktreeSetupState((previous) =>
+            previous?.requestId === msg.requestId
+              ? {
+                  ...previous,
+                  phase: "awaiting_input",
+                  answer: msg.answer,
+                  conversation: msg.conversation,
+                  tools: msg.tools,
+                  warnings: msg.warnings,
+                  budget: msg.budget,
+                }
+              : previous,
+          );
+          break;
+
+        case "agentWorktreeSetupReady":
+          setWorktreeSetupState((previous) =>
+            previous?.requestId === msg.requestId
+              ? {
+                  ...previous,
+                  phase: "ready",
+                  answer: msg.answer,
+                  config: msg.config,
+                  tools: msg.tools,
+                  warnings: msg.warnings,
+                  budget: msg.budget,
+                }
+              : previous,
+          );
+          break;
+
+        case "agentWorktreeSetupLaunching":
+          setWorktreeSetupState((previous) =>
+            previous?.requestId === msg.requestId
+              ? {
+                  ...previous,
+                  phase: "launching",
+                  config: msg.config,
+                }
+              : previous,
+          );
+          break;
+
+        case "agentWorktreeSetupResult":
+          setWorktreeSetupState((previous) =>
+            previous?.requestId === msg.requestId
+              ? {
+                  ...previous,
+                  phase: msg.phase,
+                  message: msg.message,
+                  config: msg.config ?? previous.config,
+                }
+              : previous,
+          );
           break;
 
         case "agentPairingCode":
@@ -1975,6 +2101,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             thinkingEnabled: false,
           });
           break;
+        case "fleet":
+          setShowFleetRequest((request) => request + 1);
+          break;
       }
 
       if (isForwardedBuiltinCommand("vscode", name)) {
@@ -2041,6 +2170,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const handleForwardedApprovalSubmit = useCallback(
     (data: Omit<DecisionMessage, "type">) => {
       const submittedApprovalId = data.id;
+      const approvalKind = forwardedApprovalRef.current?.kind;
       setForwardedApproval((current) => {
         if (!current || current.id === submittedApprovalId) return null;
         return current;
@@ -2049,7 +2179,11 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         forwardedApprovalRef.current = null;
       }
       forwardedFollowUpRef.current = "";
-      vscodeApi.postMessage({ command: "approvalDecision", ...data });
+      vscodeApi.postMessage({
+        command: "approvalDecision",
+        ...data,
+        approvalKind: approvalKind ?? data.approvalKind,
+      });
     },
     [vscodeApi],
   );
@@ -2076,8 +2210,43 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [vscodeApi],
   );
 
+  const pendingPromptPolishRef = useRef<
+    Map<
+      string,
+      { resolve: (polished: string) => void; reject: (err: Error) => void }
+    >
+  >(new Map());
+  const handlePolishPrompt = useCallback(
+    (draft: string): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        const requestId = `polish-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const timeout = setTimeout(() => {
+          if (pendingPromptPolishRef.current.delete(requestId)) {
+            reject(new Error("Polish timed out"));
+          }
+        }, PROMPT_POLISH_TIMEOUT_MS);
+        pendingPromptPolishRef.current.set(requestId, {
+          resolve: (polished) => {
+            clearTimeout(timeout);
+            resolve(polished);
+          },
+          reject: (err) => {
+            clearTimeout(timeout);
+            reject(err);
+          },
+        });
+        vscodeApi.postMessage({
+          command: "agentPolishPrompt",
+          requestId,
+          draft,
+        });
+      });
+    },
+    [vscodeApi],
+  );
+
   const clampApprovalPanelHeight = useCallback((height: number) => {
-    const min = 220;
+    const min = MIN_APPROVAL_PANEL_HEIGHT;
     const max = Math.max(min, window.innerHeight - 180);
     return Math.min(max, Math.max(min, height));
   }, []);
@@ -2538,7 +2707,10 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           streamingMetricsSurface="vscode-webview"
           streamingMetricsScope={state.chatState.sessionId ?? "foreground"}
         />
-        <ChatActivityShelf>
+        <ChatActivityShelf
+          revealKey={forwardedApproval?.id ?? null}
+          revealMinHeight={approvalPanelHeight + 10}
+        >
           <MessageQueuePanel
             queue={state.messageQueue}
             onSteer={(item) => {
@@ -2575,6 +2747,17 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               });
             }}
             onEdit={(item, text) => {
+              messageQueueRef.current = messageQueueRef.current.map((queued) =>
+                queued.id === item.id
+                  ? {
+                      ...queued,
+                      text,
+                      fullText: text,
+                      isSlashCommand: false,
+                      slashCommandLabel: undefined,
+                    }
+                  : queued,
+              );
               dispatch({
                 type: "EDIT_QUEUE_MESSAGE",
                 id: item.id,
@@ -2592,19 +2775,62 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                 documents: item.documents,
               });
             }}
+            onEditingChange={(item, editing) => {
+              if (editing) {
+                editingQueuedMessageRef.current = {
+                  id: item.id,
+                  resumeInterjection: item.interjectionReady === true,
+                };
+                if (item.interjectionReady) {
+                  vscodeApi.postMessage({
+                    command: "agentPauseQueuedMessageInterjection",
+                    sessionId: stateRef.current.sessionId,
+                    queueId: item.id,
+                  });
+                }
+                return;
+              }
+
+              const edit = editingQueuedMessageRef.current;
+              editingQueuedMessageRef.current = null;
+              if (
+                edit?.id !== item.id ||
+                !edit.resumeInterjection ||
+                !streamingRef.current
+              ) {
+                return;
+              }
+              const updatedItem = messageQueueRef.current.find(
+                (queued) => queued.id === item.id,
+              );
+              if (!updatedItem) return;
+              vscodeApi.postMessage({
+                command: "agentInterjectQueuedMessage",
+                sessionId: stateRef.current.sessionId,
+                queueId: updatedItem.id,
+                text: updatedItem.fullText ?? updatedItem.text,
+                displayText: updatedItem.text,
+                isSlashCommand: updatedItem.isSlashCommand === true,
+                slashCommandLabel: updatedItem.slashCommandLabel,
+                attachments: updatedItem.attachments,
+                images: updatedItem.images,
+                documents: updatedItem.documents,
+              });
+            }}
             onRemove={(item) => {
               const nextQueue = messageQueueRef.current.filter(
                 (q) => q.id !== item.id,
               );
               messageQueueRef.current = nextQueue;
               dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
-              if (item.source === "browser") {
-                vscodeApi.postMessage({
-                  command: "agentRemoveQueuedMessage",
-                  sessionId: stateRef.current.sessionId,
-                  queueId: item.id,
-                });
-              }
+              // Always notify the extension: a VS Code-sourced message may be
+              // registered as a pending interjection, and without this the
+              // deleted message would still be injected at the next tool break.
+              vscodeApi.postMessage({
+                command: "agentRemoveQueuedMessage",
+                sessionId: stateRef.current.sessionId,
+                queueId: item.id,
+              });
             }}
           />
           <ContextUsageRow
@@ -2625,8 +2851,15 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               onClose={() => setMcpManagerSnapshot(null)}
               onRefresh={() =>
                 vscodeApi.postMessage({
-                  command: "agentSlashCommand",
-                  name: "mcp-refresh",
+                  command: "agentMcpSelectProject",
+                  projectId: mcpManagerSnapshot.project?.projectId,
+                  refresh: true,
+                })
+              }
+              onSelectProject={(projectId) =>
+                vscodeApi.postMessage({
+                  command: "agentMcpSelectProject",
+                  projectId,
                 })
               }
               onServerAction={(serverName, action) =>
@@ -2634,6 +2867,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                   command: "agentMcpAction",
                   serverName,
                   action,
+                  projectId: mcpManagerSnapshot.project?.projectId,
                 })
               }
               onOpenRawConfig={(scope: McpManagerScope) =>
@@ -2641,6 +2875,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                   command: "agentMcpConfigOpenRaw",
                   profile: mcpManagerSnapshot.profile,
                   scope,
+                  projectId: mcpManagerSnapshot.project?.projectId,
                 })
               }
               onMutateConfig={(mutation: McpConfigBatchMutation) =>
@@ -2671,6 +2906,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                   command: "agentMcpConfigSave",
                   profile: mcpManagerSnapshot.profile,
                   scope,
+                  projectId: mcpManagerSnapshot.project?.projectId,
                   server,
                 })
               }
@@ -2679,6 +2915,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                   command: "agentMcpConfigRemove",
                   profile: mcpManagerSnapshot.profile,
                   scope,
+                  projectId: mcpManagerSnapshot.project?.projectId,
                   serverName,
                 })
               }
@@ -2813,6 +3050,62 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               }}
             />
           )}
+          {worktreeSetupState && (
+            <WorktreeSetupPanel
+              key={worktreeSetupState.requestId}
+              state={worktreeSetupState}
+              onCancel={(requestId) => {
+                vscodeApi.postMessage({
+                  command: "agentWorktreeSetupCancel",
+                  requestId,
+                });
+              }}
+              onDismiss={() => {
+                if (
+                  worktreeSetupState.phase === "configuring" ||
+                  worktreeSetupState.phase === "awaiting_input"
+                ) {
+                  vscodeApi.postMessage({
+                    command: "agentWorktreeSetupCancel",
+                    requestId: worktreeSetupState.requestId,
+                  });
+                }
+                setWorktreeSetupState(null);
+              }}
+              onLaunch={(requestId, autoSubmit) => {
+                setWorktreeSetupState((previous) =>
+                  previous?.requestId === requestId
+                    ? { ...previous, phase: "launching" }
+                    : previous,
+                );
+                vscodeApi.postMessage({
+                  command: "agentWorktreeSetupLaunch",
+                  requestId,
+                  autoSubmit,
+                });
+              }}
+              onReply={(requestId, text) => {
+                setWorktreeSetupState((previous) =>
+                  previous?.requestId === requestId
+                    ? {
+                        ...previous,
+                        phase: "configuring",
+                        answer: "",
+                        conversation: [
+                          ...(previous.conversation ?? []),
+                          { role: "user" as const, text },
+                        ],
+                      }
+                    : previous,
+                );
+                vscodeApi.postMessage({
+                  command: "agentWorktreeSetupReply",
+                  requestId,
+                  text,
+                });
+              }}
+            />
+          )}
           {state.chatState.interrupted && !state.streaming && (
             <div class="interrupted-session-banner">
               <i class="codicon codicon-debug-restart" />
@@ -2840,8 +3133,10 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             />
           )}
           <BackgroundSessionStrip
+            key={state.chatState.sessionId ?? "no-session"}
             sessions={bgSessions}
             openToActiveRequest={openFleetToActiveRequest}
+            showFleetRequest={showFleetRequest}
             onStop={handleStopBackground}
             onOpenTranscript={handleOpenBgTranscript}
             onSteer={handleSteerBackground}
@@ -2883,6 +3178,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           }
           onInterject={handleInterject}
           onStop={handleStop}
+          onPolishPrompt={handlePolishPrompt}
           streaming={state.streaming}
           reasoningEffort={
             state.chatState.reasoningEffort ??

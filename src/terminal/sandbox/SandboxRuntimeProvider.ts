@@ -1,6 +1,7 @@
 import type {
   SandboxCommandIdentity,
   SandboxHelperLaunchRequest,
+  SandboxManagedNetworkDestination,
 } from "./sandboxHelperProtocol.js";
 
 import type { SandboxViolation } from "../../core/sandboxPolicy.js";
@@ -22,7 +23,8 @@ export interface SandboxCommandExit {
 export type SandboxCommandEvent =
   | { type: "data"; data: string }
   | { type: "cwd"; cwd: string; nonce: string }
-  | { type: "violation"; violation: SandboxViolation };
+  | { type: "violation"; violation: SandboxViolation }
+  | { type: "network-request"; request: SandboxManagedNetworkDestination };
 
 export interface SandboxCommandDisposable {
   dispose(): void;
@@ -38,6 +40,10 @@ export interface SandboxCommandProcess {
   write(data: string): boolean;
   resize(dimensions: TerminalDimensions): boolean;
   interrupt(): boolean;
+  respondToNetworkRequest?(
+    requestId: string,
+    decision: "allow-once" | "reject",
+  ): boolean;
   terminate(): boolean;
   dispose(): void;
 }

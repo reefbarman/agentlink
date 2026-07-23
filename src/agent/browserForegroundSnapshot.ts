@@ -27,6 +27,9 @@ export interface BrowserForegroundSnapshot {
   contextBudget?: AppState["chatState"]["contextBudget"];
   condenseThreshold?: AppState["chatState"]["condenseThreshold"];
   commandApprovalPolicy?: CommandApprovalPolicy;
+  approvalPolicy?: AppState["chatState"]["approvalPolicy"];
+  approvalReviewer?: AppState["chatState"]["approvalReviewer"];
+  executionPreset?: AppState["chatState"]["executionPreset"];
   configuredCommandApprovalPolicy?: Exclude<
     CommandApprovalPolicy,
     "approve-for-me"
@@ -96,6 +99,9 @@ export function createBrowserForegroundSnapshot(
       : undefined,
     condenseThreshold: state.chatState.condenseThreshold,
     commandApprovalPolicy: state.chatState.commandApprovalPolicy,
+    approvalPolicy: state.chatState.approvalPolicy,
+    approvalReviewer: state.chatState.approvalReviewer,
+    executionPreset: state.chatState.executionPreset,
     configuredCommandApprovalPolicy:
       state.chatState.configuredCommandApprovalPolicy,
     revertRecoveryNotice: state.revertRecoveryNotice

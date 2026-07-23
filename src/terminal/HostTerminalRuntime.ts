@@ -414,13 +414,21 @@ export class HostTerminalRuntime {
     return this.presentation.terminalRunning;
   }
 
-  get closeRequiresConfirmation(): boolean {
+  get hasActiveCommand(): boolean {
+    return this.blocks.activeCommandBlockId !== undefined;
+  }
+
+  get userMayBeBusy(): boolean {
     if (!this.presentation.terminalRunning) return false;
     return (
       this.presentation.alternateScreen ||
       this.blocks.mode !== "integrated" ||
       this.blocks.activeCommandBlockId !== undefined
     );
+  }
+
+  get closeRequiresConfirmation(): boolean {
+    return this.userMayBeBusy;
   }
 
   get interactionStateKey(): string {
@@ -611,12 +619,23 @@ export class HostTerminalRuntime {
     });
 
     let pendingWrite = "";
+    let pendingReplayText = "";
+    const flushReplayText = () => {
+      if (!pendingReplayText) return;
+      this.appendReplayUnit(pendingReplayText, true);
+      pendingReplayText = "";
+    };
     for (const character of data) {
       pendingWrite += character;
       const wasAtGround = this.alternateScreenTracker.atGround;
       const tracked = this.alternateScreenTracker.push(character);
       const isAtGround = this.alternateScreenTracker.atGround;
-      this.appendReplayCharacter(character, wasAtGround, isAtGround);
+      if (wasAtGround && isAtGround) {
+        pendingReplayText += character;
+      } else {
+        flushReplayText();
+        this.appendReplayControlCharacter(character, isAtGround);
+      }
       if (tracked.transitions.length === 0) continue;
       operations.push({ type: "write", data: pendingWrite });
       pendingWrite = "";
@@ -628,19 +647,15 @@ export class HostTerminalRuntime {
         operations.push({ type: "alternate-screen", transition });
       }
     }
+    flushReplayText();
     if (pendingWrite) operations.push({ type: "write", data: pendingWrite });
     return Buffer.byteLength(data, "utf8");
   }
 
-  private appendReplayCharacter(
+  private appendReplayControlCharacter(
     character: string,
-    wasAtGround: boolean,
     isAtGround: boolean,
   ): void {
-    if (wasAtGround && isAtGround) {
-      this.appendReplayUnit(character, true);
-      return;
-    }
     const characterBytes = Buffer.byteLength(character, "utf8");
     this.replayControlPendingBytes += characterBytes;
     if (!this.replayControlOverflow) {

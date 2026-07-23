@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 
+import { waitFor } from "@testing-library/preact";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HostTerminalTab } from "../../core/terminalProtocol.js";
@@ -78,21 +79,22 @@ class FakeRenderer implements TerminalRenderer {
   readonly reset = vi.fn();
   readonly focus = vi.fn();
   readonly clearSearch = vi.fn();
+  readonly isBracketedPasteMode = vi.fn(() => false);
   readonly updateConfiguration = vi.fn();
   readonly dispose = vi.fn();
   readonly findNext = vi.fn(() => true);
   readonly findPrevious = vi.fn(() => true);
   readonly registerBlockBoundary = vi.fn(() => true);
   readonly retainBlockAnchors = vi.fn();
-  readonly writes: string[] = [];
+  readonly writes: Array<{ data: string; source: "live" | "replay" }> = [];
   readonly pendingWrites: Array<() => void> = [];
   fitDimensions = { columns: 80, rows: 24 };
   deferWrites = false;
 
   constructor(readonly callbacks: TerminalRendererCallbacks) {}
 
-  write(data: string): Promise<void> {
-    this.writes.push(data);
+  write(data: string, source: "live" | "replay" = "live"): Promise<void> {
+    this.writes.push({ data, source });
     if (!this.deferWrites) return Promise.resolve();
     return new Promise((resolve) => this.pendingWrites.push(resolve));
   }
@@ -148,16 +150,34 @@ beforeEach(() => vi.restoreAllMocks());
 describe("TerminalWebviewController", () => {
   it("announces readiness and uses unique IDs for explicit requests", () => {
     const test = harness();
-    const addEventListener = vi.fn();
-    const removeEventListener = vi.fn();
+    const listeners = new Map<string, () => void>();
+    const addEventListener = vi.fn((type: string, listener: () => void) =>
+      listeners.set(type, listener),
+    );
+    const removeEventListener = vi.fn((type: string) => listeners.delete(type));
 
     const unmount = test.controller.mount({
+      document: { hasFocus: () => true },
       addEventListener,
       removeEventListener,
     });
     expect(test.postMessage).toHaveBeenCalledWith({
       type: "terminal-view/ready",
       protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
+    });
+    expect(test.postMessage).toHaveBeenCalledWith({
+      type: "terminal-view/focus-changed",
+      focused: true,
+    });
+    listeners.get("focus")?.();
+    listeners.get("blur")?.();
+    expect(test.postMessage).toHaveBeenCalledWith({
+      type: "terminal-view/focus-changed",
+      focused: true,
+    });
+    expect(test.postMessage).toHaveBeenCalledWith({
+      type: "terminal-view/focus-changed",
+      focused: false,
     });
     expect(
       test.postMessage.mock.calls.some(
@@ -167,20 +187,128 @@ describe("TerminalWebviewController", () => {
 
     test.controller.createTerminal();
     test.controller.createTerminal();
-    expect(test.postMessage).toHaveBeenNthCalledWith(2, {
-      type: "host-terminal/create",
-      requestId: "terminal-create-1-unique-1",
-    });
-    expect(test.postMessage).toHaveBeenNthCalledWith(3, {
-      type: "host-terminal/create",
-      requestId: "terminal-create-2-unique-2",
-    });
+    expect(
+      test.postMessage.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.type === "host-terminal/create"),
+    ).toEqual([
+      {
+        type: "host-terminal/create",
+        requestId: "terminal-create-1-unique-1",
+      },
+      {
+        type: "host-terminal/create",
+        requestId: "terminal-create-2-unique-2",
+      },
+    ]);
 
     unmount();
     expect(removeEventListener).toHaveBeenCalledWith(
       "message",
       expect.any(Function),
     );
+    expect(removeEventListener).toHaveBeenCalledWith(
+      "focus",
+      expect.any(Function),
+    );
+    expect(removeEventListener).toHaveBeenCalledWith(
+      "blur",
+      expect.any(Function),
+    );
+  });
+
+  it("retains multiple tabs from sequential New Terminal lifecycles", async () => {
+    const test = harness();
+    await test.controller.receive(bootstrap([], []));
+
+    await test.controller.receive({
+      type: "host-terminal/opened",
+      terminalInstanceId: "instance-1",
+      terminal: tab("terminal-1"),
+    });
+    await test.controller.receive({
+      type: "host-terminal/opened",
+      terminalInstanceId: "instance-2",
+      terminal: tab("terminal-2"),
+    });
+
+    expect(test.controller.getSnapshot()).toMatchObject({
+      tabs: [
+        { id: "terminal-1", terminalInstanceId: "instance-1" },
+        { id: "terminal-2", terminalInstanceId: "instance-2" },
+      ],
+      activeTabId: "terminal-2",
+      creating: false,
+    });
+    expect(test.factory.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens agent terminals quietly and tracks running and unread activity", async () => {
+    const test = harness();
+    await test.controller.receive(
+      bootstrap([tab("terminal-1")], [replay("terminal-1", "instance-1")]),
+    );
+    const initialFocusRequest = test.controller.getSnapshot().focusRequest;
+    expect(initialFocusRequest).toBe(1);
+
+    await test.controller.receive({
+      type: "host-terminal/opened",
+      terminalInstanceId: "agent-instance-1",
+      activate: false,
+      terminal: {
+        ...tab("agent-1"),
+        channelKind: "agent-native",
+      },
+    });
+    expect(test.controller.getSnapshot()).toMatchObject({
+      activeTabId: "terminal-1",
+      focusRequest: initialFocusRequest,
+    });
+
+    await test.controller.receive({
+      type: "host-terminal/agent-activity",
+      terminalId: "agent-1",
+      terminalInstanceId: "agent-instance-1",
+      activity: "running",
+    });
+    await test.controller.receive({
+      type: "host-terminal/activated",
+      terminalId: "agent-1",
+      terminalInstanceId: "agent-instance-1",
+    });
+    expect(test.controller.getSnapshot()).toMatchObject({
+      activeTabId: "agent-1",
+      focusRequest: initialFocusRequest,
+      tabs: [{ id: "terminal-1" }, { id: "agent-1", agentActivity: "running" }],
+    });
+
+    await test.controller.receive({
+      type: "host-terminal/activated",
+      terminalId: "terminal-1",
+      terminalInstanceId: "instance-1",
+    });
+    await test.controller.receive({
+      type: "host-terminal/agent-activity",
+      terminalId: "agent-1",
+      terminalInstanceId: "agent-instance-1",
+      activity: "unread",
+    });
+    expect(test.controller.getSnapshot().tabs).toEqual([
+      expect.objectContaining({ id: "terminal-1" }),
+      expect.objectContaining({ id: "agent-1", agentActivity: "unread" }),
+    ]);
+
+    test.controller.selectTerminal("agent-1");
+    await test.controller.receive({
+      type: "host-terminal/activated",
+      terminalId: "agent-1",
+      terminalInstanceId: "agent-instance-1",
+    });
+    expect(test.controller.getSnapshot()).toMatchObject({
+      activeTabId: "agent-1",
+      focusRequest: initialFocusRequest + 1,
+      tabs: [{ id: "terminal-1" }, { id: "agent-1" }],
+    });
   });
 
   it("creates one terminal after the initial empty bootstrap only", async () => {
@@ -296,12 +424,13 @@ describe("TerminalWebviewController", () => {
     await test.controller.receive(bootstrap());
     test.postMessage.mockClear();
 
-    test.renderers[0].callbacks.onPaste();
+    test.renderers[0].callbacks.onPaste(true);
     expect(test.postMessage).toHaveBeenCalledWith({
       type: "host-terminal/paste-intent",
       terminalId: "terminal-1",
       terminalInstanceId: "instance-1",
       rendererEpoch: "renderer-1",
+      bracketedPasteMode: true,
     });
 
     await test.controller.receive({
@@ -325,6 +454,7 @@ describe("TerminalWebviewController", () => {
     });
     expect(test.controller.getSnapshot().confirmation).toBeDefined();
 
+    test.renderers[0].isBracketedPasteMode.mockReturnValue(false);
     test.controller.respondToConfirmation(true);
     expect(test.postMessage).toHaveBeenCalledWith({
       type: "terminal-view/confirm",
@@ -333,6 +463,7 @@ describe("TerminalWebviewController", () => {
       rendererEpoch: "renderer-1",
       confirmationId: "confirmation-1",
       accept: true,
+      bracketedPasteMode: false,
     });
     expect(test.controller.getSnapshot().confirmation).toBeUndefined();
     expect(
@@ -369,7 +500,9 @@ describe("TerminalWebviewController", () => {
 
     await test.controller.receive(event);
     expect(test.renderers[0].reset).toHaveBeenCalledOnce();
-    expect(test.renderers[0].writes).toEqual(["retained output"]);
+    expect(test.renderers[0].writes).toEqual([
+      { data: "retained output", source: "replay" },
+    ]);
 
     await test.controller.receive({
       ...event,
@@ -377,13 +510,68 @@ describe("TerminalWebviewController", () => {
     });
     expect(test.factory.create).toHaveBeenCalledOnce();
     expect(test.renderers[0].reset).toHaveBeenCalledOnce();
-    expect(test.renderers[0].writes).toEqual(["retained output"]);
+    expect(test.renderers[0].writes).toEqual([
+      { data: "retained output", source: "replay" },
+    ]);
     expect(test.renderers[0].retainBlockAnchors).toHaveBeenLastCalledWith(
       new Set(),
     );
     expect(test.renderers[0].updateConfiguration).toHaveBeenCalledWith({
       scrollback: 1000,
     });
+  });
+
+  it("waits until the selected pane is visible before fitting and ignores inactive resizes", async () => {
+    const test = harness();
+    await test.controller.receive(
+      bootstrap(
+        [tab("terminal-1"), tab("terminal-2")],
+        [
+          replay("terminal-1", "instance-1"),
+          replay("terminal-2", "instance-2"),
+        ],
+      ),
+    );
+    test.controller.attachContainer(
+      "terminal-1",
+      document.createElement("div"),
+    );
+    test.controller.attachContainer(
+      "terminal-2",
+      document.createElement("div"),
+    );
+    test.postMessage.mockClear();
+
+    test.renderers[1].fitDimensions = { columns: 7, rows: 2 };
+    test.resizeCallbacks[1]();
+    test.controller.selectTerminal("terminal-2");
+
+    expect(test.postMessage).toHaveBeenCalledOnce();
+    expect(test.postMessage).toHaveBeenLastCalledWith({
+      type: "host-terminal/activate",
+      terminalId: "terminal-2",
+      terminalInstanceId: "instance-2",
+      rendererEpoch: "renderer-1",
+    });
+    expect(test.renderers[1].focus).not.toHaveBeenCalled();
+
+    test.renderers[0].fitDimensions = { columns: 5, rows: 2 };
+    test.resizeCallbacks[0]();
+    test.renderers[1].fitDimensions = { columns: 120, rows: 40 };
+    test.controller.fitActive();
+
+    expect(test.postMessage).toHaveBeenCalledTimes(2);
+    expect(test.postMessage).toHaveBeenLastCalledWith({
+      type: "host-terminal/resize",
+      terminalId: "terminal-2",
+      terminalInstanceId: "instance-2",
+      rendererEpoch: "renderer-1",
+      dimensions: { columns: 120, rows: 40 },
+    });
+    expect(test.renderers[1].focus).not.toHaveBeenCalled();
+
+    test.controller.focusActive();
+    expect(test.renderers[1].focus).toHaveBeenCalledOnce();
   });
 
   it("fits observed containers and sends only changed positive integer dimensions", async () => {
@@ -422,7 +610,7 @@ describe("TerminalWebviewController", () => {
     renderer.deferWrites = true;
     test.postMessage.mockClear();
 
-    const rendered = test.controller.receive({
+    await test.controller.receive({
       type: "terminal-view/render-batch",
       terminalId: "terminal-1",
       terminalInstanceId: "instance-1",
@@ -455,7 +643,7 @@ describe("TerminalWebviewController", () => {
     });
 
     await Promise.resolve();
-    expect(renderer.writes).toEqual(["first"]);
+    expect(renderer.writes).toEqual([{ data: "first", source: "live" }]);
     expect(renderer.registerBlockBoundary).not.toHaveBeenCalled();
     expect(test.postMessage).not.toHaveBeenCalled();
 
@@ -465,11 +653,15 @@ describe("TerminalWebviewController", () => {
       "block-1",
       "command-start",
     );
-    expect(renderer.writes).toEqual(["first", "second"]);
+    expect(renderer.writes).toEqual([
+      { data: "first", source: "live" },
+      { data: "second", source: "live" },
+    ]);
     expect(test.postMessage).not.toHaveBeenCalled();
 
     renderer.resolveNextWrite();
-    await rendered;
+    await Promise.resolve();
+    await Promise.resolve();
     expect(test.controller.getSnapshot().blockStates["terminal-1"]).toEqual({
       mode: "integrated",
       alternateScreen: false,
@@ -508,6 +700,144 @@ describe("TerminalWebviewController", () => {
     });
     test.controller.runBlockAction("terminal-1", "block-1", "rerun-command");
     expect(test.postMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains a terminal render before applying its exit and close lifecycle", async () => {
+    const test = harness();
+    await test.controller.receive(bootstrap());
+    const renderer = test.renderers[0];
+    renderer.deferWrites = true;
+
+    await test.controller.receive({
+      type: "terminal-view/render-batch",
+      terminalId: "terminal-1",
+      terminalInstanceId: "instance-1",
+      sequence: 1,
+      operations: [{ type: "write", data: "final output" }],
+      droppedRenderBytes: 0,
+      replayTruncated: false,
+      replayPendingControl: false,
+      suppressedOutputCharacters: 0,
+      outputPolicyDecisions: [],
+    });
+    await test.controller.receive({
+      type: "host-terminal/exited",
+      terminalId: "terminal-1",
+      terminalInstanceId: "instance-1",
+      exitCode: 0,
+    });
+    await test.controller.receive({
+      type: "host-terminal/closed",
+      terminalId: "terminal-1",
+      terminalInstanceId: "instance-1",
+    });
+
+    expect(test.controller.getSnapshot().tabs[0].status).toBe("running");
+    expect(renderer.dispose).not.toHaveBeenCalled();
+    renderer.resolveNextWrite();
+    await waitFor(() => expect(renderer.dispose).toHaveBeenCalledOnce());
+    expect(test.controller.getSnapshot().tabs).toEqual([]);
+  });
+
+  it("does not block another terminal lifecycle behind a slow render", async () => {
+    const test = harness();
+    await test.controller.receive(bootstrap());
+    const renderer = test.renderers[0];
+    renderer.deferWrites = true;
+
+    await test.controller.receive({
+      type: "terminal-view/render-batch",
+      terminalId: "terminal-1",
+      terminalInstanceId: "instance-1",
+      sequence: 1,
+      operations: [{ type: "write", data: "slow echo" }],
+      droppedRenderBytes: 0,
+      replayTruncated: false,
+      replayPendingControl: false,
+      suppressedOutputCharacters: 0,
+      outputPolicyDecisions: [],
+    });
+    await Promise.resolve();
+    expect(renderer.pendingWrites).toHaveLength(1);
+
+    await test.controller.receive({
+      type: "host-terminal/opened",
+      terminalInstanceId: "instance-2",
+      terminal: tab("terminal-2"),
+    });
+
+    expect(test.controller.getSnapshot()).toMatchObject({
+      tabs: [{ id: "terminal-1" }, { id: "terminal-2" }],
+      activeTabId: "terminal-2",
+    });
+    renderer.resolveNextWrite();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  it("does not warn when live output rolls beyond retained replay", async () => {
+    const test = harness();
+    await test.controller.receive(bootstrap());
+
+    await test.controller.receive({
+      type: "terminal-view/render-batch",
+      terminalId: "terminal-1",
+      terminalInstanceId: "instance-1",
+      sequence: 1,
+      operations: [{ type: "write", data: "current output" }],
+      droppedRenderBytes: 1_229_865,
+      replayTruncated: true,
+      replayPendingControl: false,
+      suppressedOutputCharacters: 0,
+      outputPolicyDecisions: [],
+    });
+
+    expect(
+      test.controller.getSnapshot().replayWarnings["terminal-1"],
+    ).toBeUndefined();
+  });
+
+  it("does not warn when recovery history exceeds retained scrollback", async () => {
+    const test = harness();
+    const snapshot = replay("terminal-1", "instance-1", "recent history", 1);
+    await test.controller.receive({
+      ...bootstrap(
+        [tab()],
+        [
+          {
+            ...snapshot,
+            droppedBytes: 1_229_865,
+            replayTruncated: true,
+          },
+        ],
+      ),
+      rendererEpoch: "renderer-2",
+    });
+
+    expect(
+      test.controller.getSnapshot().replayWarnings["terminal-1"],
+    ).toBeUndefined();
+  });
+
+  it("warns when recovery ends with an incomplete control sequence", async () => {
+    const test = harness();
+    const snapshot = replay("terminal-1", "instance-1", "recent history", 1);
+    await test.controller.receive({
+      ...bootstrap(
+        [tab()],
+        [
+          {
+            ...snapshot,
+            replayPendingControl: true,
+          },
+        ],
+      ),
+      rendererEpoch: "renderer-2",
+    });
+
+    expect(test.controller.getSnapshot().replayWarnings["terminal-1"]).toBe(
+      "Earlier terminal output could not be restored completely.",
+    );
   });
 
   it("projects replayed raw blocks as detached and routes only advertised actions", async () => {
@@ -773,6 +1103,59 @@ describe("TerminalWebviewController", () => {
     ).toBe(false);
   });
 
+  it("drops queued stale batches before an authoritative resync replay", async () => {
+    const test = harness();
+    await test.controller.receive(bootstrap());
+    const renderer = test.renderers[0];
+    renderer.reset.mockClear();
+    renderer.writes.length = 0;
+    renderer.deferWrites = true;
+    test.postMessage.mockClear();
+
+    const batch = (sequence: number, data: string) => ({
+      type: "terminal-view/render-batch" as const,
+      terminalId: "terminal-1",
+      terminalInstanceId: "instance-1",
+      sequence,
+      operations: [{ type: "write" as const, data }],
+      droppedRenderBytes: 0,
+      replayTruncated: false,
+      replayPendingControl: false,
+      suppressedOutputCharacters: 0,
+      outputPolicyDecisions: [],
+    });
+    await test.controller.receive(batch(1, "parsing stale"));
+    await test.controller.receive(batch(2, "queued stale"));
+    await Promise.resolve();
+    expect(renderer.writes).toEqual([
+      { data: "parsing stale", source: "live" },
+    ]);
+
+    await test.controller.receive({
+      type: "terminal-view/resync-required",
+      rendererEpoch: "renderer-1",
+    });
+    await test.controller.receive(
+      bootstrap(
+        [tab()],
+        [replay("terminal-1", "instance-1", "authoritative replay", 2)],
+      ),
+    );
+    renderer.resolveNextWrite();
+    await waitFor(() => expect(renderer.reset).toHaveBeenCalledOnce());
+    expect(renderer.writes).toEqual([
+      { data: "parsing stale", source: "live" },
+      { data: "authoritative replay", source: "replay" },
+    ]);
+    expect(
+      test.postMessage.mock.calls.some(
+        ([message]) =>
+          message.type === "terminal-view/output-ack" && message.sequence <= 2,
+      ),
+    ).toBe(false);
+    renderer.resolveNextWrite();
+  });
+
   it("resets and replays retained renderers after a requested resync", async () => {
     const test = harness();
     await test.controller.receive(bootstrap());
@@ -800,7 +1183,9 @@ describe("TerminalWebviewController", () => {
 
     expect(test.factory.create).toHaveBeenCalledOnce();
     expect(test.renderers[0].reset).toHaveBeenCalledOnce();
-    expect(test.renderers[0].writes).toEqual(["authoritative replay"]);
+    expect(test.renderers[0].writes).toEqual([
+      { data: "authoritative replay", source: "replay" },
+    ]);
   });
 
   it("applies configuration, lifecycle state, local search, and disposal", async () => {

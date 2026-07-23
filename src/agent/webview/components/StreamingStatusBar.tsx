@@ -1,7 +1,9 @@
 import type { ChatMessage } from "../types";
-import { getStreamingActivity } from "./MessageBubble";
+import { LiveLinkIndicator } from "./LiveLinkIndicator";
+import { getStreamingActivity } from "./activityPresentation";
 import {
   formatBackgroundRuntimeStatus,
+  getBackgroundRuntimeMotion,
   type BackgroundRuntimeStatus,
 } from "./backgroundRuntimeStatus";
 import { useEffect, useState } from "preact/hooks";
@@ -25,16 +27,21 @@ export function StreamingStatusBar({
     return () => window.clearInterval(timer);
   }, [runtimeStatus?.requestStartedAt, runtimeStatus?.retryAt]);
   const lastMsg = messages[messages.length - 1];
+  const projectedActivity =
+    lastMsg?.role === "assistant"
+      ? getStreamingActivity(lastMsg.blocks)
+      : getStreamingActivity([]);
   const status =
     formatBackgroundRuntimeStatus(runtimeStatus, now) ??
     statusOverride ??
-    (lastMsg?.role === "assistant"
-      ? getStreamingActivity(lastMsg.blocks)
-      : "Waiting for response…");
+    projectedActivity.label;
+  const motion = runtimeStatus
+    ? getBackgroundRuntimeMotion(runtimeStatus)
+    : projectedActivity.motion;
 
   return (
     <div class={`streaming-status-bar${className ? ` ${className}` : ""}`}>
-      <i class="codicon codicon-loading codicon-modifier-spin" />
+      <LiveLinkIndicator motion={motion} />
       <span>{status}</span>
     </div>
   );

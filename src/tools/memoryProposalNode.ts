@@ -17,6 +17,8 @@ export interface MemoryProposalTargetOptions {
   homeDir?: string;
   projectRoot?: string;
   allowProjectScope?: boolean;
+  /** Update/remove an existing command from any supported command source. */
+  preferExistingCommandTarget?: boolean;
   resolveProjectInstructionsTarget?: (
     projectRoot: string,
   ) => Promise<MemoryProposalTarget>;
@@ -34,7 +36,7 @@ export async function readMemoryProposalFileIfExists(
 }
 
 export async function resolveMemoryProposalTarget(
-  params: Pick<MemoryProposalParams, "tier" | "scope" | "name">,
+  params: Pick<MemoryProposalParams, "tier" | "scope" | "name" | "operation">,
   options: MemoryProposalTargetOptions = {},
 ): Promise<MemoryProposalTarget> {
   const home = options.homeDir ?? os.homedir();
@@ -97,6 +99,26 @@ export async function resolveMemoryProposalTarget(
     }
     case "command": {
       const name = validateMemoryProposalName(params);
+      if (options.preferExistingCommandTarget && params.operation !== "add") {
+        // Match SlashCommandRegistry precedence within the selected scope so
+        // updating a loaded .agents/.claude command edits that source instead
+        // of opening a blank .agentlink command as a new file.
+        for (const directory of [".agentlink", ".claude", ".agents"]) {
+          const filePath = path.join(base, directory, "commands", `${name}.md`);
+          try {
+            await fs.access(filePath);
+            return {
+              filePath,
+              displayPath:
+                params.scope === "global"
+                  ? `~/${directory}/commands/${name}.md`
+                  : `${directory}/commands/${name}.md`,
+            };
+          } catch {
+            // Try the next lower-precedence compatible command source.
+          }
+        }
+      }
       const filePath = path.join(base, ".agentlink", "commands", `${name}.md`);
       return {
         filePath,

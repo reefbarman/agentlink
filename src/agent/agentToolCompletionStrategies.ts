@@ -1,32 +1,33 @@
+import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import type { TrackedCall } from "./AgentToolCallTracker.js";
 import { successResult } from "../shared/types.js";
 
 export type AgentToolCompletionStrategy = (
   call: TrackedCall,
   log: (message: string) => void,
+  terminalProvider?: TerminalProvider,
 ) => Promise<void>;
 
 const completeExecuteCommand: AgentToolCompletionStrategy = async (
   call,
   log,
+  terminalProvider,
 ) => {
   log(
     `COMPLETE_EXEC ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${call.terminalId ?? "none"}`,
   );
-  const { getTerminalManager } =
-    await import("../integrations/TerminalManager.js");
-  const terminalManager = getTerminalManager();
-
   let partialOutput = "";
   if (call.terminalId) {
     partialOutput =
-      terminalManager.getCurrentOutput(call.terminalId, { force: true }) ?? "";
+      terminalProvider?.getCurrentOutput?.(call.terminalId, { force: true }) ??
+      terminalProvider?.getBackgroundState(call.terminalId)?.output ??
+      "";
     log(`COMPLETE_EXEC output captured: ${partialOutput.length} chars`);
   }
 
   if (call.terminalId) {
     log(`COMPLETE_EXEC interrupting terminal ${call.terminalId}`);
-    terminalManager.interruptTerminal(call.terminalId);
+    terminalProvider?.interruptTerminal(call.terminalId);
   }
 
   call.forceResolve(
@@ -44,19 +45,17 @@ const completeExecuteCommand: AgentToolCompletionStrategy = async (
 const completeGetTerminalOutput: AgentToolCompletionStrategy = async (
   call,
   log,
+  terminalProvider,
 ) => {
   const terminalId = call.displayArgs;
   log(
     `COMPLETE_GET_OUTPUT ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${terminalId}`,
   );
 
-  const { getTerminalManager } =
-    await import("../integrations/TerminalManager.js");
-  const terminalManager = getTerminalManager();
-  const state = terminalManager.getBackgroundState(terminalId);
+  const state = terminalProvider?.getBackgroundState(terminalId);
 
   if (!state) {
-    const directOutput = terminalManager.getCurrentOutput(terminalId, {
+    const directOutput = terminalProvider?.getCurrentOutput?.(terminalId, {
       force: true,
     });
     call.forceResolve(
@@ -82,7 +81,7 @@ const completeGetTerminalOutput: AgentToolCompletionStrategy = async (
 
   const output = state.output_captured
     ? state.output
-    : (terminalManager.getCurrentOutput(terminalId, { force: true }) ?? "");
+    : (terminalProvider?.getCurrentOutput?.(terminalId, { force: true }) ?? "");
 
   call.forceResolve(
     successResult({

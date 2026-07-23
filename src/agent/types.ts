@@ -31,6 +31,14 @@ export interface AgentRuntimeError {
   actions?: AgentErrorActions;
 }
 
+export interface PreservedRuntimeContext {
+  toolNames: string[];
+  mcpServerNames?: string[];
+  activeSkills?: string[];
+  /** Canonical task state reattached after context condensation. */
+  todos?: TodoItem[];
+}
+
 export type AgentMessage = MessageParam & {
   /**
    * Pasted media (images/PDFs) attached to this user message. Kept out of
@@ -47,11 +55,7 @@ export type AgentMessage = MessageParam & {
   isResumeContext?: boolean;
   condenseId?: string;
   condenseParent?: string;
-  preservedContext?: {
-    toolNames: string[];
-    mcpServerNames?: string[];
-    activeSkills?: string[];
-  };
+  preservedContext?: PreservedRuntimeContext;
   runtimeError?: AgentRuntimeError;
   uiHint?: {
     userMessage?: {
@@ -176,6 +180,10 @@ export type AgentEvent =
       storeResponseState?: boolean;
       providerResponseId?: string;
       contextBreakdown?: RequestContextBreakdown;
+      /** Engine-side estimate of content appended since the previous response. */
+      accumulatedEstimatedTokens?: number;
+      /** Per-source split of that estimate (e.g. "tool:read_file") for jump attribution. */
+      accumulatedEstimatedTokensBySource?: Record<string, number>;
     }
   | {
       type: "warning";

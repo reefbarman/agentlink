@@ -4,6 +4,12 @@ export type McpManagerScope = "global" | "project" | "ask-agent-global";
 
 export type McpManagerView = "status" | "config" | "add" | "edit";
 
+export interface McpManagerProjectInfo {
+  projectId: string;
+  displayName: string;
+  availability: "available" | "unavailable";
+}
+
 export type McpTransportType = "stdio" | "sse" | "streamable-http" | "http";
 
 export interface McpManagerToolInfo {
@@ -56,6 +62,8 @@ export interface McpManagerServerDraft {
   timeout?: number;
   toolPolicy?: "ask" | "allow";
   toolDisclosure?: "inline" | "deferred" | "auto";
+  /** Explicit opt-in for concurrent tool calls to this server. */
+  supportsParallelToolCalls?: boolean;
   allowedTools?: string[];
   disabled?: boolean;
 }
@@ -118,6 +126,8 @@ export interface McpConfigBatchMutation {
   operationId: string;
   profile: McpManagerProfile;
   scope: McpManagerScope;
+  /** Project targeted by a main-profile mutation in a multi-project workspace. */
+  projectId?: string;
   expectedRevision: string;
   operations: McpConfigBatchOperation[];
 }
@@ -162,6 +172,10 @@ export interface McpConfigMutationResult {
 
 export interface McpConfigSnapshot {
   profile: McpManagerProfile;
+  /** Explicit main-profile project scope represented by this snapshot. */
+  project?: McpManagerProjectInfo;
+  /** Workspace projects available for main-profile MCP management. */
+  projects?: McpManagerProjectInfo[];
   version: number;
   revision?: string;
   sources: McpConfigSourceSummary[];
@@ -183,16 +197,19 @@ export interface McpConfigSnapshot {
 export interface McpConfigServerMutation {
   profile: McpManagerProfile;
   scope: McpManagerScope;
+  projectId?: string;
   server: McpManagerServerDraft;
 }
 
 export interface McpConfigRemoveMutation {
   profile: McpManagerProfile;
   scope: McpManagerScope;
+  projectId?: string;
   serverName: string;
 }
 
 export interface McpRawConfigOpenRequest {
   profile: McpManagerProfile;
   scope: McpManagerScope;
+  projectId?: string;
 }

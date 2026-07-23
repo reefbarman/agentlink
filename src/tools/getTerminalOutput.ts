@@ -1,42 +1,13 @@
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
+import { type ToolResult } from "../shared/types.js";
+import { detectInteractivePrompt } from "../terminal/interactivePromptDetector.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 import { sleep } from "../util/sleep.js";
 
-import { type ToolResult } from "../shared/types.js";
-
-const INTERACTIVE_PROMPT_PATTERNS: RegExp[] = [
-  /\b(y\/n|yes\/no|press\s+(enter|return)|continue\?|are you sure)\b/i,
-  /\b(choose|select)\b.*\b(option|number)\b/i,
-  /\b(waiting\s+for\s+(input|confirmation)|enter\s+(?:yes|no|y|n))\b/i,
-  // Known prompt text emitted by codegen workflows that pause for confirmation.
-  /\bcustom code preservation\b/i,
-];
-
-function detectPromptBlock(output: string): {
-  blocked_on_prompt: boolean;
-  matched_pattern?: string;
-} {
-  const trimmed = output.trim();
-  if (!trimmed) {
-    return { blocked_on_prompt: false };
-  }
-
-  const tail = trimmed.slice(Math.max(0, trimmed.length - 4000));
-  const nonEmptyLines = tail
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  const recentTail = nonEmptyLines.slice(-6).join("\n");
-
-  for (const pattern of INTERACTIVE_PROMPT_PATTERNS) {
-    if (pattern.test(recentTail)) {
-      return {
-        blocked_on_prompt: true,
-        matched_pattern: pattern.source,
-      };
-    }
-  }
-  return { blocked_on_prompt: false };
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 }
 
 export interface GetTerminalOutputProviders {
@@ -119,16 +90,23 @@ export async function handleGetTerminalOutput(
     await sleep(500);
   }
 
-  const state = terminalProvider.getBackgroundState(params.terminal_id);
+  let state = terminalProvider.getBackgroundState(params.terminal_id);
+  const recentlyClosed = state
+    ? []
+    : terminalProvider.getRecentlyClosedTerminals(20);
+  const closedState = recentlyClosed.find(
+    (terminal) => terminal.id === params.terminal_id,
+  );
+  state ??= closedState;
 
   if (!state) {
-    const recent = terminalProvider.getRecentlyClosedTerminals(5).map((t) => ({
-      terminal_id: t.id,
-      terminal_name: t.name,
-      closed_at: new Date(t.closedAt).toISOString(),
-      state: t.state,
-      exit_code: t.exit_code,
-      output_captured: t.output_captured,
+    const recent = recentlyClosed.slice(0, 5).map((terminal) => ({
+      terminal_id: terminal.id,
+      terminal_name: terminal.name,
+      closed_at: new Date(terminal.closedAt).toISOString(),
+      state: terminal.state,
+      exit_code: terminal.exit_code,
+      output_captured: terminal.output_captured,
     }));
 
     return {
@@ -145,29 +123,63 @@ export async function handleGetTerminalOutput(
     };
   }
 
+  const retainedOutput = terminalProvider.getRetainedOutput?.(
+    params.terminal_id,
+  );
+  const output = retainedOutput?.output ?? state.output;
+  const outputComplete =
+    retainedOutput?.complete ?? state.output_complete ?? true;
+  const outputFinalized =
+    retainedOutput?.finalized ?? state.output_finalized ?? !state.is_running;
   const result: Record<string, unknown> = {
     terminal_id: params.terminal_id,
     is_running: state.is_running,
     state: state.state,
     exit_code: state.exit_code,
     output_captured: state.output_captured,
+    output_complete: outputComplete,
+    output_finalized: outputFinalized,
+    ...(retainedOutput
+      ? {
+          output_total_bytes: retainedOutput.total_bytes,
+          output_retained_bytes: retainedOutput.retained_bytes,
+          output_dropped_bytes: retainedOutput.dropped_bytes,
+        }
+      : state.output_total_bytes !== undefined
+        ? {
+            output_total_bytes: state.output_total_bytes,
+            output_retained_bytes: state.output_retained_bytes,
+            output_dropped_bytes: state.output_dropped_bytes,
+          }
+        : {}),
+    ...(closedState
+      ? {
+          terminal_name: closedState.name,
+          closed_at: new Date(closedState.closedAt).toISOString(),
+          recently_closed: true,
+        }
+      : {}),
+    ...(state.termination_reason
+      ? { termination_reason: state.termination_reason }
+      : {}),
+    ...(state.interactive_prompt
+      ? { interactive_prompt: { ...state.interactive_prompt } }
+      : {}),
     ...(params.kill && { killed: true }),
   };
 
   if (state.is_running && state.output_captured) {
-    const promptState = detectPromptBlock(state.output);
-    if (promptState.blocked_on_prompt) {
+    const prompt = detectInteractivePrompt(output);
+    if (prompt) {
       result.blocked_on_prompt = true;
-      result.prompt_detection = "heuristic";
-      if (promptState.matched_pattern) {
-        result.prompt_pattern = promptState.matched_pattern;
-      }
+      result.prompt_detection = "observation_only";
+      result.interactive_prompt = prompt;
       result.prompt_hint =
-        "The command appears to be waiting for interactive input. Use terminal_id with get_terminal_output(kill: true) to stop it, or open the terminal UI and answer the prompt.";
+        "The background command may be waiting for interactive input. get_terminal_output only observes background commands; use kill: true to stop it, or open the terminal UI and answer the prompt.";
     }
   }
 
-  if (state.output_captured && state.output) {
+  if (state.output_captured && output) {
     const filterOptions = {
       output_head: params.output_head,
       output_tail: params.output_tail,
@@ -176,16 +188,24 @@ export async function handleGetTerminalOutput(
       output_grep_context: params.output_grep_context,
     };
     const { filtered, totalLines, linesShown } = filterOutput(
-      state.output,
+      output,
       filterOptions,
     );
 
     result.output = filtered;
     result.total_lines = totalLines;
     result.lines_shown = linesShown;
+    result.total_lines_scope = outputComplete ? "complete" : "retained";
 
-    if (linesShown < totalLines) {
-      const outputFile = saveOutputTempFile(state.output);
+    if (!outputFinalized) {
+      result.output_warning =
+        "Terminal output is still running or was closed before finalization. Filtering applies to retained output so far; no final output file is available.";
+    } else if (!outputComplete) {
+      const droppedBytes =
+        retainedOutput?.dropped_bytes ?? state.output_dropped_bytes;
+      result.output_warning = `⚠️ Terminal output exceeded the bounded capture limit. ${droppedBytes === undefined ? "Some output" : formatBytes(droppedBytes)} was not retained; filtering applies only to the retained tail and no full-output file is available.`;
+    } else if (linesShown < totalLines) {
+      const outputFile = saveOutputTempFile(output);
       if (outputFile) {
         result.output_file = outputFile;
         result.output_warning =

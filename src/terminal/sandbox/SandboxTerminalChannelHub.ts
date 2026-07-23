@@ -5,6 +5,7 @@ import type {
 
 import type { SandboxTerminalSessionSnapshot } from "./SandboxTerminalSession.js";
 import type { TerminalDimensions } from "../../core/terminalProtocol.js";
+import type { TerminalExecuteOptions } from "../../core/capabilities/terminal.js";
 
 export interface SandboxTerminalChannelHubDisposable {
   dispose(): void;
@@ -14,8 +15,38 @@ export type SandboxTerminalChannelHubListener = (
   update: SandboxTerminalChannelEvent,
 ) => void;
 
+export interface AgentTerminalRawDataEvent {
+  channelId: string;
+  data: string;
+}
+
+export type AgentTerminalChannelAuthority = "sandbox" | "native";
+
+interface RawDataTerminalChannelCoordinator {
+  onRawData(
+    listener: (update: AgentTerminalRawDataEvent) => void,
+  ): SandboxTerminalChannelHubDisposable;
+}
+
+interface TerminalChannelCoordinator {
+  listTerminals(): Array<{ id: string }>;
+  getChannelSnapshot(
+    channelId: string,
+  ): SandboxTerminalSessionSnapshot | undefined;
+  onChannelEvent(
+    listener: (update: SandboxTerminalChannelEvent) => void,
+  ): SandboxTerminalChannelHubDisposable;
+  onDispose(listener: () => void): SandboxTerminalChannelHubDisposable;
+  write(channelId: string, data: string): boolean;
+  resize(channelId: string, dimensions: TerminalDimensions): boolean;
+  interruptTerminal(channelId: string): boolean;
+  closeTerminals(names?: string[]): { closed: number };
+  executeCommand(options: TerminalExecuteOptions): Promise<unknown>;
+}
+
 interface CoordinatorRegistration {
   eventSubscription: SandboxTerminalChannelHubDisposable;
+  rawDataSubscription?: SandboxTerminalChannelHubDisposable;
   disposeSubscription: SandboxTerminalChannelHubDisposable;
 }
 
@@ -25,16 +56,23 @@ export interface SandboxTerminalChannelHubOptions {
 }
 
 export class SandboxTerminalChannelHub {
-  private currentCoordinator: SandboxTerminalCoordinator | undefined;
+  private currentCoordinator: TerminalChannelCoordinator | undefined;
   private readonly coordinators = new Map<
-    SandboxTerminalCoordinator,
+    TerminalChannelCoordinator,
     CoordinatorRegistration
   >();
   private readonly channelOwners = new Map<
     string,
-    SandboxTerminalCoordinator
+    TerminalChannelCoordinator
+  >();
+  private readonly channelAuthorities = new Map<
+    string,
+    AgentTerminalChannelAuthority
   >();
   private readonly listeners = new Set<SandboxTerminalChannelHubListener>();
+  private readonly rawDataListeners = new Set<
+    (update: AgentTerminalRawDataEvent) => void
+  >();
   private readonly snapshots = new Map<
     string,
     SandboxTerminalSessionSnapshot
@@ -44,22 +82,26 @@ export class SandboxTerminalChannelHub {
     private readonly options: SandboxTerminalChannelHubOptions = {},
   ) {}
 
-  attach(coordinator: SandboxTerminalCoordinator): void {
+  attach(
+    coordinator: SandboxTerminalCoordinator | TerminalChannelCoordinator,
+    authority: AgentTerminalChannelAuthority = "sandbox",
+  ): void {
     this.currentCoordinator = coordinator;
     if (this.coordinators.has(coordinator)) return;
 
     for (const terminal of coordinator.listTerminals()) {
       const snapshot = coordinator.getChannelSnapshot(terminal.id);
-      if (snapshot) this.setSnapshotOwner(coordinator, snapshot);
+      if (snapshot) this.setSnapshotOwner(coordinator, snapshot, authority);
     }
     const eventSubscription = coordinator.onChannelEvent((update) => {
       if (update.snapshot.status === "closed") {
         if (this.channelOwners.get(update.snapshot.channelId) === coordinator) {
           this.channelOwners.delete(update.snapshot.channelId);
+          this.channelAuthorities.delete(update.snapshot.channelId);
           this.snapshots.delete(update.snapshot.channelId);
         }
       } else {
-        this.setSnapshotOwner(coordinator, update.snapshot);
+        this.setSnapshotOwner(coordinator, update.snapshot, authority);
       }
       if (
         update.event.type === "command-started" &&
@@ -73,19 +115,28 @@ export class SandboxTerminalChannelHub {
       }
       for (const listener of this.listeners) listener(update);
     });
+    const rawDataSubscription = this.isRawDataCoordinator(coordinator)
+      ? coordinator.onRawData((update) => {
+          const snapshot = coordinator.getChannelSnapshot(update.channelId);
+          if (snapshot) this.setSnapshotOwner(coordinator, snapshot, authority);
+          for (const listener of this.rawDataListeners) listener(update);
+        })
+      : undefined;
     const disposeSubscription = coordinator.onDispose(() =>
       this.detach(coordinator),
     );
     this.coordinators.set(coordinator, {
       eventSubscription,
+      ...(rawDataSubscription ? { rawDataSubscription } : {}),
       disposeSubscription,
     });
   }
 
-  detach(coordinator: SandboxTerminalCoordinator): void {
+  detach(coordinator: TerminalChannelCoordinator): void {
     const registration = this.coordinators.get(coordinator);
     if (!registration) return;
     registration.eventSubscription.dispose();
+    registration.rawDataSubscription?.dispose();
     registration.disposeSubscription.dispose();
     this.coordinators.delete(coordinator);
     if (this.currentCoordinator === coordinator) {
@@ -94,6 +145,7 @@ export class SandboxTerminalChannelHub {
     for (const [channelId, owner] of this.channelOwners) {
       if (owner !== coordinator) continue;
       this.channelOwners.delete(channelId);
+      this.channelAuthorities.delete(channelId);
       this.snapshots.delete(channelId);
     }
   }
@@ -105,6 +157,13 @@ export class SandboxTerminalChannelHub {
     return { dispose: () => this.listeners.delete(listener) };
   }
 
+  subscribeRawData(
+    listener: (update: AgentTerminalRawDataEvent) => void,
+  ): SandboxTerminalChannelHubDisposable {
+    this.rawDataListeners.add(listener);
+    return { dispose: () => this.rawDataListeners.delete(listener) };
+  }
+
   listSnapshots(): SandboxTerminalSessionSnapshot[] {
     return [...this.snapshots.values()].map((snapshot) =>
       structuredClone(snapshot),
@@ -114,6 +173,10 @@ export class SandboxTerminalChannelHub {
   getSnapshot(channelId: string): SandboxTerminalSessionSnapshot | undefined {
     const snapshot = this.snapshots.get(channelId);
     return snapshot ? structuredClone(snapshot) : undefined;
+  }
+
+  getAuthority(channelId: string): AgentTerminalChannelAuthority | undefined {
+    return this.channelAuthorities.get(channelId);
   }
 
   write(channelId: string, data: string): boolean {
@@ -157,15 +220,26 @@ export class SandboxTerminalChannelHub {
     });
   }
 
+  private isRawDataCoordinator(
+    coordinator: TerminalChannelCoordinator,
+  ): coordinator is TerminalChannelCoordinator &
+    RawDataTerminalChannelCoordinator {
+    return (
+      "onRawData" in coordinator && typeof coordinator.onRawData === "function"
+    );
+  }
+
   private setSnapshotOwner(
-    coordinator: SandboxTerminalCoordinator,
+    coordinator: TerminalChannelCoordinator,
     snapshot: SandboxTerminalSessionSnapshot,
+    authority: AgentTerminalChannelAuthority,
   ): void {
     const existing = this.channelOwners.get(snapshot.channelId);
     if (existing && existing !== coordinator) {
       throw new Error(`Duplicate sandbox terminal ID: ${snapshot.channelId}`);
     }
     this.channelOwners.set(snapshot.channelId, coordinator);
+    this.channelAuthorities.set(snapshot.channelId, authority);
     this.snapshots.set(snapshot.channelId, snapshot);
   }
 }

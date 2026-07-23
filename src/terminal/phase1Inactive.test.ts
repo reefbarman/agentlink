@@ -119,6 +119,25 @@ describe("Phase 1 gated activation boundary", () => {
       description:
         "Optional absolute path to a standalone Node.js executable used by the AgentLink sandbox helper. Leave empty to probe Node.js from VS Code's inherited PATH and standard macOS installation locations. Electron is not supported.",
     });
+    expect(properties["agentlink.terminal.environmentPolicy"]).toMatchObject({
+      type: "object",
+      scope: "machine",
+      default: {
+        inherit: "all",
+        ignoreDefaultExcludes: true,
+        exclude: [],
+        set: {},
+        includeOnly: [],
+        useProfile: false,
+      },
+      additionalProperties: false,
+    });
+    expect(extensionSource).toContain(
+      "the configured shell environment policy controls inherited variables",
+    );
+    expect(extensionSource).not.toContain(
+      "credential-like environment variables are removed",
+    );
     const commands = manifest.contributes?.commands ?? [];
     expect(commands).toContainEqual({
       command: "agentlink.openTerminal",
@@ -146,17 +165,64 @@ describe("Phase 1 gated activation boundary", () => {
     expect(extensionSource).toContain(
       'affectsConfiguration("agentlink.terminal.enabled")',
     );
-    expect(extensionSource).toContain("createRuntime: async () => {");
-    expect(extensionSource).toContain("ensureSandboxNodeRuntime");
+    const createRuntimeStart = extensionSource.indexOf(
+      "createRuntime: async () => {",
+    );
+    const liveControllerStart = extensionSource.indexOf(
+      "new LiveHostTerminalSurfaceController",
+      createRuntimeStart,
+    );
+    const createRuntimeEnd = extensionSource.indexOf(
+      "onRuntimeUnavailable:",
+      createRuntimeStart,
+    );
+    const sandboxAvailabilityStart = extensionSource.indexOf(
+      "getSandboxAvailability:",
+    );
+    expect(createRuntimeStart).toBeGreaterThan(-1);
+    expect(liveControllerStart).toBeGreaterThan(createRuntimeStart);
+    expect(createRuntimeEnd).toBeGreaterThan(liveControllerStart);
+    expect(
+      extensionSource.slice(createRuntimeStart, createRuntimeEnd),
+    ).not.toContain("ensureSandboxNodeRuntime");
     expect(extensionSource).toContain('get<string>("terminal.nodePath", "")');
     expect(extensionSource).toContain(
       'affectsConfiguration("agentlink.terminal.nodePath")',
     );
-    expect(extensionSource).toContain("getSandboxAvailability:");
+    expect(extensionSource).toContain(
+      'affectsConfiguration("agentlink.terminal.environmentPolicy")',
+    );
+    expect(sandboxAvailabilityStart).toBeGreaterThan(createRuntimeEnd);
+    const sandboxAvailability = extensionSource.slice(sandboxAvailabilityStart);
+    expect(sandboxAvailability).toContain("ensureSandboxNodeRuntime");
+    expect(sandboxAvailability).toContain("showSandboxRuntimeUnavailable");
+    expect(extensionSource).toContain("resetSandboxNodeRuntime();");
     expect(extensionSource).toContain("SandboxBehaviorAttestationService");
     expect(extensionSource).toContain("createProductionSandboxBehaviorProbe");
     expect(extensionSource).not.toContain("isSandboxAvailable:");
     expect(extensionSource).toContain("retainContextWhenHidden: true");
+  });
+
+  it("keeps sandbox Node configuration out of custom-terminal lifecycle", () => {
+    const subscriptionStart = extensionSource.indexOf(
+      "subscribeEnabledChanges: (listener)",
+    );
+    const createRuntimeStart = extensionSource.indexOf(
+      "createRuntime: async () => {",
+      subscriptionStart,
+    );
+    const subscription = extensionSource.slice(
+      subscriptionStart,
+      createRuntimeStart,
+    );
+
+    expect(subscription).toContain(
+      'affectsConfiguration("agentlink.terminal.enabled")',
+    );
+    expect(subscription).not.toContain("terminal.nodePath");
+    expect(subscription).not.toContain("terminal.environmentPolicy");
+    expect(subscription).not.toContain("resetSandboxNodeRuntime");
+    expect(subscription).not.toContain("showSandboxRuntimeUnavailable");
   });
 
   it("keeps terminal-provider selection host-owned and preserves approval boundaries", () => {

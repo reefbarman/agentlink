@@ -37,6 +37,8 @@ const mocks = vi.hoisted(() => {
         followUp?: string;
       } | null = null;
       let assistantText = "background result";
+      let pendingInterjectionCount = 0;
+      const interjectionListeners = new Set<() => void>();
       const mockSession = {
         id: `bg-${seq}`,
         mode: opts.mode,
@@ -59,7 +61,18 @@ const mocks = vi.hoisted(() => {
         lastActiveAt: 1,
         fleetMetadata: undefined as any,
         addUserMessage: vi.fn(),
-        setPendingInterjection: vi.fn(() => true),
+        setPendingInterjection: vi.fn(() => {
+          pendingInterjectionCount += 1;
+          for (const listener of interjectionListeners) listener();
+          return true;
+        }),
+        get hasPendingInterjections() {
+          return pendingInterjectionCount > 0;
+        },
+        onPendingInterjectionQueued: vi.fn((listener: () => void) => {
+          interjectionListeners.add(listener);
+          return () => interjectionListeners.delete(listener);
+        }),
         restoreFromStore: vi.fn((data: any) => {
           mockSession.id = data.id;
           mockSession.title = data.title;
@@ -77,7 +90,10 @@ const mocks = vi.hoisted(() => {
             .join("");
         }),
         appendRuntimeError: vi.fn(),
-        consumePendingInterjection: vi.fn(() => null),
+        consumePendingInterjection: vi.fn(() => {
+          if (pendingInterjectionCount > 0) pendingInterjectionCount -= 1;
+          return null;
+        }),
         queuePendingModeResume: vi.fn((mode: string, opts?: any) => {
           pendingModeResume = {
             mode,
@@ -207,11 +223,16 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
-  it("snapshots the parent approval state for a background child", async () => {
+  it("snapshots the parent's full approval mode for a shared child", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     const parent = await mgr.createSession("code");
     const inheritSessionApprovalState = vi.fn();
-    mgr.setCommandApprovalPolicy(parent.id, "approve-for-me");
+    mgr.setSessionApprovalMode(parent.id, {
+      commandApprovalPolicy: "sensitive",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "native-manual",
+    });
     mgr.setToolContext({
       ...toolCtx,
       getCommandApprovalPolicy: (sessionId) =>
@@ -223,23 +244,49 @@ describe("AgentSessionManager background agents", () => {
       { task: "inherit policy", message: "inspect" },
       parent.id,
     );
-    expect(mgr.getCommandApprovalPolicy(child.sessionId)).toBe(
-      "approve-for-me",
-    );
+    expect(mgr.getSessionApprovalMode(child.sessionId)).toEqual({
+      commandApprovalPolicy: "sensitive",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "native-manual",
+    });
     expect(inheritSessionApprovalState).toHaveBeenCalledWith(
       parent.id,
       child.sessionId,
     );
-
-    mgr.setCommandApprovalPolicy(parent.id, "safe");
-    expect(mgr.getCommandApprovalPolicy(parent.id)).toBe("safe");
-    expect(mgr.getCommandApprovalPolicy(child.sessionId)).toBe(
-      "approve-for-me",
+    expect(toolCtx.approvalManager.bindSessionProject).toHaveBeenCalledWith(
+      parent.id,
+      parent.projectScope,
     );
+    expect(toolCtx.approvalManager.bindSessionProject).toHaveBeenCalledWith(
+      child.sessionId,
+      expect.objectContaining({ projectId: parent.projectScope.projectId }),
+    );
+
+    mgr.setSessionApprovalMode(parent.id, {
+      commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "user",
+      executionPreset: "workspace-write",
+    });
+    expect(mgr.getSessionApprovalMode(child.sessionId)).toEqual({
+      commandApprovalPolicy: "sensitive",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "native-manual",
+    });
   });
 
-  it("refreshes approvals for children that were already spawned", async () => {
-    const mgr = new AgentSessionManager(config, "/tmp");
+  it("adds later parent session approvals to active shared children", async () => {
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 0 },
+    );
     const parent = await mgr.createSession("code");
     const inheritSessionApprovalState = vi.fn();
     mgr.setToolContext({
@@ -262,6 +309,63 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("propagates later approvals down the active shared-agent tree", async () => {
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 0 },
+    );
+    const root = await mgr.createSession("code");
+    const authority = new Map<string, Set<string>>([
+      [root.id, new Set(["initial"])],
+    ]);
+    const inheritSessionApprovalState = vi.fn(
+      (parentSessionId: string, childSessionId: string) => {
+        const childAuthority = authority.get(childSessionId) ?? new Set();
+        for (const grant of authority.get(parentSessionId) ?? []) {
+          childAuthority.add(grant);
+        }
+        authority.set(childSessionId, childAuthority);
+      },
+    );
+    mgr.setToolContext({
+      ...toolCtx,
+      inheritSessionApprovalState,
+    });
+
+    const child = await mgr.spawnBackground(
+      { task: "child", message: "inspect" },
+      root.id,
+    );
+    const grandchild = await mgr.spawnBackground(
+      { task: "grandchild", message: "inspect more" },
+      child.sessionId,
+    );
+    const sibling = await mgr.spawnBackground(
+      { task: "sibling", message: "inspect separately" },
+      root.id,
+    );
+    authority.get(root.id)?.add("later-root");
+    authority.get(child.sessionId)?.add("child-only");
+
+    mgr.refreshBackgroundApprovalInheritance();
+
+    expect(authority.get(child.sessionId)).toEqual(
+      new Set(["initial", "child-only", "later-root"]),
+    );
+    expect(authority.get(grandchild.sessionId)).toEqual(
+      new Set(["initial", "child-only", "later-root"]),
+    );
+    expect(authority.get(sibling.sessionId)).toEqual(
+      new Set(["initial", "later-root"]),
+    );
+    expect(authority.get(root.id)).toEqual(new Set(["initial", "later-root"]));
+  });
+
   it("queues spawn when the concurrent limit is reached", async () => {
     const mgr = new AgentSessionManager(
       config,
@@ -278,6 +382,31 @@ describe("AgentSessionManager background agents", () => {
     expect(mgr.getBackgroundStatus(spawned.sessionId)).toEqual(
       expect.objectContaining({ status: "queued", done: false }),
     );
+  });
+
+  it("allows a parent to have eight outstanding background children", async () => {
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 0 },
+    );
+    const parent = await mgr.createSession("code");
+    mgr.setToolContext(toolCtx);
+
+    for (let index = 0; index < 8; index++) {
+      await mgr.spawnBackground(
+        { task: `task-${index}`, message: `inspect-${index}` },
+        parent.id,
+      );
+    }
+
+    await expect(
+      mgr.spawnBackground({ task: "task-8", message: "inspect-8" }, parent.id),
+    ).rejects.toThrow(/per-parent child limit reached \(8\)/);
   });
 
   it("attaches inherited images to the native background prompt", async () => {
@@ -321,9 +450,18 @@ describe("AgentSessionManager background agents", () => {
       ],
     });
     const mgr = new AgentSessionManager(config, "/tmp");
+    const parent = await mgr.createSession("code");
+    mgr.setSessionApprovalMode(parent.id, {
+      commandApprovalPolicy: "sensitive",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "native-manual",
+    });
     mgr.setToolContext({
       ...toolCtx,
       globalStorageUri: { fsPath: globalStoragePath } as any,
+      getCommandApprovalPolicy: (sessionId) =>
+        mgr.getCommandApprovalPolicy(sessionId),
       worktreeAgentLaunchProvider: { start },
     });
     const result = await mgr.spawnBackground({
@@ -332,7 +470,14 @@ describe("AgentSessionManager background agents", () => {
       worktree: "isolated",
     });
     expect(start).toHaveBeenCalledWith(
-      expect.objectContaining({ task: "isolated", autoSubmit: true }),
+      expect.objectContaining({
+        task: "isolated",
+        autoSubmit: true,
+        commandApprovalPolicy: "sensitive",
+        approvalPolicy: "on-request",
+        approvalReviewer: "auto-review",
+        executionPreset: "native-manual",
+      }),
     );
     const fleet = (mgr as any).sessions.get(result.sessionId).fleetMetadata;
     expect(fleet).toEqual(
@@ -487,6 +632,200 @@ describe("AgentSessionManager background agents", () => {
 
     expect(mocks.runArgs).toHaveBeenCalledTimes(2);
     expect(mgr.getBackgroundStatus(second.sessionId).done).toBe(true);
+  });
+
+  it("releases the waiter's slot so a queued child can run during get_background_result", async () => {
+    let releaseParent: (() => void) | undefined;
+    mocks.runBehavior
+      .mockReturnValueOnce(
+        (async function* () {
+          await new Promise<void>((resolve) => {
+            releaseParent = resolve;
+          });
+          yield { type: "done" };
+        })(),
+      )
+      .mockReturnValueOnce(
+        (async function* () {
+          yield { type: "done" };
+        })(),
+      );
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 1 },
+    );
+    mgr.setToolContext(toolCtx);
+
+    const parent = await mgr.spawnBackground({
+      task: "parent",
+      message: "hold",
+    });
+    await waitFor(
+      () => releaseParent,
+      (release) => typeof release === "function",
+    );
+    const child = await mgr.spawnBackground(
+      { task: "child review", message: "review" },
+      parent.sessionId,
+    );
+    expect(mgr.getBackgroundStatus(child.sessionId).status).toBe("queued");
+
+    // The parent occupies the only slot, but blocking on the child's result
+    // must release it so the queued child can start and finish.
+    const result = await mgr.waitForAuthorizedBackground(
+      parent.sessionId,
+      child.sessionId,
+    );
+
+    expect(result).toBe("background result");
+    expect(mgr.getBackgroundStatus(child.sessionId).done).toBe(true);
+    expect(mgr.getBackgroundStatus(parent.sessionId).done).toBe(false);
+    expect((mgr as any).bgResultWaitHolds.size).toBe(0);
+
+    releaseParent?.();
+    await waitFor(
+      () => mgr.getBackgroundStatus(parent.sessionId),
+      (status) => status.done,
+    );
+    expect(mgr.getBackgroundStatus(parent.sessionId).done).toBe(true);
+  });
+
+  it("returns wait_interrupted when a user message arrives while blocked on get_background_result", async () => {
+    let releaseBackground: (() => void) | undefined;
+    mocks.runBehavior.mockReturnValueOnce(
+      (async function* () {
+        await new Promise<void>((resolve) => {
+          releaseBackground = resolve;
+        });
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const spawned = await mgr.spawnBackground(
+      { task: "slow lane", message: "keep working" },
+      foreground.id,
+    );
+
+    const waitPromise = mgr.waitForAuthorizedBackground(
+      foreground.id,
+      spawned.sessionId,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    (foreground as any).setPendingInterjection("new instructions", "queue-1");
+
+    const interrupted = JSON.parse(await waitPromise);
+    expect(interrupted).toMatchObject({
+      status: "wait_interrupted",
+      reason: "user_message_pending",
+      done: false,
+      sessionId: spawned.sessionId,
+      retrySafe: true,
+    });
+    expect(mgr.getBackgroundStatus(spawned.sessionId).done).toBe(false);
+    expect((mgr as any).bgResultWaiters.get(spawned.sessionId) ?? []).toEqual(
+      [],
+    );
+
+    // After the engine drains the interjection, waiting again returns the
+    // real result once the background agent finishes.
+    (foreground as any).consumePendingInterjection();
+    const resumedWait = mgr.waitForAuthorizedBackground(
+      foreground.id,
+      spawned.sessionId,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseBackground?.();
+    await expect(resumedWait).resolves.toBe("background result");
+  });
+
+  it("returns wait_interrupted immediately when an interjection is already pending", async () => {
+    mocks.runBehavior.mockReturnValueOnce(
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const spawned = await mgr.spawnBackground(
+      { task: "slow lane", message: "keep working" },
+      foreground.id,
+    );
+    (foreground as any).setPendingInterjection("urgent request", "queue-1");
+
+    const interrupted = JSON.parse(
+      await mgr.waitForAuthorizedBackground(foreground.id, spawned.sessionId),
+    );
+    expect(interrupted).toMatchObject({
+      status: "wait_interrupted",
+      reason: "user_message_pending",
+      done: false,
+    });
+    expect(mgr.getBackgroundStatus(spawned.sessionId).done).toBe(false);
+  });
+
+  it("releases the blocked parent's wait hold when steering interrupts it", async () => {
+    let releaseParent: (() => void) | undefined;
+    let releaseChild: (() => void) | undefined;
+    mocks.runBehavior
+      .mockReturnValueOnce(
+        (async function* () {
+          await new Promise<void>((resolve) => {
+            releaseParent = resolve;
+          });
+          yield { type: "done" };
+        })(),
+      )
+      .mockReturnValueOnce(
+        (async function* () {
+          await new Promise<void>((resolve) => {
+            releaseChild = resolve;
+          });
+          yield { type: "done" };
+        })(),
+      );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const parent = await mgr.spawnBackground({ task: "parent", message: "go" });
+    await waitFor(
+      () => releaseParent,
+      (release) => typeof release === "function",
+    );
+    const child = await mgr.spawnBackground(
+      { task: "child", message: "go" },
+      parent.sessionId,
+    );
+    await waitFor(
+      () => releaseChild,
+      (release) => typeof release === "function",
+    );
+
+    const waitPromise = mgr.waitForAuthorizedBackground(
+      parent.sessionId,
+      child.sessionId,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((mgr as any).bgResultWaitHolds.size).toBe(1);
+
+    const parentSession = (mgr as any).sessions.get(parent.sessionId);
+    parentSession.setPendingInterjection("stop and report", "steer-1");
+
+    const interrupted = JSON.parse(await waitPromise);
+    expect(interrupted).toMatchObject({ status: "wait_interrupted" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((mgr as any).bgResultWaitHolds.size).toBe(0);
+    expect(mgr.getBackgroundStatus(child.sessionId).done).toBe(false);
+
+    releaseChild?.();
+    releaseParent?.();
   });
 
   it("runs explicit ACP provider without native route resolution", async () => {
@@ -784,6 +1123,128 @@ describe("AgentSessionManager background agents", () => {
       resolvedProvider: "acp",
     });
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
+  });
+
+  it("reuses inherited ACP write authority only for structured safe locations", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      defaultAgent: "acp:claude",
+      acpAgents: [
+        {
+          id: "claude",
+          command: "claude-agent-acp",
+          readonlyOnly: false,
+        },
+      ],
+    });
+    const permissionOutcomes: unknown[] = [];
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        permissionOutcomes.push(
+          await request.onRequestPermission({
+            toolCall: {
+              toolCallId: "tc-edit",
+              kind: "edit",
+              title: "Edit source",
+              locations: [{ path: "file.ts" }],
+              rawInput: { path: "file.ts" },
+            },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "reject", name: "Reject", kind: "reject_once" },
+            ],
+          }),
+          await request.onRequestPermission({
+            toolCall: {
+              toolCallId: "tc-protected",
+              kind: "edit",
+              title: "Edit instructions",
+              locations: [{ path: "AGENTS.md" }],
+              rawInput: { path: "AGENTS.md" },
+            },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "reject", name: "Reject", kind: "reject_once" },
+            ],
+          }),
+          await request.onRequestPermission({
+            toolCall: {
+              toolCallId: "tc-outside",
+              kind: "edit",
+              title: "Edit outside workspace",
+              locations: [{ path: "/outside/file.ts" }],
+              rawInput: { path: "/outside/file.ts" },
+            },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "reject", name: "Reject", kind: "reject_once" },
+            ],
+          }),
+        );
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    const parent = await mgr.createSession("code");
+    const onApprovalRequest = vi.fn(async () => "reject");
+    const approvalManager = {
+      bindSessionProject: vi.fn(),
+      touchSession: vi.fn(),
+      getAgentWriteAuthorization: vi.fn(() => ({
+        allowed: true,
+        basis: "blanket_approval",
+        scope: "session",
+      })),
+      isPathTrusted: vi.fn(() => false),
+      getFileWriteAuthorization: vi.fn(() => ({
+        allowed: false,
+        basis: "none",
+      })),
+    };
+    mgr.setToolContext({
+      ...toolCtx,
+      approvalManager: approvalManager as any,
+      onApprovalRequest,
+      inheritSessionApprovalState: vi.fn(),
+    });
+
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "external implementation",
+        message: "edit this",
+        provider: "acp:claude",
+      },
+      parent.id,
+    );
+    await mgr.waitForBackground(spawned.sessionId);
+
+    expect(approvalManager.getAgentWriteAuthorization).toHaveBeenCalledOnce();
+    expect(permissionOutcomes).toEqual([
+      { outcome: { outcome: "selected", optionId: "allow" } },
+      { outcome: { outcome: "selected", optionId: "reject" } },
+      { outcome: { outcome: "selected", optionId: "reject" } },
+    ]);
+    expect(approvalManager.isPathTrusted).toHaveBeenCalledWith(
+      spawned.sessionId,
+      "/outside/file.ts",
+    );
+    expect(approvalManager.getFileWriteAuthorization).not.toHaveBeenCalled();
+    expect(onApprovalRequest).toHaveBeenCalledTimes(2);
+    expect(onApprovalRequest).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        kind: "write",
+        backgroundTask: "external implementation",
+      }),
+      spawned.sessionId,
+    );
   });
 
   it("cancels non-readonly ACP permission requests without surfacing approval", async () => {
@@ -3358,7 +3819,14 @@ describe("AgentSessionManager background agents", () => {
 
     expect(mocks.runBehavior).toHaveBeenCalledTimes(2);
     expect(addUserMessageSpy).toHaveBeenCalledWith(
-      "You stopped but there are still pending tasks. Continue with the remaining items.",
+      expect.stringContaining(
+        "Before doing more work, reconcile the complete list against the conversation and current workspace",
+      ),
+    );
+    expect(addUserMessageSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Do not redo completed work merely because its TODO status is stale",
+      ),
     );
   });
 
@@ -3391,7 +3859,7 @@ describe("AgentSessionManager background agents", () => {
 
     expect(mocks.runBehavior).toHaveBeenCalledTimes(1);
     expect(addUserMessageSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining("You stopped but there are still pending tasks."),
+      expect.stringContaining("You stopped but the TODO list"),
     );
   });
 
@@ -3423,7 +3891,7 @@ describe("AgentSessionManager background agents", () => {
     // done is emitted so the UI can flush its queue.
     expect(mocks.runBehavior).toHaveBeenCalledTimes(1);
     expect(addUserMessageSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining("You stopped but there are still pending tasks."),
+      expect.stringContaining("You stopped but the TODO list"),
     );
     expect(events.filter((event) => event.type === "done")).toHaveLength(1);
   });
@@ -3433,11 +3901,11 @@ describe("AgentSessionManager background agents", () => {
     mgr.setToolContext(toolCtx);
 
     const fg = await mgr.createSession("code");
-    (fg as any).hasPendingInterjections = true;
     const addUserMessageSpy = vi.spyOn(fg, "addUserMessage");
 
     mocks.runBehavior.mockReturnValueOnce(
       (async function* () {
+        (fg as any).setPendingInterjection("still pending", "queue-1");
         yield {
           type: "todo_update",
           todos: [{ id: "1", content: "finish it", status: "pending" }],
@@ -3450,7 +3918,7 @@ describe("AgentSessionManager background agents", () => {
 
     expect(mocks.runBehavior).toHaveBeenCalledTimes(1);
     expect(addUserMessageSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining("You stopped but there are still pending tasks."),
+      expect.stringContaining("You stopped but the TODO list"),
     );
   });
 

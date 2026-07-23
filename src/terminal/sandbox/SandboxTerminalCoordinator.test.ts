@@ -13,6 +13,7 @@ import type {
   SandboxRuntimeProvider,
 } from "./SandboxRuntimeProvider.js";
 import {
+  SANDBOX_INTERACTIVE_PROMPT_GRACE_MS,
   SandboxTerminalCoordinator,
   type AuthorizedSandboxLaunch,
   type SandboxLaunchAuthorizer,
@@ -36,6 +37,7 @@ class FakeProcess implements SandboxCommandProcess {
   readonly write = vi.fn(() => true);
   readonly resize = vi.fn(() => true);
   readonly interrupt = vi.fn(() => true);
+  readonly respondToNetworkRequest = vi.fn(() => true);
   readonly terminate = vi.fn(() => true);
   readonly dispose = vi.fn();
   private readonly listeners = new Set<(event: SandboxCommandEvent) => void>();
@@ -60,6 +62,20 @@ class FakeProcess implements SandboxCommandProcess {
   }
 }
 
+const managedDestination = {
+  requestId: "network-1",
+  host: "registry.npmjs.org",
+  protocol: "https" as const,
+  port: 443,
+  address: "104.16.24.34",
+  family: 4 as const,
+  dnsAnswers: [
+    { address: "104.16.24.34", family: 4 as const },
+    { address: "104.16.25.34", family: 4 as const },
+  ],
+  destinationClass: "public" as const,
+};
+
 const metadata: SandboxExecutionMetadata = {
   policyVersion: CURRENT_SANDBOX_POLICY_VERSION,
   profileId: "workspace-write",
@@ -71,8 +87,8 @@ const metadata: SandboxExecutionMetadata = {
     filesystemWrite: "strict",
     network: "blocked",
     privateHome: true,
-    privateTmp: true,
-    hostIpcBlocked: true,
+    privateTmp: false,
+    hostIpcBlocked: false,
     resourceLimits: "partial",
     warnings: [],
   },
@@ -111,13 +127,13 @@ function harness() {
             writableRoots: ["/workspace"],
             deniedRoots: [],
             protectedReadOnlyRoots: [],
-            network: { mode: "blocked" },
+            network: { mode: "loopback" },
             environment: { inheritHost: false, values: {} },
             allowedUnixSockets: [],
           },
         },
         helperRequest: {
-          version: 1,
+          version: 3,
           type: "launch",
           channelId,
           commandId,
@@ -132,8 +148,9 @@ function harness() {
             allowWrite: ["/workspace"],
             denyWrite: [],
           },
-          network: { mode: "blocked" },
+          network: { mode: "loopback" },
           protectedRoots: [],
+          structurallyProtectedRoots: [],
           dimensions,
         },
         metadata,
@@ -178,6 +195,27 @@ async function finish(process: FakeProcess, output = "ok\r\n", exitCode = 0) {
   await flush();
 }
 
+function enableManagedNetworking(test: ReturnType<typeof harness>): void {
+  const authorize = vi
+    .mocked(test.authorizer.authorize)
+    .getMockImplementation();
+  if (!authorize) throw new Error("expected authorizer implementation");
+  vi.mocked(test.authorizer.authorize).mockImplementation(async (input) => {
+    const authorized = await authorize(input);
+    return {
+      ...authorized,
+      helperRequest: {
+        ...authorized.helperRequest,
+        network: { mode: "public-proxy" },
+      },
+      metadata: {
+        ...authorized.metadata,
+        grant: { grantId: "grant-network", auditId: "audit-network" },
+      },
+    };
+  });
+}
+
 describe("SandboxTerminalCoordinator", () => {
   it("preauthorizes without launching and transfers cleanup on consume", async () => {
     const test = harness();
@@ -192,7 +230,16 @@ describe("SandboxTerminalCoordinator", () => {
         route: "sandbox",
         confinement: "verified-baseline",
         routeReason: "verified-local-macos",
-        approvalPolicy: "sandbox-baseline-v1",
+        executionSurface: "verified-sandbox",
+        requiredAuthority: "sandbox",
+        permissionIntent: "default",
+        approvalRequirement: "policy",
+        authorityReason: "approval-policy",
+        approvalPolicySnapshot: "on-request" as const,
+        approvalReviewerSnapshot: "auto-review" as const,
+        executionPresetSnapshot: "workspace-write" as const,
+        commandApprovalPolicySnapshot: "approve-for-me",
+        executionPolicy: "sandbox-baseline-v2",
         preparedAt: 100,
         sandbox: {
           attestationId: "attestation-1",
@@ -220,6 +267,373 @@ describe("SandboxTerminalCoordinator", () => {
     await expect(prepared.execute()).rejects.toThrow("no longer available");
   });
 
+  it("reserves separate terminals for parallel prepared executions", async () => {
+    const test = harness();
+    const routeSecurity: Parameters<
+      SandboxTerminalCoordinator["prepareConfinementExecution"]
+    >[1] = {
+      auditId: "audit-parallel",
+      route: "sandbox",
+      confinement: "verified-baseline",
+      routeReason: "verified-local-macos",
+      executionSurface: "verified-sandbox",
+      requiredAuthority: "sandbox",
+      permissionIntent: "default",
+      approvalRequirement: "policy",
+      authorityReason: "approval-policy",
+      approvalPolicySnapshot: "on-request" as const,
+      approvalReviewerSnapshot: "auto-review" as const,
+      executionPresetSnapshot: "workspace-write" as const,
+      commandApprovalPolicySnapshot: "approve-for-me",
+      executionPolicy: "sandbox-baseline-v2",
+      preparedAt: 100,
+    };
+    const firstPrepared = await test.coordinator.prepareConfinementExecution(
+      {
+        command: "printf first",
+        cwd: "/workspace",
+        sandboxSessionId: "agent-session",
+      },
+      routeSecurity,
+    );
+    const secondPrepared = await test.coordinator.prepareConfinementExecution(
+      {
+        command: "printf second",
+        cwd: "/workspace",
+        sandboxSessionId: "agent-session",
+      },
+      routeSecurity,
+    );
+
+    const first = firstPrepared.execute();
+    const second = secondPrepared.execute();
+    expect(test.processes.map((process) => process.identity.channelId)).toEqual(
+      ["sandbox-1", "sandbox-2"],
+    );
+
+    await finish(test.processes[0], "first\r\n");
+    await finish(test.processes[1], "second\r\n");
+    await expect(first).resolves.toMatchObject({
+      terminal_id: "sandbox-1",
+      output: "first",
+    });
+    await expect(second).resolves.toMatchObject({
+      terminal_id: "sandbox-2",
+      output: "second",
+    });
+  });
+
+  it("reserves separate terminals while parallel direct executions authorize", async () => {
+    const test = harness();
+    const firstAuthorization = deferred<AuthorizedSandboxLaunch>();
+    const defaultAuthorize = vi
+      .mocked(test.authorizer.authorize)
+      .getMockImplementation();
+    if (!defaultAuthorize)
+      throw new Error("expected authorizer implementation");
+    vi.mocked(test.authorizer.authorize)
+      .mockImplementationOnce(() => firstAuthorization.promise)
+      .mockImplementationOnce(defaultAuthorize);
+
+    const first = test.coordinator.executeCommand({
+      command: "printf first",
+      cwd: "/workspace",
+      sandboxSessionId: "agent-session",
+    });
+    await flush();
+    const second = test.coordinator.executeCommand({
+      command: "printf second",
+      cwd: "/workspace",
+      sandboxSessionId: "agent-session",
+    });
+    await flush();
+
+    const firstRequest = vi.mocked(test.authorizer.authorize).mock.calls[0][0];
+    const secondRequest = vi.mocked(test.authorizer.authorize).mock.calls[1][0];
+    expect([firstRequest.channelId, secondRequest.channelId]).toEqual([
+      "sandbox-1",
+      "sandbox-2",
+    ]);
+    firstAuthorization.resolve(await defaultAuthorize(firstRequest));
+    await flush();
+
+    await finish(test.processes[0], "second\r\n");
+    await finish(test.processes[1], "first\r\n");
+    await expect(first).resolves.toMatchObject({ terminal_id: "sandbox-1" });
+    await expect(second).resolves.toMatchObject({ terminal_id: "sandbox-2" });
+  });
+
+  it("attributes prepared managed-network requests and resumes the exact helper", async () => {
+    const test = harness();
+    const review = deferred<"allow-once" | "reject">();
+    const onManagedNetworkRequest = vi.fn(() => review.promise);
+    const prepared = await test.coordinator.prepareConfinementExecution(
+      {
+        command: "npm view example version",
+        cwd: "/workspace",
+        sandboxSessionId: "session-network",
+        sandboxCapabilityRequest: { unrestrictedPublicNetwork: true },
+        onManagedNetworkRequest,
+      },
+      {
+        auditId: "audit-network",
+        route: "sandbox",
+        confinement: "verified-baseline",
+        routeReason: "verified-local-macos",
+        executionSurface: "verified-sandbox",
+        requiredAuthority: "sandbox",
+        permissionIntent: "additional-permissions",
+        approvalRequirement: "explicit-permissions",
+        authorityReason: "additional-permissions",
+        approvalPolicySnapshot: "on-request",
+        approvalReviewerSnapshot: "auto-review",
+        executionPresetSnapshot: "workspace-write",
+        commandApprovalPolicySnapshot: "approve-for-me",
+        executionPolicy: "sandbox-baseline-v2",
+        preparedAt: 100,
+      },
+    );
+
+    const result = prepared.execute();
+    const process = test.processes[0];
+    process.emit({ type: "network-request", request: managedDestination });
+    await flush();
+
+    expect(onManagedNetworkRequest).toHaveBeenCalledWith(
+      {
+        sessionId: "session-network",
+        auditId: "audit-network",
+        terminalId: "sandbox-1",
+        commandId: "command-1",
+        generation: 1,
+        command: "npm view example version",
+        cwd: "/workspace",
+        reason: "Managed public network requested",
+        ...managedDestination,
+        dnsAnswers: managedDestination.dnsAnswers,
+      },
+      expect.any(AbortSignal),
+    );
+    expect(process.respondToNetworkRequest).not.toHaveBeenCalled();
+
+    review.resolve("allow-once");
+    await flush();
+    expect(process.respondToNetworkRequest).toHaveBeenCalledWith(
+      "network-1",
+      "allow-once",
+    );
+    await finish(process);
+    await expect(result).resolves.toMatchObject({ exit_code: 0 });
+  });
+
+  it("fails closed before launch when managed networking lacks audit attribution", async () => {
+    const test = harness();
+    const authorize = vi
+      .mocked(test.authorizer.authorize)
+      .getMockImplementation();
+    if (!authorize) throw new Error("expected authorizer implementation");
+    vi.mocked(test.authorizer.authorize).mockImplementationOnce(
+      async (input) => {
+        const authorized = await authorize(input);
+        return {
+          ...authorized,
+          helperRequest: {
+            ...authorized.helperRequest,
+            network: { mode: "public-proxy" },
+          },
+        };
+      },
+    );
+
+    await expect(
+      test.coordinator.executeCommand({
+        command: "curl https://example.com",
+        cwd: "/workspace",
+        sandboxSessionId: "session-network",
+        sandboxCapabilityRequest: { unrestrictedPublicNetwork: true },
+        onManagedNetworkRequest: vi.fn(),
+      }),
+    ).rejects.toThrow("requires command audit attribution");
+    expect(test.runtime.launch).not.toHaveBeenCalled();
+    expect(test.authorizedFinalizer).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects managed-network requests when no reviewer is available", async () => {
+    const test = harness();
+    const result = test.coordinator.executeCommand({
+      command: "curl https://example.com",
+      cwd: "/workspace",
+      sandboxSessionId: "session-network",
+    });
+    await flush();
+    const process = test.processes[0];
+
+    process.emit({ type: "network-request", request: managedDestination });
+    await flush();
+    expect(process.respondToNetworkRequest).toHaveBeenCalledWith(
+      "network-1",
+      "reject",
+    );
+
+    await finish(process, "blocked\r\n", 1);
+    await expect(result).resolves.toMatchObject({ exit_code: 1 });
+  });
+
+  it("aborts pending network review on timeout and rejects the live helper request", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      enableManagedNetworking(test);
+      const onManagedNetworkRequest = vi.fn(
+        (_request, signal: AbortSignal) =>
+          new Promise<"allow-once">((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => reject(new Error("review aborted")),
+              { once: true },
+            );
+          }),
+      );
+      const result = test.coordinator.executeCommand({
+        command: "curl https://example.com",
+        cwd: "/workspace",
+        sandboxSessionId: "session-network",
+        timeout: 100,
+        onManagedNetworkRequest,
+      });
+      await flush();
+      const process = test.processes[0];
+      process.emit({ type: "network-request", request: managedDestination });
+      await flush();
+
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(result).resolves.toMatchObject({ timed_out: true });
+      await flush();
+      expect(process.respondToNetworkRequest).toHaveBeenCalledWith(
+        "network-1",
+        "reject",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("isolates identical network request IDs across concurrent commands", async () => {
+    const test = harness();
+    enableManagedNetworking(test);
+    const firstReview = deferred<"allow-once" | "reject">();
+    const secondReview = deferred<"allow-once" | "reject">();
+    const first = test.coordinator.executeCommand({
+      command: "curl https://one.example",
+      cwd: "/workspace",
+      terminal_name: "One",
+      sandboxSessionId: "session-network",
+      background: true,
+      onManagedNetworkRequest: () => firstReview.promise,
+    });
+    const second = test.coordinator.executeCommand({
+      command: "curl https://two.example",
+      cwd: "/workspace",
+      terminal_name: "Two",
+      sandboxSessionId: "session-network",
+      background: true,
+      onManagedNetworkRequest: () => secondReview.promise,
+    });
+    await flush();
+    await Promise.all([first, second]);
+    const [firstProcess, secondProcess] = test.processes;
+
+    firstProcess.emit({ type: "network-request", request: managedDestination });
+    secondProcess.emit({
+      type: "network-request",
+      request: managedDestination,
+    });
+    await flush();
+    secondReview.resolve("reject");
+    firstReview.resolve("allow-once");
+    await flush();
+
+    expect(firstProcess.respondToNetworkRequest).toHaveBeenCalledWith(
+      "network-1",
+      "allow-once",
+    );
+    expect(secondProcess.respondToNetworkRequest).toHaveBeenCalledWith(
+      "network-1",
+      "reject",
+    );
+  });
+
+  it("rejects pending network review when its terminal closes", async () => {
+    const test = harness();
+    enableManagedNetworking(test);
+    const reviewStarted = deferred<AbortSignal>();
+    const onManagedNetworkRequest = vi.fn(
+      (_request, signal: AbortSignal) =>
+        new Promise<"allow-once">((_resolve, reject) => {
+          reviewStarted.resolve(signal);
+          signal.addEventListener(
+            "abort",
+            () => reject(new Error("review aborted")),
+            { once: true },
+          );
+        }),
+    );
+    await test.coordinator.executeCommand({
+      command: "curl https://example.com",
+      cwd: "/workspace",
+      sandboxSessionId: "session-network",
+      background: true,
+      onManagedNetworkRequest,
+    });
+    const process = test.processes[0];
+    process.emit({ type: "network-request", request: managedDestination });
+    await reviewStarted.promise;
+
+    expect(test.coordinator.closeTerminals(["sandbox-1"])).toEqual({
+      closed: 1,
+    });
+    await flush();
+    expect(process.respondToNetworkRequest).toHaveBeenCalledWith(
+      "network-1",
+      "reject",
+    );
+  });
+
+  it("invalidates a prepared execution when its terminal closes", async () => {
+    const test = harness();
+    const prepared = await test.coordinator.prepareConfinementExecution(
+      {
+        command: "pwd",
+        cwd: "/workspace",
+        sandboxSessionId: "agent-session",
+      },
+      {
+        auditId: "audit-close",
+        route: "sandbox",
+        confinement: "verified-baseline",
+        routeReason: "verified-local-macos",
+        executionSurface: "verified-sandbox",
+        requiredAuthority: "sandbox",
+        permissionIntent: "default",
+        approvalRequirement: "policy",
+        authorityReason: "approval-policy",
+        approvalPolicySnapshot: "on-request" as const,
+        approvalReviewerSnapshot: "auto-review" as const,
+        executionPresetSnapshot: "workspace-write" as const,
+        commandApprovalPolicySnapshot: "approve-for-me",
+        executionPolicy: "sandbox-baseline-v2",
+        preparedAt: 100,
+      },
+    );
+
+    expect(test.coordinator.closeTerminals(["sandbox-1"])).toEqual({
+      closed: 1,
+    });
+    await expect(prepared.execute()).rejects.toThrow("reservation is stale");
+    expect(test.runtime.launch).not.toHaveBeenCalled();
+    expect(test.authorizedFinalizer).toHaveBeenCalledOnce();
+  });
+
   it("disposes rejected preauthorization without launching", async () => {
     const test = harness();
     const prepared = await test.coordinator.prepareConfinementExecution(
@@ -233,7 +647,16 @@ describe("SandboxTerminalCoordinator", () => {
         route: "sandbox",
         confinement: "verified-baseline",
         routeReason: "verified-local-macos",
-        approvalPolicy: "sandbox-baseline-v1",
+        executionSurface: "verified-sandbox",
+        requiredAuthority: "sandbox",
+        permissionIntent: "default",
+        approvalRequirement: "policy",
+        authorityReason: "approval-policy",
+        approvalPolicySnapshot: "on-request" as const,
+        approvalReviewerSnapshot: "auto-review" as const,
+        executionPresetSnapshot: "workspace-write" as const,
+        commandApprovalPolicySnapshot: "approve-for-me",
+        executionPolicy: "sandbox-baseline-v2",
         preparedAt: 100,
       },
     );
@@ -415,6 +838,216 @@ describe("SandboxTerminalCoordinator", () => {
     });
   });
 
+  it("terminates a foreground process group after a high-confidence prompt stays inactive", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const resultPromise = test.coordinator.executeCommand({
+        command: "interactive-generator",
+        cwd: "/workspace",
+        sandboxSessionId: "agent-session",
+      });
+      await flush();
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 10, pgid: 10, backend: "seatbelt" });
+      await flush();
+      process.terminate.mockImplementation(() => {
+        expect(test.coordinator.getBackgroundState("sandbox-1")).toMatchObject({
+          state: "interactive_prompt",
+          termination_reason: "interactive_prompt",
+        });
+        return true;
+      });
+
+      process.emit({
+        type: "data",
+        data: "\u001b[33mContinue?\u001b[0m ",
+      });
+      await vi.advanceTimersByTimeAsync(
+        SANDBOX_INTERACTIVE_PROMPT_GRACE_MS - 1,
+      );
+      expect(process.terminate).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(process.terminate).toHaveBeenCalledOnce();
+
+      process.completionDeferred.resolve({
+        exitCode: 143,
+        signal: 15,
+        timedOut: false,
+      });
+      const result = await resultPromise;
+      expect(result).toMatchObject({
+        exit_code: 143,
+        timed_out: false,
+        termination_reason: "interactive_prompt",
+        interactive_prompt: {
+          kind: "confirmation",
+          confidence: "high",
+          evidence: "Continue?",
+        },
+        is_running: false,
+        retry_safe: false,
+      });
+      expect(result.backgrounded).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets or cancels the foreground watchdog on later output", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const resultPromise = test.coordinator.executeCommand({
+        command: "interactive-generator",
+        cwd: "/workspace",
+        sandboxSessionId: "agent-session",
+      });
+      await flush();
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 11, pgid: 11, backend: "seatbelt" });
+      await flush();
+
+      process.emit({ type: "data", data: "Continue? " });
+      await vi.advanceTimersByTimeAsync(
+        SANDBOX_INTERACTIVE_PROMPT_GRACE_MS - 100,
+      );
+      process.emit({ type: "data", data: "\rWorking...\n" });
+      await vi.advanceTimersByTimeAsync(SANDBOX_INTERACTIVE_PROMPT_GRACE_MS);
+      expect(process.terminate).not.toHaveBeenCalled();
+
+      process.emit({ type: "data", data: "Press Enter to continue" });
+      await vi.advanceTimersByTimeAsync(
+        SANDBOX_INTERACTIVE_PROMPT_GRACE_MS - 1,
+      );
+      process.emit({ type: "data", data: "\u001b[0m" });
+      await vi.advanceTimersByTimeAsync(
+        SANDBOX_INTERACTIVE_PROMPT_GRACE_MS - 1,
+      );
+      expect(process.terminate).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(process.terminate).toHaveBeenCalledOnce();
+
+      process.completionDeferred.resolve({ exitCode: 143, timedOut: false });
+      await resultPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves background interactive prompts observation-only", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      await test.coordinator.executeCommand({
+        command: "interactive-server",
+        cwd: "/workspace",
+        background: true,
+        sandboxSessionId: "agent-session",
+      });
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 12, pgid: 12, backend: "seatbelt" });
+      await flush();
+      process.emit({ type: "data", data: "Continue? " });
+
+      await vi.advanceTimersByTimeAsync(
+        SANDBOX_INTERACTIVE_PROMPT_GRACE_MS * 2,
+      );
+      expect(process.terminate).not.toHaveBeenCalled();
+      expect(test.coordinator.getBackgroundState("sandbox-1")).toMatchObject({
+        is_running: true,
+        state: "running",
+      });
+      expect(
+        test.coordinator.getBackgroundState("sandbox-1")?.termination_reason,
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cleans the foreground watchdog on completion, timeout, and close", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const completed = test.coordinator.executeCommand({
+        command: "complete-after-prompt",
+        cwd: "/workspace",
+        terminal_name: "Complete",
+        sandboxSessionId: "agent-session",
+      });
+      await flush();
+      const completedProcess = test.processes[0];
+      completedProcess.readyDeferred.resolve({
+        pid: 13,
+        pgid: 13,
+        backend: "seatbelt",
+      });
+      await flush();
+      completedProcess.emit({ type: "data", data: "Continue? " });
+      completedProcess.completionDeferred.resolve({
+        exitCode: 0,
+        timedOut: false,
+      });
+      await completed;
+
+      const timedOut = test.coordinator.executeCommand({
+        command: "timeout-after-prompt",
+        cwd: "/workspace",
+        terminal_name: "Timeout",
+        timeout: 100,
+        sandboxSessionId: "agent-session",
+      });
+      await flush();
+      const timedOutProcess = test.processes[1];
+      timedOutProcess.readyDeferred.resolve({
+        pid: 14,
+        pgid: 14,
+        backend: "seatbelt",
+      });
+      await flush();
+      timedOutProcess.emit({ type: "data", data: "Continue? " });
+      await vi.advanceTimersByTimeAsync(100);
+      await timedOut;
+
+      const closing = test.coordinator.executeCommand({
+        command: "close-after-prompt",
+        cwd: "/workspace",
+        terminal_name: "Close",
+        sandboxSessionId: "agent-session",
+      });
+      await flush();
+      const closedProcess = test.processes[2];
+      closedProcess.readyDeferred.resolve({
+        pid: 15,
+        pgid: 15,
+        backend: "seatbelt",
+      });
+      await flush();
+      closedProcess.emit({ type: "data", data: "Continue? " });
+      test.coordinator.closeTerminals(["Close"]);
+
+      await vi.advanceTimersByTimeAsync(
+        SANDBOX_INTERACTIVE_PROMPT_GRACE_MS * 2,
+      );
+      expect(completedProcess.terminate).not.toHaveBeenCalled();
+      expect(timedOutProcess.terminate).not.toHaveBeenCalled();
+      expect(closedProcess.terminate).not.toHaveBeenCalled();
+      timedOutProcess.completionDeferred.resolve({
+        exitCode: 0,
+        timedOut: false,
+      });
+      closedProcess.completionDeferred.resolve({
+        exitCode: 0,
+        timedOut: false,
+      });
+      await flush();
+      void closing.catch(() => undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("provides background output, UI input, resize, and Ctrl+C", async () => {
     const test = harness();
     const result = test.coordinator.executeCommand({
@@ -493,6 +1126,202 @@ describe("SandboxTerminalCoordinator", () => {
     }
   });
 
+  it("survives repeated mixed lifecycle cycles across concurrent named channels", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+
+      for (let iteration = 1; iteration <= 3; iteration += 1) {
+        const foreground = test.coordinator.executeCommand({
+          command: `printf foreground-${iteration}`,
+          cwd: "/workspace",
+          sandboxSessionId: "agent-session",
+        });
+        await flush();
+        await finish(
+          test.processes.at(-1) as FakeProcess,
+          `foreground-${iteration}\r\n`,
+        );
+        await expect(foreground).resolves.toMatchObject({
+          terminal_id: "sandbox-1",
+          exit_code: 0,
+          output: `foreground-${iteration}`,
+        });
+
+        const interrupted = test.coordinator.executeCommand({
+          command: `sleep interrupted-${iteration}`,
+          cwd: "/workspace",
+          terminal_name: "Interrupt lane",
+          background: true,
+          sandboxSessionId: "agent-session",
+        });
+        const completed = test.coordinator.executeCommand({
+          command: `printf completed-${iteration}`,
+          cwd: "/workspace",
+          terminal_name: "Complete lane",
+          background: true,
+          sandboxSessionId: "agent-session",
+        });
+        await flush();
+        await expect(interrupted).resolves.toMatchObject({
+          terminal_id: "sandbox-2",
+          backgrounded: true,
+        });
+        await expect(completed).resolves.toMatchObject({
+          terminal_id: "sandbox-3",
+          backgrounded: true,
+        });
+        const interruptedProcess = test.processes.at(-2) as FakeProcess;
+        const completedProcess = test.processes.at(-1) as FakeProcess;
+        interruptedProcess.readyDeferred.resolve({
+          pid: iteration * 10 + 1,
+          pgid: iteration * 10 + 1,
+          backend: "seatbelt",
+        });
+        completedProcess.readyDeferred.resolve({
+          pid: iteration * 10 + 2,
+          pgid: iteration * 10 + 2,
+          backend: "seatbelt",
+        });
+        await flush();
+        expect(test.coordinator.interruptTerminal("sandbox-2")).toBe(true);
+        interruptedProcess.completionDeferred.resolve({
+          exitCode: 130,
+          signal: 2,
+          timedOut: false,
+        });
+        completedProcess.emit({
+          type: "data",
+          data: `completed-${iteration}\r\n`,
+        });
+        completedProcess.completionDeferred.resolve({
+          exitCode: 0,
+          timedOut: false,
+        });
+        await flush();
+
+        const timedOut = test.coordinator.executeCommand({
+          command: `sleep timeout-${iteration}`,
+          cwd: "/workspace",
+          terminal_name: "Timeout lane",
+          timeout: 10,
+          sandboxSessionId: "agent-session",
+        });
+        await flush();
+        const timedOutProcess = test.processes.at(-1) as FakeProcess;
+        timedOutProcess.readyDeferred.resolve({
+          pid: iteration * 10 + 3,
+          pgid: iteration * 10 + 3,
+          backend: "seatbelt",
+        });
+        await flush();
+        await vi.advanceTimersByTimeAsync(10);
+        await expect(timedOut).resolves.toMatchObject({
+          terminal_id: "sandbox-4",
+          timed_out: true,
+          backgrounded: true,
+          is_running: true,
+        });
+        timedOutProcess.completionDeferred.resolve({
+          exitCode: 0,
+          timedOut: false,
+        });
+        await flush();
+      }
+
+      expect(test.runtime.launch).toHaveBeenCalledTimes(12);
+      expect(test.coordinator.listTerminals()).toEqual([
+        { id: "sandbox-1", name: "Agent command", busy: false },
+        { id: "sandbox-2", name: "Interrupt lane", busy: false },
+        { id: "sandbox-3", name: "Complete lane", busy: false },
+        { id: "sandbox-4", name: "Timeout lane", busy: false },
+      ]);
+      expect(
+        test.coordinator
+          .getChannelSnapshot("sandbox-2")
+          ?.commands.map(({ generation, exitCode }) => ({
+            generation,
+            exitCode,
+          })),
+      ).toEqual([
+        { generation: 1, exitCode: 130 },
+        { generation: 2, exitCode: 130 },
+        { generation: 3, exitCode: 130 },
+      ]);
+      expect(
+        test.coordinator
+          .getChannelSnapshot("sandbox-4")
+          ?.commands.map(({ generation, exitCode }) => ({
+            generation,
+            exitCode,
+          })),
+      ).toEqual([
+        { generation: 1, exitCode: 0 },
+        { generation: 2, exitCode: 0 },
+        { generation: 3, exitCode: 0 },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an unnamed timed-out high-volume command addressable by its returned ID", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const resultPromise = test.coordinator.executeCommand({
+        command: "generate high-volume output",
+        cwd: "/workspace",
+        timeout: 100,
+        sandboxSessionId: "agent-session",
+      });
+      await flush();
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+      await flush();
+      process.emit({ type: "data", data: "1\n2\n3\n" });
+
+      await vi.advanceTimersByTimeAsync(100);
+      const timedOut = await resultPromise;
+      expect(timedOut).toMatchObject({
+        terminal_id: "sandbox-1",
+        terminal_name: "Agent command",
+        timed_out: true,
+        backgrounded: true,
+        is_running: true,
+      });
+      expect(
+        test.coordinator.getBackgroundState(timedOut.terminal_id),
+      ).toMatchObject({
+        is_running: true,
+        state: "running",
+        output: "1\n2\n3",
+      });
+
+      const remainder = `${"line x\n".repeat(180_000)}final line\n`;
+      process.emit({ type: "data", data: remainder });
+      process.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+      await flush();
+
+      expect(
+        test.coordinator.getBackgroundState(timedOut.terminal_id),
+      ).toMatchObject({
+        is_running: false,
+        state: "completed",
+        exit_code: 0,
+      });
+      const retained = test.coordinator.getRetainedOutput(timedOut.terminal_id);
+      expect(retained).toMatchObject({
+        complete: true,
+        finalized: true,
+        dropped_bytes: 0,
+      });
+      expect(retained?.output).toBe(`1\n2\n3\n${remainder}`.trim());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("closes only Sandbox channels and records recovery metadata", async () => {
     const test = harness();
     await test.coordinator.executeCommand({
@@ -529,9 +1358,43 @@ describe("SandboxTerminalCoordinator", () => {
         exit_code: null,
         output: "",
         output_captured: true,
+        output_complete: false,
+        output_finalized: false,
+        output_total_bytes: 0,
+        output_retained_bytes: 0,
+        output_dropped_bytes: 0,
         terminal_raw_output: "",
       },
     ]);
+  });
+
+  it("keeps exact multi-megabyte output retrievable after terminal close", async () => {
+    const test = harness();
+    await test.coordinator.executeCommand({
+      command: "generate output",
+      cwd: "/workspace",
+      terminal_name: "Large output",
+      background: true,
+      sandboxSessionId: "agent-session",
+    });
+    const output = `${"line x\n".repeat(180_000)}final line\n`;
+    await finish(test.processes[0], output);
+
+    expect(
+      test.coordinator.getBackgroundState("sandbox-1")?.output.length,
+    ).toBeLessThan(output.length);
+    expect(test.coordinator.closeTerminals(["sandbox-1"])).toEqual({
+      closed: 1,
+    });
+    expect(test.coordinator.getBackgroundState("sandbox-1")).toBeUndefined();
+    expect(test.coordinator.getRetainedOutput("sandbox-1")).toEqual({
+      output: output.trim(),
+      complete: true,
+      finalized: true,
+      total_bytes: Buffer.byteLength(output, "utf8"),
+      retained_bytes: Buffer.byteLength(output, "utf8"),
+      dropped_bytes: 0,
+    });
   });
 
   it("fails before launch for missing sessions or mismatched authorization identity", async () => {

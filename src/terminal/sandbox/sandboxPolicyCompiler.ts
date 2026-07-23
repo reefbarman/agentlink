@@ -52,7 +52,11 @@ function canonicalRoots(values: readonly string[], label: string): string[] {
 }
 
 function isWithin(candidate: string, root: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 function validateEnvironment(
@@ -134,15 +138,21 @@ export function compileSandboxHelperLaunchRequest(
     );
   }
   const networkIsPublic = policy.network.mode === "public-proxy";
+  const localBinding = policy.network.allowLocalBinding === true;
   if (capability.publicNetwork !== networkIsPublic) {
     throw new Error(
       "Sandbox public-network capability does not match the compiled network policy",
     );
   }
-  if (networkIsPublic) {
+  if (capability.localBinding !== localBinding) {
+    throw new Error(
+      "Sandbox local-binding capability does not match the compiled network policy",
+    );
+  }
+  if (networkIsPublic || localBinding) {
     if (!request.authorization.grant) {
       throw new Error(
-        "Public-network sandbox policy requires an approved grant",
+        "Additional sandbox capability requires an approved grant",
       );
     }
     if (
@@ -154,11 +164,11 @@ export function compileSandboxHelperLaunchRequest(
     }
     if (request.authorization.grant.consumedAt === undefined) {
       throw new Error(
-        "Public-network sandbox grant must be atomically consumed before launch",
+        "Sandbox capability grant must be atomically consumed before launch",
       );
     }
   } else if (request.authorization.grant) {
-    throw new Error("Blocked-network sandbox policy must not carry a grant");
+    throw new Error("Baseline sandbox policy must not carry a grant");
   }
 
   const readableRoots = canonicalRoots(
@@ -178,21 +188,33 @@ export function compileSandboxHelperLaunchRequest(
     policy.protectedReadOnlyRoots,
     "Sandbox protected root",
   );
-  for (const protectedRoot of protectedRoots) {
-    if (!readableRoots.some((root) => isWithin(protectedRoot, root))) {
-      throw new Error(
-        `Sandbox protected root is not covered by readable roots: ${protectedRoot}`,
-      );
-    }
-    if (!deniedWriteRoots.some((root) => isWithin(protectedRoot, root))) {
-      throw new Error(
-        `Sandbox protected root is not covered by denied-write roots: ${protectedRoot}`,
-      );
+  const structurallyProtectedRoots = canonicalRoots(
+    policy.structurallyProtectedRoots ?? [],
+    "Sandbox structurally protected root",
+  );
+  for (const [label, roots] of [
+    ["protected", protectedRoots],
+    ["structurally protected", structurallyProtectedRoots],
+  ] as const) {
+    for (const protectedRoot of roots) {
+      if (!readableRoots.some((root) => isWithin(protectedRoot, root))) {
+        throw new Error(
+          `Sandbox ${label} root is not covered by readable roots: ${protectedRoot}`,
+        );
+      }
+      if (!deniedWriteRoots.some((root) => isWithin(protectedRoot, root))) {
+        throw new Error(
+          `Sandbox ${label} root is not covered by denied-write roots: ${protectedRoot}`,
+        );
+      }
     }
   }
 
   const environment = validateEnvironment(policy.environment.values);
-  for (const name of ["HOME", "TMPDIR", "XDG_CACHE_HOME"] as const) {
+  if (!readableRoots.some((root) => isWithin(environment.HOME, root))) {
+    throw new Error("Sandbox environment HOME must be within a readable root");
+  }
+  for (const name of ["TMPDIR", "XDG_CACHE_HOME"] as const) {
     const value = environment[name];
     if (
       value !== undefined &&
@@ -226,8 +248,12 @@ export function compileSandboxHelperLaunchRequest(
       allowWrite: writableRoots,
       denyWrite: deniedWriteRoots,
     },
-    network: networkIsPublic ? { mode: "public-proxy" } : { mode: "blocked" },
+    network: {
+      mode: networkIsPublic ? "public-proxy" : "loopback",
+      ...(localBinding ? { allowLocalBinding: true as const } : {}),
+    },
     protectedRoots,
+    structurallyProtectedRoots,
     dimensions: request.dimensions,
   };
   if (!isSandboxHelperControlFrame(launch)) {

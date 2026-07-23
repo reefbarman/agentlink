@@ -29,7 +29,7 @@ const request: ApprovalRequest = {
 };
 
 describe("McpCard", () => {
-  it("defaults to a one-time grant and clearly identifies the request", () => {
+  it("uses the standard one-time approval layout by default", () => {
     render(
       h(McpCard, {
         request,
@@ -38,14 +38,15 @@ describe("McpCard", () => {
       }),
     );
 
-    expect(screen.getByText("linear")).toBeTruthy();
-    expect(screen.getByText("list_issues")).toBeTruthy();
-    expect(screen.getByLabelText(/Run once/)).toHaveProperty("checked", true);
+    expect(screen.getByText("linear / list_issues")).toBeTruthy();
     expect(screen.getByText(/"team": "ENG"/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Run tool once" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow Once" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /Auto Approval Rules/ }),
+    ).toBeTruthy();
   });
 
-  it("offers an entire-MCP session grant and submits it only after confirmation", () => {
+  it("saves a whole-MCP session rule through the standard rules editor", () => {
     const submit = vi.fn();
     render(
       h(McpCard, {
@@ -56,17 +57,14 @@ describe("McpCard", () => {
     );
 
     fireEvent.click(
-      screen.getByLabelText(/Entire linear MCP for this session/),
+      screen.getByRole("button", { name: /Auto Approval Rules/ }),
     );
+    fireEvent.click(screen.getByRole("button", { name: "Whole MCP" }));
+    fireEvent.click(screen.getByRole("button", { name: "Session" }));
 
     expect(submit).not.toHaveBeenCalled();
-    expect(screen.getByRole("status").textContent).toMatch(
-      /skips future prompts for every tool/i,
-    );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Allow MCP for session" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Save Rule & Allow" }));
 
     expect(submit).toHaveBeenCalledWith({
       id: "mcp-approval",

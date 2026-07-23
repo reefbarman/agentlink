@@ -1,6 +1,9 @@
 import type { RuleEntry, SubCommandEntry } from "../types.js";
 
+import { isBannedCommandRulePrefixSuggestion } from "../../commandRulePolicy.js";
+
 const MODES = ["prefix", "exact", "regex"] as const;
+const DECISIONS = ["legacy", "allow", "prompt", "forbidden"] as const;
 const SCOPES = ["session", "project", "global", "skip"] as const;
 const SCOPE_LABELS: Record<string, string> = {
   session: "Session",
@@ -8,6 +11,13 @@ const SCOPE_LABELS: Record<string, string> = {
   global: "Global",
   skip: "Skip",
 };
+
+const DECISION_LABELS = {
+  legacy: "Approval only",
+  allow: "Allow",
+  prompt: "Prompt",
+  forbidden: "Forbidden",
+} as const;
 
 const TIER_LABELS = {
   safe: "Safe",
@@ -53,6 +63,11 @@ export function RuleRow({
   const isSkipped = value.scope === "skip";
   const canSuggest = !!onSuggestRegex;
   const isSuggesting = suggestStatus === "loading";
+  const broadNativePrefix =
+    !isSkipped &&
+    value.mode === "prefix" &&
+    (value.decision ?? "legacy") === "allow" &&
+    isBannedCommandRulePrefixSuggestion(value.pattern);
 
   return (
     <div class={`rule-row ${isSkipped ? "rule-row-skipped" : ""}`}>
@@ -154,7 +169,7 @@ export function RuleRow({
                     key={t.prefix}
                     class={`rule-prefix-token ${t.prefix.length <= (suggestedPattern?.length ?? 0) ? "active" : ""}`}
                     onClick={() => onSelectPrefix?.(t.prefix)}
-                    title={`Approve commands starting with “${t.prefix}”`}
+                    title={`Allow commands starting with “${t.prefix}”; active exact/prefix allow rules may authorize native execution`}
                   >
                     {t.token}
                   </button>
@@ -178,6 +193,40 @@ export function RuleRow({
       )}
 
       <div class="rule-row-options">
+        {!isSkipped && (value.decision ?? "legacy") === "allow" && (
+          <div class="rule-row-authority-note">
+            {value.mode === "regex"
+              ? "This regex rule skips future approval but stays inside the Protected Terminal. Regex matches do not grant native execution authority."
+              : broadNativePrefix
+                ? "Broad native prefix: this rule can authorize any matching command outside the Protected Terminal with your normal user permissions. Narrow the prefix unless you intend to trust the entire command family."
+                : "This rule skips future approval and may run matching commands outside the Protected Terminal with your normal user permissions. Every parsed command segment must have an explicit exact or prefix allow match."}
+          </div>
+        )}
+        <div class="rule-row-option-line">
+          <span class="rule-row-option-label">Decision:</span>
+          <div class="toggle-group">
+            {DECISIONS.map((decision) => (
+              <button
+                key={decision}
+                type="button"
+                class={`mode-btn ${(value.decision ?? "legacy") === decision ? "active" : ""}`}
+                onClick={() =>
+                  onChange({
+                    ...value,
+                    decision: decision === "legacy" ? undefined : decision,
+                  })
+                }
+                disabled={isSkipped}
+              >
+                {decision === "allow"
+                  ? value.mode === "regex"
+                    ? "Allow (sandboxed)"
+                    : "Allow (native)"
+                  : DECISION_LABELS[decision]}
+              </button>
+            ))}
+          </div>
+        </div>
         <div class="rule-row-option-line">
           <span class="rule-row-option-label">Scope:</span>
           <div class="toggle-group">

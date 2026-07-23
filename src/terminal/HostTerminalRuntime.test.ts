@@ -3,7 +3,7 @@ import {
   createShellIntegrationParser,
   encodeShellIntegrationValue,
 } from "./shellIntegration.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { HostTerminalRuntime } from "./HostTerminalRuntime.js";
 
@@ -115,8 +115,9 @@ describe("HostTerminalRuntime", () => {
     ).toBe(true);
   });
 
-  it("requires close confirmation only when host state cannot prove an idle integrated prompt", () => {
+  it("treats a user terminal as busy unless host state proves an idle integrated prompt", () => {
     const integratedRuntime = integrated();
+    expect(integratedRuntime.userMayBeBusy).toBe(true);
     expect(integratedRuntime.closeRequiresConfirmation).toBe(true);
 
     integratedRuntime.processData(
@@ -126,6 +127,7 @@ describe("HostTerminalRuntime", () => {
         "$ ",
       ].join(""),
     );
+    expect(integratedRuntime.userMayBeBusy).toBe(false);
     expect(integratedRuntime.closeRequiresConfirmation).toBe(false);
 
     integratedRuntime.processData(
@@ -133,14 +135,18 @@ describe("HostTerminalRuntime", () => {
         "",
       ),
     );
+    expect(integratedRuntime.userMayBeBusy).toBe(true);
     expect(integratedRuntime.closeRequiresConfirmation).toBe(true);
 
     const tuiRuntime = raw();
     tuiRuntime.processData("\x1b[?1049h");
+    expect(tuiRuntime.userMayBeBusy).toBe(true);
     expect(tuiRuntime.closeRequiresConfirmation).toBe(true);
+    expect(raw().userMayBeBusy).toBe(true);
     expect(raw().closeRequiresConfirmation).toBe(true);
 
     integratedRuntime.finish();
+    expect(integratedRuntime.userMayBeBusy).toBe(false);
     expect(integratedRuntime.closeRequiresConfirmation).toBe(false);
   });
 
@@ -329,6 +335,26 @@ describe("HostTerminalRuntime", () => {
       droppedBytes: 7,
     });
     expect(update.batch?.droppedRenderBytes).toBe(7);
+  });
+
+  it("appends a long printable replay span once instead of once per character", () => {
+    const runtime = raw({ maxRenderReplayBytes: 1024 });
+    const appendReplayUnit = vi.spyOn(
+      runtime as unknown as {
+        appendReplayUnit(data: string, splittable: boolean): void;
+      },
+      "appendReplayUnit",
+    );
+
+    runtime.processData("x".repeat(1200));
+
+    expect(appendReplayUnit).toHaveBeenCalledTimes(1);
+    expect(appendReplayUnit).toHaveBeenCalledWith("x".repeat(1200), true);
+    expect(runtime.snapshot()).toMatchObject({
+      data: "x".repeat(1024),
+      byteLength: 1024,
+      droppedBytes: 176,
+    });
   });
 
   it("requires explicit detach before a different renderer epoch attaches", () => {

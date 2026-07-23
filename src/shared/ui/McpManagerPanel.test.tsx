@@ -116,6 +116,51 @@ function successfulResult(
 afterEach(cleanup);
 
 describe("McpManagerPanel", () => {
+  it("switches projects in one manager and pins mutations to the selected project", async () => {
+    const onSelectProject = vi.fn();
+    const onMutateConfig = vi.fn(async (batch: McpConfigBatchMutation) =>
+      successfulResult(batch),
+    );
+    render(
+      <McpManagerPanel
+        snapshot={snapshot({
+          project: {
+            projectId: "project-a",
+            displayName: "Project A",
+            availability: "available",
+          },
+          projects: [
+            {
+              projectId: "project-a",
+              displayName: "Project A",
+              availability: "available",
+            },
+            {
+              projectId: "project-b",
+              displayName: "Project B",
+              availability: "available",
+            },
+          ],
+        })}
+        onSelectProject={onSelectProject}
+        onMutateConfig={onMutateConfig}
+      />,
+    );
+
+    fireEvent.input(screen.getByLabelText("MCP project"), {
+      target: { value: "project-b" },
+    });
+    expect(onSelectProject).toHaveBeenCalledWith("project-b");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Disable configured-only" }),
+    );
+    await waitFor(() => expect(onMutateConfig).toHaveBeenCalledTimes(1));
+    expect(onMutateConfig.mock.calls[0][0]).toMatchObject({
+      projectId: "project-a",
+    });
+  });
+
   it("joins configured and runtime servers in the overview, including disabled and not connected", () => {
     render(<McpManagerPanel snapshot={snapshot()} />);
 
@@ -289,6 +334,9 @@ describe("McpManagerPanel", () => {
     fireEvent.input(screen.getByLabelText(/^Arguments/), {
       target: { value: "script with spaces.js\n--flag=value" },
     });
+    fireEvent.click(
+      screen.getByLabelText(/Server supports parallel tool calls/),
+    );
     expect(screen.getByText("Advanced settings")).toBeTruthy();
     fireEvent.click(screen.getByText("Credentials"));
     fireEvent.input(
@@ -321,6 +369,7 @@ describe("McpManagerPanel", () => {
             name: "new-server",
             command: "node",
             args: ["script with spaces.js", "--flag=value"],
+            supportsParallelToolCalls: true,
             env: {
               mode: "patch",
               set: { TOKEN: "secret=value", NEW: "value" },

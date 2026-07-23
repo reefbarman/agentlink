@@ -14,10 +14,15 @@ import {
 import { handlePendingEditLockError } from "./pendingEditLock.js";
 import type {
   EditReviewProvider,
+  EditReviewParams,
   EditReviewResult,
+  WriteApprovalPromptEvent,
   WriteApprovalPolicyProvider,
 } from "../core/capabilities/editReview.js";
-import { DEFAULT_DIAGNOSTIC_DELAY_MS } from "../core/capabilities/editReview.js";
+import {
+  DEFAULT_DIAGNOSTIC_DELAY_MS,
+  evaluateWriteAuthorization,
+} from "../core/capabilities/editReview.js";
 
 interface SearchReplaceBlock {
   search: string;
@@ -931,6 +936,8 @@ function buildAtomicFailurePayload(
 export interface ApplyDiffProviders {
   editReviewProvider?: EditReviewProvider;
   writeApprovalPolicyProvider?: WriteApprovalPolicyProvider;
+  onApprovalPrompt?: (event: WriteApprovalPromptEvent) => void;
+  prepareOneShotAuthorization?: EditReviewParams["prepareOneShotAuthorization"];
   diagnosticDelay?: number;
 }
 
@@ -1158,14 +1165,27 @@ export async function handleApplyDiff(
       });
     }
 
-    const canAutoApprove =
-      providers.writeApprovalPolicyProvider?.canAutoApprove({
+    const authorization = evaluateWriteAuthorization(
+      providers.writeApprovalPolicyProvider,
+      {
         sessionId,
         absolutePath: filePath,
         relativePath: relPath,
         inWorkspace,
         mode,
-      }) ?? false;
+      },
+    );
+    const canAutoApprove = authorization.allowed;
+    const approvalPromptEvent = !canAutoApprove
+      ? {
+          authorization,
+          sessionId,
+          absolutePath: filePath,
+          relativePath: relPath,
+          inWorkspace,
+          mode,
+        }
+      : undefined;
 
     let lockedFailedBlocks = failedBlocks;
     let lockedBlockResults = blockResults;
@@ -1179,6 +1199,13 @@ export async function handleApplyDiff(
       diagnosticDelay: providers.diagnosticDelay ?? DEFAULT_DIAGNOSTIC_DELAY_MS,
       approvalPanel,
       onApprovalRequest,
+      prepareOneShotAuthorization: providers.prepareOneShotAuthorization,
+      ...(approvalPromptEvent
+        ? {
+            onApprovalPresented: () =>
+              providers.onApprovalPrompt?.(approvalPromptEvent),
+          }
+        : {}),
       sessionId,
       allowCreate: false,
       operation: "modified",
@@ -1243,6 +1270,17 @@ export async function handleApplyDiff(
       ...response
     } = result;
     const responseObj = response as Record<string, unknown>;
+    responseObj.authorization = result.authorization
+      ? result.authorization
+      : canAutoApprove
+        ? authorization
+        : result.decision
+          ? {
+              allowed: result.decision !== "reject",
+              basis: "human",
+              decision: result.decision,
+            }
+          : undefined;
     const acceptedContent =
       result.status === "accepted"
         ? (result.finalContent ??

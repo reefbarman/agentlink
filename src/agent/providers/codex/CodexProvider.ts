@@ -69,6 +69,22 @@ import {
   toCodexRequestError,
   type CodexErrorShape,
 } from "../../../core/model/providers/codex/errors.js";
+import {
+  canUseCodexStandaloneWeb,
+  executeCodexStandaloneWeb,
+} from "../../../core/model/providers/codex/standaloneWeb.js";
+import type {
+  CoreWebAccessSettings,
+  CoreWebToolKind,
+} from "../../../core/webAccess.js";
+
+/**
+ * Absolute per-request ceiling on OAuth refresh retries. The per-account dedup
+ * set normally bounds refreshes to one per account, but it is keyed on
+ * oauthAccountPoolId — if that id is ever absent, a persistent 401 would
+ * otherwise refresh-and-retry forever with no backoff.
+ */
+const MAX_OAUTH_REFRESH_ATTEMPTS = 3;
 
 // ── Provider ──
 
@@ -167,6 +183,31 @@ export class CodexProvider implements ModelProvider {
     }
     this.lastResolvedAuthMethod = auth.method;
     return auth;
+  }
+
+  async executeNativeWebTool(request: {
+    model: string;
+    kind: CoreWebToolKind;
+    input: Record<string, unknown>;
+    settings: CoreWebAccessSettings;
+    signal?: AbortSignal;
+  }): Promise<unknown | null> {
+    const auth = await this.getModelAuthOrThrow();
+    if (!canUseCodexStandaloneWeb(auth)) return null;
+    const model = this.resolveEffectiveModel(
+      request.model,
+      auth,
+      `standalone web ${request.kind}`,
+    );
+    return await executeCodexStandaloneWeb({
+      auth,
+      sessionId: this.sessionId,
+      model,
+      operation: request.kind,
+      input: request.input,
+      settings: request.settings,
+      signal: request.signal,
+    });
   }
 
   private getClient(auth: OpenAiCodexResolvedAuth): OpenAI {
@@ -273,6 +314,7 @@ export class CodexProvider implements ModelProvider {
 
     const attemptedOAuthAccountIds = new Set<string>();
     const refreshedOAuthAccountIds = new Set<string>();
+    let oauthRefreshAttempts = 0;
     let unavailableModelFallbackAttempted = false;
     if (auth.method === "oauth" && auth.oauthAccountPoolId) {
       attemptedOAuthAccountIds.add(auth.oauthAccountPoolId);
@@ -347,13 +389,15 @@ export class CodexProvider implements ModelProvider {
         if (action === "refresh_oauth_auth") {
           const refreshAccountId = auth.oauthAccountPoolId;
           if (
-            refreshAccountId &&
-            refreshedOAuthAccountIds.has(refreshAccountId)
+            (refreshAccountId &&
+              refreshedOAuthAccountIds.has(refreshAccountId)) ||
+            oauthRefreshAttempts >= MAX_OAUTH_REFRESH_ATTEMPTS
           ) {
             this.log(
-              `[codex] OAuth auth failure persists after refresh for account ${auth.oauthAccountLabel ?? refreshAccountId}`,
+              `[codex] OAuth auth failure persists after refresh for account ${auth.oauthAccountLabel ?? refreshAccountId ?? "unknown"}`,
             );
           } else {
+            oauthRefreshAttempts += 1;
             const refreshed = await this.authManager.forceRefreshModelAuth(
               "oauth",
               {
@@ -428,6 +472,7 @@ export class CodexProvider implements ModelProvider {
 
     const attemptedOAuthAccountIds = new Set<string>();
     const refreshedOAuthAccountIds = new Set<string>();
+    let oauthRefreshAttempts = 0;
     let unavailableModelFallbackAttempted = false;
     if (auth.method === "oauth" && auth.oauthAccountPoolId) {
       attemptedOAuthAccountIds.add(auth.oauthAccountPoolId);
@@ -494,13 +539,15 @@ export class CodexProvider implements ModelProvider {
         if (action === "refresh_oauth_auth") {
           const refreshAccountId = auth.oauthAccountPoolId;
           if (
-            refreshAccountId &&
-            refreshedOAuthAccountIds.has(refreshAccountId)
+            (refreshAccountId &&
+              refreshedOAuthAccountIds.has(refreshAccountId)) ||
+            oauthRefreshAttempts >= MAX_OAUTH_REFRESH_ATTEMPTS
           ) {
             this.log(
-              `[codex] complete() OAuth auth failure persists after refresh for account ${auth.oauthAccountLabel ?? refreshAccountId}`,
+              `[codex] complete() OAuth auth failure persists after refresh for account ${auth.oauthAccountLabel ?? refreshAccountId ?? "unknown"}`,
             );
           } else {
+            oauthRefreshAttempts += 1;
             const refreshed = await this.authManager.forceRefreshModelAuth(
               "oauth",
               {

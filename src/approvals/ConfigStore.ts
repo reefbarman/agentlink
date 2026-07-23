@@ -4,6 +4,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 import type { CommandRule } from "./CommandRuleStore.js";
+import type { NetworkRule } from "./NetworkRuleStore.js";
 import type { PathRule } from "./PathRuleStore.js";
 import { parseJsonWithComments } from "../util/jsonc.js";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
@@ -13,6 +14,7 @@ export interface AgentLinkConfig {
   writeApproved?: boolean;
   agentWriteApproved?: boolean;
   commandRules?: CommandRule[];
+  networkRules?: NetworkRule[];
   pathRules?: PathRule[];
   writeRules?: PathRule[];
 }
@@ -23,9 +25,11 @@ const GLOBAL_CONFIG_PATH = path.join(GLOBAL_DIR, "agentlink.json");
 const PROJECT_CONFIG_RELATIVE = path.join(".agentlink", "agentlink.json");
 const DEBOUNCE_MS = 200;
 
+let logChannel: vscode.LogOutputChannel | null = null;
+
 function log(msg: string): void {
-  const ch = vscode.window.createOutputChannel("agentlink", { log: true });
-  ch.info(msg);
+  logChannel ??= vscode.window.createOutputChannel("agentlink", { log: true });
+  logChannel.info(msg);
 }
 
 export class ConfigStore {
@@ -216,7 +220,24 @@ export class ConfigStore {
           typeof r === "object" &&
           r !== null &&
           typeof (r as CommandRule).pattern === "string" &&
-          ["prefix", "regex", "exact"].includes((r as CommandRule).mode),
+          ["prefix", "regex", "exact"].includes((r as CommandRule).mode) &&
+          ((r as CommandRule).decision === undefined ||
+            ["allow", "prompt", "forbidden"].includes(
+              (r as CommandRule).decision as string,
+            )),
+      );
+    }
+
+    if (Array.isArray(obj.networkRules)) {
+      config.networkRules = obj.networkRules.filter(
+        (rule): rule is NetworkRule =>
+          typeof rule === "object" &&
+          rule !== null &&
+          typeof (rule as NetworkRule).pattern === "string" &&
+          (rule as NetworkRule).mode === "exact" &&
+          ["allow", "prompt", "forbidden"].includes(
+            (rule as NetworkRule).decision,
+          ),
       );
     }
 

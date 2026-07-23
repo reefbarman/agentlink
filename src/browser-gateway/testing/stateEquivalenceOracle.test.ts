@@ -166,6 +166,9 @@ function createReadSet(): BrowserGatewayOwnerProjectionReadSet {
     policies: {
       agentWriteApproval: "prompt",
       commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "user",
+      executionPreset: "native-manual",
       configuredCommandApprovalPolicy: "safe",
     },
   };
@@ -250,6 +253,9 @@ function createLegacySnapshot(
           : null,
         agentWriteApproval: readSet.policies.agentWriteApproval,
         commandApprovalPolicy: readSet.policies.commandApprovalPolicy,
+        approvalPolicy: readSet.policies.approvalPolicy,
+        approvalReviewer: readSet.policies.approvalReviewer,
+        executionPreset: readSet.policies.executionPreset,
         configuredCommandApprovalPolicy:
           readSet.policies.configuredCommandApprovalPolicy,
       },
@@ -340,6 +346,9 @@ function syncLegacyForeground(
     : null;
   target.agentWriteApproval = readSet.policies.agentWriteApproval;
   target.commandApprovalPolicy = readSet.policies.commandApprovalPolicy;
+  target.approvalPolicy = readSet.policies.approvalPolicy;
+  target.approvalReviewer = readSet.policies.approvalReviewer;
+  target.executionPreset = readSet.policies.executionPreset;
   target.configuredCommandApprovalPolicy =
     readSet.policies.configuredCommandApprovalPolicy;
   target.projectedMessages = structuredClone(source.messages) as ChatMessage[];
@@ -410,6 +419,9 @@ describe("browser gateway state equivalence oracle", () => {
     readSet.policies = {
       agentWriteApproval: "project",
       commandApprovalPolicy: "sensitive",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
       configuredCommandApprovalPolicy: "sensitive",
     };
     syncLegacyForeground(legacy, readSet);

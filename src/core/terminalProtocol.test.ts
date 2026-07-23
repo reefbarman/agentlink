@@ -96,6 +96,36 @@ describe("host terminal protocol", () => {
     ).toBe(second);
   });
 
+  it("opens agent tabs quietly and clears unread activity when activated", () => {
+    let state = reduceHostTerminalState(EMPTY_HOST_TERMINAL_STATE, {
+      type: "host-terminal/opened",
+      terminal: terminal("user"),
+    });
+    state = reduceHostTerminalState(state, {
+      type: "host-terminal/opened",
+      terminal: terminal("agent"),
+      activate: false,
+    });
+    expect(state.activeTabId).toBe("user");
+
+    state = reduceHostTerminalState(state, {
+      type: "host-terminal/agent-activity",
+      terminalId: "agent",
+      activity: "unread",
+    });
+    expect(state.tabs[1]).toMatchObject({
+      id: "agent",
+      agentActivity: "unread",
+    });
+
+    state = reduceHostTerminalState(state, {
+      type: "host-terminal/activated",
+      terminalId: "agent",
+    });
+    expect(state.activeTabId).toBe("agent");
+    expect(state.tabs[1]?.agentActivity).toBeUndefined();
+  });
+
   it("updates cwd, dimensions, and exit state without storing stream data", () => {
     let state = reduceHostTerminalState(EMPTY_HOST_TERMINAL_STATE, {
       type: "host-terminal/opened",

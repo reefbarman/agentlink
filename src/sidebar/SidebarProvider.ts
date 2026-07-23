@@ -17,6 +17,7 @@ import type {
 } from "./webview/types.js";
 import { deleteFeedback, readFeedback } from "../util/feedbackStore.js";
 
+import type { CommandRuleDecision } from "../approvals/CommandRuleStore.js";
 import { editRuleViaQuickPick } from "./editRuleQuickPick.js";
 import { getConfiguredMasterBypass } from "../adapters/vscode/agentLinkConfig.js";
 import { renderWebviewShell } from "../adapters/vscode/webviewShell.js";
@@ -165,22 +166,52 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "removeGlobalRule":
           if (message.pattern) {
-            this.approvalManager?.removeCommandRule(message.pattern, "global");
+            this.approvalManager?.removeCommandRule(
+              message.pattern,
+              "global",
+              undefined,
+              message.mode
+                ? {
+                    mode: message.mode as "prefix" | "regex" | "exact",
+                    decision: message.decision,
+                  }
+                : undefined,
+            );
           }
           break;
         case "editGlobalRule":
           if (message.pattern && message.mode) {
-            this.editRule(message.pattern, message.mode, "global");
+            this.editRule(
+              message.pattern,
+              message.mode,
+              message.decision,
+              "global",
+            );
           }
           break;
         case "removeProjectRule":
           if (message.pattern) {
-            this.approvalManager?.removeCommandRule(message.pattern, "project");
+            this.approvalManager?.removeCommandRule(
+              message.pattern,
+              "project",
+              undefined,
+              message.mode
+                ? {
+                    mode: message.mode as "prefix" | "regex" | "exact",
+                    decision: message.decision,
+                  }
+                : undefined,
+            );
           }
           break;
         case "editProjectRule":
           if (message.pattern && message.mode) {
-            this.editRule(message.pattern, message.mode, "project");
+            this.editRule(
+              message.pattern,
+              message.mode,
+              message.decision,
+              "project",
+            );
           }
           break;
         case "addGlobalRule":
@@ -192,6 +223,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               message.pattern,
               "session",
               message.sessionId,
+              message.mode
+                ? {
+                    mode: message.mode as "prefix" | "regex" | "exact",
+                    decision: message.decision,
+                  }
+                : undefined,
             );
           }
           break;
@@ -200,6 +237,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             this.editRule(
               message.pattern,
               message.mode,
+              message.decision,
               "session",
               message.sessionId,
             );
@@ -360,6 +398,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private async editRule(
     oldPattern: string,
     oldMode: string,
+    oldDecision: CommandRuleDecision | undefined,
     scope: RuleScope,
     sessionId?: string,
   ): Promise<void> {
@@ -386,14 +425,54 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         },
       ],
     });
-    if (result) {
-      this.approvalManager.editCommandRule(
-        oldPattern,
-        result,
-        scope,
-        sessionId,
-      );
-    }
+    if (!result) return;
+    const decisions: Array<
+      vscode.QuickPickItem & { decision: CommandRuleDecision | undefined }
+    > = [
+      {
+        label: "Approval only (legacy)",
+        description: "Skip repeat cards without granting native authority",
+        decision: undefined,
+        picked: oldDecision === undefined,
+      },
+      {
+        label: result.mode === "regex" ? "Allow (sandboxed)" : "Allow (native)",
+        description:
+          result.mode === "regex"
+            ? "Skip review but retain the Protected Terminal"
+            : "Skip review and use normal user permissions when every segment matches",
+        decision: "allow",
+        picked: oldDecision === "allow",
+      },
+      {
+        label: "Prompt",
+        description: "Require the selected reviewer for matching commands",
+        decision: "prompt",
+        picked: oldDecision === "prompt",
+      },
+      {
+        label: "Forbidden",
+        description: "Reject matching commands before terminal preparation",
+        decision: "forbidden",
+        picked: oldDecision === "forbidden",
+      },
+    ];
+    const decision = await vscode.window.showQuickPick(decisions, {
+      title: "Rule Decision",
+      placeHolder: "What should matching commands do?",
+      ignoreFocusOut: true,
+    });
+    if (!decision) return;
+    this.approvalManager.editCommandRule(
+      oldPattern,
+      { ...result, decision: decision.decision },
+      scope,
+      sessionId,
+      {
+        mode: oldMode as "prefix" | "regex" | "exact",
+        decision: oldDecision,
+      },
+    );
   }
 
   private async editPathRule(

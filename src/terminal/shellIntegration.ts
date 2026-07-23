@@ -253,13 +253,15 @@ export function createRawShellIntegrationParser(): ShellIntegrationParser {
   return new RawShellIntegrationParser();
 }
 
-function commonFunctions(nonce: string): string[] {
+function commonFunctions(nonce: string, shell: ShellIntegrationKind): string[] {
+  // Bare % is an end-anchor pattern in zsh substitution, not a literal percent.
+  const percentPattern = shell === "zsh" ? '"%"' : "%";
   return [
     `__agentlink_si_nonce='${nonce}'`,
     "__agentlink_si_active=0",
     "__agentlink_si_encode() {",
     "  local __agentlink_si_value=${1-}",
-    "  __agentlink_si_value=${__agentlink_si_value//%/%25}",
+    `  __agentlink_si_value=\${__agentlink_si_value//${percentPattern}/%25}`,
     "  __agentlink_si_value=${__agentlink_si_value//;/%3B}",
     "  __agentlink_si_value=${__agentlink_si_value//$'\\033'/%1B}",
     "  __agentlink_si_value=${__agentlink_si_value//$'\\007'/%07}",
@@ -280,7 +282,14 @@ function commonFunctions(nonce: string): string[] {
 
 function createZshIntegrationScript(nonce: string): string {
   return [
-    ...commonFunctions(nonce),
+    ...commonFunctions(nonce, "zsh"),
+    "__agentlink_si_prompt_start() {",
+    "  __agentlink_si_emit A",
+    "}",
+    "__agentlink_si_prompt_end() {",
+    "  __agentlink_si_emit B",
+    "}",
+    "__agentlink_si_prompt_wrapped=0",
     "__agentlink_si_precmd() {",
     "  local __agentlink_si_status=$?",
     "  if (( __agentlink_si_active )); then",
@@ -288,10 +297,17 @@ function createZshIntegrationScript(nonce: string): string {
     "    __agentlink_si_active=0",
     "  fi",
     '  __agentlink_si_emit P "$PWD"',
-    "  __agentlink_si_emit A",
+    "  if (( ! __agentlink_si_prompt_wrapped )); then",
+    '    __agentlink_si_prior_prompt="$PS1"',
+    '    PS1="%{$(__agentlink_si_prompt_start)%}$PS1%{$(__agentlink_si_prompt_end)%}"',
+    "    __agentlink_si_prompt_wrapped=1",
+    "  fi",
     "}",
     "__agentlink_si_preexec() {",
-    "  __agentlink_si_emit B",
+    "  if (( __agentlink_si_prompt_wrapped )); then",
+    '    PS1="$__agentlink_si_prior_prompt"',
+    "    __agentlink_si_prompt_wrapped=0",
+    "  fi",
     '  __agentlink_si_emit C "$1"',
     "  __agentlink_si_active=1",
     "}",
@@ -303,7 +319,7 @@ function createZshIntegrationScript(nonce: string): string {
 function createBashIntegrationScript(nonce: string): string {
   return [
     'if [[ -z "$(trap -p DEBUG)" && $- != *T* ]]; then',
-    ...commonFunctions(nonce).map((line) => `  ${line}`),
+    ...commonFunctions(nonce, "bash").map((line) => `  ${line}`),
     "  __agentlink_si_prompting=0",
     "  __agentlink_si_prompt_begin() {",
     "    __agentlink_si_prompting=1",

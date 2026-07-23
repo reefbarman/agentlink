@@ -11,3 +11,5 @@ plans/*
 .mcp.json
 /AGENTS.md
 benchmarks/
+tmp/
+.agentlink-smoke/

@@ -6,6 +6,7 @@ import * as vscode from "vscode";
 
 const isWindows = process.platform.startsWith("win");
 const binName = isWindows ? "rg.exe" : "rg";
+const SYSTEM_RG_PROBE_TIMEOUT_MS = 2_000;
 
 let cachedRgPath: string | undefined;
 
@@ -24,11 +25,22 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
-export async function getRipgrepBinPath(): Promise<string> {
-  if (cachedRgPath) return cachedRgPath;
+function getBundledRipgrepCandidates(appRoot: string): string[] {
+  const universalBinDir = `${process.platform}-${process.arch}`;
 
-  const appRoot = vscode.env.appRoot;
-  const candidates = [
+  return [
+    path.join(
+      appRoot,
+      "node_modules.asar.unpacked/@vscode/ripgrep-universal/bin",
+      universalBinDir,
+      binName,
+    ),
+    path.join(
+      appRoot,
+      "node_modules/@vscode/ripgrep-universal/bin",
+      universalBinDir,
+      binName,
+    ),
     path.join(appRoot, "node_modules/@vscode/ripgrep/bin/", binName),
     path.join(appRoot, "node_modules/vscode-ripgrep/bin/", binName),
     path.join(
@@ -42,6 +54,25 @@ export async function getRipgrepBinPath(): Promise<string> {
       binName,
     ),
   ];
+}
+
+async function canExecuteSystemRipgrep(): Promise<boolean> {
+  return new Promise((resolve) => {
+    childProcess.execFile(
+      binName,
+      ["--version"],
+      { timeout: SYSTEM_RG_PROBE_TIMEOUT_MS, windowsHide: true },
+      (error, stdout) => {
+        resolve(!error && /^ripgrep\s+\d/i.test(stdout.trim()));
+      },
+    );
+  });
+}
+
+export async function getRipgrepBinPath(): Promise<string> {
+  if (cachedRgPath) return cachedRgPath;
+
+  const candidates = getBundledRipgrepCandidates(vscode.env.appRoot);
 
   for (const candidate of candidates) {
     if (await fileExists(candidate)) {
@@ -50,7 +81,14 @@ export async function getRipgrepBinPath(): Promise<string> {
     }
   }
 
-  throw new Error("Could not find ripgrep binary in VS Code installation");
+  if (await canExecuteSystemRipgrep()) {
+    cachedRgPath = binName;
+    return binName;
+  }
+
+  throw new Error(
+    "Could not find a usable ripgrep binary in the VS Code installation or on PATH",
+  );
 }
 
 // --- Ripgrep JSON output types ---

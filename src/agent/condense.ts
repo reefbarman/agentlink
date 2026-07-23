@@ -29,7 +29,11 @@ import {
   CODEX_CONDENSE_MODEL_FALLBACKS,
 } from "./providers/index.js";
 
-import type { AgentErrorActions, AgentMessage } from "./types.js";
+import type {
+  AgentErrorActions,
+  AgentMessage,
+  PreservedRuntimeContext,
+} from "./types.js";
 import {
   initTreeSitter,
   treeSitterChunkFile,
@@ -44,6 +48,7 @@ import {
   renderDeterministicSections,
   type CondenseRecallAnchors,
 } from "./condensePrompt.js";
+import { getLatestTodoState } from "./todoTool.js";
 
 export { renderDeterministicSections } from "./condensePrompt.js";
 
@@ -430,7 +435,12 @@ export function getEffectiveHistory(messages: AgentMessage[]): AgentMessage[] {
     pendingTasks,
   });
 
-  const preservedContext = summary.preservedContext;
+  const latestTodos = getLatestTodoState(messages);
+  const preservedContext = summary.preservedContext
+    ? { ...summary.preservedContext, todos: latestTodos }
+    : latestTodos.length > 0
+      ? { toolNames: [], todos: latestTodos }
+      : undefined;
 
   const resumeContextMessage: AgentMessage = {
     role: "user",
@@ -561,11 +571,7 @@ export interface SummarizeOptions {
   isAutomatic: boolean;
   filesRead?: string[];
   cwd?: string;
-  preservedContext?: {
-    toolNames: string[];
-    mcpServerNames?: string[];
-    activeSkills?: string[];
-  };
+  preservedContext?: PreservedRuntimeContext;
 }
 
 export interface SummarizeResult {

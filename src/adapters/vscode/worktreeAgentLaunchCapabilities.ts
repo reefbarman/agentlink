@@ -8,10 +8,12 @@ export function createVscodeWorktreeAgentLaunchProvider(deps: {
   sessionId?: string | (() => string);
 }): WorktreeAgentLaunchProvider {
   return {
-    start(request) {
+    start(request, options) {
       return handleStartWorktreeAgent(request, {
         globalStorageUri: deps.globalStorageUri,
-        onApprovalRequest: deps.onApprovalRequest,
+        onApprovalRequest: options?.approvalDecision
+          ? async () => options.approvalDecision!
+          : deps.onApprovalRequest,
         sessionId:
           typeof deps.sessionId === "function"
             ? deps.sessionId()

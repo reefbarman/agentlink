@@ -31,10 +31,12 @@ function CondensingSpinner() {
   return (
     <div class="condense-row condense-row-condensing">
       <div class="condense-row-line" />
-      <div class="condense-row-badge">
-        <i class="codicon codicon-loading codicon-modifier-spin" />
-        <span class="condense-row-label">Condensing context…</span>
-        <span class="condense-row-detail">{elapsed}s</span>
+      <div class="condense-row-content">
+        <div class="condense-row-badge">
+          <i class="codicon codicon-loading codicon-modifier-spin" />
+          <span class="condense-row-label">Condensing context…</span>
+          <span class="condense-row-detail">{elapsed}s</span>
+        </div>
       </div>
       <div class="condense-row-line" />
     </div>
@@ -67,35 +69,40 @@ export function CondenseRow({ message }: CondenseRowProps) {
     info && info.prevInputTokens > 0
       ? Math.round((saved / info.prevInputTokens) * 100)
       : 0;
+  const validationWarnings = info?.validationWarnings ?? [];
 
   return (
     <div class="condense-row">
       <div class="condense-row-line" />
-      <div class="condense-row-badge">
-        <i class="codicon codicon-fold" />
-        <span class="condense-row-label">Context condensed</span>
-        {info && (
-          <span class="condense-row-detail condense-row-stats">
-            {formatK(info.prevInputTokens)} → {formatK(info.newInputTokens)}{" "}
-            tokens
-            {savedPct > 0 && (
-              <span class="condense-row-saved"> (−{savedPct}%)</span>
-            )}
-            {info.durationMs !== undefined && (
-              <span class="condense-row-duration">
-                {" · "}
-                {formatDuration(info.durationMs)}
-              </span>
-            )}
-          </span>
+      <div
+        class={`condense-row-content${validationWarnings.length > 0 ? " condense-row-content-with-warning" : ""}`}
+      >
+        <div class="condense-row-badge">
+          <i class="codicon codicon-fold" />
+          <span class="condense-row-label">Context condensed</span>
+          {info && (
+            <span class="condense-row-detail condense-row-stats">
+              {formatK(info.prevInputTokens)} → {formatK(info.newInputTokens)}{" "}
+              tokens
+              {savedPct > 0 && (
+                <span class="condense-row-saved"> (−{savedPct}%)</span>
+              )}
+              {info.durationMs !== undefined && (
+                <span class="condense-row-duration">
+                  {" · "}
+                  {formatDuration(info.durationMs)}
+                </span>
+              )}
+            </span>
+          )}
+        </div>
+        {validationWarnings.length > 0 && (
+          <div class="condense-row-warning">
+            <i class="codicon codicon-warning" />
+            <span>{validationWarnings.join(" · ")}</span>
+          </div>
         )}
       </div>
-      {info?.validationWarnings && info.validationWarnings.length > 0 && (
-        <div class="condense-row-detail" style={{ marginTop: "4px" }}>
-          <i class="codicon codicon-warning" />{" "}
-          {info.validationWarnings.join(" · ")}
-        </div>
-      )}
       <div class="condense-row-line" />
     </div>
   );

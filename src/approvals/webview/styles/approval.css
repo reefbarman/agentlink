@@ -77,10 +77,11 @@ body {
 
 .approval-project-context {
   display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin: -4px 0 16px;
-  padding: 8px 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: -4px 0 10px;
+  padding: 4px 7px;
   border: 1px solid var(--vscode-panel-border);
   border-radius: 4px;
   background: var(--vscode-editor-inactiveSelectionBackground);
@@ -131,12 +132,19 @@ body {
 }
 
 .approval-project-target {
-  padding-left: 22px;
+  min-width: 0;
+  flex: 1 1 140px;
   color: var(--vscode-descriptionForeground);
   font-family: var(--vscode-editor-font-family);
   font-size: 11px;
   line-height: 1.35;
-  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.approval-project-route + .approval-project-target {
+  padding-left: 8px;
+  border-left: 1px solid var(--vscode-panel-border);
 }
 
 /* ── Card label ──────────────────────────────────────────────────────── */
@@ -310,97 +318,119 @@ body {
   margin-bottom: 16px;
 }
 
-/* ── Command reason (agent explanation) ──────────────────────────────── */
+/* ── Compact command execution context ───────────────────────────────── */
 
-.command-reason {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin-bottom: 10px;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--vscode-descriptionForeground);
-}
-.command-reason .codicon {
-  font-size: 13px;
-  flex-shrink: 0;
-  margin-top: 1px;
-  color: var(--vscode-terminal-ansiBlue, #6796e6);
-}
-
-.command-security {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin-bottom: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 4px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--vscode-descriptionForeground);
-  background: color-mix(
-    in srgb,
-    var(--vscode-editorInfo-background, #063b49) 25%,
-    transparent
-  );
-}
-.command-security > .codicon {
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-.command-security.verified > .codicon {
-  color: #4ec9b0;
-}
-.command-security.native > .codicon {
-  color: var(--vscode-terminal-ansiYellow, #d7ba7d);
-}
-.command-security-heading {
-  margin-bottom: 2px;
-  font-weight: 600;
-  color: var(--vscode-foreground);
-}
-
-.command-review {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
+.command-context {
   margin-bottom: 12px;
-  padding: 8px 10px;
   border: 1px solid var(--vscode-panel-border);
-  border-radius: 4px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--vscode-descriptionForeground);
+  border-radius: 6px;
   background: color-mix(
     in srgb,
-    var(--vscode-editorInfo-background, #063b49) 35%,
+    var(--vscode-editorInfo-background, #063b49) 22%,
     transparent
   );
 }
-.command-review > .codicon {
-  flex-shrink: 0;
-  margin-top: 2px;
-  color: var(--vscode-terminal-ansiYellow, #d7ba7d);
-}
-.command-review-heading {
-  margin-bottom: 2px;
-  font-weight: 600;
-  color: var(--vscode-foreground);
-}
-
-.command-guardrail {
+.command-context-summary {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 10px;
-  font-size: 12px;
-  line-height: 1.4;
+  gap: 8px;
+  padding: 7px 9px;
   color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+  list-style: none;
 }
-.command-guardrail .codicon {
-  flex-shrink: 0;
+.command-context-summary::-webkit-details-marker {
+  display: none;
+}
+.command-context-summary::after {
+  content: "\eab6";
+  flex: 0 0 auto;
+  font-family: codicon;
+}
+.command-context[open] .command-context-summary::after {
+  content: "\eab4";
+}
+.command-context-summary > .codicon {
+  flex: 0 0 auto;
+}
+.command-context.verified .command-context-summary > .codicon {
+  color: var(--vscode-terminal-ansiGreen, #4ec9b0);
+}
+.command-context.native .command-context-summary > .codicon,
+.command-context-detail-row > .codicon {
   color: var(--vscode-terminal-ansiYellow, #d7ba7d);
+}
+.command-context-summary-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+.command-context-summary-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.command-context-summary-line strong {
+  color: var(--vscode-foreground);
+}
+.command-context-boundary::before {
+  content: "\00b7";
+  margin-right: 5px;
+}
+.command-context-reason {
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.command-context-review-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.command-context-review-badge.risk-medium {
+  background: var(--vscode-editorWarning-foreground, #cca700);
+  color: #000;
+}
+.command-context-review-badge.risk-high {
+  background: var(--vscode-editorError-foreground, #f14c4c);
+  color: #fff;
+}
+.command-context-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+.command-context-detail-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.command-context-detail-row > .codicon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.command-context-detail-row > div {
+  min-width: 0;
+}
+.command-context-detail-row strong {
+  color: var(--vscode-foreground);
 }
 
 /* ── Terminal-style command box ───────────────────────────────────────── */
@@ -411,6 +441,12 @@ body {
   border-radius: 6px;
   margin-bottom: 16px;
   overflow: hidden;
+}
+.terminal-box > .approval-detail-text {
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
 }
 .terminal-header {
   display: flex;
@@ -931,6 +967,18 @@ body {
   flex-direction: column;
   gap: 6px;
 }
+.rule-row-authority-note {
+  padding: 7px 8px;
+  border-left: 2px solid var(--vscode-notificationsWarningIcon-foreground);
+  background: color-mix(
+    in srgb,
+    var(--vscode-notificationsWarningIcon-foreground) 8%,
+    transparent
+  );
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 1.4;
+}
 .rule-row-option-line {
   display: flex;
   align-items: center;
@@ -1110,345 +1158,37 @@ body {
 /* ── Follow-up input ─────────────────────────────────────────────────── */
 
 .follow-up-section {
-  margin-top: 16px;
-  padding-top: 12px;
-  padding-bottom: 16px;
+  margin-top: 10px;
+  padding-top: 4px;
   border-top: 1px solid var(--vscode-panel-border);
 }
 .follow-up-label {
-  font-size: 12px;
-  color: var(--vscode-descriptionForeground);
-  margin-bottom: 6px;
   display: flex;
   align-items: center;
   gap: 4px;
-}
-.follow-up-input {
-  resize: vertical;
-  min-height: 36px;
-}
-
-/* ── MCP card ────────────────────────────────────────────────────────── */
-
-.mcp-identity-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px;
-  margin-bottom: 12px;
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 6px;
-  background: var(--vscode-editor-inactiveSelectionBackground);
-}
-
-.mcp-identity-icon {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
-  border-radius: 6px;
-  background: color-mix(in srgb, #4ec9b0 14%, transparent);
-  color: #4ec9b0;
-}
-
-.mcp-identity-icon .codicon {
-  font-size: 17px;
-}
-
-.mcp-identity-copy {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.mcp-identity-eyebrow {
+  padding: 6px 4px;
   color: var(--vscode-descriptionForeground);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.mcp-identity-route {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.mcp-identity-route > span:first-child,
-.mcp-identity-route code {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mcp-identity-route .codicon {
-  flex: 0 0 auto;
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-}
-
-.mcp-identity-route code {
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: var(--vscode-textCodeBlock-background);
-  color: var(--vscode-textPreformat-foreground, var(--vscode-foreground));
-  font-family: var(--vscode-editor-font-family);
   font-size: 12px;
-}
-
-.mcp-external-badge,
-.mcp-session-badge,
-.mcp-new-choice-badge {
-  flex: 0 0 auto;
-  padding: 2px 6px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.mcp-external-badge {
-  border: 1px solid color-mix(in srgb, #4ec9b0 38%, transparent);
-  color: #4ec9b0;
-}
-
-.mcp-input-disclosure,
-.mcp-durable-permissions {
-  margin-bottom: 14px;
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.mcp-input-disclosure > summary,
-.mcp-durable-permissions > summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-  font-weight: 600;
   cursor: pointer;
   list-style: none;
-  user-select: none;
 }
-
-.mcp-input-disclosure > summary::-webkit-details-marker,
-.mcp-durable-permissions > summary::-webkit-details-marker {
+.follow-up-label::-webkit-details-marker {
   display: none;
 }
-
-.mcp-input-disclosure > summary::after,
-.mcp-durable-permissions > summary::after {
+.follow-up-label::after {
   content: "\eab6";
   margin-left: auto;
   font-family: codicon;
 }
-
-.mcp-input-disclosure[open] > summary::after,
-.mcp-durable-permissions[open] > summary::after {
+.follow-up-section[open] .follow-up-label::after {
   content: "\eab4";
 }
-
-.mcp-input-disclosure pre {
-  max-height: 190px;
-  margin: 0;
-  padding: 10px 12px;
-  overflow: auto;
-  border-top: 1px solid var(--vscode-panel-border);
-  background: var(
-    --vscode-textCodeBlock-background,
-    var(--vscode-editor-background)
-  );
-  font-family: var(--vscode-editor-font-family);
-  font-size: 11px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
+.follow-up-body {
+  padding: 2px 0 10px;
 }
-
-.mcp-permission-fieldset {
-  min-width: 0;
-  padding: 0;
-  border: 0;
-}
-
-.mcp-permission-fieldset > legend {
-  margin-bottom: 8px;
-  color: var(--vscode-foreground);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.mcp-permission-group {
-  margin-top: 14px;
-}
-
-.mcp-permission-group-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 2px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.mcp-permission-group > p,
-.mcp-durable-note {
-  margin: 0 0 8px;
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.mcp-session-badge {
-  background: color-mix(in srgb, #4ec9b0 12%, transparent);
-  color: #4ec9b0;
-  font-size: 9px;
-  text-transform: uppercase;
-}
-
-.mcp-permission-options {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.mcp-permission-option {
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 9px;
-  min-height: 52px;
-  padding: 8px 10px;
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 6px;
-  background: var(--vscode-editor-background);
-  cursor: pointer;
-  transition:
-    border-color 100ms ease,
-    background 100ms ease;
-}
-
-.mcp-permission-option:hover {
-  background: var(--vscode-list-hoverBackground);
-}
-
-.mcp-permission-option.selected {
-  border-color: var(--vscode-focusBorder);
-  background: color-mix(
-    in srgb,
-    var(--vscode-focusBorder) 9%,
-    var(--vscode-editor-background)
-  );
-}
-
-.mcp-permission-option.broad.selected {
-  border-color: var(--vscode-editorWarning-foreground, #cca700);
-  background: color-mix(
-    in srgb,
-    var(--vscode-editorWarning-foreground, #cca700) 8%,
-    var(--vscode-editor-background)
-  );
-}
-
-.mcp-permission-option input[type="radio"] {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: var(--vscode-focusBorder);
-}
-
-.mcp-permission-icon {
-  color: var(--vscode-descriptionForeground);
-  font-size: 14px;
-}
-
-.mcp-permission-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.mcp-permission-title {
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-.mcp-permission-description {
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.mcp-new-choice-badge {
-  background: var(--vscode-badge-background);
-  color: var(--vscode-badge-foreground);
-  font-size: 9px;
-  text-transform: uppercase;
-}
-
-.mcp-scope-warning {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  margin-top: 10px;
-  padding: 8px 10px;
-  border-left: 3px solid var(--vscode-editorWarning-foreground, #cca700);
-  background: color-mix(
-    in srgb,
-    var(--vscode-editorWarning-foreground, #cca700) 8%,
-    transparent
-  );
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.mcp-scope-warning .codicon {
-  margin-top: 1px;
-  color: var(--vscode-editorWarning-foreground, #cca700);
-}
-
-.mcp-durable-permissions {
-  margin-top: 14px;
-  margin-bottom: 0;
-}
-
-.mcp-durable-permissions[open] > summary {
-  border-bottom: 1px solid var(--vscode-panel-border);
-}
-
-.mcp-durable-note {
-  padding: 9px 10px 0;
-}
-
-.mcp-durable-permissions .mcp-permission-options {
-  padding: 0 8px 8px;
-}
-
-@media (max-width: 380px) {
-  .mcp-external-badge {
-    display: none;
-  }
-
-  .mcp-permission-option {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-
-  .mcp-permission-icon {
-    display: none;
-  }
+.follow-up-input {
+  resize: vertical;
+  min-height: 36px;
 }
 
 /* ── Mode switch card ────────────────────────────────────────────────── */

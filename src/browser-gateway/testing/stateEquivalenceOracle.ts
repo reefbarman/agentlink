@@ -92,6 +92,15 @@ export interface BrowserGatewayNormalizedSemanticState {
     readonly commandApprovalPolicy: NonNullable<
       BrowserGatewayForegroundControlState["commandApprovalPolicy"]
     >;
+    readonly approvalPolicy: NonNullable<
+      BrowserGatewayForegroundControlState["approvalPolicy"]
+    >;
+    readonly approvalReviewer: NonNullable<
+      BrowserGatewayForegroundControlState["approvalReviewer"]
+    >;
+    readonly executionPreset: NonNullable<
+      BrowserGatewayForegroundControlState["executionPreset"]
+    >;
     readonly configuredCommandApprovalPolicy: NonNullable<
       BrowserGatewayForegroundControlState["configuredCommandApprovalPolicy"]
     >;
@@ -288,6 +297,9 @@ export function normalizeLegacyBrowserGatewaySnapshot(
             : {}),
           agentWriteApproval: foreground.agentWriteApproval ?? "prompt",
           commandApprovalPolicy: foreground.commandApprovalPolicy ?? "safe",
+          approvalPolicy: foreground.approvalPolicy ?? "on-request",
+          approvalReviewer: foreground.approvalReviewer ?? "user",
+          executionPreset: foreground.executionPreset ?? "native-manual",
           configuredCommandApprovalPolicy:
             foreground.configuredCommandApprovalPolicy ?? "safe",
           restoringSession: foreground.restoringSession ?? false,
@@ -894,6 +906,9 @@ function normalizeRelayForeground(
       : {}),
     agentWriteApproval: foreground.agentWriteApproval ?? "prompt",
     commandApprovalPolicy: foreground.commandApprovalPolicy ?? "safe",
+    approvalPolicy: foreground.approvalPolicy ?? "on-request",
+    approvalReviewer: foreground.approvalReviewer ?? "user",
+    executionPreset: foreground.executionPreset ?? "native-manual",
     configuredCommandApprovalPolicy:
       foreground.configuredCommandApprovalPolicy ?? "safe",
     restoringSession: foreground.restoringSession ?? false,

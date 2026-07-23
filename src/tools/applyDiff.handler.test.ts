@@ -233,16 +233,20 @@ describe("handleApplyDiff", () => {
     fs.writeFileSync(filePath, "old", "utf-8");
     const approvalPanel = {};
     const editReviewProvider: EditReviewProvider = {
-      reviewAndApply: vi.fn(async () => ({
-        status: "accepted" as const,
-        path: "src/example.ts",
-        operation: "modified" as const,
-        finalContent: "new",
-        decision: "accept-session" as const,
-        writeApprovalResponse: { decision: "accept-session" },
-      })),
+      reviewAndApply: vi.fn(async (params) => {
+        params.onApprovalPresented?.();
+        return {
+          status: "accepted" as const,
+          path: "src/example.ts",
+          operation: "modified" as const,
+          finalContent: "new",
+          decision: "accept-session" as const,
+          writeApprovalResponse: { decision: "accept-session" },
+        };
+      }),
     };
     const policy = createApprovalPolicy(false);
+    const onApprovalPrompt = vi.fn();
 
     const { handleApplyDiff } = await import("./applyDiff.js");
     const result = await handleApplyDiff(
@@ -252,7 +256,11 @@ describe("handleApplyDiff", () => {
       "session-1",
       undefined,
       "code",
-      { editReviewProvider, writeApprovalPolicyProvider: policy },
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: policy,
+        onApprovalPrompt,
+      },
     );
 
     expect(toolJson(result)).toMatchObject({
@@ -276,6 +284,18 @@ describe("handleApplyDiff", () => {
         approvalPanel,
       }),
     );
+    expect(onApprovalPrompt).toHaveBeenCalledWith({
+      authorization: {
+        allowed: false,
+        basis: "none",
+        reason: "legacy_policy_provider",
+      },
+      sessionId: "session-1",
+      absolutePath: filePath,
+      relativePath: "src/example.ts",
+      inWorkspace: true,
+      mode: "code",
+    });
   });
 
   it("does not record trust for interactive rejections", async () => {
@@ -307,6 +327,11 @@ describe("handleApplyDiff", () => {
       status: "rejected_by_user",
       path: "src/rejected.ts",
       reason: "Needs a smaller diff",
+      authorization: {
+        allowed: false,
+        basis: "human",
+        decision: "reject",
+      },
     });
     expect(toolJson(result)).not.toHaveProperty("decision");
     expect(policy.recordDecision).not.toHaveBeenCalled();

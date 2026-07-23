@@ -2,6 +2,10 @@ import type {
   HostShellBootstrapPlan,
   MaterializedHostShellBootstrap,
 } from "./hostShellBootstrap.js";
+import {
+  LiveHostTerminalSurfaceController,
+  decideTerminalPaste,
+} from "./LiveHostTerminalSurfaceController.js";
 import type { NodePtyModule, NodePtyProcess } from "./nodePtyFactory.js";
 import type {
   SandboxTerminalChannelEvent,
@@ -9,7 +13,6 @@ import type {
 } from "./sandbox/SandboxTerminalCoordinator.js";
 import { describe, expect, it, vi } from "vitest";
 
-import { LiveHostTerminalSurfaceController } from "./LiveHostTerminalSurfaceController.js";
 import { SandboxTerminalChannelHub } from "./sandbox/SandboxTerminalChannelHub.js";
 import type { SandboxTerminalSessionSnapshot } from "./sandbox/SandboxTerminalSession.js";
 import { TERMINAL_SURFACE_PROTOCOL_VERSION } from "./terminalSurfaceProtocol.js";
@@ -90,6 +93,7 @@ function harness(
   configuration = snapshot(),
   options: {
     runtimeWatermarks?: { high: number; low: number };
+    multiLinePasteWarning?: "auto" | "always" | "never";
     ensureRuntimeRoot?: () => Promise<void>;
     materializeBootstrap?: (
       plan: HostShellBootstrapPlan,
@@ -101,6 +105,8 @@ function harness(
     clipboardWriteError?: Error;
     readClipboard?: () => Promise<string>;
     sandboxChannelHub?: SandboxTerminalChannelHub;
+    requestTerminalViewReveal?: () => void;
+    log?: (message: string) => void;
     postSurfaceEvent?: (
       event: TerminalSurfaceEvent,
     ) => PromiseLike<boolean> | boolean;
@@ -134,12 +140,18 @@ function harness(
   const writeClipboard = vi.fn(async () => {
     if (options.clipboardWriteError) throw options.clipboardWriteError;
   });
+  const requestTerminalViewReveal = options.requestTerminalViewReveal
+    ? vi.fn(options.requestTerminalViewReveal)
+    : vi.fn();
   const controller = new LiveHostTerminalSurfaceController({
     host: { platform: "darwin" },
     runtimeRoot: "/runtime/host-terminal",
     nodePtyLoader: { load },
     getConfigurationSnapshot,
-    getSurfaceConfiguration: () => ({ scrollback: 2000 }),
+    getSurfaceConfiguration: () => ({
+      scrollback: 2000,
+      multiLinePasteWarning: options.multiLinePasteWarning ?? "auto",
+    }),
     isAcceptingRequests: () => accepting,
     createId: () => `identifier_${nextId++}_1234567890`,
     openExternal,
@@ -147,6 +159,8 @@ function harness(
     readClipboard,
     writeClipboard,
     sandboxChannelHub: options.sandboxChannelHub,
+    requestTerminalViewReveal,
+    log: options.log,
     runtimeWatermarks: options.runtimeWatermarks,
     ensureRuntimeRoot: options.ensureRuntimeRoot,
     materializeBootstrap: options.materializeBootstrap,
@@ -167,6 +181,7 @@ function harness(
     openNativeTerminal,
     readClipboard,
     writeClipboard,
+    requestTerminalViewReveal,
     setAccepting(value: boolean) {
       accepting = value;
     },
@@ -217,8 +232,11 @@ function materializer(cleanup: () => Promise<void>) {
   };
 }
 
-function shellMarker(kind: string, payload?: string): string {
-  const nonce = "identifier_5_1234567890";
+function shellMarker(
+  kind: string,
+  payload?: string,
+  nonce = "identifier_5_1234567890",
+): string {
   return `\x1b]697;AgentLink;${nonce};${kind}${payload === undefined ? "" : `;${payload}`}\x07`;
 }
 
@@ -280,6 +298,55 @@ function sandboxHubHarness() {
   };
 }
 
+function nativeHubHarness() {
+  const channel = sandboxSnapshot();
+  channel.channelId = "native-agent-1";
+  channel.title = "Native Agent";
+  let lifecycleListener:
+    | ((event: SandboxTerminalChannelEvent) => void)
+    | undefined;
+  let rawDataListener:
+    | ((event: { channelId: string; data: string }) => void)
+    | undefined;
+  const coordinator = {
+    listTerminals: vi.fn(() => [
+      { id: channel.channelId, name: channel.title, busy: false },
+    ]),
+    getChannelSnapshot: vi.fn(() => structuredClone(channel)),
+    onChannelEvent: vi.fn((next) => {
+      lifecycleListener = next;
+      return { dispose: vi.fn() };
+    }),
+    onRawData: vi.fn((next) => {
+      rawDataListener = next;
+      return { dispose: vi.fn() };
+    }),
+    onDispose: vi.fn(() => ({ dispose: vi.fn() })),
+    write: vi.fn(() => true),
+    resize: vi.fn(() => true),
+    interruptTerminal: vi.fn(() => true),
+    closeTerminals: vi.fn(() => ({ closed: 1 })),
+    executeCommand: vi.fn(async () => ({
+      exit_code: null,
+      output: "",
+      output_captured: true,
+    })),
+  };
+  const hub = new SandboxTerminalChannelHub();
+  hub.attach(coordinator as unknown as SandboxTerminalCoordinator, "native");
+  return {
+    channel,
+    coordinator,
+    hub,
+    emitLifecycle(update: SandboxTerminalChannelEvent) {
+      lifecycleListener?.(update);
+    },
+    emitRaw(data: string) {
+      rawDataListener?.({ channelId: channel.channelId, data });
+    },
+  };
+}
+
 function target(
   test: ReturnType<typeof harness>,
   opened: { terminalId: string; terminalInstanceId: string },
@@ -290,7 +357,624 @@ function target(
   };
 }
 
+describe("decideTerminalPaste", () => {
+  it("matches VS Code auto, always, and never warning behavior", () => {
+    expect(decideTerminalPaste("one\ntwo\n", "auto", true)).toEqual({
+      action: "paste",
+      data: "one\ntwo\n",
+    });
+    expect(decideTerminalPaste("one\ntwo\n", "auto", false)).toEqual({
+      action: "confirm",
+      data: "one\ntwo\n",
+    });
+    expect(decideTerminalPaste("one\ntwo\n", "always", true)).toEqual({
+      action: "confirm",
+      data: "one\ntwo\n",
+    });
+    expect(decideTerminalPaste("one\ntwo\n", "never", false)).toEqual({
+      action: "paste",
+      data: "one\ntwo\n",
+    });
+  });
+
+  it("removes one trailing newline in auto mode without bracketed paste", () => {
+    expect(decideTerminalPaste("echo ready\n", "auto", false)).toEqual({
+      action: "paste",
+      data: "echo ready",
+    });
+    expect(decideTerminalPaste("echo ready", "always", false)).toEqual({
+      action: "paste",
+      data: "echo ready",
+    });
+  });
+});
+
 describe("LiveHostTerminalSurfaceController", () => {
+  it("retains multiple user terminals created from sequential New Terminal requests", async () => {
+    const test = harness();
+    await ready(test);
+    test.events.length = 0;
+
+    await test.controller.handleRequest(test.connection, {
+      type: "host-terminal/create",
+      requestId: "request-1",
+    });
+    await test.controller.handleRequest(test.connection, {
+      type: "host-terminal/create",
+      requestId: "request-2",
+    });
+
+    const opened = test.events.filter(
+      (event) => event.type === "host-terminal/opened",
+    );
+    expect(opened).toHaveLength(2);
+    expect(new Set(opened.map((event) => event.terminal.id)).size).toBe(2);
+    expect(test.processes).toHaveLength(2);
+    expect(test.processes.map((process) => process.killCount)).toEqual([0, 0]);
+
+    test.events.length = 0;
+    await ready(test);
+    expect(test.events).toHaveLength(1);
+    expect(test.events[0]).toMatchObject({
+      type: "terminal-view/bootstrap",
+      state: {
+        tabs: [{ id: opened[0]?.terminal.id }, { id: opened[1]?.terminal.id }],
+        activeTabId: opened[1]?.terminal.id,
+      },
+    });
+  });
+
+  it("keeps an active user command selected and marks agent activity for later", async () => {
+    const native = nativeHubHarness();
+    const test = harness(snapshot("/bin/zsh", ["-l"]), {
+      sandboxChannelHub: native.hub,
+      ensureRuntimeRoot: async () => {},
+      materializeBootstrap: materializer(vi.fn(async () => {})),
+    });
+    await ready(test);
+    const userOpened = await create(test);
+    await test.controller.handleRequest(test.connection, {
+      type: "terminal-view/focus-changed",
+      focused: true,
+    });
+    const userTerminalId = userOpened.terminalId;
+    const userNonce = "identifier_6_1234567890";
+    test.processes[0].emitData(
+      `${shellMarker("B", undefined, userNonce)}${shellMarker(
+        "C",
+        encodeShellIntegrationValue("sleep 10"),
+        userNonce,
+      )}`,
+    );
+    await Promise.resolve();
+    test.events.length = 0;
+
+    const command = {
+      commandId: "native-command-1",
+      generation: 1,
+      command: "npm test",
+      cwd: "/workspace",
+      origin: "agent" as const,
+      status: "running" as const,
+      startedAt: 1,
+      output: "",
+      outputBytes: 0,
+      droppedOutputBytes: 0,
+      violations: [],
+    };
+    const runningSnapshot = {
+      ...native.channel,
+      status: "running" as const,
+      activeCommandId: command.commandId,
+      commands: [command],
+    };
+    native.emitLifecycle({
+      event: { type: "command-started", command },
+      snapshot: runningSnapshot,
+    });
+
+    expect(test.events).toContainEqual(
+      expect.objectContaining({
+        type: "host-terminal/agent-activity",
+        terminalId: "native-agent-1",
+        activity: "running",
+      }),
+    );
+    expect(test.events).not.toContainEqual(
+      expect.objectContaining({
+        type: "host-terminal/activated",
+        terminalId: "native-agent-1",
+      }),
+    );
+    expect(test.requestTerminalViewReveal).not.toHaveBeenCalled();
+
+    test.events.length = 0;
+    native.emitLifecycle({
+      event: {
+        type: "command-exited",
+        commandId: command.commandId,
+        generation: 1,
+        exit: { exitCode: 0, timedOut: false },
+      },
+      snapshot: {
+        ...native.channel,
+        commands: [{ ...command, status: "exited" as const, exitCode: 0 }],
+      },
+    });
+    expect(test.events).toContainEqual(
+      expect.objectContaining({
+        type: "host-terminal/agent-activity",
+        terminalId: "native-agent-1",
+        activity: "unread",
+      }),
+    );
+
+    test.events.length = 0;
+    await ready(test);
+    expect(test.events[0]).toMatchObject({
+      type: "terminal-view/bootstrap",
+      state: {
+        activeTabId: userTerminalId,
+        tabs: expect.arrayContaining([
+          expect.objectContaining({
+            id: "native-agent-1",
+            agentActivity: "unread",
+          }),
+        ]),
+      },
+    });
+  });
+
+  it("renders the real Native Agent prompt and forwards idle input directly", async () => {
+    const native = nativeHubHarness();
+    const test = harness(snapshot(), { sandboxChannelHub: native.hub });
+
+    await ready(test);
+    const bootstrap = test.events[0];
+    expect(bootstrap).toMatchObject({
+      type: "terminal-view/bootstrap",
+      state: {
+        tabs: [
+          {
+            id: "native-agent-1",
+            channelKind: "agent-native",
+            profileName: "AgentLink Native",
+          },
+        ],
+      },
+      replay: [expect.objectContaining({ data: "" })],
+    });
+    if (bootstrap?.type !== "terminal-view/bootstrap") {
+      throw new Error("expected bootstrap");
+    }
+    const nativeTarget = {
+      terminalId: "native-agent-1",
+      terminalInstanceId: bootstrap.replay[0].terminalInstanceId,
+      rendererEpoch: test.connection.rendererEpoch,
+    };
+
+    native.emitRaw("➜  agentlink ");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(test.events).toContainEqual(
+      expect.objectContaining({
+        type: "terminal-view/render-batch",
+        terminalId: "native-agent-1",
+        operations: expect.arrayContaining([
+          { type: "write", data: "➜  agentlink " },
+        ]),
+      }),
+    );
+
+    await test.controller.handleRequest(test.connection, {
+      type: "host-terminal/write",
+      ...nativeTarget,
+      data: "pwd\r",
+    });
+    expect(native.coordinator.write).toHaveBeenCalledWith(
+      "native-agent-1",
+      "pwd\r",
+    );
+    expect(native.coordinator.executeCommand).not.toHaveBeenCalled();
+
+    native.channel.cwd = "/other";
+    native.emitRaw("");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(test.events).toContainEqual(
+      expect.objectContaining({
+        type: "host-terminal/cwd",
+        terminalId: "native-agent-1",
+        cwd: "/other",
+      }),
+    );
+  });
+
+  it("confirms Native Agent multiline paste and writes it once in the active shell mode", async () => {
+    const native = nativeHubHarness();
+    const test = harness(snapshot(), {
+      sandboxChannelHub: native.hub,
+      clipboardText: "printf one\nprintf two\n",
+      multiLinePasteWarning: "always",
+    });
+    await ready(test);
+    const bootstrap = test.events[0];
+    if (bootstrap?.type !== "terminal-view/bootstrap") {
+      throw new Error("expected bootstrap");
+    }
+    const nativeTarget = {
+      terminalId: "native-agent-1",
+      terminalInstanceId: bootstrap.replay[0].terminalInstanceId,
+      rendererEpoch: test.connection.rendererEpoch,
+    };
+
+    await test.controller.handleRequest(test.connection, {
+      type: "host-terminal/paste-intent",
+      ...nativeTarget,
+      bracketedPasteMode: true,
+    });
+    const cancelled = confirmation(test);
+    expect(native.coordinator.write).not.toHaveBeenCalled();
+    await test.controller.handleRequest(test.connection, {
+      type: "terminal-view/confirm",
+      ...nativeTarget,
+      confirmationId: cancelled.confirmationId,
+      accept: false,
+    });
+    expect(native.coordinator.write).not.toHaveBeenCalled();
+
+    await test.controller.handleRequest(test.connection, {
+      type: "host-terminal/paste-intent",
+      ...nativeTarget,
+      bracketedPasteMode: true,
+    });
+    const accepted = confirmation(test);
+    await test.controller.handleRequest(test.connection, {
+      type: "terminal-view/confirm",
+      ...nativeTarget,
+      confirmationId: accepted.confirmationId,
+      accept: true,
+      bracketedPasteMode: false,
+    });
+    expect(native.coordinator.write).toHaveBeenCalledTimes(1);
+    expect(native.coordinator.write).toHaveBeenCalledWith(
+      "native-agent-1",
+      "printf one\rprintf two\r",
+    );
+
+    await test.controller.handleRequest(test.connection, {
+      type: "terminal-view/confirm",
+      ...nativeTarget,
+      confirmationId: accepted.confirmationId,
+      accept: true,
+    });
+    expect(native.coordinator.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates a Native Agent paste confirmation when the user types", async () => {
+    const native = nativeHubHarness();
+    const test = harness(snapshot(), {
+      sandboxChannelHub: native.hub,
+      clipboardText: "printf one\nprintf two\n",
+      multiLinePasteWarning: "always",
+    });
+    await ready(test);
+    const bootstrap = test.events[0];
+    if (bootstrap?.type !== "terminal-view/bootstrap") {
+      throw new Error("expected bootstrap");
+    }
+    const nativeTarget = {
+      terminalId: "native-agent-1",
+      terminalInstanceId: bootstrap.replay[0].terminalInstanceId,
+      rendererEpoch: test.connection.rendererEpoch,
+    };
+
+    await test.controller.handleRequest(test.connection, {
+      type: "host-terminal/paste-intent",
+      ...nativeTarget,
+      bracketedPasteMode: true,
+    });
+    const requested = confirmation(test);
+    await test.controller.handleRequest(test.connection, {
+      type: "host-terminal/write",
+      ...nativeTarget,
+      data: "x",
+    });
+    expect(test.events).toContainEqual({
+      type: "terminal-view/confirmation-cancelled",
+      confirmationId: requested.confirmationId,
+    });
+    expect(native.coordinator.write).toHaveBeenCalledWith(
+      "native-agent-1",
+      "x",
+    );
+
+    await test.controller.handleRequest(test.connection, {
+      type: "terminal-view/confirm",
+      ...nativeTarget,
+      confirmationId: requested.confirmationId,
+      accept: true,
+      bracketedPasteMode: true,
+    });
+    expect(native.coordinator.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("selects the agent terminal when the active user terminal is provably idle", async () => {
+    const native = nativeHubHarness();
+    const test = harness(snapshot("/bin/zsh", ["-l"]), {
+      sandboxChannelHub: native.hub,
+      ensureRuntimeRoot: async () => {},
+      materializeBootstrap: materializer(vi.fn(async () => {})),
+    });
+    await ready(test);
+    await create(test);
+    test.processes[0].emitData(
+      `${shellMarker("A", undefined, "identifier_6_1234567890")}$ `,
+    );
+    await Promise.resolve();
+    test.events.length = 0;
+
+    const command = {
+      commandId: "native-command-1",
+      generation: 1,
+      command: "printf native",
+      cwd: "/workspace",
+      origin: "agent" as const,
+      status: "running" as const,
+      startedAt: 1,
+      output: "",
+      outputBytes: 0,
+      droppedOutputBytes: 0,
+      violations: [],
+    };
+    native.emitLifecycle({
+      event: { type: "command-started", command },
+      snapshot: {
+        ...native.channel,
+        status: "running",
+        activeCommandId: command.commandId,
+        commands: [command],
+      },
+    });
+
+    expect(test.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "host-terminal/agent-activity",
+          terminalId: "native-agent-1",
+          activity: "running",
+        }),
+        expect.objectContaining({
+          type: "host-terminal/activated",
+          terminalId: "native-agent-1",
+        }),
+      ]),
+    );
+    expect(test.requestTerminalViewReveal).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a focused uncertain raw user terminal selected but switches after terminal focus leaves", async () => {
+    const native = nativeHubHarness();
+    const test = harness(snapshot(), { sandboxChannelHub: native.hub });
+    await ready(test);
+    const userOpened = await create(test);
+    await test.controller.handleRequest(test.connection, {
+      type: "terminal-view/focus-changed",
+      focused: true,
+    });
+    test.events.length = 0;
+
+    const command = {
+      commandId: "native-command-raw-user",
+      generation: 1,
+      command: "printf native",
+      cwd: "/workspace",
+      origin: "agent" as const,
+      status: "running" as const,
+      startedAt: 1,
+      output: "",
+      outputBytes: 0,
+      droppedOutputBytes: 0,
+      violations: [],
+    };
+    native.emitLifecycle({
+      event: { type: "command-started", command },
+      snapshot: {
+        ...native.channel,
+        status: "running",
+        activeCommandId: command.commandId,
+        commands: [command],
+      },
+    });
+
+    expect(test.events).not.toContainEqual(
+      expect.objectContaining({
+        type: "host-terminal/activated",
+        terminalId: "native-agent-1",
+      }),
+    );
+    expect(test.requestTerminalViewReveal).not.toHaveBeenCalled();
+
+    await test.controller.handleRequest(test.connection, {
+      type: "terminal-view/focus-changed",
+      focused: false,
+    });
+    test.events.length = 0;
+    native.emitLifecycle({
+      event: {
+        type: "command-started",
+        command: {
+          ...command,
+          commandId: "native-command-2",
+          generation: 2,
+        },
+      },
+      snapshot: {
+        ...native.channel,
+        status: "running",
+        activeCommandId: "native-command-2",
+        commands: [
+          { ...command, commandId: "native-command-2", generation: 2 },
+        ],
+      },
+    });
+
+    expect(test.events).toContainEqual(
+      expect.objectContaining({
+        type: "host-terminal/activated",
+        terminalId: "native-agent-1",
+      }),
+    );
+    expect(test.requestTerminalViewReveal).toHaveBeenCalledOnce();
+    expect(userOpened.terminalId).not.toBe("native-agent-1");
+  });
+
+  it("explicitly reveals the exact custom terminal without changing reveal policy", async () => {
+    const native = nativeHubHarness();
+    const test = harness(snapshot(), { sandboxChannelHub: native.hub });
+    await ready(test);
+    native.emitLifecycle({
+      event: {
+        type: "command-started",
+        command: {
+          commandId: "native-command-1",
+          generation: 1,
+          command: "printf native",
+          cwd: "/workspace",
+          origin: "agent",
+          status: "running",
+          startedAt: 1,
+          output: "",
+          outputBytes: 0,
+          droppedOutputBytes: 0,
+          violations: [],
+        },
+      },
+      snapshot: {
+        ...native.channel,
+        status: "running",
+        activeCommandId: "native-command-1",
+      },
+    });
+    test.events.length = 0;
+    test.requestTerminalViewReveal.mockClear();
+
+    expect(test.controller.revealTerminal("native-agent-1")).toBe(true);
+    expect(test.controller.revealTerminal("missing-agent")).toBe(false);
+    expect(test.events).toContainEqual(
+      expect.objectContaining({
+        type: "host-terminal/activated",
+        terminalId: "native-agent-1",
+      }),
+    );
+    expect(test.requestTerminalViewReveal).toHaveBeenCalledOnce();
+  });
+
+  it("isolates terminal view reveal failures after selecting the agent terminal", async () => {
+    const native = nativeHubHarness();
+    const log = vi.fn();
+    const test = harness(snapshot(), {
+      sandboxChannelHub: native.hub,
+      requestTerminalViewReveal: () => {
+        throw new Error("focus failed");
+      },
+      log,
+    });
+    await ready(test);
+    test.events.length = 0;
+
+    const command = {
+      commandId: "native-command-1",
+      generation: 1,
+      command: "printf native",
+      cwd: "/workspace",
+      origin: "agent" as const,
+      status: "running" as const,
+      startedAt: 1,
+      output: "",
+      outputBytes: 0,
+      droppedOutputBytes: 0,
+      violations: [],
+    };
+    expect(() =>
+      native.emitLifecycle({
+        event: { type: "command-started", command },
+        snapshot: {
+          ...native.channel,
+          status: "running",
+          activeCommandId: command.commandId,
+          commands: [command],
+        },
+      }),
+    ).not.toThrow();
+
+    expect(test.events).toContainEqual(
+      expect.objectContaining({
+        type: "host-terminal/activated",
+        terminalId: "native-agent-1",
+      }),
+    );
+    expect(log).toHaveBeenCalledWith(
+      "Unable to reveal AgentLink Terminal: focus failed",
+    );
+  });
+
+  it("does not synthesize or duplicate Native Agent command output", async () => {
+    const native = nativeHubHarness();
+    const test = harness(snapshot(), { sandboxChannelHub: native.hub });
+    await ready(test);
+    test.events.length = 0;
+
+    const command = {
+      commandId: "native-command-1",
+      generation: 1,
+      command: "printf native",
+      cwd: "/workspace",
+      origin: "agent" as const,
+      status: "running" as const,
+      startedAt: 1,
+      output: "",
+      outputBytes: 0,
+      droppedOutputBytes: 0,
+      violations: [],
+    };
+    native.emitLifecycle({
+      event: { type: "command-started", command },
+      snapshot: {
+        ...native.channel,
+        status: "running",
+        activeCommandId: command.commandId,
+        commands: [command],
+      },
+    });
+    native.emitRaw("printf native\r\nnative\r\n➜  agentlink ");
+    native.emitLifecycle({
+      event: {
+        type: "data",
+        commandId: command.commandId,
+        generation: 1,
+        data: "native\r\n",
+      },
+      snapshot: {
+        ...native.channel,
+        status: "running",
+        activeCommandId: command.commandId,
+        commands: [{ ...command, output: "native\r\n" }],
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const writes = test.events.flatMap((event) =>
+      event.type === "terminal-view/render-batch"
+        ? event.operations.flatMap((operation) =>
+            operation.type === "write" ? [operation.data] : [],
+          )
+        : [],
+    );
+    expect(writes).toEqual(["printf native\r\nnative\r\n➜  agentlink "]);
+  });
+
   it("renders sandbox channels and launches idle user input as a fresh command", async () => {
     const sandbox = sandboxHubHarness();
     const test = harness(snapshot(), { sandboxChannelHub: sandbox.hub });
@@ -657,7 +1341,10 @@ describe("LiveHostTerminalSurfaceController", () => {
         protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
         rendererEpoch: test.connection.rendererEpoch,
         state: { tabs: [] },
-        configuration: { scrollback: 2000 },
+        configuration: {
+          scrollback: 2000,
+          multiLinePasteWarning: "auto",
+        },
         replay: [],
       },
     ]);
@@ -984,13 +1671,17 @@ describe("LiveHostTerminalSurfaceController", () => {
   });
 
   it("keeps multiline clipboard text host-side until one-use confirmation", async () => {
-    const test = harness(snapshot(), { clipboardText: "echo one\necho two\n" });
+    const test = harness(snapshot(), {
+      clipboardText: "echo one\necho two\n",
+      multiLinePasteWarning: "always",
+    });
     await ready(test);
     const opened = await create(test);
 
     await test.controller.handleRequest(test.connection, {
       type: "host-terminal/paste-intent",
       ...target(test, opened),
+      bracketedPasteMode: true,
     });
     const requested = confirmation(test);
     expect(requested).toMatchObject({
@@ -1005,14 +1696,18 @@ describe("LiveHostTerminalSurfaceController", () => {
       confirmationId: requested.confirmationId,
       accept: true,
     });
-    expect(test.processes[0].writes).toEqual(["echo one\necho two\n"]);
+    expect(test.processes[0].writes).toEqual([
+      "\x1b[200~echo one\recho two\r\x1b[201~",
+    ]);
     await test.controller.handleRequest(test.connection, {
       type: "terminal-view/confirm",
       ...target(test, opened),
       confirmationId: requested.confirmationId,
       accept: true,
     });
-    expect(test.processes[0].writes).toEqual(["echo one\necho two\n"]);
+    expect(test.processes[0].writes).toEqual([
+      "\x1b[200~echo one\recho two\r\x1b[201~",
+    ]);
   });
 
   it("ignores an older clipboard read when a newer paste intent wins", async () => {
@@ -1495,7 +2190,7 @@ describe("LiveHostTerminalSurfaceController", () => {
     });
   });
 
-  it("pauses at the render high-water mark and resumes after acknowledgment", async () => {
+  it("requests a resync at the render high-water mark without pausing the PTY", async () => {
     const test = harness(snapshot(), {
       runtimeWatermarks: { high: 5, low: 2 },
     });
@@ -1504,21 +2199,54 @@ describe("LiveHostTerminalSurfaceController", () => {
     const process = test.processes[0];
 
     process.emitData("123456");
-    await vi.waitFor(() => expect(process.pauseCount).toBe(1));
-    const batch = test.events.find(
-      (event) => event.type === "terminal-view/render-batch",
+    await vi.waitFor(() =>
+      expect(
+        test.events.filter(
+          (event) => event.type === "terminal-view/resync-required",
+        ),
+      ).toHaveLength(1),
     );
-    if (!batch || batch.type !== "terminal-view/render-batch") {
-      throw new Error("expected render batch");
-    }
+    expect(process.pauseCount).toBe(0);
+
+    const batchCount = test.events.filter(
+      (event) => event.type === "terminal-view/render-batch",
+    ).length;
+    process.emitData("more");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(process.pauseCount).toBe(0);
+    expect(
+      test.events.filter(
+        (event) => event.type === "terminal-view/render-batch",
+      ),
+    ).toHaveLength(batchCount);
+    expect(
+      test.events.filter(
+        (event) => event.type === "terminal-view/resync-required",
+      ),
+    ).toHaveLength(1);
 
     await test.controller.handleRequest(test.connection, {
-      type: "terminal-view/output-ack",
-      ...target(test, opened),
-      sequence: batch.sequence,
+      type: "terminal-view/resync",
+      rendererEpoch: test.connection.rendererEpoch,
     });
+    const bootstrap = test.events
+      .filter((event) => event.type === "terminal-view/bootstrap")
+      .at(-1);
+    if (!bootstrap || bootstrap.type !== "terminal-view/bootstrap") {
+      throw new Error("expected bootstrap event");
+    }
+    expect(bootstrap.replay).toMatchObject([
+      { terminalId: opened.terminalId, data: "123456more" },
+    ]);
 
-    expect(process.resumeCount).toBe(1);
+    process.emitData("!");
+    await vi.waitFor(() =>
+      expect(
+        test.events.filter(
+          (event) => event.type === "terminal-view/render-batch",
+        ).length,
+      ).toBeGreaterThan(batchCount),
+    );
   });
 
   it("replays retained output on renderer reattach and accepts acknowledgments", async () => {

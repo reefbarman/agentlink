@@ -792,6 +792,9 @@ function createReadSet(): MutableReadSet {
     policies: {
       agentWriteApproval: "prompt",
       commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "user",
+      executionPreset: "native-manual",
       configuredCommandApprovalPolicy: "safe",
     },
   };

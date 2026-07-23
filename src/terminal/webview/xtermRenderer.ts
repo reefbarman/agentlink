@@ -109,6 +109,14 @@ function write(terminal: Terminal, data: string): Promise<void> {
   return new Promise((resolve) => terminal.write(data, resolve));
 }
 
+export function terminalCursorKeySequence(
+  key: string,
+  applicationCursorKeysMode: boolean,
+): string | undefined {
+  if (key !== "ArrowUp" && key !== "ArrowDown") return undefined;
+  return `\x1b${applicationCursorKeysMode ? "O" : "["}${key === "ArrowUp" ? "A" : "B"}`;
+}
+
 interface TerminalLineCell {
   readonly textStart: number;
   readonly textEnd: number;
@@ -240,6 +248,28 @@ export function registerTerminalOscDefenses(terminal: Terminal): IDisposable {
   };
 }
 
+function isColorQuery(command: number, data: string): boolean {
+  const values = data.split(";");
+  return command === 4
+    ? values.some((value, index) => index % 2 === 1 && value === "?")
+    : values.includes("?");
+}
+
+export function registerReplayResponseSuppression(
+  terminal: Terminal,
+): IDisposable {
+  const subscriptions = [4, 10, 11, 12].map((command) =>
+    terminal.parser.registerOscHandler(command, (data) =>
+      isColorQuery(command, data),
+    ),
+  );
+  return {
+    dispose() {
+      for (const subscription of subscriptions) subscription.dispose();
+    },
+  };
+}
+
 function createTerminalHttpLinkProvider(
   terminal: Terminal,
   onLink: (url: string) => void,
@@ -310,6 +340,28 @@ class XtermRenderer implements TerminalRenderer {
     );
     this.terminal.loadAddon(this.fitAddon);
     this.terminal.loadAddon(this.searchAddon);
+    // Keep history navigation deterministic in VS Code webviews. The xterm 5.5
+    // default key path can produce an empty data event for plain Up/Down there.
+    this.terminal.attachCustomKeyEventHandler((event) => {
+      if (
+        event.type !== "keydown" ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+      ) {
+        return true;
+      }
+      const sequence = terminalCursorKeySequence(
+        event.key,
+        this.terminal.modes.applicationCursorKeysMode,
+      );
+      if (!sequence) return true;
+      event.preventDefault();
+      event.stopPropagation();
+      callbacks.onData(sequence);
+      return false;
+    });
     this.subscriptions.push(
       this.terminal.onData(callbacks.onData),
       this.terminal.registerLinkProvider(
@@ -324,13 +376,22 @@ class XtermRenderer implements TerminalRenderer {
     this.terminal.textarea?.setAttribute("aria-label", this.ariaLabel);
     interceptTerminalInputTransfer(
       container,
-      this.callbacks.onPaste,
+      () => this.callbacks.onPaste(this.terminal.modes.bracketedPasteMode),
       this.abortController.signal,
     );
   }
 
-  write(data: string): Promise<void> {
-    return write(this.terminal, data);
+  async write(data: string, source: "live" | "replay" = "live"): Promise<void> {
+    if (source === "live") {
+      await write(this.terminal, data);
+      return;
+    }
+    const suppression = registerReplayResponseSuppression(this.terminal);
+    try {
+      await write(this.terminal, data);
+    } finally {
+      suppression.dispose();
+    }
   }
 
   reset(): void {
@@ -365,6 +426,10 @@ class XtermRenderer implements TerminalRenderer {
   clearSearch(): void {
     this.searchAddon.clearDecorations();
     this.terminal.clearSelection();
+  }
+
+  isBracketedPasteMode(): boolean {
+    return this.terminal.modes.bracketedPasteMode;
   }
 
   registerBlockBoundary(

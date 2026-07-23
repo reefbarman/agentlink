@@ -259,6 +259,9 @@ describe("RelaySnapshotProjector", () => {
       revertRecoveryNotice: null,
       agentWriteApproval: "prompt",
       commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "user",
+      executionPreset: "native-manual",
       configuredCommandApprovalPolicy: "safe",
     });
     expect(projected).not.toHaveProperty("contextBudget");

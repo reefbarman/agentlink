@@ -38,6 +38,19 @@ afterEach(() => {
 });
 
 describe("SlashCommandRegistry", () => {
+  it("exposes /fleet as a built-in panel command", async () => {
+    const registry = new SlashCommandRegistry(tmpDir, "code");
+    await registry.reload();
+
+    expect(registry.getAll().find((cmd) => cmd.name === "fleet")).toMatchObject(
+      {
+        description: "Show the Agent Fleet panel",
+        source: "builtin",
+        builtin: true,
+      },
+    );
+  });
+
   it("exposes /remember as a prompt command", async () => {
     const registry = new SlashCommandRegistry(tmpDir, "code");
     await registry.reload();

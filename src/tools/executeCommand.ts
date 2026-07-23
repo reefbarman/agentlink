@@ -7,15 +7,28 @@ import { getConfiguredMasterBypass } from "../adapters/vscode/agentLinkConfig.js
 import { getWorkspaceRoots, tryGetFirstWorkspaceRoot } from "../util/paths.js";
 import type {
   CommandExecutionPolicy,
+  ManagedNetworkRequest,
   PreparedTerminalExecution,
+  TerminalApprovalModeSnapshot,
+  TerminalCommandResult,
+  TerminalExecutionAttemptSummary,
   TerminalExecutionAuditEvent,
+  TerminalExecutionRouteContext,
   TerminalExecutionSecuritySummary,
   TerminalExecuteOptions,
   TerminalProvider,
 } from "../core/capabilities/terminal.js";
-import type { SandboxCapabilityRequest } from "../core/sandboxPolicy.js";
+
+import type { SandboxViolation } from "../core/sandboxPolicy.js";
+import {
+  commandRulePolicyFingerprint,
+  type CommandRulePolicyEvaluation,
+} from "../approvals/commandRulePolicy.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
-import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import type {
+  ApprovalPanelProvider,
+  NetworkApprovalResponse,
+} from "../approvals/ApprovalPanelProvider.js";
 import type { TrackerContext } from "../agent/AgentToolCallTracker.js";
 import {
   splitCompoundCommand,
@@ -25,18 +38,25 @@ import {
   classifyCommand,
   isCommandEligibleForReadOnlyExecution,
   isCommandPathInsideWorkspace,
+  type ClassifiedCommand,
+  type CommandRiskCode,
   type CommandTier,
 } from "../approvals/commandTierClassifier.js";
 import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
 import {
+  commandReviewActionKey,
   getCommandAutoApprovalEligibility,
   type CommandReviewContextEntry,
   type CommandApprovalReviewer,
+  type CommandReviewTurnCircuit,
+  type RetainedCommandReviewDenials,
 } from "../approvals/commandApprovalReview.js";
 import type {
   CommandReviewSummary,
+  NetworkReviewSummary,
   SubCommandEntry,
 } from "../approvals/webview/types.js";
+import type { NetworkApprovalReviewer } from "../approvals/networkApprovalReview.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 import { validateCommand } from "../util/pipeValidator.js";
 import { validateInteractiveCommand } from "../util/interactiveValidator.js";
@@ -69,10 +89,11 @@ type CommandApprovalAudit =
   | {
       by: "model_reviewer";
       model: string;
-      tier: "sensitive";
-      confidence: "high";
-      risk: "low" | "medium";
-      reason: string;
+      tier: CommandTier;
+      outcome: "allow";
+      risk: "low" | "medium" | "high" | "critical";
+      user_authorization: "unknown" | "low" | "medium" | "high";
+      rationale: string;
     }
   | { by: "human" }
   | { by: "human_edited" };
@@ -82,7 +103,11 @@ import { type ToolResult } from "../shared/types.js";
 export interface ExecuteCommandProviders {
   terminalProvider?: TerminalProvider;
   getCommandApprovalPolicy?: (sessionId: string) => CommandApprovalPolicy;
+  getCommandApprovalMode?: (sessionId: string) => TerminalApprovalModeSnapshot;
   commandApprovalReviewer?: CommandApprovalReviewer;
+  networkApprovalReviewer?: NetworkApprovalReviewer;
+  commandReviewTurnCircuit?: CommandReviewTurnCircuit;
+  retainedCommandReviewDenials?: RetainedCommandReviewDenials;
   isSessionActive?: (sessionId: string) => boolean;
   toolAbortSignal?: AbortSignal;
   getUserObjective?: (sessionId: string) => string | undefined;
@@ -93,8 +118,11 @@ export interface ExecuteCommandProviders {
 function prepareTerminalExecution(
   provider: TerminalProvider,
   options: TerminalExecuteOptions,
+  routeContext: TerminalExecutionRouteContext,
 ): Promise<PreparedTerminalExecution> {
-  if (provider.prepareExecution) return provider.prepareExecution(options);
+  if (provider.prepareExecution) {
+    return provider.prepareExecution(options, routeContext);
+  }
   const descriptor = Object.freeze({
     ...options,
     ...(options.env ? { env: Object.freeze({ ...options.env }) } : {}),
@@ -108,12 +136,21 @@ function prepareTerminalExecution(
         }
       : {}),
   });
+  if (routeContext.requiredAuthority !== "native-agent") {
+    return Promise.reject(
+      new Error(
+        "Required Sandbox execution is unavailable. The compatibility provider cannot satisfy the host-owned route.",
+      ),
+    );
+  }
   const security: TerminalExecutionSecuritySummary = {
     auditId: randomUUID(),
     route: "native",
+    executionSurface: "vscode-compatibility",
     confinement: "native-unsandboxed",
     routeReason: "unsupported-host",
-    approvalPolicy: "native-legacy-v1",
+    ...routeContext,
+    executionPolicy: "native-legacy-v1",
     preparedAt: Date.now(),
   };
   let available = true;
@@ -139,15 +176,33 @@ function sameDisplayedSecurityBasis(
 ): boolean {
   return (
     left.route === right.route &&
+    left.executionSurface === right.executionSurface &&
     left.confinement === right.confinement &&
     left.routeReason === right.routeReason &&
-    left.approvalPolicy === right.approvalPolicy &&
+    left.approvalPolicySnapshot === right.approvalPolicySnapshot &&
+    left.approvalReviewerSnapshot === right.approvalReviewerSnapshot &&
+    left.executionPresetSnapshot === right.executionPresetSnapshot &&
+    left.requiredAuthority === right.requiredAuthority &&
+    left.permissionIntent === right.permissionIntent &&
+    left.approvalRequirement === right.approvalRequirement &&
+    left.authorityReason === right.authorityReason &&
+    left.commandApprovalPolicySnapshot ===
+      right.commandApprovalPolicySnapshot &&
+    left.commandExecutionPolicySnapshot ===
+      right.commandExecutionPolicySnapshot &&
+    left.executionPolicy === right.executionPolicy &&
     left.sandbox?.attestationId === right.sandbox?.attestationId &&
     left.sandbox?.attestationVersion === right.sandbox?.attestationVersion &&
     left.sandbox?.policyVersion === right.sandbox?.policyVersion &&
     left.sandbox?.profileId === right.sandbox?.profileId &&
     left.sandbox?.backend === right.sandbox?.backend &&
-    left.sandbox?.architecture === right.sandbox?.architecture
+    left.sandbox?.architecture === right.sandbox?.architecture &&
+    JSON.stringify(left.sandbox?.capabilities) ===
+      JSON.stringify(right.sandbox?.capabilities) &&
+    JSON.stringify(left.sandbox?.grant) ===
+      JSON.stringify(right.sandbox?.grant) &&
+    JSON.stringify(left.sandbox?.environmentPolicy) ===
+      JSON.stringify(right.sandbox?.environmentPolicy)
   );
 }
 
@@ -157,7 +212,7 @@ function recordExecutionAudit(
   security: TerminalExecutionSecuritySummary,
   detail: Pick<
     TerminalExecutionAuditEvent,
-    "approvalBasis" | "resultStatus"
+    "approvalBasis" | "failure" | "resultStatus"
   > = {},
 ): void {
   provider.recordExecutionAudit?.({
@@ -175,6 +230,359 @@ function recordExecutionAudit(
       : {}),
     ...detail,
   });
+}
+
+function approvalModeFor(
+  providers: ExecuteCommandProviders,
+  sessionId: string,
+): TerminalApprovalModeSnapshot {
+  const provided = providers.getCommandApprovalMode?.(sessionId);
+  if (provided) return Object.freeze({ ...provided });
+  const commandApprovalPolicy =
+    providers.getCommandApprovalPolicy?.(sessionId) ?? "manual";
+  const approveForMe = commandApprovalPolicy === "approve-for-me";
+  return Object.freeze({
+    commandApprovalPolicy,
+    approvalPolicy: "on-request",
+    approvalReviewer: approveForMe ? "auto-review" : "user",
+    executionPreset: approveForMe ? "workspace-write" : "native-manual",
+  });
+}
+
+function routeContextFor(
+  approvalMode: TerminalApprovalModeSnapshot,
+  permissionIntent: "default" | "additional-permissions" | "native-escalation",
+  commandExecutionPolicySnapshot?: CommandExecutionPolicy,
+  explicitRuleAuthority = false,
+): TerminalExecutionRouteContext {
+  const executionPresetSnapshot = approvalMode.executionPreset;
+  const explicitEscalation = permissionIntent === "native-escalation";
+  const additionalPermissions = permissionIntent === "additional-permissions";
+  return Object.freeze({
+    approvalPolicySnapshot: approvalMode.approvalPolicy,
+    approvalReviewerSnapshot: approvalMode.approvalReviewer,
+    executionPresetSnapshot,
+    requiredAuthority:
+      explicitEscalation ||
+      explicitRuleAuthority ||
+      executionPresetSnapshot === "native-manual"
+        ? "native-agent"
+        : "sandbox",
+    permissionIntent,
+    approvalRequirement: explicitEscalation
+      ? "explicit-escalation"
+      : additionalPermissions
+        ? "explicit-permissions"
+        : "policy",
+    authorityReason: explicitEscalation
+      ? "explicit-escalation"
+      : additionalPermissions
+        ? "additional-permissions"
+        : explicitRuleAuthority
+          ? "explicit-rule"
+          : "approval-policy",
+    commandApprovalPolicySnapshot: approvalMode.commandApprovalPolicy,
+    ...(commandExecutionPolicySnapshot
+      ? { commandExecutionPolicySnapshot }
+      : {}),
+  });
+}
+
+function hasPolicyDrift(
+  providers: ExecuteCommandProviders,
+  sessionId: string,
+  routeContext: TerminalExecutionRouteContext,
+): boolean {
+  const current = approvalModeFor(providers, sessionId);
+  return (
+    current.commandApprovalPolicy !==
+      routeContext.commandApprovalPolicySnapshot ||
+    current.approvalPolicy !== routeContext.approvalPolicySnapshot ||
+    current.approvalReviewer !== routeContext.approvalReviewerSnapshot ||
+    current.executionPreset !== routeContext.executionPresetSnapshot ||
+    providers.commandExecutionPolicy !==
+      routeContext.commandExecutionPolicySnapshot
+  );
+}
+
+function policyDriftResult(
+  command: string,
+  security?: TerminalExecutionSecuritySummary,
+): ToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          status: "retry_required",
+          command,
+          reason:
+            "Command approval or execution policy changed while this command was pending. Retry to prepare and approve it under the current policy.",
+          ...(security ? { security } : {}),
+          security_failure: "policy_drift",
+          command_sent: false,
+        }),
+      },
+    ],
+  };
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+}
+
+function sandboxCapabilityDenial(
+  result: TerminalCommandResult,
+): SandboxViolation | undefined {
+  if (
+    result.security?.route !== "sandbox" ||
+    result.exit_code === 0 ||
+    result.exit_code === null ||
+    result.backgrounded ||
+    result.is_running ||
+    result.timed_out ||
+    result.termination_reason === "interactive_prompt"
+  ) {
+    return undefined;
+  }
+  return result.sandbox?.violations?.[0];
+}
+
+const NATIVE_RETRY_ELIGIBLE_COMMAND_CODES = new Set<CommandRiskCode>([
+  "read_only",
+  "version_check",
+  "project_toolchain",
+]);
+
+function isNativeRetryEligibleDenial(
+  denial: SandboxViolation,
+  classified: ClassifiedCommand,
+): boolean {
+  return (
+    denial.operation !== "network-connect" &&
+    denial.operation !== "resource-limit" &&
+    classified.perSubCommand.length > 0 &&
+    classified.perSubCommand.every(
+      ({ result }) =>
+        result.tier !== "dangerous" &&
+        NATIVE_RETRY_ELIGIBLE_COMMAND_CODES.has(result.code),
+    )
+  );
+}
+
+function executionAttemptSummary(
+  attempt: 1 | 2,
+  result: TerminalCommandResult,
+  denial?: SandboxViolation,
+): TerminalExecutionAttemptSummary {
+  const processLaunched = result.process_launched ?? "unknown";
+  const commandSent = result.command_sent ?? "unknown";
+  const status = result.timed_out
+    ? "timed_out"
+    : result.termination_reason === "interactive_prompt"
+      ? "interactive_prompt"
+      : result.is_running || result.backgrounded
+        ? "running"
+        : "completed";
+  return {
+    attempt,
+    status,
+    route: result.security?.route ?? (attempt === 1 ? "sandbox" : "native"),
+    ...(result.security?.auditId ? { audit_id: result.security.auditId } : {}),
+    command_sent: commandSent,
+    process_launched: processLaunched,
+    retry_safe:
+      result.retry_safe ?? (commandSent === false && processLaunched === false),
+    may_have_side_effects:
+      processLaunched === "unknown" ? "unknown" : processLaunched,
+    exit_code: result.exit_code,
+    terminal_id: result.terminal_id,
+    execution_mode: result.execution_mode,
+    ...(denial ? { capability_denial: { ...denial } } : {}),
+  };
+}
+
+function unlaunchedAttemptSummary(
+  attempt: 2,
+  security: TerminalExecutionSecuritySummary,
+  status: "approval_denied" | "cancelled" | "failed",
+  failureStage: "preparation" | "approval" | "launch",
+): TerminalExecutionAttemptSummary {
+  return {
+    attempt,
+    status,
+    route: security.route,
+    audit_id: security.auditId,
+    command_sent: false,
+    process_launched: false,
+    retry_safe: true,
+    may_have_side_effects: false,
+    failure_stage: failureStage,
+  };
+}
+
+function commandRulePolicyFor(
+  approvalManager: ApprovalManager,
+  sessionId: string,
+  command: string,
+  cwd: string,
+): CommandRulePolicyEvaluation {
+  const evaluator = (
+    approvalManager as ApprovalManager & {
+      evaluateCommandRules?: ApprovalManager["evaluateCommandRules"];
+    }
+  ).evaluateCommandRules;
+  if (typeof evaluator === "function") {
+    return evaluator.call(approvalManager, sessionId, command, cwd);
+  }
+
+  // Compatibility for partial ApprovalManager implementations in adapters and
+  // tests. Legacy boolean rules may skip approval, but can never grant native
+  // authority because they are not explicit Codex allow decisions.
+  const commands = expandSubCommands(splitCompoundCommand(command));
+  const segments = (commands.length > 0 ? commands : [command.trim()]).map(
+    (segment) => ({
+      command: segment,
+      decision: approvalManager.isCommandApproved(sessionId, segment, cwd)
+        ? ("legacy_allow" as const)
+        : ("unmatched" as const),
+      matches: [],
+      explicitlyAllowed: false,
+    }),
+  );
+  const allSegmentsApprovedByRule =
+    segments.length > 0 &&
+    segments.every((segment) => segment.decision === "legacy_allow");
+  return {
+    decision: allSegmentsApprovedByRule ? "legacy_allow" : "unmatched",
+    segments,
+    allSegmentsExplicitlyAllowed: false,
+    allSegmentsApprovedByRule,
+  };
+}
+
+async function reviewManagedNetworkRequest(
+  request: ManagedNetworkRequest,
+  signal: AbortSignal,
+  approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
+  providers: ExecuteCommandProviders,
+  approvalMode: TerminalApprovalModeSnapshot,
+): Promise<"allow-once" | "reject"> {
+  if (
+    signal.aborted ||
+    isCommandApprovalCancelled(request.sessionId, providers)
+  ) {
+    return "reject";
+  }
+  const initialPolicy = approvalManager.evaluateNetworkRules(
+    request.sessionId,
+    request,
+  );
+  if (initialPolicy.decision === "forbidden") return "reject";
+  if (initialPolicy.decision === "allow") return "allow-once";
+
+  let review: NetworkReviewSummary | undefined;
+  // Explicit prompt rules preserve human authority even in Approve for Me mode.
+  if (
+    initialPolicy.decision !== "prompt" &&
+    approvalMode.approvalReviewer === "auto-review"
+  ) {
+    const reviewer = providers.networkApprovalReviewer;
+    if (!reviewer) return "reject";
+    const result = await reviewer.review({
+      request,
+      userObjective: providers.getUserObjective?.(request.sessionId),
+      context: providers.getReviewContext?.(request.sessionId),
+      signal,
+    });
+    review = result;
+    if (result.status !== "reviewed" || result.outcome !== "allow") {
+      return "reject";
+    }
+    const currentPolicy = approvalManager.evaluateNetworkRules(
+      request.sessionId,
+      request,
+    );
+    return !signal.aborted &&
+      !isCommandApprovalCancelled(request.sessionId, providers) &&
+      !hasNetworkApprovalModeDrift(
+        providers,
+        request.sessionId,
+        approvalMode,
+      ) &&
+      currentPolicy.key === initialPolicy.key &&
+      currentPolicy.decision === initialPolicy.decision
+      ? "allow-once"
+      : "reject";
+  }
+
+  const response = await approvalPanel.enqueueNetworkApproval({
+    request,
+    review,
+    signal,
+  }).promise;
+  if (
+    signal.aborted ||
+    isCommandApprovalCancelled(request.sessionId, providers) ||
+    hasNetworkApprovalModeDrift(providers, request.sessionId, approvalMode) ||
+    response.decision === "reject"
+  ) {
+    return "reject";
+  }
+  const currentPolicy = approvalManager.evaluateNetworkRules(
+    request.sessionId,
+    request,
+  );
+  if (
+    currentPolicy.key !== initialPolicy.key ||
+    currentPolicy.decision !== initialPolicy.decision
+  ) {
+    return "reject";
+  }
+  const scope = networkRuleScope(response);
+  if (
+    scope &&
+    !approvalManager.addNetworkRule(
+      request.sessionId,
+      { pattern: currentPolicy.key, mode: "exact", decision: "allow" },
+      scope,
+    )
+  ) {
+    return "reject";
+  }
+  return "allow-once";
+}
+
+function hasNetworkApprovalModeDrift(
+  providers: ExecuteCommandProviders,
+  sessionId: string,
+  expected: TerminalApprovalModeSnapshot,
+): boolean {
+  const current = approvalModeFor(providers, sessionId);
+  return (
+    current.commandApprovalPolicy !== expected.commandApprovalPolicy ||
+    current.approvalPolicy !== expected.approvalPolicy ||
+    current.approvalReviewer !== expected.approvalReviewer ||
+    current.executionPreset !== expected.executionPreset
+  );
+}
+
+function networkRuleScope(
+  response: NetworkApprovalResponse,
+): "session" | "project" | "global" | undefined {
+  switch (response.decision) {
+    case "allow-session":
+      return "session";
+    case "allow-project":
+      return "project";
+    case "allow-global":
+      return "global";
+    default:
+      return undefined;
+  }
 }
 
 function unavailableExecuteCommandResult(command: string): ToolResult {
@@ -203,8 +611,13 @@ export async function handleExecuteCommand(
     background?: boolean;
     timeout?: number;
     env?: Record<string, string>;
-    sandbox_permissions?: {
-      public_network?: boolean;
+    sandbox_permissions?:
+      | "use_default"
+      | "with_additional_permissions"
+      | "require_managed_network"
+      | "require_escalated";
+    additional_permissions?: {
+      network?: { allow_local_binding?: true };
     };
     files?: InlineCommandFileInput[];
     output_head?: number;
@@ -252,18 +665,74 @@ export async function handleExecuteCommand(
     }
 
     const workspaceRoots = getWorkspaceRoots();
-    const readOnlyPolicy = providers.commandExecutionPolicy === "read-only";
-    const sandboxCapabilityRequest: SandboxCapabilityRequest | undefined =
-      params.sandbox_permissions?.public_network === true
-        ? { unrestrictedPublicNetwork: true }
-        : undefined;
-    if (sandboxCapabilityRequest) {
+    const nativeEscalation = params.sandbox_permissions === "require_escalated";
+    const managedNetwork =
+      params.sandbox_permissions === "require_managed_network";
+    const additionalPermissions =
+      params.sandbox_permissions === "with_additional_permissions";
+    const localBinding =
+      params.additional_permissions?.network?.allow_local_binding === true;
+    if (additionalPermissions !== localBinding) {
       return rejectedCommandResult(
         params.command,
-        "Public network capability requests are not available yet. Run without sandbox_permissions.public_network.",
+        additionalPermissions
+          ? 'sandbox_permissions="with_additional_permissions" currently requires additional_permissions.network.allow_local_binding=true.'
+          : 'additional_permissions requires sandbox_permissions="with_additional_permissions".',
       );
     }
+    if (
+      (nativeEscalation || managedNetwork || additionalPermissions) &&
+      !params.reason?.trim()
+    ) {
+      return rejectedCommandResult(
+        params.command,
+        `sandbox_permissions="${params.sandbox_permissions}" requires a non-empty reason explaining why the additional authority is needed.`,
+      );
+    }
+    const approvalMode = approvalModeFor(providers, sessionId);
+    const initialRulePolicy = commandRulePolicyFor(
+      approvalManager,
+      sessionId,
+      params.command,
+      cwd,
+    );
+    if (initialRulePolicy.decision === "forbidden") {
+      return rejectedCommandResult(
+        params.command,
+        "Command execution is forbidden by an applicable command policy rule.",
+      );
+    }
+    const initialRulePolicyFingerprint =
+      commandRulePolicyFingerprint(initialRulePolicy);
+    const explicitRuleAuthority =
+      !nativeEscalation &&
+      !managedNetwork &&
+      !additionalPermissions &&
+      !params.files?.length &&
+      !params.env &&
+      !params.force &&
+      !params.force_reason &&
+      approvalMode.commandApprovalPolicy === "approve-for-me" &&
+      initialRulePolicy.allSegmentsExplicitlyAllowed;
+    const routeContext = routeContextFor(
+      approvalMode,
+      nativeEscalation
+        ? "native-escalation"
+        : managedNetwork || additionalPermissions
+          ? "additional-permissions"
+          : "default",
+      providers.commandExecutionPolicy,
+      explicitRuleAuthority,
+    );
+    const readOnlyPolicy =
+      routeContext.commandExecutionPolicySnapshot === "read-only";
     if (readOnlyPolicy) {
+      if (localBinding) {
+        return rejectedCommandResult(
+          params.command,
+          "Read-only command execution cannot request local listener binding.",
+        );
+      }
       const rejectionReason = getReadOnlyCommandRejectionReason(
         params,
         cwd,
@@ -271,6 +740,12 @@ export async function handleExecuteCommand(
       );
       if (rejectionReason) {
         return rejectedCommandResult(params.command, rejectionReason);
+      }
+      if (routeContext.commandApprovalPolicySnapshot !== "approve-for-me") {
+        return rejectedCommandResult(
+          params.command,
+          "Read-only command execution requires Approve for Me because Sandbox terminals are disabled under the current command approval policy.",
+        );
       }
     }
 
@@ -289,10 +764,14 @@ export async function handleExecuteCommand(
       inlineCleanupComplete = true;
       inlineRun?.cleanup();
     };
+    let commitApprovalMutations: (() => void) | undefined;
     let approvalFollowUp: string | undefined;
     let approvalAudit: CommandApprovalAudit | undefined = readOnlyPolicy
       ? { by: "readonly_policy" }
-      : masterBypass
+      : !nativeEscalation &&
+          !managedNetwork &&
+          !additionalPermissions &&
+          masterBypass
         ? { by: "master_bypass" }
         : undefined;
     let autoApprovedByTier:
@@ -429,13 +908,30 @@ export async function handleExecuteCommand(
         timeout: params.timeout ? params.timeout * 1000 : undefined,
         env: params.env,
         sandboxSessionId: sessionId,
+        sandboxCapabilityRequest:
+          managedNetwork || localBinding
+            ? {
+                ...(managedNetwork ? { unrestrictedPublicNetwork: true } : {}),
+                ...(localBinding ? { allowLocalBinding: true } : {}),
+              }
+            : undefined,
+        onManagedNetworkRequest: managedNetwork
+          ? (request, signal) =>
+              reviewManagedNetworkRequest(
+                request,
+                signal,
+                approvalManager,
+                approvalPanel,
+                providers,
+                approvalMode,
+              )
+          : undefined,
         sandboxInlineFiles: inlineFiles?.map((file) => ({
           name: file.name,
           path: file.path,
           bytes: file.bytes,
           sha256: file.sha256,
         })),
-        sandboxCapabilityRequest,
         onTerminalAssigned: trackerCtx
           ? (tid) => trackerCtx.setTerminalId(tid)
           : undefined,
@@ -449,9 +945,15 @@ export async function handleExecuteCommand(
       preparedExecution = await prepareTerminalExecution(
         providers.terminalProvider,
         terminalOptions(),
+        routeContext,
       );
 
-      if (!masterBypass && !readOnlyPolicy) {
+      if (
+        nativeEscalation ||
+        managedNetwork ||
+        additionalPermissions ||
+        (!masterBypass && !readOnlyPolicy)
+      ) {
         // Gate: only one command goes through approval at a time, so pending
         // dialogs aren't buried by terminals from auto-approved commands.
         const releaseGate = await approvalGate.acquire();
@@ -470,14 +972,41 @@ export async function handleExecuteCommand(
               displayCommand: commandToRun,
               inlineFiles,
               requireHumanApproval: inlineFiles !== undefined,
+              requireFreshReview:
+                nativeEscalation || managedNetwork || additionalPermissions,
+              rulePolicy: initialRulePolicy,
+              ruleFastPathAllowed:
+                !inlineFiles &&
+                !managedNetwork &&
+                !additionalPermissions &&
+                !params.env &&
+                !params.force &&
+                !params.force_reason,
               hasEnvOverrides: Boolean(
                 params.env && Object.keys(params.env).length > 0,
               ),
               forceRequested: Boolean(params.force || params.force_reason),
+              routeContext,
               providers,
               security: preparedExecution.security,
             },
           );
+
+          if (approvalResult.policyDrift) {
+            const driftedPreparation = preparedExecution;
+            preparedExecution = undefined;
+            driftedPreparation.dispose();
+            recordExecutionAudit(
+              providers.terminalProvider,
+              "preparation_revoked",
+              driftedPreparation.security,
+              { failure: "policy_drift", resultStatus: "policy_drift" },
+            );
+            return policyDriftResult(
+              params.command,
+              driftedPreparation.security,
+            );
+          }
 
           if (approvalResult.cancelled) {
             recordExecutionAudit(
@@ -498,11 +1027,13 @@ export async function handleExecuteCommand(
                 {
                   type: "text",
                   text: JSON.stringify({
-                    status: "rejected_by_user",
+                    status: approvalResult.reviewCircuitInterrupted
+                      ? "review_interrupted"
+                      : "rejected_by_user",
                     command: params.command,
-                    ...(approvalResult.reason && {
-                      reason: approvalResult.reason,
-                    }),
+                    reason: approvalResult.reviewCircuitInterrupted
+                      ? "Automatic command review stopped after repeated denials in this turn. Use a materially safer approach or ask the user."
+                      : approvalResult.reason,
                     security: preparedExecution.security,
                     command_sent: false,
                   }),
@@ -539,6 +1070,7 @@ export async function handleExecuteCommand(
             preparedExecution = await prepareTerminalExecution(
               providers.terminalProvider,
               terminalOptions(),
+              routeContext,
             );
             if (
               !sameDisplayedSecurityBasis(
@@ -553,6 +1085,7 @@ export async function handleExecuteCommand(
             }
           }
 
+          commitApprovalMutations = approvalResult.commitMutations;
           approvalFollowUp = approvalResult.followUp;
           approvalAudit = approvalResult.approval;
           if (approvalAudit) {
@@ -572,6 +1105,40 @@ export async function handleExecuteCommand(
         }
       }
 
+      const currentRulePolicy = commandRulePolicyFor(
+        approvalManager,
+        sessionId,
+        params.command,
+        cwd,
+      );
+      if (
+        !commandEditedByUser &&
+        commandRulePolicyFingerprint(currentRulePolicy) !==
+          initialRulePolicyFingerprint
+      ) {
+        const driftedPreparation = preparedExecution;
+        preparedExecution = undefined;
+        driftedPreparation.dispose();
+        recordExecutionAudit(
+          providers.terminalProvider,
+          "preparation_revoked",
+          driftedPreparation.security,
+          { failure: "policy_drift", resultStatus: "rule_policy_drift" },
+        );
+        return policyDriftResult(commandToRun, driftedPreparation.security);
+      }
+      if (hasPolicyDrift(providers, sessionId, routeContext)) {
+        const driftedPreparation = preparedExecution;
+        preparedExecution = undefined;
+        driftedPreparation.dispose();
+        recordExecutionAudit(
+          providers.terminalProvider,
+          "preparation_revoked",
+          driftedPreparation.security,
+          { failure: "policy_drift", resultStatus: "policy_drift" },
+        );
+        return policyDriftResult(commandToRun, driftedPreparation.security);
+      }
       if (isCommandApprovalCancelled(sessionId, providers)) {
         recordExecutionAudit(
           providers.terminalProvider,
@@ -593,18 +1160,362 @@ export async function handleExecuteCommand(
         );
       }
 
+      commitApprovalMutations?.();
       const execution = preparedExecution;
       preparedExecution = undefined;
-      const result = await execution.execute();
+      let result = await execution.execute();
       result.security = execution.security;
+
+      const capabilityDenial = sandboxCapabilityDenial(result);
+      if (capabilityDenial) {
+        const retryLineageId = randomUUID();
+        const firstAttempt = executionAttemptSummary(
+          1,
+          result,
+          capabilityDenial,
+        );
+        const retryClassification = classifyCommand(commandToRun, {
+          cwd,
+          workspaceRoots,
+        });
+        const retryUnsupportedReason = !isNativeRetryEligibleDenial(
+          capabilityDenial,
+          retryClassification,
+        )
+          ? capabilityDenial.operation === "network-connect"
+            ? "Managed network capability review is required; native retry was not attempted."
+            : capabilityDenial.operation === "resource-limit"
+              ? "Resource-limit denials are not retried outside the sandbox."
+              : `Native retry was not attempted because the command is not a recognized read-only, version, or project-toolchain operation (${
+                  retryClassification.perSubCommand
+                    .map(({ command, result }) => `${command}: ${result.code}`)
+                    .join("; ") || "no classified command"
+                }).`
+          : routeContext.commandApprovalPolicySnapshot !== "approve-for-me"
+            ? "Automatic native retry requires Approve for Me."
+            : readOnlyPolicy
+              ? "Read-only execution policy does not permit native retry."
+              : inlineFiles
+                ? "Commands with temporary inline files cannot be replayed after sandbox completion."
+                : commandEditedByUser
+                  ? "Commands edited during approval require a new explicit invocation before native retry."
+                  : params.terminal_id ||
+                      params.terminal_name ||
+                      params.split_from
+                    ? "Commands pinned to a terminal target cannot switch execution authority automatically."
+                    : undefined;
+
+        if (retryUnsupportedReason) {
+          result.capability_denial = { ...capabilityDenial };
+          result.retry_lineage_id = retryLineageId;
+          result.retry_outcome = "not_attempted";
+          result.retry_reason = retryUnsupportedReason;
+          result.execution_attempts = [firstAttempt];
+          result.retry_safe = firstAttempt.retry_safe;
+        } else {
+          const retryRouteContext = routeContextFor(
+            approvalModeFor(providers, sessionId),
+            "native-escalation",
+            providers.commandExecutionPolicy,
+          );
+          const retryReason = `The sandbox denied ${capabilityDenial.operation}${
+            capabilityDenial.target ? ` for ${capabilityDenial.target}` : ""
+          }: ${capabilityDenial.reason}`;
+          let retryExecution: PreparedTerminalExecution;
+          try {
+            retryExecution = await prepareTerminalExecution(
+              providers.terminalProvider,
+              terminalOptions(),
+              retryRouteContext,
+            );
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(
+                    {
+                      status: "retry_failed",
+                      command: commandToRun,
+                      cwd,
+                      error: message,
+                      command_sent: firstAttempt.command_sent,
+                      process_launched: firstAttempt.process_launched,
+                      retry_safe: false,
+                      failure_stage: "preparation",
+                      capability_denial: { ...capabilityDenial },
+                      retry_lineage_id: retryLineageId,
+                      retry_outcome: "failed",
+                      execution_attempts: [
+                        firstAttempt,
+                        {
+                          attempt: 2,
+                          status: "failed",
+                          route: "native",
+                          command_sent: false,
+                          process_launched: false,
+                          retry_safe: true,
+                          may_have_side_effects: false,
+                          failure_stage: "preparation",
+                        },
+                      ],
+                    },
+                    null,
+                    2,
+                  ),
+                },
+              ],
+            };
+          }
+
+          try {
+            const releaseGate = await approvalGate.acquire();
+            let retryApproval: Awaited<ReturnType<typeof approveSubCommands>>;
+            try {
+              retryApproval = await approveSubCommands(
+                splitCompoundCommand(commandToRun),
+                commandToRun,
+                approvalManager,
+                approvalPanel,
+                sessionId,
+                retryReason,
+                cwd,
+                workspaceRoots,
+                {
+                  displayCommand: commandToRun,
+                  requireFreshReview: true,
+                  hasEnvOverrides: Boolean(
+                    params.env && Object.keys(params.env).length > 0,
+                  ),
+                  forceRequested: Boolean(params.force || params.force_reason),
+                  routeContext: retryRouteContext,
+                  providers,
+                  security: retryExecution.security,
+                },
+              );
+            } finally {
+              releaseGate();
+            }
+
+            if (retryApproval.approval) {
+              recordExecutionAudit(
+                providers.terminalProvider,
+                "approval_decided",
+                retryExecution.security,
+                {
+                  approvalBasis: retryApproval.approval.by,
+                  resultStatus: "approved",
+                },
+              );
+            }
+            const retryStatus = retryApproval.cancelled
+              ? "cancelled"
+              : "approval_denied";
+            if (
+              retryApproval.policyDrift ||
+              retryApproval.cancelled ||
+              !retryApproval.approved ||
+              retryApproval.editedCommand
+            ) {
+              const reason = retryApproval.policyDrift
+                ? "Command approval or execution policy changed before the native retry."
+                : retryApproval.cancelled
+                  ? "Native retry approval was cancelled."
+                  : retryApproval.editedCommand
+                    ? "A native retry must use the exact command from the sandbox attempt; edited retries are not executed automatically."
+                    : retryApproval.reviewCircuitInterrupted
+                      ? "Automatic command review stopped after repeated denials in this turn."
+                      : (retryApproval.reason ??
+                        "Native retry was not approved.");
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify(
+                      {
+                        status: retryApproval.policyDrift
+                          ? "retry_required"
+                          : retryApproval.reviewCircuitInterrupted
+                            ? "review_interrupted"
+                            : retryStatus === "cancelled"
+                              ? "cancelled"
+                              : "rejected_by_user",
+                        command: commandToRun,
+                        cwd,
+                        reason,
+                        security: retryExecution.security,
+                        command_sent: firstAttempt.command_sent,
+                        process_launched: firstAttempt.process_launched,
+                        retry_safe: false,
+                        failure_stage: "approval",
+                        capability_denial: { ...capabilityDenial },
+                        retry_lineage_id: retryLineageId,
+                        retry_outcome:
+                          retryStatus === "cancelled"
+                            ? "cancelled"
+                            : "approval_denied",
+                        execution_attempts: [
+                          firstAttempt,
+                          unlaunchedAttemptSummary(
+                            2,
+                            retryExecution.security,
+                            retryStatus,
+                            "approval",
+                          ),
+                        ],
+                      },
+                      null,
+                      2,
+                    ),
+                  },
+                ],
+              };
+            }
+
+            if (
+              hasPolicyDrift(providers, sessionId, retryRouteContext) ||
+              isCommandApprovalCancelled(sessionId, providers)
+            ) {
+              const policyDrift = hasPolicyDrift(
+                providers,
+                sessionId,
+                retryRouteContext,
+              );
+              recordExecutionAudit(
+                providers.terminalProvider,
+                policyDrift ? "preparation_revoked" : "execution_cancelled",
+                retryExecution.security,
+                policyDrift
+                  ? { failure: "policy_drift", resultStatus: "policy_drift" }
+                  : { resultStatus: "session_cancelled" },
+              );
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify(
+                      {
+                        status: policyDrift ? "retry_required" : "cancelled",
+                        command: commandToRun,
+                        cwd,
+                        reason:
+                          "Native retry was cancelled before execution because the session or policy changed.",
+                        security: retryExecution.security,
+                        command_sent: firstAttempt.command_sent,
+                        process_launched: firstAttempt.process_launched,
+                        retry_safe: false,
+                        failure_stage: "approval",
+                        capability_denial: { ...capabilityDenial },
+                        retry_lineage_id: retryLineageId,
+                        retry_outcome: "cancelled",
+                        execution_attempts: [
+                          firstAttempt,
+                          unlaunchedAttemptSummary(
+                            2,
+                            retryExecution.security,
+                            "cancelled",
+                            "approval",
+                          ),
+                        ],
+                      },
+                      null,
+                      2,
+                    ),
+                  },
+                ],
+              };
+            }
+
+            retryApproval.commitMutations?.();
+            let retryResult: TerminalCommandResult;
+            try {
+              retryResult = await retryExecution.execute();
+            } catch (error) {
+              const message =
+                error instanceof Error ? error.message : String(error);
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify(
+                      {
+                        status: "retry_failed",
+                        command: commandToRun,
+                        cwd,
+                        error: message,
+                        security: retryExecution.security,
+                        command_sent: firstAttempt.command_sent,
+                        process_launched: firstAttempt.process_launched,
+                        retry_safe: false,
+                        failure_stage: "launch",
+                        capability_denial: { ...capabilityDenial },
+                        retry_lineage_id: retryLineageId,
+                        retry_outcome: "failed",
+                        execution_attempts: [
+                          firstAttempt,
+                          {
+                            attempt: 2,
+                            status: "failed",
+                            route: retryExecution.security.route,
+                            audit_id: retryExecution.security.auditId,
+                            command_sent: "unknown",
+                            process_launched: "unknown",
+                            retry_safe: false,
+                            may_have_side_effects: "unknown",
+                            failure_stage: "launch",
+                          },
+                        ],
+                      },
+                      null,
+                      2,
+                    ),
+                  },
+                ],
+              };
+            }
+            retryResult.security = retryExecution.security;
+            retryResult.approval = retryApproval.approval;
+            retryResult.follow_up = retryApproval.followUp;
+            retryResult.capability_denial = { ...capabilityDenial };
+            retryResult.retry_lineage_id = retryLineageId;
+            retryResult.retry_outcome = "completed";
+            retryResult.retry_safe = false;
+            retryResult.execution_attempts = [
+              firstAttempt,
+              executionAttemptSummary(2, retryResult),
+            ];
+            result = retryResult;
+          } finally {
+            retryExecution.dispose();
+          }
+        }
+      }
 
       // Raw shell-integration output duplicates `output` and includes ANSI/control
       // sequences. Keep it inside the terminal provider instead of sending both
       // representations through the model-facing tool result.
       delete result.terminal_raw_output;
 
-      // Apply output filtering and temp file saving
+      // Apply output filtering and temp file saving. Background and timed-out
+      // commands may have a larger exact spool than the bounded display tail.
+      const retainedOutput = providers.terminalProvider.getRetainedOutput?.(
+        result.terminal_id,
+      );
+      if (retainedOutput) {
+        result.output = retainedOutput.output;
+        result.output_complete = retainedOutput.complete;
+        result.output_finalized = retainedOutput.finalized;
+        result.output_total_bytes = retainedOutput.total_bytes;
+        result.output_retained_bytes = retainedOutput.retained_bytes;
+        result.output_dropped_bytes = retainedOutput.dropped_bytes;
+      } else if (result.output_complete === undefined) {
+        result.output_complete = true;
+        result.output_finalized = !result.is_running;
+      }
       if (result.output_captured && result.output) {
+        const fullOutput = result.output;
         const filterOptions = {
           output_head: params.output_head,
           output_tail: params.output_tail,
@@ -613,16 +1524,24 @@ export async function handleExecuteCommand(
           output_grep_context: params.output_grep_context,
         };
         const { filtered, totalLines, linesShown } = filterOutput(
-          result.output,
+          fullOutput,
           filterOptions,
         );
 
         result.total_lines = totalLines;
         result.lines_shown = linesShown;
+        result.total_lines_scope =
+          result.output_finalized === false || result.output_complete === false
+            ? "retained"
+            : "complete";
 
-        // Only save temp file when output is actually being truncated
-        if (linesShown < totalLines) {
-          const outputFile = saveOutputTempFile(result.output);
+        if (result.output_finalized === false) {
+          result.output_warning =
+            "Terminal output is still running or was closed before finalization. Filtering applies to retained output so far; no final output file is available.";
+        } else if (result.output_complete === false) {
+          result.output_warning = `⚠️ Terminal output exceeded the bounded capture limit. ${result.output_dropped_bytes === undefined ? "Some output" : formatBytes(result.output_dropped_bytes)} was not retained; filtering applies only to the retained tail and no full-output file is available.`;
+        } else if (linesShown < totalLines) {
+          const outputFile = saveOutputTempFile(fullOutput);
           if (outputFile) {
             result.output_file = outputFile;
             result.output_warning =
@@ -653,11 +1572,11 @@ export async function handleExecuteCommand(
         result.command = commandToRun;
       }
 
-      if (approvalAudit) {
+      if (approvalAudit && result.retry_outcome !== "completed") {
         result.approval = approvalAudit;
       }
 
-      if (autoApprovedByTier) {
+      if (autoApprovedByTier && result.retry_outcome !== "completed") {
         result.auto_approved = {
           by: "tier",
           tier: autoApprovedByTier.tier,
@@ -665,7 +1584,7 @@ export async function handleExecuteCommand(
         };
       }
 
-      if (approvalFollowUp) {
+      if (approvalFollowUp && result.retry_outcome !== "completed") {
         result.follow_up = approvalFollowUp;
       }
 
@@ -838,8 +1757,12 @@ async function approveSubCommands(
     displayCommand?: string;
     inlineFiles?: InlineCommandFilePreview[];
     requireHumanApproval?: boolean;
+    requireFreshReview?: boolean;
+    rulePolicy?: ReturnType<ApprovalManager["evaluateCommandRules"]>;
+    ruleFastPathAllowed?: boolean;
     hasEnvOverrides?: boolean;
     forceRequested?: boolean;
+    routeContext: TerminalExecutionRouteContext;
     providers?: ExecuteCommandProviders;
     security?: TerminalExecutionSecuritySummary;
   },
@@ -851,16 +1774,47 @@ async function approveSubCommands(
   approval?: CommandApprovalAudit;
   autoApprovedByTier?: { tier: CommandTier; threshold: "safe" | "sensitive" };
   cancelled?: boolean;
+  policyDrift?: boolean;
+  reviewCircuitInterrupted?: boolean;
+  commitMutations?: () => void;
 }> {
   // Expand wrappers: ["cd /foo", "sudo npm install"] → ["cd /foo", "sudo", "npm install"]
   const expanded = expandSubCommands(subCommands);
 
+  const reviewProviders = options?.providers;
+  const actionKey = commandReviewActionKey({
+    command: fullCommand,
+    cwd,
+    security: options?.security,
+  });
+  const retainedDenial =
+    reviewProviders?.retainedCommandReviewDenials?.has(sessionId, actionKey) ??
+    false;
+  const circuitInterrupted =
+    reviewProviders?.commandReviewTurnCircuit?.interrupted ?? false;
+
   // Check if all expanded sub-commands are already approved. Recent one-time
   // approvals are checked after project attribution is captured by enqueue.
-  const allApproved = expanded.every((sub) =>
-    approvalManager.isCommandApproved(sessionId, sub, cwd),
-  );
-  if (!options?.requireHumanApproval && allApproved) {
+  const rulePolicy =
+    options?.rulePolicy ??
+    commandRulePolicyFor(approvalManager, sessionId, fullCommand, cwd);
+  if (rulePolicy.decision === "forbidden") {
+    return {
+      approved: false,
+      reason:
+        "Command execution is forbidden by an applicable command policy rule.",
+    };
+  }
+  const allApproved =
+    options?.ruleFastPathAllowed !== false &&
+    rulePolicy.decision !== "prompt" &&
+    rulePolicy.allSegmentsApprovedByRule;
+  if (
+    !options?.requireHumanApproval &&
+    !options?.requireFreshReview &&
+    !retainedDenial &&
+    allApproved
+  ) {
     return { approved: true, approval: { by: "explicit_rule" } };
   }
 
@@ -872,10 +1826,13 @@ async function approveSubCommands(
     workspaceRoots,
   });
   const policy =
-    options?.providers?.getCommandApprovalPolicy?.(sessionId) ?? "manual";
+    options?.routeContext.commandApprovalPolicySnapshot ?? "manual";
   const threshold = policy === "sensitive" ? "sensitive" : "safe";
   const deterministicallyApproved =
+    rulePolicy.decision !== "prompt" &&
     !options?.requireHumanApproval &&
+    !retainedDenial &&
+    !options?.requireFreshReview &&
     ((tierInfo.tier === "safe" && policy !== "manual") ||
       (tierInfo.tier === "sensitive" && policy === "sensitive"));
   if (deterministicallyApproved) {
@@ -886,12 +1843,14 @@ async function approveSubCommands(
     };
   }
 
-  const reviewProviders = options?.providers;
   const inlineFiles = options?.inlineFiles;
   const hasEnvOverrides = Boolean(options?.hasEnvOverrides);
   const forceRequested = Boolean(options?.forceRequested);
   let commandReview: CommandReviewSummary | undefined;
   let humanOnlyReason: string | undefined;
+  if (circuitInterrupted) {
+    return { approved: false, reviewCircuitInterrupted: true };
+  }
   if (policy === "approve-for-me" && reviewProviders?.commandApprovalReviewer) {
     const eligibility = getCommandAutoApprovalEligibility({
       classified: tierInfo,
@@ -934,46 +1893,60 @@ async function approveSubCommands(
           { resultStatus: review.status },
         );
       }
-      const currentPolicy =
-        reviewProviders.getCommandApprovalPolicy?.(sessionId) ?? "safe";
+      if (
+        options?.routeContext &&
+        hasPolicyDrift(reviewProviders, sessionId, options.routeContext)
+      ) {
+        return { approved: false, policyDrift: true };
+      }
       const sessionActive =
         reviewProviders.isSessionActive?.(sessionId) ??
         !reviewProviders.toolAbortSignal?.aborted;
+      const circuitDecision =
+        reviewProviders.commandReviewTurnCircuit?.record(review);
+      if (circuitDecision?.explicitDenial) {
+        reviewProviders.retainedCommandReviewDenials?.retain(
+          sessionId,
+          actionKey,
+        );
+      }
+      if (circuitDecision?.interrupted) {
+        return { approved: false, reviewCircuitInterrupted: true };
+      }
       const reviewerApproved =
-        review.status === "reviewed" &&
-        review.decision === "approve" &&
-        review.confidence === "high" &&
-        review.risk !== "high";
+        review.status === "reviewed" && review.outcome === "allow";
       if (
         reviewerApproved &&
-        currentPolicy === "approve-for-me" &&
         sessionActive &&
         !reviewProviders.toolAbortSignal?.aborted &&
         reviewedCommand === fullCommand
       ) {
+        reviewProviders.retainedCommandReviewDenials?.clear(
+          sessionId,
+          actionKey,
+        );
         return {
           approved: true,
           approval: {
             by: "model_reviewer",
             model: review.model,
-            tier: "sensitive",
-            confidence: "high",
-            risk: review.risk === "low" ? "low" : "medium",
-            reason: review.reason.slice(0, 500),
+            tier: tierInfo.tier,
+            outcome: "allow",
+            risk: review.risk,
+            user_authorization: review.userAuthorization,
+            rationale: review.rationale.slice(0, 500),
           },
         };
       }
       if (!reviewerApproved) {
         commandReview = {
           status: review.status,
-          decision: review.decision,
-          confidence: review.confidence,
+          outcome: review.outcome,
           risk: review.risk,
-          reason: review.reason.slice(0, 500),
+          userAuthorization: review.userAuthorization,
+          rationale: review.rationale.slice(0, 500),
           model: review.model,
         };
-      } else if (currentPolicy !== "approve-for-me") {
-        humanOnlyReason = "Approve for Me was turned off during review";
       }
     }
   }
@@ -994,6 +1967,7 @@ async function approveSubCommands(
         existingRule: {
           pattern: match.rule.pattern,
           mode: match.rule.mode,
+          decision: match.rule.decision,
           scope: match.scope,
         },
         tier: tierByCommand.get(cmd),
@@ -1010,48 +1984,61 @@ async function approveSubCommands(
       options.security,
     );
   }
-  const { promise } = approvalPanel.enqueueCommandApproval(
-    options?.displayCommand ?? fullCommand,
-    fullCommand,
-    {
-      subCommands: entries,
-      inlineFiles: options?.inlineFiles,
-      reason,
-      cwd,
-      commandReview,
-      humanOnlyReason,
-      security: options?.security,
-      sessionId,
-    },
-  );
+  const { promise, commitApprovalRecording = () => {} } =
+    approvalPanel.enqueueCommandApproval(
+      options?.displayCommand ?? fullCommand,
+      fullCommand,
+      {
+        subCommands: entries,
+        inlineFiles: options?.inlineFiles,
+        reason,
+        cwd,
+        commandReview,
+        humanOnlyReason,
+        security: options?.security,
+        sessionId,
+        signal: reviewProviders?.toolAbortSignal,
+        deferApprovalRecording: true,
+        bypassRecentApproval: options?.requireFreshReview,
+      },
+    );
   const response = await promise;
 
   if (isCommandApprovalCancelled(sessionId, reviewProviders)) {
     return { approved: false, cancelled: true };
+  }
+  if (
+    options?.routeContext &&
+    reviewProviders &&
+    hasPolicyDrift(reviewProviders, sessionId, options.routeContext)
+  ) {
+    return { approved: false, policyDrift: true };
   }
 
   if (response.decision === "reject") {
     return { approved: false, reason: response.rejectionReason };
   }
 
-  // Save per-sub-command rules (each with its own scope)
-  if (response.rules && response.rules.length > 0) {
-    for (const rule of response.rules) {
-      if (rule.mode === "skip" || !rule.pattern) {
+  let mutationsCommitted = false;
+  const commitMutations = () => {
+    if (mutationsCommitted) return;
+    mutationsCommitted = true;
+    commitApprovalRecording();
+    for (const rule of response.rules ?? []) {
+      if (rule.mode === "skip" || rule.scope === "skip" || !rule.pattern)
         continue;
-      }
-      const scope = rule.scope as "session" | "project" | "global";
       approvalManager.addCommandRule(
         sessionId,
         {
           pattern: rule.pattern,
-          mode: rule.mode as "prefix" | "exact" | "regex",
+          mode: rule.mode,
+          decision: rule.decision,
         },
-        scope,
+        rule.scope,
         cwd,
       );
     }
-  }
+  };
 
   if (response.editedCommand) {
     return {
@@ -1059,6 +2046,7 @@ async function approveSubCommands(
       approval: { by: "human_edited" },
       editedCommand: response.editedCommand,
       followUp: response.followUp,
+      commitMutations,
     };
   }
   return {
@@ -1067,6 +2055,7 @@ async function approveSubCommands(
       ? { by: "recent_approval" }
       : { by: "human" },
     followUp: response.followUp,
+    commitMutations,
   };
 }
 

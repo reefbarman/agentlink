@@ -13,6 +13,7 @@ import {
   autosizeTextarea,
   canSubmitComposer,
   focusAndAutosizeTextarea,
+  observeTextareaAutosize,
 } from "../../../shared/composerBehavior";
 import {
   findTrailingEmojiShortcode,
@@ -168,6 +169,7 @@ interface InputAreaProps {
   onSend: ComposerSubmitHandler;
   onInterject?: ComposerSubmitHandler;
   onStop: () => void;
+  onPolishPrompt?: (draft: string) => Promise<string>;
   streaming: boolean;
   reasoningEffort: ReasoningEffort;
   onSetReasoningEffort: (effort: ReasoningEffort) => void;
@@ -217,6 +219,7 @@ export function InputArea({
   onSend,
   onInterject,
   onStop,
+  onPolishPrompt,
   streaming,
   reasoningEffort,
   onSetReasoningEffort,
@@ -322,6 +325,75 @@ export function InputArea({
     autosizeTextarea(el);
   }, [text]);
 
+  useEffect(() => observeTextareaAutosize(textareaRef.current), []);
+
+  const [polishing, setPolishing] = useState(false);
+  const [lastPolish, setLastPolish] = useState<{
+    original: string;
+    polished: string;
+  } | null>(null);
+  const [polishError, setPolishError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPolishError(null);
+  }, [text]);
+
+  const handlePolish = useCallback(async () => {
+    if (!onPolishPrompt || polishing) return;
+    const draft = textareaRef.current?.value ?? text;
+    if (!draft.trim()) return;
+    setPolishError(null);
+    setPolishing(true);
+    onComposerEvent?.("polish.click", { chars: draft.length });
+    try {
+      const polished = await onPolishPrompt(draft);
+      // The user may have kept typing while the request was in flight; never
+      // clobber a draft that no longer matches what was sent for polishing.
+      const current = textareaRef.current?.value ?? "";
+      if (current !== draft) {
+        onComposerEvent?.("polish.stale", {});
+        return;
+      }
+      if (!polished.trim() || polished === draft) {
+        setLastPolish(null);
+        onComposerEvent?.("polish.unchanged", {});
+        return;
+      }
+      setText(polished);
+      setLastPolish({ original: draft, polished });
+      onComposerEvent?.("polish.applied", { chars: polished.length });
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.selectionStart = el.selectionEnd = polished.length;
+        }
+      });
+    } catch (err) {
+      setPolishError(err instanceof Error ? err.message : String(err));
+      onComposerEvent?.("polish.failed", {});
+    } finally {
+      setPolishing(false);
+    }
+  }, [onPolishPrompt, polishing, text, onComposerEvent]);
+
+  const handleUndoPolish = useCallback(() => {
+    if (!lastPolish) return;
+    const { original } = lastPolish;
+    setText(original);
+    setLastPolish(null);
+    onComposerEvent?.("polish.reverted", {});
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.selectionStart = el.selectionEnd = original.length;
+      }
+    });
+  }, [lastPolish, onComposerEvent]);
+  const canUndoPolish =
+    lastPolish !== null && !polishing && text === lastPolish.polished;
+
   const displaySlashCommands = useMemo(
     () => slashCommands.map(withSlashCommandDisplayName),
     [slashCommands],
@@ -337,9 +409,6 @@ export function InputArea({
     const result = mediaAttachments.map((m) => {
       const commaIdx = m.dataUrl.indexOf(",");
       const base64 = commaIdx >= 0 ? m.dataUrl.slice(commaIdx + 1) : m.dataUrl;
-      console.log(
-        `[agentlink:media] pendingMedia: name="${m.name}" mimeType="${m.mimeType}" kind="${m.kind}" dataUrlLength=${m.dataUrl.length} base64Length=${base64.length} commaIdx=${commaIdx}`,
-      );
       return {
         name: m.name,
         mimeType: m.mimeType,
@@ -543,6 +612,7 @@ export function InputArea({
     "skills",
     "mcp",
     "mcp-refresh",
+    "worktree",
     "pair",
   ]);
   // Commands that open a sub-picker
@@ -1322,6 +1392,30 @@ export function InputArea({
             <i class="codicon codicon-attach" />
           </button>
         )}
+        {onPolishPrompt && (
+          <button
+            class="icon-button polish-button"
+            onClick={() => void handlePolish()}
+            title="Polish prompt — fix spelling and grammar and improve wording (uses model quota)"
+            type="button"
+            disabled={disabled || polishing || !text.trim()}
+            aria-busy={polishing}
+          >
+            <i
+              class={`codicon ${polishing ? "codicon-loading codicon-modifier-spin" : "codicon-sparkle"}`}
+            />
+          </button>
+        )}
+        {onPolishPrompt && canUndoPolish && (
+          <button
+            class="icon-button polish-undo-button"
+            onClick={handleUndoPolish}
+            title="Revert polish — restore what you had typed"
+            type="button"
+          >
+            <i class="codicon codicon-discard" />
+          </button>
+        )}
         <div class="input-toolbar-spacer" />
         {contextMode && (
           <button
@@ -1424,6 +1518,12 @@ export function InputArea({
         <div class="composer-disabled-notice" role="status">
           <i class="codicon codicon-warning" />
           <span>{disabledReason}</span>
+        </div>
+      )}
+      {polishError && (
+        <div class="composer-disabled-notice" role="status">
+          <i class="codicon codicon-warning" />
+          <span>Polish failed: {polishError}</span>
         </div>
       )}
       <ComposerBox

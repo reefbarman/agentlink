@@ -77,7 +77,7 @@ describe("createVscodeTerminalProvider", () => {
             writableRoots: [],
             deniedRoots: [],
             protectedReadOnlyRoots: [],
-            network: { mode: "blocked" },
+            network: { mode: "loopback" },
             environment: { inheritHost: false, values: {} },
             allowedUnixSockets: [],
           },

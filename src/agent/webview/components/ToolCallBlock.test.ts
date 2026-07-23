@@ -1,15 +1,15 @@
 // @vitest-environment jsdom
 
-import { h } from "preact";
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
-
 import {
   ToolCallBlock,
   formatToolFileDisplayPath,
   getCommandApprovalBadge,
   getToolCallVisualState,
 } from "./ToolCallBlock";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
+
+import { h } from "preact";
 
 afterEach(() => {
   cleanup();
@@ -123,6 +123,83 @@ describe("ToolCallBlock", () => {
 
     expect(document.querySelector(".tool-image-badge")).toBeNull();
   });
+
+  it("renders MCP approval promotion as a labeled scope group", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "mcp-search",
+          name: "notion__search",
+          inputJson: JSON.stringify({ query: "launch plan" }),
+          result: JSON.stringify({ ok: true }),
+          complete: true,
+          mcpApprovalPromotion: {
+            serverName: "notion",
+            bareToolName: "search",
+            scopes: ["session", "project", "global"],
+          },
+        },
+        onPromoteMcpToolApproval: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /notion__search/i }));
+
+    expect(screen.getByText("Remember this approval")).toBeTruthy();
+    expect(
+      screen.getByRole("group", { name: "Remember MCP tool approval" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Allow for this chat session" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Allow whenever this project uses the tool",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Allow whenever any project uses the tool",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("promotes the chosen MCP approval scope and removes that action", () => {
+    const onPromoteMcpToolApproval = vi.fn();
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "mcp-search",
+          name: "notion__search",
+          inputJson: "{}",
+          result: JSON.stringify({ ok: true }),
+          complete: true,
+          mcpApprovalPromotion: {
+            serverName: "notion",
+            bareToolName: "search",
+            scopes: ["session", "project"],
+          },
+        },
+        onPromoteMcpToolApproval,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /notion__search/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Allow for this chat session" }),
+    );
+
+    expect(onPromoteMcpToolApproval).toHaveBeenCalledWith({
+      serverName: "notion",
+      bareToolName: "search",
+      scope: "session",
+    });
+    expect(
+      screen.queryByRole("button", { name: "Allow for this chat session" }),
+    ).toBeNull();
+  });
 });
 
 describe("formatToolFileDisplayPath", () => {
@@ -174,23 +251,25 @@ describe("getCommandApprovalBadge", () => {
         approval: {
           by: "model_reviewer",
           model: "review-model",
-          confidence: "high",
+          tier: "sensitive",
+          outcome: "allow",
           risk: "medium",
-          reason: "Bounded workspace mutation",
+          user_authorization: "high",
+          rationale: "Bounded workspace mutation",
         },
         security: {
           route: "sandbox",
           confinement: "verified-baseline",
           sandbox: {
             profileId: "workspace-write",
-            attestationVersion: "sandbox-behavior-v1",
+            attestationVersion: "sandbox-behavior-v2",
           },
         },
       }),
     ).toEqual({
       text: "approved · reviewer · sandbox",
       title: expect.stringContaining(
-        "Verified sandbox (workspace-write) · sandbox-behavior-v1",
+        "Verified sandbox (workspace-write) · sandbox-behavior-v2",
       ),
     });
   });
@@ -203,12 +282,14 @@ describe("getCommandApprovalBadge", () => {
           route: "native",
           confinement: "native-unsandboxed",
           routeReason: "runtime-unavailable",
+          approvalReviewerSnapshot: "auto-review",
+          executionPresetSnapshot: "workspace-write",
         },
       }),
     ).toEqual({
       text: "approved · rule · native",
       title: expect.stringContaining(
-        "Native terminal (unsandboxed) · runtime-unavailable",
+        "Native terminal (unsandboxed) · runtime-unavailable · Auto reviewer · Workspace-write preset",
       ),
     });
   });

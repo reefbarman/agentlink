@@ -105,6 +105,11 @@ export class RelaySnapshotProjector {
               checkpoint.foreground.agentWriteApproval ?? "prompt",
             commandApprovalPolicy:
               checkpoint.foreground.commandApprovalPolicy ?? "safe",
+            approvalPolicy:
+              checkpoint.foreground.approvalPolicy ?? "on-request",
+            approvalReviewer: checkpoint.foreground.approvalReviewer ?? "user",
+            executionPreset:
+              checkpoint.foreground.executionPreset ?? "native-manual",
             configuredCommandApprovalPolicy:
               checkpoint.foreground.configuredCommandApprovalPolicy ?? "safe",
           }

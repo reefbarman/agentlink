@@ -97,12 +97,36 @@ describe("terminal surface protocol", () => {
     ).toBe(true);
     expect(
       isTerminalSurfaceRequest({
+        type: "host-terminal/paste-intent",
+        ...target,
+        bracketedPasteMode: true,
+      }),
+    ).toBe(true);
+    expect(
+      isTerminalSurfaceRequest({
+        type: "host-terminal/paste-intent",
+        ...target,
+        bracketedPasteMode: "yes",
+      }),
+    ).toBe(false);
+    expect(
+      isTerminalSurfaceRequest({
         type: "terminal-view/confirm",
         ...target,
         confirmationId: "confirmation-1",
         accept: true,
+        bracketedPasteMode: false,
       }),
     ).toBe(true);
+    expect(
+      isTerminalSurfaceRequest({
+        type: "terminal-view/confirm",
+        ...target,
+        confirmationId: "confirmation-1",
+        accept: true,
+        bracketedPasteMode: "yes",
+      }),
+    ).toBe(false);
     expect(
       isTerminalSurfaceRequest({ type: "host-terminal/close", ...target }),
     ).toBe(false);
@@ -245,6 +269,28 @@ describe("terminal surface protocol", () => {
     expect(isTerminalSurfaceRequest({ type: "terminal-view/unknown" })).toBe(
       false,
     );
+  });
+
+  it("validates exact terminal-view focus change requests", () => {
+    expect(
+      isTerminalSurfaceRequest({
+        type: "terminal-view/focus-changed",
+        focused: true,
+      }),
+    ).toBe(true);
+    expect(
+      isTerminalSurfaceRequest({
+        type: "terminal-view/focus-changed",
+        focused: "true",
+      }),
+    ).toBe(false);
+    expect(
+      isTerminalSurfaceRequest({
+        type: "terminal-view/focus-changed",
+        focused: false,
+        rendererEpoch: target.rendererEpoch,
+      }),
+    ).toBe(false);
   });
 
   it("validates exact renderer resynchronization requests", () => {

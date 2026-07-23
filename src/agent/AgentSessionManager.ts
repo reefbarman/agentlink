@@ -1,4 +1,5 @@
 import * as crypto from "crypto";
+import * as nodePath from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
 import type { AgentConfig, AgentMessage, SessionInfo } from "./types.js";
@@ -16,6 +17,7 @@ import {
   collectNativeWebToolResult,
   continueNativeWebProviderStream,
 } from "../core/nativeWebTools.js";
+import { runWatchedProviderStream } from "../core/providerStreamWatchdog.js";
 import type {
   BackgroundAgentBudgetUsage,
   BackgroundAgentResultContent,
@@ -31,7 +33,16 @@ import type {
   PersistenceRevision,
   RevertRecoveryState,
 } from "./persistenceContracts.js";
-import { hasPendingTodos, todoTool, type TodoItem } from "./todoTool.js";
+import {
+  getLatestTodoState,
+  hasPendingTodos,
+  todoTool,
+  type TodoItem,
+} from "./todoTool.js";
+import {
+  createCommandReviewTurnCircuit,
+  createRetainedCommandReviewDenials,
+} from "../approvals/commandApprovalReview.js";
 import { AgentSession } from "./AgentSession.js";
 import type { WorkspaceFolderInfo } from "./systemPrompt.js";
 import { AgentEngine } from "./AgentEngine.js";
@@ -63,6 +74,10 @@ import type {
   ToolKind,
 } from "@agentclientprotocol/sdk" with { "resolution-mode": "import" };
 import { normalizeBackgroundAgentSettings } from "./background/acpAgentConfig.js";
+import {
+  DEFAULT_BACKGROUND_MAX_CHILDREN_PER_PARENT,
+  DEFAULT_BACKGROUND_MAX_CONCURRENT,
+} from "./background/backgroundConcurrency.js";
 import { resolveBackgroundBackendRoute } from "./background/backgroundBackendRouter.js";
 import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
@@ -120,8 +135,21 @@ import {
   withFleetResultInstruction,
 } from "./FleetWorkflows.js";
 import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeStore.js";
-import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import {
+  isCommandApprovalPolicy,
+  type CommandApprovalPolicy,
+} from "../approvals/commandApprovalPolicy.js";
+import type {
+  TerminalApprovalModeSnapshot,
+  TerminalApprovalPolicy,
+  TerminalApprovalReviewer,
+  TerminalExecutionPreset,
+} from "../core/capabilities/terminal.js";
 import { convertAcpContentBlock } from "./acpContent.js";
+import type { WorktreeAgentLaunchRequest } from "../core/capabilities/worktree.js";
+import type { ToolResult } from "../shared/types.js";
+import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";
+import { canonicalizePath, isPathWithinRoot } from "../util/paths.js";
 
 const FLEET_VISIBILITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -188,6 +216,31 @@ const BTW_MAX_API_TURNS = 5;
 const BTW_MAX_TOOL_CALLS = 10;
 /** Default overall deadline for a /btw run before it self-aborts. */
 const BTW_DEFAULT_TIMEOUT_MS = 120_000;
+
+export type WorktreeSetupProgressEvent = BtwProgressEvent;
+
+export interface WorktreeSetupOptions {
+  onProgress?: (event: WorktreeSetupProgressEvent) => void;
+  onSessionStarted?: (sessionId: string) => void;
+  signal?: AbortSignal;
+  conversation?: Array<{ role: "user" | "assistant"; text: string }>;
+}
+
+export interface WorktreeSetupResult extends BtwQuestionResult {
+  sessionId: string;
+  sourcePath: string;
+}
+
+const WORKTREE_SETUP_MAX_API_TURNS = 6;
+const WORKTREE_SETUP_MAX_TOOL_CALLS = 12;
+const WORKTREE_SETUP_SYSTEM_PROMPT = `You are a small, temporary setup agent for AgentLink's /worktree command. Your only job is to produce a safe, useful configuration for a new isolated Git worktree agent.
+
+You may inspect the current repository with read-only tools. When the task or desired outcome is unclear, ask one focused question as ordinary text and stop. The host will return the user's reply in a later turn. Prefer repository and AgentLink defaults for optional settings; do not make the user choose a branch, base ref, path, mode, or autosubmit behavior unless their request makes that choice material. Never edit files, launch agents, or create the worktree yourself.
+
+When the configuration is ready, briefly summarize it and end with exactly one machine-readable envelope using this shape:
+<worktree-config>{"task":"short shelf label","prompt":"complete initial instruction for the new agent","branch":"optional branch","baseRef":"optional Git ref","worktreePath":"optional path","mode":"optional mode","autoSubmit":true}</worktree-config>
+
+Only task and prompt are required. Omit optional JSON properties to use AgentLink defaults. Do not emit the envelope until all necessary user questions have been answered. When asking a question, do not emit the envelope.`;
 
 /** Hard-stop backstop after the nominal budget has triggered a wrap-up. */
 const BUDGET_HARD_LIMIT_RATIO = 3;
@@ -267,9 +320,60 @@ export type PersistedSessionMutationResult =
       message?: string;
     };
 
+export type SessionApprovalMode = Readonly<
+  TerminalApprovalModeSnapshot & {
+    commandApprovalPolicy: CommandApprovalPolicy;
+    approvalPolicy: TerminalApprovalPolicy;
+    approvalReviewer: TerminalApprovalReviewer;
+    executionPreset: TerminalExecutionPreset;
+  }
+>;
+
+function approvalModeFromLegacyPolicy(
+  commandApprovalPolicy: CommandApprovalPolicy,
+): SessionApprovalMode {
+  const approveForMe = commandApprovalPolicy === "approve-for-me";
+  return Object.freeze({
+    commandApprovalPolicy,
+    approvalPolicy: "on-request",
+    approvalReviewer: approveForMe ? "auto-review" : "user",
+    executionPreset: approveForMe ? "workspace-write" : "native-manual",
+  });
+}
+
+function restoredApprovalMode(
+  metadata: PersistedSessionRecord["metadata"],
+  fallback: CommandApprovalPolicy = "safe",
+): SessionApprovalMode {
+  const commandApprovalPolicy = isCommandApprovalPolicy(
+    metadata.commandApprovalPolicy,
+  )
+    ? metadata.commandApprovalPolicy
+    : fallback;
+  const legacy = approvalModeFromLegacyPolicy(commandApprovalPolicy);
+  return Object.freeze({
+    commandApprovalPolicy,
+    approvalPolicy:
+      metadata.approvalPolicy === "on-request"
+        ? metadata.approvalPolicy
+        : legacy.approvalPolicy,
+    approvalReviewer:
+      metadata.approvalReviewer === "user" ||
+      metadata.approvalReviewer === "auto-review"
+        ? metadata.approvalReviewer
+        : legacy.approvalReviewer,
+    executionPreset:
+      metadata.executionPreset === "native-manual" ||
+      metadata.executionPreset === "workspace-write"
+        ? metadata.executionPreset
+        : legacy.executionPreset,
+  });
+}
+
 export class AgentSessionManager {
   private sessions = new Map<string, AgentSession>();
-  private commandApprovalPolicies = new Map<string, CommandApprovalPolicy>();
+  private sessionApprovalModes = new Map<string, SessionApprovalMode>();
+  private retainedCommandReviewDenials = createRetainedCommandReviewDenials();
   private foregroundId: string | null = null;
   private engine: AgentEngine | null = null;
   private config: AgentConfig;
@@ -292,6 +396,12 @@ export class AgentSessionManager {
   private sessionRevisions = new Map<string, PersistenceRevision>();
   private sessionRevertPending = new Map<string, RevertRecoveryState>();
   private sessionSaveQueues = new Map<string, Promise<void>>();
+  /**
+   * Sessions with a deferred save already queued behind an in-flight write.
+   * Deferred saves snapshot state when they run, so queuing more than one per
+   * session would only repeat the same full-transcript write.
+   */
+  private pendingDeferredSaves = new Set<string>();
   private sessionRunSettled = new Map<string, Promise<void>>();
   private sessionSendQueues = new Map<string, Promise<void>>();
   private log?: (msg: string) => void;
@@ -377,6 +487,12 @@ export class AgentSessionManager {
     sessionId: string;
     start: () => Promise<void>;
   }> = [];
+  /**
+   * In-flight get_background_result waits per waiter session. A background
+   * session with an entry here is blocked on a descendant and releases its
+   * concurrency slot so the awaited work can be scheduled.
+   */
+  private bgResultWaitHolds = new Map<string, number>();
   private readonly worktreeMonitorTimers = new Map<
     string,
     ReturnType<AgentSessionManagerHost["timers"]["setInterval"]>
@@ -536,7 +652,7 @@ export class AgentSessionManager {
       maxDepth?: number;
       maxChildrenPerParent?: number;
     } = {
-      maxConcurrent: 3,
+      maxConcurrent: DEFAULT_BACKGROUND_MAX_CONCURRENT,
     },
     opts?: AgentSessionManagerOptions,
   ) {
@@ -576,7 +692,12 @@ export class AgentSessionManager {
         this.bgDefaults.maxConcurrentPerProvider ??
         this.bgDefaults.maxConcurrent,
       maxDepth: this.bgDefaults.maxDepth ?? 2,
-      maxChildrenPerParent: this.bgDefaults.maxChildrenPerParent ?? 4,
+      maxChildrenPerParent:
+        this.bgDefaults.maxChildrenPerParent ??
+        Math.max(
+          DEFAULT_BACKGROUND_MAX_CHILDREN_PER_PARENT,
+          this.bgDefaults.maxConcurrent,
+        ),
     });
   }
 
@@ -863,6 +984,7 @@ export class AgentSessionManager {
       session.id,
       session.projectScope,
     );
+    baseContext.approvalManager.touchSession?.(session.id);
     if (!inheritedContext) {
       this.projectMcpHubRegistry?.ensure(session.projectScope);
     }
@@ -894,6 +1016,7 @@ export class AgentSessionManager {
         ...captured,
         sessionId: session.id,
         mode: session.mode,
+        isBackgroundSession: session.background,
         projectScope: session.projectScope,
         projectRoot,
         workspaceProjectRoots: this.projectCatalog
@@ -901,11 +1024,26 @@ export class AgentSessionManager {
           .flatMap((project) => (project.rootPath ? [project.rootPath] : [])),
         prepareWorkspaceMutation: () =>
           this.prepareSessionProjectMutation(session),
+        commandReviewTurnCircuit: createCommandReviewTurnCircuit(),
+        retainedCommandReviewDenials: this.retainedCommandReviewDenials,
         ...(mcpHubLease ? { mcpHub: mcpHubLease.hub, mcpHubLease } : {}),
         onFileRead: (filePath: string) => session.trackFileRead(filePath),
         getAdvertisedSkills: () => session.getAdvertisedSkills(),
         getAdvertisedRules: () => session.getAdvertisedRules(),
         onSkillLoad: (skillName: string) => session.trackLoadedSkill(skillName),
+        ...(this.activityTraceRecorder.diagnoseSessionActivity
+          ? {
+              sessionActivityDiagnosticsProvider: {
+                diagnose: (
+                  query: import("../core/sessionActivityDiagnostics.js").SessionActivityQuery,
+                ) =>
+                  this.activityTraceRecorder.diagnoseSessionActivity!(
+                    session.id,
+                    query,
+                  ),
+              },
+            }
+          : {}),
       });
     } catch (error) {
       mcpHubLease?.release();
@@ -1081,10 +1219,6 @@ export class AgentSessionManager {
                     );
                   }
                   const hostedTool = route.hostedTool;
-                  const prompt = buildNativeWebDelegationPrompt(
-                    request.kind,
-                    request.input,
-                  );
                   const permit =
                     await this.host.providers.requestScheduler.acquire(
                       provider.id,
@@ -1092,6 +1226,28 @@ export class AgentSessionManager {
                       request.signal,
                     );
                   try {
+                    if (provider.executeNativeWebTool) {
+                      try {
+                        const directResult =
+                          await provider.executeNativeWebTool({
+                            model: session.model,
+                            kind: request.kind,
+                            input: request.input,
+                            settings: policy.settings,
+                            signal: request.signal,
+                          });
+                        if (directResult !== null) return directResult;
+                      } catch (error) {
+                        if (request.signal?.aborted) throw error;
+                        this.log?.(
+                          `[web] ${provider.id} standalone ${request.kind} failed; falling back to delegated hosted execution: ${error instanceof Error ? error.message : String(error)}`,
+                        );
+                      }
+                    }
+                    const prompt = buildNativeWebDelegationPrompt(
+                      request.kind,
+                      request.input,
+                    );
                     return await collectNativeWebToolResult({
                       provider: provider.id,
                       operation: request.kind,
@@ -1100,22 +1256,30 @@ export class AgentSessionManager {
                         initialMessages: [
                           { role: "user", content: prompt.userPrompt },
                         ],
+                        // Watchdog-wrapped: a hung delegated stream would
+                        // otherwise pin its scheduler permit forever with no
+                        // timeout coverage at all.
                         stream: (messages) =>
-                          provider.stream({
-                            model: session.model,
-                            systemPrompt: prompt.systemPrompt,
-                            messages,
-                            tools: [],
-                            hostedTools: [hostedTool],
-                            maxTokens: Math.min(session.maxTokens, 16_384),
-                            reasoningEffort: "low",
-                            state: { store: false },
-                            providerHints: {
-                              codex: {
-                                sessionId: `${session.id}:web:${request.kind}`,
-                              },
-                            },
+                          runWatchedProviderStream({
                             signal: request.signal,
+                            start: ({ signal, onTransportActivity }) =>
+                              provider.stream({
+                                model: session.model,
+                                systemPrompt: prompt.systemPrompt,
+                                messages,
+                                tools: [],
+                                hostedTools: [hostedTool],
+                                maxTokens: Math.min(session.maxTokens, 16_384),
+                                reasoningEffort: "low",
+                                state: { store: false },
+                                providerHints: {
+                                  codex: {
+                                    sessionId: `${session.id}:web:${request.kind}`,
+                                  },
+                                },
+                                signal,
+                                onTransportActivity,
+                              }),
                           }),
                       }),
                     });
@@ -1306,6 +1470,67 @@ export class AgentSessionManager {
     );
   }
 
+  /**
+   * Reuse inherited write authority only when ACP supplies complete structured
+   * file locations. Opaque rawInput is provider-defined and must still prompt.
+   */
+  private getInheritedAcpWriteOption(args: {
+    sessionId: string;
+    requestContext: Readonly<ToolDispatchContext> | undefined;
+    request: RequestPermissionRequest;
+  }): string | undefined {
+    const toolKind = args.request.toolCall.kind;
+    if (toolKind !== "edit" && toolKind !== "delete" && toolKind !== "move") {
+      return undefined;
+    }
+
+    const allowOnce = args.request.options.find(
+      (option) => option.kind === "allow_once",
+    );
+    const locations = args.request.toolCall.locations;
+    const requestContext = args.requestContext;
+    const projectRoot = requestContext?.projectRoot;
+    if (!allowOnce || !locations?.length || !requestContext || !projectRoot) {
+      return undefined;
+    }
+
+    const workspaceRoots = requestContext.workspaceProjectRoots?.length
+      ? requestContext.workspaceProjectRoots
+      : [projectRoot];
+    const canonicalRoots = workspaceRoots.map((root) => canonicalizePath(root));
+    const approvalManager = requestContext.approvalManager;
+
+    for (const location of locations) {
+      const rawPath = location.path.trim();
+      if (!rawPath) return undefined;
+      const absolutePath = canonicalizePath(
+        nodePath.isAbsolute(rawPath)
+          ? rawPath
+          : nodePath.resolve(projectRoot, rawPath),
+      );
+      if (isMemoryProtectedPath(absolutePath, { cwd: projectRoot })) {
+        return undefined;
+      }
+
+      const inWorkspace = canonicalRoots.some((root) =>
+        isPathWithinRoot(absolutePath, root),
+      );
+      const authorized = inWorkspace
+        ? approvalManager.getAgentWriteAuthorization(
+            args.sessionId,
+            absolutePath,
+          ).allowed
+        : approvalManager.isPathTrusted(args.sessionId, absolutePath) &&
+          approvalManager.getFileWriteAuthorization(
+            args.sessionId,
+            absolutePath,
+          ).allowed;
+      if (!authorized) return undefined;
+    }
+
+    return allowOnce.optionId;
+  }
+
   private async handleAcpPermissionRequest(args: {
     sessionId: string;
     task: string;
@@ -1323,6 +1548,13 @@ export class AgentSessionManager {
 
     if (this.bgCancelled.has(args.sessionId)) {
       return { outcome: { outcome: "cancelled" } };
+    }
+
+    const inheritedWriteOption = this.getInheritedAcpWriteOption(args);
+    if (inheritedWriteOption) {
+      return {
+        outcome: { outcome: "selected", optionId: inheritedWriteOption },
+      };
     }
 
     this.noteBackgroundProgress(args.sessionId, "awaiting_approval");
@@ -1792,6 +2024,8 @@ export class AgentSessionManager {
     opts?: { activeFilePath?: string; projectId?: string },
   ): Promise<AgentSession> {
     await this.discardEmptyForegroundSession();
+    this.sessionApprovalModes.delete("agent");
+    this.toolCtx?.approvalManager.clearSession("agent");
     return this.createSession(mode, opts);
   }
 
@@ -1833,10 +2067,10 @@ export class AgentSessionManager {
     );
     this.sessions.set(session.id, session);
     this.getCheckpointManagerForSession(session);
-    const pendingPolicy = this.commandApprovalPolicies.get("agent");
-    if (pendingPolicy) {
-      this.commandApprovalPolicies.set(session.id, pendingPolicy);
-      this.commandApprovalPolicies.delete("agent");
+    const pendingApprovalMode = this.sessionApprovalModes.get("agent");
+    if (pendingApprovalMode) {
+      this.sessionApprovalModes.set(session.id, pendingApprovalMode);
+      this.sessionApprovalModes.delete("agent");
     }
     this.foregroundId = session.id;
     this.notifySessionsChanged();
@@ -1905,7 +2139,27 @@ export class AgentSessionManager {
     sessionId: string,
     fallback: CommandApprovalPolicy = "safe",
   ): CommandApprovalPolicy {
-    return this.commandApprovalPolicies.get(sessionId) ?? fallback;
+    return (
+      this.sessionApprovalModes.get(sessionId)?.commandApprovalPolicy ??
+      fallback
+    );
+  }
+
+  getSessionApprovalMode(
+    sessionId: string,
+    fallback: CommandApprovalPolicy = "safe",
+  ): SessionApprovalMode {
+    return (
+      this.sessionApprovalModes.get(sessionId) ??
+      approvalModeFromLegacyPolicy(fallback)
+    );
+  }
+
+  setSessionApprovalMode(sessionId: string, mode: SessionApprovalMode): void {
+    if (!this.sessions.has(sessionId) && sessionId !== "agent") return;
+    this.sessionApprovalModes.set(sessionId, Object.freeze({ ...mode }));
+    if (sessionId !== "agent") this.saveSession(sessionId);
+    this.notifySessionsChanged();
   }
 
   setCommandApprovalPolicy(
@@ -1913,12 +2167,15 @@ export class AgentSessionManager {
     policy: CommandApprovalPolicy,
   ): void {
     if (!this.sessions.has(sessionId) && sessionId !== "agent") return;
-    this.commandApprovalPolicies.set(sessionId, policy);
-    this.notifySessionsChanged();
+    this.setSessionApprovalMode(
+      sessionId,
+      approvalModeFromLegacyPolicy(policy),
+    );
   }
 
   clearSessionCommandApprovalPolicy(sessionId: string): void {
-    if (!this.commandApprovalPolicies.delete(sessionId)) return;
+    if (!this.sessionApprovalModes.delete(sessionId)) return;
+    if (sessionId !== "agent") this.saveSession(sessionId);
     this.notifySessionsChanged();
   }
 
@@ -1959,9 +2216,11 @@ export class AgentSessionManager {
     }
 
     this.sessions.delete(session.id);
-    this.commandApprovalPolicies.delete(session.id);
+    this.sessionApprovalModes.delete(session.id);
+    this.retainedCommandReviewDenials.clearSession(session.id);
     this.sessionRevisions.delete(session.id);
     this.sessionSaveQueues.delete(session.id);
+    this.pendingDeferredSaves.delete(session.id);
     if (this.foregroundId === session.id) {
       this.foregroundId = null;
     }
@@ -1976,8 +2235,16 @@ export class AgentSessionManager {
       return;
     }
 
-    const run = () => this.saveSessionRevisionAware(id);
+    // The queued run reads live session state when it executes, so one deferred
+    // save behind the in-flight write covers all later requests — coalesce them.
+    if (this.pendingDeferredSaves.has(id)) return;
+
+    const run = () => {
+      this.pendingDeferredSaves.delete(id);
+      return this.saveSessionRevisionAware(id);
+    };
     const previous = this.sessionSaveQueues.get(id);
+    if (previous) this.pendingDeferredSaves.add(id);
     const next = previous ? previous.then(run, run) : run();
     const tracked = next.finally(() => {
       if (this.sessionSaveQueues.get(id) === tracked) {
@@ -2003,6 +2270,7 @@ export class AgentSessionManager {
       lastInputTokens: session.lastInputTokens,
       lastCacheReadTokens: session.lastCacheReadTokens,
       reasoningEffort: session.reasoningEffort,
+      ...this.getSessionApprovalMode(session.id),
       background: session.background,
       projectScope: session.projectScope,
       activeContextResourceUri: session.activeContextResourceUri,
@@ -2113,6 +2381,7 @@ export class AgentSessionManager {
         activeContextResourceUri: session.activeContextResourceUri,
         mode: session.mode,
         model: session.model,
+        ...this.getSessionApprovalMode(session.id),
         totalInputTokens: session.totalInputTokens,
         totalOutputTokens: session.totalOutputTokens,
         totalCacheReadTokens: session.totalCacheReadTokens,
@@ -2358,6 +2627,191 @@ export class AgentSessionManager {
       toolCallCount: toolCalls.length,
       maxToolCalls: BTW_MAX_TOOL_CALLS,
     };
+  }
+
+  /**
+   * Run the transient agent behind /worktree. Unlike /btw, this starts with a
+   * lightweight, purpose-built prompt instead of cloning foreground history,
+   * and it may use ask_user so configuration can happen in the Activity Shelf.
+   */
+  async runWorktreeSetup(
+    initialDraft: Partial<WorktreeAgentLaunchRequest>,
+    opts: WorktreeSetupOptions,
+  ): Promise<WorktreeSetupResult> {
+    if (!this.toolCtx) {
+      throw new Error("No tool context — cannot configure a worktree");
+    }
+    if (!this.toolCtx.worktreeAgentLaunchProvider) {
+      throw new Error("Worktree agent startup is unavailable in this window");
+    }
+
+    const fg = this.getForegroundSession();
+    if (fg) this.requireSessionExecution(fg);
+    const mode = "ask";
+    const model = fg?.model ?? this.config.model;
+    const providerId =
+      fg?.providerId ?? this.host.providers.tryResolveProvider(model)?.id;
+    const projectScope = fg?.projectScope ?? this.selectProjectScope();
+    const session = await this.createBoundSession({
+      mode,
+      config: this.buildConfigForModel(model, projectScope),
+      projectScope,
+      workspaceFolders: this.getWorkspaceFolders(),
+      devMode: this.devMode,
+      providerId,
+      lightweight: true,
+    });
+    session.title = "/worktree setup";
+    session.reasoningEffort = "low";
+    session.systemPrompt = WORKTREE_SETUP_SYSTEM_PROMPT;
+    opts.onSessionStarted?.(session.id);
+
+    if (opts.signal?.aborted) {
+      return {
+        sessionId: session.id,
+        sourcePath: this.requireSessionExecution(session),
+        answer: "",
+        toolCalls: [],
+        warnings: [],
+        inputTokens: 0,
+        outputTokens: 0,
+        cancelled: true,
+        apiTurns: 0,
+        maxApiTurns: WORKTREE_SETUP_MAX_API_TURNS,
+        toolCallCount: 0,
+        maxToolCalls: WORKTREE_SETUP_MAX_TOOL_CALLS,
+      };
+    }
+
+    const sourcePath = this.requireSessionExecution(session);
+    const engine = this.host.createEngine(this.host.providers, this.log);
+    const preparedTurn = await this.prepareTurnExecution(session, {
+      overrides: {
+        onModeSwitch: undefined,
+        onApprovalRequest: undefined,
+        onQuestion: undefined,
+        onSpawnBackground: undefined,
+        onGetBackgroundStatus: undefined,
+        onGetBackgroundResult: undefined,
+        onKillBackground: undefined,
+        onFinalStatus: undefined,
+      },
+    });
+    const sideCtx = this.bindCapturedEngineToSession(
+      engine,
+      session,
+      preparedTurn.context,
+    );
+    session.addUserMessage(
+      [
+        `Repository: ${sourcePath}`,
+        "Configure a new worktree agent from these supplied /worktree arguments:",
+        JSON.stringify(initialDraft, null, 2),
+        ...(opts.conversation?.length
+          ? [
+              "Setup conversation so far:",
+              JSON.stringify(opts.conversation, null, 2),
+            ]
+          : []),
+        "If task intent is missing, ask the user. Otherwise use sensible defaults and return the configuration envelope.",
+      ].join("\n\n"),
+      {
+        displayText: "/worktree",
+        isSlashCommand: true,
+        slashCommandLabel: "/worktree",
+      },
+    );
+    session.status = "streaming";
+
+    let answer = "";
+    const toolCalls: WorktreeSetupResult["toolCalls"] = [];
+    const warnings: string[] = [];
+    let apiTurns = 0;
+    let cancelled = false;
+    const cancel = () => {
+      if (cancelled) return;
+      cancelled = true;
+      session.abort();
+    };
+    const externalSignal = opts.signal;
+    const onExternalAbort = () => cancel();
+    if (externalSignal) {
+      if (externalSignal.aborted) cancel();
+      else externalSignal.addEventListener("abort", onExternalAbort);
+    }
+    const emitBudget = () =>
+      opts.onProgress?.({
+        type: "budget",
+        apiTurns,
+        toolCalls: toolCalls.length,
+        maxApiTurns: WORKTREE_SETUP_MAX_API_TURNS,
+        maxToolCalls: WORKTREE_SETUP_MAX_TOOL_CALLS,
+      });
+
+    try {
+      for await (const event of engine.run(session, {
+        toolProfile: "worktree-setup",
+        maxApiTurns: WORKTREE_SETUP_MAX_API_TURNS,
+        maxToolCalls: WORKTREE_SETUP_MAX_TOOL_CALLS,
+        webAccessPolicy: preparedTurn.policy,
+        mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
+        mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+      })) {
+        switch (event.type) {
+          case "text_delta":
+            answer += event.text;
+            opts.onProgress?.({ type: "text_delta", text: event.text });
+            break;
+          case "api_request":
+            apiTurns += 1;
+            emitBudget();
+            break;
+          case "tool_result":
+            toolCalls.push({
+              toolName: event.toolName,
+              durationMs: event.durationMs,
+            });
+            opts.onProgress?.({ type: "tool", toolName: event.toolName });
+            emitBudget();
+            break;
+          case "warning":
+            warnings.push(event.message);
+            opts.onProgress?.({ type: "warning", message: event.message });
+            break;
+          case "error":
+            throw new Error(event.error);
+        }
+      }
+    } finally {
+      this.releaseSessionToolContext(session.id, sideCtx);
+      externalSignal?.removeEventListener("abort", onExternalAbort);
+    }
+
+    return {
+      sessionId: session.id,
+      sourcePath,
+      answer: session.getLastAssistantText() ?? answer,
+      toolCalls,
+      warnings,
+      inputTokens: session.totalInputTokens,
+      outputTokens: session.totalOutputTokens,
+      cancelled,
+      apiTurns,
+      maxApiTurns: WORKTREE_SETUP_MAX_API_TURNS,
+      toolCallCount: toolCalls.length,
+      maxToolCalls: WORKTREE_SETUP_MAX_TOOL_CALLS,
+    };
+  }
+
+  startWorktreeAgent(
+    request: WorktreeAgentLaunchRequest,
+    options?: import("../core/capabilities/worktree.js").WorktreeAgentLaunchOptions,
+  ): Promise<ToolResult> {
+    const provider = this.toolCtx?.worktreeAgentLaunchProvider;
+    if (!provider) {
+      throw new Error("Worktree agent startup is unavailable in this window");
+    }
+    return provider.start(request, options);
   }
 
   async sendMessage(
@@ -2644,7 +3098,7 @@ export class AgentSessionManager {
                 `[agent] auto-continuing (${autoContinueCount}/${MAX_AUTO_CONTINUE}): pending todos remain`,
               );
               session.addUserMessage(
-                "You stopped but there are still pending tasks. Continue with the remaining items.",
+                "You stopped but the TODO list still has unfinished items. Before doing more work, reconcile the complete list against the conversation and current workspace: mark already-finished items completed, revise or remove obsolete items, and keep exactly one actual current item in progress. Do not redo completed work merely because its TODO status is stale. Then continue the genuine remaining work.",
               );
               session.status = "streaming";
               continue;
@@ -2898,13 +3352,32 @@ export class AgentSessionManager {
     const toolResultText =
       toolResult.content.find((block) => block.type === "text")?.text ??
       JSON.stringify(toolResult.content);
-    session.appendToolResults([
-      {
-        type: "tool_result" as const,
-        tool_use_id: question.toolUseId,
-        content: toolResultText,
-      },
-    ]);
+    // Sibling tool calls from the same turn ran (or were still running) when
+    // the session was interrupted and their results were never persisted, so
+    // answer them with synthetic results to keep the transcript well-formed.
+    session.appendToolResults(
+      question.assistantContent
+        .filter(
+          (
+            block,
+          ): block is import("../core/modelRuntime.js").CoreModelToolUseBlock =>
+            block.type === "tool_use",
+        )
+        .map((block) =>
+          block.id === question.toolUseId
+            ? {
+                type: "tool_result" as const,
+                tool_use_id: question.toolUseId,
+                content: toolResultText,
+              }
+            : {
+                type: "tool_result" as const,
+                tool_use_id: block.id,
+                content:
+                  "[Session was interrupted before this tool's result could be saved. The tool may or may not have completed; inspect current state and re-run it if the result is still needed.]",
+              },
+        ),
+    );
     session.runState = { phase: "running", startedAt: Date.now() };
     await this.saveSessionNow(session.id);
     void this.retrySession(session.id);
@@ -3052,6 +3525,19 @@ export class AgentSessionManager {
     }
   }
 
+  /** Resolve one session's project-specific mode without mutating the session. */
+  async resolveSessionMode(
+    sessionId: string,
+    mode: string,
+  ): Promise<AgentMode | undefined> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    return resolveMode(
+      mode,
+      await this.projectCustomizationRegistry.getModes(session.projectScope),
+    );
+  }
+
   /** Switch one session in-place without changing foreground ownership. */
   async switchSessionMode(
     sessionId: string,
@@ -3061,6 +3547,9 @@ export class AgentSessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
     this.requireSessionExecution(session);
+    const agentMode =
+      opts?.agentMode ?? (await this.resolveSessionMode(sessionId, mode));
+    if (!agentMode) return null;
 
     const model = this.getModelForMode(mode, session.projectScope);
     const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
@@ -3073,12 +3562,6 @@ export class AgentSessionManager {
     );
     this.applyThresholdToSession(session);
     this.refreshMcpToolDisclosure(session);
-    const agentMode =
-      opts?.agentMode ??
-      resolveMode(
-        mode,
-        await this.projectCustomizationRegistry.getModes(session.projectScope),
-      );
     await session.setMode(mode, { ...opts, agentMode });
 
     if (!session.background && this.foregroundId === session.id) {
@@ -3160,6 +3643,7 @@ export class AgentSessionManager {
     toolNames: string[];
     mcpServerNames: string[];
     activeSkills: string[];
+    todos: TodoItem[];
   } {
     this.refreshMcpToolDisclosure(session, context);
     const connectedMcpToolDefs = context?.mcpHub?.getToolDefs() ?? [];
@@ -3181,6 +3665,7 @@ export class AgentSessionManager {
         ),
       ],
       activeSkills: [...session.loadedSkills],
+      todos: getLatestTodoState(session.getAllMessages()),
     };
   }
 
@@ -3767,6 +4252,7 @@ export class AgentSessionManager {
 
     this.sessionRevisions.set(sessionId, readResult.revision);
     const session = await this.createRestoredSession({ summary, metadata });
+    this.sessionApprovalModes.set(sessionId, restoredApprovalMode(metadata));
     const projectId = session.projectScope.projectId;
     const checkpointState = metadata.checkpointState;
     const restoredCheckpoints =
@@ -3861,7 +4347,9 @@ export class AgentSessionManager {
       this.sessions.delete(sessionId);
       this.sessionRevisions.delete(sessionId);
       this.sessionSaveQueues.delete(sessionId);
-      this.commandApprovalPolicies.delete(sessionId);
+      this.pendingDeferredSaves.delete(sessionId);
+      this.sessionApprovalModes.delete(sessionId);
+      this.retainedCommandReviewDenials.clearSession(sessionId);
       this.bgFinalResults.delete(sessionId);
       this.bgStreamingText.delete(sessionId);
       this.bgPartialResults.delete(sessionId);
@@ -3905,6 +4393,7 @@ export class AgentSessionManager {
         metadata,
         background: true,
       });
+      this.sessionApprovalModes.set(summary.id, restoredApprovalMode(metadata));
       session.restoreFromStore({
         id: summary.id,
         title: summary.title,
@@ -4045,7 +4534,9 @@ export class AgentSessionManager {
 
     this.sessionRevisions.delete(sessionId);
     this.sessionSaveQueues.delete(sessionId);
-    this.commandApprovalPolicies.delete(sessionId);
+    this.pendingDeferredSaves.delete(sessionId);
+    this.sessionApprovalModes.delete(sessionId);
+    this.retainedCommandReviewDenials.clearSession(sessionId);
     if (this.sessions.has(sessionId)) {
       this.sessions.delete(sessionId);
       if (this.foregroundId === sessionId) {
@@ -4190,15 +4681,54 @@ export class AgentSessionManager {
   // Background agents
   // ---------------------------------------------------------------------------
 
-  private inheritBackgroundApprovalState(
+  private inheritBackgroundApprovalMode(
     parentSessionId: string,
     childSessionId: string,
   ): void {
-    this.commandApprovalPolicies.set(
-      childSessionId,
+    const parentMode = this.getSessionApprovalMode(
+      parentSessionId,
       this.toolCtx?.getCommandApprovalPolicy?.(parentSessionId) ?? "safe",
     );
-    this.toolCtx?.inheritSessionApprovalState?.(
+    this.sessionApprovalModes.set(
+      childSessionId,
+      Object.freeze({ ...parentMode }),
+    );
+  }
+
+  private inheritSharedBackgroundSessionApprovals(
+    parentSessionId: string,
+    childSessionId: string,
+  ): void {
+    const parent = this.sessions.get(parentSessionId);
+    const child = this.sessions.get(childSessionId);
+    if (
+      !parent?.projectScope.rootPath ||
+      !child?.projectScope.rootPath ||
+      !this.toolCtx?.inheritSessionApprovalState
+    ) {
+      return;
+    }
+
+    // Approval inheritance validates project identity. Background sessions are
+    // created with the parent's scope, but their tool contexts have not yet
+    // necessarily been captured (and therefore bound) at spawn time.
+    this.toolCtx.approvalManager.bindSessionProject(
+      parentSessionId,
+      parent.projectScope,
+    );
+    this.toolCtx.approvalManager.bindSessionProject(
+      childSessionId,
+      child.projectScope,
+    );
+    this.toolCtx.inheritSessionApprovalState(parentSessionId, childSessionId);
+  }
+
+  private inheritSharedBackgroundApprovalState(
+    parentSessionId: string,
+    childSessionId: string,
+  ): void {
+    this.inheritBackgroundApprovalMode(parentSessionId, childSessionId);
+    this.inheritSharedBackgroundSessionApprovals(
       parentSessionId,
       childSessionId,
     );
@@ -4207,12 +4737,8 @@ export class AgentSessionManager {
   private refreshingBackgroundApprovalInheritance = false;
 
   /**
-   * Add newly granted session approvals to existing background descendants.
-   *
-   * Spawn-time inheritance remains an independent snapshot: revoking trust on
-   * a parent does not silently revoke a child that is already working. This
-   * refresh only fills in approvals the parent gained after the child spawned
-   * (and restores inherited trust after a background-only mode switch).
+   * Add newly granted parent approvals to active shared-process descendants.
+   * Existing child authority remains independent and is never revoked here.
    */
   refreshBackgroundApprovalInheritance(): void {
     if (
@@ -4226,15 +4752,17 @@ export class AgentSessionManager {
     try {
       const children = Array.from(this.sessions.values())
         .filter((session) => {
+          if (!session.background || session.providerId === "worktree") {
+            return false;
+          }
           const lifecycle = session.fleetMetadata?.lifecycle;
           return (
-            session.background &&
-            (lifecycle === "queued" ||
-              lifecycle === "running" ||
-              lifecycle === "paused" ||
-              session.status === "streaming" ||
-              session.status === "tool_executing" ||
-              session.status === "awaiting_approval")
+            lifecycle === "queued" ||
+            lifecycle === "running" ||
+            lifecycle === "paused" ||
+            session.status === "streaming" ||
+            session.status === "tool_executing" ||
+            session.status === "awaiting_approval"
           );
         })
         .sort(
@@ -4242,48 +4770,51 @@ export class AgentSessionManager {
             (left.fleetMetadata?.depth ?? 0) -
             (right.fleetMetadata?.depth ?? 0),
         );
+
       for (const child of children) {
         const parentSessionId = this.getBackgroundParentSessionId(child.id);
         if (!parentSessionId || !this.sessions.has(parentSessionId)) continue;
-        this.toolCtx.inheritSessionApprovalState(parentSessionId, child.id);
+        this.inheritSharedBackgroundSessionApprovals(parentSessionId, child.id);
       }
     } finally {
       this.refreshingBackgroundApprovalInheritance = false;
     }
   }
 
+  /**
+   * True when a background session occupies a concurrency slot. Sessions
+   * blocked in get_background_result do not count: a full pool of parents
+   * each waiting on a queued descendant would otherwise deadlock the fleet.
+   */
+  private occupiesBackgroundSlot(session: AgentSession): boolean {
+    return (
+      session.background &&
+      !this.bgResultWaitHolds.has(session.id) &&
+      (session.status === "streaming" ||
+        session.status === "tool_executing" ||
+        session.status === "awaiting_approval")
+    );
+  }
+
   private activeBackgroundCount(): number {
-    return Array.from(this.sessions.values()).filter(
-      (session) =>
-        session.background &&
-        session.status !== "queued" &&
-        (session.status === "streaming" ||
-          session.status === "tool_executing" ||
-          session.status === "awaiting_approval"),
+    return Array.from(this.sessions.values()).filter((session) =>
+      this.occupiesBackgroundSlot(session),
     ).length;
   }
 
   private activeBackgroundCountForRoot(rootSessionId: string): number {
     return Array.from(this.sessions.values()).filter(
       (session) =>
-        session.background &&
         session.fleetMetadata?.rootSessionId === rootSessionId &&
-        session.status !== "queued" &&
-        (session.status === "streaming" ||
-          session.status === "tool_executing" ||
-          session.status === "awaiting_approval"),
+        this.occupiesBackgroundSlot(session),
     ).length;
   }
 
   private activeBackgroundCountForProvider(provider: string): number {
     return Array.from(this.sessions.values()).filter(
       (session) =>
-        session.background &&
         this.bgMeta.get(session.id)?.resolvedProvider === provider &&
-        session.status !== "queued" &&
-        (session.status === "streaming" ||
-          session.status === "tool_executing" ||
-          session.status === "awaiting_approval"),
+        this.occupiesBackgroundSlot(session),
     ).length;
   }
 
@@ -4501,7 +5032,7 @@ export class AgentSessionManager {
       session.createAbortController();
       this.sessions.set(session.id, session);
       if (parentSessionId) {
-        this.inheritBackgroundApprovalState(parentSessionId, session.id);
+        this.inheritSharedBackgroundApprovalState(parentSessionId, session.id);
         this.bgParents.set(session.id, { sessionId: parentSessionId, task });
       }
       this.bgMeta.set(session.id, {
@@ -4784,7 +5315,7 @@ export class AgentSessionManager {
     session.status = "queued";
     this.sessions.set(session.id, session);
     if (parentSessionId) {
-      this.inheritBackgroundApprovalState(parentSessionId, session.id);
+      this.inheritSharedBackgroundApprovalState(parentSessionId, session.id);
       this.bgParents.set(session.id, {
         sessionId: parentSessionId,
         task,
@@ -5793,7 +6324,45 @@ export class AgentSessionManager {
         }),
       );
     }
-    return this.waitForBackground(sessionId);
+    return this.waitForBackgroundReleasingSlot(callerSessionId, sessionId);
+  }
+
+  /**
+   * Wait for a background result, releasing the caller's concurrency slot
+   * while blocked. Without this, parents waiting on queued descendants can
+   * fill every slot and deadlock the fleet. The caller resumes as soon as
+   * the wait resolves, which may briefly overshoot the concurrency limits;
+   * the scheduler simply starts nothing new until counts drop back down.
+   */
+  private waitForBackgroundReleasingSlot(
+    callerSessionId: string,
+    sessionId: string,
+  ): Promise<string> {
+    const caller = this.sessions.get(callerSessionId);
+    const target = this.sessions.get(sessionId);
+    const waitOptions = {
+      interruptOnUserMessageForSessionId: callerSessionId,
+    };
+    const willBlock =
+      caller?.background === true &&
+      target !== undefined &&
+      this.bgFinalResults.get(sessionId) === undefined &&
+      !this.getProjectedBgStatus(target).done;
+    if (!willBlock) return this.waitForBackground(sessionId, waitOptions);
+
+    this.bgResultWaitHolds.set(
+      callerSessionId,
+      (this.bgResultWaitHolds.get(callerSessionId) ?? 0) + 1,
+    );
+    this.drainBackgroundQueue();
+    return this.waitForBackground(sessionId, waitOptions).finally(() => {
+      const remaining = (this.bgResultWaitHolds.get(callerSessionId) ?? 1) - 1;
+      if (remaining > 0) {
+        this.bgResultWaitHolds.set(callerSessionId, remaining);
+      } else {
+        this.bgResultWaitHolds.delete(callerSessionId);
+      }
+    });
   }
 
   async waitForAuthorizedBackgroundContent(
@@ -5808,6 +6377,14 @@ export class AgentSessionManager {
 
     const session = this.sessions.get(sessionId);
     if (!session) return text;
+    // An interrupted wait returns before the background agent finishes;
+    // don't attach in-progress images to the interruption payload.
+    if (
+      this.bgFinalResults.get(sessionId) === undefined &&
+      !this.getProjectedBgStatus(session).done
+    ) {
+      return text;
+    }
     const images = session
       .getAllMessages()
       .flatMap((message) =>
@@ -6021,11 +6598,36 @@ export class AgentSessionManager {
   }
 
   /**
+   * Structured result returned when a blocking wait is released because a user
+   * or steering message is pending for the waiting session. The background
+   * agent itself is untouched and keeps running.
+   */
+  private buildBackgroundWaitInterruptedResult(sessionId: string): string {
+    return JSON.stringify({
+      status: "wait_interrupted",
+      reason: "user_message_pending",
+      done: false,
+      sessionId,
+      retrySafe: true,
+      message:
+        "Waiting stopped because a user message is pending for your session. The background agent was not interrupted and keeps running. Handle the user's message first, then call get_background_result again when ready to block, or get_background_status for a non-blocking check.",
+    });
+  }
+
+  /**
    * Async — blocks until the background session finishes.
    * Returns the last assistant message text.
    * Uses a double-check pattern to prevent races between status check and waiter registration.
+   *
+   * When `interruptOnUserMessageForSessionId` is set, the wait also resolves
+   * early with a `wait_interrupted` payload as soon as that session has a
+   * pending interjection (user steering), without affecting the background
+   * agent. This lets a blocked caller handle the user's message and re-wait.
    */
-  waitForBackground(sessionId: string): Promise<string> {
+  waitForBackground(
+    sessionId: string,
+    options?: { interruptOnUserMessageForSessionId?: string },
+  ): Promise<string> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return Promise.resolve(
@@ -6050,15 +6652,33 @@ export class AgentSessionManager {
       );
     }
 
+    const interruptSession = options?.interruptOnUserMessageForSessionId
+      ? this.sessions.get(options.interruptOnUserMessageForSessionId)
+      : undefined;
+    if (interruptSession?.hasPendingInterjections) {
+      return Promise.resolve(
+        this.buildBackgroundWaitInterruptedResult(sessionId),
+      );
+    }
+
     return new Promise((resolve) => {
+      let settled = false;
+      let unsubscribeInterrupt: (() => void) | undefined;
+      const settle = (result: string) => {
+        if (settled) return;
+        settled = true;
+        unsubscribeInterrupt?.();
+        resolve(result);
+      };
+
       const waiters = this.bgResultWaiters.get(sessionId) ?? [];
-      waiters.push(resolve);
+      waiters.push(settle);
       this.bgResultWaiters.set(sessionId, waiters);
 
       // Double-check after registration to close the race window
       const storedAfter = this.bgFinalResults.get(sessionId);
       if (storedAfter !== undefined) {
-        resolve(storedAfter);
+        settle(storedAfter);
         return;
       }
 
@@ -6069,7 +6689,7 @@ export class AgentSessionManager {
         this.log?.(
           `[background] Result waiter timed out for ${sessionId}; background agent is still allowed to continue running.`,
         );
-        resolve(
+        settle(
           session.getLastAssistantText() ??
             "(background agent timed out waiting for result)",
         );
@@ -6077,6 +6697,25 @@ export class AgentSessionManager {
       const timers = this.bgSafetyTimers.get(sessionId) ?? [];
       timers.push(timerId);
       this.bgSafetyTimers.set(sessionId, timers);
+
+      if (interruptSession) {
+        unsubscribeInterrupt = interruptSession.onPendingInterjectionQueued(
+          () => {
+            // Detach this waiter and its safety timer so the eventual
+            // completion does not keep stale entries alive for 30 minutes.
+            const waiterList = this.bgResultWaiters.get(sessionId);
+            const waiterIndex = waiterList?.indexOf(settle) ?? -1;
+            if (waiterList && waiterIndex >= 0) {
+              waiterList.splice(waiterIndex, 1);
+            }
+            this.host.timers.clearTimeout(timerId);
+            const timerList = this.bgSafetyTimers.get(sessionId);
+            const timerIndex = timerList?.indexOf(timerId) ?? -1;
+            if (timerList && timerIndex >= 0) timerList.splice(timerIndex, 1);
+            settle(this.buildBackgroundWaitInterruptedResult(sessionId));
+          },
+        );
+      }
     });
   }
 
@@ -6487,8 +7126,9 @@ export class AgentSessionManager {
     request: SpawnBackgroundRequest,
     parent: AgentSession | undefined,
   ): Promise<SpawnBackgroundResult> {
-    const provider = this.toolCtx?.worktreeAgentLaunchProvider;
-    const globalStoragePath = this.toolCtx?.globalStorageUri?.fsPath;
+    const toolCtx = this.toolCtx;
+    const provider = toolCtx?.worktreeAgentLaunchProvider;
+    const globalStoragePath = toolCtx?.globalStorageUri?.fsPath;
     if (!provider || !globalStoragePath) {
       throw new Error("Isolated worktree launcher is unavailable");
     }
@@ -6509,12 +7149,7 @@ export class AgentSessionManager {
     session.status = "streaming";
     this.sessions.set(session.id, session);
     if (parent) {
-      // The launched agent runs in another VS Code process, so this window's
-      // session write trust must not cross that process boundary implicitly.
-      this.commandApprovalPolicies.set(
-        session.id,
-        this.toolCtx?.getCommandApprovalPolicy?.(parent.id) ?? "safe",
-      );
+      this.inheritBackgroundApprovalMode(parent.id, session.id);
     }
     this.bgMeta.set(session.id, {
       resolvedMode: mode,
@@ -6564,6 +7199,7 @@ export class AgentSessionManager {
     this.saveSession(session.id);
     this.notifySessionsChanged();
     try {
+      const approvalMode = this.getSessionApprovalMode(session.id);
       const result = await provider.start({
         task: request.task,
         prompt: withFleetResultInstruction(
@@ -6574,6 +7210,7 @@ export class AgentSessionManager {
         mode: request.mode,
         autoSubmit: true,
         fleetExchangeId: exchange.id,
+        ...approvalMode,
       });
       const text =
         result.content.find((item) => item.type === "text")?.text ?? "{}";

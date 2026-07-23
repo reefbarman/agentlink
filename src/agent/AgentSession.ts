@@ -123,6 +123,10 @@ export class AgentSession {
    *  Reset to 0 when addUsage() receives fresh API data. */
   estimatedAccumulatedTokens = 0;
 
+  /** Per-source split of estimatedAccumulatedTokens (e.g. "tool:read_file"),
+   *  used to attribute large context-usage jumps in telemetry. Reset alongside it. */
+  estimatedAccumulationBySource: Record<string, number> = {};
+
   /** Active file path at session creation — used for subfolder AGENTS.md and hot-reload. */
   activeFilePath: string | undefined;
   /** Durable resource identity corresponding to activeFilePath. */
@@ -177,6 +181,7 @@ export class AgentSession {
   private _abortSignal: AbortSignal | undefined;
   private _abortGeneration = 0;
   private _pendingInterjections: PendingInterjection[] = [];
+  private readonly _pendingInterjectionQueuedListeners = new Set<() => void>();
   // Transient per-surface counts of messages sitting in UI send queues
   // (VS Code webview / browser remote). Not persisted; used to give queued
   // user messages priority over the todo auto-continue prompt.
@@ -678,15 +683,19 @@ export class AgentSession {
     this.lastCacheReadTokens = cacheReadTokens;
     // Fresh API data replaces any local estimates.
     this.estimatedAccumulatedTokens = 0;
+    this.estimatedAccumulationBySource = {};
   }
 
   /**
    * Add an estimated token count for content added since the last API response
    * (e.g. tool results, user messages). Uses the same 4-bytes-per-token
-   * heuristic as Codex CLI.
+   * heuristic as Codex CLI. `source` labels the contribution for jump telemetry.
    */
-  addEstimatedTokens(chars: number): void {
-    this.estimatedAccumulatedTokens += estimateTokensFromChars(chars);
+  addEstimatedTokens(chars: number, source = "other"): void {
+    const tokens = estimateTokensFromChars(chars);
+    this.estimatedAccumulatedTokens += tokens;
+    this.estimatedAccumulationBySource[source] =
+      (this.estimatedAccumulationBySource[source] ?? 0) + tokens;
   }
 
   /**
@@ -799,7 +808,20 @@ export class AgentSession {
     );
     if (index >= 0) this._pendingInterjections[index] = entry;
     else this._pendingInterjections.push(entry);
+    for (const listener of this._pendingInterjectionQueuedListeners) {
+      listener();
+    }
     return true;
+  }
+
+  /**
+   * Subscribe to interjection queueing so blocking waits (e.g. a parent stuck
+   * in get_background_result) can return early and let the engine drain the
+   * pending message at the next tool boundary. Returns an unsubscribe function.
+   */
+  onPendingInterjectionQueued(listener: () => void): () => void {
+    this._pendingInterjectionQueuedListeners.add(listener);
+    return () => this._pendingInterjectionQueuedListeners.delete(listener);
   }
 
   updatePendingInterjection(

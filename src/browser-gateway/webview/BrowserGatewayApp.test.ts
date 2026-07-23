@@ -935,7 +935,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     );
 
     await selectWorkspaceTab();
-    await screen.findByText("Waiting for response…");
+    await screen.findByText("Working…");
     fireEvent.click(await screen.findByTestId("trigger-interject"));
 
     await waitFor(() => {
@@ -4148,6 +4148,111 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     ).toBe(false);
   });
 
+  it("forwards managed-network approval evidence and the allow-once decision", async () => {
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const approvalSnapshot = createSnapshot();
+    approvalSnapshot.ui.approval = {
+      kind: "network",
+      id: "network-approval-1",
+      managedNetwork: {
+        requestId: "network-1",
+        sessionId: "session-1",
+        auditId: "audit-1",
+        terminalId: "sandbox-1",
+        commandId: "command-1",
+        generation: 1,
+        command: "npm view example version",
+        cwd: "/workspace",
+        host: "registry.npmjs.org",
+        protocol: "https",
+        port: 443,
+        address: "104.16.24.34",
+        family: 4,
+        dnsAnswers: [
+          { address: "104.16.24.34", family: 4 },
+          { address: "104.16.25.34", family: 4 },
+        ],
+        destinationClass: "public",
+      },
+    };
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/ui-state")) {
+        return jsonResponse(approvalSnapshot);
+      }
+      if (url.includes("/api/approval")) {
+        return jsonResponse({ ok: true });
+      }
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands")) {
+        return jsonResponse({ commands: [] });
+      }
+      if (url.includes("/api/modes")) {
+        return jsonResponse({
+          modes: [{ slug: "code", name: "Code", icon: "symbol-misc" }],
+        });
+      }
+      if (url.includes("/api/models")) {
+        return jsonResponse({ models: [] });
+      }
+      if (url.includes("/api/sessions")) {
+        return jsonResponse({ sessions: [] });
+      }
+      if (url.includes("/api/debug/refresh")) {
+        return jsonResponse({ ok: true });
+      }
+      return jsonResponse({ ok: true });
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    expect(
+      await screen.findByText("https://registry.npmjs.org:443"),
+    ).toBeTruthy();
+    expect(screen.getByText("104.16.24.34 (IPv4)")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("/api/approval"),
+        ),
+      ).toBe(true);
+    });
+
+    const approvalCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes("/api/approval"),
+    );
+    expect(JSON.parse(String(approvalCall?.[1]?.body))).toMatchObject({
+      id: "network-approval-1",
+      approvalKind: "network",
+      decision: "allow-once",
+    });
+  });
+
   it("optimistically dismisses visible approval card after submitting a decision", async () => {
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     const approvalSnapshot = {
@@ -4253,10 +4358,14 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
     });
 
-    expect(
-      fetchMock.mock.calls.some(([input]) =>
-        String(input).includes("/api/approval"),
-      ),
-    ).toBe(true);
+    const approvalCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes("/api/approval"),
+    );
+    expect(approvalCall).toBeDefined();
+    expect(JSON.parse(String(approvalCall?.[1]?.body))).toMatchObject({
+      id: "approval-1",
+      approvalKind: "write",
+      decision: "accept",
+    });
   });
 });

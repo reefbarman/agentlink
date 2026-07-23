@@ -1,3 +1,7 @@
+import {
+  NetworkPolicyError,
+  resolveApprovedDestination,
+} from "./sandbox-network-policy.mjs";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   createServer as createHttpServer,
@@ -9,7 +13,6 @@ import {
 } from "node:net";
 
 import { request as httpsRequest } from "node:https";
-import { resolveApprovedDestination } from "./sandbox-network-policy.mjs";
 
 const CONNECT_TIMEOUT_MS = 10_000;
 const MAX_SOCKS_HANDSHAKE_BYTES = 1024;
@@ -118,6 +121,76 @@ function parseConnectTarget(target) {
   return { host: match[1], port };
 }
 
+function authorizationAbortError(signal) {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error("destination authorization aborted");
+}
+
+function waitForAuthorization(authorizeDestination, request, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(authorizationAbortError(signal));
+      return;
+    }
+    let settled = false;
+    const finish = (operation, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      operation(value);
+    };
+    const onAbort = () => finish(reject, authorizationAbortError(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    Promise.resolve()
+      .then(() => authorizeDestination(request, signal))
+      .then(
+        (decision) => finish(resolve, decision),
+        (error) => finish(reject, error),
+      );
+  });
+}
+
+function createDestinationAuthorizer(authorizeDestination, signal) {
+  if (!authorizeDestination) {
+    return async () => {};
+  }
+  return async (approved, protocol, port) => {
+    const answers = Object.freeze(
+      (approved.answers ?? []).map((answer) => Object.freeze({ ...answer })),
+    );
+    const request = Object.freeze({
+      host: approved.requestedHost,
+      protocol,
+      port,
+      address: approved.address,
+      family: approved.family,
+      answers,
+    });
+    const decision = await waitForAuthorization(
+      authorizeDestination,
+      request,
+      signal,
+    );
+    if (decision === "reject") {
+      throw new NetworkPolicyError(
+        "destination authorization rejected request",
+      );
+    }
+    if (decision !== "allow") {
+      throw new NetworkPolicyError(
+        "destination authorization returned an invalid decision",
+      );
+    }
+  };
+}
+
+function isPolicyDenied(error) {
+  return error instanceof NetworkPolicyError;
+}
+
 function dialApproved(approved, port) {
   return new Promise((resolve, reject) => {
     const socket = netConnect({
@@ -205,7 +278,15 @@ function closeServer(server, sockets) {
   });
 }
 
-function createHttpProxy(allowedDomains, credentials, resolverOptions, dial) {
+function createHttpProxy(
+  allowedDomains,
+  credentials,
+  resolverOptions,
+  authorize,
+  dial,
+  requestHttp,
+  requestHttps,
+) {
   const server = createHttpServer();
   server.on("connect", async (request, client, head) => {
     if (!isHttpAuthenticated(request, credentials)) {
@@ -223,13 +304,15 @@ function createHttpProxy(allowedDomains, credentials, resolverOptions, dial) {
         allowedDomains,
         resolverOptions,
       );
+      await authorize(approved, "connect:", target.port);
+      if (client.destroyed) {
+        return;
+      }
       const upstream = await dial(approved, target.port);
       client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       pipeSockets(client, upstream, head);
     } catch (error) {
-      const policyDenied = /destination host|DNS answer/.test(
-        error instanceof Error ? error.message : String(error),
-      );
+      const policyDenied = isPolicyDenied(error);
       client.end(
         `HTTP/1.1 ${policyDenied ? "403 Forbidden" : "502 Bad Gateway"}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n${policyDenied ? "Connection blocked by AgentLink network policy" : "Upstream connection failed"}`,
       );
@@ -252,6 +335,7 @@ function createHttpProxy(allowedDomains, credentials, resolverOptions, dial) {
         allowedDomains,
         resolverOptions,
       );
+      await authorize(approved, url.protocol, port);
       if (request.socket.destroyed) {
         return;
       }
@@ -260,7 +344,7 @@ function createHttpProxy(allowedDomains, credentials, resolverOptions, dial) {
         host: url.host,
       };
       const upstreamRequest = (
-        url.protocol === "https:" ? httpsRequest : httpRequest
+        url.protocol === "https:" ? requestHttps : requestHttp
       )(
         {
           host: approved.address,
@@ -288,9 +372,7 @@ function createHttpProxy(allowedDomains, credentials, resolverOptions, dial) {
       response.once("close", () => upstreamRequest.destroy());
       request.pipe(upstreamRequest);
     } catch (error) {
-      const policyDenied = /destination host|DNS answer/.test(
-        error instanceof Error ? error.message : String(error),
-      );
+      const policyDenied = isPolicyDenied(error);
       response.writeHead(policyDenied ? 403 : 400, {
         "Content-Type": "text/plain",
         Connection: "close",
@@ -355,7 +437,13 @@ function parseSocksRequest(buffer) {
   return { host, port, consumed: offset + 2 };
 }
 
-function createSocksProxy(allowedDomains, credentials, resolverOptions, dial) {
+function createSocksProxy(
+  allowedDomains,
+  credentials,
+  resolverOptions,
+  authorize,
+  dial,
+) {
   return createTcpServer((client) => {
     let buffer = Buffer.alloc(0);
     let phase = "greeting";
@@ -440,8 +528,12 @@ function createSocksProxy(allowedDomains, credentials, resolverOptions, dial) {
             allowedDomains,
             resolverOptions,
           );
+          await authorize(approved, "socks5:", target.port);
         } catch {
           fail(2);
+          return;
+        }
+        if (client.destroyed) {
           return;
         }
         try {
@@ -463,7 +555,12 @@ function createSocksProxy(allowedDomains, credentials, resolverOptions, dial) {
 export async function startTrustedNetworkProxies(
   allowedDomains,
   resolverOptions = {},
-  { dial = dialApproved } = {},
+  {
+    authorizeDestination,
+    dial = dialApproved,
+    httpRequest: requestHttp = httpRequest,
+    httpsRequest: requestHttps = httpsRequest,
+  } = {},
 ) {
   const sessionId = randomBytes(16).toString("hex");
   const password = randomBytes(32).toString("hex");
@@ -472,16 +569,25 @@ export async function startTrustedNetworkProxies(
     password,
     digest: credentialDigest(PROXY_AUTH_USERNAME, password),
   };
+  const authorizationController = new AbortController();
+  const authorize = createDestinationAuthorizer(
+    authorizeDestination,
+    authorizationController.signal,
+  );
   const httpServer = createHttpProxy(
     allowedDomains,
     credentials,
     resolverOptions,
+    authorize,
     dial,
+    requestHttp,
+    requestHttps,
   );
   const socksServer = createSocksProxy(
     allowedDomains,
     credentials,
     resolverOptions,
+    authorize,
     dial,
   );
   const httpSockets = trackServerSockets(httpServer);
@@ -498,6 +604,9 @@ export async function startTrustedNetworkProxies(
         password: credentials.password,
       },
       async close() {
+        authorizationController.abort(
+          new Error("trusted network proxies closed during authorization"),
+        );
         await Promise.all([
           closeServer(httpServer, httpSockets),
           closeServer(socksServer, socksSockets),
@@ -505,6 +614,9 @@ export async function startTrustedNetworkProxies(
       },
     };
   } catch (error) {
+    authorizationController.abort(
+      new Error("trusted network proxies failed during startup"),
+    );
     await Promise.allSettled([
       closeServer(httpServer, httpSockets),
       closeServer(socksServer, socksSockets),

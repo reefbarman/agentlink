@@ -16,7 +16,10 @@ import type {
   SandboxRuntimeProvider,
 } from "./SandboxRuntimeProvider.js";
 
+export const SANDBOX_HELPER_GRACEFUL_CLOSE_TIMEOUT_MS = 2_000;
+
 export interface SandboxHelperTransport {
+  /** Accept a complete control frame for delivery; backpressure is handled internally. */
   write(data: string): boolean;
   onLine(listener: (line: string) => void): SandboxCommandDisposable;
   onError(listener: (error: Error) => void): SandboxCommandDisposable;
@@ -27,6 +30,7 @@ export interface SandboxHelperTransport {
       stderr?: string;
     }) => void,
   ): SandboxCommandDisposable;
+  closeGracefully(killAfterMs: number): void;
   kill(): void;
   dispose(): void;
 }
@@ -64,7 +68,9 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
   private readonly readyDeferred = deferred<SandboxCommandReady>();
   private readonly completionDeferred = deferred<SandboxCommandExit>();
   private readonly listeners = new Set<(event: SandboxCommandEvent) => void>();
+  private readonly pendingEvents: SandboxCommandEvent[] = [];
   private readonly subscriptions: SandboxCommandDisposable[];
+  private eventReplayScheduled = false;
   private state: "launching" | "running" | "completed" | "failed" = "launching";
   private disposed = false;
   private readySettled = false;
@@ -101,8 +107,11 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
   onEvent(
     listener: (event: SandboxCommandEvent) => void,
   ): SandboxCommandDisposable {
-    if (this.disposed) return { dispose() {} };
+    if (this.disposed && this.pendingEvents.length === 0) {
+      return { dispose() {} };
+    }
     this.listeners.add(listener);
+    this.schedulePendingEventReplay();
     return { dispose: () => this.listeners.delete(listener) };
   }
 
@@ -122,6 +131,18 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
     return this.sendWhileRunning({ ...this.identity, type: "interrupt" });
   }
 
+  respondToNetworkRequest(
+    requestId: string,
+    decision: "allow-once" | "reject",
+  ): boolean {
+    return this.sendWhileRunning({
+      ...this.identity,
+      type: "network-decision",
+      requestId,
+      decision,
+    });
+  }
+
   terminate(): boolean {
     if (this.state !== "launching" && this.state !== "running") return false;
     return this.send({ ...this.identity, type: "terminate" });
@@ -131,7 +152,7 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
     if (this.disposed) return;
     if (this.state === "launching" || this.state === "running") {
       this.send({ ...this.identity, type: "terminate" });
-      this.fail(new Error("Sandbox command process was disposed"));
+      this.fail(new Error("Sandbox command process was disposed"), false);
       return;
     }
     this.disposed = true;
@@ -204,8 +225,29 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
         ? { type: "data", data: event.data }
         : event.type === "cwd"
           ? { type: "cwd", cwd: event.cwd, nonce: event.nonce }
-          : { type: "violation", violation: event.violation };
-    for (const listener of this.listeners) listener(commandEvent);
+          : event.type === "network-request"
+            ? { type: "network-request", request: event.request }
+            : { type: "violation", violation: event.violation };
+    this.pendingEvents.push(commandEvent);
+    this.schedulePendingEventReplay();
+  }
+
+  private schedulePendingEventReplay(): void {
+    if (this.eventReplayScheduled || this.pendingEvents.length === 0) return;
+    this.eventReplayScheduled = true;
+    queueMicrotask(() => {
+      this.eventReplayScheduled = false;
+      if (this.state === "failed" || this.listeners.size === 0) return;
+      while (this.pendingEvents.length > 0) {
+        const event = this.pendingEvents.shift();
+        if (event) this.emitEvent(event);
+      }
+      if (this.disposed) this.listeners.clear();
+    });
+  }
+
+  private emitEvent(event: SandboxCommandEvent): void {
+    for (const listener of this.listeners) listener(event);
   }
 
   private handleClose(event: {
@@ -222,7 +264,7 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
     );
   }
 
-  private fail(error: Error): void {
+  private fail(error: Error, kill = true): void {
     if (this.state === "completed" || this.state === "failed") return;
     this.state = "failed";
     if (!this.readySettled) {
@@ -233,7 +275,7 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
       this.completionSettled = true;
       this.completionDeferred.reject(error);
     }
-    this.finalizeTransport(true);
+    this.finalizeTransport(kill);
   }
 
   private finalizeTransport(kill: boolean): void {
@@ -241,8 +283,13 @@ class SandboxHelperCommandProcess implements SandboxCommandProcess {
     this.transportFinalized = true;
     this.disposed = true;
     for (const subscription of this.subscriptions) subscription.dispose();
-    this.listeners.clear();
+    if (kill || this.pendingEvents.length === 0) {
+      this.listeners.clear();
+      this.pendingEvents.length = 0;
+    }
     if (kill) this.transport.kill();
+    else
+      this.transport.closeGracefully(SANDBOX_HELPER_GRACEFUL_CLOSE_TIMEOUT_MS);
     this.transport.dispose();
   }
 

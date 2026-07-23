@@ -4,6 +4,10 @@ import { StatusBarManager } from "./StatusBarManager.js";
 
 const mocks = vi.hoisted(() => {
   const items: Array<{
+    id: string;
+    alignment: number;
+    priority: number;
+    name?: string;
     text: string;
     tooltip?: string;
     backgroundColor?: { id: string };
@@ -21,8 +25,12 @@ vi.mock("vscode", () => ({
     constructor(public readonly id: string) {}
   },
   window: {
-    createStatusBarItem: () => {
+    createStatusBarItem: (id: string, alignment: number, priority: number) => {
       const item = {
+        id,
+        alignment,
+        priority,
+        name: undefined,
         text: "",
         tooltip: undefined,
         backgroundColor: undefined,
@@ -41,6 +49,19 @@ describe("StatusBarManager retained approval and error behavior", () => {
   beforeEach(() => {
     vi.useRealTimers();
     mocks.items.length = 0;
+  });
+
+  it("creates one unified AgentLink status-bar entry", () => {
+    const manager = new StatusBarManager();
+
+    expect(mocks.items).toHaveLength(1);
+    expect(mocks.items[0]).toMatchObject({
+      id: "approvalAlert",
+      alignment: 1,
+      priority: 10000,
+      name: "AgentLink Status",
+    });
+    manager.dispose();
   });
 
   it("stays hidden while idle and hides after an approval alert", () => {
@@ -72,16 +93,68 @@ describe("StatusBarManager retained approval and error behavior", () => {
     manager.dispose();
   });
 
-  it("shows and hides the queued approval count", () => {
+  it("does not let an older alert disposable clear a newer alert", () => {
+    vi.useFakeTimers();
     const manager = new StatusBarManager();
-    const pending = mocks.items[1];
+    const primary = mocks.items[0];
+
+    const first = manager.showAlert("First approval required");
+    const second = manager.showAlert("Second approval required");
+    first.dispose();
+
+    expect(primary).toMatchObject({
+      text: "$(alert) Second approval required",
+      tooltip: "Second approval required",
+      command: "agentLink.focusApproval",
+    });
+    expect(primary.hide).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(800);
+    expect(primary.text).toBe("     Second approval required");
+
+    second.dispose();
+    expect(primary.hide).toHaveBeenCalledOnce();
+    manager.dispose();
+  });
+
+  it("shows and hides a queued approval count on the unified item", () => {
+    const manager = new StatusBarManager();
+    const item = mocks.items[0];
 
     manager.setPendingCount(2);
-    expect(pending.text).toBe("$(ellipsis) 2 more approvals pending");
-    expect(pending.show).toHaveBeenCalledTimes(1);
+    expect(item).toMatchObject({
+      text: "$(alert) AgentLink — 2 approvals pending",
+      tooltip: "2 AgentLink approvals pending",
+      command: "agentLink.focusApproval",
+      backgroundColor: { id: "statusBarItem.warningBackground" },
+    });
+    expect(item.show).toHaveBeenCalledTimes(1);
 
     manager.setPendingCount(0);
-    expect(pending.hide).toHaveBeenCalledTimes(1);
+    expect(item.hide).toHaveBeenCalledTimes(1);
+    manager.dispose();
+  });
+
+  it("combines the current approval alert and queued count", () => {
+    vi.useFakeTimers();
+    const manager = new StatusBarManager();
+    const item = mocks.items[0];
+    const alert = manager.showAlert("Command approval required");
+
+    manager.setPendingCount(2);
+    expect(item).toMatchObject({
+      text: "$(alert) Command approval required (+2 pending)",
+      tooltip: "Command approval required\n2 more approvals pending",
+      command: "agentLink.focusApproval",
+    });
+
+    vi.advanceTimersByTime(800);
+    expect(item.text).toBe("     Command approval required (+2 pending)");
+
+    alert.dispose();
+    expect(item.text).toBe("$(alert) AgentLink — 2 approvals pending");
+    manager.setPendingCount(0);
+    expect(item.hide).toHaveBeenCalledOnce();
     manager.dispose();
   });
 
@@ -118,7 +191,7 @@ describe("StatusBarManager retained approval and error behavior", () => {
     manager.dispose();
   });
 
-  it("disposes both status items and active flashing", () => {
+  it("disposes the unified status item and active flashing", () => {
     vi.useFakeTimers();
     const manager = new StatusBarManager();
     manager.showAlert("Approval required");
@@ -127,6 +200,5 @@ describe("StatusBarManager retained approval and error behavior", () => {
     vi.advanceTimersByTime(1_600);
 
     expect(mocks.items[0].dispose).toHaveBeenCalledTimes(1);
-    expect(mocks.items[1].dispose).toHaveBeenCalledTimes(1);
   });
 });

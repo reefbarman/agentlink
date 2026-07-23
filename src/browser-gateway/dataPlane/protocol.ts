@@ -139,6 +139,9 @@ export interface BrowserGatewayForegroundControlState {
   condenseThreshold?: number;
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
   commandApprovalPolicy?: "manual" | "safe" | "approve-for-me" | "sensitive";
+  approvalPolicy?: "on-request";
+  approvalReviewer?: "user" | "auto-review";
+  executionPreset?: "native-manual" | "workspace-write";
   configuredCommandApprovalPolicy?: "manual" | "safe" | "sensitive";
   restoringSession?: boolean;
   revertRecoveryNotice?: BrowserGatewayRevertRecoveryNotice | null;
@@ -1307,6 +1310,9 @@ function parseForeground(
     "condenseThreshold",
     "agentWriteApproval",
     "commandApprovalPolicy",
+    "approvalPolicy",
+    "approvalReviewer",
+    "executionPreset",
     "configuredCommandApprovalPolicy",
     "restoringSession",
     "revertRecoveryNotice",
@@ -1422,6 +1428,39 @@ function parseForeground(
             new Set(["manual", "safe", "approve-for-me", "sensitive"]),
           ) as NonNullable<
             BrowserGatewayForegroundControlState["commandApprovalPolicy"]
+          >,
+        }
+      : {}),
+    ...(object.approvalPolicy !== undefined
+      ? {
+          approvalPolicy: enumValue(
+            object.approvalPolicy,
+            `${path}.approvalPolicy`,
+            new Set(["on-request"]),
+          ) as NonNullable<
+            BrowserGatewayForegroundControlState["approvalPolicy"]
+          >,
+        }
+      : {}),
+    ...(object.approvalReviewer !== undefined
+      ? {
+          approvalReviewer: enumValue(
+            object.approvalReviewer,
+            `${path}.approvalReviewer`,
+            new Set(["user", "auto-review"]),
+          ) as NonNullable<
+            BrowserGatewayForegroundControlState["approvalReviewer"]
+          >,
+        }
+      : {}),
+    ...(object.executionPreset !== undefined
+      ? {
+          executionPreset: enumValue(
+            object.executionPreset,
+            `${path}.executionPreset`,
+            new Set(["native-manual", "workspace-write"]),
+          ) as NonNullable<
+            BrowserGatewayForegroundControlState["executionPreset"]
           >,
         }
       : {}),

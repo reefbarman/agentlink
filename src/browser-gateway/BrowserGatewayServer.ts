@@ -375,6 +375,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/polish-prompt"),
+        ({ req, res }) => this.handlePolishPromptAction(req, res),
+        json("polish-prompt action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/question"),
         ({ req, res }) => this.handleQuestionAction(req, res),
         json("question action failed"),
@@ -804,7 +810,11 @@ export class BrowserGatewayServer implements vscode.Disposable {
       body && typeof body === "object"
         ? (body as Record<string, unknown>)
         : undefined;
-    if (typeof parsed?.id !== "string") {
+    if (
+      typeof parsed?.id !== "string" ||
+      typeof parsed.approvalKind !== "string" ||
+      typeof parsed.decision !== "string"
+    ) {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
     }
@@ -841,6 +851,31 @@ export class BrowserGatewayServer implements vscode.Disposable {
         fullCommand: body.fullCommand,
       });
       this.writeJson(res, 200, { ok: true, pattern });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.writeJson(res, 200, { ok: false, error: message });
+    }
+  }
+
+  private async handlePolishPromptAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as { draft?: string } | null;
+    if (!body || typeof body.draft !== "string" || !body.draft.trim()) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    try {
+      const polished = await this.chatViewProvider.polishPrompt({
+        draft: body.draft,
+      });
+      this.writeJson(res, 200, { ok: true, polished });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.writeJson(res, 200, { ok: false, error: message });
@@ -1924,12 +1959,18 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const profile = this.parseMcpProfile(
       requestUrl.searchParams.get("profile") ?? "main",
     );
+    const projectId = requestUrl.searchParams.get("projectId") ?? undefined;
     if (!profile) {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
     }
     const result =
-      await this.chatViewProvider.submitBrowserMcpConfigSnapshot(profile);
+      profile === "main"
+        ? await this.chatViewProvider.submitBrowserMcpConfigSnapshot(
+            profile,
+            projectId,
+          )
+        : await this.chatViewProvider.submitBrowserMcpConfigSnapshot(profile);
     this.writeJson(res, 200, result);
   }
 
@@ -2113,6 +2154,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const body = (await readJsonBody(req)) as {
       serverName?: string;
       action?: "disable" | "reconnect" | "reauthenticate";
+      projectId?: string;
     };
     if (
       typeof body?.serverName !== "string" ||
@@ -2130,10 +2172,16 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const result = await this.chatViewProvider.submitBrowserMcpAction(
-      body.serverName,
-      body.action,
-    );
+    const result = body.projectId
+      ? await this.chatViewProvider.submitBrowserMcpAction(
+          body.serverName,
+          body.action,
+          body.projectId,
+        )
+      : await this.chatViewProvider.submitBrowserMcpAction(
+          body.serverName,
+          body.action,
+        );
     this.writeJson(res, result.ok ? 200 : 400, result);
   }
 

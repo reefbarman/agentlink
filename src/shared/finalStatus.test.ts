@@ -6,10 +6,24 @@ import {
 import { describe, expect, it } from "vitest";
 
 describe("getLatestAutoContinueAction", () => {
-  it("guides the default completed continuation across remaining phases and plan items", () => {
-    expect(DEFAULT_COMPLETED_CONTINUE_ACTION.prompt).toContain(
-      "remaining phases, plan items, subtasks, or validation steps",
+  it("guides the default continuation from a completed phase back to the full approved plan", () => {
+    const { prompt } = DEFAULT_COMPLETED_CONTINUE_ACTION;
+
+    expect(prompt).toContain("Continue working from where you left off");
+    expect(prompt).toContain("phase, handover, or scoped subtask");
+    expect(prompt).toContain(
+      "navigation point—not proof of overall completion",
     );
+    expect(prompt).toContain("original user request");
+    expect(prompt).toContain("parent/source-of-truth plan");
+    expect(prompt).toContain("higher-level plans if nested");
+    expect(prompt).toContain("user-approved scope");
+    expect(DEFAULT_COMPLETED_CONTINUE_ACTION.prompt).toContain(
+      "next explicit unfinished phase, plan item, subtask, or validation step",
+    );
+    expect(prompt).toContain("missing decision or prerequisite");
+    expect(prompt).toContain("Do not invent work or broaden scope");
+    expect(prompt).toContain("full approved scope is complete");
   });
 
   it("continues completed markers even when the legacy tool-set suppression field is present", () => {

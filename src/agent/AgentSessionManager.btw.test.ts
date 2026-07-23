@@ -86,6 +86,9 @@ function makeToolCtx(): ToolDispatchContext {
     approvalPanel: {} as ToolDispatchContext["approvalPanel"],
     extensionUri: {} as ToolDispatchContext["extensionUri"],
     sessionId: "fg",
+    worktreeAgentLaunchProvider: {
+      start: vi.fn(),
+    },
   };
 }
 
@@ -241,6 +244,95 @@ describe("AgentSessionManager /btw side questions", () => {
     );
     expect(fg.status).toBe("streaming");
     expect(fg.getAllMessages()).toHaveLength(1);
+  });
+
+  it("runs /worktree setup as a minimal session while foreground work continues", async () => {
+    const provider = makeProvider(() =>
+      textResponse(
+        'Ready. <worktree-config>{"task":"Alternative auth","prompt":"Prototype alternative auth"}</worktree-config>',
+      ),
+    );
+    providerRegistry.register(provider);
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(makeToolCtx());
+    const fg = await mgr.createSession("code");
+    fg.status = "streaming";
+    fg.addUserMessage("Unrelated foreground task");
+    const onSessionStarted = vi.fn();
+
+    const result = await mgr.runWorktreeSetup(
+      {},
+      {
+        onSessionStarted,
+      },
+    );
+
+    expect(result.answer).toContain("<worktree-config>");
+    expect(onSessionStarted).toHaveBeenCalledWith(result.sessionId);
+    expect(provider.requests[0]?.systemPrompt).toContain(
+      "temporary setup agent",
+    );
+    expect(provider.requests[0]?.systemPrompt).not.toContain(
+      "mock system prompt",
+    );
+    expect(provider.requests[0]?.tools?.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["execute_command", "read_file"]),
+    );
+    expect(provider.requests[0]?.tools?.map((tool) => tool.name)).not.toContain(
+      "ask_user",
+    );
+    expect(fg.status).toBe("streaming");
+    expect(fg.getAllMessages()).toEqual([
+      expect.objectContaining({ content: "Unrelated foreground task" }),
+    ]);
+  });
+
+  it("carries text-only setup conversation into a later minimal turn", async () => {
+    const provider = makeProvider(() =>
+      textResponse("Which authentication approach should it prototype?"),
+    );
+    providerRegistry.register(provider);
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(makeToolCtx());
+
+    const result = await mgr.runWorktreeSetup(
+      {},
+      {
+        conversation: [
+          {
+            role: "assistant",
+            text: "What should the worktree agent do?",
+          },
+          { role: "user", text: "Prototype passkeys" },
+        ],
+      },
+    );
+
+    expect(result.answer).toBe(
+      "Which authentication approach should it prototype?",
+    );
+    expect(provider.requests[0]?.messages.at(-1)?.content).toContain(
+      '"text": "Prototype passkeys"',
+    );
+  });
+
+  it("passes an inline shelf approval through to the worktree launch provider", async () => {
+    const start = vi.fn().mockResolvedValue({ content: [] });
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext({
+      ...makeToolCtx(),
+      worktreeAgentLaunchProvider: { start },
+    });
+    const request = { task: "Alternative", prompt: "Try the alternative" };
+
+    await mgr.startWorktreeAgent(request, {
+      approvalDecision: "approve-prefill",
+    });
+
+    expect(start).toHaveBeenCalledWith(request, {
+      approvalDecision: "approve-prefill",
+    });
   });
 
   it("streams incremental progress events while running", async () => {
