@@ -191,7 +191,10 @@ import {
   type BrowserGatewayAskAgentMemoryProposalRequest,
 } from "./browserGatewayAskAgentMemoryProposal.js";
 import { loadAskAgentSlashCommands } from "../../agent/SlashCommandRegistry.js";
-import { BrowserGatewayCoreOwnerRegistry } from "../coreOwnerRegistry.js";
+import {
+  BrowserGatewayCoreOwnerRegistry,
+  filterInstancesForVisibleCoreOwners,
+} from "../coreOwnerRegistry.js";
 import { DeviceStore } from "./deviceStore.js";
 import { PairingBroker } from "./pairingBroker.js";
 import { MdnsAdvertiser, listLanIpv4UrlsForPort } from "./mdnsAdvertiser.js";
@@ -1640,19 +1643,32 @@ export class BrowserGatewayHelper {
   ): Promise<void> {
     const { registered: registeredInstances, healthy: healthyInstances } =
       await listCheckedBrowserGatewayInstances();
+    const coreOwners = this.coreOwnerRegistry.list(Date.now());
+    const visibleRegisteredInstances = filterInstancesForVisibleCoreOwners(
+      registeredInstances,
+      coreOwners,
+    );
+    const visibleInstanceIds = new Set(
+      visibleRegisteredInstances.map((instance) => instance.instanceId),
+    );
+    const visibleHealthyInstances = healthyInstances.filter((instance) =>
+      visibleInstanceIds.has(instance.instanceId),
+    );
     const requestedInstanceId = requestUrl.searchParams
       .get("instanceId")
       ?.trim();
     const selectedInstance = this.selectInstance(
-      healthyInstances,
+      visibleHealthyInstances,
       requestedInstanceId,
     );
-    const enrichedInstances =
-      await this.buildInstanceListItems(registeredInstances);
-    const dataPlaneMode =
-      this.resolveEffectiveDataPlaneModeFromInstances(registeredInstances);
+    const enrichedInstances = await this.buildInstanceListItems(
+      visibleRegisteredInstances,
+    );
+    const dataPlaneMode = this.resolveEffectiveDataPlaneModeFromInstances(
+      visibleRegisteredInstances,
+    );
     logHelper(
-      `/api/instances requestedInstanceId=${requestedInstanceId || "none"} selected=${selectedInstance?.instanceId ?? "none"} registered=${registeredInstances.length} healthy=${healthyInstances.length} registeredIds=${registeredInstances.map((instance) => instance.instanceId).join(",") || "none"}`,
+      `/api/instances requestedInstanceId=${requestedInstanceId || "none"} selected=${selectedInstance?.instanceId ?? "none"} registered=${registeredInstances.length} visible=${visibleRegisteredInstances.length} healthy=${healthyInstances.length} registeredIds=${registeredInstances.map((instance) => instance.instanceId).join(",") || "none"}`,
     );
 
     this.writeInstancesJson(

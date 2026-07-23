@@ -1083,12 +1083,18 @@ describe("AgentSessionManager host injection", () => {
     expect(parentContext.mcpHub).toBe(hub);
     expect(childContext.mcpHub).toBe(hub);
 
+    const currentLease = parentContext.acquireCurrentMcpHub();
+    expect(acquire).toHaveBeenCalledTimes(2);
+    expect(acquire).toHaveBeenLastCalledWith(session.projectScope);
+    expect(currentLease.hub).toBe(hub);
+    currentLease.release();
+
     (mgr as any).releaseSessionToolContext(session.id, childContext);
     (mgr as any).releaseSessionToolContext(session.id, parentContext);
     (mgr as any).releaseSessionToolContext(session.id, parentContext);
 
     expect(releaseChild).toHaveBeenCalledOnce();
-    expect(releaseParent).toHaveBeenCalledOnce();
+    expect(releaseParent).toHaveBeenCalledTimes(2);
   });
 
   it("reports strict web policy failures without storing the rejected turn", async () => {

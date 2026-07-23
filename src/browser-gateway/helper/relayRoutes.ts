@@ -679,7 +679,7 @@ export class BrowserGatewayRelayRoutes {
       helperGenerationId: this.options.helperGenerationId,
       emittedAt: this.now(),
       owners: this.options.ownerRegistry
-        .list(this.now())
+        .listVisible(this.now())
         .map((registration) => {
           const scope = registration.owner.scope;
           return {

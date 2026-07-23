@@ -6249,6 +6249,151 @@ describe("BrowserGatewayHelper proxy routing", () => {
     await fs.rm(extensionRootPath, { recursive: true, force: true });
   });
 
+  it("hides a disconnected owner instance after same-workspace rollover", async () => {
+    const upstream = http.createServer((req, res) => {
+      if (req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ok" }));
+        return;
+      }
+      if (req.url === "/api/instance-status") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ kind: "idle", label: "Idle" }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    servers.push(upstream);
+    const upstreamPort = await waitForListening(upstream, 0);
+
+    const registryDir = path.join(os.homedir(), ".agentlink");
+    await fs.mkdir(registryDir, { recursive: true });
+    const startedAt = new Date().toISOString();
+    const instanceRecord = (instanceId: string, workspacePath: string) => ({
+      instanceId,
+      workspaceName: path.basename(workspacePath),
+      workspacePath,
+      pid: process.pid,
+      port: upstreamPort,
+      url: `http://127.0.0.1:${upstreamPort}`,
+      protocolVersion: 1,
+      startedAt,
+      authToken: `${instanceId}-token`,
+    });
+    await fs.writeFile(
+      path.join(registryDir, "browser-gateways.json"),
+      JSON.stringify([
+        instanceRecord("instance-old", "/workspace/repo"),
+        instanceRecord("instance-new", "/workspace/repo"),
+        instanceRecord("instance-legacy", "/workspace/legacy"),
+      ]),
+      "utf-8",
+    );
+
+    const extensionRootPath = await makeExtensionRoot();
+    const helperPort = await getAvailablePort();
+    const helperServer = http.createServer();
+    servers.push(helperServer);
+    helper = await createIsolatedHelper(
+      {
+        port: helperPort,
+        helperVersion: "test-version",
+        idleShutdownMs: 120_000,
+        extensionRootPath,
+      },
+      helperServer,
+    );
+    helperServer.on("request", helper.handleRequest);
+    await helper.start();
+
+    const helperBase = `http://127.0.0.1:${helperPort}`;
+    const root = await fetch(`${helperBase}/`);
+    expect(root.ok).toBe(true);
+    const cookie = String(root.headers.get("set-cookie")?.split(";")[0] ?? "");
+    const internalHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${helper.getClientSharedSecret()}`,
+    };
+    const registerOwner = async (
+      ownerId: string,
+      ownerGenerationId: string,
+      instanceId: string,
+    ) =>
+      fetch(`${helperBase}/internal/core-owners/register`, {
+        method: "POST",
+        headers: internalHeaders,
+        body: JSON.stringify({
+          ownerId,
+          ownerKind: "vscode",
+          displayName: "VS Code — Repo",
+          scope: {
+            kind: "workspace",
+            workspaceId: "workspace-repo",
+            displayName: "Repo",
+          },
+          ownerGenerationId,
+          instanceId,
+          processId: process.pid,
+        }),
+      });
+
+    const oldOwner = await registerOwner(
+      "owner-old",
+      "generation-old",
+      "instance-old",
+    );
+    expect(oldOwner.ok).toBe(true);
+    const releaseOld = await fetch(`${helperBase}/internal/client/release`, {
+      method: "POST",
+      headers: internalHeaders,
+      body: JSON.stringify({
+        clientId: "client-old",
+        ownerId: "owner-old",
+        ownerGenerationId: "generation-old",
+      }),
+    });
+    expect(releaseOld.ok).toBe(true);
+    const newOwner = await registerOwner(
+      "owner-new",
+      "generation-new",
+      "instance-new",
+    );
+    expect(newOwner.ok).toBe(true);
+
+    const owners = await fetch(`${helperBase}/internal/core-owners`, {
+      headers: internalHeaders,
+    });
+    expect(owners.ok).toBe(true);
+    await expect(owners.json()).resolves.toMatchObject({
+      owners: expect.arrayContaining([
+        expect.objectContaining({
+          owner: expect.objectContaining({ instanceId: "instance-old" }),
+          status: "disconnected",
+        }),
+        expect.objectContaining({
+          owner: expect.objectContaining({ instanceId: "instance-new" }),
+          status: "connected",
+        }),
+      ]),
+    });
+
+    const instances = await fetch(
+      `${helperBase}/api/instances?instanceId=instance-new`,
+      { headers: { Cookie: cookie } },
+    );
+    expect(instances.ok).toBe(true);
+    const body = (await instances.json()) as {
+      currentInstanceId: string;
+      instances: Array<{ instanceId: string }>;
+    };
+    expect(body.currentInstanceId).toBe("instance-new");
+    expect(
+      body.instances.map((instance) => instance.instanceId).sort(),
+    ).toEqual(["instance-legacy", "instance-new"]);
+
+    await fs.rm(extensionRootPath, { recursive: true, force: true });
+  });
+
   it("proxies /api/ui-state and /events to selected instance", async () => {
     let resolveUpstreamEventClosed!: () => void;
     const upstreamEventClosed = new Promise<void>((resolve) => {

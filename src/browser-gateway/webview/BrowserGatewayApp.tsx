@@ -1308,14 +1308,34 @@ export function BrowserGatewayApp({
 
   useEffect(() => {
     if (!relayClientEnabled) return;
-    void fetchModes(selectedInstanceId);
-    void fetchModels(selectedInstanceId, isAskAgentSelected);
-    void fetchSlashCommands(selectedInstanceId, isAskAgentSelected);
-    if (!isAskAgentSelected) {
-      void fetchSessions(selectedInstanceId, false);
-      void fetchDebugInfo(selectedInstanceId);
-    }
-    void fetchInstances({ commitSelection: false });
+    const tabId = selectedTabId;
+    const generation = selectedTabGenerationRef.current;
+    void (async () => {
+      await fetchInstances();
+      if (
+        selectedTabIdRef.current !== tabId ||
+        selectedTabGenerationRef.current !== generation
+      ) {
+        return;
+      }
+      void fetchModes(selectedInstanceId, tabId, generation);
+      void fetchModels(
+        selectedInstanceId,
+        isAskAgentSelected,
+        tabId,
+        generation,
+      );
+      void fetchSlashCommands(
+        selectedInstanceId,
+        isAskAgentSelected,
+        tabId,
+        generation,
+      );
+      if (!isAskAgentSelected) {
+        void fetchSessions(selectedInstanceId, false, tabId, generation);
+        void fetchDebugInfo(selectedInstanceId);
+      }
+    })();
     const timer = window.setInterval(() => void fetchInstances(), 5_000);
     return () => window.clearInterval(timer);
   }, [relayClientEnabled, selectedTabId]);
@@ -1767,11 +1787,14 @@ export function BrowserGatewayApp({
         return currentSelectedTabId;
       }
       if (currentSelectedInstance) {
-        const liveReplacement = liveInstances.find(
-          (instance) =>
-            instance.workspacePath === currentSelectedInstance.workspacePath ||
-            instance.workspaceName === currentSelectedInstance.workspaceName,
-        );
+        const selectedWorkspacePath =
+          currentSelectedInstance.workspacePath.trim();
+        const liveReplacement = selectedWorkspacePath
+          ? liveInstances.find(
+              (instance) =>
+                instance.workspacePath.trim() === selectedWorkspacePath,
+            )
+          : undefined;
         if (liveReplacement) {
           return liveReplacement.instanceId;
         }
@@ -1829,8 +1852,18 @@ export function BrowserGatewayApp({
           disconnectedAt: undefined,
         }),
       );
+      const liveWorkspacePaths = new Set(
+        liveInstances
+          .map((instance) => instance.workspacePath.trim())
+          .filter(Boolean),
+      );
       const retainedDisconnectedInstances = instanceOptionsRef.current
-        .filter((instance) => !liveInstanceIds.has(instance.instanceId))
+        .filter(
+          (instance) =>
+            !liveInstanceIds.has(instance.instanceId) &&
+            (!instance.workspacePath.trim() ||
+              !liveWorkspacePaths.has(instance.workspacePath.trim())),
+        )
         .map((instance) => ({
           ...instance,
           status: instance.status ?? { kind: "idle", label: "Idle" },
@@ -1937,7 +1970,7 @@ export function BrowserGatewayApp({
         snapshot?.session.foreground?.project.projectId ??
         snapshot?.session.defaultProjectId;
       const response = await fetch(
-        buildApiPath(
+        buildApiPathForInstance(
           `/api/modes${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
           instanceId,
         ),
@@ -1948,20 +1981,34 @@ export function BrowserGatewayApp({
         },
       );
       if (!response.ok) {
-        setModeStatus(`Mode list unavailable (${response.status})`);
+        if (
+          selectedTabIdRef.current === tabId &&
+          selectedTabGenerationRef.current === generation
+        ) {
+          setModeStatus(`Mode list unavailable (${response.status})`);
+        }
         return;
       }
       const body = (await response.json()) as { modes?: ModeInfo[] };
       if (
-        Array.isArray(body.modes) &&
-        body.modes.length > 0 &&
-        selectedTabIdRef.current === tabId &&
-        selectedTabGenerationRef.current === generation
+        selectedTabIdRef.current !== tabId ||
+        selectedTabGenerationRef.current !== generation
       ) {
+        return;
+      }
+      setModeStatus((current) =>
+        current.startsWith("Mode list unavailable") ? "" : current,
+      );
+      if (Array.isArray(body.modes) && body.modes.length > 0) {
         setModes(body.modes);
       }
     } catch {
-      setModeStatus("Mode list unavailable");
+      if (
+        selectedTabIdRef.current === tabId &&
+        selectedTabGenerationRef.current === generation
+      ) {
+        setModeStatus("Mode list unavailable");
+      }
     }
   }
 
@@ -1984,7 +2031,12 @@ export function BrowserGatewayApp({
         },
       );
       if (!response.ok) {
-        setModeStatus(`Model list unavailable (${response.status})`);
+        if (
+          selectedTabIdRef.current === tabId &&
+          selectedTabGenerationRef.current === generation
+        ) {
+          setModeStatus(`Model list unavailable (${response.status})`);
+        }
         return;
       }
       const body = (await response.json()) as {
@@ -1999,6 +2051,9 @@ export function BrowserGatewayApp({
       ) {
         return;
       }
+      setModeStatus((current) =>
+        current.startsWith("Model list unavailable") ? "" : current,
+      );
       if (!askAgentSelected) {
         setAskAgentCapabilities([]);
         setAskAgentModelCatalog(null);
@@ -2019,7 +2074,12 @@ export function BrowserGatewayApp({
         }
       }
     } catch {
-      setModeStatus("Model list unavailable");
+      if (
+        selectedTabIdRef.current === tabId &&
+        selectedTabGenerationRef.current === generation
+      ) {
+        setModeStatus("Model list unavailable");
+      }
     }
   }
 

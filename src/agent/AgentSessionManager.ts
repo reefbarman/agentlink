@@ -1030,6 +1030,12 @@ export class AgentSessionManager {
         commandReviewTurnCircuit: createCommandReviewTurnCircuit(),
         retainedCommandReviewDenials: this.retainedCommandReviewDenials,
         ...(mcpHubLease ? { mcpHub: mcpHubLease.hub, mcpHubLease } : {}),
+        ...(this.projectMcpHubRegistry
+          ? {
+              acquireCurrentMcpHub: () =>
+                this.projectMcpHubRegistry!.acquire(session.projectScope),
+            }
+          : {}),
         onFileRead: (filePath: string) => session.trackFileRead(filePath),
         getAdvertisedSkills: () => session.getAdvertisedSkills(),
         getAdvertisedRules: () => session.getAdvertisedRules(),

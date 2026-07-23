@@ -1743,6 +1743,8 @@ export interface ToolDispatchContext {
   mcpHub?: McpClientHub;
   /** Owned stable MCP generation reference for this request. Internal lifecycle metadata. */
   mcpHubLease?: import("./ProjectMcpHubRegistry.js").ProjectMcpHubLease;
+  /** Acquires the current MCP generation for one deferred MCP operation. */
+  acquireCurrentMcpHub?: () => import("./ProjectMcpHubRegistry.js").ProjectMcpHubLease;
   /** Current agent mode slug (e.g. "architect", "code"). Used for mode-specific approval logic. */
   mode?: string;
   onModeSwitch?: (
@@ -3357,186 +3359,249 @@ export async function dispatchToolCall(
     }
 
     case "find_mcp_tools": {
-      const mcpToolDiscoveryProvider =
-        ctx.mcpToolDiscoveryProvider ??
-        (mcpHub ? createMcpToolDiscoveryProvider(mcpHub) : undefined);
-      if (!mcpToolDiscoveryProvider)
-        return errorResult("MCP hub not available");
-      return mcpDiscoveryResultToToolResult(
-        mcpToolDiscoveryProvider.discoverTools({
-          query: params.query !== undefined ? String(params.query) : undefined,
-          server:
-            params.server !== undefined ? String(params.server) : undefined,
-          includeSchemas:
-            params.includeSchemas === true || params.includeSchemas === "true",
-          schemaLimit:
-            typeof params.schemaLimit === "number"
-              ? params.schemaLimit
-              : params.schemaLimit !== undefined
-                ? Number(params.schemaLimit)
-                : undefined,
-          limit:
-            typeof params.limit === "number"
-              ? params.limit
-              : params.limit !== undefined
-                ? Number(params.limit)
-                : undefined,
-          skillAllowlist,
-        }),
-      );
+      const currentLease = ctx.mcpToolDiscoveryProvider
+        ? undefined
+        : ctx.acquireCurrentMcpHub?.();
+      try {
+        const currentHub = currentLease?.hub ?? mcpHub;
+        const mcpToolDiscoveryProvider =
+          ctx.mcpToolDiscoveryProvider ??
+          (currentHub ? createMcpToolDiscoveryProvider(currentHub) : undefined);
+        if (!mcpToolDiscoveryProvider)
+          return errorResult("MCP hub not available");
+        return mcpDiscoveryResultToToolResult(
+          mcpToolDiscoveryProvider.discoverTools({
+            query:
+              params.query !== undefined ? String(params.query) : undefined,
+            server:
+              params.server !== undefined ? String(params.server) : undefined,
+            includeSchemas:
+              params.includeSchemas === true ||
+              params.includeSchemas === "true",
+            schemaLimit:
+              typeof params.schemaLimit === "number"
+                ? params.schemaLimit
+                : params.schemaLimit !== undefined
+                  ? Number(params.schemaLimit)
+                  : undefined,
+            limit:
+              typeof params.limit === "number"
+                ? params.limit
+                : params.limit !== undefined
+                  ? Number(params.limit)
+                  : undefined,
+            skillAllowlist,
+          }),
+        );
+      } finally {
+        currentLease?.release();
+      }
     }
 
     case "call_mcp_tool": {
+      const currentLease = ctx.mcpToolInvocationProvider
+        ? undefined
+        : ctx.acquireCurrentMcpHub?.();
+      const currentHub = currentLease?.hub ?? mcpHub;
       const mcpToolInvocationProvider =
         ctx.mcpToolInvocationProvider ??
-        (mcpHub ? createMcpToolInvocationProvider(mcpHub) : undefined);
-      if (!mcpToolInvocationProvider)
-        return errorResult("MCP hub not available");
-      const server = String(params.server ?? "").trim();
-      const tool = String(params.tool ?? "").trim();
-      if (!server || !tool) {
-        return errorResult("call_mcp_tool requires server and tool");
-      }
-      if (server.includes("__")) {
-        return errorResult(
-          "call_mcp_tool expects a server name without '__'; pass the bare tool name separately in tool",
-        );
-      }
-      const toolName = `${server}__${tool}`;
-      if (!skillAllowlistAllowsMcpTool(skillAllowlist, toolName)) {
-        return errorResult(
-          `MCP tool is not allowed by the active skill allowed-tools allowlist: ${toolName}`,
-        );
-      }
-      if (
-        !mcpToolInvocationProvider
-          .getToolDefs()
-          .some((toolDef) => toolDef.name === toolName)
-      ) {
-        return errorResult(
-          `MCP tool not found: ${toolName}. Use find_mcp_tools to discover available tools.`,
-        );
-      }
-      const toolInput =
-        params.input &&
-        typeof params.input === "object" &&
-        !Array.isArray(params.input)
-          ? (params.input as Record<string, unknown>)
-          : {};
-      if (!ctx.toolCallTracker) {
-        return dispatchToolCall(toolName, toolInput, ctx);
-      }
-
-      const nestedToolCallId = `${ctx.trackerCtx?.toolCallId ?? `mcp-${randomUUID()}`}:${toolName}`;
-      const controller = new AbortController();
-      const abortNestedCall = () => controller.abort();
-      if (ctx.toolAbortSignal?.aborted) {
-        controller.abort();
-      } else {
-        ctx.toolAbortSignal?.addEventListener("abort", abortNestedCall, {
-          once: true,
-        });
-      }
-      let forceResolve!: (result: ToolResult) => void;
-      const forcePromise = new Promise<ToolResult>((resolve) => {
-        forceResolve = resolve;
-      });
-      const nestedTrackerCtx = ctx.toolCallTracker.registerAgentCall(
-        nestedToolCallId,
-        toolName,
-        `${server}.${tool}`,
-        ctx.sessionId,
-        (result) => {
-          controller.abort();
-          forceResolve(result);
-        },
-        JSON.stringify(toolInput, null, 2),
-      );
-
+        (currentHub ? createMcpToolInvocationProvider(currentHub) : undefined);
       try {
-        return await Promise.race([
-          dispatchToolCall(toolName, toolInput, {
-            ...ctx,
-            trackerCtx: nestedTrackerCtx,
-            toolAbortSignal: controller.signal,
-          }),
-          forcePromise,
-        ]);
+        if (!mcpToolInvocationProvider)
+          return errorResult("MCP hub not available");
+        const server = String(params.server ?? "").trim();
+        const tool = String(params.tool ?? "").trim();
+        if (!server || !tool) {
+          return errorResult("call_mcp_tool requires server and tool");
+        }
+        if (server.includes("__")) {
+          return errorResult(
+            "call_mcp_tool expects a server name without '__'; pass the bare tool name separately in tool",
+          );
+        }
+        const toolName = `${server}__${tool}`;
+        if (!skillAllowlistAllowsMcpTool(skillAllowlist, toolName)) {
+          return errorResult(
+            `MCP tool is not allowed by the active skill allowed-tools allowlist: ${toolName}`,
+          );
+        }
+        if (
+          !mcpToolInvocationProvider
+            .getToolDefs()
+            .some((toolDef) => toolDef.name === toolName)
+        ) {
+          return errorResult(
+            `MCP tool not found: ${toolName}. Use find_mcp_tools to discover available tools.`,
+          );
+        }
+        const toolInput =
+          params.input &&
+          typeof params.input === "object" &&
+          !Array.isArray(params.input)
+            ? (params.input as Record<string, unknown>)
+            : {};
+        const invocationContext = {
+          ...ctx,
+          mcpHub: currentHub,
+          mcpToolInvocationProvider,
+        };
+        if (!ctx.toolCallTracker) {
+          return await dispatchToolCall(toolName, toolInput, invocationContext);
+        }
+
+        const nestedToolCallId = `${ctx.trackerCtx?.toolCallId ?? `mcp-${randomUUID()}`}:${toolName}`;
+        const controller = new AbortController();
+        const abortNestedCall = () => controller.abort();
+        if (ctx.toolAbortSignal?.aborted) {
+          controller.abort();
+        } else {
+          ctx.toolAbortSignal?.addEventListener("abort", abortNestedCall, {
+            once: true,
+          });
+        }
+        let forceResolve!: (result: ToolResult) => void;
+        const forcePromise = new Promise<ToolResult>((resolve) => {
+          forceResolve = resolve;
+        });
+        const nestedTrackerCtx = ctx.toolCallTracker.registerAgentCall(
+          nestedToolCallId,
+          toolName,
+          `${server}.${tool}`,
+          ctx.sessionId,
+          (result) => {
+            controller.abort();
+            forceResolve(result);
+          },
+          JSON.stringify(toolInput, null, 2),
+        );
+
+        try {
+          return await Promise.race([
+            dispatchToolCall(toolName, toolInput, {
+              ...invocationContext,
+              trackerCtx: nestedTrackerCtx,
+              toolAbortSignal: controller.signal,
+            }),
+            forcePromise,
+          ]);
+        } finally {
+          ctx.toolAbortSignal?.removeEventListener("abort", abortNestedCall);
+          controller.abort();
+          ctx.toolCallTracker.completeAgentCall(nestedToolCallId);
+        }
       } finally {
-        ctx.toolAbortSignal?.removeEventListener("abort", abortNestedCall);
-        controller.abort();
-        ctx.toolCallTracker.completeAgentCall(nestedToolCallId);
+        currentLease?.release();
       }
     }
 
     case "list_mcp_resources": {
-      const mcpResourcePromptProvider =
-        ctx.mcpResourcePromptProvider ??
-        (mcpHub ? createMcpResourcePromptProvider(mcpHub) : undefined);
-      if (!mcpResourcePromptProvider)
-        return errorResult("MCP hub not available");
-      const resources = mcpResourcePromptProvider
-        .listResources()
-        .filter((resource) =>
-          skillAllowlistAllowsMcpServer(skillAllowlist, resource.serverName),
-        );
-      return {
-        content: [{ type: "text", text: JSON.stringify(resources, null, 2) }],
-      };
+      const currentLease = ctx.mcpResourcePromptProvider
+        ? undefined
+        : ctx.acquireCurrentMcpHub?.();
+      try {
+        const currentHub = currentLease?.hub ?? mcpHub;
+        const mcpResourcePromptProvider =
+          ctx.mcpResourcePromptProvider ??
+          (currentHub
+            ? createMcpResourcePromptProvider(currentHub)
+            : undefined);
+        if (!mcpResourcePromptProvider)
+          return errorResult("MCP hub not available");
+        const resources = mcpResourcePromptProvider
+          .listResources()
+          .filter((resource) =>
+            skillAllowlistAllowsMcpServer(skillAllowlist, resource.serverName),
+          );
+        return {
+          content: [{ type: "text", text: JSON.stringify(resources, null, 2) }],
+        };
+      } finally {
+        currentLease?.release();
+      }
     }
 
     case "read_mcp_resource": {
-      const mcpResourcePromptProvider =
-        ctx.mcpResourcePromptProvider ??
-        (mcpHub ? createMcpResourcePromptProvider(mcpHub) : undefined);
-      if (!mcpResourcePromptProvider)
-        return errorResult("MCP hub not available");
-      const server = String(params.server ?? "").trim();
-      if (!skillAllowlistAllowsMcpServer(skillAllowlist, server)) {
-        return errorResult(
-          `MCP server is not allowed by the active skill allowed-tools allowlist: ${server}`,
+      const currentLease = ctx.mcpResourcePromptProvider
+        ? undefined
+        : ctx.acquireCurrentMcpHub?.();
+      try {
+        const currentHub = currentLease?.hub ?? mcpHub;
+        const mcpResourcePromptProvider =
+          ctx.mcpResourcePromptProvider ??
+          (currentHub
+            ? createMcpResourcePromptProvider(currentHub)
+            : undefined);
+        if (!mcpResourcePromptProvider)
+          return errorResult("MCP hub not available");
+        const server = String(params.server ?? "").trim();
+        if (!skillAllowlistAllowsMcpServer(skillAllowlist, server)) {
+          return errorResult(
+            `MCP server is not allowed by the active skill allowed-tools allowlist: ${server}`,
+          );
+        }
+        return await mcpResourcePromptProvider.readResource(
+          server,
+          String(params.uri ?? ""),
         );
+      } finally {
+        currentLease?.release();
       }
-      return mcpResourcePromptProvider.readResource(
-        server,
-        String(params.uri ?? ""),
-      );
     }
 
     case "list_mcp_prompts": {
-      const mcpResourcePromptProvider =
-        ctx.mcpResourcePromptProvider ??
-        (mcpHub ? createMcpResourcePromptProvider(mcpHub) : undefined);
-      if (!mcpResourcePromptProvider)
-        return errorResult("MCP hub not available");
-      const prompts = mcpResourcePromptProvider
-        .listPrompts()
-        .filter((prompt) =>
-          skillAllowlistAllowsMcpServer(skillAllowlist, prompt.serverName),
-        );
-      return {
-        content: [{ type: "text", text: JSON.stringify(prompts, null, 2) }],
-      };
+      const currentLease = ctx.mcpResourcePromptProvider
+        ? undefined
+        : ctx.acquireCurrentMcpHub?.();
+      try {
+        const currentHub = currentLease?.hub ?? mcpHub;
+        const mcpResourcePromptProvider =
+          ctx.mcpResourcePromptProvider ??
+          (currentHub
+            ? createMcpResourcePromptProvider(currentHub)
+            : undefined);
+        if (!mcpResourcePromptProvider)
+          return errorResult("MCP hub not available");
+        const prompts = mcpResourcePromptProvider
+          .listPrompts()
+          .filter((prompt) =>
+            skillAllowlistAllowsMcpServer(skillAllowlist, prompt.serverName),
+          );
+        return {
+          content: [{ type: "text", text: JSON.stringify(prompts, null, 2) }],
+        };
+      } finally {
+        currentLease?.release();
+      }
     }
 
     case "get_mcp_prompt": {
-      const mcpResourcePromptProvider =
-        ctx.mcpResourcePromptProvider ??
-        (mcpHub ? createMcpResourcePromptProvider(mcpHub) : undefined);
-      if (!mcpResourcePromptProvider)
-        return errorResult("MCP hub not available");
-      const server = String(params.server ?? "").trim();
-      if (!skillAllowlistAllowsMcpServer(skillAllowlist, server)) {
-        return errorResult(
-          `MCP server is not allowed by the active skill allowed-tools allowlist: ${server}`,
+      const currentLease = ctx.mcpResourcePromptProvider
+        ? undefined
+        : ctx.acquireCurrentMcpHub?.();
+      try {
+        const currentHub = currentLease?.hub ?? mcpHub;
+        const mcpResourcePromptProvider =
+          ctx.mcpResourcePromptProvider ??
+          (currentHub
+            ? createMcpResourcePromptProvider(currentHub)
+            : undefined);
+        if (!mcpResourcePromptProvider)
+          return errorResult("MCP hub not available");
+        const server = String(params.server ?? "").trim();
+        if (!skillAllowlistAllowsMcpServer(skillAllowlist, server)) {
+          return errorResult(
+            `MCP server is not allowed by the active skill allowed-tools allowlist: ${server}`,
+          );
+        }
+        const args = params.arguments as Record<string, string> | undefined;
+        return await mcpResourcePromptProvider.getPrompt(
+          server,
+          String(params.name ?? ""),
+          args,
         );
+      } finally {
+        currentLease?.release();
       }
-      const args = params.arguments as Record<string, string> | undefined;
-      return mcpResourcePromptProvider.getPrompt(
-        server,
-        String(params.name ?? ""),
-        args,
-      );
     }
 
     case "ask_user": {

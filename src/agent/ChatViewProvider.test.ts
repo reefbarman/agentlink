@@ -962,6 +962,108 @@ describe("ChatViewProvider session state sync", () => {
     provider.dispose();
   });
 
+  it("ignores MCP status changes from a hub that is no longer current", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const scope = {
+      schemaVersion: 1 as const,
+      kind: "project" as const,
+      projectId: "project-a",
+      workspaceFolderUri: "file:///workspace/a",
+      displayName: "project-a",
+      rootPath: "/workspace/a",
+    };
+    const registry = provider.getProjectMcpHubRegistry();
+    (
+      registry as unknown as {
+        loadConfigs: () => Promise<[]>;
+      }
+    ).loadConfigs = async () => [];
+    const retiredGeneration = registry.ensure(scope);
+    const currentGeneration = await registry.reload(scope);
+    const handleMcpStatusChange = vi.spyOn(
+      provider as never,
+      "handleMcpStatusChange" as never,
+    );
+    const infos = [
+      {
+        name: "linear",
+        status: "error" as const,
+        toolCount: 0,
+        resourceCount: 0,
+        promptCount: 0,
+        tools: [],
+        error: "stdio channel closed",
+      },
+    ];
+
+    retiredGeneration.hub.onStatusChange?.(infos);
+    expect(handleMcpStatusChange).not.toHaveBeenCalled();
+
+    currentGeneration.hub.onStatusChange?.(infos);
+    expect(handleMcpStatusChange).toHaveBeenCalledOnce();
+    expect(handleMcpStatusChange).toHaveBeenCalledWith(infos, scope.projectId);
+
+    provider.dispose();
+  });
+
+  it("coalesces duplicate startup MCP refreshes and skips an active generation", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const scope = {
+      schemaVersion: 1 as const,
+      kind: "project" as const,
+      projectId: "project-a",
+      workspaceFolderUri: "file:///workspace/a",
+      displayName: "project-a",
+      rootPath: "/workspace/a",
+    };
+    const registry = provider.getProjectMcpHubRegistry();
+    registry.ensure(scope);
+    let resolveRefresh!: () => void;
+    const privateProvider = provider as unknown as {
+      refreshMcpConnections(
+        options?: { interactiveForNewServers?: boolean },
+        scope?: Parameters<typeof registry.ensure>[0],
+      ): Promise<void>;
+      ensureStartupMcpConnection(
+        scope: Parameters<typeof registry.ensure>[0],
+      ): Promise<void>;
+    };
+    const refreshMcpConnections = vi
+      .spyOn(privateProvider, "refreshMcpConnections")
+      .mockReturnValue(
+        new Promise<void>((resolve) => {
+          resolveRefresh = resolve;
+        }),
+      );
+    const ensureStartupMcpConnection =
+      privateProvider.ensureStartupMcpConnection.bind(provider);
+
+    const first = ensureStartupMcpConnection(scope);
+    const second = ensureStartupMcpConnection(scope);
+    expect(refreshMcpConnections).toHaveBeenCalledOnce();
+
+    resolveRefresh();
+    await Promise.all([first, second]);
+
+    vi.spyOn(registry, "getCurrent").mockReturnValue({
+      projectId: scope.projectId,
+      generation: 1,
+      hub: {} as never,
+    });
+    await ensureStartupMcpConnection(scope);
+    expect(refreshMcpConnections).toHaveBeenCalledOnce();
+
+    provider.dispose();
+  });
+
   it("publishes semantic browser theme changes and overlays live terminal settings", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(

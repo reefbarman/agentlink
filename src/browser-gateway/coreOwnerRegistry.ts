@@ -238,6 +238,10 @@ export class BrowserGatewayCoreOwnerRegistry<
     return [...this.owners.values()];
   }
 
+  listVisible(now?: number): CoreOwnerRegistrationDto<TCapabilityId>[] {
+    return filterVisibleCoreOwners(this.list(now));
+  }
+
   requireConnectedOwner(
     ownerId: string,
   ): CoreOwnerRegistrationDto<TCapabilityId> {
@@ -263,6 +267,53 @@ export class BrowserGatewayCoreOwnerRegistry<
     }
     return candidate;
   }
+}
+
+export function filterVisibleCoreOwners<TCapabilityId extends string = string>(
+  registrations: readonly CoreOwnerRegistrationDto<TCapabilityId>[],
+): CoreOwnerRegistrationDto<TCapabilityId>[] {
+  const connectedWorkspaceIds = new Set(
+    registrations.flatMap((registration) => {
+      const scope = registration.owner.scope;
+      return registration.status === "connected" &&
+        scope.kind === "workspace" &&
+        scope.workspaceId.trim()
+        ? [scope.workspaceId.trim()]
+        : [];
+    }),
+  );
+  return registrations.filter((registration) => {
+    const scope = registration.owner.scope;
+    return (
+      registration.status === "connected" ||
+      scope.kind !== "workspace" ||
+      !scope.workspaceId.trim() ||
+      !connectedWorkspaceIds.has(scope.workspaceId.trim())
+    );
+  });
+}
+
+export function filterInstancesForVisibleCoreOwners<
+  T extends { instanceId: string },
+>(
+  instances: readonly T[],
+  registrations: readonly CoreOwnerRegistrationDto[],
+): T[] {
+  const representedInstanceIds = new Set(
+    registrations.flatMap((registration) =>
+      registration.owner.instanceId ? [registration.owner.instanceId] : [],
+    ),
+  );
+  const visibleInstanceIds = new Set(
+    filterVisibleCoreOwners(registrations).flatMap((registration) =>
+      registration.owner.instanceId ? [registration.owner.instanceId] : [],
+    ),
+  );
+  return instances.filter(
+    (instance) =>
+      !representedInstanceIds.has(instance.instanceId) ||
+      visibleInstanceIds.has(instance.instanceId),
+  );
 }
 
 function sanitizeOwnerIdSegment(value: string): string {

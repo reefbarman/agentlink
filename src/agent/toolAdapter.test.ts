@@ -3707,6 +3707,87 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("uses the current MCP generation for deferred discovery and releases its lease", async () => {
+    const staleHub = {
+      getToolDefs: vi.fn().mockReturnValue([]),
+    };
+    const currentHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List current issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+    };
+    const release = vi.fn();
+    const acquireCurrentMcpHub = vi.fn(() => ({
+      projectId: "project",
+      generation: 2,
+      hub: currentHub as any,
+      retain: vi.fn(),
+      release,
+    }));
+
+    const result = await dispatchToolCall(
+      "find_mcp_tools",
+      { query: "issues" },
+      {
+        ...mockCtx,
+        mcpHub: staleHub as any,
+        acquireCurrentMcpHub,
+      },
+    );
+
+    const parsed = JSON.parse((result.content[0] as { text: string }).text);
+    expect(parsed.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      "linear__list_issues",
+    ]);
+    expect(staleHub.getToolDefs).not.toHaveBeenCalled();
+    expect(acquireCurrentMcpHub).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("holds the current MCP generation lease through async resource reads", async () => {
+    let resolveRead!: (result: ToolResult) => void;
+    const readResult = new Promise<ToolResult>((resolve) => {
+      resolveRead = resolve;
+    });
+    const currentHub = {
+      readResource: vi.fn(() => readResult),
+    };
+    const release = vi.fn();
+
+    const resultPromise = dispatchToolCall(
+      "read_mcp_resource",
+      { server: "linear", uri: "linear://issues" },
+      {
+        ...mockCtx,
+        mcpHub: { readResource: vi.fn() } as any,
+        acquireCurrentMcpHub: () => ({
+          projectId: "project",
+          generation: 2,
+          hub: currentHub as any,
+          retain: vi.fn(),
+          release,
+        }),
+      },
+    );
+
+    await Promise.resolve();
+    expect(currentHub.readResource).toHaveBeenCalledWith(
+      "linear",
+      "linear://issues",
+    );
+    expect(release).not.toHaveBeenCalled();
+
+    resolveRead({ content: [{ type: "text", text: "current resource" }] });
+    await expect(resultPromise).resolves.toEqual({
+      content: [{ type: "text", text: "current resource" }],
+    });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("filters MCP resources and prompts by active skill server allowlist", async () => {
     const mcpHub = {
       getAllResources: vi.fn().mockReturnValue([
@@ -4130,6 +4211,75 @@ describe("dispatchToolCall", () => {
     expect(mcpHub.getToolDefs).not.toHaveBeenCalled();
     expect(mcpHub.getServerConfig).not.toHaveBeenCalled();
     expect(mcpHub.callTool).not.toHaveBeenCalled();
+  });
+
+  it("holds one current MCP generation across call_mcp_tool lookup, approval, and execution", async () => {
+    let resolveApproval!: (choice: string) => void;
+    const onApprovalRequest = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveApproval = resolve;
+        }),
+    );
+    const staleHub = {
+      getToolDefs: vi.fn().mockReturnValue([]),
+      getServerConfig: vi.fn(),
+      callTool: vi.fn(),
+    };
+    const currentHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+    const release = vi.fn();
+    const acquireCurrentMcpHub = vi.fn(() => ({
+      projectId: "project",
+      generation: 2,
+      hub: currentHub as any,
+      retain: vi.fn(),
+      release,
+    }));
+
+    const resultPromise = dispatchToolCall(
+      "call_mcp_tool",
+      { server: "linear", tool: "list_issues", input: { query: "bug" } },
+      {
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+        } as any,
+        onApprovalRequest,
+        mcpHub: staleHub as any,
+        acquireCurrentMcpHub,
+      },
+    );
+
+    await vi.waitFor(() => expect(onApprovalRequest).toHaveBeenCalledOnce());
+    expect(currentHub.getToolDefs).toHaveBeenCalledOnce();
+    expect(currentHub.getServerConfig).toHaveBeenCalledWith("linear");
+    expect(currentHub.callTool).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+    expect(staleHub.getToolDefs).not.toHaveBeenCalled();
+
+    resolveApproval("allow-once");
+    await resultPromise;
+
+    expect(acquireCurrentMcpHub).toHaveBeenCalledOnce();
+    expect(currentHub.callTool).toHaveBeenCalledWith(
+      "linear__list_issues",
+      { query: "bug" },
+      { signal: undefined },
+    );
+    expect(staleHub.callTool).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("allows call_mcp_tool bare tool names containing the MCP separator", async () => {

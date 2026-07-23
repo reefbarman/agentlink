@@ -1,6 +1,9 @@
+import {
+  BrowserGatewayCoreOwnerRegistry,
+  filterInstancesForVisibleCoreOwners,
+} from "./coreOwnerRegistry.js";
 import { describe, expect, it } from "vitest";
 
-import { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import type { CoreSessionScopeDto } from "../core/sessionProtocol.js";
 
 const projectlessScope: CoreSessionScopeDto = {
@@ -254,6 +257,78 @@ describe("BrowserGatewayCoreOwnerRegistry", () => {
     expect(registry.get("workspace-owner")?.ownerGenerationId).toBe(
       "generation-three",
     );
+  });
+
+  it("hides retired workspace owners only when a connected replacement is visible", () => {
+    const registry = new BrowserGatewayCoreOwnerRegistry({
+      heartbeatTtlMs: 30_000,
+    });
+    registry.register({
+      ownerId: "workspace-old",
+      ownerKind: "vscode",
+      displayName: "Shared Name",
+      scope: workspaceScope,
+      ownerGenerationId: "generation-old",
+      instanceId: "instance-old",
+      now: 100,
+    });
+    registry.markDisconnected("workspace-old");
+
+    expect(
+      registry.listVisible().map((record) => record.owner.ownerId),
+    ).toEqual(["workspace-old"]);
+
+    registry.register({
+      ownerId: "workspace-new",
+      ownerKind: "vscode",
+      displayName: "Replacement",
+      scope: workspaceScope,
+      ownerGenerationId: "generation-new",
+      instanceId: "instance-new",
+      now: 200,
+    });
+    registry.register({
+      ownerId: "other-workspace",
+      ownerKind: "vscode",
+      displayName: "Shared Name",
+      scope: {
+        ...workspaceScope,
+        workspaceId: "workspace-2",
+        rootPathLabel: "/workspace/two",
+      },
+      ownerGenerationId: "generation-other",
+      instanceId: "instance-other",
+      now: 200,
+    });
+
+    expect(registry.list().map((record) => record.owner.ownerId)).toEqual([
+      "workspace-old",
+      "workspace-new",
+      "other-workspace",
+    ]);
+    expect(
+      registry.listVisible().map((record) => record.owner.ownerId),
+    ).toEqual(["workspace-new", "other-workspace"]);
+    expect(
+      filterInstancesForVisibleCoreOwners(
+        [
+          { instanceId: "instance-old" },
+          { instanceId: "instance-new" },
+          { instanceId: "instance-other" },
+          { instanceId: "legacy-unrepresented" },
+        ],
+        registry.list(),
+      ).map((instance) => instance.instanceId),
+    ).toEqual(["instance-new", "instance-other", "legacy-unrepresented"]);
+
+    registry.heartbeat({
+      ownerId: "workspace-old",
+      ownerGenerationId: "generation-old",
+      now: 300,
+    });
+    expect(
+      registry.listVisible().map((record) => record.owner.ownerId),
+    ).toEqual(["workspace-old", "workspace-new", "other-workspace"]);
   });
 
   it("explicitly marks owners disconnected or errored", () => {

@@ -770,6 +770,212 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(source.url).not.toBe("/api/ask-agent/events");
   });
 
+  it("rolls a relay selection to a live workspace replacement without stale model errors or EventSource churn", async () => {
+    vi.useFakeTimers();
+    const legacyFetch = globalThis.fetch;
+    let instanceGeneration: "old" | "new" = "old";
+    let resolveOldModels!: (response: Response) => void;
+    const oldModelsResponse = new Promise<Response>((resolve) => {
+      resolveOldModels = resolve;
+    });
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/instances")) {
+          const suffix = instanceGeneration === "old" ? "old" : "new";
+          return jsonResponse({
+            currentInstanceId: `workspace-${suffix}`,
+            instances: [
+              {
+                instanceId: `workspace-${suffix}`,
+                workspaceName: "Workspace",
+                workspacePath: "/workspace",
+                url: "http://127.0.0.1:3333",
+                status: { kind: "idle", label: "Idle" },
+              },
+            ],
+          });
+        }
+        if (url.includes("/api/relay/subscription")) {
+          const request = JSON.parse(String(init?.body)) as {
+            browserConnectionId: string;
+            ownerId: string;
+            ownerGenerationId: string;
+          };
+          return jsonResponse(
+            {
+              ok: true,
+              protocolVersion: "1",
+              helperGenerationId: "helper-1",
+              browserConnectionId: request.browserConnectionId,
+              subscriptionId: `subscription-${request.ownerId}`,
+              ownerId: request.ownerId,
+              ownerGenerationId: request.ownerGenerationId,
+            },
+            202,
+          );
+        }
+        if (
+          url.includes("/api/models") &&
+          url.includes("instanceId=workspace-old")
+        ) {
+          return oldModelsResponse;
+        }
+        if (
+          url.includes("/api/models") &&
+          url.includes("instanceId=workspace-new")
+        ) {
+          return jsonResponse({
+            models: [
+              {
+                id: "gpt-5.6-sol",
+                displayName: "GPT-5.6 Sol",
+                provider: "codex",
+                contextWindow: 200000,
+                authenticated: true,
+              },
+            ],
+          });
+        }
+        return legacyFetch(input, init);
+      },
+    ) as unknown as typeof fetch;
+
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "workspace-old",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+          dataPlaneMode: "on",
+        }),
+      );
+
+      await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+      const source = MockEventSource.instances[0]!;
+      await act(async () => {
+        source.emit("hello", {
+          protocolVersion: "1",
+          helperGenerationId: "helper-1",
+          browserConnectionId: "connection-1",
+          csrfNonce: "nonce-1",
+          emittedAt: 1,
+        });
+        source.emit("catalog", {
+          protocolVersion: "1",
+          helperGenerationId: "helper-1",
+          emittedAt: 1,
+          owners: [
+            {
+              ownerId: BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+              ownerGenerationId: "ask-generation",
+              ownerKind: "browser-gateway",
+              displayName: "Ask Agent",
+              scope: {
+                kind: "projectless",
+                scopeId: "ask-agent",
+                displayName: "Ask Agent",
+              },
+              status: "connected",
+              capabilities: [],
+              lastHeartbeatAt: 1,
+            },
+            {
+              ownerId: "workspace-owner-old",
+              ownerGenerationId: "workspace-generation-old",
+              ownerKind: "vscode",
+              displayName: "Workspace",
+              instanceId: "workspace-old",
+              scope: {
+                kind: "workspace",
+                workspaceId: "workspace-1",
+                displayName: "Workspace",
+              },
+              status: "connected",
+              capabilities: [],
+              lastHeartbeatAt: 1,
+            },
+          ],
+        });
+      });
+      await selectWorkspaceTab();
+      await waitFor(() => {
+        expect(
+          vi
+            .mocked(globalThis.fetch)
+            .mock.calls.some(([url]) =>
+              String(url).includes("/api/models?instanceId=workspace-old"),
+            ),
+        ).toBe(true);
+      });
+
+      instanceGeneration = "new";
+      await act(async () => {
+        source.emit("catalog", {
+          protocolVersion: "1",
+          helperGenerationId: "helper-1",
+          emittedAt: 2,
+          owners: [
+            {
+              ownerId: BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+              ownerGenerationId: "ask-generation",
+              ownerKind: "browser-gateway",
+              displayName: "Ask Agent",
+              scope: {
+                kind: "projectless",
+                scopeId: "ask-agent",
+                displayName: "Ask Agent",
+              },
+              status: "connected",
+              capabilities: [],
+              lastHeartbeatAt: 2,
+            },
+            {
+              ownerId: "workspace-owner-new",
+              ownerGenerationId: "workspace-generation-new",
+              ownerKind: "vscode",
+              displayName: "Workspace",
+              instanceId: "workspace-new",
+              scope: {
+                kind: "workspace",
+                workspaceId: "workspace-1",
+                displayName: "Workspace",
+              },
+              status: "connected",
+              capabilities: [],
+              lastHeartbeatAt: 2,
+            },
+          ],
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      await waitFor(() => {
+        const tabs = screen.getAllByRole("tab", { name: /Workspace/ });
+        expect(tabs).toHaveLength(1);
+        expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
+        expect(tabs[0]?.textContent).not.toContain("Disconnected");
+      });
+      await waitFor(() => {
+        expect(
+          vi
+            .mocked(globalThis.fetch)
+            .mock.calls.some(([url]) =>
+              String(url).includes("/api/models?instanceId=workspace-new"),
+            ),
+        ).toBe(true);
+      });
+
+      await act(async () => resolveOldModels(jsonResponse({}, 404)));
+      expect(screen.queryByText(/Model list unavailable/)).toBeNull();
+      expect(MockEventSource.instances).toHaveLength(1);
+      expect(source.close).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("applies injected initial theme when no cached theme exists", () => {
     render(
       h(BrowserGatewayApp, {
@@ -3050,14 +3256,9 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
       await waitFor(() => {
         const tabs = screen.getAllByRole("tab", { name: /Workspace/ });
-        const liveTab = tabs.find(
-          (tab) => !tab.textContent?.includes("Disconnected"),
-        );
-        const disconnectedTab = tabs.find((tab) =>
-          tab.textContent?.includes("Disconnected"),
-        );
-        expect(liveTab?.getAttribute("aria-selected")).toBe("true");
-        expect(disconnectedTab?.getAttribute("aria-selected")).toBe("false");
+        expect(tabs).toHaveLength(1);
+        expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
+        expect(tabs[0]?.textContent).not.toContain("Disconnected");
       });
     } finally {
       vi.useRealTimers();

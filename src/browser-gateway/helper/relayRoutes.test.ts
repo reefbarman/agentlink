@@ -189,7 +189,7 @@ function makeFixture(
     onCommand: options.onCommand,
     onOperationStatus: options.onOperationStatus,
   });
-  return { routes, store, subscriberChanges, checkpointRequests };
+  return { routes, store, registry, subscriberChanges, checkpointRequests };
 }
 
 describe("BrowserGatewayRelayRoutes", () => {
@@ -227,6 +227,58 @@ describe("BrowserGatewayRelayRoutes", () => {
     );
     expect(first.writes.join("")).not.toContain("event: checkpoint");
     expect(second.writes.join("")).not.toContain("event: checkpoint");
+    fixture.routes.close();
+  });
+
+  it("omits a disconnected workspace owner when a live replacement is registered", async () => {
+    const fixture = makeFixture();
+    const oldOwnerId = "workspace-old";
+    fixture.registry.register({
+      ownerId: oldOwnerId,
+      ownerKind: "vscode",
+      displayName: "Old Workspace",
+      scope: {
+        kind: "workspace",
+        workspaceId: "workspace-1",
+        displayName: "Workspace",
+      },
+      ownerGenerationId: "generation-old",
+      instanceId: "instance-old",
+      now: 1_000,
+    });
+    fixture.registry.markDisconnected(oldOwnerId);
+    fixture.registry.register({
+      ownerId: "workspace-new",
+      ownerKind: "vscode",
+      displayName: "New Workspace",
+      scope: {
+        kind: "workspace",
+        workspaceId: "workspace-1",
+        displayName: "Workspace",
+      },
+      ownerGenerationId: "generation-new",
+      instanceId: "instance-new",
+      now: 1_100,
+    });
+    const response = new ResponseFixture();
+
+    await fixture.routes.handle(
+      "events",
+      { sessionKey: "device:1", deviceId: "device-1" },
+      request({ method: "GET", url: "/api/relay/events" }),
+      response.asServerResponse(),
+      new URL("http://127.0.0.1:47200/api/relay/events"),
+    );
+
+    const catalog = parseSseEvent(response.writes.join(""), "catalog") as {
+      owners: Array<{ ownerId: string }>;
+    };
+    expect(catalog.owners.map((owner) => owner.ownerId)).toContain(
+      "workspace-new",
+    );
+    expect(catalog.owners.map((owner) => owner.ownerId)).not.toContain(
+      oldOwnerId,
+    );
     fixture.routes.close();
   });
 

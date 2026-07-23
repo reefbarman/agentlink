@@ -287,6 +287,7 @@ textarea {
 
 .browser-instance-tabs {
   display: flex;
+  flex-shrink: 0;
   flex-wrap: wrap;
   align-items: flex-end;
   min-height: 35px;

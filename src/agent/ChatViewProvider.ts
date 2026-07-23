@@ -1152,6 +1152,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   >();
   private lastMcpPromptSignatures = new Map<string, string>();
   private mcpConfigVersions = new Map<string, number>();
+  private startupMcpRefreshes = new Map<string, Promise<void>>();
   private askAgentMcpConfigVersion = 0;
   private readonly uiEventHub: InMemoryAgentUiEventHub;
   private readonly uiPublisher: AgentUiPublisher;
@@ -1250,8 +1251,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         hub.onElicitation = handleMcpElicitation;
         hub.onUrlElicitation = handleMcpUrlElicitation;
         hub.onUrlElicitationComplete = handleMcpUrlElicitationComplete;
-        hub.onStatusChange = (infos) =>
+        hub.onStatusChange = (infos) => {
+          if (this.projectMcpHubRegistry.getCurrent(scope)?.hub !== hub) return;
           this.handleMcpStatusChange(infos, scope.projectId);
+        };
         hub.onLog = (message) =>
           this.log(`[mcp:${scope.projectId}] ${message}`);
       },
@@ -1805,7 +1808,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     await Promise.all(
       Array.from(projectScopes.values()).map((scope) =>
-        this.refreshMcpConnections(undefined, scope),
+        this.ensureStartupMcpConnection(scope),
       ),
     );
     await this.refreshAskAgentMcpConnections();
@@ -1961,6 +1964,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } catch (err) {
       this.log(`[mcp:${scope.projectId}] connection error: ${err}`);
     }
+  }
+
+  private ensureStartupMcpConnection(
+    scope: SessionProjectScope,
+  ): Promise<void> {
+    const current = this.projectMcpHubRegistry.getCurrent(scope);
+    if (current && current.generation > 0) return Promise.resolve();
+    const existing = this.startupMcpRefreshes.get(scope.projectId);
+    if (existing) return existing;
+    const refresh = this.refreshMcpConnections(undefined, scope).finally(() => {
+      if (this.startupMcpRefreshes.get(scope.projectId) === refresh) {
+        this.startupMcpRefreshes.delete(scope.projectId);
+      }
+    });
+    this.startupMcpRefreshes.set(scope.projectId, refresh);
+    return refresh;
   }
 
   private async refreshAllWorkspaceMcpConnections(options?: {
@@ -5200,7 +5219,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const scope = createSessionProjectScope(project);
         this.projectMcpHubRegistry.ensure(scope);
         this.setupFileWatchers(scope, true);
-        void this.refreshMcpConnections(undefined, scope);
+        void this.ensureStartupMcpConnection(scope);
       }
     }
     if (this.getCustomizationSelection()) {
