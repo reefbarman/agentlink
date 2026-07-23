@@ -1,6 +1,8 @@
 import { createHash } from "crypto";
 
 export const SESSION_PROJECT_SCOPE_SCHEMA_VERSION = 1 as const;
+export const PROJECTLESS_SESSION_PROJECT_ID = "projectless";
+export const PROJECTLESS_SESSION_URI = "agentlink://projectless";
 
 export type WorkspaceProjectAvailability =
   | { status: "available" }
@@ -150,4 +152,25 @@ export function createSessionProjectScope(
     displayName: project.name,
     ...(project.rootPath === undefined ? {} : { rootPath: project.rootPath }),
   };
+}
+
+/** Non-persisted identity used by Ask sessions when no workspace folder is open. */
+export function createProjectlessSessionScope(): SessionProjectScope {
+  return {
+    schemaVersion: SESSION_PROJECT_SCOPE_SCHEMA_VERSION,
+    kind: "project",
+    projectId: PROJECTLESS_SESSION_PROJECT_ID,
+    workspaceFolderUri: PROJECTLESS_SESSION_URI,
+    displayName: "No folder",
+  };
+}
+
+export function isProjectlessSessionScope(
+  scope: Readonly<SessionProjectScope>,
+): boolean {
+  return (
+    scope.projectId === PROJECTLESS_SESSION_PROJECT_ID &&
+    scope.workspaceFolderUri === PROJECTLESS_SESSION_URI &&
+    scope.rootPath === undefined
+  );
 }

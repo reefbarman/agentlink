@@ -47,13 +47,14 @@ import { AgentSession } from "./AgentSession.js";
 import type { WorkspaceFolderInfo } from "./systemPrompt.js";
 import { AgentEngine } from "./AgentEngine.js";
 import type { AgentEvent } from "./types.js";
-import { resolveMode, type AgentMode } from "./modes.js";
+import { BUILT_IN_MODES, resolveMode, type AgentMode } from "./modes.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
 import type { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
-import type {
-  ContentBlock,
-  ImageBlock,
-  ReasoningEffort,
+import {
+  getProviderAuxiliaryModel,
+  type ContentBlock,
+  type ImageBlock,
+  type ReasoningEffort,
 } from "./providers/types.js";
 import type { Question } from "./webview/types.js";
 import {
@@ -111,8 +112,10 @@ import {
 } from "./AgentSessionManagerHost.js";
 import { FleetAdmissionError, FleetScheduler } from "./FleetScheduler.js";
 import {
+  createProjectlessSessionScope,
   createSessionProjectScope,
   createWorkspaceProjectId,
+  isProjectlessSessionScope,
   type ProjectScopeResolver,
   type SessionProjectResolution,
   type SessionProjectScope,
@@ -746,9 +749,9 @@ export class AgentSessionManager {
   private async createBoundSession(
     opts: Parameters<AgentSessionManagerHost["createSession"]>[0],
   ): Promise<AgentSession> {
-    const allModes = await this.projectCustomizationRegistry.getModes(
-      opts.projectScope,
-    );
+    const allModes = isProjectlessSessionScope(opts.projectScope)
+      ? BUILT_IN_MODES
+      : await this.projectCustomizationRegistry.getModes(opts.projectScope);
     const agentMode = opts.agentMode ?? resolveMode(opts.mode, allModes);
     const session = await this.host.createSession({ ...opts, agentMode });
     const existingScope = session.projectScope;
@@ -977,6 +980,7 @@ export class AgentSessionManager {
     overrides?: Partial<ToolDispatchContext>,
     inheritedContext?: Readonly<ToolDispatchContext>,
   ): Readonly<ToolDispatchContext> | undefined {
+    if (isProjectlessSessionScope(session.projectScope)) return undefined;
     const projectRoot = this.requireSessionExecution(session);
     const baseContext = inheritedContext ?? this.toolCtx;
     if (!baseContext) return undefined;
@@ -1057,7 +1061,12 @@ export class AgentSessionManager {
     context: Readonly<ToolDispatchContext> | undefined,
     runtime?: AgentToolRuntime,
   ): Readonly<ToolDispatchContext> | undefined {
-    if (!context) return undefined;
+    if (!context) {
+      if (isProjectlessSessionScope(session.projectScope)) {
+        engine.setToolRuntime(null);
+      }
+      return undefined;
+    }
     try {
       this.refreshMcpToolDisclosure(session, context);
       engine.setToolRuntime(runtime ?? this.host.createToolRuntime(context));
@@ -1179,20 +1188,6 @@ export class AgentSessionManager {
         settings,
         providerCapabilities: capabilities?.hostedWeb,
       });
-      const unavailableNativeRoute = [
-        policy.routes.search,
-        policy.routes.fetch,
-      ].find(
-        (route) =>
-          settings[
-            route.kind === "search" ? "searchBackend" : "fetchBackend"
-          ] === "native" && !route.available,
-      );
-      if (unavailableNativeRoute) {
-        throw new Error(
-          `Native web ${unavailableNativeRoute.kind} is unavailable (${unavailableNativeRoute.reason}).`,
-        );
-      }
 
       const serverNames = new Set(
         mcpTools
@@ -1735,7 +1730,9 @@ export class AgentSessionManager {
     turnIndex: number,
     opts?: { refreshExisting?: boolean },
   ): Promise<Checkpoint | null> {
-    if (turnIndex <= 0) return null;
+    if (turnIndex <= 0 || isProjectlessSessionScope(session.projectScope)) {
+      return null;
+    }
 
     const primaryProjectId = session.projectScope.projectId;
     const projectIds = new Set(
@@ -1937,7 +1934,9 @@ export class AgentSessionManager {
   private applyThresholdToSession(session: AgentSession): void {
     session.autoCondenseThreshold = this.getCondenseThresholdForModel(
       session.model,
-      session.projectScope,
+      isProjectlessSessionScope(session.projectScope)
+        ? undefined
+        : session.projectScope,
     );
   }
 
@@ -2033,19 +2032,28 @@ export class AgentSessionManager {
     mode: string,
     opts?: { activeFilePath?: string; projectId?: string },
   ): Promise<AgentSession> {
-    const projectScope = this.selectProjectScope({
-      explicitProjectId: opts?.projectId,
-      activeFilePath: opts?.activeFilePath,
-    });
-    const model = this.getModelForMode(mode, projectScope);
-    const config = this.buildConfigForModel(model, projectScope);
+    const projectScope =
+      mode === "ask" &&
+      !this.executionUnavailableReason &&
+      this.projectCatalog.listProjects().length === 0
+        ? createProjectlessSessionScope()
+        : this.selectProjectScope({
+            explicitProjectId: opts?.projectId,
+            activeFilePath: opts?.activeFilePath,
+          });
+    const settingsScope = isProjectlessSessionScope(projectScope)
+      ? undefined
+      : projectScope;
+    const model = this.getModelForMode(mode, settingsScope);
+    const config = this.buildConfigForModel(model, settingsScope);
     const providerId = this.host.providers.tryResolveProvider(config.model)?.id;
     this.updateConfig({
       model,
       autoCondenseThreshold: config.autoCondenseThreshold,
     });
-    const projectMcpGeneration =
-      this.projectMcpHubRegistry?.getCurrent(projectScope);
+    const projectMcpGeneration = isProjectlessSessionScope(projectScope)
+      ? undefined
+      : this.projectMcpHubRegistry?.getCurrent(projectScope);
     const session = await this.createBoundSession({
       mode,
       config,
@@ -2057,16 +2065,22 @@ export class AgentSessionManager {
         ? pathToFileURL(opts.activeFilePath).toString()
         : undefined,
       providerId,
-      mcpToolDisclosure: this.buildMcpToolDisclosure(
-        projectMcpGeneration ? { mcpHub: projectMcpGeneration.hub } : undefined,
-      ),
+      mcpToolDisclosure: isProjectlessSessionScope(projectScope)
+        ? undefined
+        : this.buildMcpToolDisclosure(
+            projectMcpGeneration
+              ? { mcpHub: projectMcpGeneration.hub }
+              : undefined,
+          ),
     });
     this.applyReasoningEffortToSession(
       session,
-      this.getReasoningEffortForMode(mode, projectScope),
+      this.getReasoningEffortForMode(mode, settingsScope),
     );
     this.sessions.set(session.id, session);
-    this.getCheckpointManagerForSession(session);
+    if (!isProjectlessSessionScope(projectScope)) {
+      this.getCheckpointManagerForSession(session);
+    }
     const pendingApprovalMode = this.sessionApprovalModes.get("agent");
     if (pendingApprovalMode) {
       this.sessionApprovalModes.set(session.id, pendingApprovalMode);
@@ -2100,14 +2114,15 @@ export class AgentSessionManager {
    */
   async setModel(model: string): Promise<string> {
     const fg = this.getForegroundSession();
-    if (fg) this.requireSessionExecution(fg);
+    const projectless = fg ? isProjectlessSessionScope(fg.projectScope) : false;
+    if (fg && !projectless) this.requireSessionExecution(fg);
     const requestedModel = model;
     model = this.resolveAvailableModelId(model);
     this.updateConfig({
       model,
       autoCondenseThreshold: this.getCondenseThresholdForModel(
         model,
-        fg?.projectScope,
+        projectless ? undefined : fg?.projectScope,
       ),
     });
     if (!fg) return model;
@@ -2117,10 +2132,12 @@ export class AgentSessionManager {
     const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
     if (newProviderId !== fg.providerId) {
       fg.providerId = newProviderId;
-      await fg.rebuildSystemPrompt({
-        devMode: this.devMode,
-        workspaceFolders: this.getWorkspaceFolders(),
-      });
+      if (!projectless) {
+        await fg.rebuildSystemPrompt({
+          devMode: this.devMode,
+          workspaceFolders: this.getWorkspaceFolders(),
+        });
+      }
     }
     await this.maybeAutoCondenseForegroundSession();
     if (requestedModel !== model) {
@@ -2850,7 +2867,9 @@ export class AgentSessionManager {
     }
 
     return this.withSessionSendQueue(session.id, async () => {
-      this.requireSessionExecution(session);
+      if (!isProjectlessSessionScope(session.projectScope)) {
+        this.requireSessionExecution(session);
+      }
       const previousRunSettled = this.sessionRunSettled.get(session.id);
       if (previousRunSettled) {
         await previousRunSettled;
@@ -3413,7 +3432,9 @@ export class AgentSessionManager {
   async retrySession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-    this.requireSessionExecution(session);
+    if (!isProjectlessSessionScope(session.projectScope)) {
+      this.requireSessionExecution(session);
+    }
 
     // Force re-creation of the engine so it picks up refreshed credentials
     this.engine = null;
@@ -3673,7 +3694,9 @@ export class AgentSessionManager {
     session: AgentSession,
     isAutomatic: boolean,
   ): Promise<void> {
-    this.requireSessionExecution(session);
+    if (!isProjectlessSessionScope(session.projectScope)) {
+      this.requireSessionExecution(session);
+    }
     const engine = this.getEngine();
     const requestToolContext = this.bindEngineToSession(engine, session);
     const preservedContext = this.buildPreservedContext(
@@ -5855,7 +5878,7 @@ export class AgentSessionManager {
         const modelCandidates =
           provider.id === "codex"
             ? [...CODEX_CONDENSE_MODEL_FALLBACKS]
-            : [provider.condenseModel];
+            : [getProviderAuxiliaryModel(provider, session.model)];
         const uniqueModels = [...new Set(modelCandidates)];
 
         for (let i = 0; i < uniqueModels.length; i++) {

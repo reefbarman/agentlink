@@ -26,13 +26,13 @@ import type {
   CoreModelToolResultBlock,
   CoreModelToolUseBlock,
 } from "../../core/modelRuntime.js";
-
-import type { CoreReasoningEffort } from "../../core/modelCatalog.js";
-import { toCoreModelImageMediaType } from "../../core/modelRuntime.js";
 import type {
   CoreWebAccessSettings,
   CoreWebToolKind,
 } from "../../core/webAccess.js";
+
+import type { CoreReasoningEffort } from "../../core/modelCatalog.js";
+import { toCoreModelImageMediaType } from "../../core/modelRuntime.js";
 
 export type ContentBlock = CoreModelContentBlock;
 export type TextBlock = CoreModelTextBlock;
@@ -66,6 +66,11 @@ export interface ModelProvider {
   readonly displayName: string;
   /** The preferred cheap/fast model to use for context condensing. */
   readonly condenseModel: string;
+  /**
+   * Resolve the helper model for an active model. Multi-model connection
+   * providers use this to keep auxiliary requests on the same connection.
+   */
+  getAuxiliaryModel?(activeModel: string): string;
 
   /** Async — checks stored credentials, may trigger refresh. */
   isAuthenticated(): Promise<boolean>;
@@ -134,5 +139,16 @@ export interface ModelInfo {
   id: string;
   displayName: string;
   provider: string;
+  providerDisplayName?: string;
+  supportsToolUse?: boolean;
+  supportsImages?: boolean;
   capabilities: ModelCapabilities;
+}
+
+/** Resolve a provider's helper model without breaking legacy providers. */
+export function getProviderAuxiliaryModel(
+  provider: ModelProvider,
+  activeModel: string,
+): string {
+  return provider.getAuxiliaryModel?.(activeModel) ?? provider.condenseModel;
 }

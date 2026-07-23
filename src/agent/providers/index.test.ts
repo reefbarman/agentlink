@@ -22,7 +22,7 @@ const CAPS: ModelCapabilities = {
 
 /** A minimal fake provider whose model set + routing floor can be mutated. */
 class FakeProvider implements ModelProvider {
-  readonly id = "fake";
+  readonly id: string = "fake";
   readonly displayName = "Fake";
   readonly condenseModel = "fake-a";
 
@@ -107,6 +107,42 @@ describe("ProviderRegistry.refreshIndex", () => {
       provider,
       migratedFrom: "fake-retired",
     });
+  });
+
+  it("rejects duplicate providers and models without mutating the valid registry", () => {
+    const registry = new ProviderRegistry();
+    const first = new FakeProvider();
+    registry.register(first);
+
+    const duplicateProvider = new FakeProvider();
+    expect(() => registry.register(duplicateProvider)).toThrow(
+      'Duplicate model provider "fake"',
+    );
+    expect(registry.resolveProvider("fake-a")).toBe(first);
+
+    const colliding = new FakeProvider();
+    Object.defineProperty(colliding, "id", { value: "other" });
+    expect(() => registry.register(colliding)).toThrow(
+      /Duplicate model "fake-a" registered by providers "fake" and "other"/,
+    );
+    expect(registry.listProviders()).toEqual([first]);
+    expect(registry.resolveProvider("fake-a")).toBe(first);
+  });
+
+  it("atomically reconciles provider additions and removals", () => {
+    const registry = new ProviderRegistry();
+    const first = new FakeProvider();
+    const second = new FakeProvider();
+    Object.defineProperty(second, "id", { value: "second" });
+    second.visible = ["second-a"];
+    second.routable = ["second-a"];
+    registry.register(first);
+
+    registry.reconcile([second]);
+
+    expect(registry.tryResolveProvider("fake-a")).toBeUndefined();
+    expect(registry.resolveProvider("second-a")).toBe(second);
+    expect(registry.getProvider("fake")).toBeUndefined();
   });
 
   it("rejects cyclic or cross-provider migration targets", () => {

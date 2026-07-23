@@ -71,6 +71,41 @@ function makeRegistry(providers: ModelProvider[]): ProviderRegistry {
 }
 
 describe("resolveBackgroundRoute", () => {
+  it("excludes chat-only models from automatic routing but allows an exact override", async () => {
+    const chatOnly = makeModel("chat-only", "custom");
+    chatOnly.capabilities = {
+      ...chatOnly.capabilities,
+      supportsToolUse: false,
+    };
+    const toolModel = makeModel("tool-model", "custom");
+    const registry = makeRegistry([
+      makeProvider("custom", [chatOnly, toolModel], true),
+    ]);
+
+    await expect(
+      resolveBackgroundRoute(
+        registry,
+        { task: "Automatic", message: "Route automatically" },
+        { mode: "code", model: "chat-only" },
+      ),
+    ).resolves.toMatchObject({ resolvedModel: "tool-model" });
+
+    await expect(
+      resolveBackgroundRoute(
+        registry,
+        {
+          task: "Explicit",
+          message: "Use exact model",
+          model: "chat-only",
+        },
+        { mode: "code", model: "tool-model" },
+      ),
+    ).resolves.toMatchObject({
+      resolvedModel: "chat-only",
+      routingReason: "explicit model override (chat-only)",
+    });
+  });
+
   it("defaults general task class to foreground model", async () => {
     const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
     const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);

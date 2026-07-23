@@ -208,11 +208,15 @@ export async function resolveBackgroundRoute(
   foreground: { mode: string; model: string },
 ): Promise<BackgroundRouteResolution> {
   const registeredModels = registry.listAllModels();
+  const requestedProvider = request.provider?.trim();
+  const requestedModel = request.model?.trim();
   if (registeredModels.length === 0) {
     throw new Error("No models are registered. Cannot spawn background agent.");
   }
   const allModels = registeredModels.filter(
-    (model) => !isForegroundOnlyModel(model.id),
+    (model) =>
+      !isForegroundOnlyModel(model.id) &&
+      (model.capabilities.supportsToolUse || model.id === requestedModel),
   );
   if (allModels.length === 0) {
     throw new Error(
@@ -247,9 +251,6 @@ export async function resolveBackgroundRoute(
       : {}),
     ...(rule.toolProfile ? { toolProfile: rule.toolProfile } : {}),
   };
-
-  const requestedProvider = request.provider?.trim();
-  const requestedModel = request.model?.trim();
 
   if (requestedModel) {
     const registeredModel = registeredModels.find(

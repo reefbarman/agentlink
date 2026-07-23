@@ -22,6 +22,7 @@ export {
   type MessageParam,
   type ToolDefinition,
   type JsonSchema,
+  getProviderAuxiliaryModel,
 } from "./types.js";
 
 export {
@@ -70,25 +71,64 @@ export class ProviderRegistry {
   }
 
   register(provider: ModelProvider): void {
-    this.providers.set(provider.id, provider);
-    this.rebuildIndex();
+    if (this.providers.has(provider.id)) {
+      throw new Error(`Duplicate model provider "${provider.id}"`);
+    }
+    this.reconcile([...this.providers.values(), provider]);
   }
 
-  private rebuildIndex(): void {
-    this.modelIndex.clear();
-    for (const provider of this.providers.values()) {
-      // Index picker-visible models...
-      for (const model of provider.listModels()) {
-        this.modelIndex.set(model.id, provider.id);
+  /**
+   * Atomically replace the complete provider set. The current registry remains
+   * intact when provider/model validation fails.
+   */
+  reconcile(providers: Iterable<ModelProvider>): void {
+    const candidateProviders = new Map<string, ModelProvider>();
+    for (const provider of providers) {
+      if (candidateProviders.has(provider.id)) {
+        throw new Error(`Duplicate model provider "${provider.id}"`);
       }
+      candidateProviders.set(provider.id, provider);
+    }
+    const candidateIndex = this.buildIndex(candidateProviders);
+    this.providers = candidateProviders;
+    this.modelIndex = candidateIndex;
+  }
+
+  getProvider(providerId: string): ModelProvider | undefined {
+    return this.providers.get(providerId);
+  }
+
+  listProviders(): ModelProvider[] {
+    return [...this.providers.values()];
+  }
+
+  private buildIndex(
+    providers: ReadonlyMap<string, ModelProvider>,
+  ): Map<string, string> {
+    const index = new Map<string, string>();
+    for (const provider of providers.values()) {
+      const addModel = (modelId: string): void => {
+        const existingProviderId = index.get(modelId);
+        if (existingProviderId) {
+          throw new Error(
+            `Duplicate model "${modelId}" registered by providers "${existingProviderId}" and "${provider.id}"`,
+          );
+        }
+        index.set(modelId, provider.id);
+      };
+      // Index picker-visible models...
+      for (const model of provider.listModels()) addModel(model.id);
       // ...plus any routing-floor IDs the provider keeps resolvable but hidden
       // from the picker (e.g. static Anthropic models omitted by models.list()).
       for (const id of provider.listRoutableModelIds?.() ?? []) {
-        if (!this.modelIndex.has(id)) {
-          this.modelIndex.set(id, provider.id);
-        }
+        if (!index.has(id)) addModel(id);
       }
     }
+    return index;
+  }
+
+  private rebuildIndex(): void {
+    this.modelIndex = this.buildIndex(this.providers);
   }
 
   /**

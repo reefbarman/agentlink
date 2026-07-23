@@ -3,6 +3,10 @@ import { normalizeBrowserGatewayModelCredentialProviderId } from "./browserGatew
 
 export type BrowserGatewayModelCredentialStatus =
   | {
+      state: "not_required";
+      providerId: string;
+    }
+  | {
       state: "missing";
       providerId?: string;
       reason: string;
@@ -33,6 +37,7 @@ export interface BrowserGatewayModelCredentialGrantRequest {
   method: CoreModelAuthMethod;
   bearerToken: string;
   grantedByOwnerId: string;
+  grantedByOwnerGenerationId: string;
   modelScopes: string[];
   helperGenerationId: string;
   ttlMs?: number;
@@ -47,6 +52,7 @@ export interface BrowserGatewayModelCredentialRecord {
   method: CoreModelAuthMethod;
   bearerToken: string;
   grantedByOwnerId: string;
+  grantedByOwnerGenerationId: string;
   modelScopes: string[];
   grantedAt: number;
   expiresAt?: number;
@@ -56,7 +62,7 @@ export interface BrowserGatewayModelCredentialRecord {
 }
 
 export class BrowserGatewayModelCredentialCache {
-  private readonly credentialsByProviderId = new Map<
+  private readonly credentialsByOwnerAndProvider = new Map<
     string,
     BrowserGatewayModelCredentialRecord
   >();
@@ -72,6 +78,8 @@ export class BrowserGatewayModelCredentialCache {
     );
     const bearerToken = request.bearerToken.trim();
     const grantedByOwnerId = request.grantedByOwnerId.trim();
+    const grantedByOwnerGenerationId =
+      request.grantedByOwnerGenerationId.trim();
     const modelScopes = request.modelScopes
       .map((scope) => scope.trim())
       .filter(Boolean);
@@ -79,6 +87,7 @@ export class BrowserGatewayModelCredentialCache {
       !providerId ||
       !bearerToken ||
       !grantedByOwnerId ||
+      !grantedByOwnerGenerationId ||
       !modelScopes.length
     ) {
       throw new Error("browser_gateway_model_credential_invalid_grant");
@@ -93,6 +102,7 @@ export class BrowserGatewayModelCredentialCache {
       method: request.method,
       bearerToken,
       grantedByOwnerId,
+      grantedByOwnerGenerationId,
       modelScopes,
       grantedAt: request.now,
       expiresAt: ttlMs === undefined ? undefined : request.now + ttlMs,
@@ -100,25 +110,53 @@ export class BrowserGatewayModelCredentialCache {
       accountLabel: request.accountLabel?.trim() || undefined,
       canRefresh: request.canRefresh === true,
     };
-    this.credentialsByProviderId.set(providerId, credential);
+    this.credentialsByOwnerAndProvider.set(
+      this.getCacheKey(grantedByOwnerId, providerId),
+      credential,
+    );
     return credential;
   }
 
-  clear(providerId?: string): BrowserGatewayModelCredentialRecord | null {
-    if (providerId) {
-      const normalizedProviderId =
-        normalizeBrowserGatewayModelCredentialProviderId(providerId);
-      const previous =
-        this.credentialsByProviderId.get(normalizedProviderId) ?? null;
-      this.credentialsByProviderId.delete(normalizedProviderId);
+  clear(params: {
+    grantedByOwnerId: string;
+    grantedByOwnerGenerationId: string;
+    providerId?: string;
+  }): BrowserGatewayModelCredentialRecord | null {
+    const grantedByOwnerId = params.grantedByOwnerId.trim();
+    const grantedByOwnerGenerationId = params.grantedByOwnerGenerationId.trim();
+    if (!grantedByOwnerId || !grantedByOwnerGenerationId) return null;
+
+    if (params.providerId) {
+      const providerId = normalizeBrowserGatewayModelCredentialProviderId(
+        params.providerId,
+      );
+      if (!providerId) return null;
+      const cacheKey = this.getCacheKey(grantedByOwnerId, providerId);
+      const previous = this.credentialsByOwnerAndProvider.get(cacheKey) ?? null;
+      if (previous?.grantedByOwnerGenerationId !== grantedByOwnerGenerationId) {
+        return null;
+      }
+      this.credentialsByOwnerAndProvider.delete(cacheKey);
       return previous;
     }
-    const previous = this.credentialsByProviderId.values().next().value ?? null;
-    this.credentialsByProviderId.clear();
-    return previous;
+
+    let firstRemoved: BrowserGatewayModelCredentialRecord | null = null;
+    for (const [cacheKey, credential] of this.credentialsByOwnerAndProvider) {
+      if (
+        credential.grantedByOwnerId !== grantedByOwnerId ||
+        credential.grantedByOwnerGenerationId !== grantedByOwnerGenerationId
+      ) {
+        continue;
+      }
+      firstRemoved ??= credential;
+      this.credentialsByOwnerAndProvider.delete(cacheKey);
+    }
+    return firstRemoved;
   }
 
   getCredential(params: {
+    grantedByOwnerId: string;
+    grantedByOwnerGenerationId: string;
     providerId: string;
     modelScope: string;
     now: number;
@@ -126,9 +164,20 @@ export class BrowserGatewayModelCredentialCache {
     const providerId = normalizeBrowserGatewayModelCredentialProviderId(
       params.providerId,
     );
-    if (!providerId) return null;
-    const credential = this.credentialsByProviderId.get(providerId);
-    if (!credential) return null;
+    const grantedByOwnerId = params.grantedByOwnerId.trim();
+    const grantedByOwnerGenerationId = params.grantedByOwnerGenerationId.trim();
+    if (!providerId || !grantedByOwnerId || !grantedByOwnerGenerationId) {
+      return null;
+    }
+    const credential = this.credentialsByOwnerAndProvider.get(
+      this.getCacheKey(grantedByOwnerId, providerId),
+    );
+    if (
+      !credential ||
+      credential.grantedByOwnerGenerationId !== grantedByOwnerGenerationId
+    ) {
+      return null;
+    }
     if (
       credential.expiresAt !== undefined &&
       params.now >= credential.expiresAt
@@ -140,6 +189,8 @@ export class BrowserGatewayModelCredentialCache {
   }
 
   getStatus(params: {
+    grantedByOwnerId: string;
+    grantedByOwnerGenerationId: string;
     providerId: string;
     modelScope: string;
     now: number;
@@ -147,10 +198,18 @@ export class BrowserGatewayModelCredentialCache {
     const providerId = normalizeBrowserGatewayModelCredentialProviderId(
       params.providerId,
     );
-    const credential = providerId
-      ? this.credentialsByProviderId.get(providerId)
-      : undefined;
-    if (!credential) {
+    const grantedByOwnerId = params.grantedByOwnerId.trim();
+    const grantedByOwnerGenerationId = params.grantedByOwnerGenerationId.trim();
+    const credential =
+      providerId && grantedByOwnerId && grantedByOwnerGenerationId
+        ? this.credentialsByOwnerAndProvider.get(
+            this.getCacheKey(grantedByOwnerId, providerId),
+          )
+        : undefined;
+    if (
+      !credential ||
+      credential.grantedByOwnerGenerationId !== grantedByOwnerGenerationId
+    ) {
       return {
         state: "missing",
         providerId: providerId || undefined,
@@ -191,5 +250,9 @@ export class BrowserGatewayModelCredentialCache {
       expiresAt: credential.expiresAt,
       accountLabel: credential.accountLabel,
     };
+  }
+
+  private getCacheKey(grantedByOwnerId: string, providerId: string): string {
+    return `${grantedByOwnerId.length}:${grantedByOwnerId}${providerId}`;
   }
 }

@@ -32,7 +32,7 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 
 - `webAccess.searchBackend`, `webAccess.fetchBackend` — expose native web_search/web_fetch and pick backend
 - `webAccess.nativeSearchMode` — external access mode for provider-native transports
-- `webAccess.allowedDomains` / `webAccess.blockedDomains` — mutually exclusive domain lists; fail closed if unenforceable
+- `webAccess.allowedDomains` / `webAccess.blockedDomains` — mutually exclusive domain lists; a native route is omitted for the turn if its provider cannot enforce them
 - `webAccess.maxSearchUsesPerTurn`, `webAccess.maxFetchUsesPerTurn`, `webAccess.maxFetchContentTokens`, `webAccess.maxReplayBytesPerTurn` — per-turn caps
 
 ## MCP
@@ -56,11 +56,13 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 
 - `semanticSearchEnabled`, `qdrantUrl`, `autoIndex`, `indexExclusions`, `chunkGranularity`
 
-## OpenAI-compatible helper endpoint
+## OpenAI-compatible connections and helper endpoint
 
-Used by question detection and background summaries (e.g. LM Studio):
-
-- `openaiCompatible.baseUrl`, `openaiCompatible.model`, `openaiCompatible.apiKey`, `openaiCompatible.timeoutMs`
+- Use **AgentLink: Configure OpenAI-compatible Model** for guided add-only setup. It can query OpenRouter or generic `/models` catalogs, uses editable conservative defaults when metadata is unavailable, and creates one model backed by one connection. Edit/remove entries and advanced multi-model/headers/auxiliary configuration remain in User Settings JSON.
+- `openaiCompatible.connections` — machine-scoped named Chat Completions-compatible connections with nested models. Connections own endpoint/auth/profile behavior; models own stable local IDs, opaque wire IDs, context/output limits, and declared tool/thinking/image capabilities.
+- The wizard can select or create a named SecretStorage credential; maintain credentials separately with **AgentLink: Set OpenAI-compatible API Key** and **AgentLink: Clear OpenAI-compatible API Key**. Settings hold only non-secret `authKey` names; values remain in VS Code SecretStorage.
+- Authenticated endpoints must use HTTPS or loopback HTTP unless `allowInsecureHttp` is explicitly enabled. AgentLink rejects redirects and unsafe static headers.
+- The legacy `openaiCompatible.baseUrl`, `.model`, `.apiKey`, and `.timeoutMs` settings remain separate, window-scoped helper configuration for question detection/background summaries (for example LM Studio). The plaintext `.apiKey` is not used by configured chat connections.
 - `questionDetection.mode` — heuristic vs LLM question detection (`questionDetection.llmEnabled`/`baseUrl`/`model`/`apiKey`/`timeoutMs` are deprecated aliases)
 
 ## Codex / OpenAI provider

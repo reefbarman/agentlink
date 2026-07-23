@@ -9,6 +9,7 @@ import { AgentSessionManager } from "./AgentSessionManager.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
 import type { PersistedSessionRecord } from "./persistenceContracts.js";
 import { ProviderRegistry } from "./providers/index.js";
+import { isProjectlessSessionScope } from "../core/workspaceProjects.js";
 
 const mocks = vi.hoisted(() => {
   const createSession = vi.fn(
@@ -115,6 +116,107 @@ describe("AgentSessionManager host injection", () => {
       get: () => undefined,
       inspect: () => undefined,
     });
+  });
+
+  it("creates only a tool-free Ask session when no workspace project exists", async () => {
+    const createCheckpointManager = vi.fn();
+    const loadCustomModes = vi.fn(async () => []);
+    const projectCustomizationRegistry = new ProjectCustomizationRegistry({
+      loadCustomModes,
+      loadSlashCommands: vi.fn(async () => []),
+    });
+    const projectCatalog = {
+      listProjects: () => [],
+      resolveProjectForResource: () => undefined,
+      resolvePersistedScope: (scope: never) => ({
+        status: "missing" as const,
+        scope,
+      }),
+    };
+    const engine = { setToolRuntime: vi.fn() };
+    const resolveModelForMode = vi.fn(
+      (mode: string, fallbackModel: string, scope?: unknown) =>
+        mode === "ask" && scope === undefined
+          ? "openrouter-moonshotai-kimi-k3"
+          : fallbackModel,
+    );
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: "openai-compatible:openrouter-main",
+      displayName: "OpenRouter",
+      condenseModel: "openrouter-moonshotai-kimi-k3",
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => ({
+        supportsThinking: false,
+        supportsCaching: false,
+        supportsImages: true,
+        supportsToolUse: true,
+        contextWindow: 32_768,
+        maxOutputTokens: 4_096,
+      })),
+      listModels: vi.fn(() => [
+        {
+          id: "openrouter-moonshotai-kimi-k3",
+          displayName: "Kimi K3",
+          provider: "openai-compatible:openrouter-main",
+          capabilities: {
+            supportsThinking: false,
+            supportsCaching: false,
+            supportsImages: true,
+            supportsToolUse: true,
+            contextWindow: 32_768,
+            maxOutputTokens: 4_096,
+          },
+        },
+      ]),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as any);
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        projectCatalog,
+        projectCustomizationRegistry,
+        host: {
+          providers,
+          config: {
+            resolveModelForMode,
+            getCondenseThresholdForModel: () => 0.9,
+            getBgSummaryMode: () => "heuristic",
+            getBackgroundAgentSettings: () => ({}),
+          },
+          createCheckpointManager,
+          createEngine: vi.fn(() => engine as never),
+        },
+      },
+    );
+
+    const session = await mgr.createSession("ask");
+
+    expect(isProjectlessSessionScope(session.projectScope)).toBe(true);
+    expect(session.agentMode.slug).toBe("ask");
+    expect(session.model).toBe("openrouter-moonshotai-kimi-k3");
+    expect(resolveModelForMode).toHaveBeenCalledWith(
+      "ask",
+      makeConfig().model,
+      undefined,
+    );
+    expect(loadCustomModes).not.toHaveBeenCalled();
+    expect(createCheckpointManager).not.toHaveBeenCalled();
+    expect((mgr as any).captureSessionToolContext(session)).toBeUndefined();
+    expect(
+      (mgr as any).bindCapturedEngineToSession(engine, session, undefined),
+    ).toBeUndefined();
+    expect(engine.setToolRuntime).toHaveBeenCalledWith(null);
+    await expect(mgr.createSession("code")).rejects.toThrow(
+      "Open an available workspace folder to start a session.",
+    );
   });
 
   it("resolves conflicting custom mode definitions from each session project", async () => {
@@ -1091,7 +1193,7 @@ describe("AgentSessionManager host injection", () => {
     expect(releaseParent).toHaveBeenCalledOnce();
   });
 
-  it("reports strict web policy failures without storing the rejected turn", async () => {
+  it("omits unsupported native web tools without rejecting the turn", async () => {
     const createCheckpoint = vi.fn(async () => null);
     const providers = new ProviderRegistry();
     providers.register({
@@ -1164,48 +1266,26 @@ describe("AgentSessionManager host injection", () => {
       extensionUri: {} as any,
     });
     const session = await mgr.createSession("code");
-    const onEvent = vi.fn();
-    mgr.onEvent = onEvent;
-    const saveSessionNow = vi.spyOn(mgr as any, "saveSessionNow");
+    const prepared = await (mgr as any).prepareTurnExecution(session);
 
-    await expect(
-      mgr.sendMessage(session.id, "must not be stored", session.mode),
-    ).rejects.toThrow("Native web search is unavailable (native_unsupported).");
-
-    expect(session.status).toBe("error");
-    expect(saveSessionNow).toHaveBeenCalledWith(session.id);
-    expect(onEvent.mock.calls.map(([, event]) => event.type)).toEqual([
-      "error",
-      "done",
-    ]);
-    expect(onEvent).toHaveBeenNthCalledWith(
-      1,
-      session.id,
-      expect.objectContaining({
-        type: "error",
-        error: expect.stringContaining(
-          "Native web search is unavailable (native_unsupported).",
-        ),
-      }),
-    );
-    expect(session.addUserMessage).not.toHaveBeenCalled();
-    expect(createCheckpoint).not.toHaveBeenCalled();
-
-    onEvent.mockClear();
-    saveSessionNow.mockClear();
-    session.status = "streaming";
-
-    await expect(mgr.retrySession(session.id)).rejects.toThrow(
-      "Native web search is unavailable (native_unsupported).",
-    );
-
-    expect(session.status).toBe("error");
-    expect(saveSessionNow).toHaveBeenCalledWith(session.id);
-    expect(onEvent.mock.calls.map(([, event]) => event.type)).toEqual([
-      "error",
-      "done",
-    ]);
-    expect(session.addUserMessage).not.toHaveBeenCalled();
+    expect(prepared.policy).toMatchObject({
+      backend: "disabled",
+      available: false,
+      routes: {
+        search: {
+          backend: "disabled",
+          available: false,
+          reason: "native_unsupported",
+        },
+        fetch: {
+          backend: "disabled",
+          available: false,
+          reason: "native_unsupported",
+        },
+      },
+      enabledKinds: [],
+    });
+    expect(prepared.context.nativeWebToolKinds).toEqual([]);
     expect(createCheckpoint).not.toHaveBeenCalled();
   });
 

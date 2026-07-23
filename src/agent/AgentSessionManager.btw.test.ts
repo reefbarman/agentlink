@@ -142,6 +142,7 @@ function textResponse(text: string): ProviderStreamEvent[] {
 
 describe("AgentSessionManager /btw side questions", () => {
   beforeEach(() => {
+    providerRegistry.reconcile([]);
     vi.clearAllMocks();
     mocks.getConfiguration.mockReturnValue({
       get: () => ({}),

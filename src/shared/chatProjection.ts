@@ -462,6 +462,7 @@ export type AppAction =
       outputTokens: number;
       cacheReadTokens: number;
       cacheCreationTokens?: number;
+      usageEstimated?: boolean;
       durationMs: number;
       timeToFirstToken: number;
       usedPreviousResponseId?: boolean;
@@ -2016,6 +2017,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
         cacheReadTokens: action.cacheReadTokens,
         cacheCreationTokens: action.cacheCreationTokens,
         outputTokens: action.outputTokens,
+        ...(action.usageEstimated !== undefined
+          ? { usageEstimated: action.usageEstimated }
+          : {}),
         durationMs: action.durationMs,
         timeToFirstToken: action.timeToFirstToken,
         usedPreviousResponseId: action.usedPreviousResponseId,

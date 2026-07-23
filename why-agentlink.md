@@ -48,7 +48,7 @@ AgentLink speaks to two frontier providers — Anthropic and OpenAI/Codex — in
 
 This isn't a gimmick. Models from the same lab share training lineage, and with it blind spots — a reviewer with the same biases as the author tends to nod along. A reviewer from a different lab reliably catches things the author's own family misses, and in practice this consistently produces higher-quality code than any single-model loop. Background review agents, adversarial routing for verification tasks, and per-mode model selection make this a standing part of the workflow rather than a party trick.
 
-You choose the models on both sides — per mode, per task class, with reasoning effort and thinking budgets under your control — on your own accounts, at provider rates.
+You choose the models on both sides — per mode, per task class, with reasoning effort and thinking budgets under your control — on your own accounts, at provider rates. Configurable OpenAI-compatible connections widen that choice for experimentation through services such as OpenRouter and local servers. A guided add-model command can discover current model IDs and bounded metadata, while keeping capabilities reviewable and conservative when a generic endpoint cannot report them; AgentLink does not pretend every text endpoint is automatically suitable for tool-using review work.
 
 ## Economical with context, by design
 
@@ -72,11 +72,11 @@ Browser automation is a good example of the philosophy: rather than embedding a 
 
 The agent-harness ecosystem has converged on a set of conventions, and AgentLink treats them as table stakes rather than differentiators: project and global instruction files (`AGENTS.md`, `CLAUDE.md`), skills with per-skill tool restrictions, custom slash commands, custom modes, rules, persistent memory, checkpoints and revert, session persistence and restore across reloads, structured todo lists, `@`-mentions and file attachments (images and PDFs included), native web search and fetch, and parallel background agents with git-worktree isolation.
 
-Better still, AgentLink reads the same locations other harnesses already use — instructions from `AGENTS.md`/`CLAUDE.md`, commands and skills from `.agents`/`.claude` directories as well as its own — so an existing setup carries over instead of needing migration. If you're arriving from another agent tool, the short version: nothing table-stakes is missing, and most of your configuration already works.
+Better still, AgentLink reads the same locations other harnesses already use — instructions from `AGENTS.md`/`CLAUDE.md`, commands and skills from `.agents`/`.claude` directories as well as its own — so an existing setup carries over instead of needing migration. And when no folder is open, the same chat remains available in a deliberately tool-free, non-persistent Ask mode rather than presenting workspace powers it cannot safely provide. If you're arriving from another agent tool, the short version: nothing table-stakes is missing, and most of your configuration already works.
 
 ## Your accounts, your machine
 
-AgentLink has no cloud and no model middleman. Everything runs on accounts you already have — Anthropic API key or OAuth, OpenAI/ChatGPT or Codex subscription or API key, with multi-account management — at provider rates, with no markup or credit pool. Code, embeddings, and telemetry stay on your machine by default; configuration reads redact structured secrets before they reach a model; and remote supervision (checking on a long-running fleet from another room, approving a command from a phone browser) works over your own LAN with explicit device pairing — no relay servers. And because AgentLink is a real VS Code extension rather than a fork, your marketplace, proprietary language extensions, and existing setup — including whatever inline-completion tool you prefer — keep working untouched.
+AgentLink has no cloud and no model middleman. Everything runs on accounts you already have — Anthropic API key or OAuth, OpenAI/ChatGPT or Codex subscription or API key with multi-account management, or named OpenAI-compatible connections backed by independently stored keys or no-auth local servers — at provider rates, with no markup or credit pool. Code, embeddings, and telemetry stay on your machine by default; connection settings are machine-scoped, credentials remain in VS Code SecretStorage, authenticated model requests reject redirects, and private endpoint profiles never enter browser JavaScript. Remote supervision (checking on a long-running fleet from another room, approving a command from a phone browser) works over your own LAN with explicit device pairing — no relay servers. And because AgentLink is a real VS Code extension rather than a fork, your marketplace, proprietary language extensions, and existing setup — including whatever inline-completion tool you prefer — keep working untouched.
 
 ## What AgentLink deliberately doesn't do
 
@@ -92,7 +92,7 @@ Some current rough edges, honestly labeled, and what's planned:
 - **Semantic indexing needs setup today** (an external Qdrant instance plus embeddings; off by default). An embedded, fully local index is on the roadmap; the structural repo-map and module-dependency tools already work with zero configuration.
 - **Best-of-N and scheduled automations ship today but are maturing** — result judging and multi-window coordination are actively being hardened.
 - **Checkpoint forking and restore-scope choice** (code, conversation, or both) are planned.
-- **More providers** — Gemini, OpenRouter, local models — are on the longer-term roadmap, as are documented recipes for off-LAN supervision (Tailscale, dev tunnels) and voice input in the browser composer.
+- **More provider-specific integrations** — Gemini and richer provider-native features beyond portable Chat Completions — are on the longer-term roadmap, as are documented recipes for off-LAN supervision (Tailscale, dev tunnels) and voice input in the browser composer.
 
 ## The bet
 

@@ -233,6 +233,8 @@ export interface CoreModelUsage {
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
   serverToolUsage?: CoreModelServerToolUsage;
+  /** True when usage was estimated locally because the provider omitted it. */
+  estimated?: boolean;
 }
 
 export interface CoreModelCompleteResult {
@@ -243,7 +245,11 @@ export interface CoreModelCompleteResult {
   stopReason?: CoreModelStopReason;
 }
 
-export type CoreModelStopReason = "end_turn" | "tool_use" | "pause_turn";
+export type CoreModelStopReason =
+  | "end_turn"
+  | "tool_use"
+  | "pause_turn"
+  | "max_tokens";
 
 export type CoreModelStreamEvent =
   | {
@@ -282,6 +288,7 @@ export async function collectCoreModelCompleteResult(
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
   let serverToolUsage: CoreModelServerToolUsage | undefined;
+  let estimated: boolean | undefined;
   let providerResponseId: string | undefined;
   let assistantMessage: CoreModelMessage | undefined;
   let stopReason: CoreModelStopReason | undefined;
@@ -295,6 +302,7 @@ export async function collectCoreModelCompleteResult(
       cacheReadTokens = event.cacheReadTokens ?? 0;
       cacheCreationTokens = event.cacheCreationTokens ?? 0;
       serverToolUsage = event.serverToolUsage;
+      estimated = event.estimated;
       providerResponseId = event.providerResponseId;
     } else if (event.type === "model_stop") {
       assistantMessage = event.assistantMessage;
@@ -310,6 +318,7 @@ export async function collectCoreModelCompleteResult(
       cacheReadTokens,
       cacheCreationTokens,
       ...(serverToolUsage ? { serverToolUsage } : {}),
+      ...(estimated !== undefined ? { estimated } : {}),
     },
     providerResponseId,
     ...(assistantMessage ? { assistantMessage } : {}),
@@ -411,8 +420,17 @@ export class CoreModelBackendRegistry {
     if (this.providers.has(provider.providerId)) {
       throw new Error(`Duplicate model provider "${provider.providerId}"`);
     }
-    this.providers.set(provider.providerId, provider);
-    this.rebuildIndex();
+    const candidateProviders = new Map(this.providers);
+    candidateProviders.set(provider.providerId, provider);
+    const candidateIndex = this.buildIndex(candidateProviders);
+    this.providers.clear();
+    for (const [id, candidate] of candidateProviders) {
+      this.providers.set(id, candidate);
+    }
+    this.modelIndex.clear();
+    for (const [modelId, providerId] of candidateIndex) {
+      this.modelIndex.set(modelId, providerId);
+    }
   }
 
   refreshIndex(): void {
@@ -481,23 +499,34 @@ export class CoreModelBackendRegistry {
   }
 
   private rebuildIndex(): void {
+    const candidateIndex = this.buildIndex(this.providers);
     this.modelIndex.clear();
-    for (const provider of this.providers.values()) {
+    for (const [modelId, providerId] of candidateIndex) {
+      this.modelIndex.set(modelId, providerId);
+    }
+  }
+
+  private buildIndex(
+    providers: ReadonlyMap<string, CoreModelBackend>,
+  ): Map<string, string> {
+    const index = new Map<string, string>();
+    for (const provider of providers.values()) {
       for (const model of provider.listModels()) {
-        const existingProviderId = this.modelIndex.get(model.id);
+        const existingProviderId = index.get(model.id);
         if (existingProviderId && existingProviderId !== provider.providerId) {
           throw new Error(
             `Duplicate model "${model.id}" registered by providers "${existingProviderId}" and "${provider.providerId}"`,
           );
         }
-        this.modelIndex.set(model.id, provider.providerId);
+        index.set(model.id, provider.providerId);
       }
       for (const modelId of provider.listRoutableModelIds?.() ?? []) {
-        if (!this.modelIndex.has(modelId)) {
-          this.modelIndex.set(modelId, provider.providerId);
+        if (!index.has(modelId)) {
+          index.set(modelId, provider.providerId);
         }
       }
     }
+    return index;
   }
 }
 

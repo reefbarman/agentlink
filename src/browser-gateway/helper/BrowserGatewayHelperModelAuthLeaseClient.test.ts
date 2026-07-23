@@ -16,6 +16,7 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
       helperUrl: "http://127.0.0.1:47137",
       clientSharedSecret: "secret",
       grantedByOwnerId: "vscode-owner",
+      grantedByOwnerGenerationId: "vscode-generation-1",
       resolveModelAuth: vi.fn(async () => null),
     });
 
@@ -43,6 +44,7 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
             providerId: "openai-codex",
             method: "oauth",
             grantedByOwnerId: "vscode-owner",
+            grantedByOwnerGenerationId: "vscode-generation-1",
             grantedToOwnerId: "gateway-owner",
             modelScopes: ["chat"],
             issuedAt: 1_000,
@@ -58,6 +60,7 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
       helperUrl: "http://127.0.0.1:47137",
       clientSharedSecret: "secret",
       grantedByOwnerId: "vscode-owner",
+      grantedByOwnerGenerationId: "vscode-generation-1",
       resolveModelAuth: vi.fn(async () => ({
         providerId: "openai-codex",
         method: "oauth" as const,
@@ -116,6 +119,7 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
             method: "apiKey",
             modelScopes: ["chat"],
             grantedByOwnerId: "vscode-owner",
+            grantedByOwnerGenerationId: "vscode-generation-1",
             grantedAt: 1_000,
             accountLabel: "Stored Anthropic API key",
             canRefresh: false,
@@ -128,6 +132,7 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
       helperUrl: "http://127.0.0.1:47137",
       clientSharedSecret: "secret",
       grantedByOwnerId: "vscode-owner",
+      grantedByOwnerGenerationId: "vscode-generation-1",
       resolveModelAuth,
     });
 
@@ -145,6 +150,7 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
       method: "apiKey",
       bearerToken: "anthropic-token",
       grantedByOwnerId: "vscode-owner",
+      grantedByOwnerGenerationId: "vscode-generation-1",
       modelScopes: ["chat"],
       helperGenerationId: "helper-generation-1",
       accountLabel: "Stored Anthropic API key",
@@ -164,6 +170,7 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
             method: "oauth",
             modelScopes: ["chat"],
             grantedByOwnerId: "vscode-owner",
+            grantedByOwnerGenerationId: "vscode-generation-1",
             grantedAt: 1_000,
             expiresAt: 61_000,
             accountLabel: "acct@example.com",
@@ -177,6 +184,7 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
       helperUrl: "http://127.0.0.1:47137",
       clientSharedSecret: "secret",
       grantedByOwnerId: "vscode-owner",
+      grantedByOwnerGenerationId: "vscode-generation-1",
       resolveModelAuth: vi.fn(async () => ({
         providerId: "openai-codex",
         method: "oauth" as const,
@@ -206,6 +214,7 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
       method: "oauth",
       bearerToken: "oauth-token",
       grantedByOwnerId: "vscode-owner",
+      grantedByOwnerGenerationId: "vscode-generation-1",
       modelScopes: ["chat"],
       helperGenerationId: "helper-generation-1",
       ttlMs: 55 * 60_000,
@@ -228,11 +237,16 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
       helperUrl: "http://127.0.0.1:47137",
       clientSharedSecret: "secret",
       grantedByOwnerId: "vscode-owner",
+      grantedByOwnerGenerationId: "vscode-generation-1",
       resolveModelAuth: vi.fn(async () => null),
     });
 
     await expect(client.clearCredential("anthropic")).resolves.toBe(true);
-    expect(JSON.parse(capturedBody)).toEqual({ providerId: "anthropic" });
+    expect(JSON.parse(capturedBody)).toEqual({
+      grantedByOwnerId: "vscode-owner",
+      grantedByOwnerGenerationId: "vscode-generation-1",
+      providerId: "anthropic",
+    });
   });
 
   it("clears helper-cached credentials over the internal endpoint", async () => {
@@ -247,6 +261,7 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
       helperUrl: "http://127.0.0.1:47137",
       clientSharedSecret: "secret",
       grantedByOwnerId: "vscode-owner",
+      grantedByOwnerGenerationId: "vscode-generation-1",
       resolveModelAuth: vi.fn(async () => null),
     });
 
@@ -256,7 +271,10 @@ describe("BrowserGatewayHelperModelAuthLeaseClient", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({ Authorization: "Bearer secret" }),
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          grantedByOwnerId: "vscode-owner",
+          grantedByOwnerGenerationId: "vscode-generation-1",
+        }),
       }),
     );
   });

@@ -69,9 +69,12 @@ describe("ProjectSettingsAccessor", () => {
     };
     const properties = manifest.contributes.configuration.properties;
 
-    expect(classifications).toHaveLength(55);
+    expect(classifications).toHaveLength(56);
     expect(MACHINE_SCOPED_AGENTLINK_SETTINGS).toContain(
       "terminal.environmentPolicy",
+    );
+    expect(MACHINE_SCOPED_AGENTLINK_SETTINGS).toContain(
+      "openaiCompatible.connections",
     );
     expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain(
       "provider.maxConcurrentRequests",

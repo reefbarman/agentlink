@@ -38,6 +38,7 @@ export const MACHINE_SCOPED_AGENTLINK_SETTINGS = [
   "terminal.enabled",
   "terminal.nodePath",
   "terminal.environmentPolicy",
+  "openaiCompatible.connections",
 ] as const;
 
 export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [

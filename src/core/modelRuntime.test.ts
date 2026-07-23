@@ -271,6 +271,19 @@ describe("CoreModelBackendRegistry", () => {
     });
   });
 
+  it("keeps the previous index intact when registration collides", () => {
+    const registry = new CoreModelBackendRegistry();
+    const first = new FakeBackend("first", ["shared"]);
+    const colliding = new FakeBackend("second", ["shared"]);
+    registry.register(first);
+
+    expect(() => registry.register(colliding)).toThrow(
+      /Duplicate model "shared" registered by providers "first" and "second"/,
+    );
+    expect(registry.resolveModel("shared").provider).toBe(first);
+    expect(registry.listModels()).toHaveLength(1);
+  });
+
   it("aggregates backend auth status", async () => {
     const registry = new CoreModelBackendRegistry();
     const ready = new FakeBackend("ready", ["ready-1"]);

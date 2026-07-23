@@ -38,6 +38,7 @@ import { pathToFileURL } from "url";
 import {
   createSessionProjectScope,
   createWorkspaceProjectId,
+  isProjectlessSessionScope,
   type SessionProjectScope,
 } from "../core/workspaceProjects.js";
 
@@ -46,6 +47,10 @@ export type SessionProjectAvailabilityStatus =
   | "missing"
   | "unavailable"
   | "invalid";
+
+const PROJECTLESS_ASK_SYSTEM_PROMPT = `You are AgentLink in Ask mode without an open workspace folder.
+
+Answer the user's questions directly. No local project, files, shell, editor state, project instructions, skills, commands, MCP servers, checkpoints, or write capabilities are available in this session. Do not claim to inspect or modify local files. If the request requires a local project, explain that the user must open a folder first.`;
 
 export interface PendingInterjection {
   text: string;
@@ -251,6 +256,17 @@ export class AgentSession {
     workspaceFolders?: WorkspaceFolderInfo[];
     mcpToolDisclosure?: McpToolDisclosurePartition;
   }): Promise<AgentSession> {
+    if (isProjectlessSessionScope(opts.projectScope)) {
+      if (opts.mode !== "ask" || opts.background || opts.isBackground) {
+        throw new Error("Projectless sessions are available only in Ask mode.");
+      }
+      return AgentSession.createProjectlessAsk({
+        config: opts.config,
+        projectScope: opts.projectScope,
+        agentMode: opts.agentMode,
+        providerId: opts.providerId,
+      });
+    }
     const cwd = opts.projectScope.rootPath;
     if (cwd === undefined) {
       throw new Error(
@@ -291,6 +307,48 @@ export class AgentSession {
     session.setAdvertisedSkills(artifacts.skills);
     session.setAdvertisedRules(artifacts.advertisedRules);
     return session;
+  }
+
+  static createProjectlessAsk(opts: {
+    config: AgentConfig;
+    projectScope: SessionProjectScope;
+    agentMode?: AgentMode;
+    providerId?: string;
+  }): AgentSession {
+    if (!isProjectlessSessionScope(opts.projectScope)) {
+      throw new Error(
+        "Projectless Ask requires the reserved projectless scope.",
+      );
+    }
+    const agentMode =
+      opts.agentMode ?? BUILT_IN_MODES.find((mode) => mode.slug === "ask")!;
+    if (agentMode.slug !== "ask") {
+      throw new Error("Projectless sessions are available only in Ask mode.");
+    }
+    return new AgentSession({
+      mode: "ask",
+      agentMode,
+      config: opts.config,
+      systemPrompt: PROJECTLESS_ASK_SYSTEM_PROMPT,
+      promptBreakdown: {
+        sections: [
+          {
+            label: "projectless-ask",
+            chars: PROJECTLESS_ASK_SYSTEM_PROMPT.length,
+            estimatedTokens: estimateTokensFromChars(
+              PROJECTLESS_ASK_SYSTEM_PROMPT.length,
+            ),
+          },
+        ],
+        totalChars: PROJECTLESS_ASK_SYSTEM_PROMPT.length,
+        estimatedTokens: estimateTokensFromChars(
+          PROJECTLESS_ASK_SYSTEM_PROMPT.length,
+        ),
+      },
+      projectScope: opts.projectScope,
+      projectAvailability: "unavailable",
+      providerId: opts.providerId,
+    });
   }
 
   /** Temporary named seam for tests and callers not yet wired to the project catalog. */

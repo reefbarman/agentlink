@@ -22,9 +22,9 @@ import type { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelCredentialCache.js";
 import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
 import type { CoreModelMessage } from "../core/modelRuntime.js";
-import type { SessionImageReference } from "../core/tools/types.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { MemoryCandidateKind } from "../shared/memoryCandidates.js";
+import type { SessionImageReference } from "../core/tools/types.js";
 import { completeTodos } from "../agent/todoTool.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "./browserGatewayModelProviderIds.js";
 import { randomUUID } from "crypto";
@@ -304,7 +304,10 @@ function generatedResultImagesToDisplayMedia(
 function getAskAgentCapabilities(
   modelCredentialStatus: BrowserGatewayModelCredentialStatus,
 ): CoreCapabilityStatusDto[] {
-  if (modelCredentialStatus.state === "ready") {
+  if (
+    modelCredentialStatus.state === "ready" ||
+    modelCredentialStatus.state === "not_required"
+  ) {
     return [
       {
         capabilityId: "model-auth",
@@ -1498,6 +1501,9 @@ export class BrowserGatewayAskAgentSessionStore {
   ): string {
     if (modelCredentialStatus.state === "ready") {
       return "I received your message and the browser gateway has cached model credentials, but no model turn was run for this request.";
+    }
+    if (modelCredentialStatus.state === "not_required") {
+      return "I received your message and the browser gateway model is available without credentials, but no model turn was run for this request.";
     }
     if (modelCredentialStatus.state === "refresh_required") {
       return `I received your message, but cached model credentials need refresh before Ask Agent can answer. ${modelCredentialStatus.reason}`;

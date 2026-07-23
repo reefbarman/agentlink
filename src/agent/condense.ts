@@ -24,6 +24,7 @@ import type {
   ModelProvider,
   MessageParam,
 } from "./providers/types.js";
+import { getProviderAuxiliaryModel } from "./providers/types.js";
 import {
   CODEX_CONDENSE_MODEL,
   CODEX_CONDENSE_MODEL_FALLBACKS,
@@ -1135,6 +1136,10 @@ export async function summarizeConversation(
     return merged;
   };
 
+  const auxiliaryModel = getProviderAuxiliaryModel(
+    provider,
+    activeModel ?? provider.condenseModel,
+  );
   const validationWarnings: string[] = [];
   let {
     sourceMessages: condenseSourceMessages,
@@ -1164,7 +1169,7 @@ export async function summarizeConversation(
           systemPrompt: CONDENSE_SYSTEM_PROMPT,
         })
       : {
-          modelCandidates: [provider.condenseModel],
+          modelCandidates: [auxiliaryModel],
           skippedModelCandidates: [] as Array<{
             model: string;
             reason: string;
@@ -1172,7 +1177,7 @@ export async function summarizeConversation(
         };
   let { modelCandidates, skippedModelCandidates } =
     getModelSelection(requestMessages);
-  let selectedModel = modelCandidates[0] ?? provider.condenseModel;
+  let selectedModel = modelCandidates[0] ?? auxiliaryModel;
 
   // 3-minute timeout for the condense API call. Falls back to deterministic summary.
   const CONDENSE_TIMEOUT_MS = 3 * 60 * 1000;
@@ -1278,7 +1283,7 @@ export async function summarizeConversation(
       requestMessages = fitted.requestMessages;
       ({ modelCandidates, skippedModelCandidates } =
         getModelSelection(requestMessages));
-      selectedModel = modelCandidates[0] ?? provider.condenseModel;
+      selectedModel = modelCandidates[0] ?? auxiliaryModel;
       validationWarnings.push(
         `Condense request too large (${isBarePayloadError(first.error) ? "payload limit" : "context window"}); retried within a ${tokenBudget.toLocaleString()}-token budget using the newest ${condenseSourceMessages.length.toLocaleString()} unsummarized messages.`,
       );
@@ -1381,7 +1386,7 @@ export async function summarizeConversation(
       hadPriorSummaryInInput,
       sourceHash: sourceWindowHash(condenseSourceMessages, priorSummary),
       providerId: provider.id,
-      condenseModel: provider.condenseModel,
+      condenseModel: auxiliaryModel,
       modelCandidates,
       skippedModelCandidates:
         skippedModelCandidates.length > 0 ? skippedModelCandidates : undefined,

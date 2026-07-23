@@ -4,7 +4,10 @@ import { buildPromptArtifacts, buildSystemPrompt } from "./systemPrompt.js";
 
 import { AgentSession } from "./AgentSession.js";
 import type { ContentBlock } from "./providers/types.js";
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import {
+  createProjectlessSessionScope,
+  type SessionProjectScope,
+} from "../core/workspaceProjects.js";
 
 function makePromptArtifacts(systemPrompt: string) {
   return {
@@ -125,6 +128,35 @@ describe("AgentSession", () => {
       expect(() => session.requireProjectRoot()).toThrow(
         "Project 'test' is unavailable for local execution.",
       );
+    });
+
+    it("creates a chat-only Ask session for the reserved projectless scope", async () => {
+      const session = await AgentSession.create({
+        mode: "ask",
+        config: testConfig,
+        projectScope: createProjectlessSessionScope(),
+      });
+
+      expect(session.mode).toBe("ask");
+      expect(session.agentMode.slug).toBe("ask");
+      expect(session.projectAvailability).toBe("unavailable");
+      expect(session.systemPrompt).toContain(
+        "without an open workspace folder",
+      );
+      expect(mockedBuildPromptArtifacts).not.toHaveBeenCalled();
+      expect(() => session.requireProjectRoot()).toThrow(
+        "Project 'No folder' is unavailable for local execution.",
+      );
+    });
+
+    it("refuses non-Ask construction for the reserved projectless scope", async () => {
+      await expect(
+        AgentSession.create({
+          mode: "code",
+          config: testConfig,
+          projectScope: createProjectlessSessionScope(),
+        }),
+      ).rejects.toThrow("Projectless sessions are available only in Ask mode.");
     });
 
     it("refuses executable construction for a scope without an available root", async () => {
