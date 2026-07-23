@@ -3,6 +3,7 @@ import * as fs from "fs/promises";
 import * as http from "http";
 import * as os from "os";
 import * as path from "path";
+import { PassThrough, Writable } from "stream";
 import { randomUUID } from "crypto";
 import {
   buildAgentErrorMessage,
@@ -15,12 +16,17 @@ import {
 } from "../../shared/agentErrors.js";
 
 import {
+  resolveRegisteredBrowserGatewayDataPlaneModes,
+  type BrowserGatewayDataPlaneMode,
+} from "../browserGatewayDataPlaneMode.js";
+import {
   getBrowserGatewayRegistryPath,
   invalidateBrowserGatewayInstanceHealth,
   isBrowserGatewayInstanceProcessAlive,
   listBrowserGatewayInstances,
   listCheckedBrowserGatewayInstances,
   listHealthyBrowserGatewayInstances,
+  listRegisteredBrowserGatewayInstances,
   setBrowserGatewayRegistryLogger,
   type BrowserGatewayInstanceRecord,
 } from "../browserGatewayRegistry.js";
@@ -41,6 +47,12 @@ import {
   type AskAgentControllerState,
   type AskAgentControllerTurn,
 } from "./AskAgentController.js";
+import {
+  AskAgentOwnerAdapter,
+  askAgentOwnerCommandCapabilities,
+  askAgentOwnerGenerationId,
+  type AskAgentOwnerResolvedDetail,
+} from "./AskAgentOwnerAdapter.js";
 import {
   BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
   type BrowserGatewayClientLeaseRequest,
@@ -81,6 +93,7 @@ import { BrowserGatewayModelAuthLeaseStore } from "../browserGatewayModelAuthLea
 import {
   askAgentMediaToDisplayMedia,
   BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE,
+  BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
   BROWSER_GATEWAY_ASK_AGENT_SESSION_ID,
   BrowserGatewayAskAgentSessionStore,
   type BrowserGatewayAskAgentMediaItem,
@@ -183,6 +196,7 @@ import { DeviceStore } from "./deviceStore.js";
 import { PairingBroker } from "./pairingBroker.js";
 import { MdnsAdvertiser, listLanIpv4UrlsForPort } from "./mdnsAdvertiser.js";
 import type {
+  CoreCapabilityStatusDto,
   CoreHostKind,
   CoreSessionScopeDto,
 } from "../../core/sessionProtocol.js";
@@ -192,7 +206,11 @@ import {
   type CoreModelCatalogSnapshot,
 } from "../../core/modelCatalog.js";
 import { readBoundedBody, readJsonBody } from "../nodeHttpPrimitives.js";
-import { SseHub, type SsePublication } from "../SseHub.js";
+import {
+  SseHub,
+  type SseClientRemovalReason,
+  type SsePublication,
+} from "../SseHub.js";
 import {
   MAX_MEMORY_NUDGES_PER_SESSION,
   detectMemoryCandidates,
@@ -204,12 +222,26 @@ import {
 } from "../../shared/streamingBaselineMetrics.js";
 import type {
   AskAgentRouteHandler,
+  BrowserRelayRouteHandler,
   InternalCoreRouteHandler,
+  InternalDataPlaneRouteHandler,
   InternalDeviceRouteHandler,
   PairedBrowserRouteHandler,
   PublicHelperRouteHandler,
 } from "./helperRouteFamilies.js";
 import { HelperHttpRouter } from "./HelperHttpRouter.js";
+import { BrowserGatewayDataPlaneRoutes } from "./dataPlaneRoutes.js";
+import { BrowserGatewayCommandRoutes } from "./commandRoutes.js";
+import { OwnerRelayStore } from "./OwnerRelayStore.js";
+import {
+  BrowserGatewayRelayRoutes,
+  type BrowserRelayAuthIdentity,
+} from "./relayRoutes.js";
+import { BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION } from "../dataPlane/protocol.js";
+import {
+  HelperLifecycleCoordinator,
+  type HelperLivenessReason,
+} from "./HelperLifecycleCoordinator.js";
 
 export interface PreparedAskAgentWebAccess {
   target: BrowserGatewayInstanceRecord | null;
@@ -249,6 +281,8 @@ export interface HelperRuntimeOptions {
   extensionRootPath: string;
   /** Override persistent Ask Agent diagnostics log path. Defaults under `~/.agentlink/`. */
   askAgentLogPath?: string;
+  /** Maximum graceful helper drain before active streams/sockets are destroyed. */
+  shutdownTimeoutMs?: number;
   /** Bind to 0.0.0.0 and advertise via mDNS when true. Default false. */
   lanAccess?: boolean;
   /** mDNS hostname (without `.local`). Default "agentlink". */
@@ -375,6 +409,11 @@ async function readFormBody(
   return result;
 }
 
+type InProcessAskAgentResponse = {
+  readonly status: number;
+  readonly payload: unknown;
+};
+
 function writeJson(
   res: http.ServerResponse,
   status: number,
@@ -389,6 +428,53 @@ function writeJson(
     ...extraHeaders,
   });
   res.end(body);
+}
+
+function assertSuccessfulAskAgentCommand(
+  result: InProcessAskAgentResponse,
+): void {
+  if (result.status >= 200 && result.status < 300) return;
+  const error =
+    result.payload && typeof result.payload === "object"
+      ? (result.payload as { error?: unknown }).error
+      : undefined;
+  throw new Error(
+    typeof error === "string" ? error : "ask_agent_command_failed",
+  );
+}
+
+// This bridge is intentionally limited to handlers that produce one terminal JSON
+// response. It is not compatible with streaming handlers or header-dependent logic.
+async function invokeJsonHandlerInProcess(
+  payload: unknown,
+  handler: (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ) => Promise<void>,
+): Promise<InProcessAskAgentResponse> {
+  const body = Buffer.from(JSON.stringify(payload));
+  const request = new PassThrough() as PassThrough & http.IncomingMessage;
+  request.headers = { "content-length": String(body.byteLength) };
+  request.end(body);
+  let status = 200;
+  const chunks: Buffer[] = [];
+  const response = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      callback();
+    },
+  }) as Writable & http.ServerResponse;
+  response.writeHead = ((statusCode: number) => {
+    status = statusCode;
+    return response;
+  }) as http.ServerResponse["writeHead"];
+  await handler(request, response);
+  const raw = Buffer.concat(chunks).toString("utf-8");
+  if (!raw) throw new Error("ask_agent_command_empty_response");
+  return {
+    status,
+    payload: JSON.parse(raw) as unknown,
+  };
 }
 
 const BROWSER_SESSION_COOKIE_NAME = "agentlink_bg_session";
@@ -688,6 +774,7 @@ export class BrowserGatewayHelper {
     new BrowserGatewayModelCredentialCache();
   private modelCatalogSnapshot: CoreModelCatalogSnapshot | null = null;
   private readonly askAgentController: AskAgentController;
+  private readonly askAgentOwnerAdapter: AskAgentOwnerAdapter;
   private readonly askAgentSseHub: SseHub<AskAgentControllerSnapshot>;
   private readonly streamingMetrics: StreamingBaselineMetrics;
   private readonly askAgentModelClient: Pick<
@@ -722,6 +809,11 @@ export class BrowserGatewayHelper {
     string
   >();
   private readonly httpRouter: HelperHttpRouter<AuthResult>;
+  private readonly lifecycle: HelperLifecycleCoordinator;
+  private readonly relayStore: OwnerRelayStore;
+  private readonly relayRoutes: BrowserGatewayRelayRoutes;
+  private readonly commandRoutes: BrowserGatewayCommandRoutes;
+  private readonly dataPlaneRoutes: BrowserGatewayDataPlaneRoutes;
   private readonly deviceStore: DeviceStore;
   private readonly pairingBroker: PairingBroker;
   private mdnsAdvertiser: MdnsAdvertiser | null = null;
@@ -729,7 +821,10 @@ export class BrowserGatewayHelper {
   private idleCheckTimer: NodeJS.Timeout | undefined;
   private discoveryHeartbeatTimer: NodeJS.Timeout | undefined;
   private shuttingDown = false;
+  private stopPromise: Promise<void> | undefined;
   private lastLeaseActivityAtMs = Date.now();
+  private dataPlaneModeFallbackFingerprint: string | undefined;
+  private releaseAskAgentTurnLiveness: (() => void) | undefined;
   private readonly bindHost: string;
 
   private get askAgentSessionStore(): BrowserGatewayAskAgentSessionStore {
@@ -764,6 +859,122 @@ export class BrowserGatewayHelper {
       ) => void | Promise<void>;
     } = {},
   ) {
+    this.lifecycle = new HelperLifecycleCoordinator({
+      server,
+      shutdownTimeoutMs: options.shutdownTimeoutMs,
+      onLivenessChanged: (reasons) => this.handleLivenessChanged(reasons),
+    });
+    this.relayStore = new OwnerRelayStore({
+      helperGenerationId: this.helperGenerationId,
+    });
+    this.relayRoutes = new BrowserGatewayRelayRoutes({
+      helperGenerationId: this.helperGenerationId,
+      ownerRegistry: this.coreOwnerRegistry,
+      store: this.relayStore,
+      lifecycle: this.lifecycle,
+      isAllowedHost: (host) => this.isAllowedRelayHost(host),
+      onSubscriberCountChanged: (
+        ownerId,
+        ownerGenerationId,
+        subscriberCount,
+      ) => {
+        if (
+          ownerId === BROWSER_GATEWAY_ASK_AGENT_OWNER_ID &&
+          ownerGenerationId === this.askAgentOwnerAdapter.ownerGenerationId
+        ) {
+          try {
+            this.askAgentOwnerAdapter.setDemanded(subscriberCount > 0);
+          } catch (error) {
+            logHelper(`ask-agent relay demand update failed: ${String(error)}`);
+          }
+          return;
+        }
+        try {
+          this.dataPlaneRoutes.publishControl({
+            protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
+            helperGenerationId: this.helperGenerationId,
+            ownerId,
+            ownerGenerationId,
+            kind: "demand.changed",
+            emittedAt: Date.now(),
+            payload: { subscriberCount },
+          });
+        } catch {
+          // Owner expiry can race browser stream cleanup.
+        }
+      },
+      onCheckpointRequested: (ownerId, ownerGenerationId, latestSequence) => {
+        if (
+          ownerId === BROWSER_GATEWAY_ASK_AGENT_OWNER_ID &&
+          ownerGenerationId === this.askAgentOwnerAdapter.ownerGenerationId
+        ) {
+          try {
+            this.askAgentOwnerAdapter.publishRecoveryCheckpoint();
+          } catch (error) {
+            logHelper(
+              `ask-agent relay checkpoint request failed: ${String(error)}`,
+            );
+          }
+          return;
+        }
+        try {
+          this.dataPlaneRoutes.publishControl({
+            protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
+            helperGenerationId: this.helperGenerationId,
+            ownerId,
+            ownerGenerationId,
+            kind: "checkpoint.requested",
+            emittedAt: Date.now(),
+            payload: { reason: "checkpoint_required", latestSequence },
+          });
+        } catch {
+          // Owner expiry can race relay replay/compaction.
+        }
+      },
+      onCommand: (context, value) => this.commandRoutes.handle(context, value),
+      onOperationStatus: (context, operationId) =>
+        this.commandRoutes.lookupOperation(context, operationId),
+      onConnectionClosed: (browserConnectionId) =>
+        this.commandRoutes.closeBrowserConnection(browserConnectionId),
+    });
+    this.commandRoutes = new BrowserGatewayCommandRoutes({
+      helperGenerationId: this.helperGenerationId,
+      ownerRegistry: this.coreOwnerRegistry,
+      publishCommand: (command) =>
+        command.ownerId === BROWSER_GATEWAY_ASK_AGENT_OWNER_ID
+          ? this.askAgentOwnerAdapter.publishCommand(command)
+          : this.dataPlaneRoutes.publishCommand(command),
+      cancelCommand: (command) =>
+        command.ownerId === BROWSER_GATEWAY_ASK_AGENT_OWNER_ID
+          ? this.askAgentOwnerAdapter.cancelCommand(command)
+          : this.dataPlaneRoutes.cancelCommand(command),
+      emitOperation: (
+        browserConnectionId,
+        ownerId,
+        ownerGenerationId,
+        operation,
+      ) => {
+        this.relayRoutes.emitOperation(
+          browserConnectionId,
+          ownerId,
+          ownerGenerationId,
+          operation,
+        );
+      },
+    });
+    this.dataPlaneRoutes = new BrowserGatewayDataPlaneRoutes({
+      helperGenerationId: this.helperGenerationId,
+      ownerRegistry: this.coreOwnerRegistry,
+      lifecycle: this.lifecycle,
+      onPublication: (batch) => {
+        this.relayStore.ingestPublication(batch);
+      },
+      onAcknowledgement: (acknowledgement) =>
+        this.commandRoutes.onAcknowledgement(acknowledgement),
+      onDetail: (handle, content) => {
+        this.relayStore.putDetail(handle, content);
+      },
+    });
     this.streamingMetrics =
       injectables.streamingMetrics ??
       getDevelopmentStreamingBaselineMetrics("ask-agent-helper", __DEV_BUILD__);
@@ -778,14 +989,19 @@ export class BrowserGatewayHelper {
       flushHeaders: false,
       onClientCountChanged: (clientCount) =>
         this.recordAskAgentClientCount(clientCount),
+      onClientRemoved: (reason) => this.recordAskAgentClientRemoval(reason),
+      onFirstDelivery: (sample) => this.recordAskAgentFirstDelivery(sample),
     });
     this.askAgentController = new AskAgentController({
       ownerRegistry: this.coreOwnerRegistry,
+      ownerGenerationId: askAgentOwnerGenerationId(this.helperGenerationId),
+      additionalOwnerCapabilities: askAgentOwnerCommandCapabilities(),
       coalesceMs: 20,
       byteLength: utf8ByteLength,
       publish: async (publication) => {
         await injectables.beforeAskAgentSnapshotPublish?.(publication);
         this.broadcastAskAgentPublication(publication);
+        this.askAgentOwnerAdapter.publishControllerPublication(publication);
       },
       serialize: (snapshot) => this.serializeAskAgentSnapshot(snapshot),
       onSnapshotBuilt: (snapshot, durationMs) =>
@@ -801,6 +1017,32 @@ export class BrowserGatewayHelper {
       },
       onCompletedTurn: (sessionId) =>
         this.scheduleAskAgentMemorySummary(sessionId),
+      onActiveTurnChanged: (active) => this.handleAskAgentTurnChanged(active),
+    });
+    this.askAgentOwnerAdapter = new AskAgentOwnerAdapter({
+      helperGenerationId: this.helperGenerationId,
+      ownerRegistry: this.coreOwnerRegistry,
+      ingestPublication: async (batch) => {
+        await this.dataPlaneRoutes.ingestPublication(batch);
+      },
+      putDetail: (handle, content) =>
+        this.relayStore.putDetail(handle, content),
+      getDetail: (params) => this.relayStore.getDetail(params),
+      acknowledge: (acknowledgement) =>
+        this.commandRoutes.onAcknowledgement(acknowledgement),
+      onPublicationError: (error) =>
+        logHelper(`ask-agent relay publication failed: ${String(error)}`),
+      executor: {
+        selectSession: (sessionId) =>
+          this.executeAskAgentSelectSessionCommand(sessionId),
+        send: (params) => this.executeAskAgentSendCommand(params),
+        stopSession: (sessionId) => this.executeAskAgentStopCommand(sessionId),
+        respondToApproval: (params) =>
+          this.executeAskAgentApprovalCommand(params),
+        respondToQuestion: (params) =>
+          this.executeAskAgentQuestionCommand(params),
+        loadHistory: (params) => this.loadAskAgentHistoryCommand(params),
+      },
     });
     this.deviceStore = injectables.deviceStore ?? new DeviceStore();
     this.pairingBroker = injectables.pairingBroker ?? new PairingBroker();
@@ -835,6 +1077,9 @@ export class BrowserGatewayHelper {
     this.bindHost = options.lanAccess ? "0.0.0.0" : "127.0.0.1";
     this.httpRouter = new HelperHttpRouter(options.port, {
       isInternalAuthorized: (req) => this.isInternalClientAuthorized(req),
+      isOwnerPlaneLoopback: (req) =>
+        classifyBrowserGatewayClientOrigin(req.socket.remoteAddress) ===
+        "loopback",
       authenticate: async (req) => {
         const auth = await this.authenticateRequest(req);
         return auth.kind === "none" ? null : auth;
@@ -844,10 +1089,14 @@ export class BrowserGatewayHelper {
         this.handleAskAgentRoute(handler, req, res),
       handleInternalCore: (handler, req, res) =>
         this.handleInternalCoreRoute(handler, req, res),
+      handleInternalDataPlane: (handler, req, res, requestUrl) =>
+        this.handleInternalDataPlaneRoute(handler, req, res, requestUrl),
       handleInternalDevice: (handler, req, res, requestUrl) =>
         this.handleInternalDeviceRoute(handler, req, res, requestUrl),
       handlePairedBrowser: (handler, req, res) =>
         this.handlePairedBrowserRoute(handler, req, res),
+      handleBrowserRelay: (handler, auth, req, res, requestUrl) =>
+        this.handleBrowserRelayRoute(handler, auth, req, res, requestUrl),
       handlePublic: (handler, pathname, req, res, requestUrl) =>
         this.handlePublicRoute(handler, pathname, req, res, requestUrl),
       handleInstances: (requestUrl, res) =>
@@ -882,12 +1131,44 @@ export class BrowserGatewayHelper {
     return this.clientSharedSecret;
   }
 
+  /** Exposed for lifecycle integration tests. */
+  getLifecycleStateForTest(): {
+    acceptedSocketCount: number;
+    activeStreamCount: number;
+    livenessReasons: readonly HelperLivenessReason[];
+  } {
+    return {
+      acceptedSocketCount: this.lifecycle.acceptedSocketCount,
+      activeStreamCount: this.lifecycle.activeStreamCount,
+      livenessReasons: this.lifecycle.getLivenessReasons(),
+    };
+  }
+
+  /** Exposed for deterministic idle-liveness integration tests. */
+  isIdleShutdownEligibleForTest(nowMs: number): boolean {
+    return this.shouldShutdownForIdle(nowMs);
+  }
+
   async start(): Promise<void> {
     const [preferences, history] = await Promise.all([
       this.askAgentPreferencesStore.read(),
       this.askAgentHistoryStore.read(),
     ]);
     this.restoreState(preferences, history);
+    const askAgentState = await this.buildAskAgentResponse();
+    this.askAgentOwnerAdapter.initialize(askAgentState.snapshot);
+    this.dataPlaneRoutes.ownerRegistered(
+      BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+      this.askAgentOwnerAdapter.ownerGenerationId,
+    );
+    this.relayStore.ownerRegistered(
+      BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+      this.askAgentOwnerAdapter.ownerGenerationId,
+    );
+    this.relayRoutes.ownerRegistered(
+      BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+      this.askAgentOwnerAdapter.ownerGenerationId,
+    );
     this.logAskAgentEvent("helper.starting", {
       port: this.options.port,
       bindHost: this.bindHost,
@@ -913,7 +1194,9 @@ export class BrowserGatewayHelper {
 
     await this.writeDiscovery();
     this.discoveryHeartbeatTimer = setInterval(() => {
-      void this.writeDiscovery();
+      void this.writeDiscovery().catch((error) => {
+        logHelper(`discovery heartbeat failed: ${String(error)}`);
+      });
     }, 5_000);
 
     this.lastLeaseActivityAtMs = Date.now();
@@ -941,10 +1224,14 @@ export class BrowserGatewayHelper {
     );
   }
 
-  async stop(reason = "shutdown"): Promise<void> {
-    if (this.shuttingDown) return;
+  stop(reason = "shutdown"): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
     this.shuttingDown = true;
+    this.stopPromise = this.performStop(reason);
+    return this.stopPromise;
+  }
 
+  private async performStop(reason: string): Promise<void> {
     if (this.idleCheckTimer) {
       clearInterval(this.idleCheckTimer);
       this.idleCheckTimer = undefined;
@@ -962,33 +1249,50 @@ export class BrowserGatewayHelper {
     }
     this.askAgentMemorySummaryControllers.clear();
 
-    await this.dispose();
-    this.askAgentSseHub.dispose();
-
-    if (this.mdnsAdvertiser) {
-      try {
-        await this.mdnsAdvertiser.stop();
-      } catch {
-        // ignore
-      }
-      this.mdnsAdvertiser = null;
-    }
-
-    await clearBrowserGatewayHelperDiscovery();
-
-    await new Promise<void>((resolve) => {
-      this.server.close(() => resolve());
+    this.commandRoutes.beginDrain();
+    this.dataPlaneRoutes.beginDrain();
+    const result = await this.lifecycle.shutdown({
+      drain: async () => {
+        await this.dispose();
+        this.askAgentSseHub.dispose();
+        this.relayRoutes.close();
+        this.relayStore.close();
+      },
+      cleanup: async () => {
+        if (this.mdnsAdvertiser) {
+          try {
+            await this.mdnsAdvertiser.stop();
+          } catch {
+            // ignore
+          }
+          this.mdnsAdvertiser = null;
+        }
+        await clearBrowserGatewayHelperDiscovery(this.helperGenerationId);
+      },
     });
 
+    this.commandRoutes.close();
+    this.dataPlaneRoutes.close();
     this.logAskAgentEvent("helper.stopped", {
       reason,
       helperGenerationId: this.helperGenerationId,
+      timedOut: result.timedOut,
+      durationMs: result.durationMs,
+      destroyedSockets: result.destroyedSockets,
+      destroyedStreams: result.destroyedStreams,
+      drainError:
+        result.drainError === undefined ? undefined : String(result.drainError),
+      cleanupError:
+        result.cleanupError === undefined
+          ? undefined
+          : String(result.cleanupError),
     });
 
     process.stdout.write(
       JSON.stringify({
         type: "helper_stopped",
         reason,
+        timedOut: result.timedOut,
       }) + "\n",
     );
   }
@@ -1092,6 +1396,7 @@ export class BrowserGatewayHelper {
   ): Promise<void> {
     switch (handler) {
       case "health": {
+        const dataPlaneMode = await this.resolveEffectiveDataPlaneMode();
         const payload: BrowserGatewayHelperHealthResponse = {
           status: "ok",
           protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
@@ -1101,6 +1406,7 @@ export class BrowserGatewayHelper {
           uptimeMs: Date.now() - this.startedAtMs,
           activeClientLeases: this.getActiveLeaseCount(),
           helperGenerationId: this.helperGenerationId,
+          dataPlaneMode,
           coreOwners: this.coreOwnerRegistry.list(Date.now()).length,
         };
         writeJson(res, 200, payload);
@@ -1119,6 +1425,25 @@ export class BrowserGatewayHelper {
           "dist/browser-gateway.css",
           "text/css; charset=utf-8",
           res,
+        );
+      case "browserGatewayMonacoJs":
+        return this.handleStaticAssetRequest(
+          "dist/browser-gateway-monaco.js",
+          "text/javascript; charset=utf-8",
+          res,
+        );
+      case "browserGatewayMonacoCss":
+        return this.handleStaticAssetRequest(
+          "dist/browser-gateway-monaco.css",
+          "text/css; charset=utf-8",
+          res,
+        );
+      case "browserGatewayChunk":
+        return this.handleStaticAssetRequest(
+          `dist${pathname}`,
+          "text/javascript; charset=utf-8",
+          res,
+          "public, max-age=31536000, immutable",
         );
       case "monacoWorker":
         return this.handleStaticAssetRequest(
@@ -1158,6 +1483,24 @@ export class BrowserGatewayHelper {
     }
   }
 
+  private async handleBrowserRelayRoute(
+    handler: BrowserRelayRouteHandler,
+    auth: AuthResult,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    requestUrl: URL,
+  ): Promise<void> {
+    if (auth.kind === "none") {
+      writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const identity: BrowserRelayAuthIdentity =
+      auth.kind === "device"
+        ? { sessionKey: `device:${auth.deviceId}`, deviceId: auth.deviceId }
+        : { sessionKey: "bootstrap" };
+    await this.relayRoutes.handle(handler, identity, req, res, requestUrl);
+  }
+
   private async handlePairedBrowserRoute(
     handler: PairedBrowserRouteHandler,
     req: http.IncomingMessage,
@@ -1189,6 +1532,15 @@ export class BrowserGatewayHelper {
       case "deviceRevoke":
         return this.handleDevicesRevoke(req, res);
     }
+  }
+
+  private async handleInternalDataPlaneRoute(
+    handler: InternalDataPlaneRouteHandler,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    requestUrl: URL,
+  ): Promise<void> {
+    await this.dataPlaneRoutes.handle(handler, req, res, requestUrl);
   }
 
   private async handleInternalCoreRoute(
@@ -1248,6 +1600,7 @@ export class BrowserGatewayHelper {
           selectedInstance?.instanceId ?? "",
           selectedInstance?.workspaceName ?? "No Workspace",
           await this.resolveInitialTheme(selectedInstance),
+          await this.resolveEffectiveDataPlaneMode(),
         ),
         { "Set-Cookie": this.buildBootstrapCookie() },
       );
@@ -1275,6 +1628,7 @@ export class BrowserGatewayHelper {
         selectedInstance?.instanceId ?? "",
         selectedInstance?.workspaceName ?? "No Workspace",
         await this.resolveInitialTheme(selectedInstance),
+        await this.resolveEffectiveDataPlaneMode(),
       ),
     );
     void this.recordDeviceActivity(auth);
@@ -1295,6 +1649,8 @@ export class BrowserGatewayHelper {
     );
     const enrichedInstances =
       await this.buildInstanceListItems(registeredInstances);
+    const dataPlaneMode =
+      this.resolveEffectiveDataPlaneModeFromInstances(registeredInstances);
     logHelper(
       `/api/instances requestedInstanceId=${requestedInstanceId || "none"} selected=${selectedInstance?.instanceId ?? "none"} registered=${registeredInstances.length} healthy=${healthyInstances.length} registeredIds=${registeredInstances.map((instance) => instance.instanceId).join(",") || "none"}`,
     );
@@ -1303,7 +1659,143 @@ export class BrowserGatewayHelper {
       res,
       selectedInstance?.instanceId ?? "",
       enrichedInstances,
+      200,
+      undefined,
+      dataPlaneMode,
     );
+  }
+
+  private async executeAskAgentSelectSessionCommand(
+    sessionId: string,
+  ): Promise<void> {
+    if (!this.askAgentSessionStore.loadSession(sessionId)) {
+      throw new Error("ask_agent_session_not_found");
+    }
+    await this.persistAskAgentHistory();
+    const response = await this.buildAskAgentResponse();
+    await this.publishAskAgentSnapshot(response.snapshot);
+  }
+
+  private async executeAskAgentSendCommand(params: {
+    operationId: string;
+    sessionId: string;
+    text: string;
+    details: readonly AskAgentOwnerResolvedDetail[];
+    signal: AbortSignal;
+  }): Promise<void> {
+    if (params.signal.aborted) throw new Error("ask_agent_command_cancelled");
+    const cancel = (): void => {
+      void this.cancelActiveTurn();
+    };
+    params.signal.addEventListener("abort", cancel, { once: true });
+    const images: BrowserGatewayAskAgentMediaItem[] = [];
+    const documents: BrowserGatewayAskAgentMediaItem[] = [];
+    for (const detail of params.details) {
+      const mimeType = detail.handle.mediaType?.trim();
+      if (!mimeType) throw new Error("ask_agent_media_type_required");
+      const media = {
+        name: detail.handle.handleId,
+        mimeType,
+        base64: Buffer.from(detail.content).toString("base64"),
+      };
+      if (mimeType.startsWith("image/")) images.push(media);
+      else documents.push(media);
+    }
+    try {
+      const result = await invokeJsonHandlerInProcess(
+        {
+          id: params.operationId,
+          sessionId: params.sessionId,
+          text: params.text,
+          images,
+          documents,
+        },
+        (req, res) => this.handleAskAgentSendRequest(req, res),
+      );
+      assertSuccessfulAskAgentCommand(result);
+    } finally {
+      params.signal.removeEventListener("abort", cancel);
+    }
+  }
+
+  private async executeAskAgentStopCommand(sessionId: string): Promise<void> {
+    if (this.askAgentSessionStore.getActiveSessionId() !== sessionId) {
+      throw new Error("ask_agent_session_not_found");
+    }
+    await this.cancelActiveTurn();
+  }
+
+  private async executeAskAgentApprovalCommand(params: {
+    requestId: string;
+    decision: "approve" | "reject";
+  }): Promise<void> {
+    const request = this.askAgentController.submitApproval({
+      type: "decision",
+      id: params.requestId,
+      decision: params.decision === "approve" ? "accept" : "reject",
+    });
+    if (!request) throw new Error("approval_not_found");
+    const response = await this.buildAskAgentResponse();
+    await this.publishAskAgentSnapshot(response.snapshot);
+    this.logAskAgentEvent("ask-agent.approval", {
+      ok: true,
+      approvalId: params.requestId,
+      kind: request.kind,
+      decision: params.decision,
+    });
+  }
+
+  private async executeAskAgentQuestionCommand(params: {
+    requestId: string;
+    response: unknown;
+    signal: AbortSignal;
+  }): Promise<void> {
+    if (params.signal.aborted) throw new Error("ask_agent_command_cancelled");
+    if (!params.response || typeof params.response !== "object") {
+      throw new Error("ask_agent_question_detail_invalid");
+    }
+    const cancel = (): void => {
+      void this.cancelActiveTurn();
+    };
+    params.signal.addEventListener("abort", cancel, { once: true });
+    try {
+      const result = await invokeJsonHandlerInProcess(
+        {
+          ...(params.response as Record<string, unknown>),
+          id: params.requestId,
+        },
+        (req, res) => this.handleAskAgentQuestionResponseRequest(req, res),
+      );
+      assertSuccessfulAskAgentCommand(result);
+    } finally {
+      params.signal.removeEventListener("abort", cancel);
+    }
+  }
+
+  private loadAskAgentHistoryCommand(params: {
+    cursor: string;
+    count: number;
+  }): {
+    messages: ChatMessage[];
+    earlierCursor: string | null;
+    hasEarlier: boolean;
+  } {
+    const activeSessionId = this.askAgentSessionStore.getActiveSessionId();
+    const prefix = `${activeSessionId}:`;
+    if (!params.cursor.startsWith(prefix)) {
+      throw new Error("ask_agent_history_cursor_invalid");
+    }
+    const end = Number(params.cursor.slice(prefix.length));
+    const messages = this.askAgentSessionStore.getProjectedMessages();
+    if (!Number.isSafeInteger(end) || end < 0 || end > messages.length) {
+      throw new Error("ask_agent_history_cursor_invalid");
+    }
+    const start = Math.max(0, end - params.count);
+    return {
+      messages: messages.slice(start, end),
+      earlierCursor: start > 0 ? `${activeSessionId}:${start}` : null,
+      hasEarlier: start > 0,
+    };
   }
 
   private async handleAskAgentSessionRequest(
@@ -2352,6 +2844,9 @@ export class BrowserGatewayHelper {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
+    this.lifecycle.trackStream(res, () =>
+      this.askAgentSseHub.remove(res, "dispose"),
+    );
     await this.askAgentSseHub.subscribe(req, res, async (signal) => {
       const response = await this.buildAskAgentResponse();
       if (signal.aborted) throw new Error("ask_agent_sse_capture_aborted");
@@ -5470,6 +5965,7 @@ export class BrowserGatewayHelper {
 
   async dispose(): Promise<void> {
     await this.askAgentController.dispose();
+    await this.askAgentOwnerAdapter.dispose();
   }
 
   private broadcastAskAgentPublication(
@@ -5483,6 +5979,7 @@ export class BrowserGatewayHelper {
         type: "broadcast",
         surface: "ask-agent-helper",
         clientCount: result.attempted,
+        deliveredClientCount: result.delivered,
         bytes: publication.bytes,
       });
     }
@@ -5535,6 +6032,27 @@ export class BrowserGatewayHelper {
       type: "sse_clients",
       surface: "ask-agent-helper",
       clientCount,
+    });
+  }
+
+  private recordAskAgentClientRemoval(reason: SseClientRemovalReason): void {
+    if (!this.streamingMetrics.enabled) return;
+    this.streamingMetrics.record({
+      type: "sse_client_removed",
+      surface: "ask-agent-helper",
+      reason,
+    });
+  }
+
+  private recordAskAgentFirstDelivery(sample: {
+    durationMs: number;
+    bytes: number;
+  }): void {
+    if (!this.streamingMetrics.enabled) return;
+    this.streamingMetrics.record({
+      type: "sse_first_delivery",
+      surface: "ask-agent-helper",
+      ...sample,
     });
   }
 
@@ -5630,12 +6148,11 @@ export class BrowserGatewayHelper {
     instances: BrowserGatewayInstanceListItem[],
     status = 200,
     error?: string,
+    dataPlaneMode = this.resolveEffectiveDataPlaneModeFromInstances(instances),
   ): void {
-    const body = {
-      currentInstanceId,
-      instances,
-      error,
-    };
+    const body = error
+      ? { currentInstanceId, instances, error }
+      : { currentInstanceId, instances, dataPlaneMode, error };
     writeJson(res, status, body);
   }
 
@@ -5667,6 +6184,7 @@ export class BrowserGatewayHelper {
     }
 
     await new Promise<void>((resolve) => {
+      let proxyResponse: http.IncomingMessage | undefined;
       const proxyReq = http.request(
         {
           protocol: targetBase.protocol,
@@ -5678,6 +6196,7 @@ export class BrowserGatewayHelper {
           timeout: isEventStream ? 0 : undefined,
         },
         (proxyRes) => {
+          proxyResponse = proxyRes;
           if (isEventStream) {
             proxyRes.socket.setTimeout(0);
           }
@@ -5689,6 +6208,13 @@ export class BrowserGatewayHelper {
           proxyRes.on("close", () => resolve());
         },
       );
+      if (isEventStream) {
+        this.lifecycle.trackStream(res, () => {
+          proxyReq.destroy();
+          proxyResponse?.destroy();
+          if (!res.destroyed && !res.writableEnded) res.end();
+        });
+      }
 
       proxyReq.on("error", (error) => {
         invalidateBrowserGatewayInstanceHealth(instance.instanceId);
@@ -5715,6 +6241,28 @@ export class BrowserGatewayHelper {
         req.pipe(proxyReq);
       }
     });
+  }
+
+  private isAllowedRelayHost(host: string): boolean {
+    if (!/^(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(?::\d{1,5})?$/.test(host)) {
+      return false;
+    }
+    let requestedOrigin: string;
+    try {
+      requestedOrigin = new URL(`http://${host}`).origin;
+    } catch {
+      return false;
+    }
+    const allowedOrigins = new Set([
+      `http://localhost:${this.options.port}`,
+      `http://127.0.0.1:${this.options.port}`,
+      `http://[::1]:${this.options.port}`,
+      ...listLanIpv4UrlsForPort(this.options.port).map(
+        (url) => new URL(url).origin,
+      ),
+      ...(this.mdnsState.url ? [new URL(this.mdnsState.url).origin] : []),
+    ]);
+    return allowedOrigins.has(requestedOrigin);
   }
 
   private isInternalClientAuthorized(req: http.IncomingMessage): boolean {
@@ -5873,7 +6421,7 @@ export class BrowserGatewayHelper {
         return;
       }
       const now = Date.now();
-      const ownerRegistration = this.coreOwnerRegistry.register({
+      const registration = this.coreOwnerRegistry.registerWithCollisionPolicy({
         ...body,
         ownerId: body.ownerId.trim(),
         displayName: body.displayName.trim(),
@@ -5882,11 +6430,34 @@ export class BrowserGatewayHelper {
         processId: body.processId,
         now,
       });
+      this.dataPlaneRoutes.ownerRegistered(
+        registration.effectiveOwnerId,
+        registration.registration.ownerGenerationId,
+      );
+      this.commandRoutes.ownerRegistered(
+        registration.effectiveOwnerId,
+        registration.registration.ownerGenerationId,
+      );
+      this.relayStore.ownerRegistered(
+        registration.effectiveOwnerId,
+        registration.registration.ownerGenerationId,
+      );
+      this.relayRoutes.ownerRegistered(
+        registration.effectiveOwnerId,
+        registration.registration.ownerGenerationId,
+      );
       this.lastLeaseActivityAtMs = now;
       logHelper(
-        `core-owner register ownerId=${ownerRegistration.owner.ownerId} generation=${ownerRegistration.ownerGenerationId} kind=${ownerRegistration.owner.ownerKind}`,
+        `core-owner register requestedOwnerId=${registration.requestedOwnerId} effectiveOwnerId=${registration.effectiveOwnerId} resolution=${registration.resolution} generation=${registration.registration.ownerGenerationId} kind=${registration.registration.owner.ownerKind}`,
       );
-      writeJson(res, 200, { ok: true, ownerRegistration });
+      writeJson(res, 200, {
+        ok: true,
+        helperGenerationId: this.helperGenerationId,
+        requestedOwnerId: registration.requestedOwnerId,
+        effectiveOwnerId: registration.effectiveOwnerId,
+        resolution: registration.resolution,
+        ownerRegistration: registration.registration,
+      });
     } catch (err) {
       const invalidJson = String(err) === "Error: invalid_json";
       writeJson(res, invalidJson ? 400 : 500, {
@@ -5908,7 +6479,8 @@ export class BrowserGatewayHelper {
         typeof body.ownerId !== "string" ||
         !body.ownerId.trim() ||
         typeof body.ownerGenerationId !== "string" ||
-        !body.ownerGenerationId.trim()
+        !body.ownerGenerationId.trim() ||
+        !this.isCoreCapabilities(body.capabilities)
       ) {
         writeJson(res, 400, { error: "invalid_request" });
         return;
@@ -5916,12 +6488,14 @@ export class BrowserGatewayHelper {
       const ownerRegistration = this.coreOwnerRegistry.heartbeat({
         ownerId: body.ownerId.trim(),
         ownerGenerationId: body.ownerGenerationId.trim(),
+        capabilities: body.capabilities,
         now: Date.now(),
       });
       if (!ownerRegistration) {
         writeJson(res, 404, { error: "owner_not_registered" });
         return;
       }
+      this.relayRoutes.ownerCatalogChanged();
       writeJson(res, 200, { ok: true, ownerRegistration });
     } catch (err) {
       const invalidJson = String(err) === "Error: invalid_json";
@@ -5951,7 +6525,28 @@ export class BrowserGatewayHelper {
       body.displayName.trim() &&
       typeof body.ownerGenerationId === "string" &&
       body.ownerGenerationId.trim() &&
-      this.isCoreSessionScope(body.scope),
+      this.isCoreSessionScope(body.scope) &&
+      this.isCoreCapabilities(body.capabilities),
+    );
+  }
+
+  private isCoreCapabilities(
+    value: unknown,
+  ): value is CoreCapabilityStatusDto[] | undefined {
+    if (value === undefined) return true;
+    if (!Array.isArray(value)) return false;
+    return value.every(
+      (capability) =>
+        capability !== null &&
+        typeof capability === "object" &&
+        typeof capability.capabilityId === "string" &&
+        Boolean(capability.capabilityId.trim()) &&
+        (capability.state === "enabled" ||
+          capability.state === "disabled" ||
+          capability.state === "requires_approval" ||
+          capability.state === "unavailable") &&
+        (capability.reason === undefined ||
+          typeof capability.reason === "string"),
     );
   }
 
@@ -6423,6 +7018,10 @@ export class BrowserGatewayHelper {
         return;
       }
       const removed = await this.deviceStore.revoke(body.deviceId);
+      if (removed) {
+        this.relayRoutes.closeDevice(body.deviceId);
+        this.commandRoutes.closeSession(`device:${body.deviceId}`);
+      }
       writeJson(res, 200, { ok: true, removed });
     } catch (err) {
       const invalidJson = String(err) === "Error: invalid_json";
@@ -6539,6 +7138,27 @@ export class BrowserGatewayHelper {
     }
   }
 
+  private handleAskAgentTurnChanged(active: boolean): void {
+    if (active) {
+      this.releaseAskAgentTurnLiveness?.();
+      this.releaseAskAgentTurnLiveness =
+        this.lifecycle.acquireLiveness("ask_agent_turn");
+      return;
+    }
+    this.releaseAskAgentTurnLiveness?.();
+    this.releaseAskAgentTurnLiveness = undefined;
+  }
+
+  private handleLivenessChanged(
+    reasons: readonly HelperLivenessReason[],
+  ): void {
+    this.lastLeaseActivityAtMs = Date.now();
+    this.logAskAgentEvent("helper.liveness.changed", {
+      reasons: reasons.join(","),
+      activeBrowserStreams: this.lifecycle.activeStreamCount,
+    });
+  }
+
   private getActiveLeaseCount(nowMs = Date.now()): number {
     for (const [clientId, expiresAt] of this.activeClientLeases) {
       if (expiresAt <= nowMs) {
@@ -6548,22 +7168,51 @@ export class BrowserGatewayHelper {
     return this.activeClientLeases.size;
   }
 
+  private shouldShutdownForIdle(nowMs: number): boolean {
+    if (this.shuttingDown) return false;
+    if (this.getActiveLeaseCount(nowMs) > 0) return false;
+    if (this.lifecycle.hasLivenessReasons()) return false;
+    return nowMs - this.lastLeaseActivityAtMs >= this.options.idleShutdownMs;
+  }
+
   private async maybeShutdownForIdle(): Promise<void> {
-    if (this.shuttingDown) return;
-    const active = this.getActiveLeaseCount();
-    const idleForMs = Date.now() - this.lastLeaseActivityAtMs;
-
-    if (active > 0) return;
-    if (idleForMs < this.options.idleShutdownMs) return;
-
+    if (!this.shouldShutdownForIdle(Date.now())) return;
     await this.stop("idle");
     process.exit(0);
+  }
+
+  private async resolveEffectiveDataPlaneMode(): Promise<BrowserGatewayDataPlaneMode> {
+    return this.resolveEffectiveDataPlaneModeFromInstances(
+      await listRegisteredBrowserGatewayInstances(),
+    );
+  }
+
+  private resolveEffectiveDataPlaneModeFromInstances(
+    instances: readonly Pick<BrowserGatewayInstanceRecord, "dataPlaneMode">[],
+  ): BrowserGatewayDataPlaneMode {
+    const { mode, missingCount, invalidCount } =
+      resolveRegisteredBrowserGatewayDataPlaneModes(
+        instances.map((instance) => instance.dataPlaneMode),
+      );
+    const fallbackFingerprint = `${missingCount}:${invalidCount}`;
+    if (
+      (missingCount > 0 || invalidCount > 0) &&
+      fallbackFingerprint !== this.dataPlaneModeFallbackFingerprint
+    ) {
+      logHelper(
+        `data-plane mode fallback effective=off missing=${missingCount} invalid=${invalidCount} reason=version-skew-or-stale-registry`,
+      );
+    }
+    this.dataPlaneModeFallbackFingerprint =
+      missingCount > 0 || invalidCount > 0 ? fallbackFingerprint : undefined;
+    return mode;
   }
 
   private async writeDiscovery(): Promise<void> {
     const lanUrls = this.options.lanAccess
       ? listLanIpv4UrlsForPort(this.options.port)
       : [];
+    const dataPlaneMode = await this.resolveEffectiveDataPlaneMode();
     const record: BrowserGatewayHelperDiscoveryRecord = {
       pid: process.pid,
       port: this.options.port,
@@ -6573,6 +7222,7 @@ export class BrowserGatewayHelper {
       lastHeartbeatAt: new Date().toISOString(),
       helperVersion: this.options.helperVersion,
       helperGenerationId: this.helperGenerationId,
+      dataPlaneMode,
       browserBootstrapToken: this.browserBootstrapToken,
       clientSharedSecret: this.clientSharedSecret,
       lanAccess: Boolean(this.options.lanAccess),
@@ -6641,13 +7291,14 @@ export class BrowserGatewayHelper {
     relativePath: string,
     contentType: string,
     res: http.ServerResponse,
+    cacheControl = "no-cache",
   ): Promise<void> {
     try {
       const assetPath = path.join(this.options.extensionRootPath, relativePath);
       const content = await fs.readFile(assetPath);
       res.writeHead(200, {
         "Content-Type": contentType,
-        "Cache-Control": "no-cache",
+        "Cache-Control": cacheControl,
         ETag: JSON.stringify(`${this.options.helperVersion}:${relativePath}`),
         "X-AgentLink-Helper-Version": this.options.helperVersion,
       });
@@ -6661,6 +7312,7 @@ export class BrowserGatewayHelper {
     currentInstanceId: string,
     workspaceName: string,
     initialTheme: BrowserGatewayThemeSnapshot,
+    dataPlaneMode: BrowserGatewayDataPlaneMode,
   ): string {
     const assetVersion = encodeURIComponent(this.options.helperVersion);
     return `<!doctype html>
@@ -6690,7 +7342,8 @@ export class BrowserGatewayHelper {
       currentInstanceId: ${JSON.stringify(currentInstanceId)},
       workspaceName: ${JSON.stringify(workspaceName)},
       routeByInstance: true,
-      initialTheme: ${JSON.stringify(initialTheme)}
+      initialTheme: ${JSON.stringify(initialTheme)},
+      dataPlaneMode: ${JSON.stringify(dataPlaneMode)}
     };
   </script>
   <script type="module" src="/browser-gateway.js?v=${assetVersion}"></script>

@@ -52,6 +52,7 @@ import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow"
 import { DebugInfo } from "../../agent/webview/components/DebugInfo";
 import { BackgroundSessionStrip } from "../../agent/webview/components/BackgroundSessionStrip";
 import { BrowserDiffViewer } from "./components/BrowserDiffViewer";
+import { LazyMcpManagerPanel } from "./components/LazyMcpManagerPanel";
 import {
   InputArea,
   type ComposerContextMode,
@@ -102,18 +103,31 @@ import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBa
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
 import { McpElicitationFormControls } from "../../shared/ui/McpElicitationFormControls";
-import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
 
 import type {
   BgSessionInfo,
   BrowserGatewayThemeSnapshot,
   RevertRecoveryNotice,
 } from "../../shared/types";
+import {
+  normalizeBrowserGatewayDataPlaneMode,
+  type BrowserGatewayDataPlaneMode,
+} from "../browserGatewayDataPlaneMode";
 import type { BrowserGatewayInstanceStatusSummary } from "../protocol";
 import {
   BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
   BROWSER_GATEWAY_ASK_AGENT_TAB_TITLE,
 } from "../askAgentTabs";
+import {
+  RELAY_SHADOW_OVERRIDE_STORAGE_KEY,
+  resolveRelayClientEnabled,
+} from "./relay/relayClientSelection";
+import {
+  createRelaySourceEventPaintQueue,
+  queueAcceptedRelaySourceEventPaint,
+  type RelaySourceEventPaintMarker,
+  useRelayGatewayConnection,
+} from "./relay/useRelayGatewayConnection";
 import { useGatewaySnapshotConnection } from "./useGatewaySnapshotConnection";
 
 const DEFAULT_MAX_TOKENS = 200_000;
@@ -150,6 +164,30 @@ function scheduleAfterNextPaint(callback: () => void): void {
 }
 const streamingBaselineMetrics = __DEV_BUILD__
   ? getDevelopmentStreamingBaselineMetrics("browser-webview", true)
+  : undefined;
+const queueRelaySourceEventPaint = streamingBaselineMetrics
+  ? createRelaySourceEventPaintQueue({
+      scheduleAfterNextPaint,
+      record: (measurement) => {
+        streamingBaselineMetrics.record({
+          type: "source_event_paint",
+          surface: "browser-webview",
+          ...measurement,
+        });
+      },
+    })
+  : undefined;
+const observeGatewayConnection = streamingBaselineMetrics
+  ? (observation: {
+      phase: "created" | "open" | "first_commit" | "error";
+      elapsedMs: number;
+    }) => {
+      streamingBaselineMetrics.record({
+        type: "browser_connection",
+        surface: "browser-webview",
+        ...observation,
+      });
+    }
   : undefined;
 
 function serializeInstancesIgnoringLastSeen(
@@ -310,7 +348,7 @@ type GatewaySnapshotReadResult = {
   askAgentCapabilities?: AskAgentCapabilityStatus[];
 };
 
-type GatewaySnapshot = {
+export type GatewaySnapshot = {
   ui: {
     approval: ApprovalRequest | null;
     question: {
@@ -646,6 +684,7 @@ interface BrowserGatewayAppProps {
   workspaceName: string;
   routeByInstance?: boolean;
   initialTheme?: BrowserGatewayThemeSnapshot;
+  dataPlaneMode?: BrowserGatewayDataPlaneMode;
 }
 
 function readCachedTheme(): BrowserGatewayThemeSnapshot | null {
@@ -890,8 +929,21 @@ export function BrowserGatewayApp({
   workspaceName: _workspaceName,
   routeByInstance = false,
   initialTheme,
+  dataPlaneMode: initialDataPlaneMode,
 }: BrowserGatewayAppProps) {
   const [snapshot, setSnapshot] = useState<GatewaySnapshot | null>(null);
+  const [dataPlaneMode, setDataPlaneMode] =
+    useState<BrowserGatewayDataPlaneMode>(() =>
+      normalizeBrowserGatewayDataPlaneMode(initialDataPlaneMode, "off"),
+    );
+  const relayClientEnabled = resolveRelayClientEnabled({
+    dataPlaneMode,
+    developmentBuild: __DEV_BUILD__,
+    search: window.location.search,
+    storedOverride: window.localStorage.getItem(
+      RELAY_SHADOW_OVERRIDE_STORAGE_KEY,
+    ),
+  });
   const [instanceOptions, setInstanceOptions] = useState<
     BrowserGatewayInstanceOption[]
   >([]);
@@ -1014,7 +1066,12 @@ export function BrowserGatewayApp({
   );
 
   const commitSnapshot = useCallback(
-    (next: GatewaySnapshot, tabId: string, generation: number): boolean => {
+    (
+      next: GatewaySnapshot,
+      tabId: string,
+      generation: number,
+      sourceEventPaint?: RelaySourceEventPaintMarker,
+    ): boolean => {
       const cached = snapshotCacheRef.current.get(tabId);
       if (!cached || generation >= cached.generation) {
         snapshotCacheRef.current.set(tabId, { generation, snapshot: next });
@@ -1027,6 +1084,11 @@ export function BrowserGatewayApp({
       }
       snapshotOriginRef.current = { tabId, generation };
       setSnapshot(next);
+      queueAcceptedRelaySourceEventPaint(
+        true,
+        sourceEventPaint,
+        queueRelaySourceEventPaint,
+      );
       return true;
     },
     [],
@@ -1188,6 +1250,7 @@ export function BrowserGatewayApp({
   }, []);
 
   useGatewaySnapshotConnection({
+    enabled: !relayClientEnabled,
     authToken,
     tabId: selectedTabId,
     generation: selectedTabGenerationRef.current,
@@ -1211,7 +1274,51 @@ export function BrowserGatewayApp({
     fetchSessions,
     fetchDebugInfo,
     fetchInstances,
+    observeConnection: observeGatewayConnection,
   });
+  const dispatchRelayCommand = useRelayGatewayConnection({
+    enabled: relayClientEnabled,
+    selectedTabId,
+    selectedTabGeneration: selectedTabGenerationRef.current,
+    commitSnapshot,
+    setStatus,
+    onOperation: (operation) => {
+      if (operation.state === "accepted") return;
+      if (operation.kind === "session.send") {
+        setSendStatus(
+          operation.state === "completed"
+            ? "Sent"
+            : `Send ${operation.state}: ${operation.message ?? "unknown status"}`,
+        );
+      } else if (operation.kind === "session.stop") {
+        setSendStatus(
+          operation.state === "completed"
+            ? "Stopped"
+            : `Stop ${operation.state}: ${operation.message ?? "unknown status"}`,
+        );
+      } else if (operation.kind === "session.select") {
+        setSessionHistoryError(
+          operation.state === "completed"
+            ? null
+            : `Session selection ${operation.state}: ${operation.message ?? "unknown status"}`,
+        );
+      }
+    },
+  });
+
+  useEffect(() => {
+    if (!relayClientEnabled) return;
+    void fetchModes(selectedInstanceId);
+    void fetchModels(selectedInstanceId, isAskAgentSelected);
+    void fetchSlashCommands(selectedInstanceId, isAskAgentSelected);
+    if (!isAskAgentSelected) {
+      void fetchSessions(selectedInstanceId, false);
+      void fetchDebugInfo(selectedInstanceId);
+    }
+    void fetchInstances({ commitSelection: false });
+    const timer = window.setInterval(() => void fetchInstances(), 5_000);
+    return () => window.clearInterval(timer);
+  }, [relayClientEnabled, selectedTabId]);
 
   // Re-fetch the model list when the gateway signals a model-metadata change
   // (e.g. Anthropic dynamic capability refresh). Keeps browser models in parity
@@ -1697,6 +1804,7 @@ export function BrowserGatewayApp({
       }
       const data = (await response.json()) as {
         currentInstanceId: string;
+        dataPlaneMode?: BrowserGatewayDataPlaneMode;
         instances: Array<{
           instanceId: string;
           workspaceName: string;
@@ -1705,6 +1813,11 @@ export function BrowserGatewayApp({
           status?: BrowserGatewayInstanceStatusSummary;
         }>;
       };
+      if (data.dataPlaneMode !== undefined) {
+        setDataPlaneMode(
+          normalizeBrowserGatewayDataPlaneMode(data.dataPlaneMode, "off"),
+        );
+      }
       const now = Date.now();
       const liveInstanceIds = new Set(
         data.instances.map((instance) => instance.instanceId),
@@ -2347,7 +2460,7 @@ export function BrowserGatewayApp({
     GatewaySnapshot["session"]["foreground"] | null
   > {
     if (foreground) return foreground;
-    if (!isAskAgentSelected) return null;
+    if (!isAskAgentSelected || relayClientEnabled) return null;
 
     try {
       logAskAgentBrowserEvent("send.ensure_session.start", {
@@ -2534,6 +2647,36 @@ export function BrowserGatewayApp({
         origin,
         interject,
       });
+      const relayEligible =
+        relayClientEnabled &&
+        origin === "user" &&
+        !interject &&
+        attachments.length === 0 &&
+        images.length === 0 &&
+        documents.length === 0 &&
+        displayText === undefined &&
+        slashCommandLabel === undefined;
+      if (relayEligible) {
+        const relay = await dispatchRelayCommand({
+          kind: "session.send",
+          sessionId: activeForeground.sessionId,
+          text: trimmed,
+          detailHandles: [],
+        });
+        if (relay.handled) {
+          setSendStatus(
+            relay.operation.state === "accepted"
+              ? "Sending…"
+              : relay.operation.state === "completed"
+                ? "Sent"
+                : `Send ${relay.operation.state}: ${relay.operation.message ?? "unknown status"}`,
+          );
+          return (
+            relay.operation.state === "accepted" ||
+            relay.operation.state === "completed"
+          );
+        }
+      }
       const sendPath = isAskAgentSelected
         ? "/api/ask-agent/send"
         : buildApiPath("/api/send");
@@ -2570,7 +2713,7 @@ export function BrowserGatewayApp({
         error?: string;
         snapshot?: GatewaySnapshot;
       };
-      if (body.ok && body.snapshot) {
+      if (!relayClientEnabled && body.ok && body.snapshot) {
         setSnapshot(body.snapshot);
       }
       logAskAgentBrowserEvent("send.response", {
@@ -2637,6 +2780,21 @@ export function BrowserGatewayApp({
     setSendStatus("Stopping…");
     void (async () => {
       try {
+        if (relayClientEnabled) {
+          const relay = await dispatchRelayCommand({
+            kind: "session.stop",
+            sessionId,
+          });
+          if (relay.handled) {
+            setSendStatus(
+              relay.operation.state === "failed" ||
+                relay.operation.state === "uncertain"
+                ? `Stop ${relay.operation.state}: ${relay.operation.message ?? "unknown status"}`
+                : "Stop requested",
+            );
+            return;
+          }
+        }
         const response = await fetch(
           isAskAgentSelected
             ? "/api/ask-agent/stop"
@@ -2657,7 +2815,7 @@ export function BrowserGatewayApp({
           error?: string;
           snapshot?: GatewaySnapshot;
         };
-        if (body.ok && body.snapshot) {
+        if (!relayClientEnabled && body.ok && body.snapshot) {
           setSnapshot(body.snapshot);
         }
         setSendStatus(
@@ -2889,36 +3047,67 @@ export function BrowserGatewayApp({
 
   const handleLoadSession = (sessionId: string): void => {
     void (async () => {
-      const response = await fetch(
-        isAskAgentSelected
-          ? "/api/ask-agent/session/load"
-          : buildApiPath("/api/session/load"),
-        {
-          method: "POST",
-          credentials: "same-origin",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${authToken}`,
-          },
-          body: JSON.stringify({
+      try {
+        if (relayClientEnabled) {
+          const relay = await dispatchRelayCommand({
+            kind: "session.select",
             sessionId,
-            projectId: isAskAgentSelected
-              ? undefined
-              : snapshot?.session.sessions.find(
-                  (session) => session.id === sessionId,
-                )?.project?.projectId,
-          }),
-        },
-      );
-      const body = (await response.json().catch(() => ({}))) as {
-        ok?: boolean;
-        snapshot?: GatewaySnapshot;
-      };
-      if (body.ok && body.snapshot) {
-        setSnapshot(body.snapshot);
+          });
+          if (relay.handled) {
+            if (
+              relay.operation.state === "failed" ||
+              relay.operation.state === "uncertain"
+            ) {
+              setSessionHistoryError(
+                `Failed to load session: ${relay.operation.message ?? relay.operation.state}`,
+              );
+              return;
+            }
+            setShowHistory(false);
+            setShowMcpStatus(false);
+            return;
+          }
+        }
+        const response = await fetch(
+          isAskAgentSelected
+            ? "/api/ask-agent/session/load"
+            : buildApiPath("/api/session/load"),
+          {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              sessionId,
+              projectId: isAskAgentSelected
+                ? undefined
+                : snapshot?.session.sessions.find(
+                    (session) => session.id === sessionId,
+                  )?.project?.projectId,
+            }),
+          },
+        );
+        const body = (await response.json().catch(() => ({}))) as {
+          ok?: boolean;
+          error?: string;
+          snapshot?: GatewaySnapshot;
+        };
+        if (!response.ok || body.ok === false) {
+          setSessionHistoryError(
+            `Failed to load session: ${body.error ?? response.status}`,
+          );
+          return;
+        }
+        if (!relayClientEnabled && body.snapshot) {
+          setSnapshot(body.snapshot);
+        }
+        setShowHistory(false);
+        setShowMcpStatus(false);
+      } catch (error) {
+        setSessionHistoryError(`Failed to load session: ${String(error)}`);
       }
-      setShowHistory(false);
-      setShowMcpStatus(false);
     })();
   };
 
@@ -3415,7 +3604,7 @@ export function BrowserGatewayApp({
         error?: string;
         snapshot?: GatewaySnapshot;
       };
-      if (body.ok && body.snapshot) {
+      if (!relayClientEnabled && body.ok && body.snapshot) {
         commitSnapshot(body.snapshot, origin.tabId, origin.generation);
       }
       if (!body.ok && selectedTabIdRef.current === origin.tabId) {
@@ -5218,7 +5407,7 @@ export function BrowserGatewayApp({
                         } satisfies McpConfigSnapshot)
                       : renderedMcpSnapshot;
                     return (
-                      <McpManagerPanel
+                      <LazyMcpManagerPanel
                         snapshot={panelSnapshot}
                         initialView={mcpManagerView}
                         error={

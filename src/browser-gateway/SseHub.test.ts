@@ -63,6 +63,45 @@ describe("SseHub", () => {
     }
   });
 
+  it("records first delivery latency and bytes after a successful snapshot write", async () => {
+    let now = 100;
+    const deliveries: Array<{ durationMs: number; bytes: number }> = [];
+    const hub = new SseHub<string>({
+      serialize: JSON.stringify,
+      keepaliveIntervalMs: 0,
+      now: () => now,
+      onFirstDelivery: (sample) => deliveries.push(sample),
+    });
+    const res = new FakeResponse();
+
+    const subscribed = hub.subscribe(request(), response(res), async () => {
+      now = 135;
+      return publication(1);
+    });
+
+    await expect(subscribed).resolves.toEqual(publication(1));
+    expect(deliveries).toEqual([
+      { durationMs: 35, bytes: publication(1).bytes },
+    ]);
+  });
+
+  it("does not record first delivery when the initial write backpressures", async () => {
+    const onFirstDelivery = vi.fn();
+    const hub = new SseHub<string>({
+      serialize: JSON.stringify,
+      keepaliveIntervalMs: 0,
+      onFirstDelivery,
+    });
+    const res = new FakeResponse();
+    res.write.mockReturnValueOnce(false);
+
+    await expect(
+      hub.subscribe(request(), response(res), () => publication(1)),
+    ).resolves.toBeNull();
+
+    expect(onFirstDelivery).not.toHaveBeenCalled();
+  });
+
   it("disconnects only the client whose write reports backpressure", async () => {
     const removals: string[] = [];
     const hub = new SseHub<string>({

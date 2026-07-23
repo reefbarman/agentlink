@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppState } from "../../shared/chatProjection";
 import type { ApprovalRequest } from "../../approvals/webview/types";
+import { BROWSER_GATEWAY_ASK_AGENT_OWNER_ID } from "../browserGatewayAskAgentIdentity";
 import type { BgSessionInfo } from "../../shared/types";
 import { BrowserGatewayApp } from "./BrowserGatewayApp";
 import { h } from "preact";
@@ -482,6 +483,12 @@ class MockEventSource {
     this.url = url;
     MockEventSource.instances.push(this);
   }
+
+  emit(type: string, value: unknown): void {
+    for (const [eventName, listener] of this.addEventListener.mock.calls) {
+      if (eventName === type) listener({ data: JSON.stringify(value) });
+    }
+  }
 }
 
 function getInstanceTabs(): HTMLElement[] {
@@ -653,6 +660,114 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     cleanup();
     window.localStorage.clear();
     document.documentElement.removeAttribute("style");
+  });
+
+  it("uses one relay EventSource across collision-safe tab subscriptions when mode is on", async () => {
+    const legacyFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/relay/subscription")) {
+          const request = JSON.parse(String(init?.body)) as {
+            browserConnectionId: string;
+            ownerId: string;
+            ownerGenerationId: string;
+          };
+          return jsonResponse(
+            {
+              ok: true,
+              protocolVersion: "1",
+              helperGenerationId: "helper-1",
+              browserConnectionId: request.browserConnectionId,
+              subscriptionId: `subscription-${request.ownerId}`,
+              ownerId: request.ownerId,
+              ownerGenerationId: request.ownerGenerationId,
+            },
+            202,
+          );
+        }
+        return legacyFetch(input, init);
+      },
+    ) as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        dataPlaneMode: "on",
+      }),
+    );
+
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+    const source = MockEventSource.instances[0]!;
+    expect(source.url).toBe("/api/relay/events");
+    await act(async () => {
+      source.emit("hello", {
+        protocolVersion: "1",
+        helperGenerationId: "helper-1",
+        browserConnectionId: "connection-1",
+        csrfNonce: "nonce-1",
+        emittedAt: 1,
+      });
+      source.emit("catalog", {
+        protocolVersion: "1",
+        helperGenerationId: "helper-1",
+        emittedAt: 1,
+        owners: [
+          {
+            ownerId: BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+            ownerGenerationId: "ask-generation",
+            ownerKind: "browser-gateway",
+            displayName: "Ask Agent",
+            scope: {
+              kind: "projectless",
+              scopeId: "ask-agent",
+              displayName: "Ask Agent",
+            },
+            status: "connected",
+            capabilities: [],
+            lastHeartbeatAt: 1,
+          },
+          {
+            ownerId: "collision-adjusted-owner",
+            ownerGenerationId: "workspace-generation",
+            ownerKind: "vscode",
+            displayName: "Workspace",
+            instanceId: "instance-1",
+            scope: {
+              kind: "workspace",
+              workspaceId: "workspace-1",
+              displayName: "Workspace",
+            },
+            status: "connected",
+            capabilities: [],
+            lastHeartbeatAt: 1,
+          },
+        ],
+      });
+    });
+    await selectWorkspaceTab();
+    await waitFor(() => {
+      const subscriptionCalls = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.filter(([url]) =>
+          String(url).includes("/api/relay/subscription"),
+        );
+      expect(subscriptionCalls).toHaveLength(2);
+      expect(JSON.parse(String(subscriptionCalls[1]?.[1]?.body))).toMatchObject(
+        {
+          ownerId: "collision-adjusted-owner",
+          ownerGenerationId: "workspace-generation",
+        },
+      );
+    });
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    expect(source.close).not.toHaveBeenCalled();
+    expect(source.url).not.toContain("/events?instanceId=");
+    expect(source.url).not.toBe("/api/ask-agent/events");
   });
 
   it("applies injected initial theme when no cached theme exists", () => {

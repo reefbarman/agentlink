@@ -39,6 +39,10 @@ export interface SseHubOptions<T> {
   readonly clearInterval?: (timer: NodeJS.Timeout) => void;
   readonly onClientCountChanged?: (clientCount: number) => void;
   readonly onClientRemoved?: (reason: SseClientRemovalReason) => void;
+  readonly onFirstDelivery?: (sample: {
+    durationMs: number;
+    bytes: number;
+  }) => void;
 }
 
 type SseClient<T> = {
@@ -48,6 +52,7 @@ type SseClient<T> = {
   initializing: boolean;
   pendingPublication: SsePublication<T> | undefined;
   readonly captureController: AbortController;
+  readonly subscribedAt: number;
   readonly removed: Promise<void>;
   readonly resolveRemoved: () => void;
   removeListeners: () => void;
@@ -86,6 +91,9 @@ export class SseHub<T> {
   private readonly onClientRemoved:
     | ((reason: SseClientRemovalReason) => void)
     | undefined;
+  private readonly onFirstDelivery:
+    | ((sample: { durationMs: number; bytes: number }) => void)
+    | undefined;
   private disposed = false;
 
   constructor(options: SseHubOptions<T>) {
@@ -100,6 +108,7 @@ export class SseHub<T> {
     this.cancelInterval = options.clearInterval ?? clearInterval;
     this.onClientCountChanged = options.onClientCountChanged;
     this.onClientRemoved = options.onClientRemoved;
+    this.onFirstDelivery = options.onFirstDelivery;
   }
 
   get size(): number {
@@ -150,6 +159,7 @@ export class SseHub<T> {
       initializing: true,
       pendingPublication: undefined,
       captureController,
+      subscribedAt: this.now(),
       removed,
       resolveRemoved,
       removeListeners: () => {
@@ -191,6 +201,12 @@ export class SseHub<T> {
     client.pendingPublication = undefined;
 
     if (!this.writeEvent(client, "snapshot", selected.serialized)) return null;
+    this.notify(() =>
+      this.onFirstDelivery?.({
+        durationMs: Math.max(0, this.now() - client.subscribedAt),
+        bytes: selected.bytes,
+      }),
+    );
 
     if (this.keepaliveIntervalMs > 0) {
       try {

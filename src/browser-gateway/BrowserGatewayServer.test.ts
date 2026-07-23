@@ -392,7 +392,11 @@ describe("BrowserGatewayServer", () => {
         readers.push(reader);
         await reader.read();
       }
-      expect(recorder.summarize("vscode-gateway").connectedClientsMax).toBe(2);
+      expect(recorder.summarize("vscode-gateway")).toMatchObject({
+        connectedClientsMax: 2,
+        firstDeliveries: 2,
+        firstDeliveryBytes: expect.any(Number),
+      });
       recorder.reset();
 
       hub.publishApproval({
@@ -407,6 +411,7 @@ describe("BrowserGatewayServer", () => {
         snapshotBuilds: 1,
         serializations: 1,
         broadcasts: 1,
+        broadcastAttempts: 2,
         broadcastDeliveries: 2,
         connectedClientsMax: 2,
       });

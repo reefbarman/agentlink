@@ -35,6 +35,22 @@ export interface BrowserGatewayCoreOwnerRegistryOptions {
   heartbeatTtlMs: number;
 }
 
+export type BrowserGatewayCoreOwnerRegistrationResolution =
+  | "registered"
+  | "renewed"
+  | "superseded"
+  | "taken_over"
+  | "collision_assigned";
+
+export interface BrowserGatewayCoreOwnerRegistrationResult<
+  TCapabilityId extends string = string,
+> {
+  readonly requestedOwnerId: string;
+  readonly effectiveOwnerId: string;
+  readonly resolution: BrowserGatewayCoreOwnerRegistrationResolution;
+  readonly registration: CoreOwnerRegistrationDto<TCapabilityId>;
+}
+
 export class BrowserGatewayCoreOwnerRegistry<
   TCapabilityId extends string = string,
 > {
@@ -42,6 +58,7 @@ export class BrowserGatewayCoreOwnerRegistry<
     string,
     CoreOwnerRegistrationDto<TCapabilityId>
   >();
+  private readonly collisionOwnerIds = new Map<string, string>();
 
   constructor(
     private readonly options: BrowserGatewayCoreOwnerRegistryOptions,
@@ -69,6 +86,83 @@ export class BrowserGatewayCoreOwnerRegistry<
     };
     this.owners.set(registration.ownerId, record);
     return record;
+  }
+
+  registerWithCollisionPolicy(
+    registration: BrowserGatewayCoreOwnerRegistration<TCapabilityId>,
+  ): BrowserGatewayCoreOwnerRegistrationResult<TCapabilityId> {
+    this.refreshStatuses(registration.now);
+    const requestedOwnerId = registration.ownerId;
+    const collisionKey = `${requestedOwnerId}\u0000${registration.ownerGenerationId}`;
+    const assignedOwnerId = this.collisionOwnerIds.get(collisionKey);
+    if (assignedOwnerId) {
+      const record = this.register({
+        ...registration,
+        ownerId: assignedOwnerId,
+      });
+      return {
+        requestedOwnerId,
+        effectiveOwnerId: assignedOwnerId,
+        resolution: "renewed",
+        registration: record,
+      };
+    }
+    const current = this.owners.get(requestedOwnerId);
+    if (!current) {
+      const record = this.register(registration);
+      return {
+        requestedOwnerId,
+        effectiveOwnerId: requestedOwnerId,
+        resolution: "registered",
+        registration: record,
+      };
+    }
+    if (current.ownerGenerationId === registration.ownerGenerationId) {
+      const record = this.register(registration);
+      return {
+        requestedOwnerId,
+        effectiveOwnerId: requestedOwnerId,
+        resolution: "renewed",
+        registration: record,
+      };
+    }
+    if (current.status !== "connected") {
+      const record = this.register(registration);
+      return {
+        requestedOwnerId,
+        effectiveOwnerId: requestedOwnerId,
+        resolution: "taken_over",
+        registration: record,
+      };
+    }
+    if (
+      registration.instanceId &&
+      current.owner.instanceId === registration.instanceId
+    ) {
+      const record = this.register(registration);
+      return {
+        requestedOwnerId,
+        effectiveOwnerId: requestedOwnerId,
+        resolution: "superseded",
+        registration: record,
+      };
+    }
+
+    const effectiveOwnerId = this.allocateCollisionOwnerId(
+      requestedOwnerId,
+      registration.ownerGenerationId,
+    );
+    const record = this.register({
+      ...registration,
+      ownerId: effectiveOwnerId,
+    });
+    this.collisionOwnerIds.set(collisionKey, effectiveOwnerId);
+    return {
+      requestedOwnerId,
+      effectiveOwnerId,
+      resolution: "collision_assigned",
+      registration: record,
+    };
   }
 
   heartbeat(
@@ -153,4 +247,24 @@ export class BrowserGatewayCoreOwnerRegistry<
     }
     return owner;
   }
+
+  private allocateCollisionOwnerId(
+    requestedOwnerId: string,
+    ownerGenerationId: string,
+  ): string {
+    const suffix =
+      sanitizeOwnerIdSegment(ownerGenerationId).slice(0, 24) || "generation";
+    const base = `${requestedOwnerId}~${suffix}`;
+    let candidate = base;
+    let attempt = 1;
+    while (this.owners.has(candidate)) {
+      attempt += 1;
+      candidate = `${base}-${attempt}`;
+    }
+    return candidate;
+  }
+}
+
+function sanitizeOwnerIdSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9_.-]/g, "-");
 }

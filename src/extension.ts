@@ -68,6 +68,17 @@ import { BrowserGatewayService } from "./browser-gateway/BrowserGatewayService.j
 import { BrowserGatewayRepositoryObserver } from "./browser-gateway/BrowserGatewayRepositoryObserver.js";
 import { BrowserGatewayServer } from "./browser-gateway/BrowserGatewayServer.js";
 import { registerBrowserGatewayCommands } from "./browser-gateway/browserGatewayCommands.js";
+import {
+  BROWSER_GATEWAY_DATA_PLANE_DEFAULT,
+  isBrowserGatewayOwnerPublicationEnabled,
+  normalizeBrowserGatewayDataPlaneMode,
+  type BrowserGatewayDataPlaneMode,
+} from "./browser-gateway/browserGatewayDataPlaneMode.js";
+import {
+  BROWSER_GATEWAY_PRODUCTION_OWNER_COMMAND_CAPABILITIES,
+  ProductionBrowserGatewayOwnerCommandExecutor,
+} from "./browser-gateway/dataPlane/BrowserGatewayOwnerCommandExecutor.js";
+import { BrowserGatewayOwnerRuntime } from "./browser-gateway/dataPlane/BrowserGatewayOwnerRuntime.js";
 import { diffSnapshotHub } from "./browser-gateway/DiffSnapshotHub.js";
 import {
   bootstrapBrowserGatewayHelper,
@@ -161,6 +172,7 @@ let browserGatewayHelperAdminClient: BrowserGatewayHelperAdminClient | null =
   null;
 let browserGatewayHelperModelAuthLeaseClient: BrowserGatewayHelperModelAuthLeaseClient | null =
   null;
+let browserGatewayShutdownPromise: Promise<void> | null = null;
 
 const SEMANTIC_SETUP_PROMPT_DISMISSED_KEY =
   "semanticSetupPromptDismissedGlobally";
@@ -1247,6 +1259,17 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   const browserGatewayWindowId = randomUUID();
   const browserGatewayInstanceId = `${browserGatewayWorkspaceInstanceId}:${browserGatewayWindowId}`;
+  const browserGatewayDataPlaneConfiguration = vscode.workspace
+    .getConfiguration("agentlink")
+    .inspect<BrowserGatewayDataPlaneMode>("browserGateway.dataPlane");
+  const configuredBrowserGatewayDataPlaneMode =
+    browserGatewayDataPlaneConfiguration?.workspaceFolderValue ??
+    browserGatewayDataPlaneConfiguration?.workspaceValue ??
+    browserGatewayDataPlaneConfiguration?.globalValue;
+  const browserGatewayDataPlaneMode = normalizeBrowserGatewayDataPlaneMode(
+    configuredBrowserGatewayDataPlaneMode,
+    BROWSER_GATEWAY_DATA_PLANE_DEFAULT,
+  );
   const firstWorkspace = vscode.workspace.workspaceFolders?.[0];
   const browserWorkspaceName =
     firstWorkspace?.name ?? path.basename(workspaceCwd);
@@ -1265,6 +1288,7 @@ export function activate(context: vscode.ExtensionContext): void {
     log,
     undefined,
     () => browserGatewayHelperDiscovery?.clientSharedSecret ?? null,
+    browserGatewayDataPlaneMode,
   );
   context.subscriptions.push(browserGatewayServer);
   const browserGatewayPort = getConfig<number>("browserGatewayPort") || 47137;
@@ -1284,6 +1308,13 @@ export function activate(context: vscode.ExtensionContext): void {
       rootPathLabel: browserWorkspacePath,
     },
     ownerGenerationId: helperCoreOwnerGenerationId,
+    capabilities: isBrowserGatewayOwnerPublicationEnabled(
+      browserGatewayDataPlaneMode,
+    )
+      ? BROWSER_GATEWAY_PRODUCTION_OWNER_COMMAND_CAPABILITIES.map(
+          (capabilityId) => ({ capabilityId, state: "enabled" as const }),
+        )
+      : [],
     instanceId: browserGatewayInstanceId,
     processId: process.pid,
   };
@@ -1294,6 +1325,8 @@ export function activate(context: vscode.ExtensionContext): void {
   let browserGatewayRuntimeEnsurePromise: Promise<void> | null = null;
   let browserGatewayRestartInProgress = false;
   let browserGatewayHealthCheckTimer: NodeJS.Timeout | undefined;
+  let browserGatewayOwnerRuntime: BrowserGatewayOwnerRuntime | null = null;
+  let browserGatewayOwnerRuntimeGenerationId: string | null = null;
   context.subscriptions.push({
     dispose: () => {
       log(
@@ -1304,14 +1337,80 @@ export function activate(context: vscode.ExtensionContext): void {
       browserGatewayBridgeStartPromise = null;
       browserGatewayRuntimeEnsurePromise = null;
       browserGatewayRestartInProgress = false;
-      browserGatewayHelperLeaseClient?.dispose();
+      const runtime = browserGatewayOwnerRuntime;
+      browserGatewayOwnerRuntime = null;
+      browserGatewayOwnerRuntimeGenerationId = null;
+      const leaseClient = browserGatewayHelperLeaseClient;
       browserGatewayHelperLeaseClient = null;
+      browserGatewayShutdownPromise = (async () => {
+        await runtime?.close();
+        await leaseClient?.stop();
+      })().catch((error) => {
+        log(`[browser-gateway] shutdown cleanup failed: ${String(error)}`);
+      });
       if (browserGatewayHealthCheckTimer) {
         clearInterval(browserGatewayHealthCheckTimer);
         browserGatewayHealthCheckTimer = undefined;
       }
     },
   });
+
+  const stopBrowserGatewayOwnerRuntime = async (): Promise<void> => {
+    const runtime = browserGatewayOwnerRuntime;
+    browserGatewayOwnerRuntime = null;
+    browserGatewayOwnerRuntimeGenerationId = null;
+    if (!runtime) return;
+    await runtime.close();
+  };
+
+  const ensureBrowserGatewayOwnerRuntime = async (): Promise<void> => {
+    if (!isBrowserGatewayOwnerPublicationEnabled(browserGatewayDataPlaneMode)) {
+      await stopBrowserGatewayOwnerRuntime();
+      return;
+    }
+    const discovery = browserGatewayHelperDiscovery;
+    const service = browserGatewayService;
+    if (!discovery?.helperGenerationId || !service) {
+      throw new Error("browser_gateway_owner_runtime_helper_unavailable");
+    }
+    if (
+      browserGatewayOwnerRuntime &&
+      browserGatewayOwnerRuntimeGenerationId === discovery.helperGenerationId
+    ) {
+      return;
+    }
+    await stopBrowserGatewayOwnerRuntime();
+    const runtime = new BrowserGatewayOwnerRuntime({
+      helperUrl: discovery.url,
+      clientSharedSecret: discovery.clientSharedSecret,
+      helperGenerationId: discovery.helperGenerationId,
+      owner: helperCoreOwner,
+      sources: service.getOwnerProjectionSources(),
+      executor: new ProductionBrowserGatewayOwnerCommandExecutor(
+        chatViewProvider,
+      ),
+      commandCapabilities:
+        BROWSER_GATEWAY_PRODUCTION_OWNER_COMMAND_CAPABILITIES,
+      log,
+    });
+    await runtime.start();
+    if (browserGatewayActivationDisposed) {
+      await runtime.close();
+      throw new Error("browser_gateway_activation_disposed");
+    }
+    if (
+      browserGatewayHelperDiscovery?.helperGenerationId !==
+      discovery.helperGenerationId
+    ) {
+      await runtime.close();
+      throw new Error("browser_gateway_owner_runtime_helper_superseded");
+    }
+    browserGatewayOwnerRuntime = runtime;
+    browserGatewayOwnerRuntimeGenerationId = discovery.helperGenerationId;
+    log(
+      `[browser-gateway-data-plane] owner active mode=${browserGatewayDataPlaneMode} helperGenerationId=${discovery.helperGenerationId}`,
+    );
+  };
 
   const formatBrowserGatewayHelperError = (err: unknown): string => {
     const message = err instanceof Error ? err.message : String(err);
@@ -1408,6 +1507,13 @@ export function activate(context: vscode.ExtensionContext): void {
         throw new Error("browser_gateway_activation_disposed");
       }
 
+      if (
+        browserGatewayOwnerRuntimeGenerationId &&
+        browserGatewayOwnerRuntimeGenerationId !==
+          result.discovery.helperGenerationId
+      ) {
+        await stopBrowserGatewayOwnerRuntime();
+      }
       browserGatewayHelperDiscovery = result.discovery;
       const discovered = result.discovery;
       const externalUrl =
@@ -1546,6 +1652,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await ensureBrowserGatewayHelperReady();
       }
       await grantBrowserGatewayModelCredentials();
+      await ensureBrowserGatewayOwnerRuntime();
     })().finally(() => {
       browserGatewayRuntimeEnsurePromise = null;
     });
@@ -1594,6 +1701,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     browserGatewayRestartInProgress = true;
     try {
+      await stopBrowserGatewayOwnerRuntime();
       const previousLeaseClient = browserGatewayHelperLeaseClient;
       browserGatewayHelperLeaseClient = null;
       if (previousLeaseClient) {
@@ -2035,17 +2143,17 @@ export function activate(context: vscode.ExtensionContext): void {
       browserGatewayServer = null;
       browserGatewayService = null;
       browserGatewayAuthToken = null;
-      browserGatewayHelperLeaseClient?.dispose();
-      browserGatewayHelperLeaseClient = null;
       browserGatewayHelperDiscovery = null;
       diffSnapshotHub.dispose();
     },
   });
 }
 
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
   toolUsageTelemetry?.dispose();
   toolUsageTelemetry = null;
+  await browserGatewayShutdownPromise;
+  browserGatewayShutdownPromise = null;
   contextUsageTelemetry?.dispose();
   contextUsageTelemetry = null;
 }

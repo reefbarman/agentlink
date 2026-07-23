@@ -3,6 +3,7 @@ export type BrowserGatewayAuthPolicy =
   | "instance-bearer"
   | "browser-session"
   | "helper-shared-secret"
+  | "helper-shared-secret+loopback"
   | "instance-bearer+helper-shared-secret";
 
 export interface BrowserGatewayRouteFamily {
@@ -46,14 +47,32 @@ export const BROWSER_GATEWAY_ROUTE_FAMILIES = [
   },
   {
     surface: "helper",
+    methods: ["GET", "POST"],
+    pathClass:
+      "/api/relay/events, /api/relay/subscription, /api/relay/commands, /api/relay/operations/status, /api/relay/details",
+    auth: "browser-session",
+    notes:
+      "Helper-owned replayable stream; mutations also require connection-bound CSRF and an allowed same-origin Host.",
+  },
+  {
+    surface: "helper",
     methods: ["GET", "POST", "DELETE"],
-    pathClass: "/api/ask-agent/*, /api/instances, /api/* proxy, /events",
+    pathClass:
+      "/api/ask-agent/*, /api/instances, /api/* proxy except relay routes, /events",
     auth: "browser-session",
   },
   {
     surface: "helper",
     methods: ["GET", "POST"],
-    pathClass: "/internal/*",
+    pathClass: "/internal/core-owners/*, /internal/data-plane/*",
+    auth: "helper-shared-secret+loopback",
+    notes:
+      "Owner-plane routes validate the actual socket address; forwarded headers cannot grant loopback trust.",
+  },
+  {
+    surface: "helper",
+    methods: ["GET", "POST"],
+    pathClass: "/internal/* except owner-plane routes",
     auth: "helper-shared-secret",
   },
 ] as const satisfies readonly BrowserGatewayRouteFamily[];

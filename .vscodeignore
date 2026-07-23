@@ -26,6 +26,10 @@
 !dist/chat.css
 !dist/browser-gateway.js
 !dist/browser-gateway.css
+!dist/browser-gateway-monaco.js
+!dist/browser-gateway-monaco.css
+!dist/browser-gateway-chunks/
+!dist/browser-gateway-chunks/*.js
 !dist/terminal.js
 !dist/terminal.js.map
 !dist/terminal.css

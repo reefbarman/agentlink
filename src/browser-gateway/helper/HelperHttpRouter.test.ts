@@ -22,12 +22,15 @@ describe("HelperHttpRouter", () => {
   beforeEach(() => {
     host = {
       isInternalAuthorized: vi.fn(() => true),
+      isOwnerPlaneLoopback: vi.fn(() => true),
       authenticate: vi.fn(async () => ({ deviceId: "device-1" })),
       recordAuthenticatedActivity: vi.fn(),
       handleAskAgent: vi.fn(async () => undefined),
       handleInternalCore: vi.fn(async () => undefined),
+      handleInternalDataPlane: vi.fn(async () => undefined),
       handleInternalDevice: vi.fn(async () => undefined),
       handlePairedBrowser: vi.fn(async () => undefined),
+      handleBrowserRelay: vi.fn(async () => undefined),
       handlePublic: vi.fn(async () => undefined),
       handleInstances: vi.fn(async () => undefined),
       handleProxy: vi.fn(async () => undefined),
@@ -77,6 +80,45 @@ describe("HelperHttpRouter", () => {
     });
   });
 
+  it("routes exact data-plane paths before fallback and requires loopback", async () => {
+    const res = response();
+    router.handle(request("POST", "/internal/data-plane/publications"), res);
+    await Promise.resolve();
+
+    expect(host.handleInternalDataPlane).toHaveBeenCalledWith(
+      "publications",
+      expect.anything(),
+      res,
+      expect.objectContaining({
+        pathname: "/internal/data-plane/publications",
+      }),
+    );
+    expect(host.handleInternalCore).not.toHaveBeenCalled();
+    expect(host.handleProxy).not.toHaveBeenCalled();
+
+    vi.mocked(host.isOwnerPlaneLoopback).mockReturnValue(false);
+    router.handle(request("GET", "/internal/data-plane/commands"), res);
+    router.handle(request("POST", "/internal/core-owners/register"), res);
+    await Promise.resolve();
+
+    expect(host.writeJson).toHaveBeenCalledWith(res, 403, {
+      error: "loopback_required",
+    });
+    expect(host.handleInternalDataPlane).toHaveBeenCalledTimes(1);
+    expect(host.handleInternalCore).not.toHaveBeenCalled();
+
+    vi.mocked(host.isOwnerPlaneLoopback).mockReturnValue(true);
+    router.handle(
+      request("POST", "/internal/ignored/../data-plane/publications"),
+      res,
+    );
+    await Promise.resolve();
+    expect(host.writeJson).toHaveBeenCalledWith(res, 404, {
+      error: "not_found",
+    });
+    expect(host.handleInternalDataPlane).toHaveBeenCalledTimes(1);
+  });
+
   it("routes pairing and public assets without browser authentication", async () => {
     const res = response();
     router.handle(request("GET", "/pair"), res);
@@ -96,6 +138,37 @@ describe("HelperHttpRouter", () => {
       expect.objectContaining({ pathname: "/browser-gateway.js" }),
     );
     expect(host.authenticate).not.toHaveBeenCalled();
+  });
+
+  it("routes exact authenticated relay paths before the legacy proxy", async () => {
+    const res = response();
+    router.handle(request("GET", "/api/relay/events"), res);
+    router.handle(request("POST", "/api/relay/subscription"), res);
+    router.handle(request("POST", "/api/relay/commands"), res);
+    router.handle(request("POST", "/api/relay/operations/status"), res);
+    router.handle(request("GET", "/api/relay/details?handleId=a"), res);
+    await vi.waitFor(() => {
+      expect(host.handleBrowserRelay).toHaveBeenCalledTimes(5);
+    });
+
+    expect(host.handleBrowserRelay).toHaveBeenCalledWith(
+      "events",
+      { deviceId: "device-1" },
+      expect.anything(),
+      res,
+      expect.objectContaining({ pathname: "/api/relay/events" }),
+    );
+    expect(host.handleProxy).not.toHaveBeenCalled();
+
+    router.handle(request("GET", "/api/ignored/../relay/events"), res);
+    router.handle(request("GET", "/api/relay/commands"), res);
+    router.handle(request("GET", "/api/relay/unknown"), res);
+    await Promise.resolve();
+    expect(host.writeJson).toHaveBeenCalledWith(res, 404, {
+      error: "not_found",
+    });
+    expect(host.handleBrowserRelay).toHaveBeenCalledTimes(5);
+    expect(host.handleProxy).not.toHaveBeenCalled();
   });
 
   it("authenticates Ask Agent, instances, events, and proxy APIs", async () => {

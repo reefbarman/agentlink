@@ -215,7 +215,10 @@ describe("AskAgentController", () => {
 
   it("owns exclusive turn reservation and identity-safe completion", async () => {
     const publications: AskAgentControllerPublication[] = [];
-    const controller = createController(publications);
+    const activeTurnChanges: boolean[] = [];
+    const controller = createController(publications, undefined, {
+      onActiveTurnChanged: (active) => activeTurnChanges.push(active),
+    });
     const first = controller.beginTurn("assistant-1");
 
     expect(first).not.toBeNull();
@@ -233,6 +236,7 @@ describe("AskAgentController", () => {
     expect(second?.messageId).toBe("assistant-2");
     controller.completeTurn(second!);
     await controller.dispose();
+    expect(activeTurnChanges).toEqual([true, false, true, false]);
   });
 
   it("deduplicates cancellation and waits for active turn settlement on disposal", async () => {

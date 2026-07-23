@@ -5,50 +5,16 @@ import { h } from "preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ControllableEventSource,
+  ControllableFetch,
+} from "./testing/ControllableGatewayTransport";
+import {
   type GatewaySnapshotConnectionOptions,
   useGatewaySnapshotConnection,
 } from "./useGatewaySnapshotConnection";
 
 type Snapshot = { id: string };
 type Capability = { id: string };
-
-class MockEventSource {
-  static instances: MockEventSource[] = [];
-
-  readonly listeners = new Map<
-    string,
-    Set<(event: MessageEvent<string>) => void>
-  >();
-  onopen: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  close = vi.fn();
-
-  constructor(readonly url: string) {
-    MockEventSource.instances.push(this);
-  }
-
-  addEventListener(
-    type: string,
-    listener: (event: MessageEvent<string>) => void,
-  ): void {
-    const listeners = this.listeners.get(type) ?? new Set();
-    listeners.add(listener);
-    this.listeners.set(type, listeners);
-  }
-
-  removeEventListener(
-    type: string,
-    listener: (event: MessageEvent<string>) => void,
-  ): void {
-    this.listeners.get(type)?.delete(listener);
-  }
-
-  emit(type: string, data: string): void {
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener(new MessageEvent(type, { data }));
-    }
-  }
-}
 
 function createOptions(
   overrides: Partial<
@@ -92,8 +58,9 @@ describe("useGatewaySnapshotConnection", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    MockEventSource.instances = [];
-    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    ControllableEventSource.reset();
+    globalThis.EventSource =
+      ControllableEventSource as unknown as typeof EventSource;
     globalThis.fetch = vi.fn();
   });
 
@@ -107,8 +74,8 @@ describe("useGatewaySnapshotConnection", () => {
     const options = createOptions();
     const view = render(h(Harness, { options }));
 
-    expect(MockEventSource.instances).toHaveLength(1);
-    expect(MockEventSource.instances[0].url).toBe(
+    expect(ControllableEventSource.instances).toHaveLength(1);
+    expect(ControllableEventSource.instances[0].url).toBe(
       "/events?instanceId=instance-1",
     );
     expect(options.fetchModes).toHaveBeenCalledWith("instance-1");
@@ -125,18 +92,20 @@ describe("useGatewaySnapshotConnection", () => {
 
     view.unmount();
 
-    expect(MockEventSource.instances[0].close).toHaveBeenCalledOnce();
-    expect(MockEventSource.instances[0].listeners.get("snapshot")?.size).toBe(
-      0,
-    );
-    expect(MockEventSource.instances[0].listeners.get("update")?.size).toBe(0);
+    expect(ControllableEventSource.instances[0].closeCount).toBe(1);
+    expect(
+      ControllableEventSource.instances[0].listeners.get("snapshot")?.size,
+    ).toBe(0);
+    expect(
+      ControllableEventSource.instances[0].listeners.get("update")?.size,
+    ).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 
   it("ignores queued EventSource callbacks after cleanup", () => {
     const options = createOptions();
     const view = render(h(Harness, { options }));
-    const source = MockEventSource.instances[0];
+    const source = ControllableEventSource.instances[0];
     const queuedOpen = source.onopen;
     const queuedError = source.onerror;
 
@@ -156,10 +125,171 @@ describe("useGatewaySnapshotConnection", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("recovers a delayed stream after the initial fallback starts", async () => {
+    const transport = new ControllableFetch();
+    globalThis.fetch = transport.fetch as typeof fetch;
+    const observeConnection = vi.fn();
+    const options = createOptions({ observeConnection, now: Date.now });
+    render(h(Harness, { options }));
+    const source = ControllableEventSource.instances[0];
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(transport.pendingRequests).toHaveLength(1);
+
+    act(() => {
+      vi.advanceTimersByTime(250);
+      source.open();
+      vi.advanceTimersByTime(50);
+      source.emit("snapshot", JSON.stringify({ id: "stream-won" }));
+    });
+    await act(async () => Promise.resolve());
+
+    expect(transport.requests).toHaveLength(1);
+    expect(transport.requests[0].signal?.aborted).toBe(true);
+    expect(options.commitSnapshot).toHaveBeenCalledOnce();
+    expect(options.commitSnapshot).toHaveBeenCalledWith(
+      { id: "stream-won" },
+      "instance-1",
+      3,
+    );
+    expect(observeConnection.mock.calls).toEqual([
+      [{ phase: "created", elapsedMs: 0 }],
+      [{ phase: "open", elapsedMs: 750 }],
+      [{ phase: "first_commit", elapsedMs: 800 }],
+    ]);
+  });
+
+  it("reproduces an open-but-stalled stream recovered only by initial fallback", async () => {
+    const transport = new ControllableFetch();
+    globalThis.fetch = transport.fetch as typeof fetch;
+    const observeConnection = vi.fn();
+    const options = createOptions({ observeConnection, now: Date.now });
+    render(h(Harness, { options }));
+    const source = ControllableEventSource.instances[0];
+
+    act(() => {
+      vi.advanceTimersByTime(100);
+      source.open();
+      vi.advanceTimersByTime(400);
+    });
+    expect(options.setStatus).toHaveBeenLastCalledWith("Connected");
+    expect(transport.pendingRequests).toHaveLength(1);
+    expect(observeConnection.mock.calls).toEqual([
+      [{ phase: "created", elapsedMs: 0 }],
+      [{ phase: "open", elapsedMs: 100 }],
+    ]);
+
+    transport.requests[0].respond("{}", { status: 200 });
+    await act(async () => {
+      await transport.requests[0].promise;
+      await Promise.resolve();
+    });
+
+    expect(options.commitSnapshot).toHaveBeenCalledWith(
+      { id: "fallback" },
+      "instance-1",
+      3,
+    );
+    expect(options.setStatus).toHaveBeenLastCalledWith(
+      "Connected (fallback polling)",
+    );
+    expect(observeConnection).not.toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "first_commit" }),
+    );
+  });
+
+  it("records stream open separately from the first committed event", () => {
+    let clock = 10_000;
+    const observeConnection = vi.fn();
+    const options = createOptions({
+      observeConnection,
+      now: () => clock,
+    });
+    render(h(Harness, { options }));
+    const source = ControllableEventSource.instances[0];
+
+    expect(observeConnection).toHaveBeenCalledWith({
+      phase: "created",
+      elapsedMs: 0,
+    });
+
+    act(() => {
+      clock += 25;
+      source.open();
+      clock += 75;
+      // The first event intentionally bypasses the coalescing window.
+      source.emit("snapshot", JSON.stringify({ id: "first" }));
+      clock += 50;
+      source.emit("update", JSON.stringify({ id: "second" }));
+    });
+
+    expect(observeConnection.mock.calls).toEqual([
+      [{ phase: "created", elapsedMs: 0 }],
+      [{ phase: "open", elapsedMs: 25 }],
+      [{ phase: "first_commit", elapsedMs: 100 }],
+    ]);
+  });
+
+  it("stops fallback polling when a failed stream reopens and commits", async () => {
+    const transport = new ControllableFetch();
+    globalThis.fetch = transport.fetch as typeof fetch;
+    const options = createOptions();
+    render(h(Harness, { options }));
+    const source = ControllableEventSource.instances[0];
+
+    act(() => {
+      source.fail();
+    });
+    expect(transport.pendingRequests).toHaveLength(1);
+
+    act(() => {
+      vi.advanceTimersByTime(250);
+      source.open();
+      vi.advanceTimersByTime(25);
+      source.emit("snapshot", JSON.stringify({ id: "reconnected" }));
+      vi.advanceTimersByTime(4_000);
+    });
+    await act(async () => Promise.resolve());
+
+    expect(transport.requests).toHaveLength(1);
+    expect(transport.requests[0].signal?.aborted).toBe(true);
+    expect(options.commitSnapshot).toHaveBeenCalledWith(
+      { id: "reconnected" },
+      "instance-1",
+      3,
+    );
+    expect(options.setStatus).toHaveBeenLastCalledWith("Connected");
+  });
+
+  it("records reconnect cycles from the preceding stream error", () => {
+    const observeConnection = vi.fn();
+    const options = createOptions({ observeConnection, now: Date.now });
+    render(h(Harness, { options }));
+    const source = ControllableEventSource.instances[0];
+
+    act(() => {
+      vi.advanceTimersByTime(40);
+      source.fail();
+      vi.advanceTimersByTime(15);
+      source.open();
+      vi.advanceTimersByTime(20);
+      source.emit("snapshot", JSON.stringify({ id: "reconnected" }));
+    });
+
+    expect(observeConnection.mock.calls).toEqual([
+      [{ phase: "created", elapsedMs: 0 }],
+      [{ phase: "error", elapsedMs: 40 }],
+      [{ phase: "open", elapsedMs: 15 }],
+      [{ phase: "first_commit", elapsedMs: 35 }],
+    ]);
+  });
+
   it("coalesces rapid stream events to the latest snapshot", () => {
     const options = createOptions();
     render(h(Harness, { options }));
-    const source = MockEventSource.instances[0];
+    const source = ControllableEventSource.instances[0];
 
     act(() => {
       source.emit("snapshot", JSON.stringify({ id: "first" }));
@@ -200,7 +330,7 @@ describe("useGatewaySnapshotConnection", () => {
     render(h(Harness, { options }));
 
     await act(async () => {
-      MockEventSource.instances[0].onerror?.();
+      ControllableEventSource.instances[0].fail();
       await Promise.resolve();
       await Promise.resolve();
     });

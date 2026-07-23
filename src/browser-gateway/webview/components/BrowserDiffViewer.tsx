@@ -1,21 +1,4 @@
-import "monaco-editor/esm/vs/editor/browser/widget/diffEditor/diffEditor.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/go/go.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/java/java.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/python/python.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/rust/rust.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/shell/shell.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/xml/xml.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js";
-import "monaco-editor/esm/vs/language/css/monaco.contribution.js";
-import "monaco-editor/esm/vs/language/html/monaco.contribution.js";
-import "monaco-editor/esm/vs/language/json/monaco.contribution.js";
-import "monaco-editor/esm/vs/language/typescript/monaco.contribution.js";
-
-import type * as MonacoApi from "monaco-editor/esm/vs/editor/editor.api.js";
+import type * as MonacoApi from "./browserMonaco";
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
@@ -60,11 +43,43 @@ const MIN_SIDE_BY_SIDE_WIDTH = 780;
 const MOBILE_DIFF_MEDIA_QUERY = "(max-width: 720px)";
 
 let monacoPromise: Promise<MonacoModule> | null = null;
+let monacoStylesheetPromise: Promise<void> | null = null;
 let monacoWorkersConfigured = false;
+
+function loadMonacoStylesheet(): Promise<void> {
+  if (monacoStylesheetPromise) return monacoStylesheetPromise;
+  monacoStylesheetPromise = new Promise<void>((resolve, reject) => {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "/browser-gateway-monaco.css";
+    link.addEventListener("load", () => resolve(), { once: true });
+    link.addEventListener(
+      "error",
+      () => {
+        link.remove();
+        reject(new Error("browser_monaco_stylesheet_load_failed"));
+      },
+      { once: true },
+    );
+    document.head.appendChild(link);
+  }).catch((error: unknown) => {
+    monacoStylesheetPromise = null;
+    throw error;
+  });
+  return monacoStylesheetPromise;
+}
 
 function loadMonaco(): Promise<MonacoModule> {
   if (!monacoPromise) {
-    monacoPromise = import("monaco-editor/esm/vs/editor/editor.api.js");
+    monacoPromise = Promise.all([
+      loadMonacoStylesheet(),
+      import("./browserMonaco"),
+    ])
+      .then(([, monaco]) => monaco)
+      .catch((error: unknown) => {
+        monacoPromise = null;
+        throw error;
+      });
   }
   return monacoPromise;
 }
@@ -372,86 +387,96 @@ export function BrowserDiffViewer({
 
     let disposed = false;
 
-    void loadMonaco().then((monaco) => {
-      if (disposed) return;
-      const detail = loadState.detail;
-      const languageId = inferLanguageId(detail.filePath);
-      defineTheme(monaco, theme);
+    void loadMonaco()
+      .then((monaco) => {
+        if (disposed) return;
+        const detail = loadState.detail;
+        const languageId = inferLanguageId(detail.filePath);
+        defineTheme(monaco, theme);
 
-      // Detach the previous models from the diff widget before disposing them.
-      // Disposing a TextModel that the DiffEditorWidget still references throws
-      // "TextModel got disposed before DiffEditorWidget model got reset".
-      editorRef.current?.setModel(null);
-      originalModelRef.current?.dispose();
-      proposedModelRef.current?.dispose();
+        // Detach the previous models from the diff widget before disposing them.
+        // Disposing a TextModel that the DiffEditorWidget still references throws
+        // "TextModel got disposed before DiffEditorWidget model got reset".
+        editorRef.current?.setModel(null);
+        originalModelRef.current?.dispose();
+        proposedModelRef.current?.dispose();
 
-      const originalModel = monaco.editor.createModel(
-        detail.originalContent,
-        languageId,
-        createModelUri(
-          monaco,
-          viewerInstanceIdRef.current,
-          detail.requestId,
-          "original",
-          detail.filePath,
-        ),
-      );
-      const proposedModel = monaco.editor.createModel(
-        detail.proposedContent,
-        languageId,
-        createModelUri(
-          monaco,
-          viewerInstanceIdRef.current,
-          detail.requestId,
-          "proposed",
-          detail.filePath,
-        ),
-      );
-      originalModelRef.current = originalModel;
-      proposedModelRef.current = proposedModel;
+        const originalModel = monaco.editor.createModel(
+          detail.originalContent,
+          languageId,
+          createModelUri(
+            monaco,
+            viewerInstanceIdRef.current,
+            detail.requestId,
+            "original",
+            detail.filePath,
+          ),
+        );
+        const proposedModel = monaco.editor.createModel(
+          detail.proposedContent,
+          languageId,
+          createModelUri(
+            monaco,
+            viewerInstanceIdRef.current,
+            detail.requestId,
+            "proposed",
+            detail.filePath,
+          ),
+        );
+        originalModelRef.current = originalModel;
+        proposedModelRef.current = proposedModel;
 
-      if (!editorRef.current) {
-        editorRef.current = monaco.editor.createDiffEditor(container, {
-          automaticLayout: false,
-          contextmenu: false,
-          domReadOnly: true,
-          diffWordWrap: "on",
-          enableSplitViewResizing: true,
-          folding: false,
-          glyphMargin: false,
-          ignoreTrimWhitespace: false,
-          lineNumbers: "on",
-          minimap: { enabled: false },
-          originalEditable: false,
-          readOnly: true,
-          renderIndicators: true,
-          renderOverviewRuler: false,
-          renderSideBySide,
-          renderWhitespace: "selection",
-          scrollBeyondLastLine: false,
-          scrollbar: {
-            alwaysConsumeMouseWheel: false,
-            horizontal: "auto",
-            vertical: "auto",
-            useShadows: false,
-            verticalScrollbarSize: 12,
-            horizontalScrollbarSize: 12,
-          },
-          smoothScrolling: true,
-          useInlineViewWhenSpaceIsLimited: true,
-          wordWrap: "on",
-          wrappingIndent: "same",
+        if (!editorRef.current) {
+          editorRef.current = monaco.editor.createDiffEditor(container, {
+            automaticLayout: false,
+            contextmenu: false,
+            domReadOnly: true,
+            diffWordWrap: "on",
+            enableSplitViewResizing: true,
+            folding: false,
+            glyphMargin: false,
+            ignoreTrimWhitespace: false,
+            lineNumbers: "on",
+            minimap: { enabled: false },
+            originalEditable: false,
+            readOnly: true,
+            renderIndicators: true,
+            renderOverviewRuler: false,
+            renderSideBySide,
+            renderWhitespace: "selection",
+            scrollBeyondLastLine: false,
+            scrollbar: {
+              alwaysConsumeMouseWheel: false,
+              horizontal: "auto",
+              vertical: "auto",
+              useShadows: false,
+              verticalScrollbarSize: 12,
+              horizontalScrollbarSize: 12,
+            },
+            smoothScrolling: true,
+            useInlineViewWhenSpaceIsLimited: true,
+            wordWrap: "on",
+            wrappingIndent: "same",
+          });
+        }
+
+        editorRef.current.updateOptions({ renderSideBySide });
+        editorRef.current.setModel({
+          original: originalModel,
+          modified: proposedModel,
         });
-      }
-
-      editorRef.current.updateOptions({ renderSideBySide });
-      editorRef.current.setModel({
-        original: originalModel,
-        modified: proposedModel,
+        editorRef.current.layout();
+        setEditorReady(true);
+      })
+      .catch((error: unknown) => {
+        if (disposed) return;
+        const message =
+          error instanceof Error ? error.message : "unknown chunk load error";
+        setLoadState({
+          kind: "error",
+          message: `Diff editor failed to load: ${message}`,
+        });
       });
-      editorRef.current.layout();
-      setEditorReady(true);
-    });
 
     return () => {
       disposed = true;

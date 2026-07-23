@@ -5,6 +5,7 @@ import { InMemoryAgentUiEventHub } from "../agent/AgentUiPublisher.js";
 import type { SessionApprovalMode } from "../agent/AgentSessionManager.js";
 import type { SessionSummary } from "../agent/SessionStore.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
+import { normalizeLegacyBrowserGatewaySnapshot } from "./testing/stateEquivalenceOracle.js";
 
 vi.mock("vscode", () => {
   type Listener<T> = (event: T) => void;
@@ -213,6 +214,142 @@ describe("BrowserGatewayService", () => {
     expect(serializedSession).not.toContain("workspaceFolderUri");
     expect(serializedSession).not.toContain("rootPath");
 
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("feeds the state-equivalence oracle from the real legacy snapshot projection", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const service = makeService(hub);
+
+    const normalized = normalizeLegacyBrowserGatewaySnapshot(
+      service.getSerializableSnapshotState(),
+    );
+
+    expect(normalized.catalog).toMatchObject({
+      defaultProjectId: "project-a",
+      foregroundSessionId: "session-1",
+      projects: [
+        {
+          projectId: "project-a",
+          displayName: "Project A",
+          availability: "available",
+        },
+        {
+          projectId: "project-b",
+          displayName: "Project B",
+          availability: "available",
+        },
+      ],
+      sessions: [
+        expect.objectContaining({
+          sessionId: "session-1",
+          projectId: "project-a",
+          title: "Test Session",
+          mode: "code",
+          model: "claude-sonnet-4-6",
+        }),
+      ],
+    });
+    expect(normalized.foreground).toMatchObject({
+      sessionId: "session-1",
+      title: "Test Session",
+      status: "idle",
+    });
+    expect(normalized.theme).toEqual({
+      colorScheme: "dark",
+      variables: [{ name: "--vscode-editor-background", value: "#1e1e1e" }],
+    });
+
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("captures owner projection sources from the same legacy state boundary", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const service = makeService(hub);
+    const readSet = service.getOwnerProjectionSources().capture();
+
+    expect(readSet.catalog).toMatchObject({
+      defaultProjectId: "project-a",
+      foregroundSessionId: "session-1",
+      sessions: [
+        expect.objectContaining({
+          sessionId: "session-1",
+          projectId: "project-a",
+          updatedAt: 2,
+        }),
+      ],
+    });
+    expect(readSet.foreground).toMatchObject({
+      sessionId: "session-1",
+      title: "Test Session",
+      status: "idle",
+      messages: [
+        expect.objectContaining({ role: "user", content: "hello" }),
+        expect.objectContaining({ role: "assistant" }),
+      ],
+      earlierCursor: null,
+      hasEarlier: false,
+    });
+    const firstMessageId = readSet.foreground?.messages[0]?.id;
+    expect(firstMessageId).toBeTruthy();
+    expect(readSet.foreground?.cursorBeforeMessage(firstMessageId!)).toBe(
+      "session-1:0",
+    );
+    expect(readSet.theme).toEqual(themeSnapshotStub);
+    expect(readSet.policies).toEqual({
+      agentWriteApproval: "prompt",
+      commandApprovalPolicy: "safe",
+      approvalPolicy: "on-request",
+      approvalReviewer: "user",
+      executionPreset: "native-manual",
+      configuredCommandApprovalPolicy: "safe",
+    });
+
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("notifies owner projection demand while legacy publication is client-gated", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const service = makeService(hub);
+    service.setHasActiveClientsProbe(() => false);
+    const legacyChanges = vi.fn();
+    const ownerChanges = vi.fn();
+    const legacySubscription = service.onDidChange(legacyChanges);
+    const ownerSubscription = service
+      .getOwnerProjectionSources()
+      .onDidChange(ownerChanges);
+
+    hub.publishApproval({
+      kind: "write",
+      id: "owner-only-approval",
+      filePath: "src/owner.ts",
+      writeOperation: "modify",
+    });
+
+    expect(legacyChanges).not.toHaveBeenCalled();
+    expect(ownerChanges).toHaveBeenCalledWith("ui");
+    expect(service.getOwnerProjectionSources().capture().interaction).toEqual({
+      requestId: "owner-only-approval",
+      kind: "approval",
+      payload: {
+        approval: {
+          id: "owner-only-approval",
+          kind: "write",
+          filePath: "src/owner.ts",
+          writeOperation: "modify",
+        },
+        question: null,
+        questionProgress: null,
+        formElicitation: null,
+        urlElicitation: null,
+      },
+    });
+
+    ownerSubscription.dispose();
+    legacySubscription.dispose();
     service.dispose();
     hub.dispose();
   });
@@ -1821,6 +1958,25 @@ describe("BrowserGatewayService", () => {
           expect(snapshot.ui.recentEvents).not.toHaveLength(0);
         },
         { coalesced: false, count: 5 },
+      );
+      expect(service.getOwnerProjectionSources().capture().interaction).toEqual(
+        {
+          requestId: "matrix-approval",
+          kind: "approval",
+          payload: {
+            approval: expect.objectContaining({ id: "matrix-approval" }),
+            question: expect.objectContaining({ id: "matrix-question" }),
+            questionProgress: {
+              id: "matrix-question",
+              step: 1,
+              answers: { continue: true },
+              notes: {},
+              origin: "test",
+            },
+            formElicitation: expect.objectContaining({ id: "matrix-form" }),
+            urlElicitation: expect.objectContaining({ id: "matrix-url" }),
+          },
+        },
       );
 
       expectPublication(

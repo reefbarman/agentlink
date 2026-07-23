@@ -160,6 +160,102 @@ describe("BrowserGatewayCoreOwnerRegistry", () => {
     expect(registry.requireConnectedOwner("vscode-owner")).toBe(reconnected);
   });
 
+  it("assigns stable effective identities to simultaneous live owner collisions", () => {
+    const registry = new BrowserGatewayCoreOwnerRegistry({
+      heartbeatTtlMs: 30_000,
+    });
+    const first = registry.registerWithCollisionPolicy({
+      ownerId: "workspace-owner",
+      ownerKind: "vscode",
+      displayName: "Window One",
+      scope: workspaceScope,
+      ownerGenerationId: "generation-one",
+      instanceId: "instance-one",
+      now: 100,
+    });
+    const second = registry.registerWithCollisionPolicy({
+      ownerId: "workspace-owner",
+      ownerKind: "vscode",
+      displayName: "Window Two",
+      scope: workspaceScope,
+      ownerGenerationId: "generation-two",
+      instanceId: "instance-two",
+      now: 200,
+    });
+    const renewed = registry.registerWithCollisionPolicy({
+      ownerId: "workspace-owner",
+      ownerKind: "vscode",
+      displayName: "Window Two",
+      scope: workspaceScope,
+      ownerGenerationId: "generation-two",
+      instanceId: "instance-two",
+      now: 300,
+    });
+
+    expect(first).toMatchObject({
+      effectiveOwnerId: "workspace-owner",
+      resolution: "registered",
+    });
+    expect(second.effectiveOwnerId).toMatch(/^workspace-owner~generation-two/);
+    expect(second.resolution).toBe("collision_assigned");
+    expect(renewed).toMatchObject({
+      effectiveOwnerId: second.effectiveOwnerId,
+      resolution: "renewed",
+    });
+    expect(registry.get("workspace-owner")?.ownerGenerationId).toBe(
+      "generation-one",
+    );
+    expect(registry.get(second.effectiveOwnerId)?.ownerGenerationId).toBe(
+      "generation-two",
+    );
+  });
+
+  it("allows same-instance supersession and dead-generation takeover", () => {
+    const registry = new BrowserGatewayCoreOwnerRegistry({
+      heartbeatTtlMs: 100,
+    });
+    registry.registerWithCollisionPolicy({
+      ownerId: "workspace-owner",
+      ownerKind: "vscode",
+      displayName: "Window",
+      scope: workspaceScope,
+      ownerGenerationId: "generation-one",
+      instanceId: "instance-one",
+      now: 100,
+    });
+
+    const superseded = registry.registerWithCollisionPolicy({
+      ownerId: "workspace-owner",
+      ownerKind: "vscode",
+      displayName: "Window",
+      scope: workspaceScope,
+      ownerGenerationId: "generation-two",
+      instanceId: "instance-one",
+      now: 150,
+    });
+    expect(superseded).toMatchObject({
+      effectiveOwnerId: "workspace-owner",
+      resolution: "superseded",
+    });
+
+    const takenOver = registry.registerWithCollisionPolicy({
+      ownerId: "workspace-owner",
+      ownerKind: "vscode",
+      displayName: "Replacement",
+      scope: workspaceScope,
+      ownerGenerationId: "generation-three",
+      instanceId: "instance-three",
+      now: 300,
+    });
+    expect(takenOver).toMatchObject({
+      effectiveOwnerId: "workspace-owner",
+      resolution: "taken_over",
+    });
+    expect(registry.get("workspace-owner")?.ownerGenerationId).toBe(
+      "generation-three",
+    );
+  });
+
   it("explicitly marks owners disconnected or errored", () => {
     const registry = new BrowserGatewayCoreOwnerRegistry({
       heartbeatTtlMs: 30_000,

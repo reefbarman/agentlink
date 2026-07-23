@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BrowserGatewayHelperLeaseClient } from "./BrowserGatewayHelperLeaseClient.js";
+import { createDeferred } from "../testing/SseFaultPeer.js";
 
 describe("BrowserGatewayHelperLeaseClient", () => {
   const originalFetch = globalThis.fetch;
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -122,6 +124,71 @@ describe("BrowserGatewayHelperLeaseClient", () => {
     expect(calls[3]?.body).toContain('"ownerGenerationId":"generation-1"');
   });
 
+  it("renews and releases a collision-assigned effective owner identity", async () => {
+    const calls: Array<{ pathname: string; body: string }> = [];
+    let heartbeatCount = 0;
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const pathname = new URL(String(input)).pathname;
+      const body = typeof init?.body === "string" ? init.body : "";
+      calls.push({ pathname, body });
+      if (pathname === "/internal/core-owners/heartbeat") {
+        heartbeatCount += 1;
+        return Response.json(
+          { ok: true },
+          { status: heartbeatCount === 1 ? 404 : 200 },
+        );
+      }
+      if (pathname === "/internal/core-owners/register") {
+        return Response.json({
+          ok: true,
+          helperGenerationId: "helper-1",
+          requestedOwnerId: "owner-1",
+          effectiveOwnerId: "owner-1~generation-1",
+          resolution: "collision_assigned",
+          ownerRegistration: {
+            owner: { ownerId: "owner-1~generation-1" },
+            ownerGenerationId: "generation-1",
+            status: "connected",
+            capabilities: [],
+          },
+        });
+      }
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    const client = new BrowserGatewayHelperLeaseClient({
+      helperUrl: "http://127.0.0.1:47137",
+      clientId: "client-collision",
+      clientSharedSecret: "secret-collision",
+      coreOwner: {
+        ownerId: "owner-1",
+        ownerKind: "vscode",
+        displayName: "VS Code — Repo",
+        scope: {
+          kind: "workspace",
+          workspaceId: "workspace-1",
+          displayName: "Repo",
+        },
+        ownerGenerationId: "generation-1",
+      },
+      log: vi.fn(),
+      renewIntervalMs: 60_000,
+    });
+
+    await client.start();
+    await (client as unknown as { renewLease(): Promise<void> }).renewLease();
+    await client.stop();
+
+    const secondHeartbeat = calls.filter(
+      (call) => call.pathname === "/internal/core-owners/heartbeat",
+    )[1];
+    const release = calls.find(
+      (call) => call.pathname === "/internal/client/release",
+    );
+    expect(secondHeartbeat?.body).toContain('"ownerId":"owner-1~generation-1"');
+    expect(release?.body).toContain('"ownerId":"owner-1~generation-1"');
+  });
+
   it("registers a neutral core owner when heartbeat generation is stale", async () => {
     const calls: string[] = [];
     globalThis.fetch = vi.fn(async (input) => {
@@ -165,6 +232,104 @@ describe("BrowserGatewayHelperLeaseClient", () => {
       "/internal/core-owners/register",
       "/internal/client/release",
     ]);
+  });
+
+  it("coalesces concurrent renewal triggers into one request", async () => {
+    const renewalResponse = createDeferred<Response>();
+    let leaseRequests = 0;
+    globalThis.fetch = vi.fn(async (input) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname === "/internal/client/lease") {
+        leaseRequests += 1;
+        if (leaseRequests === 2) return renewalResponse.promise;
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+
+    const client = new BrowserGatewayHelperLeaseClient({
+      helperUrl: "http://127.0.0.1:47137",
+      clientId: "client-single-flight",
+      clientSharedSecret: "secret-single-flight",
+      log: vi.fn(),
+      renewIntervalMs: 60_000,
+      renewJitterRatio: 0,
+    });
+    await client.start();
+
+    const internal = client as unknown as { renewLease(): Promise<void> };
+    const first = internal.renewLease();
+    const second = internal.renewLease();
+
+    expect(first).toBe(second);
+    expect(leaseRequests).toBe(2);
+
+    renewalResponse.resolve(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    await Promise.all([first, second]);
+    await client.stop();
+  });
+
+  it("settles a hung abort-ignoring renewal at its deadline", async () => {
+    vi.useFakeTimers();
+    const log = vi.fn();
+    let leaseSignal: AbortSignal | undefined;
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname === "/internal/client/lease") {
+        leaseSignal = init?.signal ?? undefined;
+        return new Promise<Response>(() => undefined);
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+
+    const client = new BrowserGatewayHelperLeaseClient({
+      helperUrl: "http://127.0.0.1:47137",
+      clientId: "client-timeout",
+      clientSharedSecret: "secret-timeout",
+      log,
+      requestTimeoutMs: 100,
+      renewIntervalMs: 60_000,
+      renewJitterRatio: 0,
+    });
+
+    const start = client.start();
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(start).resolves.toBeUndefined();
+
+    expect(leaseSignal?.aborted).toBe(true);
+    expect(log).toHaveBeenCalledWith(
+      "[browser-gateway-helper] lease refresh timed out after 100ms",
+    );
+    await client.stop();
+  });
+
+  it("schedules the next renewal after completion using bounded jitter", async () => {
+    vi.useFakeTimers();
+    let leaseRequests = 0;
+    globalThis.fetch = vi.fn(async () => {
+      leaseRequests += 1;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+
+    const client = new BrowserGatewayHelperLeaseClient({
+      helperUrl: "http://127.0.0.1:47137",
+      clientId: "client-jitter",
+      clientSharedSecret: "secret-jitter",
+      log: vi.fn(),
+      renewIntervalMs: 1_000,
+      renewJitterRatio: 0.2,
+      random: () => 1,
+    });
+    await client.start();
+
+    await vi.advanceTimersByTimeAsync(1_199);
+    expect(leaseRequests).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(leaseRequests).toBe(2);
+
+    await client.stop();
   });
 
   it("logs but does not throw when lease refresh fails", async () => {

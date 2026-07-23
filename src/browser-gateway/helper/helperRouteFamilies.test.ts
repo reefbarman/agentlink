@@ -1,11 +1,15 @@
 import {
   ASK_AGENT_ROUTES,
+  BROWSER_RELAY_ROUTES,
   INTERNAL_CORE_ROUTES,
+  INTERNAL_DATA_PLANE_ROUTES,
   INTERNAL_DEVICE_ROUTES,
   PAIRED_BROWSER_ROUTES,
   PUBLIC_HELPER_EXACT_ROUTES,
   matchAskAgentRoute,
+  matchBrowserRelayRoute,
   matchInternalCoreRoute,
+  matchInternalDataPlaneRoute,
   matchInternalDeviceRoute,
   matchPairedBrowserRoute,
   matchPublicHelperRoute,
@@ -43,6 +47,33 @@ describe("helper route families", () => {
     ).toBeNull();
   });
 
+  it("matches data-plane routes exactly and keeps them out of core routing", () => {
+    for (const route of INTERNAL_DATA_PLANE_ROUTES) {
+      expect(matchInternalDataPlaneRoute(route.method, route.path)).toEqual(
+        route,
+      );
+      expect(matchInternalCoreRoute(route.method, route.path)).toBeNull();
+    }
+    expect(
+      matchInternalDataPlaneRoute("GET", "/internal/data-plane/publications"),
+    ).toBeNull();
+    expect(
+      matchInternalDataPlaneRoute(
+        "POST",
+        "/internal/data-plane/publications/extra",
+      ),
+    ).toBeNull();
+  });
+
+  it("matches browser relay routes exactly", () => {
+    for (const route of BROWSER_RELAY_ROUTES) {
+      expect(matchBrowserRelayRoute(route.method, route.path)).toEqual(route);
+    }
+    expect(matchBrowserRelayRoute("POST", "/api/relay/events")).toBeNull();
+    expect(matchBrowserRelayRoute("GET", "/api/relay/commands")).toBeNull();
+    expect(matchBrowserRelayRoute("GET", "/api/relay/unknown")).toBeNull();
+  });
+
   it("matches public pairing and internal device contracts separately", () => {
     for (const route of PAIRED_BROWSER_ROUTES) {
       expect(matchPairedBrowserRoute(route.method, route.path)).toEqual(route);
@@ -58,6 +89,26 @@ describe("helper route families", () => {
     for (const route of PUBLIC_HELPER_EXACT_ROUTES) {
       expect(matchPublicHelperRoute(route.method, route.path)).toEqual(route);
     }
+    expect(
+      matchPublicHelperRoute(
+        "GET",
+        "/browser-gateway-chunks/mermaid-ABC123.js",
+      ),
+    ).toEqual({ handler: "browserGatewayChunk" });
+    expect(matchPublicHelperRoute("GET", "/browser-gateway-monaco.js")).toEqual(
+      {
+        method: "GET",
+        path: "/browser-gateway-monaco.js",
+        handler: "browserGatewayMonacoJs",
+      },
+    );
+    expect(
+      matchPublicHelperRoute("GET", "/browser-gateway-monaco.css"),
+    ).toEqual({
+      method: "GET",
+      path: "/browser-gateway-monaco.css",
+      handler: "browserGatewayMonacoCss",
+    });
     expect(matchPublicHelperRoute("GET", "/monaco-editor.worker.js")).toEqual({
       handler: "monacoWorker",
     });
@@ -72,12 +123,32 @@ describe("helper route families", () => {
   it("rejects malformed or non-GET public asset paths", () => {
     expect(matchPublicHelperRoute("POST", "/health")).toBeNull();
     expect(matchPublicHelperRoute("GET", "/monaco-../worker.js")).toBeNull();
+    expect(
+      matchPublicHelperRoute(
+        "GET",
+        "/browser-gateway-chunks/../browser-gateway.js",
+      ),
+    ).toBeNull();
+    expect(
+      matchPublicHelperRoute(
+        "GET",
+        "/browser-gateway-chunks/mermaid-ABC123.js.map",
+      ),
+    ).toBeNull();
+    expect(
+      matchPublicHelperRoute(
+        "GET",
+        "/browser-gateway-chunks/unexpected-ABC123.css",
+      ),
+    ).toBeNull();
     expect(matchPublicHelperRoute("GET", "/browser-gateway.js.map")).toBeNull();
   });
 
   it.each([
     ["Ask Agent", ASK_AGENT_ROUTES],
     ["internal core", INTERNAL_CORE_ROUTES],
+    ["internal data plane", INTERNAL_DATA_PLANE_ROUTES],
+    ["browser relay", BROWSER_RELAY_ROUTES],
     ["paired browser", PAIRED_BROWSER_ROUTES],
     ["internal device", INTERNAL_DEVICE_ROUTES],
     ["public helper", PUBLIC_HELPER_EXACT_ROUTES],

@@ -12,6 +12,7 @@ import type {
 } from "../browserGatewayAskAgentSessionStore.js";
 import { BrowserGatewayAskAgentSessionStore } from "../browserGatewayAskAgentSessionStore.js";
 import type { BrowserGatewayModelCredentialStatus } from "../browserGatewayModelCredentialCache.js";
+import type { CoreCapabilityStatusDto } from "../../core/sessionProtocol.js";
 import type { MemoryCandidateKind } from "../../shared/memoryCandidates.js";
 import type { BrowserGatewayCoreOwnerRegistry } from "../coreOwnerRegistry.js";
 import {
@@ -83,6 +84,8 @@ export type AskAgentControllerTurnOutcome =
 
 export interface AskAgentControllerOptions {
   ownerRegistry: BrowserGatewayCoreOwnerRegistry;
+  ownerGenerationId?: string;
+  additionalOwnerCapabilities?: readonly CoreCapabilityStatusDto[];
   coalesceMs: number;
   serialize(snapshot: AskAgentControllerSnapshot): string;
   byteLength(serialized: string): number;
@@ -97,6 +100,7 @@ export interface AskAgentControllerOptions {
     nudge: BrowserGatewayAskAgentMemoryCandidateNudge,
   ): void;
   onCompletedTurn?(sessionId: string): void;
+  onActiveTurnChanged?(active: boolean): void;
 }
 
 export function freezeAskAgentControllerSnapshot(
@@ -132,6 +136,11 @@ export class AskAgentController {
   constructor(private readonly options: AskAgentControllerOptions) {
     this.sessionStore = new BrowserGatewayAskAgentSessionStore(
       options.ownerRegistry,
+      {},
+      {
+        ownerGenerationId: options.ownerGenerationId,
+        additionalCapabilities: options.additionalOwnerCapabilities,
+      },
     );
     this.snapshotQueue = new AskAgentSnapshotPublicationQueue({
       coalesceMs: options.coalesceMs,
@@ -402,6 +411,7 @@ export class AskAgentController {
         resolveSettled();
       },
     };
+    this.notifyActiveTurnChanged(true);
     return this.activeTurn;
   }
 
@@ -413,6 +423,7 @@ export class AskAgentController {
     if (this.activeTurn !== turn) return;
     this.activeTurn.settle();
     this.activeTurn = null;
+    this.notifyActiveTurnChanged(false);
   }
 
   cancelActiveTurn(
@@ -474,8 +485,20 @@ export class AskAgentController {
       activeTurn.stopped = true;
       activeTurn.controller.abort();
       await activeTurn.settled;
+      if (this.activeTurn === activeTurn) {
+        this.activeTurn = null;
+        this.notifyActiveTurnChanged(false);
+      }
     }
     await Promise.all(this.pendingCancellations);
     await this.snapshotQueue.dispose();
+  }
+
+  private notifyActiveTurnChanged(active: boolean): void {
+    try {
+      this.options.onActiveTurnChanged?.(active);
+    } catch {
+      // Liveness observers must not affect turn ownership.
+    }
   }
 }
