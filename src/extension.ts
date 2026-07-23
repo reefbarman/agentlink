@@ -1224,6 +1224,7 @@ export function activate(context: vscode.ExtensionContext): void {
       browserGatewayService?.invalidateBrowserSnapshot();
     }),
     vscode.window.onDidChangeActiveColorTheme(() => {
+      browserGatewayService?.notifyOwnerProjectionSource("theme");
       browserGatewayService?.invalidateBrowserSnapshot({
         publishWithoutClients: true,
       });
@@ -1240,6 +1241,12 @@ export function activate(context: vscode.ExtensionContext): void {
         "fontWeight",
       ].some((key) => event.affectsConfiguration(`terminal.integrated.${key}`));
       if (!affectsCommandPolicy && !affectsTerminalTheme) return;
+      if (affectsCommandPolicy) {
+        browserGatewayService?.notifyOwnerProjectionSource("policies");
+      }
+      if (affectsTerminalTheme) {
+        browserGatewayService?.notifyOwnerProjectionSource("theme");
+      }
       browserGatewayService?.invalidateBrowserSnapshot({
         publishWithoutClients: affectsTerminalTheme,
       });

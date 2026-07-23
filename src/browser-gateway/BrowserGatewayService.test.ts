@@ -331,6 +331,11 @@ describe("BrowserGatewayService", () => {
 
     expect(legacyChanges).not.toHaveBeenCalled();
     expect(ownerChanges).toHaveBeenCalledWith("ui");
+    service.notifyOwnerProjectionSource("policies");
+    service.notifyOwnerProjectionSource("theme");
+    expect(ownerChanges).toHaveBeenNthCalledWith(2, "policies");
+    expect(ownerChanges).toHaveBeenNthCalledWith(3, "theme");
+    expect(legacyChanges).not.toHaveBeenCalled();
     expect(service.getOwnerProjectionSources().capture().interaction).toEqual({
       requestId: "owner-only-approval",
       kind: "approval",
