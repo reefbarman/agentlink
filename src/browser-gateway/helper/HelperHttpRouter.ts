@@ -2,12 +2,16 @@ import type * as http from "http";
 
 import {
   matchAskAgentRoute,
+  matchBrowserRelayRoute,
   matchInternalCoreRoute,
+  matchInternalDataPlaneRoute,
   matchInternalDeviceRoute,
   matchPairedBrowserRoute,
   matchPublicHelperRoute,
   type AskAgentRouteHandler,
+  type BrowserRelayRouteHandler,
   type InternalCoreRouteHandler,
+  type InternalDataPlaneRouteHandler,
   type InternalDeviceRouteHandler,
   type PairedBrowserRouteHandler,
   type PublicHelperRouteHandler,
@@ -15,6 +19,7 @@ import {
 
 export interface HelperHttpRouterHost<TAuth> {
   isInternalAuthorized(req: http.IncomingMessage): boolean;
+  isOwnerPlaneLoopback(req: http.IncomingMessage): boolean;
   authenticate(req: http.IncomingMessage): Promise<TAuth | null>;
   recordAuthenticatedActivity(auth: TAuth): void | Promise<void>;
   handleAskAgent(
@@ -27,6 +32,12 @@ export interface HelperHttpRouterHost<TAuth> {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void>;
+  handleInternalDataPlane(
+    handler: InternalDataPlaneRouteHandler,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    requestUrl: URL,
+  ): Promise<void>;
   handleInternalDevice(
     handler: InternalDeviceRouteHandler,
     req: http.IncomingMessage,
@@ -37,6 +48,13 @@ export interface HelperHttpRouterHost<TAuth> {
     handler: PairedBrowserRouteHandler,
     req: http.IncomingMessage,
     res: http.ServerResponse,
+  ): Promise<void>;
+  handleBrowserRelay(
+    handler: BrowserRelayRouteHandler,
+    auth: TAuth,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    requestUrl: URL,
   ): Promise<void>;
   handlePublic(
     handler: PublicHelperRouteHandler,
@@ -55,6 +73,14 @@ export interface HelperHttpRouterHost<TAuth> {
   writeJson(res: http.ServerResponse, status: number, payload: unknown): void;
 }
 
+function hasExactRawPath(
+  rawUrl: string | undefined,
+  pathname: string,
+): boolean {
+  const rawPath = (rawUrl ?? "/").split("?", 1)[0];
+  return rawPath === pathname;
+}
+
 export class HelperHttpRouter<TAuth> {
   constructor(
     private readonly port: number,
@@ -69,6 +95,29 @@ export class HelperHttpRouter<TAuth> {
     if (pathname.startsWith("/internal/")) {
       if (!this.host.isInternalAuthorized(req)) {
         this.host.writeJson(res, 401, { error: "unauthorized" });
+        return;
+      }
+      const dataPlaneRoute = matchInternalDataPlaneRoute(method, pathname);
+      const ownerControlRoute =
+        pathname === "/internal/core-owners" ||
+        pathname.startsWith("/internal/core-owners/");
+      if (dataPlaneRoute || ownerControlRoute) {
+        if (!hasExactRawPath(req.url, pathname)) {
+          this.host.writeJson(res, 404, { error: "not_found" });
+          return;
+        }
+        if (!this.host.isOwnerPlaneLoopback(req)) {
+          this.host.writeJson(res, 403, { error: "loopback_required" });
+          return;
+        }
+      }
+      if (dataPlaneRoute) {
+        void this.host.handleInternalDataPlane(
+          dataPlaneRoute.handler,
+          req,
+          res,
+          requestUrl,
+        );
         return;
       }
       void this.handleInternal(method, pathname, req, res, requestUrl);
@@ -90,6 +139,29 @@ export class HelperHttpRouter<TAuth> {
         res,
         requestUrl,
       );
+      return;
+    }
+
+    const browserRelayRoute = matchBrowserRelayRoute(method, pathname);
+    if (browserRelayRoute) {
+      if (!hasExactRawPath(req.url, pathname)) {
+        this.host.writeJson(res, 404, { error: "not_found" });
+        return;
+      }
+      void this.authenticated(req, res, (auth) =>
+        this.host.handleBrowserRelay(
+          browserRelayRoute.handler,
+          auth,
+          req,
+          res,
+          requestUrl,
+        ),
+      );
+      return;
+    }
+
+    if (pathname.startsWith("/api/relay/")) {
+      this.host.writeJson(res, 404, { error: "not_found" });
       return;
     }
 
@@ -124,14 +196,14 @@ export class HelperHttpRouter<TAuth> {
   private async authenticated(
     req: http.IncomingMessage,
     res: http.ServerResponse,
-    handler: () => Promise<void>,
+    handler: (auth: TAuth) => Promise<void>,
   ): Promise<void> {
     const auth = await this.host.authenticate(req);
     if (auth === null) {
       this.host.writeJson(res, 401, { error: "unauthorized" });
       return;
     }
-    await handler();
+    await handler(auth);
     void this.host.recordAuthenticatedActivity(auth);
   }
 

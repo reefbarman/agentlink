@@ -41,6 +41,11 @@ import {
   type DiffSnapshotPreview,
 } from "./DiffSnapshotHub.js";
 import type { BrowserGatewayRepositoryInfo } from "./BrowserGatewayRepositoryObserver.js";
+import type {
+  BrowserGatewayOwnerProjectionReadSet,
+  BrowserGatewayOwnerProjectionSourceKind,
+  BrowserGatewayOwnerProjectionSources,
+} from "./dataPlane/ownerProjectionSources.js";
 
 export type { BrowserGatewayRepositoryInfo } from "./BrowserGatewayRepositoryObserver.js";
 
@@ -221,6 +226,8 @@ export class BrowserGatewayService implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly onDidChangeEmitter =
     new vscode.EventEmitter<BrowserGatewaySnapshotPublication>();
+  private readonly onDidChangeOwnerProjectionEmitter =
+    new vscode.EventEmitter<BrowserGatewayOwnerProjectionSourceKind>();
   private foregroundInvalidationTimer:
     | ReturnType<typeof setTimeout>
     | undefined;
@@ -301,8 +308,10 @@ export class BrowserGatewayService implements vscode.Disposable {
     this.disposables.push(
       uiEventHub.onDidPublish((event) => {
         this.applyEvent(event);
+        this.onDidChangeOwnerProjectionEmitter.fire("ui");
       }),
       diffSnapshotHub.onDidChange(() => {
+        this.onDidChangeOwnerProjectionEmitter.fire("diffs");
         this.invalidateBrowserSnapshot({ immediate: true });
       }),
     );
@@ -310,6 +319,20 @@ export class BrowserGatewayService implements vscode.Disposable {
 
   getCurrentThemeSnapshot(): BrowserGatewayThemeSnapshot {
     return this.getThemeSnapshot();
+  }
+
+  getOwnerProjectionSources(): BrowserGatewayOwnerProjectionSources {
+    return {
+      capture: () => this.captureOwnerProjectionReadSet(),
+      onDidChange: (listener) =>
+        this.onDidChangeOwnerProjectionEmitter.event(listener),
+    };
+  }
+
+  notifyOwnerProjectionSource(
+    source: BrowserGatewayOwnerProjectionSourceKind,
+  ): void {
+    this.onDidChangeOwnerProjectionEmitter.fire(source);
   }
 
   setRepositoryInfoProvider(
@@ -325,6 +348,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     this.disposables.push(
       onDidChangeRepository(() => {
         this.repositoryInfoCache = undefined;
+        this.onDidChangeOwnerProjectionEmitter.fire("repository");
         this.invalidateBrowserSnapshot();
       }),
     );
@@ -374,6 +398,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   ): void {
     this.disposables.push(
       onDidChangeProjectedForeground(() => {
+        this.onDidChangeOwnerProjectionEmitter.fire("foreground");
         this.invalidateBrowserSnapshot();
       }),
     );
@@ -384,6 +409,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   ): void {
     this.disposables.push(
       onDidChangeSessions(() => {
+        this.onDidChangeOwnerProjectionEmitter.fire("sessions");
         this.invalidateBrowserSnapshot();
       }),
     );
@@ -398,6 +424,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   ): void {
     this.disposables.push(
       onDidChangeSurface((kind) => {
+        this.onDidChangeOwnerProjectionEmitter.fire(kind);
         this.invalidateBrowserSnapshot({
           publishWithoutClients: kind === "theme",
         });
@@ -763,6 +790,7 @@ export class BrowserGatewayService implements vscode.Disposable {
    */
   bumpModelsVersion(): void {
     this.modelsVersion += 1;
+    this.onDidChangeOwnerProjectionEmitter.fire("model_catalog");
     this.invalidateBrowserSnapshot({ immediate: true });
   }
 
@@ -781,6 +809,135 @@ export class BrowserGatewayService implements vscode.Disposable {
     this.lastSerializedSnapshot = "";
     this.snapshotRevision = 0;
     this.onDidChangeEmitter.dispose();
+    this.onDidChangeOwnerProjectionEmitter.dispose();
+  }
+
+  private captureOwnerProjectionReadSet(): BrowserGatewayOwnerProjectionReadSet {
+    const snapshot = this.getSerializableSnapshotState();
+    const foreground = snapshot.session.foreground;
+    const interactionPayload = {
+      approval: snapshot.ui.approval,
+      question: snapshot.ui.question,
+      questionProgress: snapshot.ui.questionProgress,
+      formElicitation: snapshot.ui.formElicitation,
+      urlElicitation: snapshot.ui.urlElicitation,
+    };
+    const interaction = snapshot.ui.approval
+      ? {
+          requestId: snapshot.ui.approval.id,
+          kind: "approval" as const,
+          payload: interactionPayload,
+        }
+      : snapshot.ui.question
+        ? {
+            requestId: snapshot.ui.question.id,
+            kind: "question" as const,
+            payload: interactionPayload,
+            ...(snapshot.ui.question.backgroundTask
+              ? { backgroundTask: snapshot.ui.question.backgroundTask }
+              : {}),
+            ...(snapshot.ui.questionProgress
+              ? { step: snapshot.ui.questionProgress.step }
+              : {}),
+            totalSteps: snapshot.ui.question.questions.length,
+          }
+        : snapshot.ui.formElicitation
+          ? {
+              requestId: snapshot.ui.formElicitation.id,
+              kind: "form" as const,
+              payload: interactionPayload,
+            }
+          : snapshot.ui.urlElicitation
+            ? {
+                requestId: snapshot.ui.urlElicitation.id,
+                kind: "url" as const,
+                payload: interactionPayload,
+              }
+            : null;
+    const background = snapshot.background.map((session) => ({
+      sessionId: session.id,
+      title: session.task,
+      status: session.status,
+      ...(session.lastActiveAt !== undefined
+        ? { updatedAt: session.lastActiveAt }
+        : {}),
+    }));
+    return {
+      catalog: {
+        projects: snapshot.session.projects,
+        sessions: snapshot.session.sessions.map((session) => ({
+          sessionId: session.id,
+          projectId: session.project?.projectId ?? null,
+          title: session.title,
+          mode: session.mode,
+          model: session.model,
+          messageCount: session.messageCount,
+          createdAt: session.createdAt,
+          updatedAt: session.lastActiveAt,
+        })),
+        defaultProjectId: snapshot.session.defaultProjectId,
+        foregroundSessionId: foreground?.sessionId ?? null,
+      },
+      foreground: foreground
+        ? {
+            sessionId: foreground.sessionId,
+            title: foreground.title,
+            mode: foreground.mode,
+            model: foreground.model,
+            status: foreground.status,
+            streaming: foreground.streaming,
+            estimatedTokens: foreground.estimatedTotalUsed,
+            statusOverride: foreground.statusOverride,
+            thinkingEnabled: foreground.thinkingEnabled,
+            reasoningEffort: foreground.reasoningEffort,
+            lastInputTokens: foreground.lastInputTokens,
+            lastOutputTokens: foreground.lastOutputTokens,
+            lastCacheReadTokens: foreground.lastCacheReadTokens,
+            contextBudget: foreground.contextBudget
+              ? { ...foreground.contextBudget }
+              : undefined,
+            condenseThreshold: foreground.condenseThreshold,
+            restoringSession: foreground.restoringSession,
+            revertRecoveryNotice: foreground.revertRecoveryNotice
+              ? { ...foreground.revertRecoveryNotice }
+              : null,
+            messages: foreground.projectedMessages,
+            earlierCursor: null,
+            hasEarlier: false,
+            cursorBeforeMessage: (messageId) => {
+              const index = foreground.projectedMessages.findIndex(
+                (message) => message.id === messageId,
+              );
+              return `${foreground.sessionId}:${Math.max(0, index)}`;
+            },
+            queue: foreground.messageQueue,
+            todos: foreground.todos,
+          }
+        : null,
+      interaction,
+      background,
+      fleet: [],
+      diffs: snapshot.diffs.map((diff) => ({
+        requestId: diff.requestId,
+        filePath: diff.filePath,
+        operation: diff.operation,
+        outsideWorkspace: diff.outsideWorkspace,
+        createdAt: diff.createdAt,
+      })),
+      repository: snapshot.session.repository,
+      theme: snapshot.theme,
+      modelCatalogRevision: String(snapshot.modelsVersion),
+      mcp: snapshot.ui.mcpStatusInfos.map((server) => ({
+        name: server.name,
+        status: server.status,
+      })),
+      policies: {
+        agentWriteApproval: foreground?.agentWriteApproval ?? "prompt",
+        commandApprovalPolicy: foreground?.commandApprovalPolicy ?? "safe",
+        configuredCommandApprovalPolicy:
+          foreground?.configuredCommandApprovalPolicy ?? "safe",
+      },
+    };
   }
 
   private getForegroundQuestion(): BrowserGatewayUiState["question"] {
@@ -822,7 +979,11 @@ export class BrowserGatewayService implements vscode.Disposable {
     if (!questionId || this.questionProgress?.id !== questionId) {
       return undefined;
     }
-    return { ...this.questionProgress };
+    return {
+      ...this.questionProgress,
+      answers: { ...this.questionProgress.answers },
+      notes: { ...this.questionProgress.notes },
+    };
   }
 
   private getRepositoryInfo(): BrowserGatewayRepositoryInfo | null {

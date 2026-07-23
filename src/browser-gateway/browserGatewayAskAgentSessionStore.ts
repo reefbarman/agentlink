@@ -1,3 +1,16 @@
+export {
+  BROWSER_GATEWAY_ASK_AGENT_OWNER_GENERATION_ID,
+  BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+  BROWSER_GATEWAY_ASK_AGENT_SCOPE_ID,
+  BROWSER_GATEWAY_ASK_AGENT_SESSION_ID,
+} from "./browserGatewayAskAgentIdentity.js";
+
+import {
+  BROWSER_GATEWAY_ASK_AGENT_OWNER_GENERATION_ID,
+  BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+  BROWSER_GATEWAY_ASK_AGENT_SCOPE_ID,
+  BROWSER_GATEWAY_ASK_AGENT_SESSION_ID,
+} from "./browserGatewayAskAgentIdentity.js";
 import type {
   ChatMessage,
   QuestionRequest,
@@ -29,14 +42,14 @@ import { normalizeBrowserGatewayModelCredentialProviderId } from "./browserGatew
 import { randomUUID } from "crypto";
 import { surfaceMessagesToCoreModelMessages } from "../core/surfaceModelMessages.js";
 
-export const BROWSER_GATEWAY_ASK_AGENT_OWNER_ID = "browser-gateway:ask-agent";
-export const BROWSER_GATEWAY_ASK_AGENT_SESSION_ID =
-  "browser-gateway:ask-agent:default";
-export const BROWSER_GATEWAY_ASK_AGENT_OWNER_GENERATION_ID =
-  "browser-gateway:ask-agent:default-generation";
-export const BROWSER_GATEWAY_ASK_AGENT_SCOPE_ID = "default-ask-agent";
 export const BROWSER_GATEWAY_ASK_AGENT_DEFAULT_MODEL = "gpt-5.6-luna";
 export const BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE = "chat";
+
+export interface BrowserGatewayAskAgentSessionStoreOptions {
+  readonly ownerGenerationId?: string;
+  readonly additionalCapabilities?: readonly CoreCapabilityStatusDto[];
+}
+
 const BROWSER_GATEWAY_ASK_AGENT_FALLBACK_MODELS: WebviewModelInfo[] = [
   {
     id: "gpt-5.6-luna",
@@ -301,23 +314,21 @@ function generatedResultImagesToDisplayMedia(
 
 function getAskAgentCapabilities(
   modelCredentialStatus: BrowserGatewayModelCredentialStatus,
+  additionalCapabilities: readonly CoreCapabilityStatusDto[],
 ): CoreCapabilityStatusDto[] {
-  if (modelCredentialStatus.state === "ready") {
-    return [
-      {
-        capabilityId: "model-auth",
-        state: "enabled",
-        reason: `Browser gateway has cached ${modelCredentialStatus.providerId} credentials.`,
-      },
-    ];
-  }
-  return [
-    {
-      capabilityId: "model-auth",
-      state: "unavailable",
-      reason: modelCredentialStatus.reason,
-    },
-  ];
+  const modelAuth: CoreCapabilityStatusDto =
+    modelCredentialStatus.state === "ready"
+      ? {
+          capabilityId: "model-auth",
+          state: "enabled",
+          reason: `Browser gateway has cached ${modelCredentialStatus.providerId} credentials.`,
+        }
+      : {
+          capabilityId: "model-auth",
+          state: "unavailable",
+          reason: modelCredentialStatus.reason,
+        };
+  return [modelAuth, ...additionalCapabilities];
 }
 
 export class BrowserGatewayAskAgentSessionStore {
@@ -338,6 +349,7 @@ export class BrowserGatewayAskAgentSessionStore {
   constructor(
     private readonly ownerRegistry: BrowserGatewayCoreOwnerRegistry,
     initialPreferences: BrowserGatewayAskAgentPreferencesSnapshot = {},
+    private readonly options: BrowserGatewayAskAgentSessionStoreOptions = {},
   ) {
     const initialModel = initialPreferences.model?.trim();
     if (initialModel) {
@@ -1455,10 +1467,17 @@ export class BrowserGatewayAskAgentSessionStore {
     now: number,
     modelCredentialStatus: BrowserGatewayModelCredentialStatus,
   ): CoreOwnerRegistrationDto {
+    const ownerGenerationId =
+      this.options.ownerGenerationId ??
+      BROWSER_GATEWAY_ASK_AGENT_OWNER_GENERATION_ID;
+    const capabilities = getAskAgentCapabilities(
+      modelCredentialStatus,
+      this.options.additionalCapabilities ?? [],
+    );
     const existing = this.ownerRegistry.heartbeat({
       ownerId: BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
-      ownerGenerationId: BROWSER_GATEWAY_ASK_AGENT_OWNER_GENERATION_ID,
-      capabilities: getAskAgentCapabilities(modelCredentialStatus),
+      ownerGenerationId,
+      capabilities,
       now,
     });
     if (existing) return existing;
@@ -1472,8 +1491,8 @@ export class BrowserGatewayAskAgentSessionStore {
         scopeId: BROWSER_GATEWAY_ASK_AGENT_SCOPE_ID,
         displayName: "Ask Agent",
       },
-      ownerGenerationId: BROWSER_GATEWAY_ASK_AGENT_OWNER_GENERATION_ID,
-      capabilities: getAskAgentCapabilities(modelCredentialStatus),
+      ownerGenerationId,
+      capabilities,
       processId: process.pid,
       now,
     });

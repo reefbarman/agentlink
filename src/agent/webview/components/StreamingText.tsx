@@ -1,8 +1,7 @@
-import { useRef, useEffect, useMemo, useState } from "preact/hooks";
-import { Marked } from "marked";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+
 import DOMPurify from "dompurify";
-import mermaid from "mermaid";
-import embed, { type VisualizationSpec } from "vega-embed";
+import { Marked } from "marked";
 import { matchFilePaths } from "./filePathLinks";
 import { renderMarkdownTaskCheckbox } from "./markdownTaskCheckbox";
 
@@ -11,71 +10,19 @@ type SpecialBlock =
   | { kind: "vega"; source: string }
   | { kind: "vega-lite"; source: string };
 
-let mermaidInitialized = false;
-function ensureMermaidInit() {
-  if (mermaidInitialized) return;
-  mermaidInitialized = true;
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: "base",
-    securityLevel: "loose",
-    fontFamily: "var(--vscode-font-family)",
-    themeVariables: {
-      // AgentLink brand teal
-      primaryColor: "#2a5e58",
-      primaryTextColor: "#e0e0e0",
-      primaryBorderColor: "#4EC9B0",
-      secondaryColor: "#1e3a36",
-      secondaryTextColor: "#e0e0e0",
-      secondaryBorderColor: "#3ba89f",
-      tertiaryColor: "#163330",
-      tertiaryTextColor: "#e0e0e0",
-      tertiaryBorderColor: "#2d7a72",
-      lineColor: "#4EC9B0",
-      textColor: "#e0e0e0",
-      mainBkg: "#2a5e58",
-      nodeBorder: "#4EC9B0",
-      noteBkgColor: "#1e3a36",
-      noteTextColor: "#e0e0e0",
-      noteBorderColor: "#4EC9B0",
-      actorBkg: "#2a5e58",
-      actorBorder: "#4EC9B0",
-      actorTextColor: "#e0e0e0",
-      actorLineColor: "#4EC9B0",
-      signalColor: "#e0e0e0",
-      signalTextColor: "#e0e0e0",
-      labelBoxBkgColor: "#1e3a36",
-      labelBoxBorderColor: "#4EC9B0",
-      labelTextColor: "#e0e0e0",
-      loopTextColor: "#e0e0e0",
-      activationBorderColor: "#4EC9B0",
-      activationBkgColor: "#1e3a36",
-      sequenceNumberColor: "#1a1a2e",
-      pie1: "#4EC9B0",
-      pie2: "#3ba89f",
-      pie3: "#2d7a72",
-      pie4: "#1e5c56",
-      pie5: "#164e48",
-      pie6: "#0e3d38",
-      pie7: "#082e2a",
-      pieTitleTextColor: "#e0e0e0",
-      pieSectionTextColor: "#1a1a2e",
-      git0: "#4EC9B0",
-      git1: "#3ba89f",
-      git2: "#2d7a72",
-      git3: "#1e5c56",
-      gitBranchLabel0: "#1a1a2e",
-      gitBranchLabel1: "#1a1a2e",
-      gitBranchLabel2: "#e0e0e0",
-      gitBranchLabel3: "#e0e0e0",
-      entityBorder: "#4EC9B0",
-      entityBkg: "#2a5e58",
-      entityTextColor: "#e0e0e0",
-      relationColor: "#4EC9B0",
-      attributeBackgroundColorEven: "#1e3a36",
-      attributeBackgroundColorOdd: "#2a5e58",
-    },
-  });
+let mermaidRendererPromise:
+  | Promise<typeof import("./mermaidRenderer")>
+  | undefined;
+let vegaRendererPromise: Promise<typeof import("./vegaRenderer")> | undefined;
+
+function loadMermaidRenderer() {
+  mermaidRendererPromise ??= import("./mermaidRenderer");
+  return mermaidRendererPromise;
+}
+
+function loadVegaRenderer() {
+  vegaRendererPromise ??= import("./vegaRenderer");
+  return vegaRendererPromise;
 }
 
 const SPECIAL_FENCE_RE =
@@ -475,20 +422,14 @@ export function StreamingText({
       try {
         let renderedHtml: string;
         if (block.kind === "mermaid") {
-          ensureMermaidInit();
-          const id = `mermaid-${Date.now()}-${idx}`;
-          const { svg } = await mermaid.render(id, block.source);
-          renderedHtml = svg;
+          const { renderMermaid } = await loadMermaidRenderer();
+          renderedHtml = await renderMermaid(
+            block.source,
+            `mermaid-${Date.now()}-${idx}`,
+          );
         } else {
-          const spec = JSON.parse(block.source) as VisualizationSpec;
-          const tmp = document.createElement("div");
-          await embed(tmp, spec, {
-            actions: false,
-            renderer: "svg",
-            mode: block.kind,
-            theme: "dark",
-          });
-          renderedHtml = tmp.innerHTML;
+          const { renderVega } = await loadVegaRenderer();
+          renderedHtml = await renderVega(block.source, block.kind);
         }
 
         renderedSpecialBlocksRef.current.add(idx);

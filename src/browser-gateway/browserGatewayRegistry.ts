@@ -2,6 +2,7 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 
+import type { BrowserGatewayDataPlaneMode } from "./browserGatewayDataPlaneMode.js";
 import type { BrowserGatewayDiscoveryRecord } from "./browserGatewayDiscovery.js";
 import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
 import { sleep } from "../util/sleep.js";
@@ -38,6 +39,7 @@ export interface BrowserGatewayInstanceRecord extends BrowserGatewayDiscoveryRec
   instanceId: string;
   workspaceName: string;
   workspacePath: string;
+  dataPlaneMode?: BrowserGatewayDataPlaneMode;
   theme?: BrowserGatewayThemeSnapshot;
 }
 

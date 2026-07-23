@@ -16,6 +16,7 @@ import {
   clearBrowserGatewayDiscovery,
   writeBrowserGatewayDiscovery,
 } from "./browserGatewayDiscovery.js";
+import type { BrowserGatewayDataPlaneMode } from "./browserGatewayDataPlaneMode.js";
 import {
   getBrowserGatewayRegistryPath,
   listCheckedBrowserGatewayInstances,
@@ -90,6 +91,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       __DEV_BUILD__,
     ),
     private readonly getHelperSharedSecret: () => string | null = () => null,
+    private readonly dataPlaneMode: BrowserGatewayDataPlaneMode = "off",
   ) {}
 
   async start(port = 0): Promise<number> {
@@ -201,6 +203,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       protocolVersion: 1,
       startedAt: this.startedAtIso ?? new Date().toISOString(),
       authToken: this.authToken,
+      dataPlaneMode: this.dataPlaneMode,
       theme,
     });
     this.log(
@@ -664,6 +667,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
         type: "broadcast",
         surface: "vscode-gateway",
         clientCount: result.attempted,
+        deliveredClientCount: result.delivered,
         bytes: publication.bytes,
       });
     }
@@ -686,6 +690,23 @@ export class BrowserGatewayServer implements vscode.Disposable {
           type: "sse_clients",
           surface: "vscode-gateway",
           clientCount,
+        });
+      },
+      onClientRemoved: (reason) => {
+        if (!this.streamingMetrics.enabled) return;
+        this.streamingMetrics.record({
+          type: "sse_client_removed",
+          surface: "vscode-gateway",
+          reason,
+        });
+      },
+      onFirstDelivery: ({ durationMs, bytes }) => {
+        if (!this.streamingMetrics.enabled) return;
+        this.streamingMetrics.record({
+          type: "sse_first_delivery",
+          surface: "vscode-gateway",
+          durationMs,
+          bytes,
         });
       },
     });

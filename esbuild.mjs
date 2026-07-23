@@ -1,21 +1,41 @@
 import * as esbuild from "esbuild";
 import * as path from "path";
 
-import { copyFileSync, mkdirSync, readFileSync, readdirSync } from "fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "fs";
+import {
+  createBrowserGatewayBundleReport,
+  verifyBrowserGatewayBundlePackaging,
+} from "./scripts/browser-gateway-bundle-report.mjs";
 
+import { resolveBrowserGatewayDevBuild } from "./scripts/browser-gateway-build-env.mjs";
 import { stageSandboxRuntime } from "./scripts/package-sandbox-runtime.mjs";
 
 const watch = process.argv.includes("--watch");
+const browserGatewayReportArgument = process.argv.find((argument) =>
+  argument.startsWith("--browser-gateway-report="),
+);
+const browserGatewayReportPath =
+  browserGatewayReportArgument?.slice("--browser-gateway-report=".length) ||
+  "dist/browser-gateway-bundle-report.json";
+const browserGatewayChunkDir = "dist/browser-gateway-chunks";
+rmSync(browserGatewayChunkDir, { recursive: true, force: true });
 
 // Load .env.local if it exists (for DEV_BUILD=true opt-in). An explicit
 // environment value keeps builds deterministic in CI and isolated worktrees.
-let devBuild = process.env.DEV_BUILD === "true";
+let envLocal;
 try {
-  const envLocal = readFileSync(".env.local", "utf-8");
-  devBuild = /^DEV_BUILD\s*=\s*true$/m.test(envLocal);
+  envLocal = readFileSync(".env.local", "utf-8");
 } catch {
-  // No .env.local — dev tools disabled (default)
+  // No .env.local — dev tools disabled unless explicitly enabled.
 }
+const devBuild = resolveBrowserGatewayDevBuild(process.env.DEV_BUILD, envLocal);
 
 /** @type {esbuild.BuildOptions} */
 const extensionOptions = {
@@ -95,10 +115,31 @@ const chatOptions = {
 };
 
 /** @type {esbuild.BuildOptions} */
+const browserMonacoExternalPlugin = {
+  name: "browser-monaco-external",
+  setup(build) {
+    build.onResolve({ filter: /^\.\/browserMonaco$/ }, (args) => {
+      if (!args.importer.endsWith("BrowserDiffViewer.tsx")) return undefined;
+      return { path: "/browser-gateway-monaco.js", external: true };
+    });
+  },
+};
+
 const browserGatewayOptions = {
   ...webviewBase,
   entryPoints: ["src/browser-gateway/webview/index.tsx"],
   entryNames: "browser-gateway",
+  chunkNames: "browser-gateway-chunks/[name]-[hash]",
+  splitting: true,
+  metafile: true,
+  plugins: [browserMonacoExternalPlugin],
+};
+
+const browserGatewayMonacoOptions = {
+  ...webviewBase,
+  entryPoints: ["src/browser-gateway/webview/components/browserMonaco.ts"],
+  entryNames: "browser-gateway-monaco",
+  metafile: true,
 };
 
 /** @type {esbuild.BuildOptions} */
@@ -190,6 +231,7 @@ if (watch) {
     frCtx,
     chatCtx,
     browserGatewayCtx,
+    browserGatewayMonacoCtx,
     terminalCtx,
     monacoWorkerCtx,
     idxCtx,
@@ -202,6 +244,7 @@ if (watch) {
     esbuild.context(frPreviewOptions),
     esbuild.context(chatOptions),
     esbuild.context(browserGatewayOptions),
+    esbuild.context(browserGatewayMonacoOptions),
     esbuild.context(terminalOptions),
     esbuild.context(monacoWorkerOptions),
     esbuild.context(indexerOptions),
@@ -215,6 +258,7 @@ if (watch) {
     frCtx.watch(),
     chatCtx.watch(),
     browserGatewayCtx.watch(),
+    browserGatewayMonacoCtx.watch(),
     terminalCtx.watch(),
     monacoWorkerCtx.watch(),
     idxCtx.watch(),
@@ -222,6 +266,8 @@ if (watch) {
   ]);
   console.log("Watching for changes...");
 } else {
+  const browserGatewayBuild = esbuild.build(browserGatewayOptions);
+  const browserGatewayMonacoBuild = esbuild.build(browserGatewayMonacoOptions);
   await Promise.all([
     esbuild.build(extensionOptions),
     esbuild.build(composeRuntimeOptions),
@@ -229,13 +275,44 @@ if (watch) {
     esbuild.build(approvalOptions),
     esbuild.build(frPreviewOptions),
     esbuild.build(chatOptions),
-    esbuild.build(browserGatewayOptions),
+    browserGatewayBuild,
+    browserGatewayMonacoBuild,
     esbuild.build(terminalOptions),
     esbuild.build(monacoWorkerOptions),
     esbuild.build(indexerOptions),
     esbuild.build(browserGatewayHelperOptions),
   ]);
-  // Copy codicon assets to dist
+  const [browserGatewayResult, browserGatewayMonacoResult] = await Promise.all([
+    browserGatewayBuild,
+    browserGatewayMonacoBuild,
+  ]);
+  if (!browserGatewayResult.metafile || !browserGatewayMonacoResult.metafile) {
+    throw new Error("browser_gateway_metafile_missing");
+  }
+  const browserGatewayBundleReport = createBrowserGatewayBundleReport({
+    inputs: {
+      ...browserGatewayResult.metafile.inputs,
+      ...browserGatewayMonacoResult.metafile.inputs,
+    },
+    outputs: {
+      ...browserGatewayResult.metafile.outputs,
+      ...browserGatewayMonacoResult.metafile.outputs,
+    },
+  });
+  verifyBrowserGatewayBundlePackaging(
+    browserGatewayBundleReport,
+    readFileSync(".vscodeignore", "utf-8"),
+  );
+  mkdirSync(path.dirname(browserGatewayReportPath), { recursive: true });
+  writeFileSync(
+    browserGatewayReportPath,
+    `${JSON.stringify(browserGatewayBundleReport, null, 2)}\n`,
+  );
+  console.log(
+    `Browser gateway bundle: ${browserGatewayBundleReport.totalBytes} bytes; report: ${browserGatewayReportPath}`,
+  );
+  // Copy the canonical shared codicon assets last. The browser Monaco bundle may
+  // emit the same font path; both surfaces intentionally resolve this final file.
   copyFileSync(
     "node_modules/@vscode/codicons/dist/codicon.css",
     "dist/codicon.css",

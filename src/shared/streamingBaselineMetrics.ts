@@ -27,12 +27,60 @@ export type StreamingBaselineEvent =
       type: "broadcast";
       surface: StreamingBaselineSurface;
       clientCount: number;
+      deliveredClientCount?: number;
       bytes?: number;
     }
   | {
       type: "sse_clients";
       surface: StreamingBaselineSurface;
       clientCount: number;
+    }
+  | {
+      type: "sse_first_delivery";
+      surface: StreamingBaselineSurface;
+      durationMs: number;
+      bytes: number;
+    }
+  | {
+      type: "sse_client_removed";
+      surface: StreamingBaselineSurface;
+      reason:
+        | "request_close"
+        | "response_close"
+        | "response_error"
+        | "write_error"
+        | "backpressure"
+        | "ended"
+        | "capture_error"
+        | "scheduler_error"
+        | "dispose";
+    }
+  | {
+      type: "browser_connection";
+      surface: Extract<StreamingBaselineSurface, "browser-webview">;
+      phase: "created" | "open" | "first_commit" | "error";
+      elapsedMs: number;
+    }
+  | {
+      type: "source_event_paint";
+      surface: Extract<StreamingBaselineSurface, "browser-webview">;
+      correlationId: string;
+      eventId: string;
+      ownerId: string;
+      ownerGenerationId: string;
+      ownerSequence: number;
+      eventKind: string;
+      category:
+        | "text"
+        | "progress"
+        | "approval"
+        | "question"
+        | "error"
+        | "completion";
+      latencyClass: "text_progress" | "immediate";
+      sourceEventAt: number;
+      paintedAt: number;
+      elapsedMs: number;
     }
   | {
       type: "delta";
@@ -70,8 +118,21 @@ export interface StreamingBaselineSummary {
   serializationDurationMs: number;
   serializedBytes: number;
   broadcasts: number;
+  broadcastAttempts: number;
   broadcastDeliveries: number;
   connectedClientsMax: number;
+  firstDeliveries: number;
+  firstDeliveryDurationMs: number;
+  firstDeliveryBytes: number;
+  sseRemovals: number;
+  sseBackpressureRemovals: number;
+  sseTransportErrorRemovals: number;
+  browserConnectionLifecycles: number;
+  browserConnectionOpens: number;
+  browserFirstCommits: number;
+  browserConnectionErrors: number;
+  browserOpenDurationMs: number;
+  browserFirstCommitDurationMs: number;
   textDeltas: number;
   semanticDeltas: number;
   coalescingOpportunities: number;
@@ -94,8 +155,21 @@ function emptySummary(): StreamingBaselineSummary {
     serializationDurationMs: 0,
     serializedBytes: 0,
     broadcasts: 0,
+    broadcastAttempts: 0,
     broadcastDeliveries: 0,
     connectedClientsMax: 0,
+    firstDeliveries: 0,
+    firstDeliveryDurationMs: 0,
+    firstDeliveryBytes: 0,
+    sseRemovals: 0,
+    sseBackpressureRemovals: 0,
+    sseTransportErrorRemovals: 0,
+    browserConnectionLifecycles: 0,
+    browserConnectionOpens: 0,
+    browserFirstCommits: 0,
+    browserConnectionErrors: 0,
+    browserOpenDurationMs: 0,
+    browserFirstCommitDurationMs: 0,
     textDeltas: 0,
     semanticDeltas: 0,
     coalescingOpportunities: 0,
@@ -161,7 +235,9 @@ export class StreamingBaselineRecorder implements StreamingBaselineMetrics {
           break;
         case "broadcast":
           summary.broadcasts += 1;
-          summary.broadcastDeliveries += event.clientCount;
+          summary.broadcastAttempts += event.clientCount;
+          summary.broadcastDeliveries +=
+            event.deliveredClientCount ?? event.clientCount;
           summary.connectedClientsMax = Math.max(
             summary.connectedClientsMax,
             event.clientCount,
@@ -172,6 +248,38 @@ export class StreamingBaselineRecorder implements StreamingBaselineMetrics {
             summary.connectedClientsMax,
             event.clientCount,
           );
+          break;
+        case "sse_first_delivery":
+          summary.firstDeliveries += 1;
+          summary.firstDeliveryDurationMs += event.durationMs;
+          summary.firstDeliveryBytes += event.bytes;
+          break;
+        case "sse_client_removed":
+          summary.sseRemovals += 1;
+          if (event.reason === "backpressure") {
+            summary.sseBackpressureRemovals += 1;
+          }
+          if (
+            event.reason === "response_error" ||
+            event.reason === "write_error"
+          ) {
+            summary.sseTransportErrorRemovals += 1;
+          }
+          break;
+        case "browser_connection":
+          if (event.phase === "created") {
+            summary.browserConnectionLifecycles += 1;
+          } else if (event.phase === "open") {
+            summary.browserConnectionOpens += 1;
+            summary.browserOpenDurationMs += event.elapsedMs;
+          } else if (event.phase === "first_commit") {
+            summary.browserFirstCommits += 1;
+            summary.browserFirstCommitDurationMs += event.elapsedMs;
+          } else {
+            summary.browserConnectionErrors += 1;
+          }
+          break;
+        case "source_event_paint":
           break;
         case "delta":
           if (event.kind === "text") {

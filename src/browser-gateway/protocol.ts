@@ -10,6 +10,8 @@ import type {
   CoreModelAuthMethod,
 } from "../core/modelAuth.js";
 
+import type { BrowserGatewayCoreOwnerRegistrationResolution } from "./coreOwnerRegistry.js";
+import type { BrowserGatewayDataPlaneMode } from "./browserGatewayDataPlaneMode.js";
 import type { CoreModelCatalogEntry } from "../core/modelCatalog.js";
 
 export const BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION = 1;
@@ -23,6 +25,7 @@ export interface BrowserGatewayHelperDiscoveryRecord {
   lastHeartbeatAt: string;
   helperVersion: string;
   helperGenerationId?: string;
+  dataPlaneMode?: BrowserGatewayDataPlaneMode;
   browserBootstrapToken: string;
   clientSharedSecret: string;
   /** True when the helper is bound to 0.0.0.0 and advertising mDNS. */
@@ -47,6 +50,7 @@ export interface BrowserGatewayHelperHealthResponse {
   uptimeMs: number;
   activeClientLeases: number;
   helperGenerationId?: string;
+  dataPlaneMode?: BrowserGatewayDataPlaneMode;
   coreOwners?: number;
 }
 
@@ -78,10 +82,15 @@ export interface BrowserGatewayCoreOwnerLeaseRegistration {
 export interface BrowserGatewayCoreOwnerHeartbeatRequest {
   ownerId: string;
   ownerGenerationId: string;
+  capabilities?: CoreCapabilityStatusDto[];
 }
 
 export interface BrowserGatewayCoreOwnerRegistrationResponse {
   ok: true;
+  helperGenerationId: string;
+  requestedOwnerId: string;
+  effectiveOwnerId: string;
+  resolution: BrowserGatewayCoreOwnerRegistrationResolution;
   ownerRegistration: CoreOwnerRegistrationDto;
 }
 

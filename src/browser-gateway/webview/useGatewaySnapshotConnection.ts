@@ -5,7 +5,13 @@ export interface GatewaySnapshotReadResult<TSnapshot, TCapability> {
   askAgentCapabilities?: TCapability[];
 }
 
+export interface GatewaySnapshotConnectionObservation {
+  phase: "created" | "open" | "first_commit" | "error";
+  elapsedMs: number;
+}
+
 export interface GatewaySnapshotConnectionOptions<TSnapshot, TCapability> {
+  enabled?: boolean;
   authToken: string;
   tabId: string;
   generation: number;
@@ -40,12 +46,17 @@ export interface GatewaySnapshotConnectionOptions<TSnapshot, TCapability> {
   ) => Promise<unknown>;
   fetchDebugInfo: (instanceId: string) => Promise<unknown>;
   fetchInstances: (options?: { commitSelection?: boolean }) => Promise<unknown>;
+  observeConnection?: (
+    observation: GatewaySnapshotConnectionObservation,
+  ) => void;
+  now?: () => number;
 }
 
 export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
   options: GatewaySnapshotConnectionOptions<TSnapshot, TCapability>,
 ): void {
   const {
+    enabled = true,
     authToken,
     tabId,
     generation,
@@ -65,15 +76,35 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
     fetchSessions,
     fetchDebugInfo,
     fetchInstances,
+    observeConnection,
+    now = Date.now,
   } = options;
 
   useEffect(() => {
+    if (!enabled) return;
     let closed = false;
     let eventSource: EventSource | undefined;
     let snapshotFetchController: AbortController | undefined;
     let instanceRefreshTimer: ReturnType<typeof setInterval> | undefined;
     let initialSnapshotTimer: ReturnType<typeof setTimeout> | undefined;
     let fallbackSnapshotTimer: ReturnType<typeof setInterval> | undefined;
+    let connectionCycleStartedAt = now();
+    let recordedFirstCommit = false;
+
+    const observe = (
+      phase: GatewaySnapshotConnectionObservation["phase"],
+      observedAt = now(),
+    ) => {
+      try {
+        observeConnection?.({
+          phase,
+          elapsedMs: Math.max(0, observedAt - connectionCycleStartedAt),
+        });
+      } catch {
+        // Baseline observers must not affect connection lifecycle.
+      }
+    };
+    observe("created", connectionCycleStartedAt);
 
     const stopInitialSnapshotFallback = () => {
       if (!initialSnapshotTimer) return;
@@ -137,17 +168,24 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
 
     let pendingStreamData: string | null = null;
     let streamCoalesceTimer: ReturnType<typeof setTimeout> | undefined;
-    let lastStreamApplyAt = 0;
+    // The first event should commit immediately, regardless of the clock's epoch.
+    let lastStreamApplyAt = now() - streamCoalesceMs;
 
     const applyPendingStreamData = () => {
       streamCoalesceTimer = undefined;
       if (closed || pendingStreamData === null) return;
       const data = pendingStreamData;
       pendingStreamData = null;
-      lastStreamApplyAt = Date.now();
+      lastStreamApplyAt = now();
       try {
         const next = JSON.parse(data) as TSnapshot;
         if (!commitSnapshot(next, tabId, generation)) return;
+        if (!recordedFirstCommit) {
+          recordedFirstCommit = true;
+          // Measures usable state: event arrival, coalescing, parse, and commit.
+          // This is intentionally not a network first-byte metric.
+          observe("first_commit");
+        }
         snapshotFetchController?.abort();
         snapshotFetchController = undefined;
         stopInitialSnapshotFallback();
@@ -161,7 +199,7 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
     const applySnapshotEvent = (event: MessageEvent<string>) => {
       pendingStreamData = event.data;
       if (streamCoalesceTimer !== undefined) return;
-      const elapsed = Date.now() - lastStreamApplyAt;
+      const elapsed = now() - lastStreamApplyAt;
       if (elapsed >= streamCoalesceMs) {
         applyPendingStreamData();
         return;
@@ -177,11 +215,16 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
     );
     eventSource.onopen = () => {
       if (closed) return;
+      observe("open");
       stopFallbackSnapshotPolling();
       setStatus("Connected");
     };
     eventSource.onerror = () => {
       if (closed) return;
+      const errorAt = now();
+      observe("error", errorAt);
+      connectionCycleStartedAt = errorAt;
+      recordedFirstCommit = false;
       stopInitialSnapshotFallback();
       setStatus("Realtime stream disconnected — retrying…");
       startFallbackSnapshotPolling();
@@ -228,11 +271,14 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
       }
     };
   }, [
+    enabled,
     buildEventsApiPath,
     buildSnapshotApiPath,
     commitSnapshot,
     askAgentSelected,
     tabId,
     routeByInstance,
+    observeConnection,
+    now,
   ]);
 }

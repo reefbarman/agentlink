@@ -170,6 +170,42 @@ export function matchAskAgentRoute(
   return matchExactRoute(ASK_AGENT_ROUTES, method, pathname);
 }
 
+export type InternalDataPlaneRouteHandler =
+  | "publications"
+  | "commands"
+  | "acknowledgements"
+  | "details";
+
+export const INTERNAL_DATA_PLANE_ROUTES = [
+  {
+    method: "POST",
+    path: "/internal/data-plane/publications",
+    handler: "publications",
+  },
+  {
+    method: "GET",
+    path: "/internal/data-plane/commands",
+    handler: "commands",
+  },
+  {
+    method: "POST",
+    path: "/internal/data-plane/acknowledgements",
+    handler: "acknowledgements",
+  },
+  {
+    method: "POST",
+    path: "/internal/data-plane/details",
+    handler: "details",
+  },
+] as const satisfies readonly HelperExactRoute<InternalDataPlaneRouteHandler>[];
+
+export function matchInternalDataPlaneRoute(
+  method: string,
+  pathname: string,
+): HelperRouteMatch<InternalDataPlaneRouteHandler> | null {
+  return matchExactRoute(INTERNAL_DATA_PLANE_ROUTES, method, pathname);
+}
+
 export type InternalCoreRouteHandler =
   | "clientLease"
   | "clientRelease"
@@ -236,6 +272,36 @@ export function matchInternalCoreRoute(
   return matchExactRoute(INTERNAL_CORE_ROUTES, method, pathname);
 }
 
+export type BrowserRelayRouteHandler =
+  | "events"
+  | "subscription"
+  | "commands"
+  | "operationStatus"
+  | "detail";
+
+export const BROWSER_RELAY_ROUTES = [
+  { method: "GET", path: "/api/relay/events", handler: "events" },
+  {
+    method: "POST",
+    path: "/api/relay/subscription",
+    handler: "subscription",
+  },
+  { method: "POST", path: "/api/relay/commands", handler: "commands" },
+  {
+    method: "POST",
+    path: "/api/relay/operations/status",
+    handler: "operationStatus",
+  },
+  { method: "GET", path: "/api/relay/details", handler: "detail" },
+] as const satisfies readonly HelperExactRoute<BrowserRelayRouteHandler>[];
+
+export function matchBrowserRelayRoute(
+  method: string,
+  pathname: string,
+): HelperRouteMatch<BrowserRelayRouteHandler> | null {
+  return matchExactRoute(BROWSER_RELAY_ROUTES, method, pathname);
+}
+
 export type PairedBrowserRouteHandler = "pairGet" | "pairPost";
 
 export const PAIRED_BROWSER_ROUTES = [
@@ -293,6 +359,9 @@ export type PublicHelperRouteHandler =
   | "root"
   | "browserGatewayJs"
   | "browserGatewayCss"
+  | "browserGatewayMonacoJs"
+  | "browserGatewayMonacoCss"
+  | "browserGatewayChunk"
   | "monacoWorker"
   | "monacoWorkerMap"
   | "codiconCss"
@@ -314,6 +383,16 @@ export const PUBLIC_HELPER_EXACT_ROUTES = [
     path: "/browser-gateway.css",
     handler: "browserGatewayCss",
   },
+  {
+    method: "GET",
+    path: "/browser-gateway-monaco.js",
+    handler: "browserGatewayMonacoJs",
+  },
+  {
+    method: "GET",
+    path: "/browser-gateway-monaco.css",
+    handler: "browserGatewayMonacoCss",
+  },
   { method: "GET", path: "/codicon.css", handler: "codiconCss" },
   { method: "GET", path: "/codicon.ttf", handler: "codiconFont" },
   { method: "GET", path: "/favicon.ico", handler: "appIcon" },
@@ -330,6 +409,11 @@ export function matchPublicHelperRoute(
   if (method !== "GET") return null;
   const exact = matchExactRoute(PUBLIC_HELPER_EXACT_ROUTES, method, pathname);
   if (exact) return exact;
+  if (
+    /^\/browser-gateway-chunks\/[a-zA-Z0-9_-]+-[a-zA-Z0-9]+\.js$/.test(pathname)
+  ) {
+    return { handler: "browserGatewayChunk" };
+  }
   if (/^\/monaco-[a-z-]+\.worker\.js$/.test(pathname)) {
     return { handler: "monacoWorker" };
   }

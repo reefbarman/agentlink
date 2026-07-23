@@ -10,3 +10,4 @@ releases/
 plans/*
 .mcp.json
 /AGENTS.md
+benchmarks/

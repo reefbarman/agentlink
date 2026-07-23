@@ -69,7 +69,7 @@ describe("ProjectSettingsAccessor", () => {
     };
     const properties = manifest.contributes.configuration.properties;
 
-    expect(classifications).toHaveLength(52);
+    expect(classifications).toHaveLength(53);
     expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain(
       "webAccess.searchBackend",
     );

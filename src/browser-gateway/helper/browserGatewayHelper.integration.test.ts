@@ -986,10 +986,16 @@ describe("BrowserGatewayHelper proxy routing", () => {
         body: JSON.stringify({
           ownerId: "owner-vscode-1",
           ownerGenerationId: "generation-1",
+          capabilities: [{ capabilityId: "session.send", state: "disabled" }],
         }),
       },
     );
     expect(heartbeat.ok).toBe(true);
+    await expect(heartbeat.json()).resolves.toMatchObject({
+      ownerRegistration: {
+        capabilities: [{ capabilityId: "session.send", state: "disabled" }],
+      },
+    });
 
     const staleGenerationHeartbeat = await fetch(
       `${helperBase}/internal/core-owners/heartbeat`,
@@ -1006,14 +1012,20 @@ describe("BrowserGatewayHelper proxy routing", () => {
 
     const list = await fetch(`${helperBase}/internal/core-owners`, { headers });
     expect(list.ok).toBe(true);
-    await expect(list.json()).resolves.toMatchObject({
-      owners: [
-        {
-          owner: { ownerId: "owner-vscode-1" },
-          status: "connected",
-          ownerGenerationId: "generation-1",
-        },
-      ],
+    const listBody = (await list.json()) as {
+      owners: Array<{
+        owner: { ownerId: string };
+        status: string;
+        ownerGenerationId: string;
+      }>;
+    };
+    expect(
+      listBody.owners.find(
+        (candidate) => candidate.owner.ownerId === "owner-vscode-1",
+      ),
+    ).toMatchObject({
+      status: "connected",
+      ownerGenerationId: "generation-1",
     });
 
     const release = await fetch(`${helperBase}/internal/client/release`, {
@@ -1227,6 +1239,30 @@ describe("BrowserGatewayHelper proxy routing", () => {
 
   it("serves versioned browser assets with cache revalidation headers", async () => {
     const extensionRootPath = await makeExtensionRoot();
+    await fs.mkdir(
+      path.join(extensionRootPath, "dist", "browser-gateway-chunks"),
+      { recursive: true },
+    );
+    await fs.writeFile(
+      path.join(
+        extensionRootPath,
+        "dist",
+        "browser-gateway-chunks",
+        "mermaid-ABC123.js",
+      ),
+      "export const lazy = true;",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(extensionRootPath, "dist", "browser-gateway-monaco.js"),
+      "export const editor = true;",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(extensionRootPath, "dist", "browser-gateway-monaco.css"),
+      ".monaco-editor{}",
+      "utf-8",
+    );
 
     const helperPort = 47203;
     const helperServer = http.createServer();
@@ -1255,6 +1291,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(html).toContain(`/codicon.css?v=${encodedVersion}`);
     expect(html).toContain(`/browser-gateway.css?v=${encodedVersion}`);
     expect(html).toContain(`/browser-gateway.js?v=${encodedVersion}`);
+    expect(html).toContain('dataPlaneMode: "off"');
 
     const iconResponse = await fetch(
       `${helperBase}/agentlink-icon.png?v=${encodedVersion}`,
@@ -1313,6 +1350,48 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(scriptResponse.headers.get("etag")).toBe(
       '"test version/with spaces:dist/browser-gateway.js"',
     );
+
+    const chunkResponse = await fetch(
+      `${helperBase}/browser-gateway-chunks/mermaid-ABC123.js`,
+    );
+    expect(chunkResponse.ok).toBe(true);
+    expect(chunkResponse.headers.get("content-type")).toBe(
+      "text/javascript; charset=utf-8",
+    );
+    expect(chunkResponse.headers.get("cache-control")).toBe(
+      "public, max-age=31536000, immutable",
+    );
+    expect(chunkResponse.headers.get("x-agentlink-helper-version")).toBe(
+      "test version/with spaces",
+    );
+    expect(chunkResponse.headers.get("etag")).toBe(
+      '"test version/with spaces:dist/browser-gateway-chunks/mermaid-ABC123.js"',
+    );
+
+    const monacoScriptResponse = await fetch(
+      `${helperBase}/browser-gateway-monaco.js`,
+    );
+    expect(monacoScriptResponse.ok).toBe(true);
+    expect(monacoScriptResponse.headers.get("content-type")).toBe(
+      "text/javascript; charset=utf-8",
+    );
+    expect(monacoScriptResponse.headers.get("cache-control")).toBe("no-cache");
+    const monacoStyleResponse = await fetch(
+      `${helperBase}/browser-gateway-monaco.css`,
+    );
+    expect(monacoStyleResponse.ok).toBe(true);
+    expect(monacoStyleResponse.headers.get("content-type")).toBe(
+      "text/css; charset=utf-8",
+    );
+
+    for (const rejectedPath of [
+      "/browser-gateway-chunks/unexpected-ABC123.css",
+      "/browser-gateway-chunks/mermaid-ABC123.js.map",
+      "/browser-gateway-chunks/%2e%2e%2fbrowser-gateway.js",
+    ]) {
+      const rejected = await fetch(`${helperBase}${rejectedPath}`);
+      expect(rejected.status).toBe(404);
+    }
 
     await fs.rm(extensionRootPath, { recursive: true, force: true });
   });
@@ -1379,6 +1458,9 @@ describe("BrowserGatewayHelper proxy routing", () => {
       },
     });
     expect(authorized.ok).toBe(true);
+    await expect(authorized.json()).resolves.toMatchObject({
+      dataPlaneMode: "off",
+    });
 
     await fs.rm(extensionRootPath, { recursive: true, force: true });
   });
@@ -3594,15 +3676,31 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(sse.headers.get("content-type")).toBe("text/event-stream");
     expect(sse.headers.get("cache-control")).toBe("no-cache");
     expect(reader).toBeTruthy();
+    expect(harness.helper.getLifecycleStateForTest()).toMatchObject({
+      activeStreamCount: 1,
+      livenessReasons: ["browser_stream"],
+    });
+    expect(
+      harness.helper.isIdleShutdownEligibleForTest(Date.now() + 120_001),
+    ).toBe(false);
 
-    const initial = await reader!.read();
-    const initialText = Buffer.from(initial.value ?? new Uint8Array()).toString(
-      "utf-8",
-    );
-    const initialPublication = publications.at(-1);
-    expect(initialPublication).toBeDefined();
-    expect(initialText).toBe(
-      `event: snapshot\ndata: ${initialPublication!.serialized}\n\n`,
+    let initialText = "";
+    while (!initialText.includes("\n\n")) {
+      const initial = await reader!.read();
+      expect(initial.done).toBe(false);
+      initialText += Buffer.from(initial.value ?? new Uint8Array()).toString(
+        "utf-8",
+      );
+    }
+    const initialFrame = initialText.slice(0, initialText.indexOf("\n\n") + 2);
+    expect(initialFrame).toMatch(/^event: snapshot\ndata: /);
+    const initialSnapshot = JSON.parse(
+      initialFrame.slice("event: snapshot\ndata: ".length).trim(),
+    ) as { session: { foreground: { status: string } } };
+    expect(initialSnapshot.session.foreground.status).toBe("idle");
+    const initialRevision = Math.max(
+      0,
+      ...publications.map(({ revision }) => revision),
     );
 
     const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
@@ -3622,7 +3720,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     }
     const updateText = frames.join("");
     const updatePublications = publications.filter(
-      ({ revision }) => revision > initialPublication!.revision,
+      ({ revision }) => revision > initialRevision,
     );
     expect(updatePublications.length).toBeGreaterThan(0);
     for (const publication of updatePublications) {
@@ -3650,6 +3748,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
         type: "sse_clients",
         surface: "ask-agent-helper",
         clientCount: 0,
+      });
+      expect(harness.helper.getLifecycleStateForTest()).toMatchObject({
+        activeStreamCount: 0,
+        livenessReasons: [],
       });
     });
   });
@@ -4066,8 +4168,18 @@ describe("BrowserGatewayHelper proxy routing", () => {
       body: JSON.stringify({ text: "Keep running until shutdown" }),
     });
     await started;
+    expect(helper.getLifecycleStateForTest().livenessReasons).toContain(
+      "ask_agent_turn",
+    );
+    expect(helper.isIdleShutdownEligibleForTest(Date.now() + 120_001)).toBe(
+      false,
+    );
 
     await helper.stop("test-shutdown");
+    expect(helper.getLifecycleStateForTest()).toMatchObject({
+      activeStreamCount: 0,
+      livenessReasons: [],
+    });
     helper = null;
 
     expect(signalFromCall?.aborted).toBe(true);
@@ -6087,6 +6199,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
   });
 
   it("proxies /api/ui-state and /events to selected instance", async () => {
+    let resolveUpstreamEventClosed!: () => void;
+    const upstreamEventClosed = new Promise<void>((resolve) => {
+      resolveUpstreamEventClosed = resolve;
+    });
     const upstream = http.createServer((req, res) => {
       const url = req.url ?? "/";
       if (url === "/health") {
@@ -6126,12 +6242,13 @@ describe("BrowserGatewayHelper proxy routing", () => {
         return;
       }
       if (url === "/events") {
+        res.once("close", resolveUpstreamEventClosed);
         res.writeHead(200, {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
           Connection: "keep-alive",
         });
-        res.end('event: snapshot\\ndata: {"ok":true}\\n\\n');
+        res.write('event: snapshot\\ndata: {"ok":true}\\n\\n');
         return;
       }
       res.writeHead(404, { "Content-Type": "application/json" });
@@ -6268,7 +6385,20 @@ describe("BrowserGatewayHelper proxy routing", () => {
         "utf-8",
       );
       expect(chunk).toContain("event: snapshot");
-      await reader.cancel();
+      expect(helper.getLifecycleStateForTest()).toMatchObject({
+        activeStreamCount: 1,
+        livenessReasons: ["browser_stream"],
+      });
+      expect(helper.isIdleShutdownEligibleForTest(Date.now() + 120_001)).toBe(
+        false,
+      );
+      const firstStop = helper.stop("test-stream-shutdown");
+      const secondStop = helper.stop("duplicate-stream-shutdown");
+      expect(secondStop).toBe(firstStop);
+      await firstStop;
+      helper = null;
+      await expect(reader.read()).resolves.toMatchObject({ done: true });
+      await upstreamEventClosed;
     }
 
     await fs.rm(extensionRootPath, { recursive: true, force: true });

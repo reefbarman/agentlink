@@ -1597,6 +1597,8 @@ AgentLink can be driven from a browser for remote interaction with a running bui
 
 A shared local helper process serves the browser UI on a stable configured port (`agentlink.browserGatewayPort`, default `47137`) so the URL is bookmarkable. In the default loopback-only mode it is available only on the same machine. If `agentlink.browserGatewayLanAccess` is enabled, the helper binds on the LAN, advertises `agentlink.browserGatewayMdnsName` (default `agentlink`) as `<name>.local`, and requires each non-loopback browser device to pair before it can control a session. Pair from `/pair` in chat or **AgentLink: Pair Browser Device**, and revoke devices with `/pair list` or **AgentLink: Manage Paired Browser Devices**.
 
+The helper-owned browser data plane is controlled by `agentlink.browserGateway.dataPlane`: `on` is the dogfood default and selects the helper relay/browser client, `shadow` dual-publishes while browsers stay on legacy traffic, and `off` restores the complete legacy snapshot/proxy client. The helper remains authoritative across open VS Code windows: any explicitly configured `off` window forces the effective helper mode to `off`, while `shadow` takes precedence over `on`. Restart the affected VS Code windows/helper after changing the mode so all protocol-v1 participants use the same extension build.
+
 When multiple VS Code windows are open, each registers a per-window API/SSE bridge and the browser can switch between them by instance from a single URL.
 
 The browser surface supports:
@@ -1629,6 +1631,7 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 | `agentlink.browserGatewayPort`                 | `47137`                    | Stable port for the shared browser gateway helper                                                                                           |
 | `agentlink.browserGatewayLanAccess`            | `false`                    | Expose the browser gateway on the LAN; non-loopback devices must pair first                                                                 |
 | `agentlink.browserGatewayMdnsName`             | `agentlink`                | mDNS hostname advertised as `<name>.local` when LAN access is enabled                                                                       |
+| `agentlink.browserGateway.dataPlane`           | `on`                       | Helper-owned relay default; set `off` for complete legacy rollback or `shadow` for dual publication with legacy browser traffic             |
 | `agentlink.defaultMode`                        | `code`                     | Default mode for new built-in agent sessions                                                                                                |
 | `agentlink.agentModel`                         | `gpt-5.6-sol`              | Legacy fallback model for the built-in agent chat; mode defaults use `agentlink.modeModelPreferences`                                       |
 | `agentlink.modeModelPreferences`               | GPT-5.6 Sol per mode       | Default model by mode slug; changing the picker in a mode updates that mode's preference                                                    |

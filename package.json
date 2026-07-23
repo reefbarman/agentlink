@@ -352,6 +352,22 @@
           "default": "agentlink",
           "description": "Hostname to advertise over mDNS when LAN access is enabled (resolves as <name>.local on the same network). If the name collides on the network, a short suffix is appended automatically."
         },
+        "agentlink.browserGateway.dataPlane": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "enumDescriptions": [
+            "Use only the legacy browser snapshot/proxy path.",
+            "Publish the helper-owned data plane alongside the legacy path while browsers continue using legacy traffic.",
+            "Enable helper-owned data-plane publication for browser cutover. Legacy publication remains available during the staged rollout."
+          ],
+          "default": "on",
+          "description": "Browser gateway data-plane rollout mode. Defaults to the helper-owned relay client for dogfooding; set this explicitly to off to restore the complete legacy browser snapshot/proxy path, or shadow to dual-publish while browsers remain on legacy traffic."
+        },
         "agentlink.masterBypass": {
           "scope": "resource",
           "type": "boolean",
@@ -766,14 +782,19 @@
     "release": "bash scripts/release.sh",
     "audit:assistant-runtime": "node scripts/audit-assistant-runtime.mjs",
     "benchmark:codex-oauth-models": "node --experimental-strip-types scripts/benchmark-codex-oauth-models.mts",
+    "benchmark:browser-gateway-bundle": "node esbuild.mjs --browser-gateway-report=benchmarks/browser-gateway-bundle-baseline.json",
     "telemetry:tools": "node scripts/report-tool-usage-telemetry.mjs",
     "telemetry:tools:csv": "node scripts/report-tool-usage-telemetry.mjs --csv",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "bash -c 'e=0; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
-    "test": "vitest run",
+    "test": "vitest run && node --test scripts/browser-gateway-bundle-report.test.mjs",
     "test:watch": "vitest",
-    "test:sandbox-runtime": "node --test scripts/package-sandbox-runtime.test.mjs scripts/sandbox-interactive-helper.test.mjs scripts/sandbox-network-policy.test.mjs scripts/sandbox-network-proxy.test.mjs scripts/sandbox-process-reaper.test.mjs scripts/sandbox-protected-roots.test.mjs scripts/sandbox-runtime-helper.test.mjs",
+    "test:browser-gateway-security-gate": "node scripts/run-browser-gateway-security-gate.mjs",
+    "test:browser-gateway-phase0-gate": "npm run test:browser-gateway-security-gate && BROWSER_GATEWAY_RUN_LOAD_GATE=1 vitest run src/browser-gateway/testing/stateEquivalenceOracle.test.ts src/browser-gateway/testing/ownerDataPlaneLoadFixture.test.ts",
+    "test:browser-gateway-phase3-gate": "node scripts/run-browser-gateway-phase3-gate.mjs",
+    "test:browser-gateway-phase3-load-gate": "node scripts/run-browser-gateway-phase3-gate.mjs --sustained",
+    "test:sandbox-runtime": "node --test scripts/package-sandbox-runtime.test.mjs scripts/sandbox-interactive-helper.test.mjs scripts/sandbox-network-policy.test.mjs scripts/sandbox-process-reaper.test.mjs scripts/sandbox-protected-roots.test.mjs scripts/sandbox-runtime-helper.test.mjs",
     "probe:sandbox-runtime": "node scripts/sandbox-runtime-behavior.mjs",
     "benchmark:sandbox-runtime": "node scripts/sandbox-runtime-evidence.mjs"
   },
