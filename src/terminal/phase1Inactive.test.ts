@@ -232,7 +232,10 @@ describe("Phase 1 gated activation boundary", () => {
     expect(extensionSource).toContain("AgentTerminalProviderRouter");
     expect(extensionSource).toContain("createVscodeTerminalProvider");
     expect(extensionSource).toContain("SandboxTerminalCoordinator");
-    expect(extensionSource).toContain(
+    expect(extensionSource).toContain("TabTerminalProviderRegistry");
+    expect(extensionSource).toContain("terminalProviderForSession:");
+    expect(extensionSource).toContain("terminalProvider: undefined");
+    expect(extensionSource).not.toContain(
       "terminalProvider: agentTerminalProvider",
     );
     expect(toolAdapterSource).not.toContain("createVscodeTerminalProvider");

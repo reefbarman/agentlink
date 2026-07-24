@@ -48,7 +48,9 @@ import { IndexerManager } from "./indexer/IndexerManager.js";
 import { registerIndexCommands } from "./indexer/indexCommands.js";
 import { ChatViewProvider } from "./agent/ChatViewProvider.js";
 import { AgentSessionManager } from "./agent/AgentSessionManager.js";
-import { ChatTabController } from "./agent/ChatTabController.js";
+import { ChatTabController, type ChatTab } from "./agent/ChatTabController.js";
+import { TabTerminalProviderRegistry } from "./agent/TabTerminalProviderRegistry.js";
+import { WorkspaceMutationCoordinator } from "./agent/WorkspaceMutationCoordinator.js";
 import { ProjectCustomizationRegistry } from "./agent/ProjectCustomizationRegistry.js";
 import {
   getConfiguredBaseThresholdForModel,
@@ -670,7 +672,22 @@ export function activate(context: vscode.ExtensionContext): void {
     log,
   });
   context.subscriptions.push(contextUsageTelemetry);
-  toolCallTracker = new AgentToolCallTracker(log, () => agentTerminalProvider);
+  let tabTerminalProviders: TabTerminalProviderRegistry | undefined;
+  toolCallTracker = new AgentToolCallTracker(log, (sessionId) => {
+    const manager = agentSessionManager as AgentSessionManager | undefined;
+    const tabs = chatTabController as ChatTabController | undefined;
+    const session = manager?.getSession(sessionId);
+    const rootSessionId = session?.fleetMetadata?.rootSessionId ?? sessionId;
+    const tab = tabs?.getTabForSession(rootSessionId);
+    return tab && tabTerminalProviders
+      ? tabTerminalProviders.forOwner({
+          tabId: tab.id,
+          tabLabel: `T${tab.displayNumber}`,
+          sessionId,
+          generation: tab.terminalGeneration,
+        })
+      : undefined;
+  });
 
   // Status bar manager for approval alerts and indexer errors
   statusBarManager = new StatusBarManager();
@@ -903,6 +920,7 @@ export function activate(context: vscode.ExtensionContext): void {
     },
     log,
   });
+  tabTerminalProviders = new TabTerminalProviderRegistry(agentTerminalProvider);
   context.subscriptions.push(
     agentTerminalProvider,
     vscode.workspace.onDidChangeConfiguration((event) => {
@@ -1292,6 +1310,28 @@ export function activate(context: vscode.ExtensionContext): void {
   const browserPreferredProjectId = context.workspaceState.get<string>(
     "browserPreferredProjectId",
   );
+  const terminalOwnerForTab = (tab: ChatTab, sessionId: string) => ({
+    tabId: tab.id,
+    tabLabel: `T${tab.displayNumber}`,
+    sessionId,
+    generation: tab.terminalGeneration,
+  });
+  context.subscriptions.push(
+    chatTabController.onWillRetireTerminalGeneration(async (tab) => {
+      if (tab.sessionId) {
+        const subtreeIds = agentSessionManager.getSessionSubtreeIds(
+          tab.sessionId,
+        );
+        for (const sessionId of subtreeIds) {
+          toolCallTracker.cancelSessionCalls(sessionId);
+        }
+        await agentSessionManager.stopSessionAndWait(tab.sessionId);
+      }
+      tabTerminalProviders.retireOwner(
+        terminalOwnerForTab(tab, tab.sessionId ?? "retired"),
+      );
+    }),
+  );
   agentSessionManager = new AgentSessionManager(
     agentConfig,
     workspaceCwd,
@@ -1304,6 +1344,11 @@ export function activate(context: vscode.ExtensionContext): void {
       projectCatalog,
       legacyProjectScope,
       projectCustomizationRegistry,
+      host: {
+        workspaceMutationCoordinator: new WorkspaceMutationCoordinator(
+          context.workspaceState,
+        ),
+      },
       projectMcpHubRegistry: chatViewProvider.getProjectMcpHubRegistry(),
       executionUnavailableReason:
         workspaceSessionLocation.status === "legacy_conflict"
@@ -1315,6 +1360,12 @@ export function activate(context: vscode.ExtensionContext): void {
           "browserPreferredProjectId",
           projectId,
         );
+      },
+      terminalProviderForSession: (sessionId, rootSessionId) => {
+        const tab = chatTabController.getTabForSession(rootSessionId);
+        return tab
+          ? tabTerminalProviders.forOwner(terminalOwnerForTab(tab, sessionId))
+          : undefined;
       },
     },
   );
@@ -2103,7 +2154,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onCollectFleetWorkflow: (workflowId, kind) =>
       agentSessionManager.collectFleetWorkflow(workflowId, kind),
     onManageFleetAutomations: (input) => fleetAutomationLifecycle.manage(input),
-    terminalProvider: agentTerminalProvider,
+    terminalProvider: undefined,
     worktreeAgentLaunchProvider: createVscodeWorktreeAgentLaunchProvider({
       globalStorageUri: context.globalStorageUri,
       onApprovalRequest: (request, sessionId) =>

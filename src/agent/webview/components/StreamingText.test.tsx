@@ -33,6 +33,26 @@ describe("StreamingText lazy special-block renderers", () => {
     expect(rendererMocks.renderVega).not.toHaveBeenCalled();
   });
 
+  it("adds a restrained source icon to external web links only", () => {
+    render(
+      <StreamingText
+        text={
+          "[AgentLink docs](https://example.com/docs) and [VS Code action](vscode://agentlink.open)"
+        }
+        streaming={false}
+      />,
+    );
+
+    const webLink = screen.getByText("AgentLink docs").closest("a");
+    const vscodeLink = screen.getByText("VS Code action").closest("a");
+    expect(
+      webLink?.querySelector(
+        ".external-link-flourish.codicon.codicon-globe[aria-hidden='true']",
+      ),
+    ).toBeTruthy();
+    expect(vscodeLink?.querySelector(".external-link-flourish")).toBeNull();
+  });
+
   it("loads only the Mermaid renderer for a Mermaid fence", async () => {
     rendererMocks.renderMermaid.mockResolvedValue("<svg>diagram</svg>");
     render(

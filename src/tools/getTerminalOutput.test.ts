@@ -351,7 +351,10 @@ describe("handleGetTerminalOutput", () => {
       { terminalProvider },
     );
 
-    expect(terminalProvider.interruptTerminal).toHaveBeenCalledWith("term_42");
+    expect(terminalProvider.interruptTerminal).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "term_42",
+    });
     expect(textPayload(result)).toMatchObject({
       killed: true,
       output: "stopped",

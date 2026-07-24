@@ -86,6 +86,7 @@ export type BackgroundAgentRuntimePhase =
   | "responding"
   | "executing_tool"
   | "awaiting_approval"
+  | "awaiting_coordinator"
   | "retrying_provider"
   | "completed"
   | "failed"

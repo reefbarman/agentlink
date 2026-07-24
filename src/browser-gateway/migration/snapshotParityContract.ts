@@ -179,6 +179,11 @@ export const BROWSER_GATEWAY_SNAPSHOT_PARITY_CONTRACT = {
         "checkpoint",
         "owner_event",
       ),
+      interactiveExecutionPhase: covered(
+        "Projected into checkpoint.foreground.interactiveExecutionPhase when an interactive execution is active.",
+        "checkpoint",
+        "owner_event",
+      ),
       streaming: covered(
         "Projected into checkpoint.foreground.streaming.",
         "checkpoint",

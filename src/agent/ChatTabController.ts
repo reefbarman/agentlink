@@ -37,6 +37,9 @@ export class ChatTabController {
   private layout: ChatTabLayout;
   private focusedTabId: string;
   private readonly listeners = new Set<(layout: ChatTabLayout) => void>();
+  private readonly terminalRetirementListeners = new Set<
+    (tab: ChatTab) => void | Promise<void>
+  >();
   private saveQueue: Promise<void> = Promise.resolve();
   private readonly createId: () => string;
   private readonly log?: (message: string) => void;
@@ -64,11 +67,21 @@ export class ChatTabController {
 
   dispose(): void {
     this.listeners.clear();
+    this.terminalRetirementListeners.clear();
   }
 
   onDidChange(listener: (layout: ChatTabLayout) => void): { dispose(): void } {
     this.listeners.add(listener);
     return { dispose: () => this.listeners.delete(listener) };
+  }
+
+  onWillRetireTerminalGeneration(
+    listener: (tab: ChatTab) => void | Promise<void>,
+  ): {
+    dispose(): void;
+  } {
+    this.terminalRetirementListeners.add(listener);
+    return { dispose: () => this.terminalRetirementListeners.delete(listener) };
   }
 
   getLayout(): ChatTabLayout {
@@ -137,7 +150,15 @@ export class ChatTabController {
     }
     const focused = this.requireTab(this.focusedTabId);
     if (focused.sessionId === sessionId) return structuredClone(focused);
-    const next = { ...focused, sessionId };
+    const replacingSession = focused.sessionId !== null;
+    if (replacingSession) await this.retireTerminalGeneration(focused);
+    const next = {
+      ...focused,
+      sessionId,
+      terminalGeneration: replacingSession
+        ? focused.terminalGeneration + 1
+        : focused.terminalGeneration,
+    };
     this.replaceTab(next);
     await this.commit();
     return structuredClone(next);
@@ -165,6 +186,7 @@ export class ChatTabController {
     if (sessionId === tab.sessionId) {
       return { ok: true, tab: structuredClone(tab) };
     }
+    await this.retireTerminalGeneration(tab);
     const next = {
       ...tab,
       sessionId,
@@ -223,6 +245,7 @@ export class ChatTabController {
     ) {
       return false;
     }
+    await this.retireTerminalGeneration(tab);
     this.layout = {
       ...this.layout,
       tabs: this.layout.tabs.filter((candidate) => candidate.id !== tabId),
@@ -232,6 +255,13 @@ export class ChatTabController {
     }
     await this.commit();
     return true;
+  }
+
+  private async retireTerminalGeneration(tab: ChatTab): Promise<void> {
+    const snapshot = structuredClone(tab);
+    for (const listener of this.terminalRetirementListeners) {
+      await listener(structuredClone(snapshot));
+    }
   }
 
   private replaceTab(tab: ChatTab): void {

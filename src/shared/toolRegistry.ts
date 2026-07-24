@@ -232,6 +232,14 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
       'Search the codebase by meaning, not exact text. Uses a Qdrant vector index to find code semantically similar to your natural language query. Best for exploratory questions like "how does authentication work" or "where are database connections configured". Falls back gracefully with a helpful error if the index is not available.',
   },
 
+  // --- Agent coordination ---
+
+  respond_to_background_question: {
+    label: "Answer background agent",
+    description:
+      "Answer a pending structured question from a background agent. Use only after receiving a background-agent question interjection, and pass its exact request_id plus a complete answer map keyed by question ID. Answer from the current coordinator context when possible. If human judgment or missing human-only information is required, call ask_user first, then pass the resulting answers here. This resolves the background agent's blocked ask_user call; ordinary assistant text does not.",
+  },
+
   // --- Dev-only tools ---
 
   compose: {
@@ -244,7 +252,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     label: "Submit tool feedback",
     devOnly: true,
     description:
-      "Submit feedback about an AgentLink tool — report issues, suggest improvements, or note missing features/parameters. Use call_mcp_tool as the canonical feedback category for MCP server-tool integration failures, including direct server__tool calls; use the MCP meta-tool actually called for management helpers. Include server/tool details in the feedback fields. Feedback is stored locally for the extension developer to review.",
+      "Submit feedback about an AgentLink tool — report issues, suggest improvements, or note missing features/parameters. For MCP-related work, report only problems with AgentLink's native MCP tools or AgentLink-owned MCP plumbing. Never submit feedback about a specific MCP server or its native server__tool, including that server's bugs, limitations, confusing output, or domain errors. Feedback is stored locally for the extension developer to review.",
   },
   get_feedback: {
     label: "Read tool feedback",

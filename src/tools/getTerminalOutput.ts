@@ -61,16 +61,20 @@ export async function handleGetTerminalOutput(
   // wait_seconds effectively useless.
   if (params.wait_seconds && params.wait_seconds > 0) {
     const deadline = Date.now() + params.wait_seconds * 1000;
-    const initialState = terminalProvider.getBackgroundState(
-      params.terminal_id,
-    );
+    const initialState = terminalProvider.getBackgroundState({
+      owner: undefined,
+      terminalId: params.terminal_id,
+    });
 
     log?.(
       `[get_terminal_output] POLL_START is_running=${initialState?.is_running ?? "unknown"}`,
     );
 
     while (Date.now() < deadline) {
-      const current = terminalProvider.getBackgroundState(params.terminal_id);
+      const current = terminalProvider.getBackgroundState({
+        owner: undefined,
+        terminalId: params.terminal_id,
+      });
       if (!current) break;
 
       // Stop waiting only when the command has finished
@@ -85,15 +89,24 @@ export async function handleGetTerminalOutput(
   // Kill the running process if requested
   if (params.kill) {
     log?.(`[get_terminal_output] KILL terminal_id=${params.terminal_id}`);
-    terminalProvider.interruptTerminal(params.terminal_id);
+    terminalProvider.interruptTerminal({
+      owner: undefined,
+      terminalId: params.terminal_id,
+    });
     // Brief wait for the process to respond to SIGINT
     await sleep(500);
   }
 
-  let state = terminalProvider.getBackgroundState(params.terminal_id);
+  let state = terminalProvider.getBackgroundState({
+    owner: undefined,
+    terminalId: params.terminal_id,
+  });
   const recentlyClosed = state
     ? []
-    : terminalProvider.getRecentlyClosedTerminals(20);
+    : terminalProvider.getRecentlyClosedTerminals({
+        owner: undefined,
+        limit: 20,
+      });
   const closedState = recentlyClosed.find(
     (terminal) => terminal.id === params.terminal_id,
   );
@@ -123,9 +136,10 @@ export async function handleGetTerminalOutput(
     };
   }
 
-  const retainedOutput = terminalProvider.getRetainedOutput?.(
-    params.terminal_id,
-  );
+  const retainedOutput = terminalProvider.getRetainedOutput?.({
+    owner: undefined,
+    terminalId: params.terminal_id,
+  });
   const output = retainedOutput?.output ?? state.output;
   const outputComplete =
     retainedOutput?.complete ?? state.output_complete ?? true;

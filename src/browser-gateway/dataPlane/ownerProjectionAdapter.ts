@@ -843,6 +843,9 @@ function projectForeground(
     mode: bounded(foreground.mode, 128),
     model: bounded(foreground.model, 256),
     status: bounded(foreground.status, 128),
+    ...(foreground.interactiveExecutionPhase
+      ? { interactiveExecutionPhase: foreground.interactiveExecutionPhase }
+      : {}),
     streaming: foreground.streaming,
     ...(foreground.interrupted !== undefined
       ? { interrupted: foreground.interrupted }

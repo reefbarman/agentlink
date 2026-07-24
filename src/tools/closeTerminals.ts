@@ -28,16 +28,17 @@ export async function handleCloseTerminals(
   }
   const terminalProvider = providers.terminalProvider;
 
-  const before = terminalProvider.listTerminals();
+  const before = terminalProvider.listTerminals({ owner: undefined });
   if (before.length === 0) {
     return {
       content: [{ type: "text", text: "No managed terminals to close." }],
     };
   }
 
-  const result = terminalProvider.closeTerminals(
-    params.names && params.names.length > 0 ? params.names : undefined,
-  );
+  const result = terminalProvider.closeTerminals({
+    owner: undefined,
+    names: params.names && params.names.length > 0 ? params.names : undefined,
+  });
 
   return {
     content: [
@@ -46,7 +47,7 @@ export async function handleCloseTerminals(
         text: JSON.stringify({
           closed: result.closed,
           ...(result.not_found && { not_found: result.not_found }),
-          remaining: terminalProvider.listTerminals(),
+          remaining: terminalProvider.listTerminals({ owner: undefined }),
         }),
       },
     ],

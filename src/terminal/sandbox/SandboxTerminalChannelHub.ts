@@ -29,7 +29,7 @@ interface RawDataTerminalChannelCoordinator {
 }
 
 interface TerminalChannelCoordinator {
-  listTerminals(): Array<{ id: string }>;
+  listTerminals(request: { owner: undefined }): Array<{ id: string }>;
   getChannelSnapshot(
     channelId: string,
   ): SandboxTerminalSessionSnapshot | undefined;
@@ -39,8 +39,10 @@ interface TerminalChannelCoordinator {
   onDispose(listener: () => void): SandboxTerminalChannelHubDisposable;
   write(channelId: string, data: string): boolean;
   resize(channelId: string, dimensions: TerminalDimensions): boolean;
-  interruptTerminal(channelId: string): boolean;
-  closeTerminals(names?: string[]): { closed: number };
+  interruptTerminal(request: { owner: undefined; terminalId: string }): boolean;
+  closeTerminals(request: { owner: undefined; names?: string[] }): {
+    closed: number;
+  };
   executeCommand(options: TerminalExecuteOptions): Promise<unknown>;
 }
 
@@ -89,7 +91,7 @@ export class SandboxTerminalChannelHub {
     this.currentCoordinator = coordinator;
     if (this.coordinators.has(coordinator)) return;
 
-    for (const terminal of coordinator.listTerminals()) {
+    for (const terminal of coordinator.listTerminals({ owner: undefined })) {
       const snapshot = coordinator.getChannelSnapshot(terminal.id);
       if (snapshot) this.setSnapshotOwner(coordinator, snapshot, authority);
     }
@@ -191,14 +193,19 @@ export class SandboxTerminalChannelHub {
 
   interrupt(channelId: string): boolean {
     return (
-      this.channelOwners.get(channelId)?.interruptTerminal(channelId) ?? false
+      this.channelOwners.get(channelId)?.interruptTerminal({
+        owner: undefined,
+        terminalId: channelId,
+      }) ?? false
     );
   }
 
   close(channelId: string): boolean {
     return (
-      (this.channelOwners.get(channelId)?.closeTerminals([channelId]).closed ??
-        0) > 0
+      (this.channelOwners.get(channelId)?.closeTerminals({
+        owner: undefined,
+        names: [channelId],
+      }).closed ?? 0) > 0
     );
   }
 
@@ -212,6 +219,7 @@ export class SandboxTerminalChannelHub {
       throw new Error("The AgentLink sandbox terminal is unavailable");
     }
     await coordinator.executeCommand({
+      owner: undefined,
       command: input.command,
       cwd: input.cwd,
       terminal_id: input.channelId,

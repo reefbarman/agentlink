@@ -121,6 +121,7 @@ export interface BrowserGatewaySessionState {
         mode: string;
         model: string;
         status: string;
+        interactiveExecutionPhase?: import("../agent/types.js").InteractiveExecutionPhase;
         streaming: boolean;
         interrupted?: boolean;
         messages: AgentMessage[];
@@ -173,6 +174,7 @@ export interface BrowserGatewayWireSessionState {
     mode: string;
     model: string;
     status: string;
+    interactiveExecutionPhase?: import("../agent/types.js").InteractiveExecutionPhase;
     streaming: boolean;
     interrupted?: boolean;
     projectedMessages: ChatMessage[];
@@ -584,6 +586,11 @@ export class BrowserGatewayService implements vscode.Disposable {
     const foregroundProject = projectsById.get(
       foreground.projectScope.projectId,
     );
+    const interactiveExecutionPhase = this.sessionManager
+      .getSessionInfos()
+      .find(
+        (session) => session.id === foreground.id,
+      )?.interactiveExecutionPhase;
     return {
       projects,
       defaultProjectId,
@@ -608,6 +615,7 @@ export class BrowserGatewayService implements vscode.Disposable {
         mode: projectedMatchesForeground ? projected.mode : foreground.mode,
         model: projectedMatchesForeground ? projected.model : foreground.model,
         status: foreground.status,
+        interactiveExecutionPhase,
         streaming: projectedMatchesForeground
           ? projected.streaming
           : foreground.status === "streaming" ||
@@ -724,6 +732,8 @@ export class BrowserGatewayService implements vscode.Disposable {
             mode: sessionState.foreground.mode,
             model: sessionState.foreground.model,
             status: sessionState.foreground.status,
+            interactiveExecutionPhase:
+              sessionState.foreground.interactiveExecutionPhase,
             streaming: sessionState.foreground.streaming,
             interrupted: sessionState.foreground.interrupted,
             projectedMessages: sessionState.foreground.projectedMessages,
@@ -932,6 +942,7 @@ export class BrowserGatewayService implements vscode.Disposable {
             mode: foreground.mode,
             model: foreground.model,
             status: foreground.status,
+            interactiveExecutionPhase: foreground.interactiveExecutionPhase,
             streaming: foreground.streaming,
             interrupted: foreground.interrupted,
             estimatedTokens: foreground.estimatedTotalUsed,

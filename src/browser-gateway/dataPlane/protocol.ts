@@ -120,6 +120,7 @@ export interface BrowserGatewayForegroundControlState {
   mode: string;
   model: string;
   status: string;
+  interactiveExecutionPhase?: import("../../agent/types.js").InteractiveExecutionPhase;
   streaming: boolean;
   interrupted?: boolean;
   estimatedTokens?: number;
@@ -1300,6 +1301,7 @@ function parseForeground(
     "mode",
     "model",
     "status",
+    "interactiveExecutionPhase",
     "streaming",
     "interrupted",
     "estimatedTokens",
@@ -1379,6 +1381,23 @@ function parseForeground(
     mode: nonEmptyString(object.mode, `${path}.mode`, 128),
     model: nonEmptyString(object.model, `${path}.model`, 256),
     status: nonEmptyString(object.status, `${path}.status`, 128),
+    ...(object.interactiveExecutionPhase !== undefined
+      ? {
+          interactiveExecutionPhase: enumValue(
+            object.interactiveExecutionPhase,
+            `${path}.interactiveExecutionPhase`,
+            new Set([
+              "queued_for_workspace_write",
+              "queued_for_provider",
+              "running",
+              "awaiting_input",
+              "stopping",
+            ]),
+          ) as NonNullable<
+            BrowserGatewayForegroundControlState["interactiveExecutionPhase"]
+          >,
+        }
+      : {}),
     streaming: booleanValue(object.streaming, `${path}.streaming`),
     ...(object.interrupted !== undefined
       ? {

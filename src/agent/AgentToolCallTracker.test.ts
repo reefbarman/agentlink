@@ -1,13 +1,18 @@
+import type {
+  TerminalOutputRequest,
+  TerminalProvider,
+  TerminalTargetRequest,
+} from "../core/capabilities/terminal.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AgentToolCallTracker } from "./AgentToolCallTracker.js";
-import type { TerminalProvider } from "../core/capabilities/terminal.js";
 
 const mocks = vi.hoisted(() => ({
-  detachTerminal: vi.fn<(terminalId: string) => boolean>(),
-  revealTerminal: vi.fn<(terminalId: string) => boolean>(),
-  interruptTerminal: vi.fn<(terminalId: string) => boolean>(),
-  getCurrentOutput: vi.fn<(terminalId: string) => string | undefined>(),
+  detachTerminal: vi.fn<(request: TerminalTargetRequest) => boolean>(),
+  revealTerminal: vi.fn<(request: TerminalTargetRequest) => boolean>(),
+  interruptTerminal: vi.fn<(request: TerminalTargetRequest) => boolean>(),
+  getCurrentOutput:
+    vi.fn<(request: TerminalOutputRequest) => string | undefined>(),
   getBackgroundState: vi.fn(),
   resolveCurrentDiff: vi.fn<(decision: "accept" | "reject") => boolean>(),
 }));
@@ -73,7 +78,10 @@ describe("AgentToolCallTracker continueInBackground", () => {
 
     tracker.continueInBackground("call-1");
     await vi.waitFor(() => {
-      expect(mocks.detachTerminal).toHaveBeenCalledWith("term_1");
+      expect(mocks.detachTerminal).toHaveBeenCalledWith({
+        owner: undefined,
+        terminalId: "term_1",
+      });
     });
   });
 
@@ -93,7 +101,10 @@ describe("AgentToolCallTracker continueInBackground", () => {
     context.setTerminalId("term_2");
     await vi.waitFor(() => {
       expect(mocks.detachTerminal).toHaveBeenCalledTimes(1);
-      expect(mocks.detachTerminal).toHaveBeenCalledWith("term_2");
+      expect(mocks.detachTerminal).toHaveBeenCalledWith({
+        owner: undefined,
+        terminalId: "term_2",
+      });
     });
   });
 
@@ -117,7 +128,10 @@ describe("AgentToolCallTracker continueInBackground", () => {
     });
     tracker.continueInBackground("call-files");
     await vi.waitFor(() => {
-      expect(mocks.detachTerminal).toHaveBeenCalledWith("term_files");
+      expect(mocks.detachTerminal).toHaveBeenCalledWith({
+        owner: undefined,
+        terminalId: "term_files",
+      });
     });
   });
 
@@ -187,7 +201,10 @@ describe("AgentToolCallTracker revealTerminal", () => {
     tracker.revealTerminal("call-reveal");
 
     await vi.waitFor(() => {
-      expect(mocks.revealTerminal).toHaveBeenCalledWith("term_reveal");
+      expect(mocks.revealTerminal).toHaveBeenCalledWith({
+        owner: undefined,
+        terminalId: "term_reveal",
+      });
     });
   });
 
@@ -207,7 +224,10 @@ describe("AgentToolCallTracker revealTerminal", () => {
     context.setTerminalId("term_pending_reveal");
 
     await vi.waitFor(() => {
-      expect(mocks.revealTerminal).toHaveBeenCalledWith("term_pending_reveal");
+      expect(mocks.revealTerminal).toHaveBeenCalledWith({
+        owner: undefined,
+        terminalId: "term_pending_reveal",
+      });
     });
   });
 
@@ -293,6 +313,36 @@ describe("AgentToolCallTracker lifecycle", () => {
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
+  it("pins terminal control to the provider captured when the call starts", () => {
+    const firstInterrupt = vi.fn(() => true);
+    const secondInterrupt = vi.fn(() => true);
+    let currentProvider = {
+      ...createTerminalProvider(),
+      interruptTerminal: firstInterrupt,
+    };
+    const tracker = new AgentToolCallTracker(undefined, () => currentProvider);
+    const context = tracker.registerAgentCall(
+      "call-generation",
+      "execute_command",
+      "npm test",
+      "session-a",
+      vi.fn(),
+    );
+    context.setTerminalId("term-old-generation");
+    currentProvider = {
+      ...createTerminalProvider(),
+      interruptTerminal: secondInterrupt,
+    };
+
+    tracker.cancelCall("call-generation");
+
+    expect(firstInterrupt).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "term-old-generation",
+    });
+    expect(secondInterrupt).not.toHaveBeenCalled();
+  });
+
   it("cancels the linked terminal, diff, and force resolver", async () => {
     const tracker = createTracker();
     const forceResolve = vi.fn();
@@ -307,7 +357,10 @@ describe("AgentToolCallTracker lifecycle", () => {
 
     tracker.cancelCall("call-cancel");
     await vi.waitFor(() => {
-      expect(mocks.interruptTerminal).toHaveBeenCalledWith("term-cancel");
+      expect(mocks.interruptTerminal).toHaveBeenCalledWith({
+        owner: undefined,
+        terminalId: "term-cancel",
+      });
       expect(mocks.resolveCurrentDiff).toHaveBeenCalledWith("reject");
     });
 
@@ -364,7 +417,10 @@ describe("AgentToolCallTracker lifecycle", () => {
         data: expect.objectContaining({ status: "cancelled" }),
       }),
     );
-    expect(mocks.interruptTerminal).toHaveBeenCalledWith("sandbox-descendant");
+    expect(mocks.interruptTerminal).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "sandbox-descendant",
+    });
   });
 
   it("force-completes generic tools with the existing fallback", async () => {
@@ -402,10 +458,15 @@ describe("AgentToolCallTracker lifecycle", () => {
 
     await tracker.completeCall("call-complete");
 
-    expect(mocks.getCurrentOutput).toHaveBeenCalledWith("term-complete", {
+    expect(mocks.getCurrentOutput).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "term-complete",
       force: true,
     });
-    expect(mocks.interruptTerminal).toHaveBeenCalledWith("term-complete");
+    expect(mocks.interruptTerminal).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "term-complete",
+    });
     expect(
       JSON.parse(forceResolve.mock.calls[0][0].content[0].text),
     ).toMatchObject({
@@ -464,7 +525,9 @@ describe("AgentToolCallTracker lifecycle", () => {
 
     await tracker.completeCall("call-output-direct");
 
-    expect(mocks.getCurrentOutput).toHaveBeenCalledWith("term-direct", {
+    expect(mocks.getCurrentOutput).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "term-direct",
       force: true,
     });
     expect(

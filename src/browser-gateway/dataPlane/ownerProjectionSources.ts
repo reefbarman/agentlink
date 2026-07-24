@@ -71,6 +71,7 @@ export interface BrowserGatewayOwnerForegroundSource {
   mode: string;
   model: string;
   status: string;
+  interactiveExecutionPhase?: import("../../agent/types.js").InteractiveExecutionPhase;
   streaming: boolean;
   interrupted?: boolean;
   estimatedTokens?: number;

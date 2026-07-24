@@ -409,6 +409,7 @@ async function runAuthorizedCommand(
   const generation = 1;
   const authorized = await authorizer.authorize({
     options: {
+      owner: undefined,
       command,
       cwd,
       sandboxSessionId: "sandbox-behavior-attestation",
@@ -694,6 +695,7 @@ async function runInterruptProbe(
   const commandId = `attest-interrupt-${randomUUID()}`;
   const authorized = await authorizer.authorize({
     options: {
+      owner: undefined,
       command: `${shellQuote(nodeExecutable)} -e ${shellQuote('process.stdout.write("interrupt-ready\\n"); setInterval(() => {}, 1000)')}`,
       cwd,
       sandboxSessionId: "sandbox-behavior-attestation",

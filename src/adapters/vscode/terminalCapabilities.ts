@@ -18,29 +18,29 @@ export function createVscodeTerminalProvider(): TerminalProvider {
       }
       return terminalManager.executeCommand(options);
     },
-    getBackgroundState(terminalId) {
-      return terminalManager.getBackgroundState(terminalId);
+    getBackgroundState(request) {
+      return terminalManager.getBackgroundState(request);
     },
-    getCurrentOutput(terminalId, options) {
-      return terminalManager.getCurrentOutput(terminalId, options);
+    getCurrentOutput(request) {
+      return terminalManager.getCurrentOutput(request);
     },
-    interruptTerminal(terminalId) {
-      return terminalManager.interruptTerminal(terminalId);
+    interruptTerminal(request) {
+      return terminalManager.interruptTerminal(request);
     },
-    detachTerminal(terminalId) {
-      return terminalManager.detachTerminal(terminalId);
+    detachTerminal(request) {
+      return terminalManager.detachTerminal(request);
     },
-    revealTerminal(terminalId) {
-      return terminalManager.revealTerminal(terminalId);
+    revealTerminal(request) {
+      return terminalManager.revealTerminal(request);
     },
-    getRecentlyClosedTerminals(limit) {
-      return terminalManager.getRecentlyClosedTerminals(limit);
+    getRecentlyClosedTerminals(request) {
+      return terminalManager.getRecentlyClosedTerminals(request);
     },
-    listTerminals() {
-      return terminalManager.listTerminals();
+    listTerminals(request) {
+      return terminalManager.listTerminals(request);
     },
-    closeTerminals(names) {
-      return terminalManager.closeTerminals(names);
+    closeTerminals(request) {
+      return terminalManager.closeTerminals(request);
     },
   };
 }

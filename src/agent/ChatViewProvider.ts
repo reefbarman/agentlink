@@ -251,6 +251,8 @@ export function formatCheckpointRevertFailureMessage(
       return "Checkpoint revert was cancelled because the session changed after the preview. Refresh the checkpoint preview and try again.";
     case "checkpoint_stale":
       return "Checkpoint revert was cancelled because the checkpoint no longer matches the current transcript. Refresh the session and try again.";
+    case "workspace_mutation_conflict":
+      return "Checkpoint revert was cancelled because the workspace changed in another session or after the preview. Refresh the checkpoint preview and try again.";
     case "workspace_revert_failed":
       return "Failed to revert workspace files to the checkpoint. The transcript was not changed.";
     case "persistence_failed":
@@ -2591,7 +2593,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 { label: "Reject", value: "reject", isDanger: true },
               ],
             },
-            sessionId,
+            targetSessionId,
           );
 
           const decision =
@@ -2923,7 +2925,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
   > {
     const id = request.id ?? randomUUID();
-    const ownerSessionId = sessionId?.trim() || this.getAmbientSessionId();
+    const ownerSessionId = sessionId?.trim();
+    if (!ownerSessionId) {
+      throw new Error("Built-in agent approval requests require a sessionId.");
+    }
 
     // Build an ApprovalRequest for the rich card system
     const approvalRequest = this.buildApprovalRequest(
@@ -9089,6 +9094,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       previewResult.sessionRevision,
       previewResult.persistenceRevision,
       previewResult.projectId,
+      previewResult.workspaceRevision,
     );
 
     if (result.ok) {
@@ -9592,7 +9598,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private drainBrowserQueuedMessage(sessionId: string): void {
     const session = this.sessionManager?.getSession(sessionId);
-    if (!session) return;
+    if (!session || this.projectedForegroundStore.sessionId !== sessionId)
+      return;
     const queuedMessages = this.projectedForegroundState.messageQueue.filter(
       (entry) => entry.source === "browser",
     );
@@ -9942,12 +9949,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
       {
         enableScripts: true,
-        localResourceRoots: [
-          vscode.Uri.joinPath(this.extensionUri, "node_modules", "mermaid"),
-          vscode.Uri.joinPath(this.extensionUri, "node_modules", "vega"),
-          vscode.Uri.joinPath(this.extensionUri, "node_modules", "vega-lite"),
-          vscode.Uri.joinPath(this.extensionUri, "node_modules", "vega-embed"),
-        ],
+        localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")],
       },
     );
 
@@ -9978,25 +9980,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     source: string,
   ): string {
     const nonce = randomUUID().replace(/-/g, "");
-    const escapedSource = JSON.stringify(source);
-    const escapedKind = JSON.stringify(kind);
-    const mermaidModuleUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(
-        this.extensionUri,
-        "node_modules",
-        "mermaid",
-        "dist",
-        "mermaid.esm.min.mjs",
-      ),
-    );
-    const vegaEmbedModuleUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(
-        this.extensionUri,
-        "node_modules",
-        "vega-embed",
-        "build",
-        "embed.js",
-      ),
+    // Escape "<" so source containing "</script>" cannot break out of the
+    // JSON data script tag below.
+    const payload = JSON.stringify({ kind, source }).replace(/</g, "\\u003c");
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "dist", "special-block-panel.js"),
     );
 
     return `<!DOCTYPE html>
@@ -10005,7 +9993,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource} 'unsafe-eval' blob:; worker-src blob:; img-src ${webview.cspSource} data: blob:; font-src ${webview.cspSource} data:;">
+    content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' 'unsafe-eval' blob:; worker-src blob:; img-src ${webview.cspSource} data: blob:; font-src ${webview.cspSource} data:;">
   <title>${this.getSpecialBlockPanelTitle(kind)}</title>
   <style>
     :root { color-scheme: dark light; }
@@ -10039,57 +10027,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
   <div id="diagram">Rendering preview...</div>
-  <script nonce="${nonce}" type="module">
-    import mermaid from "${mermaidModuleUri}";
-    import embed from "${vegaEmbedModuleUri}";
-    const source = ${escapedSource};
-    const kind = ${escapedKind};
-    const target = document.getElementById("diagram");
-
-    const escapeHtml = (value) => value
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-
-    try {
-      if (kind === "mermaid") {
-        mermaid.initialize({
-          startOnLoad: false,
-          theme: "base",
-          securityLevel: "loose",
-          fontFamily: "var(--vscode-font-family)",
-          themeVariables: {
-            primaryColor: "#2a5e58",
-            primaryTextColor: "#e0e0e0",
-            primaryBorderColor: "#4EC9B0",
-            secondaryColor: "#1e3a36",
-            secondaryTextColor: "#e0e0e0",
-            secondaryBorderColor: "#3ba89f",
-            tertiaryColor: "#163330",
-            tertiaryTextColor: "#e0e0e0",
-            tertiaryBorderColor: "#2d7a72",
-            lineColor: "#4EC9B0",
-            textColor: "#e0e0e0"
-          }
-        });
-        const id = "special-block-panel-" + Date.now();
-        const { svg } = await mermaid.render(id, source);
-        target.innerHTML = svg;
-      } else {
-        const spec = JSON.parse(source);
-        target.innerHTML = "";
-        await embed(target, spec, {
-          actions: false,
-          renderer: "svg",
-          mode: kind,
-          theme: "dark"
-        });
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      target.innerHTML = '<div class="error">Failed to render preview: ' + escapeHtml(message) + "</div>";
-    }
-  </script>
+  <script id="special-block-data" type="application/json">${payload}</script>
+  <script nonce="${nonce}" type="module" src="${scriptUri}"></script>
 </body>
 </html>`;
   }

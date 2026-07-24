@@ -96,6 +96,7 @@ function makeSessionManagerStub() {
     ]),
     getDefaultProjectScope: vi.fn(() => projectScope),
     setBrowserPreferredProject: vi.fn(() => true),
+    getSessionInfos: vi.fn(() => [{ id: "session-1" }]),
     getSession: vi.fn((id: string) =>
       id === "session-1" ? { projectScope } : undefined,
     ),

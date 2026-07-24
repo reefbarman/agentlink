@@ -1464,6 +1464,8 @@ For non-trivial completed work, prefer 3-6 concise bullets or 1-2 short paragrap
 
 Ask the user one or more structured questions and wait for responses before continuing. Every call must include visible context in top-level `context` or at least one `questions[].context`. Preceding assistant messages are intentionally not considered: the rendered question card and restored session must remain understandable on their own.
 
+For native background agents, `ask_user` is mediated by the root foreground coordinator instead of immediately showing a human-facing card. The coordinator receives the complete structured request in its own turn and answers from its task, delegation, and workspace context when it can. If the answer genuinely needs human judgment or human-only information, the coordinator calls `ask_user` itself; only that escalated question is shown to the user. Detached agents or sessions without an available foreground coordinator fall back to the direct human question flow.
+
 | Parameter   | Type       | Description                                                                       |
 | ----------- | ---------- | --------------------------------------------------------------------------------- |
 | `context`   | string?    | Brief shared context that applies to every question                               |
@@ -1478,6 +1480,16 @@ Ask the user one or more structured questions and wait for responses before cont
 - `modeSwitch` on exactly one `multiple_choice` question to combine a user choice with mode-change consent; the result includes `modeSwitched` when a mapped choice switches modes
 
 Use this when the agent needs explicit confirmation or a bounded choice rather than guessing.
+
+### respond_to_background_question
+
+Resolve a pending structured question that was delegated to the root foreground coordinator. AgentLink supplies the opaque request ID and question IDs in an internal background-question interjection. Ordinary assistant text does not unblock the waiting background agent.
+
+| Parameter    | Type   | Description                                                         |
+| ------------ | ------ | ------------------------------------------------------------------- |
+| `request_id` | string | Exact opaque request ID from the background-question interjection   |
+| `answers`    | object | Complete answer map keyed by the supplied question IDs              |
+| `notes`      | object | Optional extra note per question ID, matching `ask_user` note shape |
 
 ### switch_mode
 
@@ -1573,7 +1585,7 @@ AgentLink includes static routing policy for background agents (`src/agent/backg
 - **Default behavior**: non-review tasks stay on the foreground model when policy says `useForegroundModelByDefault`.
 - **Provider admission**: streaming agent turns and native web tool requests share a provider-aware scheduler with six active request slots per provider by default, configurable with `agentlink.provider.maxConcurrentRequests`. Foreground requests have queue priority over background requests; status-summary requests run only when that provider is otherwise idle. Active requests are not preempted, and lowering the setting lets existing requests finish before enforcing the new limit.
 - **Status summaries**: heuristic summaries are the default and make no model call. The optional `agent` and `openai` modes are traced as background-summary activity; same-provider `agent` summaries use maintenance-priority admission.
-- **Coordinator behavior**: background agents are intended for parallel lanes. Use `get_background_status` for non-blocking progress and health telemetry while continuing foreground work. Judge quiet runs by `phase` and `idleMs`, not elapsed time alone; steer a useful run to return early or kill one that is no longer worth waiting for. Use `get_background_result` only when ready to block and integrate.
+- **Coordinator behavior**: background agents are intended for parallel lanes. Native background `ask_user` calls are routed first to the root foreground coordinator, which answers them with `respond_to_background_question` from existing task/delegation/workspace context or deliberately escalates with its own `ask_user` when human input is necessary. While blocked, the agent reports `phase: "awaiting_coordinator"` and the fleet UI says **Waiting on coordinator**. Use `get_background_status` for non-blocking progress and health telemetry while continuing foreground work. Judge quiet runs by `phase` and `idleMs`, not elapsed time alone; steer a useful run to return early or kill one that is no longer worth waiting for. Use `get_background_result` only when ready to block and integrate.
 - **Writable lanes**: background agents may write code/tests/docs when delegated a non-conflicting scope and remain subject to normal approval gates. Native children inherit the parent's effective command policy (including **Approve for Me**) plus session-scoped write, path, command, network, and MCP approvals at spawn; later approval-mode changes and newly granted parent approvals are also propagated to active shared-process descendants. ACP children receive the same stored session snapshot, and inherited write/path authority is reused when an ACP edit request supplies complete structured file locations; provider-defined opaque command and MCP permission requests still require review. Isolated-worktree children inherit only the command policy before their first prompt is submitted—write/path grants and later policy changes do not cross the VS Code process boundary. Child-only grants remain isolated, and revoking parent trust does not interrupt an already-running child. Use explicit owned/forbidden paths in the spawn message.
 - **Read-only lanes**: `readonly-research` routes to ask mode with the `readonly-research` tool profile for pure lookup/exploration. Both `readonly-research` and `review` profiles can run classifier-approved, non-mutating shell commands for workspace inspection.
 - **Review behavior**: review task classes (e.g. `review_code`, `review_plan`) prefer opposite-provider routing when available and use provider-specific model preferences for each tier. Balanced Anthropic reviews prefer Claude Opus 4.8 with a reduced 6,000-token thinking budget, then Sonnet 4.6 and Sonnet 5 as fallbacks; balanced Codex reviews prefer GPT-5.6 Sol. Deep Anthropic reviews use the same model order. Claude Fable 5 is foreground-only and is never routed to a background agent.

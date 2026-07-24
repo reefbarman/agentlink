@@ -226,6 +226,7 @@ describe("createProductionSandboxRuntimeFingerprint", () => {
       });
       try {
         const result = await coordinator.executeCommand({
+          owner: undefined,
           command: `/bin/cp '${inlinePath}' '${outputPath}'`,
           cwd: workspace,
           sandboxSessionId: "production-inline-test",
@@ -297,6 +298,7 @@ describe("createProductionSandboxRuntimeFingerprint", () => {
         );
         const authorized = await authorizer.authorize({
           options: {
+            owner: undefined,
             command: [
               shellQuote(process.execPath),
               "-e",
@@ -394,6 +396,7 @@ describe("createProductionSandboxRuntimeFingerprint", () => {
           );
           const authorized = await authorizer.authorize({
             options: {
+              owner: undefined,
               command: [
                 shellQuote(process.execPath),
                 "-e",

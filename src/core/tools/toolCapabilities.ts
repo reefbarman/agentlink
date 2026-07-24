@@ -420,6 +420,14 @@ const toolCapabilities = [
     false,
   ),
   metadata(
+    "respond_to_background_question",
+    "background",
+    ["agent.background.question.respond"],
+    "control",
+    "never",
+    false,
+  ),
+  metadata(
     "detach_background_agent",
     "background",
     ["agent.background.detach"],

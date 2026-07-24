@@ -633,6 +633,10 @@ export class AgentEngine {
        * are now present in canonical session history.
        */
       onAssistantTurnCommitted?: () => void;
+      /** Reports transient foreground provider admission without persisting it as run recovery state. */
+      onProviderAdmissionPhase?: (
+        phase: "queued_for_provider" | "running",
+      ) => void;
       /** Time to first raw transport activity (normally response headers). */
       providerFirstEventTimeoutMs?: number;
       /** Maximum silence between raw response body chunks/provider events. */
@@ -809,6 +813,11 @@ export class AgentEngine {
             provider,
             preservedContext,
             activeModel,
+            {
+              isBackground: opts?.isBackground,
+              signal,
+              onProviderAdmissionPhase: opts?.onProviderAdmissionPhase,
+            },
           );
           if (signal.aborted) break;
           // Drain every pending interjection FIFO so multiple queued messages
@@ -1111,6 +1120,11 @@ export class AgentEngine {
             opts?.isBackground ? "background" : "interactive",
             signal,
           );
+          if (!opts?.isBackground) {
+            opts?.onProviderAdmissionPhase?.(
+              schedulerQueued ? "queued_for_provider" : "running",
+            );
+          }
           yield {
             type: "api_request_start",
             requestId,
@@ -1121,6 +1135,9 @@ export class AgentEngine {
           };
           requestPermit = await requestPermitPromise;
           providerQueueWaitMs += requestPermit.waitMs;
+          if (!opts?.isBackground) {
+            opts?.onProviderAdmissionPhase?.("running");
+          }
           const requestController = new AbortController();
           const abortRequest = () => requestController.abort();
           signal.addEventListener("abort", abortRequest, { once: true });
@@ -1364,12 +1381,19 @@ export class AgentEngine {
                 message:
                   "Context limit exceeded — condensing conversation and retrying…",
               };
+              requestPermit?.release();
+              requestPermit = undefined;
               const condensed = yield* this.condenseSession(
                 session,
                 true,
                 provider,
                 preservedContext,
                 activeModel,
+                {
+                  isBackground: opts?.isBackground,
+                  signal,
+                  onProviderAdmissionPhase: opts?.onProviderAdmissionPhase,
+                },
               );
               if (signal.aborted) break;
               if (condensed) {
@@ -1630,6 +1654,11 @@ export class AgentEngine {
               provider,
               preservedContext,
               activeModel,
+              {
+                isBackground: opts?.isBackground,
+                signal,
+                onProviderAdmissionPhase: opts?.onProviderAdmissionPhase,
+              },
             );
             if (signal.aborted) break;
             if (condensed) {
@@ -2061,6 +2090,11 @@ export class AgentEngine {
             provider,
             preservedContext,
             activeModel,
+            {
+              isBackground: opts?.isBackground,
+              signal,
+              onProviderAdmissionPhase: opts?.onProviderAdmissionPhase,
+            },
           );
         }
 
@@ -2411,6 +2445,13 @@ export class AgentEngine {
     provider?: ModelProvider,
     preservedContext?: PreservedRuntimeContext,
     activeModel = session.model,
+    opts?: {
+      isBackground?: boolean;
+      signal?: AbortSignal;
+      onProviderAdmissionPhase?: (
+        phase: "queued_for_provider" | "running",
+      ) => void;
+    },
   ): AsyncGenerator<AgentEvent, boolean> {
     const condenseStartedAt = Date.now();
     yield { type: "condense_start", isAutomatic };
@@ -2421,19 +2462,43 @@ export class AgentEngine {
     const resolvedProvider =
       provider ?? this.registry.resolveProvider(activeModel);
 
-    const result = await summarizeConversation(
-      {
-        messages: session.getAllMessages(),
-        provider: resolvedProvider,
-        activeModel,
-        systemPrompt: session.systemPrompt,
-        isAutomatic,
-        filesRead: [...session.filesRead],
-        cwd: session.requireProjectRoot(),
-        preservedContext,
-      },
-      prevInputTokens,
+    const schedulerQueued = !this.registry.requestScheduler.hasCapacity(
+      resolvedProvider.id,
+      opts?.isBackground ? "background" : "interactive",
     );
+    const permitPromise = this.registry.requestScheduler.acquire(
+      resolvedProvider.id,
+      opts?.isBackground ? "background" : "interactive",
+      opts?.signal,
+    );
+    if (!opts?.isBackground) {
+      opts?.onProviderAdmissionPhase?.(
+        schedulerQueued ? "queued_for_provider" : "running",
+      );
+    }
+    const permit = await permitPromise;
+    if (!opts?.isBackground) {
+      opts?.onProviderAdmissionPhase?.("running");
+    }
+
+    let result: Awaited<ReturnType<typeof summarizeConversation>>;
+    try {
+      result = await summarizeConversation(
+        {
+          messages: session.getAllMessages(),
+          provider: resolvedProvider,
+          activeModel,
+          systemPrompt: session.systemPrompt,
+          isAutomatic,
+          filesRead: [...session.filesRead],
+          cwd: session.requireProjectRoot(),
+          preservedContext,
+        },
+        prevInputTokens,
+      );
+    } finally {
+      permit.release();
+    }
 
     if (result.error) {
       yield {

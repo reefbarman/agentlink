@@ -194,6 +194,26 @@ describe("BackgroundSessionStrip defaults", () => {
     ).toBeTruthy();
   });
 
+  it("shows when a background question is waiting on the coordinator", () => {
+    render(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          {
+            id: "active",
+            task: "Needs ownership answer",
+            status: "tool_executing",
+            phase: "awaiting_coordinator",
+          },
+        ],
+        onStop: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+
+    expect(screen.getByText("Waiting on coordinator")).toBeTruthy();
+  });
+
   it("hides unread event counts and explains every row action", () => {
     const { container } = render(
       h(BackgroundSessionStrip, {

@@ -1,11 +1,18 @@
 import * as vscode from "vscode";
 
-import type {
-  ClosedTerminalSnapshot,
-  TerminalBackgroundState,
-  TerminalCommandResult,
-  TerminalExecuteOptions,
-  TerminalLifecycleState,
+import {
+  sameTerminalOwnerScope,
+  type ClosedTerminalSnapshot,
+  type TerminalBackgroundState,
+  type TerminalCloseRequest,
+  type TerminalCommandResult,
+  type TerminalExecuteOptions,
+  type TerminalExecutionOwner,
+  type TerminalLifecycleState,
+  type TerminalListRequest,
+  type TerminalOutputRequest,
+  type TerminalRecentlyClosedRequest,
+  type TerminalTargetRequest,
 } from "../core/capabilities/terminal.js";
 import { cleanTerminalOutput, cleanTerminalRawOutput } from "../util/ansi.js";
 import {
@@ -72,6 +79,7 @@ interface ManagedTerminal {
   terminal: vscode.Terminal;
   name: string;
   cwd: string;
+  owner?: TerminalExecutionOwner;
   busy: boolean;
   envKey?: string;
   stale?: boolean;
@@ -235,6 +243,33 @@ export class TerminalManager {
     if (!env || Object.keys(env).length === 0) return undefined;
     const entries = Object.entries(env).sort(([a], [b]) => a.localeCompare(b));
     return entries.map(([k, v]) => `${k}=${v}`).join("\n");
+  }
+
+  private matchesOwner(
+    owner: TerminalExecutionOwner | undefined,
+    requestedOwner: TerminalExecutionOwner | undefined,
+  ): boolean {
+    return (
+      requestedOwner === undefined ||
+      sameTerminalOwnerScope(owner, requestedOwner)
+    );
+  }
+
+  private refreshOwner(
+    terminal: ManagedTerminal,
+    owner: TerminalExecutionOwner | undefined,
+  ): void {
+    terminal.owner = owner ? Object.freeze({ ...owner }) : undefined;
+  }
+
+  private findOwnedTerminal(
+    terminalId: string,
+    owner: TerminalExecutionOwner | undefined,
+  ): ManagedTerminal | undefined {
+    return this.terminals.find(
+      (terminal) =>
+        terminal.id === terminalId && this.matchesOwner(terminal.owner, owner),
+    );
   }
 
   private getOpenVscodeTerminals(): vscode.Terminal[] | undefined {
@@ -525,12 +560,18 @@ export class TerminalManager {
     options: ExecuteOptions,
   ): Promise<ManagedTerminal> {
     this.syncTerminalRegistry();
-    const { cwd, terminal_id, terminal_name, split_from } = options;
+    const { cwd, owner, terminal_id, terminal_name, split_from } = options;
     const envKey = this.buildEnvKey(options.env);
 
     // If terminal_id is specified, find that specific terminal
     if (terminal_id) {
-      const existing = this.terminals.find((t) => t.id === terminal_id);
+      const targeted = this.terminals.find(
+        (terminal) => terminal.id === terminal_id,
+      );
+      if (targeted && !sameTerminalOwnerScope(targeted.owner, owner)) {
+        throw new Error(`Terminal not found: ${terminal_id}`);
+      }
+      const existing = targeted;
       if (existing) {
         if (existing.stale) {
           throw new Error(
@@ -547,6 +588,7 @@ export class TerminalManager {
             `Terminal ${terminal_id} is busy. Wait for the current command to finish or use get_terminal_output/kill for background commands.`,
           );
         }
+        this.refreshOwner(existing, owner);
         existing.busy = true;
         try {
           await this.waitForCooldown(existing);
@@ -564,12 +606,14 @@ export class TerminalManager {
       const existing = this.terminals.find(
         (t) =>
           t.name === terminal_name &&
+          sameTerminalOwnerScope(t.owner, owner) &&
           !t.busy &&
           !t.backgroundRunning &&
           !t.stale &&
           t.envKey === envKey,
       );
       if (existing) {
+        this.refreshOwner(existing, owner);
         existing.busy = true;
         try {
           await this.waitForCooldown(existing);
@@ -580,11 +624,16 @@ export class TerminalManager {
         }
       }
       // Create with the specified name, optionally split from a parent
-      const managed = this.createTerminal(cwd, terminal_name, options.env);
+      const managed = this.createTerminal(
+        cwd,
+        terminal_name,
+        options.env,
+        owner,
+      );
       managed.busy = true;
       try {
         if (split_from) {
-          await this.splitTerminalBeside(managed, split_from);
+          await this.splitTerminalBeside(managed, split_from, owner);
         }
         return managed;
       } catch (err) {
@@ -602,10 +651,12 @@ export class TerminalManager {
         !t.backgroundRunning &&
         !t.stale &&
         t.name === "AgentLink" &&
+        sameTerminalOwnerScope(t.owner, owner) &&
         t.cwd === cwd &&
         t.envKey === envKey,
     );
     if (cwdMatch) {
+      this.refreshOwner(cwdMatch, owner);
       cwdMatch.busy = true;
       try {
         await this.waitForCooldown(cwdMatch);
@@ -616,11 +667,11 @@ export class TerminalManager {
       }
     }
 
-    const managed = this.createTerminal(cwd, "AgentLink", options.env);
+    const managed = this.createTerminal(cwd, "AgentLink", options.env, owner);
     managed.busy = true;
     try {
       if (split_from) {
-        await this.splitTerminalBeside(managed, split_from);
+        await this.splitTerminalBeside(managed, split_from, owner);
       }
       return managed;
     } catch (err) {
@@ -638,10 +689,19 @@ export class TerminalManager {
   private async splitTerminalBeside(
     child: ManagedTerminal,
     splitFrom: string,
+    owner: TerminalExecutionOwner | undefined,
   ): Promise<void> {
     const parent =
-      this.terminals.find((t) => t.id === splitFrom) ??
-      this.terminals.find((t) => t.name === splitFrom);
+      this.terminals.find(
+        (terminal) =>
+          terminal.id === splitFrom &&
+          sameTerminalOwnerScope(terminal.owner, owner),
+      ) ??
+      this.terminals.find(
+        (terminal) =>
+          terminal.name === splitFrom &&
+          sameTerminalOwnerScope(terminal.owner, owner),
+      );
     if (!parent) {
       this.log?.(
         `split_from "${splitFrom}" not found in ${this.terminals.length} terminals: [${this.terminals.map((t) => `${t.name}(${t.id})`).join(", ")}]`,
@@ -695,7 +755,8 @@ export class TerminalManager {
   private createTerminal(
     cwd: string,
     name: string,
-    extraEnv?: Record<string, string>,
+    extraEnv: Record<string, string> | undefined,
+    owner: TerminalExecutionOwner | undefined,
   ): ManagedTerminal {
     const terminal = vscode.window.createTerminal({
       name,
@@ -710,6 +771,7 @@ export class TerminalManager {
       terminal,
       name,
       cwd,
+      ...(owner ? { owner: Object.freeze({ ...owner }) } : {}),
       envKey: this.buildEnvKey(extraEnv),
       busy: false,
       lastCommandEndedAt: 0,
@@ -1502,10 +1564,20 @@ export class TerminalManager {
    * Otherwise closes all managed terminals.
    * Returns the count of closed terminals and any names that weren't found.
    */
-  closeTerminals(names?: string[]): { closed: number; not_found?: string[] } {
+  closeTerminals(request: TerminalCloseRequest): {
+    closed: number;
+    not_found?: string[];
+  } {
+    const { owner, names } = request;
+    const owned = this.terminals.filter((terminal) =>
+      this.matchesOwner(terminal.owner, owner),
+    );
     const toClose = names
-      ? this.terminals.filter((t) => names.includes(t.name))
-      : [...this.terminals];
+      ? owned.filter(
+          (terminal) =>
+            names.includes(terminal.id) || names.includes(terminal.name),
+        )
+      : owned;
 
     const closedIds = new Set(toClose.map((t) => t.id));
     this.terminals = this.terminals.filter((t) => !closedIds.has(t.id));
@@ -1522,8 +1594,10 @@ export class TerminalManager {
     }
 
     // Report any requested names that weren't found
-    const closedNames = new Set(toClose.map((t) => t.name));
-    const notFound = names?.filter((n) => !closedNames.has(n));
+    const closedTargets = new Set(
+      toClose.flatMap((terminal) => [terminal.id, terminal.name]),
+    );
+    const notFound = names?.filter((name) => !closedTargets.has(name));
 
     return {
       closed: toClose.length,
@@ -1535,14 +1609,11 @@ export class TerminalManager {
    * Get accumulated output from a busy or background terminal.
    * Returns undefined if the terminal is not found.
    */
-  getCurrentOutput(
-    terminalId: string,
-    options?: { force?: boolean },
-  ): string | undefined {
-    const managed = this.terminals.find((t) => t.id === terminalId);
+  getCurrentOutput(request: TerminalOutputRequest): string | undefined {
+    const managed = this.findOwnedTerminal(request.terminalId, request.owner);
     if (!managed) return undefined;
     if (
-      !options?.force &&
+      !request.force &&
       !managed.busy &&
       !managed.backgroundRunning &&
       !managed.backgroundOutputCaptured
@@ -1552,8 +1623,8 @@ export class TerminalManager {
   }
 
   /** Reveal and focus a managed terminal by ID. */
-  revealTerminal(terminalId: string): boolean {
-    const managed = this.terminals.find((t) => t.id === terminalId);
+  revealTerminal(request: TerminalTargetRequest): boolean {
+    const managed = this.findOwnedTerminal(request.terminalId, request.owner);
     if (!managed) return false;
     managed.terminal.show(false);
     return true;
@@ -1563,8 +1634,10 @@ export class TerminalManager {
    * Get the background execution state of a terminal.
    * Returns undefined if the terminal is not found.
    */
-  getBackgroundState(terminalId: string): TerminalBackgroundState | undefined {
-    const managed = this.terminals.find((t) => t.id === terminalId);
+  getBackgroundState(
+    request: TerminalTargetRequest,
+  ): TerminalBackgroundState | undefined {
+    const managed = this.findOwnedTerminal(request.terminalId, request.owner);
     if (managed) {
       return {
         is_running: managed.backgroundRunning,
@@ -1582,7 +1655,9 @@ export class TerminalManager {
       };
     }
     const closed = this.recentlyClosed.find(
-      (snapshot) => snapshot.id === terminalId,
+      (snapshot) =>
+        snapshot.id === request.terminalId &&
+        this.matchesOwner(snapshot.owner, request.owner),
     );
     return closed ? { ...closed } : undefined;
   }
@@ -1591,8 +1666,8 @@ export class TerminalManager {
    * Stop waiting for a foreground command while leaving it running and tracked.
    * Returns false when the terminal has no detachable foreground execution.
    */
-  detachTerminal(terminalId: string): boolean {
-    const managed = this.terminals.find((t) => t.id === terminalId);
+  detachTerminal(request: TerminalTargetRequest): boolean {
+    const managed = this.findOwnedTerminal(request.terminalId, request.owner);
     if (!managed?.detachForeground) return false;
     const detach = managed.detachForeground;
     managed.detachForeground = undefined;
@@ -1604,8 +1679,8 @@ export class TerminalManager {
    * Send Ctrl+C (SIGINT) to a managed terminal to interrupt the running process.
    * Returns true if the terminal was found and interrupted.
    */
-  interruptTerminal(terminalId: string): boolean {
-    const managed = this.terminals.find((t) => t.id === terminalId);
+  interruptTerminal(request: TerminalTargetRequest): boolean {
+    const managed = this.findOwnedTerminal(request.terminalId, request.owner);
     if (!managed) return false;
     managed.terminal.sendText("\x03", false);
     if (managed.backgroundRunning && !managed.backgroundOutputCaptured) {
@@ -1621,24 +1696,33 @@ export class TerminalManager {
   /**
    * List all managed terminals with their current state.
    */
-  listTerminals(): Array<{
+  listTerminals(request: TerminalListRequest): Array<{
     id: string;
     name: string;
     busy: boolean;
     stale?: boolean;
+    owner?: TerminalExecutionOwner;
   }> {
     this.syncTerminalRegistry();
 
-    return this.terminals.map((t) => ({
-      id: t.id,
-      name: t.name,
-      busy: t.busy || t.backgroundRunning,
-      ...(t.stale && { stale: true }),
-    }));
+    return this.terminals
+      .filter((terminal) => this.matchesOwner(terminal.owner, request.owner))
+      .map((terminal) => ({
+        id: terminal.id,
+        name: terminal.name,
+        busy: terminal.busy || terminal.backgroundRunning,
+        ...(terminal.stale && { stale: true }),
+        ...(terminal.owner ? { owner: { ...terminal.owner } } : {}),
+      }));
   }
 
-  getRecentlyClosedTerminals(limit = 5): ClosedTerminalSnapshot[] {
-    return this.recentlyClosed.slice(0, Math.max(0, limit));
+  getRecentlyClosedTerminals(
+    request: TerminalRecentlyClosedRequest,
+  ): ClosedTerminalSnapshot[] {
+    const limit = request.limit ?? 5;
+    return this.recentlyClosed
+      .filter((terminal) => this.matchesOwner(terminal.owner, request.owner))
+      .slice(0, Math.max(0, limit));
   }
 
   private rememberClosedTerminal(managed: ManagedTerminal): void {
@@ -1653,6 +1737,7 @@ export class TerminalManager {
       id: managed.id,
       name: managed.name,
       closedAt: Date.now(),
+      ...(managed.owner ? { owner: { ...managed.owner } } : {}),
       is_running: false,
       state:
         exitCode !== null

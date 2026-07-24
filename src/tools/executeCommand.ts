@@ -900,6 +900,7 @@ export async function handleExecuteCommand(
       }
 
       const terminalOptions = (): TerminalExecuteOptions => ({
+        owner: undefined,
         command: commandToRun,
         cwd,
         terminal_id: params.terminal_id,
@@ -1501,9 +1502,10 @@ export async function handleExecuteCommand(
 
       // Apply output filtering and temp file saving. Background and timed-out
       // commands may have a larger exact spool than the bounded display tail.
-      const retainedOutput = providers.terminalProvider.getRetainedOutput?.(
-        result.terminal_id,
-      );
+      const retainedOutput = providers.terminalProvider.getRetainedOutput?.({
+        owner: undefined,
+        terminalId: result.terminal_id,
+      });
       if (retainedOutput) {
         result.output = retainedOutput.output;
         result.output_complete = retainedOutput.complete;

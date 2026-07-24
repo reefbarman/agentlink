@@ -75,6 +75,7 @@ export interface BgSessionInfoProps {
     | "responding"
     | "executing_tool"
     | "awaiting_approval"
+    | "awaiting_coordinator"
     | "retrying_provider"
     | "completed"
     | "failed"
@@ -228,6 +229,14 @@ function statusText(
   runtime?: Pick<BgSessionInfoProps, "phase" | "requestStartedAt" | "retryAt">,
   now = Date.now(),
 ): string {
+  if (
+    (status === "streaming" || status === "tool_executing") &&
+    runtime?.phase === "awaiting_coordinator"
+  ) {
+    return (
+      formatBackgroundRuntimeStatus(runtime, now) ?? "Waiting on coordinator"
+    );
+  }
   if (
     status === "streaming" &&
     (runtime?.phase === "waiting_for_provider" ||

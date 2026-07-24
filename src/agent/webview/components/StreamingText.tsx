@@ -179,6 +179,24 @@ function addCodeBlockCopyButtons(container: HTMLElement) {
     });
 }
 
+function addExternalLinkFlourishes(container: HTMLElement) {
+  container.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((link) => {
+    let protocol: string;
+    try {
+      protocol = new URL(link.href).protocol;
+    } catch {
+      return;
+    }
+    if (protocol !== "http:" && protocol !== "https:") return;
+
+    const icon = document.createElement("span");
+    icon.className =
+      "external-link-flourish codicon codicon-globe external-link-icon";
+    icon.setAttribute("aria-hidden", "true");
+    link.prepend(icon);
+  });
+}
+
 function linkifyFilePathNodes(
   container: HTMLElement,
   onOpenFile: (path: string, line?: number) => void,
@@ -358,6 +376,7 @@ export function StreamingText({
     containerRef.current.innerHTML = parsed.html;
 
     addCodeBlockCopyButtons(containerRef.current);
+    addExternalLinkFlourishes(containerRef.current);
 
     // Linkify bare file paths in text nodes (skips code/pre blocks)
     if (onOpenFile) {

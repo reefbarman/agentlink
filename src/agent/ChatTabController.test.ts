@@ -184,6 +184,8 @@ describe("ChatTabController", () => {
     });
     await controller.bindFocusedSession("session-1");
     const second = await controller.createTab("session-2");
+    const retired = vi.fn();
+    controller.onWillRetireTerminalGeneration(retired);
 
     await expect(
       controller.replaceSession("tab-1", "stale", "session-3"),
@@ -191,6 +193,7 @@ describe("ChatTabController", () => {
     await expect(
       controller.replaceSession("tab-1", "session-1", "session-2"),
     ).resolves.toEqual({ ok: false, reason: "already_open" });
+    expect(retired).not.toHaveBeenCalled();
 
     const replaced = await controller.replaceSession(
       "tab-1",
@@ -209,6 +212,14 @@ describe("ChatTabController", () => {
       },
     });
     expect(controller.getTab(second.id)?.sessionId).toBe("session-2");
+    expect(retired).toHaveBeenCalledTimes(1);
+    expect(retired).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "tab-1",
+        sessionId: "session-1",
+        terminalGeneration: 1,
+      }),
+    );
   });
 
   it("reorders tabs only when the exact tab set is supplied", async () => {
@@ -259,10 +270,17 @@ describe("ChatTabController", () => {
     const second = await controller.createTab();
     const third = await controller.createTab();
     await controller.setPlacement(second.id, "popped");
+    const retired = vi.fn();
+    controller.onWillRetireTerminalGeneration(retired);
 
     await expect(controller.closeTab(third.id)).resolves.toBe(true);
     expect(controller.getFocusedTabId()).toBe("tab-1");
+    expect(retired).toHaveBeenCalledTimes(1);
+    expect(retired).toHaveBeenCalledWith(
+      expect.objectContaining({ id: third.id, terminalGeneration: 1 }),
+    );
     await expect(controller.closeTab("tab-1")).resolves.toBe(false);
+    expect(retired).toHaveBeenCalledTimes(1);
   });
 
   it("publishes cloned snapshots after serialized persistence", async () => {

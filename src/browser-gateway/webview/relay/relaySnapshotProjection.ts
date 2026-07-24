@@ -63,6 +63,8 @@ export class RelaySnapshotProjector {
             mode: checkpoint.foreground.mode,
             model: checkpoint.foreground.model,
             status: checkpoint.foreground.status,
+            interactiveExecutionPhase:
+              checkpoint.foreground.interactiveExecutionPhase,
             streaming: checkpoint.foreground.streaming,
             ...(checkpoint.foreground.interrupted !== undefined
               ? { interrupted: checkpoint.foreground.interrupted }

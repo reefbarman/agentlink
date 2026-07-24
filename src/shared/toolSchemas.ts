@@ -627,6 +627,35 @@ export const showNotificationSchema = {
     .describe("Notification type (default: 'info')"),
 };
 
+// ─── Agent coordination tools ───────────────────────────────────────────────
+
+const backgroundQuestionAnswerValueSchema = z.union([
+  z.string(),
+  z.array(z.string()),
+  z.number(),
+  z.boolean(),
+]);
+
+export const respondToBackgroundQuestionSchema = {
+  request_id: z
+    .string()
+    .min(1)
+    .describe(
+      "Opaque request ID from the background-agent question interjection.",
+    ),
+  answers: z
+    .record(z.string(), backgroundQuestionAnswerValueSchema)
+    .describe(
+      "Complete answer map keyed by the question IDs in the interjection.",
+    ),
+  notes: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Optional extra note per question ID, matching ask_user response notes.",
+    ),
+};
+
 // ─── Terminal tools ──────────────────────────────────────────────────────────
 
 export const executeCommandSchema = {

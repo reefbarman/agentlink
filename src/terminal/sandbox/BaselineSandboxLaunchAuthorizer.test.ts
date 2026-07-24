@@ -108,6 +108,7 @@ function request(
 ): Parameters<BaselineSandboxLaunchAuthorizer["authorize"]>[0] {
   return {
     options: {
+      owner: undefined,
       command: "git status --short",
       cwd: workspace,
       sandboxSessionId: "session-1",

@@ -92,6 +92,22 @@ describe("ErrorBlock", () => {
     expect(screen.queryByRole("button", { name: /^sign in$/i })).toBeNull();
   });
 
+  it("presents overloaded errors as a provider-side issue that needs waiting", () => {
+    render(
+      <ErrorBlock
+        error='API error 529: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+        retryable
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Provider overloaded")).toBeTruthy();
+    expect(
+      screen.getByText(/issues on their end.*wait a little/i),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /retry/i })).toBeTruthy();
+  });
+
   it("shows condense action for context-window exceeded errors", () => {
     const onCondense = vi.fn();
 

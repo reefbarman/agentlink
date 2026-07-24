@@ -962,6 +962,16 @@ body.chat-activity-shelf-resizing * {
   text-decoration: underline;
 }
 
+.external-link-flourish {
+  display: inline-block;
+  margin-right: 0.25em;
+  font-size: 0.9em;
+  line-height: 1;
+  vertical-align: -0.06em;
+  opacity: 0.8;
+  text-decoration: none;
+}
+
 .file-path-link {
   color: var(--vscode-textLink-foreground);
   font-family: var(--vscode-editor-font-family);

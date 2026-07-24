@@ -1,4 +1,5 @@
 import {
+  sameTerminalOwnerScope,
   type ClosedTerminalSnapshot,
   type ConfinementPreparingTerminalProvider,
   type ManagedNetworkRequest,
@@ -8,11 +9,16 @@ import {
   type TerminalCommandResult,
   type TerminalExecutionSecuritySummary,
   type TerminalExecuteOptions,
+  type TerminalExecutionOwner,
   type TerminalInteractivePromptDetection,
   type TerminalMetadata,
+  type TerminalRecentlyClosedRequest,
   type TerminalRetainedOutput,
   type TerminalRetainedOutputLease,
   type TerminalRetainedOutputMetadata,
+  type TerminalTargetRequest,
+  type TerminalListRequest,
+  type TerminalCloseRequest,
 } from "../../core/capabilities/terminal.js";
 import type {
   SandboxExecutionMetadata,
@@ -84,6 +90,7 @@ export interface SandboxTerminalCoordinatorOptions {
 
 interface ManagedSandboxChannel {
   session: SandboxTerminalSession;
+  owner?: TerminalExecutionOwner;
   active?: {
     commandId: string;
     generation: number;
@@ -532,8 +539,10 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     });
   }
 
-  getBackgroundState(terminalId: string): TerminalBackgroundState | undefined {
-    const channel = this.channels.get(terminalId);
+  getBackgroundState(
+    request: TerminalTargetRequest,
+  ): TerminalBackgroundState | undefined {
+    const channel = this.ownedChannel(request.terminalId, request.owner);
     return channel
       ? this.backgroundStateFromSnapshot(
           channel.session.snapshot(),
@@ -543,8 +552,10 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       : undefined;
   }
 
-  getRetainedOutput(terminalId: string): TerminalRetainedOutput | undefined {
-    const channel = this.channels.get(terminalId);
+  getRetainedOutput(
+    request: TerminalTargetRequest,
+  ): TerminalRetainedOutput | undefined {
+    const channel = this.ownedChannel(request.terminalId, request.owner);
     if (channel) {
       const commandId = channel.session.snapshot().commands.at(-1)?.commandId;
       return commandId
@@ -552,47 +563,60 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         : undefined;
     }
     return this.retainedOutput(
-      this.recentlyClosedOutput.get(terminalId)?.read(),
+      this.ownedClosedTerminal(request.terminalId, request.owner)
+        ? this.recentlyClosedOutput.get(request.terminalId)?.read()
+        : undefined,
     );
   }
 
   detachRetainedOutput(
-    terminalId: string,
+    request: TerminalTargetRequest,
   ): TerminalRetainedOutputLease | undefined {
-    const lease = this.recentlyClosedOutput.get(terminalId);
+    if (!this.ownedClosedTerminal(request.terminalId, request.owner)) {
+      return undefined;
+    }
+    const lease = this.recentlyClosedOutput.get(request.terminalId);
     if (!lease) return undefined;
-    this.recentlyClosedOutput.delete(terminalId);
+    this.recentlyClosedOutput.delete(request.terminalId);
     return this.retainedOutputLease(lease);
   }
 
-  interruptTerminal(terminalId: string): boolean {
-    const channel = this.channels.get(terminalId);
+  interruptTerminal(request: TerminalTargetRequest): boolean {
+    const channel = this.ownedChannel(request.terminalId, request.owner);
     this.clearInteractivePromptWatchdog(channel?.active);
     return channel?.session.interrupt() ?? false;
   }
 
-  getRecentlyClosedTerminals(limit = 5): ClosedTerminalSnapshot[] {
-    return this.recentlyClosed.slice(0, Math.max(0, limit)).map((item) => ({
-      ...item,
-    }));
+  getRecentlyClosedTerminals(
+    request: TerminalRecentlyClosedRequest,
+  ): ClosedTerminalSnapshot[] {
+    return this.recentlyClosed
+      .filter((terminal) => this.matchesOwner(terminal.owner, request.owner))
+      .slice(0, Math.max(0, request.limit ?? 5))
+      .map((item) => ({ ...item }));
   }
 
-  listTerminals(): TerminalMetadata[] {
-    return [...this.channels.values()].map(({ session }) => {
-      const snapshot = session.snapshot();
-      return {
-        id: snapshot.channelId,
-        name: snapshot.title,
-        busy: snapshot.status === "launching" || snapshot.status === "running",
-      };
-    });
+  listTerminals(request: TerminalListRequest): TerminalMetadata[] {
+    return [...this.channels.values()]
+      .filter((channel) => this.matchesOwner(channel.owner, request.owner))
+      .map(({ session, owner }) => {
+        const snapshot = session.snapshot();
+        return {
+          id: snapshot.channelId,
+          name: snapshot.title,
+          busy:
+            snapshot.status === "launching" || snapshot.status === "running",
+          ...(owner ? { owner: { ...owner } } : {}),
+        };
+      });
   }
 
-  closeTerminals(names?: string[]): TerminalCloseResult {
-    const requested = names ? new Set(names) : undefined;
+  closeTerminals(request: TerminalCloseRequest): TerminalCloseResult {
+    const requested = request.names ? new Set(request.names) : undefined;
     const notFound = requested ? new Set(requested) : undefined;
     let closed = 0;
     for (const [channelId, channel] of this.channels) {
+      if (!this.matchesOwner(channel.owner, request.owner)) continue;
       const snapshot = channel.session.snapshot();
       if (
         requested &&
@@ -615,7 +639,12 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       channel.active?.finalizer?.();
       this.channels.delete(channelId);
       this.channelReservations.delete(channelId);
-      this.rememberClosed(snapshot, outputLease, channel.latestTermination);
+      this.rememberClosed(
+        snapshot,
+        channel.owner,
+        outputLease,
+        channel.latestTermination,
+      );
       closed += 1;
     }
     return {
@@ -673,41 +702,67 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     this.disposeListeners.clear();
   }
 
+  private reuseChannel(
+    channel: ManagedSandboxChannel,
+    owner: TerminalExecutionOwner | undefined,
+  ): ManagedSandboxChannel {
+    channel.owner = owner ? Object.freeze({ ...owner }) : undefined;
+    return channel;
+  }
+
   private resolveChannel(
     options: TerminalExecuteOptions,
   ): ManagedSandboxChannel {
     if (options.terminal_id) {
       const existing = this.channels.get(options.terminal_id);
-      if (!existing) {
+      if (!existing || !sameTerminalOwnerScope(existing.owner, options.owner)) {
         throw new Error(`Sandbox terminal not found: ${options.terminal_id}`);
       }
-      return existing;
+      return this.reuseChannel(existing, options.owner);
     }
-    if (options.split_from && !this.channels.has(options.split_from)) {
+    if (
+      options.split_from &&
+      !this.ownedChannel(options.split_from, options.owner)
+    ) {
       throw new Error(`Sandbox split source not found: ${options.split_from}`);
     }
     if (options.terminal_name) {
       const named = [...this.channels.values()].find(
-        ({ session }) => session.snapshot().title === options.terminal_name,
+        ({ session, owner }) =>
+          session.snapshot().title === options.terminal_name &&
+          sameTerminalOwnerScope(owner, options.owner),
       );
-      return named ?? this.createChannel(options.terminal_name, options.cwd);
+      return named
+        ? this.reuseChannel(named, options.owner)
+        : this.createChannel(options.terminal_name, options.cwd, options.owner);
     }
     if (options.split_from) {
-      return this.createChannel(DEFAULT_SANDBOX_TITLE, options.cwd);
-    }
-    const idleDefault = [...this.channels.values()].find(({ session }) => {
-      const snapshot = session.snapshot();
-      return (
-        snapshot.status === "idle" &&
-        !this.channelReservations.has(snapshot.channelId)
+      return this.createChannel(
+        DEFAULT_SANDBOX_TITLE,
+        options.cwd,
+        options.owner,
       );
-    });
-    return (
-      idleDefault ?? this.createChannel(DEFAULT_SANDBOX_TITLE, options.cwd)
+    }
+    const idleDefault = [...this.channels.values()].find(
+      ({ session, owner }) => {
+        const snapshot = session.snapshot();
+        return (
+          sameTerminalOwnerScope(owner, options.owner) &&
+          snapshot.status === "idle" &&
+          !this.channelReservations.has(snapshot.channelId)
+        );
+      },
     );
+    return idleDefault
+      ? this.reuseChannel(idleDefault, options.owner)
+      : this.createChannel(DEFAULT_SANDBOX_TITLE, options.cwd, options.owner);
   }
 
-  private createChannel(title: string, cwd: string): ManagedSandboxChannel {
+  private createChannel(
+    title: string,
+    cwd: string,
+    owner: TerminalExecutionOwner | undefined,
+  ): ManagedSandboxChannel {
     const channelId = this.createChannelId();
     if (
       !channelId ||
@@ -724,7 +779,10 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       now: this.now,
       isAllowedCwd: this.isAllowedCwd,
     });
-    const channel: ManagedSandboxChannel = { session };
+    const channel: ManagedSandboxChannel = {
+      session,
+      ...(owner ? { owner: Object.freeze({ ...owner }) } : {}),
+    };
     session.onEvent((event) => {
       if (event.type === "network-request") {
         void this.handleManagedNetworkRequest(channel, event);
@@ -1040,8 +1098,39 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       : {};
   }
 
+  private matchesOwner(
+    owner: TerminalExecutionOwner | undefined,
+    requestedOwner: TerminalExecutionOwner | undefined,
+  ): boolean {
+    return (
+      requestedOwner === undefined ||
+      sameTerminalOwnerScope(owner, requestedOwner)
+    );
+  }
+
+  private ownedChannel(
+    terminalId: string,
+    owner: TerminalExecutionOwner | undefined,
+  ): ManagedSandboxChannel | undefined {
+    const channel = this.channels.get(terminalId);
+    return channel && this.matchesOwner(channel.owner, owner)
+      ? channel
+      : undefined;
+  }
+
+  private ownedClosedTerminal(
+    terminalId: string,
+    owner: TerminalExecutionOwner | undefined,
+  ): ClosedTerminalSnapshot | undefined {
+    return this.recentlyClosed.find(
+      (terminal) =>
+        terminal.id === terminalId && this.matchesOwner(terminal.owner, owner),
+    );
+  }
+
   private rememberClosed(
     snapshot: SandboxTerminalSessionSnapshot,
+    owner: TerminalExecutionOwner | undefined,
     outputLease?: SandboxTerminalCommandOutputLease,
     termination?: ManagedSandboxChannel["latestTermination"],
   ): void {
@@ -1051,6 +1140,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       id: snapshot.channelId,
       name: snapshot.title,
       closedAt: this.now(),
+      ...(owner ? { owner: { ...owner } } : {}),
       ...this.backgroundStateFromSnapshot(snapshot, true, termination),
       ...this.outputMetadata(outputLease?.metadata()),
     });

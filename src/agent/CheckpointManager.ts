@@ -3,10 +3,13 @@ import * as fs from "fs";
 import * as path from "path";
 import simpleGit, { type SimpleGit } from "simple-git";
 
+import type { WorkspaceMutationSnapshot } from "./WorkspaceMutationCoordinator.js";
+
 export interface CheckpointProjectSnapshot {
   projectId: string;
   commitHash: string;
   createdAt: number;
+  mutation?: WorkspaceMutationSnapshot;
 }
 
 /**
@@ -310,6 +313,40 @@ export class CheckpointManager {
       return { modified, deleted, restored };
     } catch (err) {
       this.log(`[checkpoint] Preview failed: ${err}`);
+      return null;
+    }
+  }
+
+  /** Content-sensitive fingerprint of the current workspace relative to a checkpoint. */
+  async getWorkspaceRevision(checkpoint: Checkpoint): Promise<string | null> {
+    if (!this.initialized || !this.git) return null;
+    const env = this.getGitEnv();
+    try {
+      const diff = await this.git
+        .env(env)
+        .diff([checkpoint.commitHash, "--binary"]);
+      const untracked = await this.git
+        .env(env)
+        .raw(["ls-files", "--others", "--exclude-standard", "-z"]);
+      const hash = crypto.createHash("sha256");
+      hash.update(checkpoint.commitHash);
+      hash.update("\0");
+      hash.update(diff);
+      for (const relativePath of untracked.split("\0").filter(Boolean).sort()) {
+        hash.update("\0");
+        hash.update(relativePath);
+        hash.update("\0");
+        try {
+          hash.update(
+            fs.readFileSync(path.join(this.workspaceDir, relativePath)),
+          );
+        } catch {
+          hash.update("unreadable");
+        }
+      }
+      return hash.digest("hex");
+    } catch (err) {
+      this.log(`[checkpoint] Workspace revision failed: ${err}`);
       return null;
     }
   }

@@ -48,6 +48,7 @@ import type {
   ProjectScopeResolver,
   SessionProjectScope,
 } from "../core/workspaceProjects.js";
+import { WorkspaceMutationCoordinator } from "./WorkspaceMutationCoordinator.js";
 
 export interface AgentWorkspaceHost {
   getWorkspaceFolders(): WorkspaceFolderInfo[];
@@ -86,6 +87,7 @@ export interface CheckpointManagerLike {
   initialize?(): Promise<unknown>;
   createCheckpoint(turnIndex: number): Promise<Checkpoint | null>;
   previewRevert(checkpoint: Checkpoint): Promise<RevertPreview | null>;
+  getWorkspaceRevision?(checkpoint: Checkpoint): Promise<string | null>;
   revertToCheckpoint(checkpoint: Checkpoint): Promise<boolean>;
   getDiffBetween(fromHash: string, toHash: string): Promise<string>;
 }
@@ -149,6 +151,7 @@ export interface AgentSessionManagerHost {
   ) => ToolDispatchContext;
   createToolRuntime: (ctx: ToolDispatchContext) => AgentToolRuntime;
   acpBackgroundRunner: AcpBackgroundRunner;
+  workspaceMutationCoordinator: WorkspaceMutationCoordinator;
   persistence?: SessionStore;
   timers: TimerHost;
 }
@@ -166,6 +169,11 @@ export interface AgentSessionManagerOptions {
   executionUnavailableReason?: string;
   /** Activation-time primary project used only for pre-scope session records. */
   legacyProjectScope?: import("../core/workspaceProjects.js").SessionProjectScope;
+  /** Resolves the tab-owned terminal provider for a session and its attached fleet root. */
+  terminalProviderForSession?: (
+    sessionId: string,
+    rootSessionId: string,
+  ) => import("../core/capabilities/terminal.js").TerminalProvider | undefined;
 }
 
 export function createDefaultAgentSessionManagerHost(args: {
@@ -300,6 +308,7 @@ export function createDefaultAgentSessionManagerHost(args: {
           createVscodeRenameSymbolProvider(ctx.approvalManager),
       }),
     acpBackgroundRunner: new StdioAcpBackgroundRunner(),
+    workspaceMutationCoordinator: new WorkspaceMutationCoordinator(),
     persistence: args.store,
     timers: {
       setInterval: (handler, timeoutMs) => setInterval(handler, timeoutMs),
@@ -332,6 +341,9 @@ export function mergeAgentSessionManagerHost(
     createToolRuntime: overrides?.createToolRuntime ?? base.createToolRuntime,
     acpBackgroundRunner:
       overrides?.acpBackgroundRunner ?? base.acpBackgroundRunner,
+    workspaceMutationCoordinator:
+      overrides?.workspaceMutationCoordinator ??
+      base.workspaceMutationCoordinator,
     persistence:
       overrides && "persistence" in overrides
         ? overrides.persistence

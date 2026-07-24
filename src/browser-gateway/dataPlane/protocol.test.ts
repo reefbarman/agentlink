@@ -53,6 +53,7 @@ function checkpoint(
       mode: "code",
       model: "claude-sonnet-4-6",
       status: "running",
+      interactiveExecutionPhase: "queued_for_provider",
       streaming: true,
       interrupted: true,
       estimatedTokens: 100,
@@ -212,6 +213,7 @@ const payloadByKind = {
       mode: "code",
       model: "claude-sonnet-4-6",
       status: "running",
+      interactiveExecutionPhase: "queued_for_provider",
       streaming: true,
     },
   },
@@ -393,6 +395,7 @@ describe("browser gateway owner protocol", () => {
       checkpointSequence: 0,
       foreground: {
         originalPrompt: "Implement the data plane",
+        interactiveExecutionPhase: "queued_for_provider",
         statusOverride: "Restoring session",
         thinkingEnabled: false,
         reasoningEffort: "medium",
@@ -423,6 +426,19 @@ describe("browser gateway owner protocol", () => {
   });
 
   it("rejects invalid foreground correctness fields", () => {
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerCheckpoint(
+          checkpoint({
+            foreground: {
+              ...checkpoint().foreground!,
+              interactiveExecutionPhase: "waiting_forever" as "running",
+            },
+          }),
+        ),
+      "invalid_value",
+      "$.foreground.interactiveExecutionPhase",
+    );
     expectProtocolError(
       () =>
         parseBrowserGatewayOwnerCheckpoint(

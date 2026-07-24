@@ -316,6 +316,26 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     const body = await captureRequestBody("oauth");
 
     expect(body.instructions).toEqual(
+      expect.stringContaining(
+        "Add small, relevant visual flourishes — such as an occasional emoji or familiar symbol",
+      ),
+    );
+    expect(body.instructions).toEqual(
+      expect.stringContaining(
+        "Good places include a heading, status callout, or key result",
+      ),
+    );
+    expect(body.instructions).toEqual(
+      expect.stringContaining(
+        "do not decorate every heading, paragraph, bullet, or link",
+      ),
+    );
+    expect(body.instructions).toEqual(
+      expect.stringContaining(
+        "External web links already receive a small source icon in the UI",
+      ),
+    );
+    expect(body.instructions).toEqual(
       expect.stringContaining("Use web search very proactively"),
     );
     expect(body.instructions).toEqual(

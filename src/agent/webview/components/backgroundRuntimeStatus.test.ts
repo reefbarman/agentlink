@@ -37,6 +37,15 @@ describe("formatBackgroundRuntimeStatus", () => {
     ).toBe("Retrying provider… · request 30s · retry in 2s");
   });
 
+  it("distinguishes coordinator mediation from human approval", () => {
+    expect(
+      formatBackgroundRuntimeStatus({ phase: "awaiting_coordinator" }),
+    ).toBe("Waiting on coordinator");
+    expect(getBackgroundRuntimeMotion({ phase: "awaiting_coordinator" })).toBe(
+      "attention",
+    );
+  });
+
   it("maps runtime phases to the three Live Link motion classes", () => {
     expect(getBackgroundRuntimeMotion({ phase: "thinking" })).toBe("moving");
     expect(getBackgroundRuntimeMotion({ phase: "awaiting_approval" })).toBe(

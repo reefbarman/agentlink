@@ -27,6 +27,11 @@ function isAuthError(msg: string): boolean {
   );
 }
 
+function isOverloadedError(msg: string): boolean {
+  const lower = msg.toLowerCase();
+  return lower.includes("overloaded") || lower.includes("529");
+}
+
 function getErrorTitle(
   error: string,
   options: {
@@ -42,6 +47,9 @@ function getErrorTitle(
   const lower = error.toLowerCase();
   if (lower.includes("rate_limit") || lower.includes("429")) {
     return "Rate limit reached";
+  }
+  if (isOverloadedError(lower)) {
+    return "Provider overloaded";
   }
   if (lower.includes("timed out") || lower.includes("timeout")) {
     return "Request timed out";
@@ -73,6 +81,11 @@ export function ErrorBlock({
     Boolean(actions?.signInAnotherAccount);
   const contextWindowExceeded =
     code === "context_window_exceeded" || Boolean(actions?.condense);
+  const overloaded =
+    !authError &&
+    !oauthExhausted &&
+    !contextWindowExceeded &&
+    isOverloadedError(error);
   const title = getErrorTitle(error, {
     authError,
     oauthExhausted,
@@ -84,11 +97,13 @@ export function ErrorBlock({
       ? "Sign in to authenticate your API access."
       : contextWindowExceeded
         ? "Conversation exceeded the model context window. Condense and retry."
-        : retryable
-          ? "This may be temporary. You can retry the request."
-          : onRetry
-            ? "Retry to run the last request again."
-            : undefined;
+        : overloaded
+          ? "The provider looks to be having issues on their end — nothing on your side needs fixing. Wait a little, then retry."
+          : retryable
+            ? "This may be temporary. You can retry the request."
+            : onRetry
+              ? "Retry to run the last request again."
+              : undefined;
   const hasActions = Boolean(
     (authError && onSignIn) ||
     (oauthExhausted && onSignInAnotherAccount) ||

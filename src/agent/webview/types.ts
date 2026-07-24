@@ -820,6 +820,12 @@ export interface ChatState {
 export interface SessionInfo {
   id: string;
   status: string;
+  interactiveExecutionPhase?:
+    | "queued_for_workspace_write"
+    | "queued_for_provider"
+    | "running"
+    | "awaiting_input"
+    | "stopping";
   mode: string;
   model: string;
   title: string;

@@ -30,14 +30,14 @@ The following tools are registered in dev builds only. They are **not** included
 
 Submit feedback about an AgentLink tool — report issues, suggest improvements, or note missing features. Feedback is stored locally for the extension developer to review.
 
-For MCP server-tool calls, use `call_mcp_tool` as the canonical feedback category for AgentLink integration failures, including tools exposed and invoked directly as `server__tool`. Do not use a server-specific name such as `unity__run_tests` or a bare upstream tool name as `tool_name`; put the MCP server and bare tool in `tool_params` or `feedback`. For MCP management helpers (`find_mcp_tools`, `read_mcp_resource`, and so on), use the AgentLink meta-tool actually called. Ordinary upstream server/domain errors do not need AgentLink feedback unless the problem is AgentLink's MCP transport, approval, dispatch, or result handling.
+For MCP-related work, submit feedback only about AgentLink's native MCP tools (`find_mcp_tools`, `call_mcp_tool`, and the other MCP management helpers) or AgentLink-owned discovery, transport, approval, dispatch, and result handling. Do not submit feedback about a specific MCP server or one of its native `server__tool` tools: that server's bugs, limitations, confusing output, and domain errors are upstream and out of scope. When AgentLink's MCP plumbing is the problem, use the native AgentLink MCP tool actually involved and include server/tool details only when they are needed as reproduction context.
 
-| Parameter             | Type    | Description                                                            |
-| --------------------- | ------- | ---------------------------------------------------------------------- |
-| `tool_name`           | string  | AgentLink category; use `call_mcp_tool` for MCP server-tool calls      |
-| `feedback`            | string  | Description of the issue, suggestion, or missing feature               |
-| `tool_params`         | string? | Parameters passed; include MCP server and bare tool here when relevant |
-| `tool_result_summary` | string? | Summary of what happened or the unexpected result received             |
+| Parameter             | Type    | Description                                                                |
+| --------------------- | ------- | -------------------------------------------------------------------------- |
+| `tool_name`           | string  | AgentLink tool; never a specific MCP server or its `server__tool`          |
+| `feedback`            | string  | Description of the issue, suggestion, or missing feature                   |
+| `tool_params`         | string? | Parameters passed; include server details only to reproduce AgentLink bugs |
+| `tool_result_summary` | string? | Summary of what happened or the unexpected result received                 |
 
 ### get_feedback
 

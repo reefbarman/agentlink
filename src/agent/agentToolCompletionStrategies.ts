@@ -19,15 +19,25 @@ const completeExecuteCommand: AgentToolCompletionStrategy = async (
   let partialOutput = "";
   if (call.terminalId) {
     partialOutput =
-      terminalProvider?.getCurrentOutput?.(call.terminalId, { force: true }) ??
-      terminalProvider?.getBackgroundState(call.terminalId)?.output ??
+      terminalProvider?.getCurrentOutput?.({
+        owner: undefined,
+        terminalId: call.terminalId,
+        force: true,
+      }) ??
+      terminalProvider?.getBackgroundState({
+        owner: undefined,
+        terminalId: call.terminalId,
+      })?.output ??
       "";
     log(`COMPLETE_EXEC output captured: ${partialOutput.length} chars`);
   }
 
   if (call.terminalId) {
     log(`COMPLETE_EXEC interrupting terminal ${call.terminalId}`);
-    terminalProvider?.interruptTerminal(call.terminalId);
+    terminalProvider?.interruptTerminal({
+      owner: undefined,
+      terminalId: call.terminalId,
+    });
   }
 
   call.forceResolve(
@@ -52,10 +62,15 @@ const completeGetTerminalOutput: AgentToolCompletionStrategy = async (
     `COMPLETE_GET_OUTPUT ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${terminalId}`,
   );
 
-  const state = terminalProvider?.getBackgroundState(terminalId);
+  const state = terminalProvider?.getBackgroundState({
+    owner: undefined,
+    terminalId,
+  });
 
   if (!state) {
-    const directOutput = terminalProvider?.getCurrentOutput?.(terminalId, {
+    const directOutput = terminalProvider?.getCurrentOutput?.({
+      owner: undefined,
+      terminalId,
       force: true,
     });
     call.forceResolve(
@@ -81,7 +96,11 @@ const completeGetTerminalOutput: AgentToolCompletionStrategy = async (
 
   const output = state.output_captured
     ? state.output
-    : (terminalProvider?.getCurrentOutput?.(terminalId, { force: true }) ?? "");
+    : (terminalProvider?.getCurrentOutput?.({
+        owner: undefined,
+        terminalId,
+        force: true,
+      }) ?? "");
 
   call.forceResolve(
     successResult({

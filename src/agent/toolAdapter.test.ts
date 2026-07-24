@@ -544,11 +544,16 @@ describe("getAgentTools", () => {
       const toolNameSchema = sendFeedback?.input_schema.properties
         ?.tool_name as { description?: string } | undefined;
       expect(sendFeedback?.description).toContain(
-        "call_mcp_tool as the canonical feedback category",
+        "report only problems with AgentLink's native MCP tools",
       );
-      expect(sendFeedback?.description).toContain("direct server__tool calls");
+      expect(sendFeedback?.description).toContain(
+        "Never submit feedback about a specific MCP server or its native server__tool",
+      );
       expect(toolNameSchema?.description).toContain(
-        "use call_mcp_tool even when invoked directly as server__tool",
+        "use the native AgentLink MCP tool actually involved",
+      );
+      expect(toolNameSchema?.description).toContain(
+        "Never report a specific MCP server or its server__tool",
       );
     } else {
       expect(names).not.toContain("send_feedback");
@@ -1645,6 +1650,55 @@ describe("spawn_background_agent tool", () => {
     expect(onDetachBackground).toHaveBeenCalledWith("test-session", "bg-child");
   });
 
+  it("exposes background question responses only to foreground agents", () => {
+    const foregroundTool = getAgentTools().find(
+      (tool) => tool.name === "respond_to_background_question",
+    );
+    const backgroundNames = getAgentTools(undefined, undefined, true).map(
+      (tool) => tool.name,
+    );
+
+    expect(foregroundTool).toBeDefined();
+    expect(foregroundTool?.description).toContain("call ask_user first");
+    expect(foregroundTool?.input_schema.required).toEqual([
+      "request_id",
+      "answers",
+    ]);
+    expect(backgroundNames).not.toContain("respond_to_background_question");
+  });
+
+  it("forwards a complete background question response request", async () => {
+    const onRespondToBackgroundQuestion = vi.fn(() => ({ accepted: true }));
+    const result = await dispatchToolCall(
+      "respond_to_background_question",
+      {
+        request_id: "question-123",
+        answers: {
+          path: "src/example.test.ts",
+          confirmed: true,
+          targets: ["unit", "integration"],
+        },
+        notes: { path: "Matches the delegated ownership boundary." },
+      },
+      { ...mockCtx, onRespondToBackgroundQuestion },
+    );
+
+    expect(onRespondToBackgroundQuestion).toHaveBeenCalledWith({
+      callerSessionId: "test-session",
+      requestId: "question-123",
+      answers: {
+        path: "src/example.test.ts",
+        confirmed: true,
+        targets: ["unit", "integration"],
+      },
+      notes: { path: "Matches the delegated ownership boundary." },
+    });
+    expect(result.isError).toBe(false);
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual({
+      accepted: true,
+    });
+  });
+
   it("dispatches get_background_status to onGetBackgroundStatus callback", async () => {
     const onGetBackgroundStatus = vi.fn().mockReturnValue({
       status: "streaming",
@@ -1897,11 +1951,43 @@ describe("dispatchToolCall", () => {
       input: { command: "touch output.txt", cwd: "/workspace/project-b" },
       context: { sessionId: "session-a", mode: "code" },
     });
+    await runtime.executeTool({
+      name: "propose_memory",
+      input: {
+        operation: "add",
+        scope: "project",
+        tier: "command",
+        title: "Invalid proposal",
+        rationale: "Exercise mutation preparation",
+        content: "test",
+      },
+      context: { sessionId: "session-a", mode: "code" },
+    });
 
-    expect(prepareWorkspaceMutation).toHaveBeenCalledTimes(3);
+    expect(prepareWorkspaceMutation).toHaveBeenCalledTimes(4);
     expect(handleWriteFile).toHaveBeenCalledTimes(1);
     expect(handleGenerateImage).toHaveBeenCalledTimes(1);
     expect(handleExecuteCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not prepare a mutation for a read-only command inherited from the runtime context", async () => {
+    const prepareWorkspaceMutation = vi.fn().mockResolvedValue(undefined);
+    const { handleExecuteCommand } = await import("../tools/executeCommand.js");
+    vi.mocked(handleExecuteCommand).mockClear();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      commandExecutionPolicy: "read-only",
+      prepareWorkspaceMutation,
+    });
+
+    await runtime.executeTool({
+      name: "execute_command",
+      input: { command: "git status --short", cwd: "/tmp/project" },
+      context: { sessionId: "session-a", mode: "ask" },
+    });
+
+    expect(prepareWorkspaceMutation).not.toHaveBeenCalled();
+    expect(handleExecuteCommand).toHaveBeenCalledOnce();
   });
 
   it("searches and hydrates the current session transcript with append-safe snapshots", async () => {

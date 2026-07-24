@@ -301,7 +301,28 @@ export interface ManagedNetworkRequest {
 
 export type ManagedNetworkDecision = "allow-once" | "reject";
 
+export interface TerminalExecutionOwner {
+  /** Opaque stable pool scope; VS Code composition maps this to a chat tab ID. */
+  scopeId: string;
+  /** Stable user-visible owner label such as T1. Never grants authority. */
+  displayLabel: string;
+  /** Pool generation advanced whenever the owning logical session is replaced. */
+  generation: number;
+  /** Executing session used for approval and audit attribution. */
+  authoritySessionId: string;
+}
+
+export function sameTerminalOwnerScope(
+  left: TerminalExecutionOwner | undefined,
+  right: TerminalExecutionOwner | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return left.scopeId === right.scopeId && left.generation === right.generation;
+}
+
 export interface TerminalExecuteOptions {
+  /** Required migration key; interactive AgentLink execution must provide an owner. */
+  owner: TerminalExecutionOwner | undefined;
   command: string;
   cwd: string;
   terminal_id?: string;
@@ -381,6 +402,7 @@ export interface ClosedTerminalSnapshot extends TerminalBackgroundState {
   id: string;
   name: string;
   closedAt: number;
+  owner?: TerminalExecutionOwner;
 }
 
 export interface TerminalMetadata {
@@ -388,11 +410,33 @@ export interface TerminalMetadata {
   name: string;
   busy: boolean;
   stale?: boolean;
+  owner?: TerminalExecutionOwner;
 }
 
 export interface TerminalCloseResult {
   closed: number;
   not_found?: string[];
+}
+
+export interface TerminalTargetRequest {
+  owner: TerminalExecutionOwner | undefined;
+  terminalId: string;
+}
+
+export interface TerminalOutputRequest extends TerminalTargetRequest {
+  force?: boolean;
+}
+
+export interface TerminalListRequest {
+  owner: TerminalExecutionOwner | undefined;
+}
+
+export interface TerminalRecentlyClosedRequest extends TerminalListRequest {
+  limit?: number;
+}
+
+export interface TerminalCloseRequest extends TerminalListRequest {
+  names?: string[];
 }
 
 export interface ConfinementPreparingTerminalProvider extends TerminalProvider {
@@ -421,21 +465,24 @@ export interface TerminalProvider {
   executeCommand(
     options: TerminalExecuteOptions,
   ): Promise<TerminalCommandResult>;
-  getBackgroundState(terminalId: string): TerminalBackgroundState | undefined;
-  getCurrentOutput?(
-    terminalId: string,
-    options?: { force?: boolean },
-  ): string | undefined;
-  getRetainedOutput?(terminalId: string): TerminalRetainedOutput | undefined;
+  getBackgroundState(
+    request: TerminalTargetRequest,
+  ): TerminalBackgroundState | undefined;
+  getCurrentOutput?(request: TerminalOutputRequest): string | undefined;
+  getRetainedOutput?(
+    request: TerminalTargetRequest,
+  ): TerminalRetainedOutput | undefined;
   detachRetainedOutput?(
-    terminalId: string,
+    request: TerminalTargetRequest,
   ): TerminalRetainedOutputLease | undefined;
-  interruptTerminal(terminalId: string): boolean;
-  detachTerminal?(terminalId: string): boolean;
-  revealTerminal?(terminalId: string): boolean;
-  getRecentlyClosedTerminals(limit?: number): ClosedTerminalSnapshot[];
-  listTerminals(): TerminalMetadata[];
-  closeTerminals(names?: string[]): TerminalCloseResult;
+  interruptTerminal(request: TerminalTargetRequest): boolean;
+  detachTerminal?(request: TerminalTargetRequest): boolean;
+  revealTerminal?(request: TerminalTargetRequest): boolean;
+  getRecentlyClosedTerminals(
+    request: TerminalRecentlyClosedRequest,
+  ): ClosedTerminalSnapshot[];
+  listTerminals(request: TerminalListRequest): TerminalMetadata[];
+  closeTerminals(request: TerminalCloseRequest): TerminalCloseResult;
   recordExecutionAudit?(event: TerminalExecutionAuditEvent): void;
   log?(message: string): void;
 }

@@ -12,6 +12,7 @@ import {
 } from "./AgentSessionManager.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
 import { SessionStore } from "./SessionStore.js";
+import { WorkspaceMutationCoordinator } from "./WorkspaceMutationCoordinator.js";
 import type {
   PersistedSessionRecord,
   PersistedSessionRunState,
@@ -111,6 +112,26 @@ async function flushPromises(): Promise<void> {
   }
 }
 
+function addCurrentMutationMetadata(
+  manager: AgentSessionManager,
+  sessionId: string,
+  root = "/tmp",
+): void {
+  const checkpoint = manager.getCheckpoints(sessionId)[0];
+  if (!checkpoint?.projectId) throw new Error("Missing checkpoint fixture");
+  checkpoint.projectSnapshots = [
+    {
+      projectId: checkpoint.projectId,
+      commitHash: checkpoint.commitHash,
+      createdAt: checkpoint.createdAt,
+      mutation: (manager as any).host.workspaceMutationCoordinator.getSnapshot(
+        root,
+        sessionId,
+      ),
+    },
+  ];
+}
+
 const makeConfig = (): AgentConfig => ({
   model: "claude-sonnet-4-6",
   maxTokens: 8192,
@@ -127,6 +148,102 @@ describe("AgentSessionManager host injection", () => {
       get: () => undefined,
       inspect: () => undefined,
     });
+  });
+
+  it("captures a root-tab terminal provider and clears the window-global fallback", async () => {
+    const rawProvider = { executeCommand: vi.fn() } as any;
+    const scopedProvider = { executeCommand: vi.fn() } as any;
+    const terminalProviderForSession = vi
+      .fn()
+      .mockReturnValueOnce(scopedProvider)
+      .mockReturnValueOnce(undefined);
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      { terminalProviderForSession },
+    );
+    mgr.setToolContext({
+      approvalManager: { bindSessionProject: vi.fn() } as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+      terminalProvider: rawProvider,
+    });
+    const session = await mgr.createSession("code");
+    session.fleetMetadata = { rootSessionId: "root-session" } as any;
+
+    const owned = (mgr as any).captureSessionToolContext(session);
+    const unavailable = (mgr as any).captureSessionToolContext(session);
+
+    expect(terminalProviderForSession).toHaveBeenNthCalledWith(
+      1,
+      session.id,
+      "root-session",
+    );
+    expect(owned.terminalProvider).toBe(scopedProvider);
+    expect(unavailable.terminalProvider).toBeUndefined();
+  });
+
+  it("acquires and marks a mutation lease at a late mutating boundary", async () => {
+    const coordinator = new WorkspaceMutationCoordinator(undefined, {
+      createEpoch: () => "test-epoch",
+    });
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          workspaceMutationCoordinator: coordinator,
+          createCheckpointManager: vi.fn(() => ({
+            baseCommit: null,
+            initialize: vi.fn(async () => true),
+            createCheckpoint: vi.fn(async () => null),
+            previewRevert: vi.fn(async () => null),
+            revertToCheckpoint: vi.fn(async () => false),
+            getDiffBetween: vi.fn(async () => ""),
+          })),
+        },
+      },
+    );
+    mgr.setToolContext({
+      approvalManager: { bindSessionProject: vi.fn() } as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+    });
+    const session = await mgr.createSession("code");
+    const leaseHolder: {
+      sessionId: string;
+      lease?: { release(): void };
+    } = { sessionId: session.id };
+    const context = (mgr as any).captureSessionToolContext(
+      session,
+      undefined,
+      undefined,
+      leaseHolder,
+    );
+
+    expect(coordinator.getSnapshot("/tmp", "observer").generation).toBe(0);
+    await context.prepareWorkspaceMutation();
+    expect(coordinator.getSnapshot("/tmp", "observer").generation).toBe(1);
+    expect(leaseHolder.lease).toBeDefined();
+
+    (mgr as any).releaseWorkspaceMutationLease(leaseHolder);
+    const nextLease = await coordinator.acquire(
+      "other-session",
+      coordinator.createDomain(["/tmp"]),
+    );
+    nextLease.release();
   });
 
   it("creates only a tool-free Ask session when no workspace project exists", async () => {
@@ -1048,15 +1165,33 @@ describe("AgentSessionManager host injection", () => {
     expect(session.thinkingBudget).toBe(2048);
   });
 
-  it("memoizes the foreground engine and captures tool context at request boundaries", async () => {
+  it("owns fresh interactive engines and captured contexts per active session", async () => {
     const providers = new ProviderRegistry();
-    const setToolRuntime = vi.fn();
-    const createEngine = vi.fn(() => ({
-      setToolRuntime,
-      run: vi.fn(async function* () {}),
-      condenseSession: vi.fn(async function* () {}),
-      isOverCondenseThreshold: vi.fn(() => false),
-    }));
+    const engines = [
+      {
+        setToolRuntime: vi.fn(),
+        run: vi.fn(async function* () {}),
+        condenseSession: vi.fn(async function* () {}),
+        isOverCondenseThreshold: vi.fn(() => false),
+      },
+      {
+        setToolRuntime: vi.fn(),
+        run: vi.fn(async function* () {}),
+        condenseSession: vi.fn(async function* () {}),
+        isOverCondenseThreshold: vi.fn(() => false),
+      },
+      {
+        setToolRuntime: vi.fn(),
+        run: vi.fn(async function* () {}),
+        condenseSession: vi.fn(async function* () {}),
+        isOverCondenseThreshold: vi.fn(() => false),
+      },
+    ];
+    const createEngine = vi
+      .fn()
+      .mockReturnValueOnce(engines[0])
+      .mockReturnValueOnce(engines[1])
+      .mockReturnValueOnce(engines[2]);
     const runtimeA = { executeTool: vi.fn() };
     const runtimeB = { executeTool: vi.fn() };
     const createToolRuntime = vi
@@ -1098,22 +1233,34 @@ describe("AgentSessionManager host injection", () => {
       mcpHub: mcpHubA,
     };
     const ctxB = { ...ctxA, sessionId: "agent-next", mcpHub: mcpHubB };
+    const session = await mgr.createSession("code");
 
     mgr.setToolContext(ctxA);
-    const first = (mgr as any).getEngine();
-    const second = (mgr as any).getEngine();
-    const session = await mgr.createSession("code");
+    const first = (mgr as any).createInteractiveEngine(session.id);
     const requestA = (mgr as any).bindEngineToSession(first, session);
-    mgr.setToolContext(ctxB);
+    expect(() => (mgr as any).createInteractiveEngine(session.id)).toThrow(
+      "already owns an active interactive engine",
+    );
 
-    expect(first).toBe(second);
-    expect(createEngine).toHaveBeenCalledTimes(1);
-    expect(createEngine).toHaveBeenCalledWith(providers, undefined);
+    const other = (mgr as any).createInteractiveEngine("session-2");
+    expect(other).not.toBe(first);
+    (mgr as any).releaseInteractiveEngine("session-2", other);
+    (mgr as any).releaseSessionToolContext(session.id, requestA);
+    (mgr as any).releaseInteractiveEngine(session.id, first);
+
+    mgr.setToolContext(ctxB);
+    const next = (mgr as any).createInteractiveEngine(session.id);
+    const requestB = (mgr as any).bindEngineToSession(next, session);
+
+    expect(next).not.toBe(first);
+    expect(createEngine).toHaveBeenCalledTimes(3);
+    expect(createEngine).toHaveBeenNthCalledWith(1, providers, undefined);
+    expect(createEngine).toHaveBeenNthCalledWith(2, providers, undefined);
+    expect(createEngine).toHaveBeenNthCalledWith(3, providers, undefined);
     expect(bindSessionProject).toHaveBeenCalledWith(
       session.id,
       session.projectScope,
     );
-    expect(createToolRuntime).toHaveBeenCalledTimes(1);
     expect(createToolRuntime).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -1123,20 +1270,177 @@ describe("AgentSessionManager host injection", () => {
         mcpHub: mcpHubA,
       }),
     );
-    expect(setToolRuntime).toHaveBeenCalledTimes(1);
-    expect(setToolRuntime).toHaveBeenCalledWith(runtimeA);
-    expect(() => (mgr as any).bindEngineToSession(first, session)).toThrow(
-      "Foreground engine is already bound",
-    );
-
-    (mgr as any).releaseSessionToolContext(session.id, requestA);
-    (mgr as any).bindEngineToSession(first, session);
-    expect(createToolRuntime).toHaveBeenCalledTimes(2);
+    expect(engines[0].setToolRuntime).toHaveBeenCalledWith(runtimeA);
     expect(createToolRuntime).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ mcpHub: mcpHubB }),
     );
-    expect(setToolRuntime).toHaveBeenNthCalledWith(2, runtimeB);
+    expect(engines[2].setToolRuntime).toHaveBeenCalledWith(runtimeB);
+
+    (mgr as any).releaseSessionToolContext(session.id, requestB);
+    (mgr as any).releaseInteractiveEngine(session.id, next);
+    expect((mgr as any).activeInteractiveEngines.size).toBe(0);
+  });
+
+  it("rejects an unknown explicit session instead of creating a fallback session", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const createCallsBeforeSend = mocks.createSession.mock.calls.length;
+
+    await expect(
+      mgr.sendMessage("missing-session", "do not reroute", "code"),
+    ).rejects.toThrow("Session 'missing-session' was not found.");
+
+    expect(mocks.createSession).toHaveBeenCalledTimes(createCallsBeforeSend);
+    expect(mgr.getSessionInfos()).toEqual([]);
+  });
+
+  it("runs different sessions concurrently with isolated interactive engines", async () => {
+    const defaultCreateSession = mocks.createSession.getMockImplementation();
+    if (!defaultCreateSession)
+      throw new Error("Missing session fixture factory");
+    const providers = new ProviderRegistry();
+    const startedSessionIds: string[] = [];
+    const releases = new Map<string, () => void>();
+    const createEngine = vi.fn(() => ({
+      setToolRuntime: vi.fn(),
+      run: vi.fn(async function* (session: { id: string }) {
+        startedSessionIds.push(session.id);
+        await new Promise<void>((resolve) => {
+          releases.set(session.id, resolve);
+        });
+        yield {
+          type: "done",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        };
+      }),
+      condenseSession: vi.fn(async function* () {}),
+      isOverCondenseThreshold: vi.fn(() => false),
+    }));
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          providers,
+          createEngine: createEngine as any,
+        },
+      },
+    );
+    const first = await mgr.createSession("code");
+    mocks.createSession.mockImplementationOnce(async (opts: any) => ({
+      ...(await defaultCreateSession(opts)),
+      id: "session-2",
+    }));
+    const second = await mgr.createSession("code");
+
+    const firstSend = mgr.sendMessage(first.id, "first", first.mode);
+    const secondSend = mgr.sendMessage(second.id, "second", second.mode);
+    await vi.waitFor(() => {
+      expect(startedSessionIds).toEqual(
+        expect.arrayContaining([first.id, second.id]),
+      );
+    });
+
+    expect(createEngine).toHaveBeenCalledTimes(2);
+    expect((mgr as any).activeInteractiveEngines.size).toBe(2);
+
+    releases.get(first.id)?.();
+    await firstSend;
+    expect((mgr as any).activeInteractiveEngines.has(first.id)).toBe(false);
+    expect((mgr as any).activeInteractiveEngines.has(second.id)).toBe(true);
+
+    releases.get(second.id)?.();
+    await secondSend;
+    expect((mgr as any).activeInteractiveEngines.size).toBe(0);
+  });
+
+  it("projects provider admission phase for only the owning interactive session", async () => {
+    let releaseProviderQueue!: () => void;
+    const providerQueue = new Promise<void>((resolve) => {
+      releaseProviderQueue = resolve;
+    });
+    const createEngine = vi.fn(() => ({
+      setToolRuntime: vi.fn(),
+      run: vi.fn(async function* (
+        _session: unknown,
+        opts: {
+          onProviderAdmissionPhase?: (
+            phase: "queued_for_provider" | "running",
+          ) => void;
+        },
+      ) {
+        opts.onProviderAdmissionPhase?.("queued_for_provider");
+        await providerQueue;
+        opts.onProviderAdmissionPhase?.("running");
+        yield {
+          type: "done",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        };
+      }),
+      condenseSession: vi.fn(async function* () {}),
+      isOverCondenseThreshold: vi.fn(() => false),
+    }));
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { createEngine: createEngine as any } },
+    );
+    const session = await mgr.createSession("code");
+
+    const send = mgr.sendMessage(session.id, "queue me", session.mode);
+    await vi.waitFor(() => {
+      expect(
+        mgr.getSessionInfos().find((info) => info.id === session.id)
+          ?.interactiveExecutionPhase,
+      ).toBe("queued_for_provider");
+    });
+
+    releaseProviderQueue();
+    await send;
+    expect(
+      mgr.getSessionInfos().find((info) => info.id === session.id)
+        ?.interactiveExecutionPhase,
+    ).toBeUndefined();
+  });
+
+  it("waits for prepare-time session work to unwind after stop", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    (session as any).abort = vi.fn();
+    let releasePrepare!: () => void;
+    const prepare = new Promise<void>((resolve) => {
+      releasePrepare = resolve;
+    });
+    const queued = (mgr as any).withSessionSendQueue(session.id, () => prepare);
+    await flushPromises();
+
+    let stopped = false;
+    const stop = mgr.stopSessionAndWait(session.id).then((ids) => {
+      stopped = true;
+      return ids;
+    });
+    await flushPromises();
+    expect(stopped).toBe(false);
+
+    releasePrepare();
+    await queued;
+    await expect(stop).resolves.toEqual([session.id]);
   });
 
   it("owns stable MCP leases across fresh and inherited request contexts", async () => {
@@ -1196,7 +1500,10 @@ describe("AgentSessionManager host injection", () => {
       extensionUri: {} as any,
     });
     const session = await mgr.createSession("code");
-    const engine = (mgr as any).getEngine();
+    const engine = (mgr as any).host.createEngine(
+      (mgr as any).host.providers,
+      undefined,
+    );
 
     const parentContext = (mgr as any).bindEngineToSession(engine, session);
     const childContext = (mgr as any).captureSessionToolContext(
@@ -1683,6 +1990,7 @@ describe("AgentSessionManager manual condense", () => {
     const session = await mgr.createSession("code");
     session.status = "idle";
     (session as any).loadedSkills = new Set<string>();
+    (session as any).createAbortController = vi.fn(() => new AbortController());
     (mgr as any).foregroundId = session.id;
     const todos = [
       {
@@ -1734,7 +2042,7 @@ describe("AgentSessionManager manual condense", () => {
       isOverCondenseThreshold: vi.fn(() => false),
     };
 
-    (mgr as any).engine = engine;
+    (mgr as any).host.createEngine = vi.fn(() => engine);
 
     await mgr.condenseCurrentSession();
 
@@ -1744,6 +2052,8 @@ describe("AgentSessionManager manual condense", () => {
       false,
       undefined,
       expect.objectContaining({ todos }),
+      session.model,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(engine.run).not.toHaveBeenCalled();
     expect(onEvent).toHaveBeenCalledWith(
@@ -1762,6 +2072,7 @@ describe("AgentSessionManager manual condense", () => {
     const session = await mgr.createSession("code");
     session.status = "idle";
     (session as any).loadedSkills = new Set<string>();
+    (session as any).createAbortController = vi.fn(() => new AbortController());
     (mgr as any).foregroundId = session.id;
     let releaseActiveWork!: () => void;
     const activeWork = new Promise<void>((resolve) => {
@@ -1778,7 +2089,7 @@ describe("AgentSessionManager manual condense", () => {
       run: vi.fn(async function* () {}),
       isOverCondenseThreshold: vi.fn(() => false),
     };
-    (mgr as any).engine = engine;
+    (mgr as any).host.createEngine = vi.fn(() => engine);
 
     const condense = mgr.condenseCurrentSession();
     await flushPromises();
@@ -1794,6 +2105,7 @@ describe("AgentSessionManager manual condense", () => {
     const session = await mgr.createSession("code");
     session.status = "idle";
     (session as any).loadedSkills = new Set<string>();
+    (session as any).createAbortController = vi.fn(() => new AbortController());
     (mgr as any).foregroundId = session.id;
 
     const engine = {
@@ -1807,7 +2119,7 @@ describe("AgentSessionManager manual condense", () => {
       isOverCondenseThreshold: vi.fn(() => false),
     };
 
-    (mgr as any).engine = engine;
+    (mgr as any).host.createEngine = vi.fn(() => engine);
 
     await mgr.condenseCurrentSession();
 
@@ -2221,7 +2533,7 @@ describe("AgentSessionManager in-flight persistence", () => {
     (session as any).consumePendingInterjection = vi.fn(() => null);
     (session as any).consumePendingModeResume = vi.fn(() => null);
     (session as any).autoTitle = vi.fn();
-    (mgr as any).engine = {
+    (mgr as any).host.createEngine = vi.fn(() => ({
       run: vi.fn(async function* (_session: unknown, opts: any) {
         yield {
           type: "text_delta",
@@ -2268,7 +2580,7 @@ describe("AgentSessionManager in-flight persistence", () => {
           totalCacheCreationTokens: 0,
         };
       }),
-    };
+    }));
 
     const send = mgr.sendMessage(session.id, "start", session.mode);
     await flushPromises();
@@ -2340,7 +2652,7 @@ describe("AgentSessionManager in-flight persistence", () => {
     (session as any).consumePendingInterjection = vi.fn(() => null);
     (session as any).consumePendingModeResume = vi.fn(() => null);
     (session as any).autoTitle = vi.fn();
-    (mgr as any).engine = {
+    (mgr as any).host.createEngine = vi.fn(() => ({
       run: vi.fn(async function* () {
         yield {
           type: "done",
@@ -2350,7 +2662,7 @@ describe("AgentSessionManager in-flight persistence", () => {
           totalCacheCreationTokens: 0,
         };
       }),
-    };
+    }));
 
     await mgr.sendMessage(session.id, "continue", session.mode);
 
@@ -2380,6 +2692,11 @@ describe("AgentSessionManager in-flight persistence", () => {
       store,
     );
     const session = await mgr.createSession("code");
+    (mgr as any).activeInteractiveEngines.set(session.id, {
+      sessionId: session.id,
+      engine: {},
+      phase: "running",
+    });
 
     await mgr.persistPendingQuestionRecovery(
       session.id,
@@ -2419,6 +2736,22 @@ describe("AgentSessionManager in-flight persistence", () => {
         toolUseId: "toolu-1",
       },
     });
+    expect(
+      mgr.getSessionInfos().find((info) => info.id === session.id)
+        ?.interactiveExecutionPhase,
+    ).toBe("awaiting_input");
+
+    mgr.clearPendingQuestionRecovery(session.id, "different-question");
+    expect(
+      mgr.getSessionInfos().find((info) => info.id === session.id)
+        ?.interactiveExecutionPhase,
+    ).toBe("awaiting_input");
+
+    mgr.clearPendingQuestionRecovery(session.id, "question-1");
+    expect(
+      mgr.getSessionInfos().find((info) => info.id === session.id)
+        ?.interactiveExecutionPhase,
+    ).toBe("running");
   });
 
   it("does not append a recovered answer when the saved tool turn is malformed", async () => {
@@ -2777,7 +3110,7 @@ describe("AgentSessionManager in-flight persistence", () => {
     const loaded = await mgr.restoreLastSession();
     expect(loaded?.runState?.phase).toBe("running");
 
-    (mgr as any).engine = {
+    (mgr as any).host.createEngine = vi.fn(() => ({
       run: vi.fn(async function* () {
         yield {
           type: "done",
@@ -2787,7 +3120,7 @@ describe("AgentSessionManager in-flight persistence", () => {
           totalCacheCreationTokens: 0,
         };
       }),
-    };
+    }));
 
     await expect(
       Promise.all([
@@ -2901,7 +3234,7 @@ describe("AgentSessionManager in-flight persistence", () => {
       }),
     };
 
-    (mgr as any).engine = engine;
+    (mgr as any).host.createEngine = vi.fn(() => engine);
 
     const sendPromise = mgr.sendMessage(session.id, "start", session.mode);
     await vi.advanceTimersByTimeAsync(3500);
@@ -3138,7 +3471,7 @@ describe("AgentSessionManager activity tracing", () => {
             };
           }),
       };
-      (mgr as any).engine = engine;
+      (mgr as any).host.createEngine = vi.fn(() => engine);
       const onEvent = vi.fn();
       mgr.onEvent = onEvent;
 
@@ -3226,7 +3559,7 @@ describe("AgentSessionManager activity tracing", () => {
           };
         }),
       };
-      (mgr as any).engine = engine;
+      (mgr as any).host.createEngine = vi.fn(() => engine);
 
       await mgr.sendMessage(session.id, "start", session.mode);
 
@@ -3274,6 +3607,184 @@ describe("AgentSessionManager checkpoints", () => {
       get: () => undefined,
       inspect: () => undefined,
     });
+  });
+
+  it("waits for active workspace writers before capturing a manual checkpoint", async () => {
+    const coordinator = new WorkspaceMutationCoordinator();
+    const domain = coordinator.createDomain(["/tmp"]);
+    const writer = await coordinator.acquire("writer-session", domain);
+    const createCheckpoint = vi.fn(async (turnIndex: number) => ({
+      id: "checkpoint-1",
+      commitHash: "commit-1",
+      turnIndex,
+      createdAt: 100,
+    }));
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          workspaceMutationCoordinator: coordinator,
+          createCheckpointManager: vi.fn(() => ({
+            baseCommit: "base-1",
+            initialize: vi.fn(async () => true),
+            createCheckpoint,
+            previewRevert: vi.fn(async () => null),
+            revertToCheckpoint: vi.fn(async () => false),
+            getDiffBetween: vi.fn(async () => ""),
+          })),
+        },
+      },
+    );
+    const session = await mgr.createSession("code");
+    session.getAllMessages = vi.fn(() => [
+      { role: "user" as const, content: "capture this state" },
+    ]);
+
+    const checkpointPromise = mgr.createManualCheckpoint();
+    await Promise.resolve();
+    expect(createCheckpoint).not.toHaveBeenCalled();
+
+    writer.release();
+    await expect(checkpointPromise).resolves.toMatchObject({
+      id: "checkpoint-1",
+      commitHash: "commit-1",
+    });
+    expect(createCheckpoint).toHaveBeenCalledWith(1);
+  });
+
+  it("fails closed when legacy checkpoint mutation metadata is missing", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    const revertToCheckpoint = vi.fn(async () => true);
+    (mgr as any).checkpointManager = { revertToCheckpoint };
+
+    const result = await (mgr as any).revertWorkspaceToCheckpoint(session, {
+      id: "legacy-checkpoint",
+      projectId: session.projectScope.projectId,
+      commitHash: "commit-1",
+      turnIndex: 1,
+      createdAt: 100,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "workspace_mutation_conflict",
+    });
+    expect(revertToCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("rejects a checkpoint after another session advances the workspace generation", async () => {
+    const coordinator = new WorkspaceMutationCoordinator(undefined, {
+      createEpoch: () => "test-epoch",
+    });
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      { host: { workspaceMutationCoordinator: coordinator } },
+    );
+    const session = await mgr.createSession("code");
+    const mutation = coordinator.getSnapshot("/tmp", session.id);
+    const otherLease = await coordinator.acquire(
+      "other-session",
+      coordinator.createDomain(["/tmp"]),
+    );
+    await otherLease.markMutation();
+    otherLease.release();
+    const revertToCheckpoint = vi.fn(async () => true);
+    (mgr as any).checkpointManager = { revertToCheckpoint };
+
+    const result = await (mgr as any).revertWorkspaceToCheckpoint(session, {
+      id: "checkpoint-1",
+      projectId: session.projectScope.projectId,
+      commitHash: "commit-1",
+      turnIndex: 1,
+      createdAt: 100,
+      projectSnapshots: [
+        {
+          projectId: session.projectScope.projectId,
+          commitHash: "commit-1",
+          createdAt: 100,
+          mutation,
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "workspace_mutation_conflict",
+    });
+    expect(revertToCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("rejects a revert when the workspace fingerprint changed after preview", async () => {
+    const coordinator = new WorkspaceMutationCoordinator(undefined, {
+      createEpoch: () => "test-epoch",
+    });
+    const getWorkspaceRevision = vi.fn(async () => "changed-revision");
+    const revertToCheckpoint = vi.fn(async () => true);
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          workspaceMutationCoordinator: coordinator,
+          createCheckpointManager: vi.fn(() => ({
+            baseCommit: "base-1",
+            initialize: vi.fn(async () => true),
+            createCheckpoint: vi.fn(async () => null),
+            previewRevert: vi.fn(async () => null),
+            getWorkspaceRevision,
+            revertToCheckpoint,
+            getDiffBetween: vi.fn(async () => ""),
+          })),
+        },
+      },
+    );
+    const session = await mgr.createSession("code");
+    const mutation = coordinator.getSnapshot("/tmp", session.id);
+
+    const result = await (mgr as any).revertWorkspaceToCheckpoint(
+      session,
+      {
+        id: "checkpoint-1",
+        projectId: session.projectScope.projectId,
+        commitHash: "commit-1",
+        turnIndex: 1,
+        createdAt: 100,
+        projectSnapshots: [
+          {
+            projectId: session.projectScope.projectId,
+            commitHash: "commit-1",
+            createdAt: 100,
+            mutation,
+          },
+        ],
+      },
+      "preview-revision",
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "workspace_mutation_conflict",
+    });
+    expect(getWorkspaceRevision).toHaveBeenCalledOnce();
+    expect(revertToCheckpoint).not.toHaveBeenCalled();
   });
 
   it("creates, previews, diffs, and reverts one checkpoint across all workspace roots", async () => {
@@ -3471,6 +3982,24 @@ describe("AgentSessionManager checkpoints", () => {
         "base-b",
         "commit-b",
       );
+
+      const coordinator = (mgr as any).host
+        .workspaceMutationCoordinator as WorkspaceMutationCoordinator;
+      const externalLease = await coordinator.acquire(
+        "other-session",
+        coordinator.createDomain([rootB]),
+      );
+      await externalLease.markMutation();
+      externalLease.release();
+
+      await expect(
+        mgr.revertToCheckpoint(session.id, checkpoint!.id),
+      ).resolves.toEqual({
+        ok: false,
+        reason: "workspace_mutation_conflict",
+      });
+      expect(managerA.revertToCheckpoint).toHaveBeenCalledTimes(1);
+      expect(managerB.revertToCheckpoint).toHaveBeenCalledTimes(1);
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
@@ -3894,7 +4423,7 @@ describe("AgentSessionManager checkpoints", () => {
         };
       }),
     };
-    (mgr as any).engine = engine;
+    (mgr as any).host.createEngine = vi.fn(() => engine);
 
     const onEvent = vi.fn();
     mgr.onEvent = onEvent;
@@ -3988,7 +4517,7 @@ describe("AgentSessionManager checkpoints", () => {
         };
       }),
     };
-    (mgr as any).engine = engine;
+    (mgr as any).host.createEngine = vi.fn(() => engine);
 
     const firstSend = mgr.sendMessage(session.id, "first prompt", session.mode);
     await flushPromises();
@@ -4076,7 +4605,7 @@ describe("AgentSessionManager checkpoints", () => {
         };
       }),
     };
-    (mgr as any).engine = engine;
+    (mgr as any).host.createEngine = vi.fn(() => engine);
 
     const onEvent = vi.fn();
     mgr.onEvent = onEvent;
@@ -4341,6 +4870,7 @@ describe("AgentSessionManager checkpoints", () => {
     );
     const loaded = await mgr.loadPersistedSession("session-1");
     expect(loaded).toBe(session);
+    addCurrentMutationMetadata(mgr, "session-1");
 
     const checkpointManager = {
       revertToCheckpoint: vi.fn(async () => true),
@@ -4362,24 +4892,36 @@ describe("AgentSessionManager checkpoints", () => {
       { role: "assistant", content: "first answer" },
     ]);
     expect(mgr.getCheckpoints("session-1")).toEqual([
-      {
+      expect.objectContaining({
         id: "cp-1",
         projectId: session.projectScope.projectId,
         commitHash: "hash-1",
         turnIndex: 1,
         createdAt: 111,
-      },
+        projectSnapshots: [
+          expect.objectContaining({
+            projectId: session.projectScope.projectId,
+            mutation: expect.objectContaining({ ownerSessionId: "session-1" }),
+          }),
+        ],
+      }),
     ]);
     expect(saveSession).toHaveBeenCalled();
     const lastSaveArg = saveSession.mock.lastCall![0].session;
     expect(lastSaveArg?.metadata.checkpointState?.checkpoints).toEqual([
-      {
+      expect.objectContaining({
         id: "cp-1",
         projectId: session.projectScope.projectId,
         commitHash: "hash-1",
         turnIndex: 1,
         createdAt: 111,
-      },
+        projectSnapshots: [
+          expect.objectContaining({
+            projectId: session.projectScope.projectId,
+            mutation: expect.objectContaining({ ownerSessionId: "session-1" }),
+          }),
+        ],
+      }),
     ]);
     expect(lastSaveArg?.messages).toEqual([
       { role: "user", content: "first prompt" },
@@ -4494,6 +5036,7 @@ describe("AgentSessionManager checkpoints", () => {
       store,
     );
     await mgr.loadPersistedSession("session-1");
+    addCurrentMutationMetadata(mgr, "session-1");
 
     const checkpointManager = {
       revertToCheckpoint: vi.fn(async () => true),
@@ -4620,6 +5163,7 @@ describe("AgentSessionManager checkpoints", () => {
       store,
     );
     await mgr.loadPersistedSession("session-1");
+    addCurrentMutationMetadata(mgr, "session-1");
     (mgr as any).checkpointManager = {
       revertToCheckpoint: vi.fn(async () => true),
     };
@@ -4879,6 +5423,7 @@ describe("AgentSessionManager checkpoints", () => {
       store,
     );
     await mgr.loadPersistedSession("session-1");
+    addCurrentMutationMetadata(mgr, "session-1");
 
     const checkpointManager = {
       revertToCheckpoint: vi.fn(async () => true),
@@ -5140,7 +5685,7 @@ describe("AgentSessionManager memory candidate nudges", () => {
     (session as any).autoTitle = vi.fn();
 
     (mgr as any).checkpointManager = { createCheckpoint: vi.fn() };
-    (mgr as any).engine = {
+    (mgr as any).host.createEngine = vi.fn(() => ({
       run: vi.fn(async function* () {
         yield {
           type: "done",
@@ -5150,7 +5695,7 @@ describe("AgentSessionManager memory candidate nudges", () => {
           totalCacheCreationTokens: 0,
         };
       }),
-    };
+    }));
     mgr.onEvent = vi.fn();
     return { mgr, session };
   }

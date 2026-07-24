@@ -3,15 +3,21 @@ import type {
   ConfinementPreparingTerminalProvider,
   NativePreparingTerminalProvider,
   PreparedTerminalExecution,
+  TerminalCloseRequest,
   TerminalCloseResult,
   TerminalExecuteOptions,
   TerminalExecutionAuditEvent,
+  TerminalExecutionOwner,
   TerminalExecutionRouteContext,
   TerminalExecutionSecuritySummary,
+  TerminalListRequest,
+  TerminalOutputRequest,
   TerminalProvider,
+  TerminalRecentlyClosedRequest,
   TerminalRetainedOutput,
   TerminalRetainedOutputLease,
   TerminalSandboxAttestationSummary,
+  TerminalTargetRequest,
 } from "../../core/capabilities/terminal.js";
 
 import { randomUUID } from "node:crypto";
@@ -69,6 +75,15 @@ type RouteDecision =
         | "native-runtime-unavailable"
         | "required-sandbox-unavailable";
     };
+
+function terminalIdentity(
+  terminalId: string,
+  owner: TerminalExecutionOwner | undefined,
+): string {
+  return owner
+    ? `${owner.scopeId}\0${owner.generation}\0${terminalId}`
+    : `ownerless\0${terminalId}`;
+}
 
 function closeResult(names?: string[]): TerminalCloseResult {
   return {
@@ -375,74 +390,105 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
   }
 
   getBackgroundState(
-    terminalId: string,
+    request: TerminalTargetRequest,
   ): ReturnType<TerminalProvider["getBackgroundState"]> {
-    return this.ownerForTerminal(terminalId)?.getBackgroundState(terminalId);
+    return this.ownerForTerminal(
+      request.terminalId,
+      request.owner,
+    )?.getBackgroundState(request);
   }
 
-  getCurrentOutput(
-    terminalId: string,
-    options?: { force?: boolean },
-  ): string | undefined {
-    return this.ownerForTerminal(terminalId)?.getCurrentOutput?.(
-      terminalId,
-      options,
+  getCurrentOutput(request: TerminalOutputRequest): string | undefined {
+    return this.ownerForTerminal(
+      request.terminalId,
+      request.owner,
+    )?.getCurrentOutput?.(request);
+  }
+
+  getRetainedOutput(
+    request: TerminalTargetRequest,
+  ): TerminalRetainedOutput | undefined {
+    const owner = this.ownerForRetainedOutput(
+      request.terminalId,
+      request.owner,
     );
+    if (owner) return owner.getRetainedOutput?.(request);
+    const retiredMatches = this.retiredRecentlyClosed.filter(
+      (terminal) =>
+        terminal.id === request.terminalId &&
+        (request.owner === undefined ||
+          (terminal.owner?.scopeId === request.owner.scopeId &&
+            terminal.owner.generation === request.owner.generation)),
+    );
+    if (retiredMatches.length !== 1) return undefined;
+    const retired = retiredMatches[0];
+    return this.retiredRetainedOutput
+      .get(terminalIdentity(retired.id, retired.owner))
+      ?.read();
   }
 
-  getRetainedOutput(terminalId: string): TerminalRetainedOutput | undefined {
-    const owner = this.ownerForRetainedOutput(terminalId);
+  interruptTerminal(request: TerminalTargetRequest): boolean {
     return (
-      owner?.getRetainedOutput?.(terminalId) ??
-      this.retiredRetainedOutput.get(terminalId)?.read()
+      this.ownerForTerminal(
+        request.terminalId,
+        request.owner,
+      )?.interruptTerminal(request) ?? false
     );
   }
 
-  interruptTerminal(terminalId: string): boolean {
+  detachTerminal(request: TerminalTargetRequest): boolean {
     return (
-      this.ownerForTerminal(terminalId)?.interruptTerminal(terminalId) ?? false
+      this.ownerForTerminal(
+        request.terminalId,
+        request.owner,
+      )?.detachTerminal?.(request) ?? false
     );
   }
 
-  detachTerminal(terminalId: string): boolean {
-    return (
-      this.ownerForTerminal(terminalId)?.detachTerminal?.(terminalId) ?? false
-    );
-  }
-
-  revealTerminal(terminalId: string): boolean {
-    const owner = this.ownerForTerminal(terminalId);
+  revealTerminal(request: TerminalTargetRequest): boolean {
+    const owner = this.ownerForTerminal(request.terminalId, request.owner);
     if (!owner) return false;
     return owner.revealTerminal
-      ? owner.revealTerminal(terminalId)
-      : (this.options.revealCustomTerminal?.(terminalId) ?? false);
+      ? owner.revealTerminal(request)
+      : (this.options.revealCustomTerminal?.(request.terminalId) ?? false);
   }
 
   getRecentlyClosedTerminals(
-    limit = 5,
+    request: TerminalRecentlyClosedRequest,
   ): ReturnType<TerminalProvider["getRecentlyClosedTerminals"]> {
     this.assertActive();
-    const boundedLimit = Math.max(0, limit);
+    const boundedLimit = Math.max(0, request.limit ?? 5);
     const current = this.allProviders().flatMap((provider) =>
-      provider.getRecentlyClosedTerminals(boundedLimit),
+      provider.getRecentlyClosedTerminals(request),
     );
-    return [...current, ...this.retiredRecentlyClosed]
+    const retired = this.retiredRecentlyClosed.filter(
+      (terminal) =>
+        request.owner === undefined ||
+        (terminal.owner?.scopeId === request.owner.scopeId &&
+          terminal.owner.generation === request.owner.generation),
+    );
+    return [...current, ...retired]
       .sort((left, right) => right.closedAt - left.closedAt)
       .filter(
         (terminal, index, terminals) =>
-          terminals.findIndex((candidate) => candidate.id === terminal.id) ===
-          index,
+          terminals.findIndex(
+            (candidate) =>
+              terminalIdentity(candidate.id, candidate.owner) ===
+              terminalIdentity(terminal.id, terminal.owner),
+          ) === index,
       )
       .slice(0, boundedLimit)
       .map((terminal) => ({ ...terminal }));
   }
 
-  listTerminals(): ReturnType<TerminalProvider["listTerminals"]> {
+  listTerminals(
+    request: TerminalListRequest,
+  ): ReturnType<TerminalProvider["listTerminals"]> {
     this.assertActive();
     const providers = this.allProviders();
     const seen = new Set<string>();
     return providers.flatMap((provider) =>
-      provider.listTerminals().filter((terminal) => {
+      provider.listTerminals(request).filter((terminal) => {
         if (seen.has(terminal.id)) return false;
         seen.add(terminal.id);
         return true;
@@ -450,14 +496,15 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     );
   }
 
-  closeTerminals(names?: string[]): TerminalCloseResult {
+  closeTerminals(request: TerminalCloseRequest): TerminalCloseResult {
     this.assertActive();
     const providers = this.allProviders();
+    const names = request.names;
     if (providers.length === 0) return closeResult(names);
     if (!names || names.length === 0) {
       const result = {
         closed: providers.reduce(
-          (count, provider) => count + provider.closeTerminals().closed,
+          (count, provider) => count + provider.closeTerminals(request).closed,
           0,
         ),
       };
@@ -473,7 +520,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       }
       const owners = providers.filter((provider) =>
         provider
-          .listTerminals()
+          .listTerminals({ owner: request.owner })
           .some(
             (terminal) => terminal.id === target || terminal.name === target,
           ),
@@ -482,7 +529,10 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
         notFound.push(target);
         continue;
       }
-      const result = owners[0].closeTerminals([target]);
+      const result = owners[0].closeTerminals({
+        owner: request.owner,
+        names: [target],
+      });
       closed += result.closed;
       if (result.not_found?.includes(target) || result.closed === 0) {
         notFound.push(target);
@@ -793,7 +843,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       if (target.startsWith("host-terminal-")) {
         this.rejectExecutionTarget("host_target", kind);
       }
-      const matches = this.providersForTerminalId(target);
+      const matches = this.providersForTerminalId(target, descriptor.owner);
       if (matches.length === 0) this.rejectExecutionTarget("not_found", kind);
       if (matches.length > 1)
         this.rejectExecutionTarget("ambiguous_name", kind);
@@ -809,7 +859,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     if (!descriptor.terminal_name) return;
     const namedMatches = this.allProviders().filter((provider) =>
       provider
-        .listTerminals()
+        .listTerminals({ owner: descriptor.owner })
         .some((terminal) => terminal.name === descriptor.terminal_name),
     );
     if (namedMatches.length === 0) return;
@@ -846,9 +896,14 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     );
   }
 
-  private providersForTerminalId(terminalId: string): TerminalProvider[] {
+  private providersForTerminalId(
+    terminalId: string,
+    owner: TerminalExecutionOwner | undefined,
+  ): TerminalProvider[] {
     return this.allProviders().filter((provider) =>
-      provider.listTerminals().some((terminal) => terminal.id === terminalId),
+      provider
+        .listTerminals({ owner })
+        .some((terminal) => terminal.id === terminalId),
     );
   }
 
@@ -861,21 +916,25 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     );
   }
 
-  private ownerForTerminal(terminalId: string): TerminalProvider | undefined {
+  private ownerForTerminal(
+    terminalId: string,
+    owner: TerminalExecutionOwner | undefined,
+  ): TerminalProvider | undefined {
     this.assertActive();
     if (terminalId.startsWith("host-terminal-")) return undefined;
-    const matches = this.providersForTerminalId(terminalId);
+    const matches = this.providersForTerminalId(terminalId, owner);
     return matches.length === 1 ? matches[0] : undefined;
   }
 
   private ownerForRetainedOutput(
     terminalId: string,
+    owner: TerminalExecutionOwner | undefined,
   ): TerminalProvider | undefined {
-    const liveOwner = this.ownerForTerminal(terminalId);
+    const liveOwner = this.ownerForTerminal(terminalId, owner);
     if (liveOwner) return liveOwner;
     const matches = this.allProviders().filter((provider) =>
       provider
-        .getRecentlyClosedTerminals(20)
+        .getRecentlyClosedTerminals({ owner, limit: 20 })
         .some((terminal) => terminal.id === terminalId),
     );
     return matches.length === 1 ? matches[0] : undefined;
@@ -1008,12 +1067,15 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       ...this.retiredNativeAgentProviders,
     ];
     for (const provider of retired) {
-      if (provider.listTerminals().length > 0) continue;
+      if (provider.listTerminals({ owner: undefined }).length > 0) continue;
       this.retiredSandboxProviders.delete(
         provider as ConfinementPreparingTerminalProvider,
       );
       this.retiredNativeAgentProviders.delete(provider);
-      const recentlyClosed = provider.getRecentlyClosedTerminals(20);
+      const recentlyClosed = provider.getRecentlyClosedTerminals({
+        owner: undefined,
+        limit: 20,
+      });
       this.rememberRecentlyClosed(recentlyClosed, provider);
       this.channelLifecycleSubscriptions.get(provider)?.dispose();
       this.channelLifecycleSubscriptions.delete(provider);
@@ -1029,14 +1091,19 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     provider?: TerminalProvider,
   ): void {
     for (const terminal of terminals) {
+      const identity = terminalIdentity(terminal.id, terminal.owner);
       const existing = this.retiredRecentlyClosed.findIndex(
-        (candidate) => candidate.id === terminal.id,
+        (candidate) =>
+          terminalIdentity(candidate.id, candidate.owner) === identity,
       );
       if (existing >= 0) this.retiredRecentlyClosed.splice(existing, 1);
-      const retained = provider?.detachRetainedOutput?.(terminal.id);
+      const retained = provider?.detachRetainedOutput?.({
+        owner: terminal.owner,
+        terminalId: terminal.id,
+      });
       if (retained) {
-        this.retiredRetainedOutput.get(terminal.id)?.dispose();
-        this.retiredRetainedOutput.set(terminal.id, retained);
+        this.retiredRetainedOutput.get(identity)?.dispose();
+        this.retiredRetainedOutput.set(identity, retained);
       }
       this.retiredRecentlyClosed.push({ ...terminal });
     }
@@ -1045,8 +1112,9 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     );
     const removed = this.retiredRecentlyClosed.splice(20);
     for (const terminal of removed) {
-      this.retiredRetainedOutput.get(terminal.id)?.dispose();
-      this.retiredRetainedOutput.delete(terminal.id);
+      const identity = terminalIdentity(terminal.id, terminal.owner);
+      this.retiredRetainedOutput.get(identity)?.dispose();
+      this.retiredRetainedOutput.delete(identity);
     }
   }
 

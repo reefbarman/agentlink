@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import { BUILT_IN_MODES } from "./modes.js";
 import { getAgentTools } from "./toolAdapter.js";
 
-const FOREGROUND_ONLY_TOOLS = new Set(["compose"]);
+const FOREGROUND_ONLY_TOOLS = new Set([
+  "compose",
+  "respond_to_background_question",
+]);
 
 const mcpTools = [
   {
@@ -26,6 +29,9 @@ describe("foreground/background capability parity contract", () => {
       expect(
         getAgentTools(mode, mcpTools, true).map((tool) => tool.name),
       ).not.toContain("compose");
+      expect(
+        getAgentTools(mode, mcpTools, true).map((tool) => tool.name),
+      ).not.toContain("respond_to_background_question");
     });
   }
 

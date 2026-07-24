@@ -114,6 +114,16 @@ const chatOptions = {
   entryNames: "chat",
 };
 
+// Pop-out preview panel for mermaid/vega blocks. Must be a self-contained
+// bundle: node_modules is not shipped in the .vsix, and vega-embed's dist
+// uses bare import specifiers that a webview can't resolve.
+/** @type {esbuild.BuildOptions} */
+const specialBlockPanelOptions = {
+  ...webviewBase,
+  entryPoints: ["src/agent/webview/specialBlockPanel.ts"],
+  entryNames: "special-block-panel",
+};
+
 /** @type {esbuild.BuildOptions} */
 const browserMonacoExternalPlugin = {
   name: "browser-monaco-external",
@@ -230,6 +240,7 @@ if (watch) {
     appCtx,
     frCtx,
     chatCtx,
+    specialBlockPanelCtx,
     browserGatewayCtx,
     browserGatewayMonacoCtx,
     terminalCtx,
@@ -243,6 +254,7 @@ if (watch) {
     esbuild.context(approvalOptions),
     esbuild.context(frPreviewOptions),
     esbuild.context(chatOptions),
+    esbuild.context(specialBlockPanelOptions),
     esbuild.context(browserGatewayOptions),
     esbuild.context(browserGatewayMonacoOptions),
     esbuild.context(terminalOptions),
@@ -257,6 +269,7 @@ if (watch) {
     appCtx.watch(),
     frCtx.watch(),
     chatCtx.watch(),
+    specialBlockPanelCtx.watch(),
     browserGatewayCtx.watch(),
     browserGatewayMonacoCtx.watch(),
     terminalCtx.watch(),
@@ -275,6 +288,7 @@ if (watch) {
     esbuild.build(approvalOptions),
     esbuild.build(frPreviewOptions),
     esbuild.build(chatOptions),
+    esbuild.build(specialBlockPanelOptions),
     browserGatewayBuild,
     browserGatewayMonacoBuild,
     esbuild.build(terminalOptions),

@@ -115,6 +115,23 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("exfiltrate workspace/private data");
   });
 
+  it("encourages restrained visual flourishes in user-facing responses", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain(
+      "Add small, relevant visual flourishes — such as an occasional emoji or familiar symbol",
+    );
+    expect(result).toContain(
+      "Good places include a heading, status callout, or key result",
+    );
+    expect(result).toContain(
+      "do not decorate every heading, paragraph, bullet, or link",
+    );
+    expect(result).toContain(
+      "External web links already receive a small source icon in the UI",
+    );
+    expect(result).toContain("omit them for somber or high-stakes topics");
+  });
+
   it("asks agents to attach continuation actions for concrete follow-up work", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).toContain(
@@ -473,14 +490,14 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt("code", tmpDir, { devMode: true });
     expect(result).toContain("Tool Feedback (Dev Mode)");
     expect(result).toContain(
-      "use `call_mcp_tool` as the canonical feedback category",
+      "only submit feedback about AgentLink's native MCP tools",
     );
-    expect(result).toContain("invoked directly as `server__tool`");
+    expect(result).toContain("`find_mcp_tools` and `call_mcp_tool`");
     expect(result).toContain(
-      "do not use a server-specific name such as `unity__run_tests`",
+      "Never submit feedback about a specific MCP server or its native `server__tool`",
     );
     expect(result).toContain(
-      "Do not submit AgentLink feedback for ordinary upstream server/domain errors",
+      "bugs, limitations, confusing output, and domain errors in that server are upstream and out of scope",
     );
   });
 

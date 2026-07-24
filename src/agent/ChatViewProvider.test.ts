@@ -3069,6 +3069,80 @@ describe("ChatViewProvider session state sync", () => {
     ]);
   });
 
+  it("does not drain the foreground browser queue when another session completes", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const sessionA = {
+      id: "session-a",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "streaming",
+      title: "Session A",
+      reasoningEffort: "high",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      projectScope: {
+        projectId: "project-a",
+        workspaceFolderUri: "file:///workspace/a",
+        displayName: "Project A",
+        rootPath: "/workspace/a",
+      },
+      projectAvailability: "available",
+      getAllMessages: () => [] as unknown[],
+    };
+    const sessionB = {
+      ...sessionA,
+      id: "session-b",
+      status: "streaming",
+      title: "Session B",
+      getAllMessages: () => [] as unknown[],
+      setPendingInterjection: vi.fn(),
+    };
+    const sendMessage = vi.fn(async () => undefined);
+    const manager = {
+      getForegroundSession: vi.fn(() => sessionB),
+      getSession: vi.fn((sessionId: string) =>
+        sessionId === sessionA.id ? sessionA : sessionB,
+      ),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      sendMessage,
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+
+    await provider.submitBrowserSend({
+      text: "message for session B",
+      sessionId: sessionB.id,
+      mode: "code",
+    });
+
+    (
+      provider as unknown as {
+        drainBrowserQueuedMessage(sessionId: string): void;
+      }
+    ).drainBrowserQueuedMessage(sessionA.id);
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(
+      provider.getBrowserProjectedForegroundState()?.messageQueue,
+    ).toMatchObject([
+      {
+        text: "message for session B",
+        source: "browser",
+      },
+    ]);
+  });
+
   it("sends browser workspace image attachments as model media", async () => {
     const projectRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "agentlink-browser-image-"),
@@ -4815,6 +4889,32 @@ describe("ChatViewProvider session state sync", () => {
     });
   });
 
+  it("rejects unscoped built-in approval requests before publishing a card", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const uiPublisher = (
+      provider as unknown as {
+        uiPublisher: {
+          publishApproval: (sessionId: string, request: unknown) => void;
+        };
+      }
+    ).uiPublisher;
+    const publishApprovalSpy = vi.spyOn(uiPublisher, "publishApproval");
+
+    expect(() =>
+      provider.requestApproval({
+        id: "approval-unscoped",
+        kind: "write",
+        title: "Modify `src/file.ts`?",
+        choices: [],
+      }),
+    ).toThrow("Built-in agent approval requests require a sessionId.");
+    expect(publishApprovalSpy).not.toHaveBeenCalled();
+  });
+
   it("publishes approval idle after resolving an inline browser approval decision", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
@@ -4832,15 +4932,18 @@ describe("ChatViewProvider session state sync", () => {
     ).uiPublisher;
     const publishApprovalIdleSpy = vi.spyOn(uiPublisher, "publishApprovalIdle");
 
-    const approvalPromise = provider.requestApproval({
-      id: "approval-inline",
-      kind: "write",
-      title: "Modify `src/file.ts`?",
-      choices: [
-        { label: "Accept", value: "accept", isPrimary: true },
-        { label: "Reject", value: "reject", isDanger: true },
-      ],
-    });
+    const approvalPromise = provider.requestApproval(
+      {
+        id: "approval-inline",
+        kind: "write",
+        title: "Modify `src/file.ts`?",
+        choices: [
+          { label: "Accept", value: "accept", isPrimary: true },
+          { label: "Reject", value: "reject", isDanger: true },
+        ],
+      },
+      "agent",
+    );
 
     const ok = provider.submitBrowserApprovalDecision({
       id: "approval-inline",
@@ -4883,24 +4986,27 @@ describe("ChatViewProvider session state sync", () => {
       mainRespond,
     );
 
-    const worktreePromise = provider.requestApproval({
-      kind: "worktree",
-      id: "worktree-launch",
-      title: "Start worktree agent: Reliability pass",
-      detail: "Destination: /workspace/reliability",
-      choices: [
-        {
-          label: "Approve and autosubmit prompt",
-          value: "approve-autosubmit",
-          isPrimary: true,
-        },
-        {
-          label: "Approve, prefill only",
-          value: "approve-prefill",
-        },
-        { label: "Deny", value: "deny", isDanger: true },
-      ],
-    });
+    const worktreePromise = provider.requestApproval(
+      {
+        kind: "worktree",
+        id: "worktree-launch",
+        title: "Start worktree agent: Reliability pass",
+        detail: "Destination: /workspace/reliability",
+        choices: [
+          {
+            label: "Approve and autosubmit prompt",
+            value: "approve-autosubmit",
+            isPrimary: true,
+          },
+          {
+            label: "Approve, prefill only",
+            value: "approve-prefill",
+          },
+          { label: "Deny", value: "deny", isDanger: true },
+        ],
+      },
+      "agent",
+    );
 
     expect(publishApprovalSpy).toHaveBeenLastCalledWith(
       "agent",
@@ -4960,15 +5066,18 @@ describe("ChatViewProvider session state sync", () => {
       forwardedRespond,
     );
 
-    const foregroundPromise = provider.requestApproval({
-      id: "foreground-write",
-      kind: "write",
-      title: "Modify `src/file.ts`?",
-      choices: [
-        { label: "Accept", value: "accept", isPrimary: true },
-        { label: "Reject", value: "reject", isDanger: true },
-      ],
-    });
+    const foregroundPromise = provider.requestApproval(
+      {
+        id: "foreground-write",
+        kind: "write",
+        title: "Modify `src/file.ts`?",
+        choices: [
+          { label: "Accept", value: "accept", isPrimary: true },
+          { label: "Reject", value: "reject", isDanger: true },
+        ],
+      },
+      "agent",
+    );
 
     expect(publishApprovalSpy).toHaveBeenLastCalledWith(
       "agent",
@@ -5015,15 +5124,18 @@ describe("ChatViewProvider session state sync", () => {
     const publishApprovalSpy = vi.spyOn(uiPublisher, "publishApproval");
     const publishApprovalIdleSpy = vi.spyOn(uiPublisher, "publishApprovalIdle");
 
-    const foregroundPromise = provider.requestApproval({
-      id: "foreground-write",
-      kind: "write",
-      title: "Modify `src/file.ts`?",
-      choices: [
-        { label: "Accept", value: "accept", isPrimary: true },
-        { label: "Reject", value: "reject", isDanger: true },
-      ],
-    });
+    const foregroundPromise = provider.requestApproval(
+      {
+        id: "foreground-write",
+        kind: "write",
+        title: "Modify `src/file.ts`?",
+        choices: [
+          { label: "Accept", value: "accept", isPrimary: true },
+          { label: "Reject", value: "reject", isDanger: true },
+        ],
+      },
+      "agent",
+    );
     const forwardedRespond = vi.fn(() => true);
     provider.forwardApproval(
       {
@@ -5069,6 +5181,56 @@ describe("ChatViewProvider session state sync", () => {
     });
     await expect(foregroundPromise).resolves.toMatchObject({
       decision: "reject",
+    });
+  });
+
+  it("rejects only the stopped session's inline approvals", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => undefined),
+      getSession: vi.fn(() => ({
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCacheReadTokens: 0,
+        totalCacheCreationTokens: 0,
+        background: false,
+      })),
+      stopSession: vi.fn(),
+      getWorkspaceProjects: vi.fn(() => []),
+      onSessionsChanged: vi.fn(() => ({ dispose: vi.fn() })),
+    } as never);
+    const stoppedApproval = provider.requestApproval(
+      { id: "stop-me", kind: "write", title: "Stop", choices: [] },
+      "session-stop",
+    );
+    const retainedApproval = provider.requestApproval(
+      { id: "keep-me", kind: "write", title: "Keep", choices: [] },
+      "session-keep",
+    );
+
+    (
+      provider as unknown as {
+        stopSessionFromUi(sessionId: string): void;
+      }
+    ).stopSessionFromUi("session-stop");
+
+    await expect(stoppedApproval).resolves.toBe("reject");
+    expect(
+      (
+        provider as unknown as { pendingApprovals: Map<string, unknown> }
+      ).pendingApprovals.has("keep-me"),
+    ).toBe(true);
+    provider.submitBrowserApprovalDecision({
+      id: "keep-me",
+      approvalKind: "write",
+      decision: "accept",
+    });
+    await expect(retainedApproval).resolves.toMatchObject({
+      decision: "accept",
     });
   });
 
@@ -5548,5 +5710,50 @@ describe("handleModeSwitch resume queueing", () => {
           message.type === "agentModeSwitchRequest" && message.mode === "code",
       ),
     ).toBe(true);
+  });
+});
+
+describe("special block pop-out panel", () => {
+  it("loads the bundled panel script and embeds breakout-safe source data", async () => {
+    const vscode = await import("vscode");
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const asWebviewUri = vi.fn(
+      () => "https://webview.test/dist/special-block-panel.js",
+    );
+    const webview = { asWebviewUri, cspSource: "https://webview.test" };
+    const source = 'graph TD\n  A["</script><b>x</b>"] --> B';
+
+    const html = (
+      provider as unknown as {
+        getSpecialBlockPanelHtml: (
+          webview: unknown,
+          kind: string,
+          source: string,
+        ) => string;
+      }
+    ).getSpecialBlockPanelHtml(webview, "mermaid", source);
+
+    // The panel must load the self-contained bundle from dist — raw
+    // node_modules files are not shipped in the packaged .vsix.
+    expect(
+      vi
+        .mocked(vscode.Uri.joinPath)
+        .mock.calls.some((call) => call.includes("special-block-panel.js")),
+    ).toBe(true);
+    expect(html).toContain(
+      'src="https://webview.test/dist/special-block-panel.js"',
+    );
+    expect(html).not.toContain("node_modules");
+
+    const dataMatch = html.match(
+      /<script id="special-block-data" type="application\/json">([\s\S]*?)<\/script>/,
+    );
+    expect(dataMatch).toBeTruthy();
+    expect(dataMatch![1]).not.toContain("</script>");
+    expect(JSON.parse(dataMatch![1]!)).toEqual({ kind: "mermaid", source });
   });
 });

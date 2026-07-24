@@ -1138,9 +1138,10 @@ describe("LiveHostTerminalSurfaceController", () => {
       "sandbox-1",
       "hello",
     );
-    expect(sandbox.coordinator.interruptTerminal).toHaveBeenCalledWith(
-      "sandbox-1",
-    );
+    expect(sandbox.coordinator.interruptTerminal).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "sandbox-1",
+    });
     expect(test.processes).toEqual([]);
   });
 
@@ -1296,9 +1297,10 @@ describe("LiveHostTerminalSurfaceController", () => {
       terminalInstanceId,
       rendererEpoch: test.connection.rendererEpoch,
     });
-    expect(sandbox.coordinator.closeTerminals).toHaveBeenCalledWith([
-      "sandbox-1",
-    ]);
+    expect(sandbox.coordinator.closeTerminals).toHaveBeenCalledWith({
+      owner: undefined,
+      names: ["sandbox-1"],
+    });
     expect(test.processes).toEqual([]);
   });
   it("uses the resolved shell executable as the user terminal title", async () => {

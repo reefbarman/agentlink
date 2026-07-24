@@ -23,13 +23,18 @@ function formatRetryStatus(message: ChatMessage, nowMs: number): string {
   return `Retrying in ${remainingSeconds}s`;
 }
 
+function isOverloadedWarning(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes("overloaded") || lower.includes("529");
+}
+
 function getWarningTitle(message: string, resolved: boolean): string {
   const lower = message.toLowerCase();
   if (lower.includes("rate_limit") || lower.includes("429")) {
     return resolved ? "Rate limit cleared" : "Rate limit reached";
   }
-  if (lower.includes("overloaded") || lower.includes("529")) {
-    return resolved ? "Provider recovered" : "Provider is busy";
+  if (isOverloadedWarning(message)) {
+    return resolved ? "Provider recovered" : "Provider is overloaded";
   }
   if (lower.includes("timed out") || lower.includes("timeout")) {
     return resolved ? "Request resumed" : "Response timed out";
@@ -92,7 +97,9 @@ export function WarningRow({
       hint={
         resolved
           ? "The agent continued successfully."
-          : "The agent is still running; no action is needed."
+          : isOverloadedWarning(message.warningMessage ?? "")
+            ? "The provider may be having issues on their end — there's nothing to fix here. The agent will keep retrying until it recovers."
+            : "The agent is still running; no action is needed."
       }
       details={messages.map((warning) => warning.warningMessage ?? "")}
       actions={

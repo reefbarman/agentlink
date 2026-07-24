@@ -5,7 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AgentSessionManager } from "./AgentSessionManager.js";
 import { ProviderRegistry } from "./providers/index.js";
-import type { ToolDispatchContext } from "./toolAdapter.js";
+import {
+  createAgentToolRuntime,
+  type ToolDispatchContext,
+} from "./toolAdapter.js";
+import { WorkspaceMutationCoordinator } from "./WorkspaceMutationCoordinator.js";
 import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeStore.js";
 import { mkdtemp } from "fs/promises";
 
@@ -42,6 +46,7 @@ const mocks = vi.hoisted(() => {
       const mockSession = {
         id: `bg-${seq}`,
         mode: opts.mode,
+        agentMode: opts.agentMode,
         model: opts.config.model,
         reasoningEffort: "high",
         providerId: opts.providerId,
@@ -123,6 +128,7 @@ const mocks = vi.hoisted(() => {
         getAdvertisedSkills: vi.fn(() => []),
         getAdvertisedRules: vi.fn(() => []),
         trackLoadedSkill: vi.fn(),
+        getActiveSkillAllowedTools: vi.fn(() => undefined),
       };
       return mockSession;
     }),
@@ -710,6 +716,7 @@ describe("AgentSessionManager background agents", () => {
     const parent = await mgr.spawnBackground({
       task: "parent",
       message: "hold",
+      permissionProfile: "review-only",
     });
     await waitFor(
       () => releaseParent,
@@ -757,6 +764,10 @@ describe("AgentSessionManager background agents", () => {
     const spawned = await mgr.spawnBackground(
       { task: "slow lane", message: "keep working" },
       foreground.id,
+    );
+    await waitFor(
+      () => releaseBackground,
+      (release) => typeof release === "function",
     );
 
     const waitPromise = mgr.waitForAuthorizedBackground(
@@ -840,7 +851,11 @@ describe("AgentSessionManager background agents", () => {
       );
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
-    const parent = await mgr.spawnBackground({ task: "parent", message: "go" });
+    const parent = await mgr.spawnBackground({
+      task: "parent",
+      message: "go",
+      permissionProfile: "review-only",
+    });
     await waitFor(
       () => releaseParent,
       (release) => typeof release === "function",
@@ -1293,6 +1308,263 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("lets read-only ACP run alongside a writable ACP lease", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [
+        {
+          id: "writer",
+          command: "writer-acp",
+          readonlyOnly: false,
+        },
+        {
+          id: "reader",
+          command: "reader-acp",
+          readonlyOnly: true,
+        },
+      ],
+    });
+    let releaseWriter: (() => void) | undefined;
+    const started: string[] = [];
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        started.push(request.agent.id);
+        if (request.agent.id === "writer") {
+          await new Promise<void>((resolve) => {
+            releaseWriter = resolve;
+          });
+        }
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          config: configHost,
+          acpBackgroundRunner,
+          workspaceMutationCoordinator: new WorkspaceMutationCoordinator(),
+        },
+      },
+    );
+    mgr.setToolContext(toolCtx);
+
+    const writer = await mgr.spawnBackground({
+      task: "write",
+      message: "write",
+      provider: "acp:writer",
+    });
+    await waitFor(
+      () => started,
+      (value) => value.includes("writer"),
+    );
+    const reader = await mgr.spawnBackground({
+      task: "read",
+      message: "read",
+      provider: "acp:reader",
+    });
+    await mgr.waitForBackground(reader.sessionId);
+
+    expect(started).toEqual(["writer", "reader"]);
+    releaseWriter?.();
+    await mgr.waitForBackground(writer.sessionId);
+  });
+
+  it("serializes writable ACP runs and releases the lease after failure", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      defaultAgent: "acp:writer",
+      acpAgents: [
+        {
+          id: "writer",
+          command: "writer-acp",
+          readonlyOnly: false,
+        },
+      ],
+    });
+    let rejectFirst: ((error: Error) => void) | undefined;
+    const started: number[] = [];
+    const acpBackgroundRunner = {
+      run: vi.fn(async () => {
+        const invocation = started.length + 1;
+        started.push(invocation);
+        if (invocation === 1) {
+          await new Promise<void>((_resolve, reject) => {
+            rejectFirst = reject;
+          });
+        }
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          config: configHost,
+          acpBackgroundRunner,
+          workspaceMutationCoordinator: new WorkspaceMutationCoordinator(),
+        },
+      },
+    );
+    mgr.setToolContext(toolCtx);
+
+    const first = await mgr.spawnBackground({
+      task: "first",
+      message: "write",
+    });
+    await waitFor(
+      () => started.length,
+      (value) => value === 1,
+    );
+    const second = await mgr.spawnBackground({
+      task: "second",
+      message: "write",
+    });
+    await Promise.resolve();
+    expect(started).toEqual([1]);
+
+    rejectFirst?.(new Error("writer failed"));
+    await mgr.waitForBackground(first.sessionId);
+    await mgr.waitForBackground(second.sessionId);
+    expect(started).toEqual([1, 2]);
+  });
+
+  it("advances workspace generation before approving an ACP mutation", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      defaultAgent: "acp:writer",
+      acpAgents: [
+        {
+          id: "writer",
+          command: "writer-acp",
+          readonlyOnly: false,
+        },
+      ],
+    });
+    const coordinator = new WorkspaceMutationCoordinator(undefined, {
+      createEpoch: () => "test-epoch",
+    });
+    let generationAtPermissionReturn = -1;
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        const outcome = await request.onRequestPermission({
+          toolCall: {
+            toolCallId: "tc-edit",
+            kind: "edit",
+            title: "Edit source",
+            rawInput: { path: "file.ts" },
+          },
+          options: [
+            { optionId: "allow", name: "Allow", kind: "allow_once" },
+            { optionId: "reject", name: "Reject", kind: "reject_once" },
+          ],
+        });
+        expect(outcome).toEqual({
+          outcome: { outcome: "selected", optionId: "allow" },
+        });
+        generationAtPermissionReturn = coordinator.getSnapshot(
+          "/tmp",
+          "observer",
+        ).generation;
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          config: configHost,
+          acpBackgroundRunner,
+          workspaceMutationCoordinator: coordinator,
+        },
+      },
+    );
+    mgr.setToolContext({
+      ...toolCtx,
+      onApprovalRequest: vi.fn(async () => "allow"),
+    });
+
+    const spawned = await mgr.spawnBackground({
+      task: "edit",
+      message: "edit",
+    });
+    await mgr.waitForBackground(spawned.sessionId);
+
+    expect(generationAtPermissionReturn).toBe(1);
+  });
+
+  it("rejects a shared writer child while its parent owns the mutation lease", async () => {
+    const coordinator = new WorkspaceMutationCoordinator();
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 0 },
+      {
+        host: {
+          config: configHost,
+          workspaceMutationCoordinator: coordinator,
+        },
+      },
+    );
+    const parent = await mgr.createSession("code");
+    mgr.setToolContext(toolCtx);
+    const leaseHolder = { sessionId: parent.id };
+    await (mgr as any).ensureWorkspaceMutationLease(parent, leaseHolder);
+
+    await expect(
+      mgr.spawnBackground(
+        {
+          task: "writer child",
+          message: "write",
+          permissionProfile: "workspace-safe",
+        },
+        parent.id,
+      ),
+    ).rejects.toMatchObject({
+      result: expect.objectContaining({ code: "workspace_conflict" }),
+    });
+    await expect(
+      mgr.spawnBackground(
+        {
+          task: "reader child",
+          message: "read",
+          permissionProfile: "review-only",
+        },
+        parent.id,
+      ),
+    ).resolves.toMatchObject({ resolvedProvider: "anthropic" });
+
+    const readerChild = Array.from((mgr as any).sessions.values()).find(
+      (session: any) => session.fleetMetadata?.parentSessionId === parent.id,
+    );
+    expect(readerChild).toBeDefined();
+    expect(() =>
+      (mgr as any).ensureParentWriterCanSpawnSharedChild(readerChild, false),
+    ).toThrowError(
+      expect.objectContaining({
+        result: expect.objectContaining({ code: "workspace_conflict" }),
+      }),
+    );
+
+    (mgr as any).releaseWorkspaceMutationLease(leaseHolder);
+  });
+
   it("cancels non-readonly ACP permission requests without surfacing approval", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       defaultAgent: "acp:claude",
@@ -1397,24 +1669,15 @@ describe("AgentSessionManager background agents", () => {
     });
   });
 
-  it("creates background engines through the host without reusing the memoized foreground engine", async () => {
+  it("creates background engines through the host without caching an idle interactive engine", async () => {
     const providers = new ProviderRegistry();
-    const foregroundEngine = {
-      setToolRuntime: vi.fn(),
-      run: vi.fn(async function* () {}),
-      condenseSession: vi.fn(async function* () {}),
-      isOverCondenseThreshold: vi.fn(() => false),
-    };
     const backgroundEngine = {
       setToolRuntime: vi.fn(),
       run: vi.fn(() => mocks.runBehavior()),
       condenseSession: vi.fn(async function* () {}),
       isOverCondenseThreshold: vi.fn(() => false),
     };
-    const createEngine = vi
-      .fn()
-      .mockReturnValueOnce(foregroundEngine)
-      .mockReturnValueOnce(backgroundEngine);
+    const createEngine = vi.fn(() => backgroundEngine);
     const createToolRuntime = vi.fn(() => ({ executeTool: vi.fn() }));
 
     const mgr = new AgentSessionManager(
@@ -1435,16 +1698,18 @@ describe("AgentSessionManager background agents", () => {
     );
     mgr.setToolContext(toolCtx);
 
-    const memoizedForeground = (mgr as any).getEngine();
+    expect((mgr as any).activeInteractiveEngines.size).toBe(0);
     await mgr.spawnBackground({ task: "host engine", message: "run" });
+    await waitFor(
+      () => backgroundEngine.run.mock.calls.length,
+      (calls) => calls === 1,
+    );
 
-    expect(memoizedForeground).toBe(foregroundEngine);
-    expect(createEngine).toHaveBeenCalledTimes(2);
-    expect(createEngine).toHaveBeenNthCalledWith(1, providers, undefined);
-    expect(createEngine).toHaveBeenNthCalledWith(2, providers, undefined);
+    expect(createEngine).toHaveBeenCalledOnce();
+    expect(createEngine).toHaveBeenCalledWith(providers, undefined);
     expect(backgroundEngine.setToolRuntime).toHaveBeenCalledTimes(1);
     expect(backgroundEngine.run).toHaveBeenCalledTimes(1);
-    expect(foregroundEngine.run).not.toHaveBeenCalled();
+    expect((mgr as any).activeInteractiveEngines.size).toBe(0);
   });
 
   it("tracks tool calls and token usage without enforcing limits", async () => {
@@ -1690,6 +1955,10 @@ describe("AgentSessionManager background agents", () => {
       message: "run",
       budget: { maxToolCalls: 5, maxApiTurns: 7 },
     });
+    await waitFor(
+      () => mocks.runArgs.mock.calls.length,
+      (calls) => calls === 1,
+    );
 
     expect(mocks.runArgs).toHaveBeenCalledWith(
       expect.anything(),
@@ -1706,6 +1975,10 @@ describe("AgentSessionManager background agents", () => {
       message: "run",
       budget: { maxToolCalls: 5, maxApiTurns: 7, scope: "subtree" },
     });
+    await waitFor(
+      () => mocks.runArgs.mock.calls.length,
+      (calls) => calls === 1,
+    );
 
     expect(mocks.runArgs).toHaveBeenCalledWith(
       expect.anything(),
@@ -1793,6 +2066,7 @@ describe("AgentSessionManager background agents", () => {
     const parent = await mgr.spawnBackground({
       task: "budget owner",
       message: "coordinate",
+      permissionProfile: "review-only",
       budget: { maxTokens: 100, scope: "subtree" },
     });
     await mgr.spawnBackground(
@@ -1876,6 +2150,7 @@ describe("AgentSessionManager background agents", () => {
     const parent = await mgr.spawnBackground({
       task: "parent",
       message: "coordinate",
+      permissionProfile: "review-only",
     });
     const child = await mgr.spawnBackground(
       { task: "child", message: "inspect" },
@@ -2220,31 +2495,160 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
-  it("wraps background questions with context, session id, and task attribution", async () => {
+  it("routes background questions through the root coordinator runtime", async () => {
     const onQuestion = vi.fn().mockResolvedValue({ answers: {}, notes: {} });
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext({ ...toolCtx, onQuestion });
+    const foreground = await mgr.createSession("code");
+    foreground.status = "streaming";
+    const setPendingInterjection = vi.mocked(foreground.setPendingInterjection);
 
-    const spawned = await mgr.spawnBackground({
-      task: "review task",
-      message: "run",
-    });
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "review task",
+        message: "run",
+      },
+      foreground.id,
+    );
 
     const bgRuntime = mocks.setToolRuntime.mock.calls.at(-1)?.[0];
     expect(bgRuntime).toBeDefined();
-    await bgRuntime.executeTool({
+    const backgroundAnswer = bgRuntime.executeTool({
       name: "ask_user",
-      input: { context: "Need input.", questions: [] },
+      input: {
+        context: "The ownership boundary needs one more exact path.",
+        questions: [
+          {
+            id: "path",
+            type: "text",
+            question: "Which NUnit test file should I own?",
+          },
+        ],
+      },
       context: { sessionId: spawned.sessionId },
     });
 
-    expect(onQuestion).toHaveBeenCalledWith(
-      "Need input.",
-      [],
-      spawned.sessionId,
-      "review task",
-      undefined,
+    await waitFor(
+      () => setPendingInterjection.mock.calls.length,
+      (calls) => calls === 1,
     );
+    expect(onQuestion).not.toHaveBeenCalled();
+    const [prompt, requestId, , displayText] =
+      setPendingInterjection.mock.calls[0];
+    expect(prompt).toContain("<background_agent_question");
+    expect(prompt).toContain("respond_to_background_question");
+    expect(prompt).toContain("Which NUnit test file should I own?");
+    expect(displayText).toContain("review task");
+    mgr.getSession(spawned.sessionId)!.status = "tool_executing";
+    expect(mgr.getBackgroundStatus(spawned.sessionId)?.phase).toBe(
+      "awaiting_coordinator",
+    );
+    expect(
+      (mgr.getSession(spawned.sessionId)?.fleetMetadata?.events ?? []).some(
+        (event) => event.type === "question",
+      ),
+    ).toBe(false);
+
+    mgr.interruptSession(foreground.id);
+    await mgr.sendMessage(foreground.id, "Handle this steering first.", "code");
+    expect(setPendingInterjection).toHaveBeenCalledTimes(2);
+    expect(setPendingInterjection.mock.calls[1]?.[1]).toBe(requestId);
+
+    const coordinatorContext = (
+      mgr as unknown as {
+        captureSessionToolContext: (
+          session: unknown,
+        ) => ToolDispatchContext | undefined;
+      }
+    ).captureSessionToolContext(foreground);
+    expect(coordinatorContext).toBeDefined();
+    const coordinatorRuntime = createAgentToolRuntime(coordinatorContext!);
+    const responseResult = await coordinatorRuntime.executeTool({
+      name: "respond_to_background_question",
+      input: {
+        request_id: requestId,
+        answers: { path: "tests/CoordinatorOwnedTests.cs" },
+      },
+      context: { sessionId: foreground.id },
+    });
+    expect(responseResult.content[0]).toMatchObject({
+      type: "text",
+      text: '{"accepted":true}',
+    });
+
+    const answerResult = await backgroundAnswer;
+    expect(answerResult.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("tests/CoordinatorOwnedTests.cs"),
+    });
+    expect(mgr.getBackgroundStatus(spawned.sessionId)?.phase).not.toBe(
+      "awaiting_coordinator",
+    );
+  });
+
+  it("starts an internal coordinator turn when the foreground is idle", async () => {
+    const onQuestion = vi.fn().mockResolvedValue({ answers: {}, notes: {} });
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext({ ...toolCtx, onQuestion });
+    const foreground = await mgr.createSession("code");
+    const onEvent = vi.fn();
+    mgr.onEvent = onEvent;
+
+    const spawned = await mgr.spawnBackground(
+      { task: "confirm scope", message: "run" },
+      foreground.id,
+    );
+    const bgRuntime = mocks.setToolRuntime.mock.calls.at(-1)?.[0];
+    const backgroundAnswer = bgRuntime.executeTool({
+      name: "ask_user",
+      input: {
+        context: "The implementation scope is otherwise clear.",
+        questions: [
+          {
+            id: "include_docs",
+            type: "yes_no",
+            question: "Should I update the delegated docs file too?",
+          },
+        ],
+      },
+      context: { sessionId: spawned.sessionId },
+    });
+
+    await waitFor(
+      () => vi.mocked(foreground.addUserMessage).mock.calls.length,
+      (calls) => calls === 1,
+    );
+    const [prompt, messageOptions] = vi.mocked(foreground.addUserMessage).mock
+      .calls[0];
+    const requestId = /request_id="([^"]+)"/.exec(prompt)?.[1];
+    expect(requestId).toBeTruthy();
+    expect(messageOptions).toMatchObject({
+      displayText:
+        "Background agent “confirm scope” needs a coordinator answer",
+    });
+    expect(onEvent).toHaveBeenCalledWith(
+      foreground.id,
+      expect.objectContaining({
+        type: "user_interjection",
+        queueId: requestId,
+      }),
+    );
+
+    const coordinatorRuntime = mocks.setToolRuntime.mock.calls.at(-1)?.[0];
+    await coordinatorRuntime.executeTool({
+      name: "respond_to_background_question",
+      input: {
+        request_id: requestId,
+        answers: { include_docs: true },
+      },
+      context: { sessionId: foreground.id },
+    });
+    const answerResult = await backgroundAnswer;
+    expect(answerResult.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('"answer":true'),
+    });
+    expect(onQuestion).not.toHaveBeenCalled();
   });
 
   it("routes background mode switches with the originating session id", async () => {
@@ -2316,7 +2720,12 @@ describe("AgentSessionManager background agents", () => {
 
     const result = await parentRuntime.executeTool({
       name: "spawn_background_agent",
-      input: { task: "child", message: "inspect", mode: "review" },
+      input: {
+        task: "child",
+        message: "inspect",
+        mode: "review",
+        permissionProfile: "review-only",
+      },
       context: { sessionId: parent.sessionId },
     });
     const childId = JSON.parse(result.content[0].text).sessionId;
@@ -2391,6 +2800,7 @@ describe("AgentSessionManager background agents", () => {
     const parent = await mgr.spawnBackground({
       task: "parent",
       message: "work",
+      permissionProfile: "review-only",
     });
     const child = await mgr.spawnBackground(
       { task: "child", message: "work" },
@@ -2425,6 +2835,7 @@ describe("AgentSessionManager background agents", () => {
     const parent = await mgr.spawnBackground({
       task: "parent",
       message: "work",
+      permissionProfile: "review-only",
     });
     const child = await mgr.spawnBackground(
       { task: "child", message: "work" },
@@ -2464,6 +2875,7 @@ describe("AgentSessionManager background agents", () => {
     const parent = await mgr.spawnBackground({
       task: "parent",
       message: "work",
+      permissionProfile: "review-only",
     });
     const child = await mgr.spawnBackground(
       { task: "child", message: "work" },
@@ -2542,6 +2954,7 @@ describe("AgentSessionManager background agents", () => {
     const parent = await mgr.spawnBackground({
       task: "parent",
       message: "coordinate",
+      permissionProfile: "review-only",
     });
     const child = await mgr.spawnBackground(
       { task: "child", message: "work" },
@@ -2723,6 +3136,10 @@ describe("AgentSessionManager background agents", () => {
       budget: { maxToolCalls: 20, maxApiTurns: 11 },
     });
     const session = (mgr as any).sessions.get(spawned.sessionId);
+    await waitFor(
+      () => mocks.runArgs.mock.calls.length,
+      (calls) => calls === 1,
+    );
 
     expect(session.fleetMetadata).toEqual(
       expect.objectContaining({
@@ -3972,6 +4389,7 @@ describe("AgentSessionManager background agents", () => {
     await mgr.spawnBackground({
       task: "inspect failing tests",
       message: "run the investigation",
+      permissionProfile: "review-only",
     });
 
     await new Promise((r) => setTimeout(r, 0));

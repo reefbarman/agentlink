@@ -24,6 +24,7 @@
 !dist/fr-preview.css
 !dist/chat.js
 !dist/chat.css
+!dist/special-block-panel.js
 !dist/browser-gateway.js
 !dist/browser-gateway.css
 !dist/browser-gateway-monaco.js

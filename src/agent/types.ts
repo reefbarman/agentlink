@@ -5,8 +5,8 @@ import type {
 } from "../shared/types.js";
 import type { MessageParam, ReasoningEffort } from "./providers/types.js";
 
-import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { CoreModelToolResultBlock } from "../core/modelRuntime.js";
+import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { SessionProjectScope } from "../core/workspaceProjects.js";
 import type { TodoItem } from "./todoTool.js";
 
@@ -239,9 +239,17 @@ export type SessionStatus =
   | "awaiting_approval"
   | "error";
 
+export type InteractiveExecutionPhase =
+  | "queued_for_workspace_write"
+  | "queued_for_provider"
+  | "running"
+  | "awaiting_input"
+  | "stopping";
+
 export interface SessionInfo {
   id: string;
   status: SessionStatus;
+  interactiveExecutionPhase?: InteractiveExecutionPhase;
   mode: string;
   model: string;
   title: string;

@@ -202,7 +202,12 @@ export const READ_ONLY_TOOLS = new Set(PARALLEL_SAFE_TOOLS);
 
 // --- Tools excluded from the agent (MCP-only or not applicable) ---
 
-const EXCLUDED_TOOLS = new Set(["handshake", "load_rule", "load_skill"]);
+const EXCLUDED_TOOLS = new Set([
+  "handshake",
+  "load_rule",
+  "load_skill",
+  "respond_to_background_question",
+]);
 
 /**
  * Registered language tools hidden from ordinary model catalogs while their
@@ -284,6 +289,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   get_type_hierarchy: schemas.getTypeHierarchySchema,
   get_inlay_hints: schemas.getInlayHintsSchema,
   codebase_search: schemas.codebaseSearchSchema,
+  respond_to_background_question: schemas.respondToBackgroundQuestionSchema,
   compose: schemas.composeSchema,
   ...(__DEV_BUILD__
     ? {
@@ -291,7 +297,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
           tool_name: z
             .string()
             .describe(
-              "Canonical AgentLink tool category this feedback is about. For MCP server-tool calls, use call_mcp_tool even when invoked directly as server__tool; put the MCP server and bare tool in tool_params or feedback. For MCP management helpers, use the AgentLink meta-tool actually called.",
+              "AgentLink tool this feedback is about. For MCP-related feedback, use the native AgentLink MCP tool actually involved, such as find_mcp_tools or call_mcp_tool. Never report a specific MCP server or its server__tool; those are out of scope unless the problem is in AgentLink's MCP plumbing.",
             ),
           feedback: z
             .string()
@@ -371,7 +377,7 @@ const MCP_META_TOOLS: ToolDefinition[] = MCP_META_TOOL_DEFINITIONS;
 const ASK_USER_TOOL: ToolDefinition = {
   name: "ask_user",
   description:
-    "Ask the user one or more structured questions and wait for their responses before continuing. Prefer `questions[].context`: visible user-facing text for that specific question explaining why input is needed, the relevant trade-off/options, and your recommendation. Use top-level `context` only for a brief shared intro that applies to every question. For multi-question asks, split context across the individual questions instead of delivering one large block. Questions must be self-contained and must not rely on hidden thinking or prior messages; preceding assistant text does not satisfy the context requirement. For multiple_choice and multiple_select questions, always include `recommended`. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
+    "Ask one or more structured questions and wait for responses before continuing. In a foreground session this asks the user. In a native background session the root foreground coordinator answers first and decides whether human escalation is necessary. Prefer `questions[].context`: visible text for that specific question explaining why input is needed, the relevant trade-off/options, and your recommendation. Use top-level `context` only for a brief shared intro that applies to every question. For multi-question asks, split context across the individual questions instead of delivering one large block. Questions must be self-contained and must not rely on hidden thinking or prior messages; preceding assistant text does not satisfy the context requirement. For multiple_choice and multiple_select questions, always include `recommended`. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
   input_schema: {
     type: "object",
     properties: {
@@ -621,6 +627,17 @@ const SWITCH_MODE_TOOL: ToolDefinition = {
     },
     required: ["mode"],
   },
+};
+
+const RESPOND_TO_BACKGROUND_QUESTION_TOOL: ToolDefinition = {
+  name: "respond_to_background_question",
+  description:
+    TOOL_REGISTRY.respond_to_background_question?.description ??
+    "Answer a pending structured question from a background agent.",
+  input_schema: cachedJsonSchemaFor(
+    "respond_to_background_question",
+    schemas.respondToBackgroundQuestionSchema,
+  ),
 };
 
 /** Shared budget schema for spawn_background_agent and start_fleet_workflow. */
@@ -1273,6 +1290,9 @@ export function getAgentTools(
       ? [getSetTaskStatusTool(backgroundExpectedResult, Boolean(isBackground))]
       : []),
     ...(profileAllowlist ? [] : [SWITCH_MODE_TOOL]),
+    ...(!profileAllowlist && !isBackground
+      ? [RESPOND_TO_BACKGROUND_QUESTION_TOOL]
+      : []),
     ...(profileAllowlist ? [] : BG_AGENT_TOOLS),
   ];
 }
@@ -1281,6 +1301,18 @@ export function getAgentTools(
  * Context needed by the tool dispatcher.
  */
 export type QuestionResponse = UserQuestionResponse;
+
+export interface BackgroundQuestionAnswerRequest {
+  callerSessionId: string;
+  requestId: string;
+  answers: QuestionResponse["answers"];
+  notes: QuestionResponse["notes"];
+}
+
+export interface BackgroundQuestionAnswerResult {
+  accepted: boolean;
+  error?: string;
+}
 
 export async function buildAskUserToolResult(args: {
   context: string;
@@ -1777,6 +1809,10 @@ export interface ToolDispatchContext {
     backgroundTask?: string,
     pendingQuestionRecovery?: AgentToolExecutionRequest["context"]["pendingQuestionRecovery"],
   ) => Promise<QuestionResponse>;
+  /** Resolves a background ask_user request after its root coordinator answers. */
+  onRespondToBackgroundQuestion?: (
+    request: BackgroundQuestionAnswerRequest,
+  ) => BackgroundQuestionAnswerResult;
   /** Called whenever the agent reads a file — used to track files for folded context on condense */
   onFileRead?: (filePath: string) => void;
   /** Returns images available in this session, including attachments and image tool results. */
@@ -1952,7 +1988,14 @@ export function createAgentToolRuntime(
           request.input,
           ctx,
         );
-        if (PATH_MUTATING_TOOLS.has(request.name)) {
+        if (
+          PATH_MUTATING_TOOLS.has(request.name) &&
+          !(
+            request.name === "execute_command" &&
+            (request.context.commandExecutionPolicy ??
+              ctx.commandExecutionPolicy) === "read-only"
+          )
+        ) {
           await ctx.prepareWorkspaceMutation?.();
         }
         const operationRoots = mutationTarget
@@ -2140,6 +2183,7 @@ const PATH_MUTATING_TOOLS = new Set([
   "execute_command",
   "rename_symbol",
   "apply_code_action",
+  "propose_memory",
 ]);
 
 function getMutationInputPaths(
@@ -4055,6 +4099,34 @@ export async function dispatchToolCall(
         String(params.message ?? ""),
       );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    }
+
+    case "respond_to_background_question": {
+      if (!ctx.onRespondToBackgroundQuestion) {
+        return errorResult("Background question response is not available");
+      }
+      const rawAnswers =
+        params.answers &&
+        typeof params.answers === "object" &&
+        !Array.isArray(params.answers)
+          ? (params.answers as BackgroundQuestionAnswerRequest["answers"])
+          : {};
+      const rawNotes =
+        params.notes &&
+        typeof params.notes === "object" &&
+        !Array.isArray(params.notes)
+          ? (params.notes as BackgroundQuestionAnswerRequest["notes"])
+          : {};
+      const result = ctx.onRespondToBackgroundQuestion({
+        callerSessionId: ctx.sessionId,
+        requestId: String(params.request_id ?? ""),
+        answers: rawAnswers,
+        notes: rawNotes,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result) }],
+        isError: !result.accepted,
+      };
     }
 
     case "detach_background_agent": {

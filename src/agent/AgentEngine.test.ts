@@ -357,6 +357,7 @@ describe("AgentEngine", () => {
         expect.anything(),
         expect.objectContaining({ todos }),
         TEST_MODEL,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
       expect(events.some((e) => e.type === "condense")).toBe(true);
     });
@@ -4136,6 +4137,55 @@ describe("AgentEngine", () => {
       expect(session.lastCacheReadTokens).toBe(0);
       expect(session.estimatedAccumulatedTokens).toBe(0);
       expect(session.estimatedInputUsed).toBe(12_000);
+    });
+
+    it("queues condense through provider admission and releases its permit", async () => {
+      mocks.mockSummarizeConversation.mockResolvedValue({
+        messages: [{ role: "user", content: "summary", isSummary: true }],
+        summary: "summary",
+        prevInputTokens: 1000,
+        newInputTokens: 100,
+      });
+      const registry = makeRegistry();
+      registry.requestScheduler.setMaxConcurrentPerProvider(1);
+      const blocker = await registry.requestScheduler.acquire(
+        "mock",
+        "background",
+      );
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const phases: Array<"queued_for_provider" | "running"> = [];
+      const engine = new AgentEngine(registry);
+
+      const condense = collectEvents(
+        engine.condenseSession(
+          session,
+          true,
+          undefined,
+          undefined,
+          session.model,
+          {
+            signal: new AbortController().signal,
+            onProviderAdmissionPhase: (phase) => phases.push(phase),
+          },
+        ),
+      );
+      await vi.waitFor(() => {
+        expect(phases).toEqual(["queued_for_provider"]);
+      });
+      expect(mocks.mockSummarizeConversation).not.toHaveBeenCalled();
+
+      blocker.release();
+      await condense;
+      expect(phases).toEqual(["queued_for_provider", "running"]);
+      expect(mocks.mockSummarizeConversation).toHaveBeenCalledTimes(1);
+
+      const nextPermit = await registry.requestScheduler.acquire(
+        "mock",
+        "interactive",
+      );
+      expect(nextPermit.queued).toBe(false);
+      nextPermit.release();
     });
 
     it("propagates structured condense error metadata", async () => {

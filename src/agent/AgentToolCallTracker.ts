@@ -17,6 +17,7 @@ export interface TrackedCall {
   displayArgs: string;
   params?: string;
   sessionId: string;
+  terminalProvider?: TerminalProvider;
   startedAt: number;
   forceResolve: (result: ToolResult) => void;
   parentCallId?: string;
@@ -56,9 +57,9 @@ export class AgentToolCallTracker extends EventEmitter {
 
   constructor(
     log?: (msg: string) => void,
-    private readonly getTerminalProvider: () =>
-      | TerminalProvider
-      | undefined = () => undefined,
+    private readonly getTerminalProvider: (
+      sessionId: string,
+    ) => TerminalProvider | undefined = () => undefined,
   ) {
     super();
     this.log = log ?? (() => {});
@@ -130,7 +131,10 @@ export class AgentToolCallTracker extends EventEmitter {
   private async revealExecuteCommandTerminal(call: TrackedCall): Promise<void> {
     if (!call.terminalId) return;
     const revealed =
-      this.getTerminalProvider()?.revealTerminal?.(call.terminalId) ?? false;
+      call.terminalProvider?.revealTerminal?.({
+        owner: undefined,
+        terminalId: call.terminalId,
+      }) ?? false;
     this.log(
       `REVEAL_TERMINAL ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${call.terminalId}, revealed=${revealed}`,
     );
@@ -158,6 +162,7 @@ export class AgentToolCallTracker extends EventEmitter {
       displayArgs,
       params,
       sessionId,
+      terminalProvider: this.getTerminalProvider(sessionId),
       startedAt: Date.now(),
       forceResolve,
       parentCallId,
@@ -190,6 +195,15 @@ export class AgentToolCallTracker extends EventEmitter {
   /**
    * Remove all active agent calls for a given session (e.g. when the session is stopped).
    */
+  cancelSessionCalls(sessionId: string): void {
+    const callIds = [...this.activeCalls.values()]
+      .filter((call) => call.sessionId === sessionId)
+      .map((call) => call.id);
+    for (const callId of callIds) {
+      if (this.activeCalls.has(callId)) this.cancelCall(callId);
+    }
+  }
+
   clearAgentCalls(sessionId: string): void {
     let removed = 0;
     for (const [id, call] of this.activeCalls) {
@@ -255,7 +269,10 @@ export class AgentToolCallTracker extends EventEmitter {
   private async detachExecuteCommand(call: TrackedCall): Promise<void> {
     if (!call.terminalId) return;
     const detached =
-      this.getTerminalProvider()?.detachTerminal?.(call.terminalId) ?? false;
+      call.terminalProvider?.detachTerminal?.({
+        owner: undefined,
+        terminalId: call.terminalId,
+      }) ?? false;
     this.log(
       `BACKGROUND_DETACH ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${call.terminalId}, detached=${detached}`,
     );
@@ -291,7 +308,10 @@ export class AgentToolCallTracker extends EventEmitter {
       if (descendantId === id) continue;
       const descendant = this.activeCalls.get(descendantId);
       if (descendant?.terminalId) {
-        this.getTerminalProvider()?.interruptTerminal(descendant.terminalId);
+        descendant.terminalProvider?.interruptTerminal({
+          owner: undefined,
+          terminalId: descendant.terminalId,
+        });
       }
       descendant?.forceResolve(
         successResult({
@@ -306,7 +326,10 @@ export class AgentToolCallTracker extends EventEmitter {
     if (call.terminalId) {
       this.log(`CANCEL_INTERRUPT terminal ${call.terminalId}`);
       const interrupted =
-        this.getTerminalProvider()?.interruptTerminal(call.terminalId) ?? false;
+        call.terminalProvider?.interruptTerminal({
+          owner: undefined,
+          terminalId: call.terminalId,
+        }) ?? false;
       this.log(
         `CANCEL_INTERRUPT_RESULT terminal ${call.terminalId}, interrupted=${interrupted}`,
       );
@@ -344,6 +367,6 @@ export class AgentToolCallTracker extends EventEmitter {
     this.log(`COMPLETE_AGENT ${call.toolName} (${id.slice(0, 8)})`);
 
     const strategy = getAgentToolCompletionStrategy(call.toolName);
-    await strategy(call, this.log, this.getTerminalProvider());
+    await strategy(call, this.log, call.terminalProvider);
   }
 }

@@ -1,3 +1,7 @@
+import type {
+  TerminalExecuteOptions,
+  TerminalExecutionOwner,
+} from "../core/capabilities/terminal.js";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import * as vscode from "vscode";
 
@@ -28,6 +32,7 @@ type MockManagedTerminal = {
   cwd: string;
   busy: boolean;
   envKey?: string;
+  owner?: TerminalExecutionOwner;
   backgroundRunning: boolean;
   lastCommandEndedAt: number;
   outputBuffer: string;
@@ -150,9 +155,91 @@ describe("TerminalManager terminal selection", () => {
       },
     ];
 
-    expect(manager.revealTerminal("term_reveal")).toBe(true);
+    expect(
+      manager.revealTerminal({ owner: undefined, terminalId: "term_reveal" }),
+    ).toBe(true);
     expect(show).toHaveBeenCalledWith(false);
-    expect(manager.revealTerminal("term_missing")).toBe(false);
+    expect(
+      manager.revealTerminal({ owner: undefined, terminalId: "term_missing" }),
+    ).toBe(false);
+  });
+
+  it("refreshes descendant attribution on reuse and isolates the next owner generation", async () => {
+    const manager = new TerminalManager();
+    const rootOwner: TerminalExecutionOwner = {
+      scopeId: "tab-1",
+      displayLabel: "T1",
+      generation: 1,
+      authoritySessionId: "root-session",
+    };
+    const childOwner: TerminalExecutionOwner = {
+      ...rootOwner,
+      authoritySessionId: "child-session",
+    };
+    const nextGeneration: TerminalExecutionOwner = {
+      ...rootOwner,
+      generation: 2,
+      authoritySessionId: "replacement-session",
+    };
+    const managed = {
+      id: "term_owned",
+      name: "AgentLink T1",
+      cwd: "/workspace",
+      owner: rootOwner,
+      busy: false,
+      backgroundRunning: false,
+      lastCommandEndedAt: Date.now(),
+      outputBuffer: "",
+      backgroundExitCode: null,
+      backgroundOutputCaptured: false,
+      backgroundDisposables: [],
+      terminal: {
+        show: vi.fn(),
+        sendText: vi.fn(),
+        dispose: vi.fn(),
+      },
+    } satisfies MockManagedTerminal;
+    (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+      managed,
+    ];
+
+    const reused = await (
+      manager as unknown as {
+        resolveTerminal(
+          options: TerminalExecuteOptions,
+        ): Promise<MockManagedTerminal>;
+      }
+    ).resolveTerminal({
+      owner: childOwner,
+      command: "pwd",
+      cwd: "/workspace",
+      terminal_id: managed.id,
+    });
+
+    expect(reused).toBe(managed);
+    expect(managed.owner).toEqual(childOwner);
+    expect(manager.listTerminals({ owner: childOwner })).toEqual([
+      expect.objectContaining({ id: managed.id, owner: childOwner }),
+    ]);
+    expect(manager.listTerminals({ owner: nextGeneration })).toEqual([]);
+    expect(
+      manager.getBackgroundState({
+        owner: nextGeneration,
+        terminalId: managed.id,
+      }),
+    ).toBeUndefined();
+    expect(
+      manager.interruptTerminal({
+        owner: nextGeneration,
+        terminalId: managed.id,
+      }),
+    ).toBe(false);
+    expect(
+      manager.closeTerminals({
+        owner: nextGeneration,
+        names: [managed.id],
+      }),
+    ).toEqual({ closed: 0, not_found: [managed.id] });
   });
 
   it("emits terminal open, command, and state events for sendText fallback execution", async () => {
@@ -174,6 +261,7 @@ describe("TerminalManager terminal selection", () => {
     ).mockResolvedValue(false);
 
     const result = await manager.executeCommand({
+      owner: undefined,
       command: "echo no-capture",
       cwd: "/workspace/events",
     });
@@ -285,7 +373,12 @@ describe("TerminalManager terminal selection", () => {
     const createTerminalSpy = vi
       .spyOn(
         manager as unknown as {
-          createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+          createTerminal: (
+            cwd: string,
+            name: string,
+            env: Record<string, string> | undefined,
+            owner: undefined,
+          ) => MockManagedTerminal;
         },
         "createTerminal",
       )
@@ -324,6 +417,7 @@ describe("TerminalManager terminal selection", () => {
     ).mockResolvedValue(false);
 
     const result = await manager.executeCommand({
+      owner: undefined,
       command: "pwd",
       cwd: "/workspace",
     });
@@ -332,9 +426,63 @@ describe("TerminalManager terminal selection", () => {
       "/workspace",
       "AgentLink",
       undefined,
+      undefined,
     );
     expect(result.terminal_id).toBe("term_new");
     expect(existing.terminal.sendText).not.toHaveBeenCalled();
+  });
+
+  it("preserves named-terminal reuse across requested cwd changes", async () => {
+    const manager = new TerminalManager();
+    const existing = {
+      id: "term_named",
+      name: "Server",
+      cwd: "/workspace/server",
+      busy: false,
+      backgroundRunning: false,
+      lastCommandEndedAt: 0,
+      outputBuffer: "",
+      backgroundExitCode: null,
+      backgroundOutputCaptured: false,
+      backgroundDisposables: [],
+      terminal: {
+        show: vi.fn(),
+        sendText: vi.fn(),
+        dispose: vi.fn(),
+      },
+    } satisfies MockManagedTerminal;
+    (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+      existing,
+    ];
+    vi.spyOn(
+      manager as unknown as {
+        waitForCooldown: (managed: MockManagedTerminal) => Promise<void>;
+      },
+      "waitForCooldown",
+    ).mockResolvedValue();
+    const createTerminal = vi.spyOn(
+      manager as unknown as {
+        createTerminal: (...args: unknown[]) => MockManagedTerminal;
+      },
+      "createTerminal",
+    );
+
+    const resolved = await (
+      manager as unknown as {
+        resolveTerminal: (options: {
+          command: string;
+          cwd: string;
+          terminal_name: string;
+        }) => Promise<MockManagedTerminal>;
+      }
+    ).resolveTerminal({
+      command: "npm test",
+      cwd: "/workspace/client",
+      terminal_name: "Server",
+    });
+
+    expect(resolved).toBe(existing);
+    expect(createTerminal).not.toHaveBeenCalled();
   });
 
   it("marks a reused terminal busy before awaiting cooldown so concurrent callers cannot race onto it", async () => {
@@ -375,7 +523,12 @@ describe("TerminalManager terminal selection", () => {
     const createTerminalSpy = vi
       .spyOn(
         manager as unknown as {
-          createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+          createTerminal: (
+            cwd: string,
+            name: string,
+            env: Record<string, string> | undefined,
+            owner: undefined,
+          ) => MockManagedTerminal;
         },
         "createTerminal",
       )
@@ -408,6 +561,7 @@ describe("TerminalManager terminal selection", () => {
     ).mockResolvedValue(false);
 
     const first = manager.executeCommand({
+      owner: undefined,
       command: "echo first",
       cwd: "/workspace",
     });
@@ -417,6 +571,7 @@ describe("TerminalManager terminal selection", () => {
     expect(waitForCooldownSpy).toHaveBeenCalledTimes(1);
 
     const second = manager.executeCommand({
+      owner: undefined,
       command: "echo second",
       cwd: "/workspace",
     });
@@ -425,6 +580,7 @@ describe("TerminalManager terminal selection", () => {
     expect(createTerminalSpy).toHaveBeenCalledWith(
       "/workspace",
       "AgentLink",
+      undefined,
       undefined,
     );
 
@@ -462,6 +618,7 @@ describe("TerminalManager terminal selection", () => {
 
     await expect(
       manager.executeCommand({
+        owner: undefined,
         command: "echo blocked",
         cwd: "/workspace",
         terminal_id: "term_busy",
@@ -480,6 +637,7 @@ describe("TerminalManager terminal selection", () => {
     ).mockResolvedValue(false);
 
     const result = await manager.executeCommand({
+      owner: undefined,
       command: "echo no-capture",
       cwd: "/workspace/no-capture",
     });
@@ -530,6 +688,7 @@ describe("TerminalManager terminal selection", () => {
     });
 
     const execution = manager.executeCommand({
+      owner: undefined,
       command: "npm run dev",
       cwd: "/workspace",
       onTerminalAssigned: (terminalId) => {
@@ -538,7 +697,12 @@ describe("TerminalManager terminal selection", () => {
     });
     await waitForCondition(() => assignedTerminalId.length > 0);
 
-    expect(manager.detachTerminal(assignedTerminalId)).toBe(true);
+    expect(
+      manager.detachTerminal({
+        owner: undefined,
+        terminalId: assignedTerminalId,
+      }),
+    ).toBe(true);
     const result = await execution;
 
     expect(result).toMatchObject({
@@ -547,13 +711,26 @@ describe("TerminalManager terminal selection", () => {
       is_running: true,
       execution_mode: "send_text",
     });
-    expect(manager.getBackgroundState(assignedTerminalId)).toMatchObject({
+    expect(
+      manager.getBackgroundState({
+        owner: undefined,
+        terminalId: assignedTerminalId,
+      }),
+    ).toMatchObject({
       is_running: true,
       output_captured: false,
     });
-    expect(manager.detachTerminal(assignedTerminalId)).toBe(false);
+    expect(
+      manager.detachTerminal({
+        owner: undefined,
+        terminalId: assignedTerminalId,
+      }),
+    ).toBe(false);
 
-    manager.interruptTerminal(assignedTerminalId);
+    manager.interruptTerminal({
+      owner: undefined,
+      terminalId: assignedTerminalId,
+    });
   });
 
   it("detaches an active shell execution and finalizes deferred cleanup on completion", async () => {
@@ -606,6 +783,7 @@ describe("TerminalManager terminal selection", () => {
     });
 
     const execution = manager.executeCommand({
+      owner: undefined,
       command: "npm run dev",
       cwd: "/workspace",
       onCommandFinalizationDeferred,
@@ -614,10 +792,16 @@ describe("TerminalManager terminal selection", () => {
     await waitForCondition(() => executeCommand.mock.calls.length > 0);
     await waitForCondition(
       () =>
-        manager.getCurrentOutput("term_detach", { force: true }) === "watching",
+        manager.getCurrentOutput({
+          owner: undefined,
+          terminalId: "term_detach",
+          force: true,
+        }) === "watching",
     );
 
-    expect(manager.detachTerminal("term_detach")).toBe(true);
+    expect(
+      manager.detachTerminal({ owner: undefined, terminalId: "term_detach" }),
+    ).toBe(true);
     const result = await execution;
 
     expect(result).toMatchObject({
@@ -630,7 +814,12 @@ describe("TerminalManager terminal selection", () => {
     expect(result.output).toContain("get_terminal_output");
     expect(onCommandFinalizationDeferred).toHaveBeenCalledTimes(1);
     expect(onCommandFinalized).not.toHaveBeenCalled();
-    expect(manager.getBackgroundState("term_detach")).toMatchObject({
+    expect(
+      manager.getBackgroundState({
+        owner: undefined,
+        terminalId: "term_detach",
+      }),
+    ).toMatchObject({
       is_running: true,
       output: "watching",
       output_captured: true,
@@ -638,10 +827,19 @@ describe("TerminalManager terminal selection", () => {
 
     releaseCompletion();
     await waitForCondition(
-      () => manager.getBackgroundState("term_detach")?.is_running === false,
+      () =>
+        manager.getBackgroundState({
+          owner: undefined,
+          terminalId: "term_detach",
+        })?.is_running === false,
       1_000,
     );
-    expect(manager.getBackgroundState("term_detach")).toMatchObject({
+    expect(
+      manager.getBackgroundState({
+        owner: undefined,
+        terminalId: "term_detach",
+      }),
+    ).toMatchObject({
       is_running: false,
       exit_code: 0,
       output: "watching\ndone",
@@ -687,6 +885,7 @@ describe("TerminalManager terminal selection", () => {
 
     await expect(
       manager.executeCommand({
+        owner: undefined,
         command: "npm run dev",
         cwd: "/workspace",
         background: true,
@@ -736,6 +935,7 @@ describe("TerminalManager terminal selection", () => {
     }));
 
     const result = await manager.executeCommand({
+      owner: undefined,
       command: "sleep 60",
       cwd: "/workspace",
     });
@@ -803,6 +1003,7 @@ describe("TerminalManager terminal selection", () => {
     });
 
     const resultPromise = manager.executeCommand({
+      owner: undefined,
       command: "exit 7",
       cwd: "/workspace",
     });
@@ -863,6 +1064,7 @@ describe("TerminalManager terminal selection", () => {
 
     const startedAt = Date.now();
     const result = await manager.executeCommand({
+      owner: undefined,
       command: "echo done",
       cwd: "/workspace",
     });
@@ -873,7 +1075,10 @@ describe("TerminalManager terminal selection", () => {
       output: "done",
     });
     expect(
-      manager.getBackgroundState("term_unknown_marker_no_end"),
+      manager.getBackgroundState({
+        owner: undefined,
+        terminalId: "term_unknown_marker_no_end",
+      }),
     ).toMatchObject({
       state: "unknown_termination",
       exit_code: null,
@@ -922,6 +1127,7 @@ describe("TerminalManager terminal selection", () => {
     });
 
     const result = await manager.executeCommand({
+      owner: undefined,
       command: "exit 7",
       cwd: "/workspace",
     });
@@ -931,7 +1137,12 @@ describe("TerminalManager terminal selection", () => {
       output: "failed output",
       output_captured: true,
     });
-    expect(manager.getBackgroundState("term_marker_exit")).toMatchObject({
+    expect(
+      manager.getBackgroundState({
+        owner: undefined,
+        terminalId: "term_marker_exit",
+      }),
+    ).toMatchObject({
       state: "completed",
       exit_code: 7,
       output: "failed output",
@@ -997,6 +1208,7 @@ describe("TerminalManager terminal selection", () => {
     });
 
     await manager.executeCommand({
+      owner: undefined,
       command: "npm run dev",
       cwd: "/workspace",
       background: true,
@@ -1012,9 +1224,12 @@ describe("TerminalManager terminal selection", () => {
       exitCode: 0,
     });
     expect(onCommandFinalized).not.toHaveBeenCalled();
-    expect(manager.getBackgroundState("term_exact_execution")?.is_running).toBe(
-      true,
-    );
+    expect(
+      manager.getBackgroundState({
+        owner: undefined,
+        terminalId: "term_exact_execution",
+      })?.is_running,
+    ).toBe(true);
 
     endListeners[0]({
       terminal: terminal as never,
@@ -1023,9 +1238,12 @@ describe("TerminalManager terminal selection", () => {
       exitCode: 0,
     });
     expect(onCommandFinalized).toHaveBeenCalledTimes(1);
-    expect(manager.getBackgroundState("term_exact_execution")?.is_running).toBe(
-      false,
-    );
+    expect(
+      manager.getBackgroundState({
+        owner: undefined,
+        terminalId: "term_exact_execution",
+      })?.is_running,
+    ).toBe(false);
   });
 
   it("keeps background tracking alive after a code-less marker until exact completion", async () => {
@@ -1083,16 +1301,24 @@ describe("TerminalManager terminal selection", () => {
     });
 
     await manager.executeCommand({
+      owner: undefined,
       command: "exit 7",
       cwd: "/workspace",
       background: true,
     });
     await waitForCondition(
       () =>
-        manager.getBackgroundState("term_bg_unknown_marker")?.output ===
-        "background done",
+        manager.getBackgroundState({
+          owner: undefined,
+          terminalId: "term_bg_unknown_marker",
+        })?.output === "background done",
     );
-    expect(manager.getBackgroundState("term_bg_unknown_marker")).toMatchObject({
+    expect(
+      manager.getBackgroundState({
+        owner: undefined,
+        terminalId: "term_bg_unknown_marker",
+      }),
+    ).toMatchObject({
       is_running: true,
       state: "detached",
       exit_code: null,
@@ -1105,7 +1331,12 @@ describe("TerminalManager terminal selection", () => {
       exitCode: 7,
     });
 
-    expect(manager.getBackgroundState("term_bg_unknown_marker")).toMatchObject({
+    expect(
+      manager.getBackgroundState({
+        owner: undefined,
+        terminalId: "term_bg_unknown_marker",
+      }),
+    ).toMatchObject({
       is_running: false,
       state: "completed",
       exit_code: 7,
@@ -1163,6 +1394,7 @@ describe("TerminalManager terminal selection", () => {
     });
 
     const result = await manager.executeCommand({
+      owner: undefined,
       command: "npm run dev",
       cwd: "/workspace",
       background: true,
@@ -1178,7 +1410,9 @@ describe("TerminalManager terminal selection", () => {
       exitCode: 3,
     });
 
-    expect(manager.getBackgroundState(managed.id)).toMatchObject({
+    expect(
+      manager.getBackgroundState({ owner: undefined, terminalId: managed.id }),
+    ).toMatchObject({
       is_running: false,
       exit_code: 3,
       output: "captured later",
@@ -1229,6 +1463,7 @@ describe("TerminalManager terminal selection", () => {
     });
 
     const result = await manager.executeCommand({
+      owner: undefined,
       command: "npm run dev",
       cwd: "/workspace",
       background: true,
@@ -1236,10 +1471,19 @@ describe("TerminalManager terminal selection", () => {
 
     expect(result.terminal_id).toBe("term_bg_prompt");
     await waitForCondition(
-      () => manager.getBackgroundState("term_bg_prompt")?.is_running === false,
+      () =>
+        manager.getBackgroundState({
+          owner: undefined,
+          terminalId: "term_bg_prompt",
+        })?.is_running === false,
     );
 
-    expect(manager.getBackgroundState("term_bg_prompt")).toMatchObject({
+    expect(
+      manager.getBackgroundState({
+        owner: undefined,
+        terminalId: "term_bg_prompt",
+      }),
+    ).toMatchObject({
       is_running: false,
       exit_code: 130,
       output: "watching\n^C",
@@ -1258,12 +1502,14 @@ describe("TerminalManager terminal selection", () => {
     ).mockResolvedValue(false);
 
     const first = await manager.executeCommand({
+      owner: undefined,
       command: "echo first",
       cwd: "/workspace",
       env: { CI: "1" },
     });
 
     const second = await manager.executeCommand({
+      owner: undefined,
       command: "echo second",
       cwd: "/workspace",
       env: { CI: "0" },
@@ -1283,6 +1529,7 @@ describe("TerminalManager terminal selection", () => {
     ).mockResolvedValue(false);
 
     const first = await manager.executeCommand({
+      owner: undefined,
       command: "echo first",
       cwd: "/workspace",
       env: { CI: "1" },
@@ -1290,6 +1537,7 @@ describe("TerminalManager terminal selection", () => {
 
     await expect(
       manager.executeCommand({
+        owner: undefined,
         command: "echo second",
         cwd: "/workspace",
         terminal_id: first.terminal_id,
@@ -1308,14 +1556,21 @@ describe("TerminalManager terminal selection", () => {
     ).mockResolvedValue(false);
 
     const first = await manager.executeCommand({
+      owner: undefined,
       command: "echo first",
       cwd: "/workspace",
       env: { CI: "1" },
     });
 
-    expect(manager.interruptTerminal(first.terminal_id)).toBe(true);
+    expect(
+      manager.interruptTerminal({
+        owner: undefined,
+        terminalId: first.terminal_id,
+      }),
+    ).toBe(true);
 
     const second = await manager.executeCommand({
+      owner: undefined,
       command: "echo second",
       cwd: "/workspace",
       terminal_id: first.terminal_id,
@@ -1336,11 +1591,13 @@ describe("TerminalManager terminal selection", () => {
     ).mockResolvedValue(false);
 
     const first = await manager.executeCommand({
+      owner: undefined,
       command: "long-running-command",
       cwd: "/workspace",
     });
 
     const second = await manager.executeCommand({
+      owner: undefined,
       command: "another-command",
       cwd: "/workspace",
     });
@@ -1349,7 +1606,10 @@ describe("TerminalManager terminal selection", () => {
     expect(second.execution_mode).toBe("send_text");
     expect(first.terminal_id).not.toBe(second.terminal_id);
 
-    const firstState = manager.getBackgroundState(first.terminal_id);
+    const firstState = manager.getBackgroundState({
+      owner: undefined,
+      terminalId: first.terminal_id,
+    });
     expect(firstState).toMatchObject({
       is_running: true,
       output_captured: false,
@@ -1370,6 +1630,7 @@ describe("TerminalManager terminal selection", () => {
     ).mockResolvedValue(false);
 
     const first = await manager.executeCommand({
+      owner: undefined,
       command: "long-running-command",
       cwd: "/workspace",
       onCommandFinalizationDeferred,
@@ -1378,13 +1639,24 @@ describe("TerminalManager terminal selection", () => {
 
     expect(onCommandFinalizationDeferred).toHaveBeenCalledTimes(1);
     expect(onCommandFinalized).not.toHaveBeenCalled();
-    const firstState = manager.getBackgroundState(first.terminal_id);
+    const firstState = manager.getBackgroundState({
+      owner: undefined,
+      terminalId: first.terminal_id,
+    });
     expect(firstState?.is_running).toBe(true);
 
-    expect(manager.interruptTerminal(first.terminal_id)).toBe(true);
+    expect(
+      manager.interruptTerminal({
+        owner: undefined,
+        terminalId: first.terminal_id,
+      }),
+    ).toBe(true);
     expect(onCommandFinalized).toHaveBeenCalledTimes(1);
 
-    const releasedState = manager.getBackgroundState(first.terminal_id);
+    const releasedState = manager.getBackgroundState({
+      owner: undefined,
+      terminalId: first.terminal_id,
+    });
     expect(releasedState).toMatchObject({
       is_running: false,
       output_captured: false,
@@ -1392,6 +1664,7 @@ describe("TerminalManager terminal selection", () => {
     });
 
     const second = await manager.executeCommand({
+      owner: undefined,
       command: "after-interrupt",
       cwd: "/workspace",
       terminal_id: first.terminal_id,
@@ -1447,11 +1720,15 @@ describe("TerminalManager terminal selection", () => {
       retainedTerminal,
     ];
 
-    expect(manager.listTerminals()).toEqual([
+    expect(manager.listTerminals({ owner: undefined })).toEqual([
       { id: "term_open", name: "AgentLink", busy: false },
     ]);
-    expect(manager.getRecentlyClosedTerminals()).toHaveLength(1);
-    expect(manager.getRecentlyClosedTerminals()[0]?.id).toBe("term_closed");
+    expect(
+      manager.getRecentlyClosedTerminals({ owner: undefined }),
+    ).toHaveLength(1);
+    expect(
+      manager.getRecentlyClosedTerminals({ owner: undefined })[0]?.id,
+    ).toBe("term_closed");
   });
 
   it("retains bounded output and status after a managed terminal closes", () => {
@@ -1480,15 +1757,20 @@ describe("TerminalManager terminal selection", () => {
       managed,
     ];
 
-    manager.closeTerminals();
+    manager.closeTerminals({ owner: undefined });
 
-    expect(manager.getBackgroundState(managed.id)).toMatchObject({
+    expect(
+      manager.getBackgroundState({ owner: undefined, terminalId: managed.id }),
+    ).toMatchObject({
       is_running: false,
       state: "completed",
       exit_code: 9,
       output_captured: true,
     });
-    const snapshot = manager.getBackgroundState(managed.id)!;
+    const snapshot = manager.getBackgroundState({
+      owner: undefined,
+      terminalId: managed.id,
+    })!;
     expect(snapshot.output).toContain("final output");
     expect(snapshot.output.length).toBeLessThanOrEqual(40 * 1024);
   });
@@ -1522,8 +1804,8 @@ describe("TerminalManager terminal selection", () => {
       },
     ];
 
-    expect(manager.closeTerminals()).toEqual({ closed: 1 });
-    expect(manager.listTerminals()).toEqual([]);
+    expect(manager.closeTerminals({ owner: undefined })).toEqual({ closed: 1 });
+    expect(manager.listTerminals({ owner: undefined })).toEqual([]);
   });
 
   it("reports a never-run managed terminal as completed rather than unknown", () => {
@@ -1551,7 +1833,9 @@ describe("TerminalManager terminal selection", () => {
       },
     ];
 
-    expect(manager.getBackgroundState("term_idle")).toMatchObject({
+    expect(
+      manager.getBackgroundState({ owner: undefined, terminalId: "term_idle" }),
+    ).toMatchObject({
       is_running: false,
       state: "completed",
       exit_code: null,
@@ -1573,7 +1857,7 @@ describe("TerminalManager terminal selection", () => {
 
     const manager = new TerminalManager();
 
-    expect(manager.listTerminals()).toEqual([
+    expect(manager.listTerminals({ owner: undefined })).toEqual([
       {
         id: expect.stringMatching(/^term_/),
         name: "AgentLink",
@@ -1594,7 +1878,7 @@ describe("TerminalManager terminal selection", () => {
 
     const manager = new TerminalManager();
 
-    expect(manager.listTerminals()).toEqual([]);
+    expect(manager.listTerminals({ owner: undefined })).toEqual([]);
   });
 
   it("rejects terminal_id reuse for adopted stale terminals", async () => {
@@ -1607,11 +1891,12 @@ describe("TerminalManager terminal selection", () => {
     (vscode.window as unknown as MockVscodeWindow).terminals = [staleTerminal];
 
     const manager = new TerminalManager();
-    const stale = manager.listTerminals()[0];
+    const stale = manager.listTerminals({ owner: undefined })[0];
     expect(stale).toMatchObject({ name: "AgentLink", stale: true });
 
     await expect(
       manager.executeCommand({
+        owner: undefined,
         command: "echo should-not-run",
         cwd: "/workspace",
         terminal_id: stale?.id,

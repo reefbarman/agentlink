@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserGatewayService } from "./BrowserGatewayService.js";
 import { InMemoryAgentUiEventHub } from "../agent/AgentUiPublisher.js";
 import type { SessionApprovalMode } from "../agent/AgentSessionManager.js";
+import type { SessionInfo } from "../agent/types.js";
 import type { SessionSummary } from "../agent/SessionStore.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
 import { normalizeLegacyBrowserGatewaySnapshot } from "./testing/stateEquivalenceOracle.js";
@@ -80,6 +81,30 @@ function makeSessionManagerStub() {
           displayName: "Project A",
           rootPath: "/workspace/a",
         },
+      },
+    ]),
+    getSessionInfos: vi.fn<() => SessionInfo[]>(() => [
+      {
+        id: "session-1",
+        status: "idle",
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        title: "Test Session",
+        messageCount: 2,
+        totalInputTokens: 10,
+        totalOutputTokens: 20,
+        background: false,
+        createdAt: 1,
+        lastActiveAt: 2,
+        projectScope: {
+          schemaVersion: 1,
+          kind: "project",
+          projectId: "project-a",
+          workspaceFolderUri: "file:///workspace/a",
+          displayName: "Project A",
+          rootPath: "/workspace/a",
+        },
+        projectAvailability: "available",
       },
     ]),
     getForegroundSession: vi.fn(() => ({
@@ -165,8 +190,10 @@ const themeSnapshotStub = {
   source: "vscode-theme-api" as const,
 };
 
-function makeService(hub: InMemoryAgentUiEventHub): BrowserGatewayService {
-  const sessionManager = makeSessionManagerStub();
+function makeService(
+  hub: InMemoryAgentUiEventHub,
+  sessionManager = makeSessionManagerStub(),
+): BrowserGatewayService {
   return new BrowserGatewayService(
     hub,
     sessionManager as never,
@@ -292,7 +319,14 @@ describe("BrowserGatewayService", () => {
 
   it("captures owner projection sources from the same legacy state boundary", () => {
     const hub = new InMemoryAgentUiEventHub();
-    const service = makeService(hub);
+    const sessionManager = makeSessionManagerStub();
+    sessionManager.getSessionInfos.mockReturnValue([
+      {
+        ...sessionManager.getSessionInfos()[0]!,
+        interactiveExecutionPhase: "queued_for_provider",
+      },
+    ]);
+    const service = makeService(hub, sessionManager);
     const readSet = service.getOwnerProjectionSources().capture();
 
     expect(readSet.catalog).toMatchObject({
@@ -311,6 +345,7 @@ describe("BrowserGatewayService", () => {
       title: "Test Session",
       originalPrompt: "hello",
       status: "idle",
+      interactiveExecutionPhase: "queued_for_provider",
       messages: [
         expect.objectContaining({ role: "user", content: "hello" }),
         expect.objectContaining({ role: "assistant" }),

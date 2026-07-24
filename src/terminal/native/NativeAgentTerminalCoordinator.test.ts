@@ -10,12 +10,15 @@ import type {
   SandboxCommandProcess,
   SandboxCommandReady,
 } from "../sandbox/SandboxRuntimeProvider.js";
+import type {
+  TerminalExecutionOwner,
+  TerminalExecutionSecuritySummary,
+} from "../../core/capabilities/terminal.js";
 import { describe, expect, it, vi } from "vitest";
 
 import type { MaterializedHostShellBootstrap } from "../hostShellBootstrap.js";
 import { NativeAgentTerminalCoordinator } from "./NativeAgentTerminalCoordinator.js";
 import type { NodePtyModuleLoader } from "../deferredNodePtyLoader.js";
-import type { TerminalExecutionSecuritySummary } from "../../core/capabilities/terminal.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -175,6 +178,7 @@ describe("NativeAgentTerminalCoordinator", () => {
     const assigned = vi.fn();
     const prepared = await test.coordinator.prepareNativeExecution(
       {
+        owner: undefined,
         command: "printf native",
         cwd: "/workspace",
         env: { EXACT: "value" },
@@ -185,7 +189,7 @@ describe("NativeAgentTerminalCoordinator", () => {
 
     expect(test.prepareShell).not.toHaveBeenCalled();
     expect(test.runtime.prepareChannel).not.toHaveBeenCalled();
-    expect(test.coordinator.listTerminals()).toEqual([
+    expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([
       { id: "native-agent-1", name: "AgentLink", busy: false },
     ]);
 
@@ -223,15 +227,15 @@ describe("NativeAgentTerminalCoordinator", () => {
   it("reserves separate terminals for parallel prepared executions", async () => {
     const test = harness();
     const firstPrepared = await test.coordinator.prepareNativeExecution(
-      { command: "printf first", cwd: "/workspace" },
+      { owner: undefined, command: "printf first", cwd: "/workspace" },
       security,
     );
     const secondPrepared = await test.coordinator.prepareNativeExecution(
-      { command: "printf second", cwd: "/workspace" },
+      { owner: undefined, command: "printf second", cwd: "/workspace" },
       security,
     );
 
-    expect(test.coordinator.listTerminals()).toEqual([
+    expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([
       { id: "native-agent-1", name: "AgentLink", busy: false },
       { id: "native-agent-2", name: "AgentLink", busy: false },
     ]);
@@ -258,10 +262,12 @@ describe("NativeAgentTerminalCoordinator", () => {
   it("reserves separate terminals for parallel direct executions", async () => {
     const test = harness();
     const first = test.coordinator.executeCommand({
+      owner: undefined,
       command: "printf first",
       cwd: "/workspace",
     });
     const second = test.coordinator.executeCommand({
+      owner: undefined,
       command: "printf second",
       cwd: "/workspace",
     });
@@ -283,13 +289,14 @@ describe("NativeAgentTerminalCoordinator", () => {
   it("preserves an explicit terminal name instead of the AgentLink default", async () => {
     const test = harness();
     const pending = test.coordinator.executeCommand({
+      owner: undefined,
       command: "printf named",
       cwd: "/workspace",
       terminal_name: "Server",
     });
     await flush();
 
-    expect(test.coordinator.listTerminals()).toEqual([
+    expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([
       { id: "native-agent-1", name: "Server", busy: true },
     ]);
     await finish(test.processes[0], "named\r\n", 0);
@@ -299,6 +306,7 @@ describe("NativeAgentTerminalCoordinator", () => {
   it("reuses one persistent shell for compatible commands", async () => {
     const test = harness();
     const first = test.coordinator.executeCommand({
+      owner: undefined,
       command: "typeset -g NATIVE_STATE=ready",
       cwd: "/workspace",
     });
@@ -307,6 +315,7 @@ describe("NativeAgentTerminalCoordinator", () => {
     await first;
 
     const second = test.coordinator.executeCommand({
+      owner: undefined,
       command: "printf $NATIVE_STATE",
       cwd: "/workspace",
     });
@@ -325,6 +334,7 @@ describe("NativeAgentTerminalCoordinator", () => {
   it("creates another shell for incompatible implicit cwd or environment", async () => {
     const test = harness();
     const first = test.coordinator.executeCommand({
+      owner: undefined,
       command: "pwd",
       cwd: "/workspace",
       env: { A: "one" },
@@ -334,6 +344,7 @@ describe("NativeAgentTerminalCoordinator", () => {
     await first;
 
     const second = test.coordinator.executeCommand({
+      owner: undefined,
       command: "pwd",
       cwd: "/other",
       env: { A: "two" },
@@ -346,11 +357,77 @@ describe("NativeAgentTerminalCoordinator", () => {
     expect(test.prepareShell).toHaveBeenCalledTimes(2);
   });
 
+  it("reuses within an owner generation, refreshes attribution, and rejects the next generation", async () => {
+    const test = harness();
+    const rootOwner: TerminalExecutionOwner = {
+      scopeId: "tab-1",
+      displayLabel: "T1",
+      generation: 1,
+      authoritySessionId: "root-session",
+    };
+    const childOwner = { ...rootOwner, authoritySessionId: "child-session" };
+    const nextGeneration = {
+      ...rootOwner,
+      generation: 2,
+      authoritySessionId: "replacement-session",
+    };
+
+    const first = test.coordinator.executeCommand({
+      owner: rootOwner,
+      command: "pwd",
+      cwd: "/workspace",
+    });
+    await flush();
+    await finish(test.processes[0], "/workspace\r\n");
+    const firstResult = await first;
+
+    const second = test.coordinator.executeCommand({
+      owner: childOwner,
+      command: "pwd",
+      cwd: "/workspace",
+    });
+    await flush();
+    await finish(test.processes[1], "/workspace\r\n");
+    const secondResult = await second;
+
+    expect(secondResult.terminal_id).toBe(firstResult.terminal_id);
+    expect(test.coordinator.listTerminals({ owner: childOwner })).toEqual([
+      expect.objectContaining({
+        id: firstResult.terminal_id,
+        owner: childOwner,
+      }),
+    ]);
+    expect(test.coordinator.listTerminals({ owner: nextGeneration })).toEqual(
+      [],
+    );
+    expect(
+      test.coordinator.getBackgroundState({
+        owner: nextGeneration,
+        terminalId: firstResult.terminal_id,
+      }),
+    ).toBeUndefined();
+    expect(
+      test.coordinator.interruptTerminal({
+        owner: nextGeneration,
+        terminalId: firstResult.terminal_id,
+      }),
+    ).toBe(false);
+    await expect(
+      test.coordinator.executeCommand({
+        owner: nextGeneration,
+        command: "pwd",
+        cwd: "/workspace",
+        terminal_id: firstResult.terminal_id,
+      }),
+    ).rejects.toThrow("terminal not found");
+  });
+
   it("supports background output, interrupt, and deferred cleanup", async () => {
     const test = harness();
     const deferredFinalization = vi.fn();
     const finalized = vi.fn();
     const resultPromise = test.coordinator.executeCommand({
+      owner: undefined,
       command: "sleep 10",
       cwd: "/workspace",
       background: true,
@@ -367,7 +444,12 @@ describe("NativeAgentTerminalCoordinator", () => {
       execution_mode: "native_pty",
     });
     expect(deferredFinalization).toHaveBeenCalledOnce();
-    expect(test.coordinator.interruptTerminal(result.terminal_id)).toBe(true);
+    expect(
+      test.coordinator.interruptTerminal({
+        owner: undefined,
+        terminalId: result.terminal_id,
+      }),
+    ).toBe(true);
     expect(test.runtime.interrupt).toHaveBeenCalledWith(result.terminal_id);
 
     test.processes[0].readyDeferred.resolve({
@@ -385,7 +467,10 @@ describe("NativeAgentTerminalCoordinator", () => {
 
     expect(finalized).toHaveBeenCalledOnce();
     expect(
-      test.coordinator.getBackgroundState(result.terminal_id),
+      test.coordinator.getBackgroundState({
+        owner: undefined,
+        terminalId: result.terminal_id,
+      }),
     ).toMatchObject({
       is_running: false,
       state: "completed",
@@ -400,6 +485,7 @@ describe("NativeAgentTerminalCoordinator", () => {
       const test = harness();
       const finalized = vi.fn();
       const resultPromise = test.coordinator.executeCommand({
+        owner: undefined,
         command: "sleep 10",
         cwd: "/workspace",
         timeout: 25,
@@ -433,16 +519,21 @@ describe("NativeAgentTerminalCoordinator", () => {
   it("closes the logical channel when its persistent shell exits unexpectedly", async () => {
     const test = harness();
     const result = await test.coordinator.executeCommand({
+      owner: undefined,
       command: "pwd",
       cwd: "/workspace",
       background: true,
     });
-    expect(test.coordinator.listTerminals()).toHaveLength(1);
+    expect(test.coordinator.listTerminals({ owner: undefined })).toHaveLength(
+      1,
+    );
 
     test.channelRequests[0].onClosed();
 
-    expect(test.coordinator.listTerminals()).toEqual([]);
-    expect(test.coordinator.getRecentlyClosedTerminals()).toEqual([
+    expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([]);
+    expect(
+      test.coordinator.getRecentlyClosedTerminals({ owner: undefined }),
+    ).toEqual([
       expect.objectContaining({
         id: result.terminal_id,
         state: "unknown_termination",
@@ -454,21 +545,34 @@ describe("NativeAgentTerminalCoordinator", () => {
   it("closes only Native Agent shells and records recent state", async () => {
     const test = harness();
     const result = await test.coordinator.executeCommand({
+      owner: undefined,
       command: "watch",
       cwd: "/workspace",
       background: true,
     });
 
-    expect(test.coordinator.closeTerminals(["host-terminal-1"])).toEqual({
+    expect(
+      test.coordinator.closeTerminals({
+        owner: undefined,
+        names: ["host-terminal-1"],
+      }),
+    ).toEqual({
       closed: 0,
       not_found: ["host-terminal-1"],
     });
     expect(test.runtime.closeChannel).not.toHaveBeenCalled();
-    expect(test.coordinator.closeTerminals([result.terminal_id])).toEqual({
+    expect(
+      test.coordinator.closeTerminals({
+        owner: undefined,
+        names: [result.terminal_id],
+      }),
+    ).toEqual({
       closed: 1,
     });
     expect(test.runtime.closeChannel).toHaveBeenCalledWith(result.terminal_id);
-    expect(test.coordinator.getRecentlyClosedTerminals()).toEqual([
+    expect(
+      test.coordinator.getRecentlyClosedTerminals({ owner: undefined }),
+    ).toEqual([
       expect.objectContaining({
         id: result.terminal_id,
         state: "unknown_termination",
@@ -479,11 +583,16 @@ describe("NativeAgentTerminalCoordinator", () => {
   it("invalidates a prepared execution when its terminal closes", async () => {
     const test = harness();
     const prepared = await test.coordinator.prepareNativeExecution(
-      { command: "pwd", cwd: "/workspace" },
+      { owner: undefined, command: "pwd", cwd: "/workspace" },
       security,
     );
 
-    expect(test.coordinator.closeTerminals(["native-agent-1"])).toEqual({
+    expect(
+      test.coordinator.closeTerminals({
+        owner: undefined,
+        names: ["native-agent-1"],
+      }),
+    ).toEqual({
       closed: 1,
     });
     await expect(prepared.execute()).rejects.toThrow("reservation is stale");
@@ -495,7 +604,7 @@ describe("NativeAgentTerminalCoordinator", () => {
   it("releases an unconsumed reservation without materializing a shell", async () => {
     const test = harness();
     const prepared = await test.coordinator.prepareNativeExecution(
-      { command: "pwd", cwd: "/workspace" },
+      { owner: undefined, command: "pwd", cwd: "/workspace" },
       security,
     );
     prepared.dispose();

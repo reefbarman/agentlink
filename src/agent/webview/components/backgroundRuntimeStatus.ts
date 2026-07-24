@@ -7,6 +7,7 @@ export type BackgroundRuntimePhase =
   | "responding"
   | "executing_tool"
   | "awaiting_approval"
+  | "awaiting_coordinator"
   | "retrying_provider"
   | "completed"
   | "failed"
@@ -23,6 +24,7 @@ export function getBackgroundRuntimeMotion(
 ): ActivityMotion {
   switch (runtime?.phase) {
     case "awaiting_approval":
+    case "awaiting_coordinator":
       return "attention";
     case "completed":
     case "failed":
@@ -70,6 +72,8 @@ export function formatBackgroundRuntimeStatus(
       return "Running tool…";
     case "awaiting_approval":
       return "Approval needed";
+    case "awaiting_coordinator":
+      return "Waiting on coordinator";
     case "queued":
       return "Queued";
     case "completed":

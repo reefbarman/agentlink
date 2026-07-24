@@ -156,6 +156,7 @@ describe("AgentTerminalProviderRouter", () => {
     test.setEnabled(true);
 
     await test.router.executeCommand({
+      owner: undefined,
       command: "echo super-secret-command",
       cwd: "/workspace/private-path",
       env: { SECRET_VALUE: "do-not-log" },
@@ -184,6 +185,7 @@ describe("AgentTerminalProviderRouter", () => {
     await expect(
       test.router.prepareExecution(
         {
+          owner: undefined,
           command: "npm view vite version",
           cwd: "/workspace",
           sandboxSessionId: "session-1",
@@ -202,9 +204,13 @@ describe("AgentTerminalProviderRouter", () => {
     const test = harness();
 
     await expect(
-      test.router.executeCommand({ command: "pwd", cwd: "/workspace" }),
+      test.router.executeCommand({
+        owner: undefined,
+        command: "pwd",
+        cwd: "/workspace",
+      }),
     ).resolves.toMatchObject({ output: "native", terminal_id: "native-1" });
-    test.router.listTerminals();
+    test.router.listTerminals({ owner: undefined });
 
     expect(test.createNativeProvider).toHaveBeenCalledTimes(1);
     expect(test.createSandboxProvider).not.toHaveBeenCalled();
@@ -223,7 +229,11 @@ describe("AgentTerminalProviderRouter", () => {
       test.setHost({ platform, remoteName });
 
       await expect(
-        test.router.executeCommand({ command: "pwd", cwd: "/workspace" }),
+        test.router.executeCommand({
+          owner: undefined,
+          command: "pwd",
+          cwd: "/workspace",
+        }),
       ).resolves.toMatchObject({ output: "native" });
       expect(test.createSandboxProvider).not.toHaveBeenCalled();
       expect(test.getSandboxAvailability).not.toHaveBeenCalled();
@@ -267,7 +277,7 @@ describe("AgentTerminalProviderRouter", () => {
     });
 
     const preparation = router.prepareExecution(
-      { command: "pwd", cwd: "/workspace" },
+      { owner: undefined, command: "pwd", cwd: "/workspace" },
       mutableRoute,
     );
     Object.assign(mutableRoute, nativeAgentRoute);
@@ -323,6 +333,7 @@ describe("AgentTerminalProviderRouter", () => {
     test.setEnabled(true);
 
     const prepared = await test.router.prepareExecution({
+      owner: undefined,
       command: "pwd",
       cwd: "/workspace",
     });
@@ -352,6 +363,7 @@ describe("AgentTerminalProviderRouter", () => {
     const test = harness();
     test.setEnabled(true);
     const prepared = await test.router.prepareExecution({
+      owner: undefined,
       command: "pwd",
       cwd: "/workspace",
     });
@@ -372,10 +384,17 @@ describe("AgentTerminalProviderRouter", () => {
     test.setEnabled(true);
 
     await expect(
-      test.router.executeCommand({ command: "pwd", cwd: "/workspace" }),
+      test.router.executeCommand({
+        owner: undefined,
+        command: "pwd",
+        cwd: "/workspace",
+      }),
     ).resolves.toMatchObject({ output: "sandbox" });
-    test.router.getBackgroundState("sandbox-1");
-    test.router.closeTerminals();
+    test.router.getBackgroundState({
+      owner: undefined,
+      terminalId: "sandbox-1",
+    });
+    test.router.closeTerminals({ owner: undefined });
 
     expect(test.createSandboxProvider).toHaveBeenCalledTimes(1);
     expect(test.createNativeProvider).not.toHaveBeenCalled();
@@ -387,7 +406,11 @@ describe("AgentTerminalProviderRouter", () => {
     test.setSandboxAvailable(false);
 
     await expect(
-      test.router.executeCommand({ command: "pwd", cwd: "/workspace" }),
+      test.router.executeCommand({
+        owner: undefined,
+        command: "pwd",
+        cwd: "/workspace",
+      }),
     ).resolves.toMatchObject({ output: "native", terminal_id: "native-1" });
     expect(test.createNativeProvider).toHaveBeenCalledTimes(1);
     expect(test.createSandboxProvider).not.toHaveBeenCalled();
@@ -400,7 +423,7 @@ describe("AgentTerminalProviderRouter", () => {
 
     await expect(
       test.router.prepareExecution(
-        { command: "pwd", cwd: "/workspace" },
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
         sandboxRoute,
       ),
     ).rejects.toThrow("Required Sandbox execution is unavailable");
@@ -418,7 +441,7 @@ describe("AgentTerminalProviderRouter", () => {
 
     await expect(
       test.router.prepareExecution(
-        { command: "pwd", cwd: "/workspace" },
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
         nativeAgentRoute,
       ),
     ).rejects.toThrow(
@@ -438,7 +461,7 @@ describe("AgentTerminalProviderRouter", () => {
     test.setEnabled(true);
 
     const prepared = await test.router.prepareExecution(
-      { command: "pwd", cwd: "/workspace" },
+      { owner: undefined, command: "pwd", cwd: "/workspace" },
       nativeAgentRoute,
     );
     await expect(prepared.execute()).resolves.toMatchObject({
@@ -465,7 +488,12 @@ describe("AgentTerminalProviderRouter", () => {
 
       await expect(
         test.router.prepareExecution(
-          { command: "pwd", cwd: "/workspace", terminal_id: terminalId },
+          {
+            owner: undefined,
+            command: "pwd",
+            cwd: "/workspace",
+            terminal_id: terminalId,
+          },
           sandboxRoute,
         ),
       ).rejects.toThrow(reason);
@@ -482,7 +510,7 @@ describe("AgentTerminalProviderRouter", () => {
       { id: "native-agent-1", name: "Native Agent", busy: false },
     ]);
     const nativePrepared = await test.router.prepareExecution(
-      { command: "pwd", cwd: "/workspace" },
+      { owner: undefined, command: "pwd", cwd: "/workspace" },
       nativeAgentRoute,
     );
     await nativePrepared.execute();
@@ -490,6 +518,7 @@ describe("AgentTerminalProviderRouter", () => {
     await expect(
       test.router.prepareExecution(
         {
+          owner: undefined,
           command: "pwd",
           cwd: "/workspace",
           terminal_id: "native-agent-1",
@@ -511,14 +540,19 @@ describe("AgentTerminalProviderRouter", () => {
     ]);
     await (
       await test.router.prepareExecution(
-        { command: "pwd", cwd: "/workspace" },
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
         nativeAgentRoute,
       )
     ).execute();
 
     await expect(
       test.router.prepareExecution(
-        { command: "pwd", cwd: "/workspace", terminal_name: "Shared" },
+        {
+          owner: undefined,
+          command: "pwd",
+          cwd: "/workspace",
+          terminal_name: "Shared",
+        },
         sandboxRoute,
       ),
     ).rejects.toThrow("ambiguous name");
@@ -540,16 +574,31 @@ describe("AgentTerminalProviderRouter", () => {
     vi.mocked(test.sandbox.interruptTerminal).mockReturnValue(true);
     await (
       await test.router.prepareExecution(
-        { command: "pwd", cwd: "/workspace" },
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
         sandboxRoute,
       )
     ).execute();
 
-    expect(test.router.getBackgroundState("sandbox-1")).toMatchObject({
+    expect(
+      test.router.getBackgroundState({
+        owner: undefined,
+        terminalId: "sandbox-1",
+      }),
+    ).toMatchObject({
       output: "running",
     });
-    expect(test.router.interruptTerminal("sandbox-1")).toBe(true);
-    expect(test.router.interruptTerminal("unknown-1")).toBe(false);
+    expect(
+      test.router.interruptTerminal({
+        owner: undefined,
+        terminalId: "sandbox-1",
+      }),
+    ).toBe(true);
+    expect(
+      test.router.interruptTerminal({
+        owner: undefined,
+        terminalId: "unknown-1",
+      }),
+    ).toBe(false);
     expect(test.sandbox.interruptTerminal).toHaveBeenCalledTimes(1);
     expect(test.native.interruptTerminal).not.toHaveBeenCalled();
     expect(test.nativeAgent.interruptTerminal).not.toHaveBeenCalled();
@@ -584,23 +633,31 @@ describe("AgentTerminalProviderRouter", () => {
     ]);
     await (
       await test.router.prepareExecution(
-        { command: "pwd", cwd: "/workspace" },
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
         nativeAgentRoute,
       )
     ).execute();
     await (
       await test.router.prepareExecution(
-        { command: "pwd", cwd: "/workspace" },
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
         sandboxRoute,
       )
     ).execute();
 
-    expect(test.router.getRecentlyClosedTerminals(5)).toEqual([
+    expect(
+      test.router.getRecentlyClosedTerminals({ owner: undefined, limit: 5 }),
+    ).toEqual([
       expect.objectContaining({ id: "native-agent-closed" }),
       expect.objectContaining({ id: "sandbox-closed" }),
     ]);
-    expect(test.nativeAgent.getRecentlyClosedTerminals).toHaveBeenCalledWith(5);
-    expect(test.sandbox.getRecentlyClosedTerminals).toHaveBeenCalledWith(5);
+    expect(test.nativeAgent.getRecentlyClosedTerminals).toHaveBeenCalledWith({
+      owner: undefined,
+      limit: 5,
+    });
+    expect(test.sandbox.getRecentlyClosedTerminals).toHaveBeenCalledWith({
+      owner: undefined,
+      limit: 5,
+    });
   });
 
   it("reveals exact custom terminals through the surface fallback", async () => {
@@ -611,14 +668,18 @@ describe("AgentTerminalProviderRouter", () => {
     ]);
     await (
       await test.router.prepareExecution(
-        { command: "pwd", cwd: "/workspace" },
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
         sandboxRoute,
       )
     ).execute();
 
-    expect(test.router.revealTerminal("sandbox-1")).toBe(true);
+    expect(
+      test.router.revealTerminal({ owner: undefined, terminalId: "sandbox-1" }),
+    ).toBe(true);
     expect(test.revealCustomTerminal).toHaveBeenCalledWith("sandbox-1");
-    expect(test.router.revealTerminal("unknown-1")).toBe(false);
+    expect(
+      test.router.revealTerminal({ owner: undefined, terminalId: "unknown-1" }),
+    ).toBe(false);
     expect(test.revealCustomTerminal).toHaveBeenCalledTimes(1);
   });
 
@@ -630,10 +691,19 @@ describe("AgentTerminalProviderRouter", () => {
     vi.mocked(test.native.listTerminals).mockReturnValue([
       { id: "native-1", name: "Native", busy: true },
     ]);
-    await test.router.executeCommand({ command: "pwd", cwd: "/workspace" });
+    await test.router.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace",
+    });
 
-    expect(test.router.revealTerminal("native-1")).toBe(false);
-    expect(revealTerminal).toHaveBeenCalledWith("native-1");
+    expect(
+      test.router.revealTerminal({ owner: undefined, terminalId: "native-1" }),
+    ).toBe(false);
+    expect(revealTerminal).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "native-1",
+    });
     expect(test.revealCustomTerminal).not.toHaveBeenCalled();
   });
 
@@ -648,18 +718,23 @@ describe("AgentTerminalProviderRouter", () => {
     ]);
     await (
       await test.router.prepareExecution(
-        { command: "pwd", cwd: "/workspace" },
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
         nativeAgentRoute,
       )
     ).execute();
     await (
       await test.router.prepareExecution(
-        { command: "pwd", cwd: "/workspace" },
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
         sandboxRoute,
       )
     ).execute();
 
-    expect(test.router.closeTerminals(["Shared", "host-terminal-1"])).toEqual({
+    expect(
+      test.router.closeTerminals({
+        owner: undefined,
+        names: ["Shared", "host-terminal-1"],
+      }),
+    ).toEqual({
       closed: 0,
       not_found: ["Shared", "host-terminal-1"],
     });
@@ -670,11 +745,16 @@ describe("AgentTerminalProviderRouter", () => {
   it("fails closed when runtime availability is lost after sandbox selection", async () => {
     const test = harness();
     test.setEnabled(true);
-    await test.router.executeCommand({ command: "pwd", cwd: "/workspace" });
+    await test.router.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace",
+    });
 
     test.setSandboxAvailable(false);
     await expect(
       test.router.executeCommand({
+        owner: undefined,
         command: "echo must not downgrade",
         cwd: "/workspace",
       }),
@@ -689,7 +769,11 @@ describe("AgentTerminalProviderRouter", () => {
     test.setHost({ workspaceTrusted: false });
 
     await expect(
-      test.router.executeCommand({ command: "pwd", cwd: "/workspace" }),
+      test.router.executeCommand({
+        owner: undefined,
+        command: "pwd",
+        cwd: "/workspace",
+      }),
     ).rejects.toThrow("unavailable until the workspace is trusted");
     expect(test.createNativeProvider).not.toHaveBeenCalled();
     expect(test.createSandboxProvider).not.toHaveBeenCalled();
@@ -703,10 +787,18 @@ describe("AgentTerminalProviderRouter", () => {
     });
 
     await expect(
-      test.router.executeCommand({ command: "pwd", cwd: "/workspace" }),
+      test.router.executeCommand({
+        owner: undefined,
+        command: "pwd",
+        cwd: "/workspace",
+      }),
     ).rejects.toThrow("failed closed: helper missing");
     await expect(
-      test.router.executeCommand({ command: "echo again", cwd: "/workspace" }),
+      test.router.executeCommand({
+        owner: undefined,
+        command: "echo again",
+        cwd: "/workspace",
+      }),
     ).rejects.toThrow("failed closed: helper missing");
 
     expect(test.createSandboxProvider).toHaveBeenCalledTimes(1);
@@ -719,10 +811,14 @@ describe("AgentTerminalProviderRouter", () => {
   it("keeps status queries attached to an existing sandbox across route changes", async () => {
     const test = harness();
     test.setEnabled(true);
-    await test.router.executeCommand({ command: "pwd", cwd: "/workspace" });
+    await test.router.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace",
+    });
 
     test.setEnabled(false);
-    test.router.listTerminals();
+    test.router.listTerminals({ owner: undefined });
 
     expect(test.sandbox.listTerminals).toHaveBeenCalledTimes(1);
     expect(test.sandbox.dispose).not.toHaveBeenCalled();
@@ -732,11 +828,19 @@ describe("AgentTerminalProviderRouter", () => {
   it("keeps existing sandbox channels while routing new work native after disable", async () => {
     const test = harness();
     test.setEnabled(true);
-    await test.router.executeCommand({ command: "pwd", cwd: "/workspace" });
+    await test.router.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace",
+    });
 
     test.setEnabled(false);
     await expect(
-      test.router.executeCommand({ command: "echo native", cwd: "/workspace" }),
+      test.router.executeCommand({
+        owner: undefined,
+        command: "echo native",
+        cwd: "/workspace",
+      }),
     ).resolves.toMatchObject({ output: "native" });
 
     expect(test.sandbox.dispose).not.toHaveBeenCalled();
@@ -748,11 +852,13 @@ describe("AgentTerminalProviderRouter", () => {
     test.setEnabled(true);
     await expect(
       test.router.executeCommand({
+        owner: undefined,
         command: "echo sandbox",
         cwd: "/workspace",
       }),
     ).resolves.toMatchObject({ output: "sandbox" });
     const oldLease = await test.router.prepareExecution({
+      owner: undefined,
       command: "echo prepared",
       cwd: "/workspace",
     });
@@ -765,7 +871,11 @@ describe("AgentTerminalProviderRouter", () => {
     await expect(oldLease.execute()).rejects.toThrow("no longer available");
     expect(test.sandbox.dispose).toHaveBeenCalledTimes(1);
     await expect(
-      test.router.executeCommand({ command: "echo native", cwd: "/workspace" }),
+      test.router.executeCommand({
+        owner: undefined,
+        command: "echo native",
+        cwd: "/workspace",
+      }),
     ).resolves.toMatchObject({ output: "native" });
     expect(test.getSandboxAvailability).toHaveBeenCalledTimes(2);
 
@@ -773,6 +883,7 @@ describe("AgentTerminalProviderRouter", () => {
     test.router.refresh();
     await expect(
       test.router.executeCommand({
+        owner: undefined,
         command: "echo fresh sandbox",
         cwd: "/workspace",
       }),
@@ -792,7 +903,11 @@ describe("AgentTerminalProviderRouter", () => {
     test.router.log = assignedLog;
     test.setEnabled(true);
 
-    await test.router.executeCommand({ command: "pwd", cwd: "/workspace" });
+    await test.router.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace",
+    });
 
     expect(test.router.log).toBe(assignedLog);
     expect(test.sandbox.log).toBe(assignedLog);
@@ -803,7 +918,7 @@ describe("AgentTerminalProviderRouter", () => {
     test.setEnabled(true);
     await (
       await test.router.prepareExecution(
-        { command: "pwd", cwd: "/workspace" },
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
         nativeAgentRoute,
       )
     ).execute();
@@ -813,7 +928,7 @@ describe("AgentTerminalProviderRouter", () => {
     expect(test.nativeAgent.dispose).toHaveBeenCalledTimes(1);
     await (
       await test.router.prepareExecution(
-        { command: "pwd", cwd: "/workspace" },
+        { owner: undefined, command: "pwd", cwd: "/workspace" },
         nativeAgentRoute,
       )
     ).execute();
@@ -828,7 +943,7 @@ describe("AgentTerminalProviderRouter", () => {
     test.setEnabled(true);
     await (
       await test.router.prepareExecution(
-        { command: "sleep 30", cwd: "/workspace" },
+        { owner: undefined, command: "sleep 30", cwd: "/workspace" },
         nativeAgentRoute,
       )
     ).execute();
@@ -842,6 +957,7 @@ describe("AgentTerminalProviderRouter", () => {
     await expect(
       test.router.prepareExecution(
         {
+          owner: undefined,
           command: "pwd",
           cwd: "/workspace",
           terminal_id: "native-agent-1",
@@ -910,7 +1026,7 @@ describe("AgentTerminalProviderRouter", () => {
     test.setEnabled(true);
     await (
       await test.router.prepareExecution(
-        { command: "sleep 30", cwd: "/workspace" },
+        { owner: undefined, command: "sleep 30", cwd: "/workspace" },
         nativeAgentRoute,
       )
     ).execute();
@@ -918,20 +1034,38 @@ describe("AgentTerminalProviderRouter", () => {
     test.router.refresh();
 
     expect(test.nativeAgent.dispose).not.toHaveBeenCalled();
-    expect(test.router.getBackgroundState("native-agent-1")).toMatchObject({
+    expect(
+      test.router.getBackgroundState({
+        owner: undefined,
+        terminalId: "native-agent-1",
+      }),
+    ).toMatchObject({
       is_running: true,
       output: "still running",
     });
-    expect(test.router.closeTerminals(["native-agent-1"])).toEqual({
+    expect(
+      test.router.closeTerminals({
+        owner: undefined,
+        names: ["native-agent-1"],
+      }),
+    ).toEqual({
       closed: 1,
     });
     expect(test.nativeAgent.dispose).toHaveBeenCalledTimes(1);
-    expect(test.nativeAgent.detachRetainedOutput).toHaveBeenCalledWith(
-      "native-agent-1",
-    );
+    expect(test.nativeAgent.detachRetainedOutput).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "native-agent-1",
+    });
     expect(read).not.toHaveBeenCalled();
-    expect(test.router.getRecentlyClosedTerminals()).toEqual([closedTerminal]);
-    expect(test.router.getRetainedOutput("native-agent-1")).toEqual({
+    expect(
+      test.router.getRecentlyClosedTerminals({ owner: undefined }),
+    ).toEqual([closedTerminal]);
+    expect(
+      test.router.getRetainedOutput({
+        owner: undefined,
+        terminalId: "native-agent-1",
+      }),
+    ).toEqual({
       output: "still running",
       complete: false,
       finalized: false,
@@ -948,11 +1082,19 @@ describe("AgentTerminalProviderRouter", () => {
   it("disposes an empty retired sandbox and creates a new generation", async () => {
     const test = harness();
     test.setEnabled(true);
-    await test.router.executeCommand({ command: "pwd", cwd: "/workspace" });
+    await test.router.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace",
+    });
 
     test.router.refresh();
     expect(test.sandbox.dispose).toHaveBeenCalledTimes(1);
-    await test.router.executeCommand({ command: "pwd", cwd: "/workspace" });
+    await test.router.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace",
+    });
     expect(test.createSandboxProvider).toHaveBeenCalledTimes(2);
     test.router.dispose();
     expect(test.sandbox.dispose).toHaveBeenCalledTimes(1);
@@ -966,6 +1108,7 @@ describe("AgentTerminalProviderRouter", () => {
     ]);
     test.setEnabled(true);
     await test.router.executeCommand({
+      owner: undefined,
       command: "sleep 30",
       cwd: "/workspace",
     });
@@ -975,6 +1118,7 @@ describe("AgentTerminalProviderRouter", () => {
     await expect(
       test.router.prepareExecution(
         {
+          owner: undefined,
           command: "pwd",
           cwd: "/workspace",
           terminal_name: "Retired Sandbox",
@@ -1033,17 +1177,33 @@ describe("AgentTerminalProviderRouter", () => {
       dispose,
     }));
     test.setEnabled(true);
-    await test.router.executeCommand({ command: "pwd", cwd: "/workspace" });
+    await test.router.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace",
+    });
 
     test.router.refresh();
     expect(test.sandbox.dispose).not.toHaveBeenCalled();
 
-    expect(test.router.closeTerminals(["sandbox-1"])).toEqual({ closed: 1 });
+    expect(
+      test.router.closeTerminals({ owner: undefined, names: ["sandbox-1"] }),
+    ).toEqual({ closed: 1 });
     expect(test.sandbox.dispose).toHaveBeenCalledTimes(1);
-    expect(test.sandbox.detachRetainedOutput).toHaveBeenCalledWith("sandbox-1");
+    expect(test.sandbox.detachRetainedOutput).toHaveBeenCalledWith({
+      owner: undefined,
+      terminalId: "sandbox-1",
+    });
     expect(read).not.toHaveBeenCalled();
-    expect(test.router.getRecentlyClosedTerminals()).toEqual([closedTerminal]);
-    expect(test.router.getRetainedOutput("sandbox-1")).toEqual({
+    expect(
+      test.router.getRecentlyClosedTerminals({ owner: undefined }),
+    ).toEqual([closedTerminal]);
+    expect(
+      test.router.getRetainedOutput({
+        owner: undefined,
+        terminalId: "sandbox-1",
+      }),
+    ).toEqual({
       output: "done",
       complete: true,
       finalized: true,
@@ -1064,23 +1224,29 @@ describe("AgentTerminalProviderRouter", () => {
     ]);
     test.setEnabled(true);
     await test.router.executeCommand({
+      owner: undefined,
       command: "sleep 30",
       cwd: "/workspace",
     });
 
     test.router.refresh();
     await test.router.executeCommand({
+      owner: undefined,
       command: "printf active sandbox",
       cwd: "/workspace",
     });
     await (
       await test.router.prepareExecution(
-        { command: "printf active native", cwd: "/workspace" },
+        {
+          owner: undefined,
+          command: "printf active native",
+          cwd: "/workspace",
+        },
         nativeAgentRoute,
       )
     ).execute();
     const pending = await test.router.prepareExecution(
-      { command: "printf never launched", cwd: "/workspace" },
+      { owner: undefined, command: "printf never launched", cwd: "/workspace" },
       sandboxRoute,
     );
 
@@ -1097,10 +1263,12 @@ describe("AgentTerminalProviderRouter", () => {
         failure: "lease_revoked",
       }),
     );
-    expect(() => test.router.listTerminals()).toThrow("router is disposed");
+    expect(() => test.router.listTerminals({ owner: undefined })).toThrow(
+      "router is disposed",
+    );
 
     const reloaded = harness();
-    expect(reloaded.router.listTerminals()).toEqual([]);
+    expect(reloaded.router.listTerminals({ owner: undefined })).toEqual([]);
     expect(reloaded.createNativeProvider).not.toHaveBeenCalled();
     expect(reloaded.createNativeAgentProvider).not.toHaveBeenCalled();
     expect(reloaded.createSandboxProvider).not.toHaveBeenCalled();
@@ -1109,11 +1277,17 @@ describe("AgentTerminalProviderRouter", () => {
   it("disposes the sandbox provider exactly once", async () => {
     const test = harness();
     test.setEnabled(true);
-    await test.router.executeCommand({ command: "pwd", cwd: "/workspace" });
+    await test.router.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace",
+    });
 
     test.router.dispose();
     test.router.dispose();
     expect(test.sandbox.dispose).toHaveBeenCalledTimes(1);
-    expect(() => test.router.listTerminals()).toThrow("router is disposed");
+    expect(() => test.router.listTerminals({ owner: undefined })).toThrow(
+      "router is disposed",
+    );
   });
 });

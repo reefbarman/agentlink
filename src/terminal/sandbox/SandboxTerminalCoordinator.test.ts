@@ -1,3 +1,4 @@
+import type { TerminalExecutionOwner } from "../../core/capabilities/terminal.js";
 import {
   CURRENT_SANDBOX_POLICY_VERSION,
   type SandboxExecutionMetadata,
@@ -221,6 +222,7 @@ describe("SandboxTerminalCoordinator", () => {
     const test = harness();
     const prepared = await test.coordinator.prepareConfinementExecution(
       {
+        owner: undefined,
         command: "pwd",
         cwd: "/workspace",
         sandboxSessionId: "session-1",
@@ -290,6 +292,7 @@ describe("SandboxTerminalCoordinator", () => {
     };
     const firstPrepared = await test.coordinator.prepareConfinementExecution(
       {
+        owner: undefined,
         command: "printf first",
         cwd: "/workspace",
         sandboxSessionId: "agent-session",
@@ -298,6 +301,7 @@ describe("SandboxTerminalCoordinator", () => {
     );
     const secondPrepared = await test.coordinator.prepareConfinementExecution(
       {
+        owner: undefined,
         command: "printf second",
         cwd: "/workspace",
         sandboxSessionId: "agent-session",
@@ -336,12 +340,14 @@ describe("SandboxTerminalCoordinator", () => {
       .mockImplementationOnce(defaultAuthorize);
 
     const first = test.coordinator.executeCommand({
+      owner: undefined,
       command: "printf first",
       cwd: "/workspace",
       sandboxSessionId: "agent-session",
     });
     await flush();
     const second = test.coordinator.executeCommand({
+      owner: undefined,
       command: "printf second",
       cwd: "/workspace",
       sandboxSessionId: "agent-session",
@@ -363,12 +369,87 @@ describe("SandboxTerminalCoordinator", () => {
     await expect(second).resolves.toMatchObject({ terminal_id: "sandbox-2" });
   });
 
+  it("reuses within an owner generation, refreshes attribution, and rejects the next generation", async () => {
+    const test = harness();
+    const rootOwner: TerminalExecutionOwner = {
+      scopeId: "tab-1",
+      displayLabel: "T1",
+      generation: 1,
+      authoritySessionId: "root-session",
+    };
+    const childOwner = { ...rootOwner, authoritySessionId: "child-session" };
+    const nextGeneration = {
+      ...rootOwner,
+      generation: 2,
+      authoritySessionId: "replacement-session",
+    };
+
+    const first = test.coordinator.executeCommand({
+      owner: rootOwner,
+      command: "pwd",
+      cwd: "/workspace",
+      sandboxSessionId: "root-session",
+    });
+    await flush();
+    await finish(test.processes[0], "/workspace\r\n");
+    const firstResult = await first;
+
+    const second = test.coordinator.executeCommand({
+      owner: childOwner,
+      command: "pwd",
+      cwd: "/workspace",
+      sandboxSessionId: "child-session",
+    });
+    await flush();
+    await finish(test.processes[1], "/workspace\r\n");
+    const secondResult = await second;
+
+    expect(secondResult.terminal_id).toBe(firstResult.terminal_id);
+    expect(
+      vi.mocked(test.authorizer.authorize).mock.calls[1][0].options,
+    ).toMatchObject({
+      owner: childOwner,
+      sandboxSessionId: "child-session",
+    });
+    expect(test.coordinator.listTerminals({ owner: childOwner })).toEqual([
+      expect.objectContaining({
+        id: firstResult.terminal_id,
+        owner: childOwner,
+      }),
+    ]);
+    expect(test.coordinator.listTerminals({ owner: nextGeneration })).toEqual(
+      [],
+    );
+    expect(
+      test.coordinator.getBackgroundState({
+        owner: nextGeneration,
+        terminalId: firstResult.terminal_id,
+      }),
+    ).toBeUndefined();
+    expect(
+      test.coordinator.interruptTerminal({
+        owner: nextGeneration,
+        terminalId: firstResult.terminal_id,
+      }),
+    ).toBe(false);
+    await expect(
+      test.coordinator.executeCommand({
+        owner: nextGeneration,
+        command: "pwd",
+        cwd: "/workspace",
+        terminal_id: firstResult.terminal_id,
+        sandboxSessionId: "replacement-session",
+      }),
+    ).rejects.toThrow("terminal not found");
+  });
+
   it("attributes prepared managed-network requests and resumes the exact helper", async () => {
     const test = harness();
     const review = deferred<"allow-once" | "reject">();
     const onManagedNetworkRequest = vi.fn(() => review.promise);
     const prepared = await test.coordinator.prepareConfinementExecution(
       {
+        owner: undefined,
         command: "npm view example version",
         cwd: "/workspace",
         sandboxSessionId: "session-network",
@@ -447,6 +528,7 @@ describe("SandboxTerminalCoordinator", () => {
 
     await expect(
       test.coordinator.executeCommand({
+        owner: undefined,
         command: "curl https://example.com",
         cwd: "/workspace",
         sandboxSessionId: "session-network",
@@ -461,6 +543,7 @@ describe("SandboxTerminalCoordinator", () => {
   it("rejects managed-network requests when no reviewer is available", async () => {
     const test = harness();
     const result = test.coordinator.executeCommand({
+      owner: undefined,
       command: "curl https://example.com",
       cwd: "/workspace",
       sandboxSessionId: "session-network",
@@ -495,6 +578,7 @@ describe("SandboxTerminalCoordinator", () => {
           }),
       );
       const result = test.coordinator.executeCommand({
+        owner: undefined,
         command: "curl https://example.com",
         cwd: "/workspace",
         sandboxSessionId: "session-network",
@@ -524,6 +608,7 @@ describe("SandboxTerminalCoordinator", () => {
     const firstReview = deferred<"allow-once" | "reject">();
     const secondReview = deferred<"allow-once" | "reject">();
     const first = test.coordinator.executeCommand({
+      owner: undefined,
       command: "curl https://one.example",
       cwd: "/workspace",
       terminal_name: "One",
@@ -532,6 +617,7 @@ describe("SandboxTerminalCoordinator", () => {
       onManagedNetworkRequest: () => firstReview.promise,
     });
     const second = test.coordinator.executeCommand({
+      owner: undefined,
       command: "curl https://two.example",
       cwd: "/workspace",
       terminal_name: "Two",
@@ -579,6 +665,7 @@ describe("SandboxTerminalCoordinator", () => {
         }),
     );
     await test.coordinator.executeCommand({
+      owner: undefined,
       command: "curl https://example.com",
       cwd: "/workspace",
       sandboxSessionId: "session-network",
@@ -589,7 +676,12 @@ describe("SandboxTerminalCoordinator", () => {
     process.emit({ type: "network-request", request: managedDestination });
     await reviewStarted.promise;
 
-    expect(test.coordinator.closeTerminals(["sandbox-1"])).toEqual({
+    expect(
+      test.coordinator.closeTerminals({
+        owner: undefined,
+        names: ["sandbox-1"],
+      }),
+    ).toEqual({
       closed: 1,
     });
     await flush();
@@ -603,6 +695,7 @@ describe("SandboxTerminalCoordinator", () => {
     const test = harness();
     const prepared = await test.coordinator.prepareConfinementExecution(
       {
+        owner: undefined,
         command: "pwd",
         cwd: "/workspace",
         sandboxSessionId: "agent-session",
@@ -626,7 +719,12 @@ describe("SandboxTerminalCoordinator", () => {
       },
     );
 
-    expect(test.coordinator.closeTerminals(["sandbox-1"])).toEqual({
+    expect(
+      test.coordinator.closeTerminals({
+        owner: undefined,
+        names: ["sandbox-1"],
+      }),
+    ).toEqual({
       closed: 1,
     });
     await expect(prepared.execute()).rejects.toThrow("reservation is stale");
@@ -638,6 +736,7 @@ describe("SandboxTerminalCoordinator", () => {
     const test = harness();
     const prepared = await test.coordinator.prepareConfinementExecution(
       {
+        owner: undefined,
         command: "pwd",
         cwd: "/workspace",
         sandboxSessionId: "session-1",
@@ -675,6 +774,7 @@ describe("SandboxTerminalCoordinator", () => {
     test.coordinator.onChannelEvent(({ event }) => order.push(event.type));
     test.coordinator.onDispose(() => order.push("disposed"));
     await test.coordinator.executeCommand({
+      owner: undefined,
       command: "sleep 10",
       cwd: "/workspace",
       sandboxSessionId: "agent-session",
@@ -706,6 +806,7 @@ describe("SandboxTerminalCoordinator", () => {
     );
 
     const pending = test.coordinator.executeCommand({
+      owner: undefined,
       command: "printf hello",
       cwd: "/workspace",
       sandboxSessionId: "agent-session",
@@ -729,6 +830,7 @@ describe("SandboxTerminalCoordinator", () => {
 
     subscription.dispose();
     await test.coordinator.executeCommand({
+      owner: undefined,
       command: "true",
       cwd: "/workspace",
       terminal_id: "sandbox-1",
@@ -740,6 +842,7 @@ describe("SandboxTerminalCoordinator", () => {
   it("executes in a fresh process and reuses idle channel history/cwd", async () => {
     const test = harness();
     const firstPromise = test.coordinator.executeCommand({
+      owner: undefined,
       command: "pwd",
       cwd: "/workspace",
       sandboxSessionId: "agent-session",
@@ -757,6 +860,7 @@ describe("SandboxTerminalCoordinator", () => {
     });
 
     const secondPromise = test.coordinator.executeCommand({
+      owner: undefined,
       command: "echo next",
       cwd: "/workspace",
       sandboxSessionId: "agent-session",
@@ -783,6 +887,7 @@ describe("SandboxTerminalCoordinator", () => {
   it("supports named and split Sandbox channels without exposing foreign IDs", async () => {
     const test = harness();
     const named = test.coordinator.executeCommand({
+      owner: undefined,
       command: "sleep 1",
       cwd: "/workspace",
       terminal_name: "Server",
@@ -797,6 +902,7 @@ describe("SandboxTerminalCoordinator", () => {
     });
 
     const split = test.coordinator.executeCommand({
+      owner: undefined,
       command: "pwd",
       cwd: "/workspace",
       split_from: "sandbox-1",
@@ -810,6 +916,7 @@ describe("SandboxTerminalCoordinator", () => {
     });
     await expect(
       test.coordinator.executeCommand({
+        owner: undefined,
         command: "pwd",
         cwd: "/workspace",
         terminal_id: "host-terminal-1",
@@ -821,6 +928,7 @@ describe("SandboxTerminalCoordinator", () => {
   it("keeps unnamed sandbox titles stable without exposing command text", async () => {
     const test = harness();
     const result = test.coordinator.executeCommand({
+      owner: undefined,
       command: "curl https://example.test?token=secret",
       cwd: "/workspace",
       background: true,
@@ -831,11 +939,13 @@ describe("SandboxTerminalCoordinator", () => {
     await expect(result).resolves.toMatchObject({
       terminal_name: "Agent command",
     });
-    expect(test.coordinator.listTerminals()).toContainEqual({
-      id: "sandbox-1",
-      name: "Agent command",
-      busy: true,
-    });
+    expect(test.coordinator.listTerminals({ owner: undefined })).toContainEqual(
+      {
+        id: "sandbox-1",
+        name: "Agent command",
+        busy: true,
+      },
+    );
   });
 
   it("terminates a foreground process group after a high-confidence prompt stays inactive", async () => {
@@ -843,6 +953,7 @@ describe("SandboxTerminalCoordinator", () => {
     try {
       const test = harness();
       const resultPromise = test.coordinator.executeCommand({
+        owner: undefined,
         command: "interactive-generator",
         cwd: "/workspace",
         sandboxSessionId: "agent-session",
@@ -852,7 +963,12 @@ describe("SandboxTerminalCoordinator", () => {
       process.readyDeferred.resolve({ pid: 10, pgid: 10, backend: "seatbelt" });
       await flush();
       process.terminate.mockImplementation(() => {
-        expect(test.coordinator.getBackgroundState("sandbox-1")).toMatchObject({
+        expect(
+          test.coordinator.getBackgroundState({
+            owner: undefined,
+            terminalId: "sandbox-1",
+          }),
+        ).toMatchObject({
           state: "interactive_prompt",
           termination_reason: "interactive_prompt",
         });
@@ -899,6 +1015,7 @@ describe("SandboxTerminalCoordinator", () => {
     try {
       const test = harness();
       const resultPromise = test.coordinator.executeCommand({
+        owner: undefined,
         command: "interactive-generator",
         cwd: "/workspace",
         sandboxSessionId: "agent-session",
@@ -940,6 +1057,7 @@ describe("SandboxTerminalCoordinator", () => {
     try {
       const test = harness();
       await test.coordinator.executeCommand({
+        owner: undefined,
         command: "interactive-server",
         cwd: "/workspace",
         background: true,
@@ -954,12 +1072,20 @@ describe("SandboxTerminalCoordinator", () => {
         SANDBOX_INTERACTIVE_PROMPT_GRACE_MS * 2,
       );
       expect(process.terminate).not.toHaveBeenCalled();
-      expect(test.coordinator.getBackgroundState("sandbox-1")).toMatchObject({
+      expect(
+        test.coordinator.getBackgroundState({
+          owner: undefined,
+          terminalId: "sandbox-1",
+        }),
+      ).toMatchObject({
         is_running: true,
         state: "running",
       });
       expect(
-        test.coordinator.getBackgroundState("sandbox-1")?.termination_reason,
+        test.coordinator.getBackgroundState({
+          owner: undefined,
+          terminalId: "sandbox-1",
+        })?.termination_reason,
       ).toBeUndefined();
     } finally {
       vi.useRealTimers();
@@ -971,6 +1097,7 @@ describe("SandboxTerminalCoordinator", () => {
     try {
       const test = harness();
       const completed = test.coordinator.executeCommand({
+        owner: undefined,
         command: "complete-after-prompt",
         cwd: "/workspace",
         terminal_name: "Complete",
@@ -992,6 +1119,7 @@ describe("SandboxTerminalCoordinator", () => {
       await completed;
 
       const timedOut = test.coordinator.executeCommand({
+        owner: undefined,
         command: "timeout-after-prompt",
         cwd: "/workspace",
         terminal_name: "Timeout",
@@ -1011,6 +1139,7 @@ describe("SandboxTerminalCoordinator", () => {
       await timedOut;
 
       const closing = test.coordinator.executeCommand({
+        owner: undefined,
         command: "close-after-prompt",
         cwd: "/workspace",
         terminal_name: "Close",
@@ -1025,7 +1154,7 @@ describe("SandboxTerminalCoordinator", () => {
       });
       await flush();
       closedProcess.emit({ type: "data", data: "Continue? " });
-      test.coordinator.closeTerminals(["Close"]);
+      test.coordinator.closeTerminals({ owner: undefined, names: ["Close"] });
 
       await vi.advanceTimersByTimeAsync(
         SANDBOX_INTERACTIVE_PROMPT_GRACE_MS * 2,
@@ -1051,6 +1180,7 @@ describe("SandboxTerminalCoordinator", () => {
   it("provides background output, UI input, resize, and Ctrl+C", async () => {
     const test = harness();
     const result = test.coordinator.executeCommand({
+      owner: undefined,
       command: "cat",
       cwd: "/workspace",
       background: true,
@@ -1067,10 +1197,20 @@ describe("SandboxTerminalCoordinator", () => {
     expect(
       test.coordinator.resize("sandbox-1", { columns: 120, rows: 40 }),
     ).toBe(true);
-    expect(test.coordinator.interruptTerminal("sandbox-1")).toBe(true);
+    expect(
+      test.coordinator.interruptTerminal({
+        owner: undefined,
+        terminalId: "sandbox-1",
+      }),
+    ).toBe(true);
     expect(process.write).toHaveBeenCalledWith("hello\r");
     expect(process.interrupt).toHaveBeenCalledTimes(1);
-    expect(test.coordinator.getBackgroundState("sandbox-1")).toMatchObject({
+    expect(
+      test.coordinator.getBackgroundState({
+        owner: undefined,
+        terminalId: "sandbox-1",
+      }),
+    ).toMatchObject({
       is_running: true,
       state: "running",
       output: "waiting",
@@ -1083,7 +1223,12 @@ describe("SandboxTerminalCoordinator", () => {
       timedOut: false,
     });
     await flush();
-    expect(test.coordinator.getBackgroundState("sandbox-1")).toMatchObject({
+    expect(
+      test.coordinator.getBackgroundState({
+        owner: undefined,
+        terminalId: "sandbox-1",
+      }),
+    ).toMatchObject({
       is_running: false,
       state: "completed",
       exit_code: 130,
@@ -1097,6 +1242,7 @@ describe("SandboxTerminalCoordinator", () => {
       const deferred = vi.fn();
       const finalized = vi.fn();
       const resultPromise = test.coordinator.executeCommand({
+        owner: undefined,
         command: "sleep 10",
         cwd: "/workspace",
         timeout: 100,
@@ -1119,7 +1265,7 @@ describe("SandboxTerminalCoordinator", () => {
       process.completionDeferred.resolve({ exitCode: 0, timedOut: false });
       await flush();
       expect(finalized).toHaveBeenCalledTimes(1);
-      test.coordinator.closeTerminals();
+      test.coordinator.closeTerminals({ owner: undefined });
       expect(finalized).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
@@ -1133,6 +1279,7 @@ describe("SandboxTerminalCoordinator", () => {
 
       for (let iteration = 1; iteration <= 3; iteration += 1) {
         const foreground = test.coordinator.executeCommand({
+          owner: undefined,
           command: `printf foreground-${iteration}`,
           cwd: "/workspace",
           sandboxSessionId: "agent-session",
@@ -1149,6 +1296,7 @@ describe("SandboxTerminalCoordinator", () => {
         });
 
         const interrupted = test.coordinator.executeCommand({
+          owner: undefined,
           command: `sleep interrupted-${iteration}`,
           cwd: "/workspace",
           terminal_name: "Interrupt lane",
@@ -1156,6 +1304,7 @@ describe("SandboxTerminalCoordinator", () => {
           sandboxSessionId: "agent-session",
         });
         const completed = test.coordinator.executeCommand({
+          owner: undefined,
           command: `printf completed-${iteration}`,
           cwd: "/workspace",
           terminal_name: "Complete lane",
@@ -1184,7 +1333,12 @@ describe("SandboxTerminalCoordinator", () => {
           backend: "seatbelt",
         });
         await flush();
-        expect(test.coordinator.interruptTerminal("sandbox-2")).toBe(true);
+        expect(
+          test.coordinator.interruptTerminal({
+            owner: undefined,
+            terminalId: "sandbox-2",
+          }),
+        ).toBe(true);
         interruptedProcess.completionDeferred.resolve({
           exitCode: 130,
           signal: 2,
@@ -1201,6 +1355,7 @@ describe("SandboxTerminalCoordinator", () => {
         await flush();
 
         const timedOut = test.coordinator.executeCommand({
+          owner: undefined,
           command: `sleep timeout-${iteration}`,
           cwd: "/workspace",
           terminal_name: "Timeout lane",
@@ -1230,7 +1385,7 @@ describe("SandboxTerminalCoordinator", () => {
       }
 
       expect(test.runtime.launch).toHaveBeenCalledTimes(12);
-      expect(test.coordinator.listTerminals()).toEqual([
+      expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([
         { id: "sandbox-1", name: "Agent command", busy: false },
         { id: "sandbox-2", name: "Interrupt lane", busy: false },
         { id: "sandbox-3", name: "Complete lane", busy: false },
@@ -1270,6 +1425,7 @@ describe("SandboxTerminalCoordinator", () => {
     try {
       const test = harness();
       const resultPromise = test.coordinator.executeCommand({
+        owner: undefined,
         command: "generate high-volume output",
         cwd: "/workspace",
         timeout: 100,
@@ -1291,7 +1447,10 @@ describe("SandboxTerminalCoordinator", () => {
         is_running: true,
       });
       expect(
-        test.coordinator.getBackgroundState(timedOut.terminal_id),
+        test.coordinator.getBackgroundState({
+          owner: undefined,
+          terminalId: timedOut.terminal_id,
+        }),
       ).toMatchObject({
         is_running: true,
         state: "running",
@@ -1304,13 +1463,19 @@ describe("SandboxTerminalCoordinator", () => {
       await flush();
 
       expect(
-        test.coordinator.getBackgroundState(timedOut.terminal_id),
+        test.coordinator.getBackgroundState({
+          owner: undefined,
+          terminalId: timedOut.terminal_id,
+        }),
       ).toMatchObject({
         is_running: false,
         state: "completed",
         exit_code: 0,
       });
-      const retained = test.coordinator.getRetainedOutput(timedOut.terminal_id);
+      const retained = test.coordinator.getRetainedOutput({
+        owner: undefined,
+        terminalId: timedOut.terminal_id,
+      });
       expect(retained).toMatchObject({
         complete: true,
         finalized: true,
@@ -1325,6 +1490,7 @@ describe("SandboxTerminalCoordinator", () => {
   it("closes only Sandbox channels and records recovery metadata", async () => {
     const test = harness();
     await test.coordinator.executeCommand({
+      owner: undefined,
       command: "sleep 10",
       cwd: "/workspace",
       terminal_name: "Server",
@@ -1332,6 +1498,7 @@ describe("SandboxTerminalCoordinator", () => {
       sandboxSessionId: "agent-session",
     });
     await test.coordinator.executeCommand({
+      owner: undefined,
       command: "sleep 10",
       cwd: "/workspace",
       terminal_name: "Tests",
@@ -1340,15 +1507,22 @@ describe("SandboxTerminalCoordinator", () => {
     });
     test.setNow(500);
 
-    expect(test.coordinator.closeTerminals(["Server", "Missing"])).toEqual({
+    expect(
+      test.coordinator.closeTerminals({
+        owner: undefined,
+        names: ["Server", "Missing"],
+      }),
+    ).toEqual({
       closed: 1,
       not_found: ["Missing"],
     });
     expect(test.processes[0].dispose).toHaveBeenCalledTimes(1);
-    expect(test.coordinator.listTerminals()).toEqual([
+    expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([
       { id: "sandbox-2", name: "Tests", busy: true },
     ]);
-    expect(test.coordinator.getRecentlyClosedTerminals()).toEqual([
+    expect(
+      test.coordinator.getRecentlyClosedTerminals({ owner: undefined }),
+    ).toEqual([
       {
         id: "sandbox-1",
         name: "Server",
@@ -1371,6 +1545,7 @@ describe("SandboxTerminalCoordinator", () => {
   it("keeps exact multi-megabyte output retrievable after terminal close", async () => {
     const test = harness();
     await test.coordinator.executeCommand({
+      owner: undefined,
       command: "generate output",
       cwd: "/workspace",
       terminal_name: "Large output",
@@ -1381,13 +1556,31 @@ describe("SandboxTerminalCoordinator", () => {
     await finish(test.processes[0], output);
 
     expect(
-      test.coordinator.getBackgroundState("sandbox-1")?.output.length,
+      test.coordinator.getBackgroundState({
+        owner: undefined,
+        terminalId: "sandbox-1",
+      })?.output.length,
     ).toBeLessThan(output.length);
-    expect(test.coordinator.closeTerminals(["sandbox-1"])).toEqual({
+    expect(
+      test.coordinator.closeTerminals({
+        owner: undefined,
+        names: ["sandbox-1"],
+      }),
+    ).toEqual({
       closed: 1,
     });
-    expect(test.coordinator.getBackgroundState("sandbox-1")).toBeUndefined();
-    expect(test.coordinator.getRetainedOutput("sandbox-1")).toEqual({
+    expect(
+      test.coordinator.getBackgroundState({
+        owner: undefined,
+        terminalId: "sandbox-1",
+      }),
+    ).toBeUndefined();
+    expect(
+      test.coordinator.getRetainedOutput({
+        owner: undefined,
+        terminalId: "sandbox-1",
+      }),
+    ).toEqual({
       output: output.trim(),
       complete: true,
       finalized: true,
@@ -1400,7 +1593,11 @@ describe("SandboxTerminalCoordinator", () => {
   it("fails before launch for missing sessions or mismatched authorization identity", async () => {
     const test = harness();
     await expect(
-      test.coordinator.executeCommand({ command: "pwd", cwd: "/workspace" }),
+      test.coordinator.executeCommand({
+        owner: undefined,
+        command: "pwd",
+        cwd: "/workspace",
+      }),
     ).rejects.toThrow("owning AgentLink session ID");
     const authorize = vi
       .mocked(test.authorizer.authorize)
@@ -1416,6 +1613,7 @@ describe("SandboxTerminalCoordinator", () => {
     );
     await expect(
       test.coordinator.executeCommand({
+        owner: undefined,
         command: "pwd",
         cwd: "/workspace",
         sandboxSessionId: "agent-session",
@@ -1433,6 +1631,7 @@ describe("SandboxTerminalCoordinator", () => {
 
     await expect(
       test.coordinator.executeCommand({
+        owner: undefined,
         command: "pwd",
         cwd: "/workspace",
         sandboxSessionId: "agent-session",
@@ -1444,6 +1643,7 @@ describe("SandboxTerminalCoordinator", () => {
   it("disposes runtime and active commands exactly once", async () => {
     const test = harness();
     await test.coordinator.executeCommand({
+      owner: undefined,
       command: "sleep 10",
       cwd: "/workspace",
       background: true,
@@ -1455,6 +1655,7 @@ describe("SandboxTerminalCoordinator", () => {
     expect(test.runtime.dispose).toHaveBeenCalledTimes(1);
     await expect(
       test.coordinator.executeCommand({
+        owner: undefined,
         command: "pwd",
         cwd: "/workspace",
         sandboxSessionId: "agent-session",

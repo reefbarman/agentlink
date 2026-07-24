@@ -65,10 +65,10 @@ describe("handleCloseTerminals", () => {
       { terminalProvider },
     );
 
-    expect(terminalProvider.closeTerminals).toHaveBeenCalledWith([
-      "Server",
-      "Missing",
-    ]);
+    expect(terminalProvider.closeTerminals).toHaveBeenCalledWith({
+      owner: undefined,
+      names: ["Server", "Missing"],
+    });
     expect(textPayload(result)).toEqual({
       closed: 1,
       not_found: ["Missing"],
@@ -84,7 +84,10 @@ describe("handleCloseTerminals", () => {
 
     const result = await handleCloseTerminals({}, { terminalProvider });
 
-    expect(terminalProvider.closeTerminals).toHaveBeenCalledWith(undefined);
+    expect(terminalProvider.closeTerminals).toHaveBeenCalledWith({
+      owner: undefined,
+      names: undefined,
+    });
     expect(textPayload(result)).toEqual({ closed: 1, remaining: [] });
   });
 });

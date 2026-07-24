@@ -91,6 +91,7 @@ function readSet(): BrowserGatewayOwnerProjectionReadSet {
       mode: "code",
       model: "gpt-5.6-sol",
       status: "streaming",
+      interactiveExecutionPhase: "queued_for_provider",
       streaming: true,
       interrupted: true,
       estimatedTokens: 1_000,
@@ -453,6 +454,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     expect(checkpoint.foreground).toMatchObject({
       originalPrompt: "Review the relay implementation",
       interrupted: true,
+      interactiveExecutionPhase: "queued_for_provider",
       statusOverride: "Refreshing credentials…",
       thinkingEnabled: false,
       reasoningEffort: "medium",

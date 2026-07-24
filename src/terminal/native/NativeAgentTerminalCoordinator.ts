@@ -1,5 +1,6 @@
-import type {
-  ClosedTerminalSnapshot,
+import {
+  sameTerminalOwnerScope,
+  type ClosedTerminalSnapshot,
   NativePreparingTerminalProvider,
   PreparedTerminalExecution,
   TerminalBackgroundState,
@@ -7,10 +8,16 @@ import type {
   TerminalCommandResult,
   TerminalExecutionSecuritySummary,
   TerminalExecuteOptions,
+  TerminalExecutionOwner,
   TerminalMetadata,
+  TerminalOutputRequest,
+  TerminalRecentlyClosedRequest,
   TerminalRetainedOutput,
   TerminalRetainedOutputLease,
   TerminalRetainedOutputMetadata,
+  TerminalTargetRequest,
+  TerminalListRequest,
+  TerminalCloseRequest,
 } from "../../core/capabilities/terminal.js";
 import type { TerminalDimensions } from "../../core/terminalProtocol.js";
 import { buildAgentExecutionEnv } from "../../process/agentExecutionPolicy.js";
@@ -65,6 +72,7 @@ export interface NativeAgentTerminalCoordinatorOptions {
 
 interface ManagedNativeChannel {
   session: SandboxTerminalSession;
+  owner?: TerminalExecutionOwner;
   envKey?: string;
   active?: {
     commandId: string;
@@ -236,27 +244,31 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     }
   }
 
-  getBackgroundState(terminalId: string): TerminalBackgroundState | undefined {
-    const channel = this.channels.get(terminalId);
+  getBackgroundState(
+    request: TerminalTargetRequest,
+  ): TerminalBackgroundState | undefined {
+    const channel = this.ownedChannel(request.terminalId, request.owner);
     return channel
       ? this.backgroundStateFromSnapshot(channel.session.snapshot())
       : undefined;
   }
 
-  getCurrentOutput(
-    terminalId: string,
-    _options?: { force?: boolean },
-  ): string | undefined {
+  getCurrentOutput(request: TerminalOutputRequest): string | undefined {
     // Native output is already held in the in-memory session; there is no
     // external shell-integration buffer to flush when force is requested.
-    const snapshot = this.channels.get(terminalId)?.session.snapshot();
+    const snapshot = this.ownedChannel(
+      request.terminalId,
+      request.owner,
+    )?.session.snapshot();
     return snapshot
       ? cleanTerminalOutput(snapshot.commands.at(-1)?.output ?? "")
       : undefined;
   }
 
-  getRetainedOutput(terminalId: string): TerminalRetainedOutput | undefined {
-    const channel = this.channels.get(terminalId);
+  getRetainedOutput(
+    request: TerminalTargetRequest,
+  ): TerminalRetainedOutput | undefined {
+    const channel = this.ownedChannel(request.terminalId, request.owner);
     if (channel) {
       const commandId = channel.session.snapshot().commands.at(-1)?.commandId;
       return commandId
@@ -264,45 +276,61 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
         : undefined;
     }
     return this.retainedOutput(
-      this.recentlyClosedOutput.get(terminalId)?.read(),
+      this.ownedClosedTerminal(request.terminalId, request.owner)
+        ? this.recentlyClosedOutput.get(request.terminalId)?.read()
+        : undefined,
     );
   }
 
   detachRetainedOutput(
-    terminalId: string,
+    request: TerminalTargetRequest,
   ): TerminalRetainedOutputLease | undefined {
-    const lease = this.recentlyClosedOutput.get(terminalId);
+    if (!this.ownedClosedTerminal(request.terminalId, request.owner)) {
+      return undefined;
+    }
+    const lease = this.recentlyClosedOutput.get(request.terminalId);
     if (!lease) return undefined;
-    this.recentlyClosedOutput.delete(terminalId);
+    this.recentlyClosedOutput.delete(request.terminalId);
     return this.retainedOutputLease(lease);
   }
 
-  interruptTerminal(terminalId: string): boolean {
-    return this.runtime.interrupt(terminalId);
+  interruptTerminal(request: TerminalTargetRequest): boolean {
+    return (
+      this.ownedChannel(request.terminalId, request.owner) !== undefined &&
+      this.runtime.interrupt(request.terminalId)
+    );
   }
 
-  getRecentlyClosedTerminals(limit = 5): ClosedTerminalSnapshot[] {
-    return this.recentlyClosed.slice(0, Math.max(0, limit)).map((item) => ({
-      ...item,
-    }));
+  getRecentlyClosedTerminals(
+    request: TerminalRecentlyClosedRequest,
+  ): ClosedTerminalSnapshot[] {
+    return this.recentlyClosed
+      .filter((terminal) => this.matchesOwner(terminal.owner, request.owner))
+      .slice(0, Math.max(0, request.limit ?? 5))
+      .map((item) => ({ ...item }));
   }
 
-  listTerminals(): TerminalMetadata[] {
-    return [...this.channels.values()].map(({ session }) => {
-      const snapshot = session.snapshot();
-      return {
-        id: snapshot.channelId,
-        name: snapshot.title,
-        busy: snapshot.status === "launching" || snapshot.status === "running",
-      };
-    });
+  listTerminals(request: TerminalListRequest): TerminalMetadata[] {
+    return [...this.channels.values()]
+      .filter((channel) => this.matchesOwner(channel.owner, request.owner))
+      .map(({ session, owner }) => {
+        const snapshot = session.snapshot();
+        return {
+          id: snapshot.channelId,
+          name: snapshot.title,
+          busy:
+            snapshot.status === "launching" || snapshot.status === "running",
+          ...(owner ? { owner: { ...owner } } : {}),
+        };
+      });
   }
 
-  closeTerminals(names?: string[]): TerminalCloseResult {
-    const requested = names ? new Set(names) : undefined;
+  closeTerminals(request: TerminalCloseRequest): TerminalCloseResult {
+    const requested = request.names ? new Set(request.names) : undefined;
     const notFound = requested ? new Set(requested) : undefined;
     let closed = 0;
     for (const [channelId, channel] of this.channels) {
+      if (!this.matchesOwner(channel.owner, request.owner)) continue;
       const snapshot = channel.session.snapshot();
       if (
         requested &&
@@ -324,7 +352,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       this.runtime.closeChannel(channelId);
       this.channels.delete(channelId);
       this.reservations.delete(channelId);
-      this.rememberClosed(snapshot, outputLease);
+      this.rememberClosed(snapshot, channel.owner, outputLease);
       closed += 1;
     }
     return {
@@ -533,37 +561,57 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     );
   }
 
+  private reuseChannel(
+    channel: ManagedNativeChannel,
+    owner: TerminalExecutionOwner | undefined,
+  ): ManagedNativeChannel {
+    channel.owner = owner ? Object.freeze({ ...owner }) : undefined;
+    return channel;
+  }
+
   private resolveChannel(
     options: TerminalExecuteOptions,
   ): ManagedNativeChannel {
     if (options.terminal_id) {
       const existing = this.channels.get(options.terminal_id);
-      if (!existing) {
+      if (!existing || !sameTerminalOwnerScope(existing.owner, options.owner)) {
         throw new Error(
           `Native Agent terminal not found: ${options.terminal_id}`,
         );
       }
-      return existing;
+      return this.reuseChannel(existing, options.owner);
     }
-    if (options.split_from && !this.channels.has(options.split_from)) {
+    if (
+      options.split_from &&
+      !this.ownedChannel(options.split_from, options.owner)
+    ) {
       throw new Error(
         `Native Agent split source not found: ${options.split_from}`,
       );
     }
     if (options.terminal_name) {
       const named = [...this.channels.values()].find(
-        ({ session }) => session.snapshot().title === options.terminal_name,
+        ({ session, owner }) =>
+          session.snapshot().title === options.terminal_name &&
+          sameTerminalOwnerScope(owner, options.owner),
       );
-      return named ?? this.createChannel(options.terminal_name, options.cwd);
+      return named
+        ? this.reuseChannel(named, options.owner)
+        : this.createChannel(options.terminal_name, options.cwd, options.owner);
     }
     if (options.split_from) {
-      return this.createChannel(DEFAULT_AGENTLINK_TITLE, options.cwd);
+      return this.createChannel(
+        DEFAULT_AGENTLINK_TITLE,
+        options.cwd,
+        options.owner,
+      );
     }
     const envKey = environmentKey(options.env);
     const idle = [...this.channels.values()].find(
-      ({ session, envKey: current }) => {
+      ({ session, owner, envKey: current }) => {
         const snapshot = session.snapshot();
         return (
+          sameTerminalOwnerScope(owner, options.owner) &&
           snapshot.status === "idle" &&
           !this.reservations.has(snapshot.channelId) &&
           snapshot.cwd === options.cwd &&
@@ -571,10 +619,16 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
         );
       },
     );
-    return idle ?? this.createChannel(DEFAULT_AGENTLINK_TITLE, options.cwd);
+    return idle
+      ? this.reuseChannel(idle, options.owner)
+      : this.createChannel(DEFAULT_AGENTLINK_TITLE, options.cwd, options.owner);
   }
 
-  private createChannel(title: string, cwd: string): ManagedNativeChannel {
+  private createChannel(
+    title: string,
+    cwd: string,
+    owner: TerminalExecutionOwner | undefined,
+  ): ManagedNativeChannel {
     const channelId = this.createChannelId();
     if (
       !channelId ||
@@ -593,7 +647,10 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       dimensions: this.dimensions,
       now: this.now,
     });
-    const channel: ManagedNativeChannel = { session };
+    const channel: ManagedNativeChannel = {
+      session,
+      ...(owner ? { owner: Object.freeze({ ...owner }) } : {}),
+    };
     session.onEvent((event) => {
       const snapshot = session.snapshot();
       const update: NativeAgentTerminalChannelEvent = { event, snapshot };
@@ -616,7 +673,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     channel.active?.finalizer?.();
     this.channels.delete(channelId);
     this.reservations.delete(channelId);
-    this.rememberClosed(snapshot, outputLease);
+    this.rememberClosed(snapshot, channel.owner, outputLease);
   }
 
   private backgroundResult(
@@ -766,8 +823,39 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       : {};
   }
 
+  private matchesOwner(
+    owner: TerminalExecutionOwner | undefined,
+    requestedOwner: TerminalExecutionOwner | undefined,
+  ): boolean {
+    return (
+      requestedOwner === undefined ||
+      sameTerminalOwnerScope(owner, requestedOwner)
+    );
+  }
+
+  private ownedChannel(
+    terminalId: string,
+    owner: TerminalExecutionOwner | undefined,
+  ): ManagedNativeChannel | undefined {
+    const channel = this.channels.get(terminalId);
+    return channel && this.matchesOwner(channel.owner, owner)
+      ? channel
+      : undefined;
+  }
+
+  private ownedClosedTerminal(
+    terminalId: string,
+    owner: TerminalExecutionOwner | undefined,
+  ): ClosedTerminalSnapshot | undefined {
+    return this.recentlyClosed.find(
+      (terminal) =>
+        terminal.id === terminalId && this.matchesOwner(terminal.owner, owner),
+    );
+  }
+
   private rememberClosed(
     snapshot: SandboxTerminalSessionSnapshot,
+    owner: TerminalExecutionOwner | undefined,
     outputLease?: SandboxTerminalCommandOutputLease,
   ): void {
     if (outputLease)
@@ -776,6 +864,7 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       id: snapshot.channelId,
       name: snapshot.title,
       closedAt: this.now(),
+      ...(owner ? { owner: { ...owner } } : {}),
       ...this.backgroundStateFromSnapshot(snapshot, true),
       ...this.outputMetadata(outputLease?.metadata()),
     });

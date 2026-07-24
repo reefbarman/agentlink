@@ -33,6 +33,7 @@ describe("createVscodeTerminalProvider", () => {
     const provider = createVscodeTerminalProvider();
     const onTerminalAssigned = vi.fn();
     const result = await provider.executeCommand({
+      owner: undefined,
       command: "npm test",
       cwd: "/workspace",
       timeout: 1000,
@@ -58,6 +59,7 @@ describe("createVscodeTerminalProvider", () => {
 
     await expect(
       provider.executeCommand({
+        owner: undefined,
         command: "curl https://example.com",
         cwd: "/workspace",
         sandboxCapabilityRequest: { unrestrictedPublicNetwork: true },
@@ -67,6 +69,7 @@ describe("createVscodeTerminalProvider", () => {
     );
     await expect(
       provider.executeCommand({
+        owner: undefined,
         command: "pwd",
         cwd: "/workspace",
         sandbox: {
@@ -118,15 +121,20 @@ describe("createVscodeTerminalProvider", () => {
 
     const provider = createVscodeTerminalProvider();
 
-    expect(provider.getBackgroundState("term_1")).toEqual({
+    const targetRequest = { owner: undefined, terminalId: "term_1" };
+    const recentRequest = { owner: undefined, limit: 5 };
+    const listRequest = { owner: undefined };
+    const closeRequest = { owner: undefined, names: ["Server"] };
+
+    expect(provider.getBackgroundState(targetRequest)).toEqual({
       is_running: true,
       state: "running",
       exit_code: null,
       output: "running",
       output_captured: true,
     });
-    expect(provider.interruptTerminal("term_1")).toBe(true);
-    expect(provider.getRecentlyClosedTerminals(5)).toEqual([
+    expect(provider.interruptTerminal(targetRequest)).toBe(true);
+    expect(provider.getRecentlyClosedTerminals(recentRequest)).toEqual([
       {
         id: "term_1",
         name: "Server",
@@ -138,15 +146,22 @@ describe("createVscodeTerminalProvider", () => {
         output_captured: true,
       },
     ]);
-    expect(provider.listTerminals()).toEqual([
+    expect(provider.listTerminals(listRequest)).toEqual([
       { id: "term_2", name: "Tests", busy: false },
     ]);
-    expect(provider.closeTerminals(["Server"])).toEqual({ closed: 1 });
+    expect(provider.closeTerminals(closeRequest)).toEqual({ closed: 1 });
 
-    expect(terminalManager.getBackgroundState).toHaveBeenCalledWith("term_1");
-    expect(terminalManager.interruptTerminal).toHaveBeenCalledWith("term_1");
-    expect(terminalManager.getRecentlyClosedTerminals).toHaveBeenCalledWith(5);
-    expect(terminalManager.closeTerminals).toHaveBeenCalledWith(["Server"]);
+    expect(terminalManager.getBackgroundState).toHaveBeenCalledWith(
+      targetRequest,
+    );
+    expect(terminalManager.interruptTerminal).toHaveBeenCalledWith(
+      targetRequest,
+    );
+    expect(terminalManager.getRecentlyClosedTerminals).toHaveBeenCalledWith(
+      recentRequest,
+    );
+    expect(terminalManager.listTerminals).toHaveBeenCalledWith(listRequest);
+    expect(terminalManager.closeTerminals).toHaveBeenCalledWith(closeRequest);
   });
 
   it("proxies log access to TerminalManager", () => {
