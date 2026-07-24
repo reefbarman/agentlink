@@ -69,12 +69,19 @@ When adding a new tool or changing tool parameters:
 
 1. Add or update its metadata in `src/shared/toolRegistry.ts`
 2. Add or update its input schema in `src/shared/toolSchemas.ts`
-3. Wire the tool definition and dispatch path in `src/agent/toolAdapter.ts`
-4. Add or update handler/unit tests for definitions, dispatch, and result behavior
+3. Wire the tool definition and dispatch path in `src/agent/toolAdapter.ts`, following the cross-layer forwarding guidance below
+4. Add or update handler/unit tests for definitions, dispatch, and result behavior. When new callback or request data crosses layers, include a production composition-boundary test that proves the terminal consumer receives it.
 5. Keep the VS Code and browser surfaces in parity when the tool affects shared session state or user-visible events
 6. Update `README.md` — add a full tool section with parameter table and response details
 7. If the change alters what the built-in documentation skill distills (new user-facing capability area, mode, or setting — see [Built-in Documentation Skill](#built-in-documentation-skill)), update that skill too
 8. Run `npm run release -- --install` to rebuild and reinstall the extension. (Not when developing the agent, though)
+
+## Cross-Layer Callback and Request Plumbing
+
+- TypeScript intentionally permits a callback to omit trailing parameters, even with `strict` and `strictFunctionTypes`. When adding or changing callback/request data, search every wrapper, adapter, copied context, and composition root; do not rely on type-checking to detect a dropped optional or trailing value.
+- For pass-through callbacks, use a handler typed from the canonical contract and forward the complete argument tuple (for example, `(...args) => target(...args)`), or pass an already-bound handler directly. Do not manually enumerate positional arguments unless the adapter is deliberately transforming them.
+- Prefer a single request object for internal callback contracts expected to evolve. Forward the whole request object; when constructors should be forced to acknowledge new fields, use required keys whose values may include `undefined` rather than optional keys.
+- Add a composition-boundary regression test that sends distinctive data through the production wiring and asserts that the terminal consumer receives it. Producer and consumer unit tests alone do not verify the seam between them.
 
 ## Tool Usage and Feedback Review
 

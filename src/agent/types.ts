@@ -6,6 +6,7 @@ import type {
 import type { MessageParam, ReasoningEffort } from "./providers/types.js";
 
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
+import type { CoreModelToolResultBlock } from "../core/modelRuntime.js";
 import type { SessionProjectScope } from "../core/workspaceProjects.js";
 import type { TodoItem } from "./todoTool.js";
 
@@ -100,6 +101,8 @@ export type AgentEvent =
       toolCallId: string;
       toolName: string;
       result: ToolResult["content"];
+      /** Canonical provider-history form, computed once by the engine. */
+      historyContent?: CoreModelToolResultBlock["content"];
       durationMs: number;
       input?: unknown;
       parentCallId?: string;

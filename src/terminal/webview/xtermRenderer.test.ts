@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { TerminalRendererCallbacks } from "./terminalWebviewController.js";
 import {
+  computeStickyBlockId,
   detectTerminalHttpLinks,
   interceptTerminalInputTransfer,
   registerReplayResponseSuppression,
@@ -61,13 +62,17 @@ function writeTerminal(terminal: Terminal, data: string): Promise<void> {
   return new Promise((resolve) => terminal.write(data, resolve));
 }
 
-function callbacks(onBlockAnchorDisposed = vi.fn()): TerminalRendererCallbacks {
+function callbacks(
+  onBlockAnchorDisposed = vi.fn(),
+  onStickyBlockChanged = vi.fn(),
+): TerminalRendererCallbacks {
   return {
     ariaLabel: "Test terminal",
     onBlockAnchorDisposed,
     onData: vi.fn(),
     onLink: vi.fn(),
     onPaste: vi.fn(),
+    onStickyBlockChanged,
   };
 }
 
@@ -406,6 +411,73 @@ describe("xtermRendererFactory", () => {
     disposeListener?.();
 
     expect(onBlockAnchorDisposed).toHaveBeenCalledWith("block-1");
+    renderer.dispose();
+  });
+});
+
+describe("computeStickyBlockId", () => {
+  it("picks the closest block start strictly above the viewport top", () => {
+    const markers = new Map([
+      ["block-1", { line: 0, isDisposed: false }],
+      ["block-2", { line: 5, isDisposed: false }],
+      ["block-3", { line: 12, isDisposed: false }],
+    ]);
+    expect(computeStickyBlockId(markers, 0)).toBeUndefined();
+    expect(computeStickyBlockId(markers, 5)).toBe("block-1");
+    expect(computeStickyBlockId(markers, 6)).toBe("block-2");
+    expect(computeStickyBlockId(markers, 20)).toBe("block-3");
+  });
+
+  it("ignores disposed markers and prefers later same-line registrations", () => {
+    const markers = new Map([
+      ["prompt-1", { line: 3, isDisposed: false }],
+      ["command-1", { line: 3, isDisposed: false }],
+      ["command-2", { line: 9, isDisposed: true }],
+    ]);
+    expect(computeStickyBlockId(markers, 4)).toBe("command-1");
+    expect(computeStickyBlockId(markers, 10)).toBe("command-1");
+  });
+});
+
+describe("sticky block tracking", () => {
+  it("reports the block spanning the viewport top and scrolls back to it", async () => {
+    // scrollToLine only takes effect through the DOM viewport, which needs an
+    // opened terminal; headless coverage asserts the delegation instead.
+    const scrollToLine = vi.spyOn(Terminal.prototype, "scrollToLine");
+    const onStickyBlockChanged = vi.fn();
+    const renderer = xtermRendererFactory.create(
+      { scrollback: 1000 },
+      callbacks(vi.fn(), onStickyBlockChanged),
+    );
+    renderer.registerBlockBoundary("block-1", "command-start");
+    expect(onStickyBlockChanged).not.toHaveBeenCalled();
+
+    await renderer.write(
+      Array.from({ length: 40 }, (_, line) => `line-${line}`).join("\r\n"),
+    );
+    expect(onStickyBlockChanged).toHaveBeenLastCalledWith("block-1");
+
+    expect(renderer.scrollToBlock("block-1")).toBe(true);
+    expect(scrollToLine).toHaveBeenCalledWith(0);
+    expect(renderer.scrollToBlock("missing-block")).toBe(false);
+    expect(scrollToLine).toHaveBeenCalledTimes(1);
+    renderer.dispose();
+  });
+
+  it("clears the sticky block when its marker is pruned", async () => {
+    const onStickyBlockChanged = vi.fn();
+    const renderer = xtermRendererFactory.create(
+      { scrollback: 1000 },
+      callbacks(vi.fn(), onStickyBlockChanged),
+    );
+    renderer.registerBlockBoundary("block-1", "command-start");
+    await renderer.write(
+      Array.from({ length: 40 }, (_, line) => `line-${line}`).join("\r\n"),
+    );
+    expect(onStickyBlockChanged).toHaveBeenLastCalledWith("block-1");
+
+    renderer.retainBlockAnchors(new Set());
+    expect(onStickyBlockChanged).toHaveBeenLastCalledWith(undefined);
     renderer.dispose();
   });
 });

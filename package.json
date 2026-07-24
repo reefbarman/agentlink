@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.17.55",
+  "version": "1.17.68",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -468,7 +468,7 @@
           "scope": "resource",
           "type": "boolean",
           "default": false,
-          "description": "Skip ALL approval prompts (file writes and commands auto-approved). Use with caution."
+          "description": "Skip ordinary command and file-write approval prompts. Explicit native escalation, outside-path reads, MCP tools, protected paths, and read-only/delegation boundaries still apply. Use with caution."
         },
         "agentlink.diagnosticDelay": {
           "scope": "resource",

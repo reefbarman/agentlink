@@ -1,6 +1,10 @@
 /** @vitest-environment jsdom */
 
-import type { ChatMessage, TodoItem } from "../../agent/webview/types";
+import type {
+  ChatMessage,
+  ProjectInfo,
+  TodoItem,
+} from "../../agent/webview/types";
 import {
   act,
   cleanup,
@@ -295,6 +299,7 @@ type TestSnapshot = {
       model: string;
       status: string;
       streaming: boolean;
+      interrupted?: boolean;
       projectedMessages: ChatMessage[];
       statusOverride: string | null;
       thinkingEnabled: boolean;
@@ -419,6 +424,7 @@ function createSnapshot(): TestSnapshot {
         model: "claude-sonnet-4-6",
         status: "idle",
         streaming: false,
+        interrupted: false,
         projectedMessages: [],
         statusOverride: null as string | null,
         thinkingEnabled: true,
@@ -662,6 +668,51 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     document.documentElement.removeAttribute("style");
   });
 
+  it("renders and safely resumes an interrupted workspace session", async () => {
+    const interruptedSnapshot = createSnapshot();
+    interruptedSnapshot.session.foreground.interrupted = true;
+    const fallbackFetch = globalThis.fetch;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/ui-state")) {
+          return jsonResponse(interruptedSnapshot);
+        }
+        if (url.includes("/api/resume")) {
+          return jsonResponse({ ok: true }, 202);
+        }
+        return fallbackFetch(input, init);
+      },
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    expect(await screen.findByText("Session interrupted")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([input]) =>
+        String(input).includes("/api/resume?instanceId=instance-1"),
+      );
+      expect(call).toBeDefined();
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+        sessionId: "session-1",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Session interrupted")).toBeNull();
+    });
+  });
+
   for (const dataPlaneMode of ["on", "off"] as const) {
     it(`reloads once when helper authentication expires in ${dataPlaneMode} mode`, async () => {
       vi.useFakeTimers();
@@ -706,6 +757,284 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }
     });
   }
+
+  it("associates Browser Ask Agent model and send requests with the current VS Code instance", async () => {
+    let resolveModelSelection!: () => void;
+    let failModelSelection = false;
+    const modelSelectionGate = new Promise<void>((resolve) => {
+      resolveModelSelection = resolve;
+    });
+    const legacyFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/ask-agent/models?instanceId=instance-1")) {
+          return jsonResponse({
+            models: [
+              {
+                id: "moonshotai/kimi-k2",
+                displayName: "Kimi K2",
+                provider: "openai-compatible:openrouter-moonshotai-kimi-k3",
+                contextWindow: 262_144,
+                authenticated: true,
+              },
+            ],
+            source: "cached",
+            publishedByOwnerId: "workspace-owner",
+            publishedAt: 1,
+            modelCount: 1,
+          });
+        }
+        if (url.includes("/api/relay/subscription")) {
+          const request = JSON.parse(String(init?.body)) as {
+            browserConnectionId: string;
+            ownerId: string;
+            ownerGenerationId: string;
+          };
+          return jsonResponse(
+            {
+              ok: true,
+              protocolVersion: "1",
+              helperGenerationId: "helper-1",
+              browserConnectionId: request.browserConnectionId,
+              subscriptionId: `subscription-${request.ownerId}`,
+              ownerId: request.ownerId,
+              ownerGenerationId: request.ownerGenerationId,
+            },
+            202,
+          );
+        }
+        if (url === "/api/ask-agent/model") {
+          await modelSelectionGate;
+          if (failModelSelection) {
+            return jsonResponse({ error: "invalid_model" }, 400);
+          }
+          const snapshot = createAskAgentSessionResponse().snapshot;
+          delete (snapshot.session.foreground as { project?: ProjectInfo })
+            .project;
+          delete (snapshot.session as { projects?: ProjectInfo[] }).projects;
+          snapshot.session.foreground.model = "moonshotai/kimi-k2";
+          return jsonResponse({ ok: true, snapshot });
+        }
+        return legacyFetch(input, init);
+      },
+    ) as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        dataPlaneMode: "on",
+      }),
+    );
+
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+    const source = MockEventSource.instances[0]!;
+    await act(async () => {
+      source.emit("hello", {
+        protocolVersion: "1",
+        helperGenerationId: "helper-1",
+        browserConnectionId: "connection-1",
+        csrfNonce: "nonce-1",
+        emittedAt: 1,
+      });
+      source.emit("catalog", {
+        protocolVersion: "1",
+        helperGenerationId: "helper-1",
+        emittedAt: 1,
+        owners: [
+          {
+            ownerId: BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+            ownerGenerationId: "ask-generation",
+            ownerKind: "browser-gateway",
+            displayName: "Ask Agent",
+            scope: {
+              kind: "projectless",
+              scopeId: "ask-agent",
+              displayName: "Ask Agent",
+            },
+            status: "connected",
+            capabilities: [],
+            lastHeartbeatAt: 1,
+          },
+          {
+            ownerId: "workspace-owner",
+            ownerGenerationId: "workspace-generation",
+            ownerKind: "vscode",
+            displayName: "Workspace",
+            instanceId: "instance-1",
+            scope: {
+              kind: "workspace",
+              workspaceId: "workspace-1",
+              displayName: "Workspace",
+            },
+            status: "connected",
+            capabilities: [],
+            lastHeartbeatAt: 1,
+          },
+        ],
+      });
+    });
+    await waitFor(() => {
+      expect(
+        vi
+          .mocked(globalThis.fetch)
+          .mock.calls.some(([input]) =>
+            String(input).includes("/api/relay/subscription"),
+          ),
+      ).toBe(true);
+    });
+    await act(async () => {
+      source.emit("checkpoint", {
+        protocolVersion: "1",
+        helperGenerationId: "helper-1",
+        subscriptionId: `subscription-${BROWSER_GATEWAY_ASK_AGENT_OWNER_ID}`,
+        ownerId: BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+        ownerGenerationId: "ask-generation",
+        record: {
+          kind: "checkpoint",
+          relaySequence: 1,
+          ownerSequence: 1,
+          checkpoint: {
+            protocolVersion: "1",
+            helperGenerationId: "helper-1",
+            ownerId: BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+            ownerGenerationId: "ask-generation",
+            checkpointId: "checkpoint-ask-agent",
+            checkpointSequence: 1,
+            emittedAt: 2,
+            foreground: {
+              sessionId: "browser-gateway:ask-agent:default",
+              title: "Ask Agent",
+              mode: "ask",
+              model: "gpt-5.3-codex",
+              status: "idle",
+              streaming: false,
+            },
+            catalog: {
+              projects: [],
+              sessions: [
+                {
+                  sessionId: "browser-gateway:ask-agent:default",
+                  projectId: null,
+                  title: "Ask Agent",
+                  mode: "ask",
+                  model: "gpt-5.3-codex",
+                  messageCount: 0,
+                  createdAt: 1,
+                  updatedAt: 2,
+                },
+              ],
+              defaultProjectId: null,
+              foregroundSessionId: "browser-gateway:ask-agent:default",
+            },
+            transcript: {
+              messages: [],
+              earlierCursor: null,
+              hasEarlier: false,
+            },
+            ui: {
+              interaction: null,
+              queue: [],
+              todos: [],
+              operations: [],
+            },
+            background: [],
+            fleet: [],
+            diffs: [],
+            repository: null,
+            theme: {
+              revision: "theme-ask-agent",
+              colorScheme: "dark",
+              variables: [],
+            },
+            modelCatalogRevision: "models-ask-agent",
+            capabilities: [],
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        vi
+          .mocked(globalThis.fetch)
+          .mock.calls.some(([input]) =>
+            String(input).includes(
+              "/api/ask-agent/models?instanceId=instance-1",
+            ),
+          ),
+      ).toBe(true);
+      expect(screen.queryByText("Loading Ask Agent session…")).toBeNull();
+      expect(screen.getByTestId("model-count").textContent).toBe("1");
+    });
+
+    fireEvent.click(screen.getByTestId("trigger-select-model"));
+    await waitFor(() => {
+      expect(
+        vi
+          .mocked(globalThis.fetch)
+          .mock.calls.some(
+            ([input]) => String(input) === "/api/ask-agent/model",
+          ),
+      ).toBe(true);
+    });
+    expect(screen.getByTestId("mock-input-area")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("trigger-send"));
+    await waitFor(() => {
+      expect(screen.getByText("Waiting for model switch…")).toBeTruthy();
+    });
+    expect(
+      vi
+        .mocked(globalThis.fetch)
+        .mock.calls.some(([input]) => String(input) === "/api/ask-agent/send"),
+    ).toBe(false);
+
+    await act(async () => resolveModelSelection());
+
+    await waitFor(() => {
+      const modelCall = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.find(([input]) => String(input) === "/api/ask-agent/model");
+      const sendCall = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.find(([input]) => String(input) === "/api/ask-agent/send");
+      expect(modelCall).toBeTruthy();
+      expect(sendCall).toBeTruthy();
+      expect(JSON.parse(String(modelCall?.[1]?.body))).toMatchObject({
+        model: "moonshotai/kimi-k2",
+        instanceId: "instance-1",
+      });
+      expect(JSON.parse(String(sendCall?.[1]?.body))).toMatchObject({
+        instanceId: "instance-1",
+      });
+      expect(
+        vi
+          .mocked(globalThis.fetch)
+          .mock.calls.some(([input]) =>
+            String(input).includes("/api/relay/commands"),
+          ),
+      ).toBe(false);
+    });
+
+    failModelSelection = true;
+    fireEvent.click(screen.getByTestId("trigger-select-model"));
+    fireEvent.click(screen.getByTestId("trigger-send"));
+    await waitFor(() => {
+      expect(
+        screen.getByText("Message not sent because the model switch failed."),
+      ).toBeTruthy();
+    });
+    expect(
+      vi
+        .mocked(globalThis.fetch)
+        .mock.calls.filter(
+          ([input]) => String(input) === "/api/ask-agent/send",
+        ),
+    ).toHaveLength(1);
+  });
 
   it("opens workspace file mentions through the owning VS Code instance", async () => {
     const snapshot = createSnapshot();
@@ -3498,6 +3827,69 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
     expect(screen.getByText("Loading session…")).toBeTruthy();
     expect(await screen.findByText("Cached workspace transcript")).toBeTruthy();
+  });
+
+  it("does not restore cached content for a tab advertising newer activity", async () => {
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const workspaceSnapshot = createSnapshot();
+    workspaceSnapshot.session.foreground.projectedMessages = [
+      {
+        id: "workspace-msg-1",
+        role: "assistant",
+        content: "Stale cached workspace transcript",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "Stale cached workspace transcript" }],
+      },
+    ];
+    let workspaceRequests = 0;
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "awaiting_approval", label: "Approval" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/ask-agent/session")) {
+        return jsonResponse(createAskAgentSessionResponse());
+      }
+      if (url.includes("/api/ui-state")) {
+        workspaceRequests += 1;
+        if (workspaceRequests === 1) return jsonResponse(workspaceSnapshot);
+        return await new Promise<Response>(() => undefined);
+      }
+      return jsonResponse({});
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    await screen.findByText("Stale cached workspace transcript");
+    fireEvent.click(screen.getByRole("tab", { name: /Ask Agent/ }));
+    expect(screen.queryByText("Stale cached workspace transcript")).toBeNull();
+
+    const workspaceTab = screen.getByRole("tab", { name: /Workspace/ });
+    fireEvent.click(workspaceTab);
+    expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("Loading session…")).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByText("Stale cached workspace transcript")).toBeNull();
   });
 
   it("coalesces rapid realtime stream updates to the latest payload", async () => {

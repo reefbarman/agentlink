@@ -431,6 +431,8 @@ export type ExtensionMessage =
       type: "agentSessionLoaded";
       sessionId: string;
       title: string;
+      /** Original visible user prompt, independent of the paginated message tail. */
+      originalPrompt?: string;
       mode: string;
       model: string;
       messages: unknown[];

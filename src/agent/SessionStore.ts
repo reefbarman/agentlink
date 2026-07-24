@@ -5,6 +5,7 @@ import * as path from "path";
 import type { AgentMessage, SessionInfo } from "./types.js";
 import type {
   CheckpointState,
+  PersistDurability,
   PersistResult,
   PersistedFleetMetadata,
   PersistedSessionMetadata,
@@ -89,16 +90,30 @@ interface MetadataFile {
   fleet?: PersistedFleetMetadata;
 }
 
-// Narrow seam for testing atomic JSON writes without mocking Node's ESM `fs`
-// namespace. Non-atomic reads/deletes intentionally continue to call `fs`.
-interface SessionStoreAtomicFileOps {
-  openSync(path: fs.PathLike, flags: string | number): number;
-  writeFileSync(file: number, data: string, options: fs.WriteFileOptions): void;
-  fsyncSync(fd: number): void;
-  closeSync(fd: number): void;
-  renameSync(oldPath: fs.PathLike, newPath: fs.PathLike): void;
-  rmSync(path: fs.PathLike, options: fs.RmOptions): void;
+// Narrow async seam for testing atomic JSON writes without mocking Node's ESM
+// `fs` namespace. Non-atomic reads/deletes intentionally continue to call `fs`
+// synchronously: they are small (metadata/index) or startup-only. Node's
+// `fs.promises.FileHandle` satisfies `SessionStoreAtomicFile` structurally.
+interface SessionStoreAtomicFile {
+  writeFile(data: string, options: BufferEncoding): Promise<void>;
+  sync(): Promise<void>;
+  close(): Promise<void>;
 }
+
+interface SessionStoreAtomicFileOps {
+  open(
+    path: fs.PathLike,
+    flags: string | number,
+  ): Promise<SessionStoreAtomicFile>;
+  rename(oldPath: fs.PathLike, newPath: fs.PathLike): Promise<void>;
+  rm(path: fs.PathLike, options: fs.RmOptions): Promise<void>;
+}
+
+const defaultAtomicFileOps: SessionStoreAtomicFileOps = {
+  open: (filePath, flags) => fs.promises.open(filePath, flags),
+  rename: (oldPath, newPath) => fs.promises.rename(oldPath, newPath),
+  rm: (filePath, options) => fs.promises.rm(filePath, options),
+};
 
 export interface SessionStoreOptions {
   /**
@@ -145,8 +160,40 @@ export class SessionStore implements SessionPersistenceProvider {
    * re-fsyncing the full transcript.
    */
   private lastMessagesDigest: Map<string, string> = new Map();
+  /**
+   * Transcript revision counter recorded at the last messages.json write per
+   * session. When an incoming record carries `transcriptRevision`, comparing
+   * counters replaces serializing + hashing the full history to detect an
+   * unchanged transcript.
+   */
+  private lastTranscriptRevision: Map<string, number> = new Map();
+  /**
+   * Durability of the last messages.json write per session. A durable save
+   * whose transcript skip lands on a checkpoint-tier write must fsync the
+   * existing transcript before writing durable metadata that references it.
+   */
+  private messagesFileDurability: Map<string, PersistDurability> = new Map();
   /** Directories already created this process — skips redundant mkdirSync. */
   private ensuredDirs = new Set<string>();
+  /**
+   * Per-session write queue. Serializes the whole revision-aware mutation
+   * (CAS read → messages → metadata) per session directory so overlapping
+   * async saves/deletes can neither interleave their file writes nor race the
+   * revision check, preserving messages-before-metadata and save ordering.
+   */
+  private sessionWriteQueues = new Map<string, Promise<void>>();
+  /** Tail of the sessions.json write chain — at most one write in flight. */
+  private indexWriteChain: Promise<void> = Promise.resolve();
+  /**
+   * Index flush that is queued behind the in-flight write but not yet
+   * started. It serializes `this.index` when it runs, so any number of flush
+   * requests arriving while a write is in flight collapse into this single
+   * entry (last-write-wins; intermediate snapshots are never written).
+   */
+  private pendingIndexFlush: {
+    durability: PersistDurability;
+    promise: Promise<void>;
+  } | null = null;
   private indexLoadState:
     | { ok: true }
     | { ok: false; reason: "corrupt" | "io_error"; message: string } = {
@@ -160,7 +207,7 @@ export class SessionStore implements SessionPersistenceProvider {
       surface: "vscode",
       startedAt: Date.now(),
     },
-    atomicFileOps: SessionStoreAtomicFileOps = fs,
+    atomicFileOps: SessionStoreAtomicFileOps = defaultAtomicFileOps,
     options: SessionStoreOptions = {},
   ) {
     this.identity = identity;
@@ -223,7 +270,7 @@ export class SessionStore implements SessionPersistenceProvider {
       });
       this.index = new Map(normalized.map((s) => [s.id, s]));
       this.indexLoadState = { ok: true };
-      if (didNormalizeIndex) this.flushIndex();
+      if (didNormalizeIndex) this.flushIndexSync();
     } catch (error) {
       if (this.isNotFoundError(error)) {
         this.indexLoadState = { ok: true };
@@ -239,13 +286,67 @@ export class SessionStore implements SessionPersistenceProvider {
     }
   }
 
-  private flushIndex(): void {
+  /**
+   * Synchronous index flush for the constructor path (`loadIndex`/
+   * `rebuildIndex`) and the legacy sync mutators (`rename`/`delete`). Startup
+   * runs before any async writes exist and the index is small, so this is the
+   * one deliberate exception to the async write pipeline. Uses raw `fs`, not
+   * the async seam.
+   */
+  private flushIndexSync(): void {
     this.ensureDir(this.historyDir);
-    const arr = Array.from(this.index.values()).sort(
+    this.writeSerializedFileAtomicSync(
+      this.sessionsFile,
+      `${JSON.stringify(this.sortedIndexSnapshot())}\n`,
+    );
+    this.indexLoadState = { ok: true };
+  }
+
+  /**
+   * Request an async sessions.json flush. At most one write runs at a time;
+   * requests made while a write is in flight coalesce into a single queued
+   * flush that serializes the newest index state when it starts
+   * (last-write-wins — intermediate snapshots are dropped). A durable request
+   * upgrades a queued checkpoint flush, never the reverse.
+   */
+  private scheduleIndexFlush(durability: PersistDurability): Promise<void> {
+    const pending = this.pendingIndexFlush;
+    if (pending) {
+      if (durability === "durable" && pending.durability === "checkpoint") {
+        pending.durability = "durable";
+      }
+      return pending.promise;
+    }
+    const entry: { durability: PersistDurability; promise: Promise<void> } = {
+      durability,
+      promise: Promise.resolve(),
+    };
+    entry.promise = this.indexWriteChain.then(async () => {
+      // From here this flush serializes current state; later requests must
+      // queue a fresh flush to capture mutations made after this point.
+      if (this.pendingIndexFlush === entry) this.pendingIndexFlush = null;
+      this.ensureDir(this.historyDir);
+      // sessions.json is a derived index rebuilt from metadata on load, so a
+      // checkpoint-tier flush losing power is recoverable.
+      await this.writeJsonFileAtomic(
+        this.sessionsFile,
+        this.sortedIndexSnapshot(),
+        entry.durability,
+      );
+      this.indexLoadState = { ok: true };
+    });
+    this.pendingIndexFlush = entry;
+    this.indexWriteChain = entry.promise.then(
+      () => undefined,
+      () => undefined,
+    );
+    return entry.promise;
+  }
+
+  private sortedIndexSnapshot(): SessionSummary[] {
+    return Array.from(this.index.values()).sort(
       (a, b) => b.lastActiveAt - a.lastActiveAt,
     );
-    this.writeJsonFileAtomic(this.sessionsFile, arr);
-    this.indexLoadState = { ok: true };
   }
 
   private rebuildIndex(): void {
@@ -287,7 +388,7 @@ export class SessionStore implements SessionPersistenceProvider {
       this.indexLoadState.ok ||
       (rebuilt.size > 0 && !sawUnrebuildableSession)
     ) {
-      this.flushIndex();
+      this.flushIndexSync();
     }
   }
 
@@ -332,7 +433,7 @@ export class SessionStore implements SessionPersistenceProvider {
       )
     ) {
       this.index.set(sessionId, normalizedSummary);
-      this.flushIndex();
+      await this.scheduleIndexFlush("durable");
     }
     return {
       ok: true,
@@ -348,6 +449,17 @@ export class SessionStore implements SessionPersistenceProvider {
   async saveSession(args: {
     session: PersistedSessionRecord;
     expectedRevision: PersistenceRevision | null;
+    durability?: PersistDurability;
+  }): Promise<PersistResult> {
+    return this.enqueueSessionWrite(args.session.summary.id, () =>
+      this.saveSessionUnqueued(args),
+    );
+  }
+
+  private async saveSessionUnqueued(args: {
+    session: PersistedSessionRecord;
+    expectedRevision: PersistenceRevision | null;
+    durability?: PersistDurability;
   }): Promise<PersistResult> {
     const currentRevisionResult = this.readCurrentRevision(
       args.session.summary.id,
@@ -385,7 +497,11 @@ export class SessionStore implements SessionPersistenceProvider {
 
     try {
       const nextRevision = this.nextRevision(currentRevisionResult);
-      this.writeSessionRecord(args.session, nextRevision);
+      await this.writeSessionRecord(
+        args.session,
+        nextRevision,
+        args.durability ?? "durable",
+      );
       return { ok: true, revision: nextRevision };
     } catch (error) {
       return {
@@ -396,27 +512,54 @@ export class SessionStore implements SessionPersistenceProvider {
     }
   }
 
+  /**
+   * Chain a mutation onto the session's write queue. The task runs after all
+   * previously enqueued mutations for the same session have settled, so its
+   * revision read observes the prior write's committed state.
+   */
+  private enqueueSessionWrite<T>(
+    sessionId: string,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    const previous =
+      this.sessionWriteQueues.get(sessionId) ?? Promise.resolve();
+    const run = previous.then(task, task);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.sessionWriteQueues.set(sessionId, tail);
+    void tail.then(() => {
+      if (this.sessionWriteQueues.get(sessionId) === tail) {
+        this.sessionWriteQueues.delete(sessionId);
+      }
+    });
+    return run;
+  }
+
   async renameSession(args: {
     sessionId: string;
     title: string;
     expectedRevision: PersistenceRevision;
   }): Promise<PersistResult> {
-    const readResult = await this.readSession(args.sessionId);
-    if (!readResult.ok) return readResult;
-    if (readResult.revision !== args.expectedRevision) {
-      return {
-        ok: false,
-        reason: "conflict",
-        currentRevision: readResult.revision,
-      };
-    }
+    return this.enqueueSessionWrite(args.sessionId, async () => {
+      const readResult = await this.readSession(args.sessionId);
+      if (!readResult.ok) return readResult;
+      if (readResult.revision !== args.expectedRevision) {
+        return {
+          ok: false,
+          reason: "conflict",
+          currentRevision: readResult.revision,
+        };
+      }
 
-    return this.saveSession({
-      session: {
-        ...readResult.value,
-        summary: { ...readResult.value.summary, title: args.title },
-      },
-      expectedRevision: args.expectedRevision,
+      return this.saveSessionUnqueued({
+        session: {
+          ...readResult.value,
+          summary: { ...readResult.value.summary, title: args.title },
+        },
+        expectedRevision: args.expectedRevision,
+      });
     });
   }
 
@@ -424,27 +567,54 @@ export class SessionStore implements SessionPersistenceProvider {
     sessionId: string;
     expectedRevision: PersistenceRevision;
   }): Promise<PersistResult> {
-    const currentRevisionResult = this.readCurrentRevision(args.sessionId);
-    if (!currentRevisionResult.ok && currentRevisionResult.reason === "corrupt")
-      return currentRevisionResult;
-    if (
-      !currentRevisionResult.ok &&
-      currentRevisionResult.reason === "io_error"
-    )
-      return currentRevisionResult;
-    if (!currentRevisionResult.ok) return { ok: false, reason: "not_found" };
-    if (currentRevisionResult.revision !== args.expectedRevision) {
-      return {
-        ok: false,
-        reason: "conflict",
-        currentRevision: currentRevisionResult.revision,
-      };
-    }
+    return this.enqueueSessionWrite(args.sessionId, async () => {
+      const currentRevisionResult = this.readCurrentRevision(args.sessionId);
+      if (
+        !currentRevisionResult.ok &&
+        currentRevisionResult.reason === "corrupt"
+      )
+        return currentRevisionResult;
+      if (
+        !currentRevisionResult.ok &&
+        currentRevisionResult.reason === "io_error"
+      )
+        return currentRevisionResult;
+      if (!currentRevisionResult.ok) return { ok: false, reason: "not_found" };
+      if (currentRevisionResult.revision !== args.expectedRevision) {
+        return {
+          ok: false,
+          reason: "conflict",
+          currentRevision: currentRevisionResult.revision,
+        };
+      }
 
-    const deleted = this.delete(args.sessionId);
-    return deleted
-      ? { ok: true, revision: currentRevisionResult.revision }
-      : { ok: false, reason: "not_found" };
+      const deleted = await this.deleteUnqueued(args.sessionId);
+      return deleted
+        ? { ok: true, revision: currentRevisionResult.revision }
+        : { ok: false, reason: "not_found" };
+    });
+  }
+
+  /**
+   * Async delete used by the queued revision-aware path: removes the session
+   * from the in-memory index, flushes the derived index through the async
+   * write pipeline, and removes the session directory.
+   */
+  private async deleteUnqueued(sessionId: string): Promise<boolean> {
+    if (!this.index.has(sessionId)) return false;
+    this.index.delete(sessionId);
+    this.clearSessionWriteState(sessionId);
+    const indexFlush = this.scheduleIndexFlush("durable");
+
+    const sessionDir = path.join(this.historyDir, sessionId);
+    this.forgetEnsuredDirs(sessionDir);
+    try {
+      await fs.promises.rm(sessionDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort
+    }
+    await indexFlush;
+    return true;
   }
 
   /**
@@ -477,49 +647,54 @@ export class SessionStore implements SessionPersistenceProvider {
     checkpoints?: Checkpoint[];
   }): void {
     const messages = session.getAllMessages();
-    const currentRevisionResult = this.readCurrentRevision(session.id);
-    const nextRevision = this.nextRevision(currentRevisionResult);
-    this.writeSessionRecord(
-      {
-        summary: {
-          schemaVersion: SCHEMA_VERSION,
-          id: session.id,
-          mode: session.mode,
-          model: session.model,
-          title: session.title,
-          messageCount: messages.length,
-          totalInputTokens: session.totalInputTokens,
-          totalOutputTokens: session.totalOutputTokens,
-          createdAt: session.createdAt,
-          lastActiveAt: session.lastActiveAt,
-          background: session.background,
-          projectScope: session.projectScope,
-        },
-        messages,
-        metadata: {
-          projectScope: session.projectScope,
-          activeContextResourceUri: session.activeContextResourceUri,
-          mode: session.mode,
-          model: session.model,
-          commandApprovalPolicy: session.commandApprovalPolicy,
-          approvalPolicy: session.approvalPolicy,
-          approvalReviewer: session.approvalReviewer,
-          executionPreset: session.executionPreset,
-          totalInputTokens: session.totalInputTokens,
-          totalOutputTokens: session.totalOutputTokens,
-          totalCacheReadTokens: session.totalCacheReadTokens,
-          totalCacheCreationTokens: session.totalCacheCreationTokens,
-          lastInputTokens: session.lastInputTokens,
-          lastCacheReadTokens: session.lastCacheReadTokens,
-          reasoningEffort: session.reasoningEffort,
-          loadedSkills: session.getLoadedSkills?.() ?? [],
-          checkpointState: session.checkpoints
-            ? { baseCommit: null, checkpoints: session.checkpoints }
-            : undefined,
-        },
+    const record: PersistedSessionRecord = {
+      summary: {
+        schemaVersion: SCHEMA_VERSION,
+        id: session.id,
+        mode: session.mode,
+        model: session.model,
+        title: session.title,
+        messageCount: messages.length,
+        totalInputTokens: session.totalInputTokens,
+        totalOutputTokens: session.totalOutputTokens,
+        createdAt: session.createdAt,
+        lastActiveAt: session.lastActiveAt,
+        background: session.background,
+        projectScope: session.projectScope,
       },
-      nextRevision,
-    );
+      messages,
+      metadata: {
+        projectScope: session.projectScope,
+        activeContextResourceUri: session.activeContextResourceUri,
+        mode: session.mode,
+        model: session.model,
+        commandApprovalPolicy: session.commandApprovalPolicy,
+        approvalPolicy: session.approvalPolicy,
+        approvalReviewer: session.approvalReviewer,
+        executionPreset: session.executionPreset,
+        totalInputTokens: session.totalInputTokens,
+        totalOutputTokens: session.totalOutputTokens,
+        totalCacheReadTokens: session.totalCacheReadTokens,
+        totalCacheCreationTokens: session.totalCacheCreationTokens,
+        lastInputTokens: session.lastInputTokens,
+        lastCacheReadTokens: session.lastCacheReadTokens,
+        reasoningEffort: session.reasoningEffort,
+        loadedSkills: session.getLoadedSkills?.() ?? [],
+        checkpointState: session.checkpoints
+          ? { baseCommit: null, checkpoints: session.checkpoints }
+          : undefined,
+      },
+    };
+    void this.enqueueSessionWrite(session.id, async () => {
+      // Read the revision inside the queue so it observes prior queued writes.
+      const currentRevisionResult = this.readCurrentRevision(session.id);
+      const nextRevision = this.nextRevision(currentRevisionResult);
+      await this.writeSessionRecord(record, nextRevision);
+    }).catch((error) => {
+      this.log?.(
+        `[history] legacy save failed for session ${session.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -678,10 +853,11 @@ export class SessionStore implements SessionPersistenceProvider {
     return `${Date.now()}`;
   }
 
-  private writeSessionRecord(
+  private async writeSessionRecord(
     record: PersistedSessionRecord,
     revision: PersistenceRevision,
-  ): void {
+    durability: PersistDurability = "durable",
+  ): Promise<void> {
     const projectScope = this.resolvePersistedProjectScope(
       record.summary.id,
       record.metadata.projectScope,
@@ -699,32 +875,72 @@ export class SessionStore implements SessionPersistenceProvider {
     const sessionDir = path.join(this.historyDir, summary.id);
     this.ensureDir(sessionDir);
 
-    const messagesFile: MessagesFile = {
-      schemaVersion: SCHEMA_VERSION,
-      messages: record.messages,
-    };
     const messagesPath = path.join(sessionDir, "messages.json");
-    const messagesJson = `${JSON.stringify(messagesFile)}\n`;
-    const messagesDigest = crypto
-      .createHash("sha256")
-      .update(messagesJson)
-      .digest("base64");
-    const transcriptUnchanged =
-      this.lastMessagesDigest.get(summary.id) === messagesDigest &&
-      fs.existsSync(messagesPath);
+    const transcriptRevision = record.transcriptRevision;
+    let messagesJson: string | undefined;
+    let messagesDigest: string | undefined;
+    let transcriptUnchanged: boolean;
+    if (transcriptRevision !== undefined) {
+      transcriptUnchanged =
+        this.lastTranscriptRevision.get(summary.id) === transcriptRevision &&
+        fs.existsSync(messagesPath);
+    } else {
+      // Legacy records without a transcript revision fall back to hashing the
+      // serialized history to detect unchanged transcripts.
+      messagesJson = this.serializeMessages(record.messages);
+      messagesDigest = crypto
+        .createHash("sha256")
+        .update(messagesJson)
+        .digest("base64");
+      transcriptUnchanged =
+        this.lastMessagesDigest.get(summary.id) === messagesDigest &&
+        fs.existsSync(messagesPath);
+    }
+
     if (!transcriptUnchanged) {
-      this.writeSerializedFileAtomic(messagesPath, messagesJson);
-      this.lastMessagesDigest.set(summary.id, messagesDigest);
+      await this.writeSerializedFileAtomic(
+        messagesPath,
+        messagesJson ?? this.serializeMessages(record.messages),
+        durability,
+      );
+      // Record whichever change tracker the record supports and drop the
+      // other, so alternating counter/digest saves can never stale-skip.
+      if (transcriptRevision !== undefined) {
+        this.lastTranscriptRevision.set(summary.id, transcriptRevision);
+        this.lastMessagesDigest.delete(summary.id);
+      } else {
+        this.lastMessagesDigest.set(summary.id, messagesDigest as string);
+        this.lastTranscriptRevision.delete(summary.id);
+      }
+      this.messagesFileDurability.set(summary.id, durability);
+    } else if (
+      durability === "durable" &&
+      this.messagesFileDurability.get(summary.id) === "checkpoint"
+    ) {
+      // The transcript bytes on disk came from a checkpoint-tier write that
+      // skipped fsync. Flush them now so the durable metadata revision below
+      // never references transcript bytes that are not durable themselves.
+      await this.fsyncExistingFile(messagesPath, sessionDir);
+      this.messagesFileDurability.set(summary.id, "durable");
     }
 
     const metadataFile = this.recordMetadataToFile(metadata, revision, summary);
-    this.writeJsonFileAtomic(
+    await this.writeJsonFileAtomic(
       path.join(sessionDir, "metadata.json"),
       metadataFile,
+      durability,
     );
 
     this.index.set(summary.id, summary);
-    this.flushIndex();
+    await this.scheduleIndexFlush(durability);
+  }
+
+  private serializeMessages(messages: AgentMessage[]): string {
+    const messagesFile: MessagesFile = {
+      schemaVersion: SCHEMA_VERSION,
+      messages,
+    };
+    return `${JSON.stringify(messagesFile)}\n`;
   }
 
   private metadataFileToRecord(
@@ -803,30 +1019,101 @@ export class SessionStore implements SessionPersistenceProvider {
     };
   }
 
-  private writeJsonFileAtomic(filePath: string, value: unknown): void {
-    this.writeSerializedFileAtomic(filePath, `${JSON.stringify(value)}\n`);
+  private async writeJsonFileAtomic(
+    filePath: string,
+    value: unknown,
+    durability: PersistDurability = "durable",
+  ): Promise<void> {
+    await this.writeSerializedFileAtomic(
+      filePath,
+      `${JSON.stringify(value)}\n`,
+      durability,
+    );
   }
 
-  private writeSerializedFileAtomic(filePath: string, content: string): void {
+  private async writeSerializedFileAtomic(
+    filePath: string,
+    content: string,
+    durability: PersistDurability = "durable",
+  ): Promise<void> {
     const dir = path.dirname(filePath);
     this.ensureDir(dir);
     try {
-      this.writeSerializedFileAtomicInDir(filePath, dir, content);
+      await this.writeSerializedFileAtomicInDir(
+        filePath,
+        dir,
+        content,
+        durability,
+      );
     } catch (error) {
       if (!this.isNotFoundError(error)) throw error;
       // The directory was removed out from under the ensuredDirs cache (e.g.
       // another window deleted the session) — recreate it and retry once.
       this.ensuredDirs.delete(dir);
       this.ensureDir(dir);
-      this.writeSerializedFileAtomicInDir(filePath, dir, content);
+      await this.writeSerializedFileAtomicInDir(
+        filePath,
+        dir,
+        content,
+        durability,
+      );
     }
   }
 
-  private writeSerializedFileAtomicInDir(
+  private async writeSerializedFileAtomicInDir(
     filePath: string,
     dir: string,
     content: string,
+    durability: PersistDurability,
+  ): Promise<void> {
+    const tempPath = path.join(
+      dir,
+      `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`,
+    );
+    let shouldRemoveTemp = true;
+    let file: SessionStoreAtomicFile | undefined;
+    try {
+      file = await this.atomicFileOps.open(tempPath, "w");
+      await file.writeFile(content, "utf-8");
+      // Checkpoint-tier writes rely on the atomic rename alone: a crash never
+      // leaves a torn file, but the bytes may not survive power loss until a
+      // later durable save fsyncs them.
+      if (durability === "durable") await file.sync();
+      await file.close();
+      file = undefined;
+
+      await this.atomicFileOps.rename(tempPath, filePath);
+      shouldRemoveTemp = false;
+      if (durability === "durable") await this.fsyncDirectoryBestEffort(dir);
+    } finally {
+      if (file !== undefined) {
+        try {
+          await file.close();
+        } catch {
+          // Best-effort cleanup.
+        }
+      }
+      if (shouldRemoveTemp) {
+        try {
+          await this.atomicFileOps.rm(tempPath, { force: true });
+        } catch {
+          // Best-effort cleanup.
+        }
+      }
+    }
+  }
+
+  /**
+   * Sync atomic write used only by `flushIndexSync` (constructor path and
+   * legacy sync mutators). Deliberately bypasses the async seam; always
+   * durable.
+   */
+  private writeSerializedFileAtomicSync(
+    filePath: string,
+    content: string,
   ): void {
+    const dir = path.dirname(filePath);
+    this.ensureDir(dir);
     const tempPath = path.join(
       dir,
       `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`,
@@ -834,26 +1121,40 @@ export class SessionStore implements SessionPersistenceProvider {
     let shouldRemoveTemp = true;
     let fd: number | undefined;
     try {
-      fd = this.atomicFileOps.openSync(tempPath, "w");
-      this.atomicFileOps.writeFileSync(fd, content, "utf-8");
-      this.atomicFileOps.fsyncSync(fd);
-      this.atomicFileOps.closeSync(fd);
+      fd = fs.openSync(tempPath, "w");
+      fs.writeFileSync(fd, content, "utf-8");
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
       fd = undefined;
 
-      this.atomicFileOps.renameSync(tempPath, filePath);
+      fs.renameSync(tempPath, filePath);
       shouldRemoveTemp = false;
-      this.fsyncDirectoryBestEffort(dir);
+      let dirFd: number | undefined;
+      try {
+        dirFd = fs.openSync(dir, "r");
+        fs.fsyncSync(dirFd);
+      } catch {
+        // Some file systems/platforms do not allow fsync on directories.
+      } finally {
+        if (dirFd !== undefined) {
+          try {
+            fs.closeSync(dirFd);
+          } catch {
+            // Best-effort cleanup.
+          }
+        }
+      }
     } finally {
       if (fd !== undefined) {
         try {
-          this.atomicFileOps.closeSync(fd);
+          fs.closeSync(fd);
         } catch {
           // Best-effort cleanup.
         }
       }
       if (shouldRemoveTemp) {
         try {
-          this.atomicFileOps.rmSync(tempPath, { force: true });
+          fs.rmSync(tempPath, { force: true });
         } catch {
           // Best-effort cleanup.
         }
@@ -861,17 +1162,44 @@ export class SessionStore implements SessionPersistenceProvider {
     }
   }
 
-  private fsyncDirectoryBestEffort(dir: string): void {
-    let dirFd: number | undefined;
+  /**
+   * Fsync an already-written file (and best-effort its directory) to upgrade a
+   * prior checkpoint-tier write to durable without rewriting its content.
+   * Throws on fsync failure so the caller's save reports an io_error instead
+   * of persisting a durable metadata revision over non-durable transcript
+   * bytes.
+   */
+  private async fsyncExistingFile(
+    filePath: string,
+    dir: string,
+  ): Promise<void> {
+    let file: SessionStoreAtomicFile | undefined;
     try {
-      dirFd = this.atomicFileOps.openSync(dir, "r");
-      this.atomicFileOps.fsyncSync(dirFd);
+      file = await this.atomicFileOps.open(filePath, "r");
+      await file.sync();
+    } finally {
+      if (file !== undefined) {
+        try {
+          await file.close();
+        } catch {
+          // Best-effort cleanup.
+        }
+      }
+    }
+    await this.fsyncDirectoryBestEffort(dir);
+  }
+
+  private async fsyncDirectoryBestEffort(dir: string): Promise<void> {
+    let file: SessionStoreAtomicFile | undefined;
+    try {
+      file = await this.atomicFileOps.open(dir, "r");
+      await file.sync();
     } catch {
       // Some file systems/platforms do not allow fsync on directories.
     } finally {
-      if (dirFd !== undefined) {
+      if (file !== undefined) {
         try {
-          this.atomicFileOps.closeSync(dirFd);
+          await file.close();
         } catch {
           // Best-effort cleanup.
         }
@@ -965,34 +1293,47 @@ export class SessionStore implements SessionPersistenceProvider {
   // Mutations
   // ---------------------------------------------------------------------------
 
+  /** Legacy sync rename kept for callers without revision tracking. */
   rename(sessionId: string, title: string): boolean {
     const entry = this.index.get(sessionId);
     if (!entry) return false;
     entry.title = title;
     this.index.set(sessionId, entry);
-    this.flushIndex();
+    this.flushIndexSync();
     return true;
   }
 
+  /** Legacy sync delete kept for callers without revision tracking. */
   delete(sessionId: string): boolean {
     if (!this.index.has(sessionId)) return false;
     this.index.delete(sessionId);
-    this.lastMessagesDigest.delete(sessionId);
-    this.flushIndex();
+    this.clearSessionWriteState(sessionId);
+    this.flushIndexSync();
 
     // Remove session directory
     const sessionDir = path.join(this.historyDir, sessionId);
-    for (const dir of this.ensuredDirs) {
-      if (dir === sessionDir || dir.startsWith(sessionDir + path.sep)) {
-        this.ensuredDirs.delete(dir);
-      }
-    }
+    this.forgetEnsuredDirs(sessionDir);
     try {
       fs.rmSync(sessionDir, { recursive: true, force: true });
     } catch {
       // Best-effort
     }
     return true;
+  }
+
+  /** Drop per-session transcript-skip and durability tracking. */
+  private clearSessionWriteState(sessionId: string): void {
+    this.lastMessagesDigest.delete(sessionId);
+    this.lastTranscriptRevision.delete(sessionId);
+    this.messagesFileDurability.delete(sessionId);
+  }
+
+  private forgetEnsuredDirs(sessionDir: string): void {
+    for (const dir of this.ensuredDirs) {
+      if (dir === sessionDir || dir.startsWith(sessionDir + path.sep)) {
+        this.ensuredDirs.delete(dir);
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------

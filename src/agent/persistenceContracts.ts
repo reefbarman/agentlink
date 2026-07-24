@@ -10,12 +10,26 @@ import type { BackgroundResultState } from "../core/capabilities/background.js";
 import type { Checkpoint } from "./CheckpointManager.js";
 import type { FleetResultEnvelope } from "./FleetWorkflows.js";
 import type { PendingQuestionRecoveryContext } from "../core/tools/types.js";
+import type { CoreModelToolResultBlock } from "../core/modelRuntime.js";
 import type { Question } from "./webview/types.js";
 import type { ReasoningEffort } from "./providers/types.js";
 import type { SessionProjectScope } from "../core/workspaceProjects.js";
 import type { SessionSummary } from "./SessionStore.js";
 
 export type PersistenceRevision = string;
+
+/**
+ * Durability tier for a session save.
+ *
+ * - `durable` (the default): temp write + fsync + rename + directory fsync.
+ *   Required at turn boundaries, runState transitions, and destructive ops.
+ * - `checkpoint`: mid-turn snapshot — temp write + rename only, no fsync.
+ *   Rename still guarantees a crash never leaves a torn file; power loss may
+ *   drop the last few seconds of an in-flight turn, which was mid-stream
+ *   anyway. Providers must upgrade a checkpoint-written transcript to durable
+ *   before persisting a durable metadata revision that references it.
+ */
+export type PersistDurability = "checkpoint" | "durable";
 
 export interface SessionPersistenceIdentity {
   ownerId: string;
@@ -62,17 +76,41 @@ export interface PendingQuestionRecoveryState extends PendingQuestionRecoveryCon
   questions: Question[];
 }
 
+export interface PersistedPendingToolResult extends CoreModelToolResultBlock {
+  mcpApprovalPromotion?: import("../shared/types.js").McpApprovalPromotionMeta;
+  composeTrace?: import("../shared/composeTypes.js").ComposeTrace;
+}
+
+export interface PersistedPendingToolTurn {
+  schemaVersion: 1;
+  assistantMessage: AgentMessage;
+  toolResults: PersistedPendingToolResult[];
+}
+
 export type PersistedSessionRunState =
   | {
       phase: "running";
       projectId?: string;
       startedAt: number;
+      /**
+       * Visible text received from the provider but not yet committed as an
+       * assistant message. It is materialized during interrupted-run recovery.
+       */
+      partialAssistantText?: string;
+      /**
+       * A provider-complete assistant tool turn that is still dispatching.
+       * Keeping it outside canonical history avoids exposing placeholder tool
+       * results to live tools while still making the turn durable on reload.
+       */
+      pendingToolTurn?: PersistedPendingToolTurn;
     }
   | {
       phase: "awaiting_question";
       projectId?: string;
       startedAt: number;
       question: PendingQuestionRecoveryState;
+      /** Original provider turn retained while the question UI is pending. */
+      pendingToolTurn?: PersistedPendingToolTurn;
     };
 
 export type PersistedFleetLifecycle =
@@ -213,6 +251,14 @@ export interface PersistedSessionMetadata {
 export interface PersistedSessionRecord {
   summary: SessionSummary;
   messages: AgentMessage[];
+  /**
+   * Monotonic counter bumped on every transcript mutation
+   * (`AgentSession.transcriptRevision`). Providers compare it against the
+   * last written value to skip re-serializing an unchanged transcript without
+   * hashing the full history. Absent for legacy callers; providers must fall
+   * back to content comparison.
+   */
+  transcriptRevision?: number;
   metadata: PersistedSessionMetadata;
 }
 
@@ -226,6 +272,8 @@ export interface SessionPersistenceProvider {
   saveSession(args: {
     session: PersistedSessionRecord;
     expectedRevision: PersistenceRevision | null;
+    /** Defaults to "durable" when omitted. */
+    durability?: PersistDurability;
   }): Promise<PersistResult>;
   renameSession(args: {
     sessionId: string;

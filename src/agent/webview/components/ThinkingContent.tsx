@@ -3,29 +3,29 @@ interface ThinkingContentProps {
 }
 
 /**
- * OpenAI reasoning summaries can arrive as adjacent escaped bold fragments:
- * `**First\*\*\*\*Second**`. Turn those boundaries into readable steps
- * without changing ordinary reasoning prose.
+ * OpenAI reasoning summaries can arrive as adjacent bold fragments with raw
+ * or escaped joins: `**First****Second**` / `**First\*\*\*\*Second**`.
+ * Turn only that whole-value shape into readable steps.
  */
-export function normalizeThinkingText(text: string): string {
-  return text
-    .replace(/\\\*/g, "*")
-    .replace(/\*\*\s*\*\*/g, "**\n**")
-    .trim();
-}
-
 export function parseThinkingSteps(text: string): string[] | null {
-  const normalized = normalizeThinkingText(text);
-  const matches = [...normalized.matchAll(/\*\*([\s\S]*?)\*\*/g)];
-  if (matches.length < 2) return null;
+  const candidate = text.trim();
+  if (
+    /[\r\n]/.test(candidate) ||
+    !candidate.startsWith("**") ||
+    !candidate.endsWith("**")
+  ) {
+    return null;
+  }
 
-  const remainder = normalized.replace(/\*\*([\s\S]*?)\*\*/g, "").trim();
-  if (remainder.length > 0) return null;
+  const inner = candidate.slice(2, -2);
+  const adjacentBoldBoundary = /(?:(?:\\\*){4}|\*{4})/g;
+  if (!adjacentBoldBoundary.test(inner)) return null;
 
-  const steps = matches
-    .map((match) => match[1]?.trim() ?? "")
-    .filter((step) => step.length > 0);
-  return steps.length >= 2 ? steps : null;
+  const steps = inner.split(/(?:(?:\\\*){4}|\*{4})/).map((step) => step.trim());
+  return steps.length >= 2 &&
+    steps.every((step) => step.length > 0 && !step.includes("*"))
+    ? steps
+    : null;
 }
 
 export function ThinkingContent({ text }: ThinkingContentProps) {
@@ -40,9 +40,5 @@ export function ThinkingContent({ text }: ThinkingContentProps) {
     );
   }
 
-  const normalized = normalizeThinkingText(text).replace(
-    /^\s*\*\*(.+?)\*\*\s*$/gm,
-    "$1",
-  );
-  return <pre>{normalized}</pre>;
+  return <pre>{text}</pre>;
 }

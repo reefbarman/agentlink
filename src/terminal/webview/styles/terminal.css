@@ -394,17 +394,94 @@ input:focus-visible {
   flex-direction: column;
 }
 
-.terminal-xterm-host {
+.terminal-xterm-region {
+  position: relative;
   min-width: 0;
   min-height: 0;
   flex: 1;
+}
+
+.terminal-xterm-host {
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
+.terminal-xterm-region,
 .terminal-xterm-host,
 .terminal-xterm-host .xterm {
   width: 100%;
   height: 100%;
+}
+
+.terminal-sticky-command {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  right: 10px;
+  left: 0;
+  display: flex;
+  min-width: 0;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  padding: 2px 6px;
+  background: var(--vscode-terminal-background, var(--vscode-panel-background));
+  color: var(--vscode-terminal-foreground, var(--vscode-foreground));
+  cursor: pointer;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  text-align: left;
+}
+
+.terminal-sticky-command:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.terminal-block-command {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.terminal-command-text {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.terminal-command-status-icon {
+  flex: none;
+  font-size: 12px;
+}
+
+.terminal-command-status-icon.success {
+  color: var(--vscode-terminalCommandDecoration-successBackground, #2ea043);
+}
+
+.terminal-command-status-icon.error {
+  color: var(--vscode-terminalCommandDecoration-errorBackground, #f85149);
+}
+
+.terminal-command-status-icon.running {
+  color: var(--vscode-terminalCommandDecoration-defaultBackground, inherit);
+}
+
+.terminal-command-exit {
+  flex: none;
+  border-radius: 3px;
+  padding: 0 4px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  font-size: 10px;
+  white-space: nowrap;
 }
 
 .terminal-block-strip {

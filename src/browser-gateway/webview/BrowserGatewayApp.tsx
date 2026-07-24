@@ -381,8 +381,8 @@ export type GatewaySnapshot = {
     }>;
   };
   session: {
-    projects: ProjectInfo[];
-    defaultProjectId: string | null;
+    projects?: ProjectInfo[];
+    defaultProjectId?: string | null;
     repository: {
       projectId: string;
       branch?: string;
@@ -402,12 +402,14 @@ export type GatewaySnapshot = {
     }>;
     foreground: {
       sessionId: string;
-      project: ProjectInfo;
+      project?: ProjectInfo;
       title: string;
+      originalPrompt?: string;
       mode: string;
       model: string;
       status: string;
       streaming: boolean;
+      interrupted?: boolean;
       projectedMessages: ChatMessage[];
       statusOverride: string | null;
       thinkingEnabled?: boolean;
@@ -926,7 +928,7 @@ function safeTranscriptFilename(title: string): string {
 
 export function BrowserGatewayApp({
   authToken,
-  currentInstanceId: _currentInstanceId,
+  currentInstanceId,
   workspaceName: _workspaceName,
   routeByInstance = false,
   initialTheme,
@@ -934,6 +936,8 @@ export function BrowserGatewayApp({
   reloadPage = () => window.location.reload(),
 }: BrowserGatewayAppProps) {
   const [snapshot, setSnapshot] = useState<GatewaySnapshot | null>(null);
+  const [associatedInstanceId, setAssociatedInstanceId] =
+    useState(currentInstanceId);
   const [dataPlaneMode, setDataPlaneMode] =
     useState<BrowserGatewayDataPlaneMode>(() =>
       normalizeBrowserGatewayDataPlaneMode(initialDataPlaneMode, "off"),
@@ -973,9 +977,9 @@ export function BrowserGatewayApp({
   const isAskAgentSelected = selectedTabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
   const selectedInstanceId = isAskAgentSelected ? "" : selectedTabId;
   const selectedProjectId =
-    snapshot?.session.foreground?.project.projectId ??
+    snapshot?.session.foreground?.project?.projectId ??
     snapshot?.session.defaultProjectId ??
-    snapshot?.session.projects[0]?.projectId;
+    snapshot?.session.projects?.[0]?.projectId;
   const selectedProjectIdRef = useRef<string | undefined>(selectedProjectId);
   selectedProjectIdRef.current = selectedProjectId;
 
@@ -1006,7 +1010,13 @@ export function BrowserGatewayApp({
     // immediately; mounting a cached transcript can block the main thread for
     // long enough (especially on mobile) that the tap appears to do nothing.
     setSnapshot(null);
-    const cachedSnapshot = snapshotCacheRef.current.get(tabId)?.snapshot;
+    const advertisedStatus = instanceOptionsRef.current.find(
+      (instance) => instance.instanceId === tabId,
+    )?.status?.kind;
+    const cachedSnapshot =
+      advertisedStatus === "working" || advertisedStatus === "awaiting_approval"
+        ? undefined
+        : snapshotCacheRef.current.get(tabId)?.snapshot;
     if (cachedSnapshot) {
       scheduleAfterNextPaint(() => {
         if (
@@ -1118,6 +1128,7 @@ export function BrowserGatewayApp({
   const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
   const [modes, setModes] = useState<ModeInfo[]>([]);
   const [models, setModels] = useState<WebviewModelInfo[]>([]);
+  const pendingModelSelectionRef = useRef<Promise<boolean> | null>(null);
   const [askAgentCapabilities, setAskAgentCapabilities] = useState<
     AskAgentCapabilityStatus[]
   >([]);
@@ -1344,7 +1355,7 @@ export function BrowserGatewayApp({
     })();
     const timer = window.setInterval(() => void fetchInstances(), 5_000);
     return () => window.clearInterval(timer);
-  }, [relayClientEnabled, selectedTabId]);
+  }, [associatedInstanceId, relayClientEnabled, selectedTabId]);
 
   useEffect(() => {
     if (isAskAgentSelected || !selectedProjectId) {
@@ -1868,6 +1879,9 @@ export function BrowserGatewayApp({
           status?: BrowserGatewayInstanceStatusSummary;
         }>;
       };
+      if (data.currentInstanceId) {
+        setAssociatedInstanceId(data.currentInstanceId);
+      }
       if (data.dataPlaneMode !== undefined) {
         setDataPlaneMode(
           normalizeBrowserGatewayDataPlaneMode(data.dataPlaneMode, "off"),
@@ -2055,7 +2069,7 @@ export function BrowserGatewayApp({
     try {
       const response = await fetch(
         askAgentSelected
-          ? "/api/ask-agent/models"
+          ? `/api/ask-agent/models${associatedInstanceId ? `?instanceId=${encodeURIComponent(associatedInstanceId)}` : ""}`
           : buildApiPathForInstance("/api/models", instanceId),
         {
           credentials: "same-origin",
@@ -2609,6 +2623,16 @@ export function BrowserGatewayApp({
     targetForeground?: GatewaySnapshot["session"]["foreground"],
     interject = false,
   ): Promise<boolean> {
+    if (isAskAgentSelected) {
+      const pendingModelSelection = pendingModelSelectionRef.current;
+      if (pendingModelSelection) {
+        setSendStatus("Waiting for model switch…");
+        if (!(await pendingModelSelection)) {
+          setSendStatus("Message not sent because the model switch failed.");
+          return false;
+        }
+      }
+    }
     const activeForeground =
       targetForeground ?? (await ensureAskAgentForeground());
     if (!activeForeground) {
@@ -2743,6 +2767,7 @@ export function BrowserGatewayApp({
       });
       const relayEligible =
         relayClientEnabled &&
+        !isAskAgentSelected &&
         origin === "user" &&
         !interject &&
         attachments.length === 0 &&
@@ -2787,7 +2812,7 @@ export function BrowserGatewayApp({
           sessionId: activeForeground.sessionId,
           projectId: isAskAgentSelected
             ? undefined
-            : snapshot?.session.foreground?.project.projectId,
+            : snapshot?.session.foreground?.project?.projectId,
           mode: activeForeground.mode,
           reasoningEffort: effectiveReasoningEffort,
           thinkingEnabled: effectiveReasoningEffort !== "none",
@@ -2798,6 +2823,7 @@ export function BrowserGatewayApp({
           slashCommandLabel,
           isSlashCommand: Boolean(slashCommandLabel),
           interject,
+          instanceId: isAskAgentSelected ? associatedInstanceId : undefined,
         }),
       });
       const body = (await response.json()) as {
@@ -3317,7 +3343,7 @@ export function BrowserGatewayApp({
           type: "mode",
           mode: slug,
         });
-        const projectId = foreground?.project.projectId;
+        const projectId = foreground?.project?.projectId;
         const response = await fetch(buildApiPath(selectionRequest.path), {
           method: "POST",
           headers: {
@@ -3351,63 +3377,79 @@ export function BrowserGatewayApp({
       });
       return;
     }
-    void (async () => {
-      try {
-        setModeStatus("Switching model…");
-        logAskAgentBrowserEvent("model.start", {
-          askAgentSelected: isAskAgentSelected,
-          currentModel: foreground?.model ?? null,
-          nextModel: modelId,
-        });
-        const selectionRequest = toHttpSelectionRequest({
-          type: "model",
-          model: modelId,
-        });
-        const response = await fetch(
-          isAskAgentSelected
-            ? "/api/ask-agent/model"
-            : buildApiPath(selectionRequest.path),
-          {
-            method: "POST",
-            credentials: "same-origin",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
+    const previousSelection = pendingModelSelectionRef.current;
+    const selection = (previousSelection ?? Promise.resolve(true)).then(
+      async (): Promise<boolean> => {
+        try {
+          setModeStatus("Switching model…");
+          logAskAgentBrowserEvent("model.start", {
+            askAgentSelected: isAskAgentSelected,
+            currentModel: foreground?.model ?? null,
+            nextModel: modelId,
+          });
+          const selectionRequest = toHttpSelectionRequest({
+            type: "model",
+            model: modelId,
+          });
+          const response = await fetch(
+            isAskAgentSelected
+              ? "/api/ask-agent/model"
+              : buildApiPath(selectionRequest.path),
+            {
+              method: "POST",
+              credentials: "same-origin",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${authToken}`,
+              },
+              body: JSON.stringify({
+                ...selectionRequest.body,
+                instanceId: isAskAgentSelected
+                  ? associatedInstanceId
+                  : undefined,
+              }),
             },
-            body: JSON.stringify(selectionRequest.body),
-          },
-        );
-        const body = (await response.json()) as {
-          ok?: boolean;
-          error?: string;
-          snapshot?: GatewaySnapshot;
-        };
-        if (body.ok && body.snapshot) {
-          setSnapshot(body.snapshot);
+          );
+          const body = (await response.json()) as {
+            ok?: boolean;
+            error?: string;
+            snapshot?: GatewaySnapshot;
+          };
+          if (body.ok && body.snapshot) {
+            setSnapshot(body.snapshot);
+          }
+          logAskAgentBrowserEvent("model.response", {
+            askAgentSelected: isAskAgentSelected,
+            currentModel: foreground?.model ?? null,
+            nextModel: modelId,
+            ok: Boolean(body.ok),
+            status: response.status,
+            error: body.error ?? null,
+          });
+          setModeStatus(
+            body.ok
+              ? "Model updated"
+              : `Model switch failed: ${body.error ?? response.status}`,
+          );
+          return Boolean(body.ok);
+        } catch (err) {
+          logAskAgentBrowserEvent("model.error", {
+            askAgentSelected: isAskAgentSelected,
+            currentModel: foreground?.model ?? null,
+            nextModel: modelId,
+            error: String(err),
+          });
+          setModeStatus(`Model switch error: ${String(err)}`);
+          return false;
         }
-        logAskAgentBrowserEvent("model.response", {
-          askAgentSelected: isAskAgentSelected,
-          currentModel: foreground?.model ?? null,
-          nextModel: modelId,
-          ok: Boolean(body.ok),
-          status: response.status,
-          error: body.error ?? null,
-        });
-        setModeStatus(
-          body.ok
-            ? "Model updated"
-            : `Model switch failed: ${body.error ?? response.status}`,
-        );
-      } catch (err) {
-        logAskAgentBrowserEvent("model.error", {
-          askAgentSelected: isAskAgentSelected,
-          currentModel: foreground?.model ?? null,
-          nextModel: modelId,
-          error: String(err),
-        });
-        setModeStatus(`Model switch error: ${String(err)}`);
+      },
+    );
+    pendingModelSelectionRef.current = selection;
+    void selection.finally(() => {
+      if (pendingModelSelectionRef.current === selection) {
+        pendingModelSelectionRef.current = null;
       }
-    })();
+    });
   };
 
   const handleSetCommandApprovalPolicy = (
@@ -3887,7 +3929,10 @@ export function BrowserGatewayApp({
             "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
           },
-          body: JSON.stringify({ sessionId: foreground.sessionId }),
+          body: JSON.stringify({
+            sessionId: foreground.sessionId,
+            instanceId: associatedInstanceId,
+          }),
         });
         const body = (await response.json().catch(() => ({}))) as {
           ok?: boolean;
@@ -3904,6 +3949,52 @@ export function BrowserGatewayApp({
         setSendStatus(`Retry error: ${String(err)}`);
       }
     })();
+  };
+
+  const handleResumeInterruptedSession = (): void => {
+    if (isAskAgentSelected || !foreground) return;
+    const sessionId = foreground.sessionId;
+    setSendStatus("Resuming interrupted session…");
+    void fetch(buildApiPath("/api/resume"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ sessionId }),
+    })
+      .then(async (response) => {
+        const body = (await response.json().catch(() => ({}))) as {
+          ok?: boolean;
+          error?: string;
+        };
+        if (!response.ok || !body.ok) {
+          setSendStatus(
+            `Resume failed: ${body.error ?? String(response.status)}`,
+          );
+          return;
+        }
+        setSnapshot((previous) => {
+          const active = previous?.session.foreground;
+          if (!previous || active?.sessionId !== sessionId) return previous;
+          return {
+            ...previous,
+            session: {
+              ...previous.session,
+              foreground: {
+                ...active,
+                interrupted: false,
+                streaming: true,
+                status: "streaming",
+              },
+            },
+          };
+        });
+        setSendStatus("Resuming…");
+      })
+      .catch((error) => {
+        setSendStatus(`Resume error: ${String(error)}`);
+      });
   };
 
   const handleCondense = (): void => {
@@ -4075,7 +4166,7 @@ export function BrowserGatewayApp({
       case "mcp":
         setShowMcpStatus(true);
         void refreshWorkspaceMcpStatus(
-          foreground?.project.projectId ??
+          foreground?.project?.projectId ??
             snapshot?.session.defaultProjectId ??
             undefined,
         );
@@ -4291,7 +4382,7 @@ export function BrowserGatewayApp({
           return;
         }
         const projectId =
-          foreground?.project.projectId ?? snapshot?.session.defaultProjectId;
+          foreground?.project?.projectId ?? snapshot?.session.defaultProjectId;
         const url = buildApiPath(
           `/api/search-files?query=${encodeURIComponent(query)}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""}`,
         );
@@ -4382,7 +4473,7 @@ export function BrowserGatewayApp({
           },
           body: JSON.stringify({
             projectId:
-              foreground?.project.projectId ??
+              foreground?.project?.projectId ??
               snapshot?.session.defaultProjectId,
           }),
         })
@@ -4628,7 +4719,7 @@ export function BrowserGatewayApp({
             },
             body: JSON.stringify({
               sessionId,
-              projectId: foreground?.project.projectId,
+              projectId: foreground?.project?.projectId,
               queueId,
               text: typeof data.text === "string" ? data.text : "",
               displayText:
@@ -5393,6 +5484,7 @@ export function BrowserGatewayApp({
                       mobileLayout || touchInput ? 20 : undefined
                     }
                     sessionId={foreground?.sessionId ?? null}
+                    originalPrompt={foreground?.originalPrompt}
                     detectedQuestion={foreground?.detectedQuestion ?? null}
                     onDetectedQuestionAnswer={(payload) => {
                       void handleSend(payload, []);
@@ -5805,6 +5897,30 @@ export function BrowserGatewayApp({
                     }
                   />
                 )}
+                {!isAskAgentSelected &&
+                  foreground?.interrupted &&
+                  !streaming &&
+                  !mobileReviewOpen && (
+                    <div class="interrupted-session-banner">
+                      <i class="codicon codicon-debug-restart" />
+                      <div>
+                        <strong>Session interrupted</strong>
+                        <span>
+                          The previous agent turn stopped before it finished.
+                          Resume to let the agent inspect current state and
+                          continue safely.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        class="interrupted-session-resume"
+                        onClick={handleResumeInterruptedSession}
+                        title="Resume interrupted session"
+                      >
+                        Resume
+                      </button>
+                    </div>
+                  )}
                 {streaming && !mobileReviewOpen ? (
                   <StreamingStatusBar
                     messages={messages}
@@ -5964,15 +6080,15 @@ export function BrowserGatewayApp({
                     allowFileMentions={!isAskAgentSelected}
                     disabled={
                       !isAskAgentSelected &&
-                      (snapshot?.session.projects.length === 0 ||
-                        foreground?.project.availability === "unavailable")
+                      ((snapshot?.session.projects?.length ?? 0) === 0 ||
+                        foreground?.project?.availability === "unavailable")
                     }
                     disabledReason={
                       !isAskAgentSelected &&
-                      snapshot?.session.projects.length === 0
+                      (snapshot?.session.projects?.length ?? 0) === 0
                         ? "Open a folder to enable local execution."
                         : !isAskAgentSelected &&
-                            foreground?.project.availability === "unavailable"
+                            foreground?.project?.availability === "unavailable"
                           ? `Project unavailable: ${foreground.project.displayName}`
                           : undefined
                     }

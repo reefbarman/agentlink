@@ -1047,6 +1047,8 @@ export type BgStatusResult = BackgroundAgentStatusResult;
  */
 const MCP_ENABLED_TOOL_PROFILES = new Set(["review", "readonly-research"]);
 
+const MCP_APPROVAL_DETAIL_MAX_CHARS = 20_000;
+
 const READ_ONLY_COMMAND_PROFILES = new Set([
   "review",
   "readonly-research",
@@ -2255,6 +2257,7 @@ function enforceDelegatedPathPolicy(
       isPathWithinRoot(targetPath, scopePath),
     );
   for (const targetPath of paths) {
+    let allowedReason = "delegated_path_allowed";
     if (policy.forbiddenPaths?.some((scope) => contains(scope, targetPath))) {
       policy.onDecision?.({
         decision: "denied",
@@ -2271,15 +2274,23 @@ function enforceDelegatedPathPolicy(
         isPathWithinRoot(targetPath, canonicalRoot),
       )
     ) {
-      policy.onDecision?.({
-        decision: "denied",
-        operation: toolName,
-        reason: "outside_workspace_roots",
-        path: targetPath,
-      });
-      throw new Error(
-        `Delegation policy denied ${toolName} outside workspace roots: ${targetPath}`,
-      );
+      const hasMatchingOutsideWorkspaceAuthority =
+        ctx.approvalManager.isPathTrusted(ctx.sessionId, targetPath) &&
+        ctx.approvalManager.getFileWriteAuthorization(ctx.sessionId, targetPath)
+          .allowed;
+      if (hasMatchingOutsideWorkspaceAuthority) {
+        allowedReason = "matching_outside_workspace_authority";
+      } else {
+        policy.onDecision?.({
+          decision: "denied",
+          operation: toolName,
+          reason: "outside_workspace_roots",
+          path: targetPath,
+        });
+        throw new Error(
+          `Delegation policy denied ${toolName} outside workspace roots: ${targetPath}`,
+        );
+      }
     }
     if (
       policy.ownedPaths?.length &&
@@ -2298,7 +2309,7 @@ function enforceDelegatedPathPolicy(
     policy.onDecision?.({
       decision: "allowed",
       operation: toolName,
-      reason: "delegated_path_allowed",
+      reason: allowedReason,
       path: targetPath,
     });
   }
@@ -2525,7 +2536,18 @@ export async function dispatchToolCall(
     let approvalFollowUp: string | undefined;
 
     if (!isAutoApproved) {
-      const inputPreview = JSON.stringify(input, null, 2).slice(0, 600);
+      const inputJson = JSON.stringify(input, null, 2) ?? "";
+      // Inline approval cards render the detail in a scrollable box, so send
+      // the full input; cap only pathological payloads (e.g. base64 blobs).
+      const inputDetail =
+        inputJson.length > MCP_APPROVAL_DETAIL_MAX_CHARS
+          ? `${inputJson.slice(0, MCP_APPROVAL_DETAIL_MAX_CHARS)}\n… [input truncated: ${
+              inputJson.length - MCP_APPROVAL_DETAIL_MAX_CHARS
+            } more characters]`
+          : inputJson;
+      // The VS Code modal fallback cannot scroll, so keep a short preview.
+      const inputPreview =
+        inputJson.length > 600 ? `${inputJson.slice(0, 600)}…` : inputJson;
       let choice: string;
       let rejectionReason: string | undefined;
 
@@ -2537,7 +2559,7 @@ export async function dispatchToolCall(
           {
             kind: "mcp",
             title: `Allow MCP tool "${bareToolName}" from "${serverName}"?`,
-            detail: inputPreview,
+            detail: inputDetail,
             mcpServerName: serverName,
             mcpToolName: bareToolName,
             targetPath: projectConfigPath,
@@ -2664,21 +2686,33 @@ export async function dispatchToolCall(
               "MCP project approval is unavailable because this request has no executable project root.",
             );
           }
+          try {
+            await persistMcpToolApproval(
+              sourceServerName,
+              bareToolName,
+              filePath,
+            );
+          } catch (error) {
+            return errorResult(
+              `Could not save the project MCP tool approval: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
           approvalManager.approveMcpTool(sessionId, toolName);
-          persistMcpToolApproval(
-            sourceServerName,
-            bareToolName,
-            filePath,
-          ).catch(() => undefined);
           break;
         }
         case "always-tool-global":
+          try {
+            await persistMcpToolApproval(
+              sourceServerName,
+              bareToolName,
+              globalConfigPath,
+            );
+          } catch (error) {
+            return errorResult(
+              `Could not save the global MCP tool approval: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
           approvalManager.approveMcpTool(sessionId, toolName);
-          persistMcpToolApproval(
-            sourceServerName,
-            bareToolName,
-            globalConfigPath,
-          ).catch(() => undefined);
           break;
         case "always-server-project": {
           const filePath = projectConfigPath;
@@ -2687,17 +2721,25 @@ export async function dispatchToolCall(
               "MCP project approval is unavailable because this request has no executable project root.",
             );
           }
+          try {
+            await persistMcpServerApproval(sourceServerName, filePath);
+          } catch (error) {
+            return errorResult(
+              `Could not save the project MCP server approval: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
           approvalManager.approveMcpServer(sessionId, serverName);
-          persistMcpServerApproval(sourceServerName, filePath).catch(
-            () => undefined,
-          );
           break;
         }
         case "always-server-global":
+          try {
+            await persistMcpServerApproval(sourceServerName, globalConfigPath);
+          } catch (error) {
+            return errorResult(
+              `Could not save the global MCP server approval: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
           approvalManager.approveMcpServer(sessionId, serverName);
-          persistMcpServerApproval(sourceServerName, globalConfigPath).catch(
-            () => undefined,
-          );
           break;
         // "allow-once" — no extra action needed
       }

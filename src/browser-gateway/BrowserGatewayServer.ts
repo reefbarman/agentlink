@@ -634,6 +634,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/resume"),
+        ({ req, res }) => this.handleResumeAction(req, res),
+        json("resume action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/background/stop"),
         ({ req, res }) => this.handleBackgroundStopAction(req, res),
         json("background stop action failed"),
@@ -2245,6 +2251,27 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     const result = this.chatViewProvider.submitBrowserStop(body.sessionId);
     this.writeJson(res, result.ok ? 200 : 404, result);
+  }
+
+  private async handleResumeAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as {
+      sessionId?: string;
+    };
+    if (typeof body?.sessionId !== "string" || !body.sessionId.trim()) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+
+    const result = this.chatViewProvider.submitBrowserResume(body.sessionId);
+    this.writeJson(res, result.ok ? 202 : 404, result);
   }
 
   private async handleBackgroundStopAction(

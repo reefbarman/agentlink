@@ -21,6 +21,7 @@ interface ChatViewProps {
   messages: ChatMessage[];
   streaming: boolean;
   sessionId: string | null;
+  originalPrompt?: string | null;
   detectedQuestion?: (DetectedQuestion & { messageId: string }) | null;
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
@@ -67,6 +68,7 @@ export function ChatView({
   messages,
   streaming,
   sessionId,
+  originalPrompt,
   detectedQuestion,
   onDetectedQuestionAnswer,
   onDismissDetectedQuestion,
@@ -187,7 +189,10 @@ export function ChatView({
   }, [visibleMessageLimit]);
 
   const firstUserMsg = messages.find((m) => m.role === "user");
-  const firstPromptText = firstUserMsg?.content.trim() ?? "";
+  const firstPromptText =
+    originalPrompt !== undefined && originalPrompt !== null
+      ? originalPrompt.trim()
+      : (firstUserMsg?.content.trim() ?? "");
   const PREVIEW_MAX = 80;
   const previewLabel =
     firstPromptText.length > PREVIEW_MAX

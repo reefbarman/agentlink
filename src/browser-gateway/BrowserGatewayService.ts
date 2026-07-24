@@ -116,10 +116,12 @@ export interface BrowserGatewaySessionState {
         sessionId: string;
         project: BrowserGatewayProjectInfo;
         title: string;
+        originalPrompt?: string;
         mode: string;
         model: string;
         status: string;
         streaming: boolean;
+        interrupted?: boolean;
         messages: AgentMessage[];
         projectedMessages: ChatMessage[];
         statusOverride: string | null;
@@ -166,10 +168,12 @@ export interface BrowserGatewayWireSessionState {
     sessionId: string;
     project: BrowserGatewayProjectInfo;
     title: string;
+    originalPrompt?: string;
     mode: string;
     model: string;
     status: string;
     streaming: boolean;
+    interrupted?: boolean;
     projectedMessages: ChatMessage[];
     statusOverride: string | null;
     thinkingEnabled: boolean;
@@ -559,9 +563,11 @@ export class BrowserGatewayService implements vscode.Disposable {
     const projectionStartedAt = this.streamingMetrics.enabled
       ? performance.now()
       : 0;
+    const persistedProjectedMessages =
+      agentMessagesToChatMessages(persistedMessages);
     const projectedMessages = projectedMatchesForeground
       ? projected.projectedMessages
-      : agentMessagesToChatMessages(persistedMessages);
+      : persistedProjectedMessages;
     if (this.streamingMetrics.enabled) {
       this.streamingMetrics.record({
         type: "message_projection",
@@ -591,6 +597,10 @@ export class BrowserGatewayService implements vscode.Disposable {
               : "unavailable",
         },
         title: foreground.title,
+        originalPrompt:
+          (projectedMatchesForeground ? projected.originalPrompt : undefined) ??
+          persistedProjectedMessages.find((message) => message.role === "user")
+            ?.content,
         mode: projectedMatchesForeground ? projected.mode : foreground.mode,
         model: projectedMatchesForeground ? projected.model : foreground.model,
         status: foreground.status,
@@ -599,6 +609,14 @@ export class BrowserGatewayService implements vscode.Disposable {
           : foreground.status === "streaming" ||
             foreground.status === "tool_executing" ||
             foreground.status === "awaiting_approval",
+        interrupted: projectedMatchesForeground
+          ? Boolean(projected.interrupted)
+          : Boolean(
+              foreground.runState?.phase === "running" &&
+              foreground.status !== "streaming" &&
+              foreground.status !== "tool_executing" &&
+              foreground.status !== "awaiting_approval",
+            ),
         messages: persistedMessages,
         projectedMessages,
         statusOverride: projectedMatchesForeground
@@ -698,10 +716,12 @@ export class BrowserGatewayService implements vscode.Disposable {
             sessionId: sessionState.foreground.sessionId,
             project: sessionState.foreground.project,
             title: sessionState.foreground.title,
+            originalPrompt: sessionState.foreground.originalPrompt,
             mode: sessionState.foreground.mode,
             model: sessionState.foreground.model,
             status: sessionState.foreground.status,
             streaming: sessionState.foreground.streaming,
+            interrupted: sessionState.foreground.interrupted,
             projectedMessages: sessionState.foreground.projectedMessages,
             statusOverride: sessionState.foreground.statusOverride,
             thinkingEnabled: sessionState.foreground.thinkingEnabled,
@@ -907,10 +927,12 @@ export class BrowserGatewayService implements vscode.Disposable {
         ? {
             sessionId: foreground.sessionId,
             title: foreground.title,
+            originalPrompt: foreground.originalPrompt,
             mode: foreground.mode,
             model: foreground.model,
             status: foreground.status,
             streaming: foreground.streaming,
+            interrupted: foreground.interrupted,
             estimatedTokens: foreground.estimatedTotalUsed,
             statusOverride: foreground.statusOverride,
             thinkingEnabled: foreground.thinkingEnabled,

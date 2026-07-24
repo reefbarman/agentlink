@@ -837,10 +837,16 @@ function projectForeground(
   return {
     sessionId: bounded(foreground.sessionId, 256),
     title: bounded(foreground.title, 1_000),
+    ...(foreground.originalPrompt
+      ? { originalPrompt: bounded(foreground.originalPrompt, 16_000) }
+      : {}),
     mode: bounded(foreground.mode, 128),
     model: bounded(foreground.model, 256),
     status: bounded(foreground.status, 128),
     streaming: foreground.streaming,
+    ...(foreground.interrupted !== undefined
+      ? { interrupted: foreground.interrupted }
+      : {}),
     ...(foreground.estimatedTokens !== undefined
       ? { estimatedTokens: safeInteger(foreground.estimatedTokens) }
       : {}),

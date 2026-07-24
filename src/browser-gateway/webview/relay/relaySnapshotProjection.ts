@@ -1,3 +1,4 @@
+import type { BrowserGatewaySnapshotState } from "../../BrowserGatewayService";
 import type {
   BrowserGatewayBackgroundSummary,
   BrowserGatewayOwnerCheckpoint,
@@ -15,8 +16,6 @@ import {
   parseBrowserGatewayOwnerInteractionPayload,
   type BrowserGatewayOwnerInteractionPayload,
 } from "../../dataPlane/interactionPayload";
-import type { GatewaySnapshot } from "../BrowserGatewayApp";
-
 export class RelaySnapshotProjector {
   private readonly messageCache = new Map<
     string,
@@ -31,7 +30,7 @@ export class RelaySnapshotProjector {
   project(
     checkpoint: BrowserGatewayOwnerCheckpoint,
     interactionPayload: BrowserGatewayOwnerInteractionPayload | null = null,
-  ): GatewaySnapshot {
+  ): BrowserGatewaySnapshotState {
     this.bindIdentity(checkpoint);
     const projects = checkpoint.catalog.projects.map(projectInfo);
     const projectsById = new Map(
@@ -60,10 +59,14 @@ export class RelaySnapshotProjector {
             sessionId: checkpoint.foreground.sessionId,
             project: foregroundProject,
             title: checkpoint.foreground.title,
+            originalPrompt: checkpoint.foreground.originalPrompt,
             mode: checkpoint.foreground.mode,
             model: checkpoint.foreground.model,
             status: checkpoint.foreground.status,
             streaming: checkpoint.foreground.streaming,
+            ...(checkpoint.foreground.interrupted !== undefined
+              ? { interrupted: checkpoint.foreground.interrupted }
+              : {}),
             projectedMessages: this.projectMessages(
               checkpoint.transcript.messages,
             ),
@@ -143,7 +146,7 @@ export class RelaySnapshotProjector {
       diffs: checkpoint.diffs.map((diff) => ({
         requestId: diff.requestId,
         filePath: diff.filePath,
-        operation: diff.operation,
+        operation: diff.operation as "create" | "modify",
         originalPreview: "",
         proposedPreview: "",
         outsideWorkspace: diff.outsideWorkspace,
@@ -230,7 +233,7 @@ export function parseRelayInteractionPayload(
 
 function projectQuestionProgress(
   progress: BrowserGatewayOwnerInteractionPayload["questionProgress"],
-): GatewaySnapshot["ui"]["questionProgress"] {
+): BrowserGatewaySnapshotState["ui"]["questionProgress"] {
   if (!progress) return null;
   return {
     id: progress.id,
@@ -311,7 +314,7 @@ function resolveForegroundProject(
 function projectRepository(
   checkpoint: BrowserGatewayOwnerCheckpoint,
   projects: ReadonlyMap<string, ProjectInfo>,
-): GatewaySnapshot["session"]["repository"] {
+): BrowserGatewaySnapshotState["session"]["repository"] {
   if (!checkpoint.repository) return null;
   const foregroundSession = checkpoint.catalog.sessions.find(
     (session) => session.sessionId === checkpoint.foreground?.sessionId,

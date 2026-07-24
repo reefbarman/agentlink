@@ -74,6 +74,7 @@ import {
   getFinalMessageContinueAction,
   type FinalMessageMarker,
 } from "../shared/finalStatus.js";
+import { buildFileSearchPattern } from "./fileMentionSearch.js";
 import { getLatestTodoState, type TodoItem } from "./todoTool.js";
 import {
   resolveProjectAttachments,
@@ -87,7 +88,11 @@ import {
   type McpFormElicitationSubmitResult,
 } from "./McpFormElicitationCoordinator.js";
 import { cleanupOrphanedMcpOAuthState } from "./McpOAuthProvider.js";
-import { dispatchToolCall, getAgentTools } from "./toolAdapter.js";
+import {
+  dispatchToolCall,
+  getAgentTools,
+  type ToolDispatchContext,
+} from "./toolAdapter.js";
 import { MCP_TOOL_BRIDGE_TOOL_NAMES } from "../shared/mcpToolDefinitions.js";
 import {
   type AgentUiPublisher,
@@ -605,6 +610,8 @@ export type ExtensionToWebview =
       type: "agentSessionLoaded";
       sessionId: string;
       title: string;
+      /** Original visible user prompt, independent of the paginated message tail. */
+      originalPrompt?: string;
       mode: string;
       model: string;
       messages: import("./types.js").AgentMessage[];
@@ -3116,6 +3123,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Ask the user a set of questions via the chat webview and wait for responses.
    * Called by the ask_user tool handler in toolAdapter.
    */
+  public readonly handleToolQuestion: NonNullable<
+    ToolDispatchContext["onQuestion"]
+  > = (...args) => this.requestQuestion(...args);
+
   private restorePendingQuestionRecovery(
     session: AgentSession,
     question: PendingQuestionRecoveryState,
@@ -3298,6 +3309,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (!accepted) return false;
         this.applyProjectedAction({ type: "CLEAR_QUESTION" });
         this.uiPublisher.publishQuestionCleared(msg.id);
+        // The recovered answer was committed straight into session history
+        // (assistant ask_user tool_use + tool_result) without flowing through
+        // live agent events, so neither surface has the turn in its
+        // transcript. Resync both from session history.
+        if (
+          this.sessionManager?.getForegroundSession()?.id ===
+          foregroundSession.id
+        ) {
+          this.postSessionLoaded(foregroundSession);
+        }
         return true;
       }
       return false;
@@ -4560,18 +4581,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Stop a running session and clear any pending UI prompts (questions,
-   * approvals, elicitations) that belong to it, then notify the webview so it
-   * exits streaming state. Shared by the VS Code webview "agentStop" message
-   * and the browser gateway stop endpoint.
+   * Stop or replace a running foreground turn and clear any pending UI prompts
+   * (questions, approvals, elicitations) that belong to it, then notify the
+   * webview so it exits streaming state. Explicit stops cancel the owned
+   * background subtree; steering preserves it.
    */
   private stopSessionFromUi(
     sessionId: string,
-    opts?: { drainBrowserQueue?: boolean },
+    opts?: {
+      drainBrowserQueue?: boolean;
+      preserveBackgroundAgents?: boolean;
+    },
   ): void {
     if (!this.sessionManager) return;
     const session = this.sessionManager.getSession(sessionId);
-    this.sessionManager.stopSession(sessionId);
+    if (opts?.preserveBackgroundAgents) {
+      this.sessionManager.interruptSession(sessionId);
+    } else {
+      this.sessionManager.stopSession(sessionId);
+    }
     // Clear any active agent tool calls from the sidebar tracker
     this.toolCallTracker?.clearAgentCalls(sessionId);
     this.publishVisibleApprovalOrIdle();
@@ -4660,7 +4688,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       session.status === "tool_executing" ||
       session.status === "awaiting_approval";
     if (isRunning) {
-      this.stopSessionFromUi(input.sessionId, { drainBrowserQueue: false });
+      this.stopSessionFromUi(input.sessionId, {
+        drainBrowserQueue: false,
+        preserveBackgroundAgents: true,
+      });
     }
 
     const projectRoot = this.getSessionProjectRoot(input.sessionId);
@@ -4901,6 +4932,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return { ok: true };
   }
 
+  /** Resume an interrupted foreground session through the manager's safe path. */
+  public submitBrowserResume(sessionId: string): { ok: boolean } {
+    if (!sessionId || !this.sessionManager) return { ok: false };
+    const session = this.sessionManager.getSession(sessionId);
+    if (
+      !session ||
+      session.background ||
+      !session.runState ||
+      session.runState.phase === "awaiting_question" ||
+      (session.status !== "idle" && session.status !== "error")
+    ) {
+      return { ok: false };
+    }
+    void this.sessionManager
+      .resumeInterruptedSession(sessionId)
+      .then((resumed) => {
+        if (!resumed) this.sendInitialState();
+      })
+      .catch((error) => {
+        this.log(`[error] browser resume failed: ${String(error)}`);
+        this.sendInitialState();
+      });
+    return { ok: true };
+  }
+
   public submitBrowserStopBackground(sessionId: string): { ok: boolean } {
     if (!sessionId || !this.sessionManager) return { ok: false };
     const session = this.sessionManager.getSession(sessionId);
@@ -5052,7 +5108,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!scope?.rootPath) return [];
 
     try {
-      const pattern = query === "*" ? "**/*" : `**/*${query}*`;
+      const { pattern, effectiveQuery } = buildFileSearchPattern(
+        query,
+        scope.rootPath,
+      );
       const include = new vscode.RelativePattern(scope.rootPath, pattern);
       // VS Code can opt workspace.findFiles into respecting .gitignore. Keep
       // the normal query for fast/common results, then merge a documented
@@ -5084,7 +5143,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       const files = [...filesByPath.values()];
 
-      const lowerQuery = query.toLowerCase();
+      const lowerQuery = path.posix.basename(effectiveQuery).toLowerCase();
       files.sort((a, b) => {
         const aBase = path.basename(a.path).toLowerCase();
         const bBase = path.basename(b.path).toLowerCase();
@@ -9641,12 +9700,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.withApprovalStateTransition(() => {
       this.reconcileRestoredSessionApproval(session);
       const all = session.getAllMessages();
+      const projectedAll = agentMessagesToChatMessages(all as unknown[]);
       const tail = getTailChunkByUserTurns(
         all,
         opts?.tailTurns ?? RESTORE_TAIL_TURNS,
       );
       const persistedResultSessionIds = new Set(
-        agentMessagesToChatMessages(all as unknown[]).flatMap((message) =>
+        projectedAll.flatMap((message) =>
           message.blocks.flatMap((block) =>
             block.type === "bg_agent_result" ? [block.sessionId] : [],
           ),
@@ -9665,6 +9725,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         type: "agentSessionLoaded",
         sessionId: session.id,
         title: session.title,
+        originalPrompt: projectedAll.find((message) => message.role === "user")
+          ?.content,
         mode: session.mode,
         model: session.model,
         messages: tail.chunk,

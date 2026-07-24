@@ -768,6 +768,7 @@ type BrowserGatewayPrivateModelCatalogSnapshot = CoreModelCatalogSnapshot & {
 };
 
 type AskAgentModelExecutionContext = {
+  modelOwnerId: string;
   ownerId: string;
   ownerGenerationId: string;
   providerId: string;
@@ -792,8 +793,12 @@ export class BrowserGatewayHelper {
   });
   private readonly modelCredentialCache =
     new BrowserGatewayModelCredentialCache();
-  private modelCatalogSnapshot: BrowserGatewayPrivateModelCatalogSnapshot | null =
-    null;
+  private readonly modelCatalogSnapshots = new Map<
+    string,
+    BrowserGatewayPrivateModelCatalogSnapshot
+  >();
+  private askAgentModelOwnerId: string | undefined;
+  private latestModelCatalogOwnerId: string | undefined;
   private readonly askAgentController: AskAgentController;
   private readonly askAgentOwnerAdapter: AskAgentOwnerAdapter;
   private readonly askAgentSseHub: SseHub<AskAgentControllerSnapshot>;
@@ -1349,7 +1354,7 @@ export class BrowserGatewayHelper {
       case "events":
         return this.handleAskAgentEventsRequest(req, res);
       case "models":
-        this.handleAskAgentModelsRequest(res);
+        this.handleAskAgentModelsRequest(req, res);
         return;
       case "slashCommands":
         return this.handleAskAgentSlashCommandsRequest(res);
@@ -2281,6 +2286,7 @@ export class BrowserGatewayHelper {
     >[0],
     history: Parameters<BrowserGatewayAskAgentSessionStore["loadHistory"]>[0],
   ): void {
+    this.askAgentModelOwnerId = preferences.modelOwnerId;
     this.askAgentController.restoreState(preferences, history);
   }
 
@@ -2893,26 +2899,103 @@ export class BrowserGatewayHelper {
     });
   }
 
-  private getAskAgentModelExecutionContext(
-    now = Date.now(),
-  ): AskAgentModelExecutionContext | null {
-    const snapshot = this.modelCatalogSnapshot;
-    const model = this.askAgentSessionStore.getModel();
-    const providerId = this.askAgentSessionStore.getModelProvider();
+  private resolveModelCatalogOwnerId(requestedId?: string): string | undefined {
+    if (!requestedId) return undefined;
+    if (this.modelCatalogSnapshots.has(requestedId)) return requestedId;
+    return this.coreOwnerRegistry
+      .list()
+      .find((registration) => registration.owner.instanceId === requestedId)
+      ?.owner.ownerId;
+  }
+
+  private getModelCatalogSnapshot(
+    requestedOwnerId?: string,
+  ): BrowserGatewayPrivateModelCatalogSnapshot | null {
+    const candidateOwnerId = requestedOwnerId ?? this.askAgentModelOwnerId;
+    const ownerId = candidateOwnerId
+      ? this.resolveModelCatalogOwnerId(candidateOwnerId)
+      : this.latestModelCatalogOwnerId;
+    if (!ownerId) return null;
+    const snapshot = this.modelCatalogSnapshots.get(ownerId);
     if (!snapshot) return null;
-    if (
-      !snapshot.models.some(
-        (entry) => entry.id === model && entry.providerId === providerId,
-      )
-    ) {
-      return null;
-    }
     const owner = this.coreOwnerRegistry.get(snapshot.publishedByOwnerId);
     if (
       !owner ||
       owner.status !== "connected" ||
       owner.ownerGenerationId !== snapshot.publishedByOwnerGenerationId
     ) {
+      return null;
+    }
+    return snapshot;
+  }
+
+  private applyModelCatalogForOwner(
+    ownerId?: string,
+  ): BrowserGatewayPrivateModelCatalogSnapshot | null {
+    const requestedOwnerId = ownerId?.trim();
+    const resolvedOwnerId = requestedOwnerId
+      ? this.resolveModelCatalogOwnerId(requestedOwnerId)
+      : this.askAgentModelOwnerId;
+    if (requestedOwnerId && !resolvedOwnerId) {
+      this.askAgentSessionStore.updateAvailableModels([]);
+      return null;
+    }
+    if (resolvedOwnerId) this.askAgentModelOwnerId = resolvedOwnerId;
+    const snapshot = this.getModelCatalogSnapshot(resolvedOwnerId);
+    this.askAgentSessionStore.updateAvailableModels(
+      snapshot
+        ? snapshot.models.map((model) => ({
+            id: model.id,
+            displayName: model.displayName,
+            provider: model.providerId,
+            providerDisplayName: model.providerDisplayName,
+            supportsToolUse: model.supportsToolUse,
+            supportsImages: model.supportsImages,
+            contextWindow: model.contextWindow,
+            maxInputTokens: model.maxInputTokens,
+            maxOutputTokens: model.maxOutputTokens,
+            reasoningEfforts: model.reasoningEfforts,
+            defaultReasoningEffort: model.defaultReasoningEffort,
+            authenticated: model.authenticated,
+            condenseThreshold: model.condenseThreshold,
+          }))
+        : [],
+    );
+    return snapshot;
+  }
+
+  private async pinAskAgentModelOwner(
+    modelContext: AskAgentModelExecutionContext,
+  ): Promise<void> {
+    if (this.askAgentModelOwnerId === modelContext.modelOwnerId) return;
+    this.askAgentModelOwnerId = modelContext.modelOwnerId;
+    await this.askAgentPreferencesStore.update({
+      ...this.askAgentSessionStore.getPreferencesSnapshot(),
+      modelOwnerId: modelContext.modelOwnerId,
+    });
+  }
+
+  private modelCatalogSnapshotAdvertises(
+    snapshot: BrowserGatewayPrivateModelCatalogSnapshot,
+    model: string,
+    providerId: string,
+  ): boolean {
+    return snapshot.models.some(
+      (entry) =>
+        entry.id === model &&
+        normalizeBrowserGatewayModelCredentialProviderId(entry.providerId) ===
+          providerId,
+    );
+  }
+
+  private getAskAgentModelExecutionContextFromSnapshot(params: {
+    snapshot: BrowserGatewayPrivateModelCatalogSnapshot;
+    model: string;
+    providerId: string;
+    now: number;
+  }): AskAgentModelExecutionContext | null {
+    const { snapshot, model, providerId, now } = params;
+    if (!this.modelCatalogSnapshotAdvertises(snapshot, model, providerId)) {
       return null;
     }
     const openAiCompatibleRuntimeProfile =
@@ -2925,12 +3008,14 @@ export class BrowserGatewayHelper {
       now,
     });
     if (openAiCompatibleRuntimeProfile) {
-      if (openAiCompatibleRuntimeProfile.authRequired && !credential)
+      if (openAiCompatibleRuntimeProfile.authRequired && !credential) {
         return null;
+      }
     } else if (!credential) {
       return null;
     }
     return {
+      modelOwnerId: snapshot.publishedByOwnerId,
       ownerId: snapshot.publishedByOwnerId,
       ownerGenerationId: snapshot.publishedByOwnerGenerationId,
       providerId,
@@ -2938,6 +3023,57 @@ export class BrowserGatewayHelper {
       credential: credential ?? undefined,
       openAiCompatibleRuntimeProfile,
     };
+  }
+
+  private getAskAgentModelExecutionContext(
+    now = Date.now(),
+    requestedOwnerId = this.askAgentModelOwnerId,
+  ): AskAgentModelExecutionContext | null {
+    const snapshot = this.getModelCatalogSnapshot(requestedOwnerId);
+    const model = this.askAgentSessionStore.getModel();
+    const providerId = this.askAgentSessionStore.getModelProvider();
+    if (!snapshot) return null;
+    if (!this.modelCatalogSnapshotAdvertises(snapshot, model, providerId)) {
+      return null;
+    }
+
+    const selectedOwnerContext =
+      this.getAskAgentModelExecutionContextFromSnapshot({
+        snapshot,
+        model,
+        providerId,
+        now,
+      });
+    if (selectedOwnerContext) return selectedOwnerContext;
+    if (providerId !== BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID)
+      return null;
+
+    // Codex credentials are account-scoped rather than workspace-scoped, so a
+    // connected owner may supply them without replacing the selected catalog.
+    const candidateSnapshots = [...this.modelCatalogSnapshots.keys()]
+      .filter((ownerId) => ownerId !== snapshot.publishedByOwnerId)
+      .flatMap((ownerId) => this.getModelCatalogSnapshot(ownerId) ?? [])
+      .sort(
+        (left, right) =>
+          right.publishedAt - left.publishedAt ||
+          left.publishedByOwnerId.localeCompare(right.publishedByOwnerId),
+      );
+    for (const candidateSnapshot of candidateSnapshots) {
+      const candidateContext =
+        this.getAskAgentModelExecutionContextFromSnapshot({
+          snapshot: candidateSnapshot,
+          model,
+          providerId,
+          now,
+        });
+      if (candidateContext) {
+        return {
+          ...candidateContext,
+          modelOwnerId: snapshot.publishedByOwnerId,
+        };
+      }
+    }
+    return null;
   }
 
   private getAskAgentModelCredential(now = Date.now()) {
@@ -2954,8 +3090,11 @@ export class BrowserGatewayHelper {
     });
   }
 
-  private getAskAgentModelCredentialStatus(now = Date.now()) {
-    const snapshot = this.modelCatalogSnapshot;
+  private getAskAgentModelCredentialStatus(
+    now = Date.now(),
+    requestedOwnerId = this.askAgentModelOwnerId,
+  ) {
+    const snapshot = this.getModelCatalogSnapshot(requestedOwnerId);
     const providerId = this.askAgentSessionStore.getModelProvider();
     if (!snapshot) {
       return {
@@ -2964,24 +3103,56 @@ export class BrowserGatewayHelper {
           "Open a VS Code AgentLink window to publish model configuration.",
       };
     }
-    const profile = snapshot.openAiCompatibleRuntimeProfiles[providerId];
-    if (profile && !profile.authRequired) {
+    const modelContext = this.getAskAgentModelExecutionContext(
+      now,
+      requestedOwnerId,
+    );
+    if (modelContext?.openAiCompatibleRuntimeProfile?.authRequired === false) {
       return { state: "not_required" as const, providerId };
     }
+    const credentialOwner = modelContext ?? {
+      ownerId: snapshot.publishedByOwnerId,
+      ownerGenerationId: snapshot.publishedByOwnerGenerationId,
+    };
     return this.modelCredentialCache.getStatus({
-      grantedByOwnerId: snapshot.publishedByOwnerId,
-      grantedByOwnerGenerationId: snapshot.publishedByOwnerGenerationId,
+      grantedByOwnerId: credentialOwner.ownerId,
+      grantedByOwnerGenerationId: credentialOwner.ownerGenerationId,
       providerId,
       modelScope: BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE,
       now,
     });
   }
 
-  private handleAskAgentModelsRequest(res: http.ServerResponse): void {
-    this.applyPublishedModelCatalogToAskAgent();
-    const publishedCatalog = this.modelCatalogSnapshot;
+  private handleAskAgentModelsRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void {
+    const requestedOwnerId = new URL(
+      req.url ?? "/api/ask-agent/models",
+      "http://localhost",
+    ).searchParams
+      .get("instanceId")
+      ?.trim();
+    const publishedCatalog = this.getModelCatalogSnapshot(requestedOwnerId);
+    const models = publishedCatalog
+      ? publishedCatalog.models.map((model) => ({
+          id: model.id,
+          displayName: model.displayName,
+          provider: model.providerId,
+          providerDisplayName: model.providerDisplayName,
+          supportsToolUse: model.supportsToolUse,
+          supportsImages: model.supportsImages,
+          contextWindow: model.contextWindow,
+          maxInputTokens: model.maxInputTokens,
+          maxOutputTokens: model.maxOutputTokens,
+          reasoningEfforts: model.reasoningEfforts,
+          defaultReasoningEffort: model.defaultReasoningEffort,
+          authenticated: model.authenticated,
+          condenseThreshold: model.condenseThreshold,
+        }))
+      : this.askAgentSessionStore.getFallbackModels();
     writeJson(res, 200, {
-      models: this.askAgentSessionStore.getAvailableModels(),
+      models,
       publishedByOwnerId: publishedCatalog?.publishedByOwnerId,
       publishedByOwnerGenerationId:
         publishedCatalog?.publishedByOwnerGenerationId,
@@ -3831,28 +4002,6 @@ export class BrowserGatewayHelper {
     }
   }
 
-  private applyPublishedModelCatalogToAskAgent(): void {
-    const snapshot = this.modelCatalogSnapshot;
-    if (!snapshot) return;
-    this.askAgentSessionStore.updateAvailableModels(
-      snapshot.models.map((model) => ({
-        id: model.id,
-        displayName: model.displayName,
-        provider: model.providerId,
-        providerDisplayName: model.providerDisplayName,
-        supportsToolUse: model.supportsToolUse,
-        supportsImages: model.supportsImages,
-        contextWindow: model.contextWindow,
-        maxInputTokens: model.maxInputTokens,
-        maxOutputTokens: model.maxOutputTokens,
-        reasoningEfforts: model.reasoningEfforts,
-        defaultReasoningEffort: model.defaultReasoningEffort,
-        authenticated: model.authenticated,
-        condenseThreshold: model.condenseThreshold,
-      })),
-    );
-  }
-
   private sanitizeAskAgentLogFields(
     fields: Record<string, unknown>,
   ): Record<string, string | number | boolean | null> {
@@ -3920,8 +4069,14 @@ export class BrowserGatewayHelper {
     res: http.ServerResponse,
   ): Promise<void> {
     try {
-      const body = (await readJsonBody(req)) as { model?: unknown } | null;
+      const body = (await readJsonBody(req)) as {
+        model?: unknown;
+        instanceId?: unknown;
+      } | null;
       const model = typeof body?.model === "string" ? body.model.trim() : "";
+      const requestedOwnerId =
+        typeof body?.instanceId === "string" ? body.instanceId.trim() : "";
+      this.applyModelCatalogForOwner(requestedOwnerId || undefined);
       if (!model || !this.askAgentSessionStore.setModel(model)) {
         this.logAskAgentEvent("ask-agent.model", {
           model: model || null,
@@ -3931,9 +4086,10 @@ export class BrowserGatewayHelper {
         writeJson(res, 400, { error: "invalid_model" });
         return;
       }
-      await this.askAgentPreferencesStore.update(
-        this.askAgentSessionStore.getPreferencesSnapshot(),
-      );
+      await this.askAgentPreferencesStore.update({
+        ...this.askAgentSessionStore.getPreferencesSnapshot(),
+        modelOwnerId: this.askAgentModelOwnerId,
+      });
       logHelper(`ask-agent model selected model=${model}`);
       this.logAskAgentEvent("ask-agent.model", { model, ok: true });
       const now = Date.now();
@@ -4018,7 +4174,10 @@ export class BrowserGatewayHelper {
       this.askAgentController.projectState({
         now: Date.now(),
         theme: params.theme,
-        modelCredentialStatus: this.getAskAgentModelCredentialStatus(),
+        modelCredentialStatus: this.getAskAgentModelCredentialStatus(
+          Date.now(),
+          params.modelContext.ownerId,
+        ),
         approval: this.askAgentController.getPendingApproval(),
         memoryCandidateNudge: this.askAgentController.getMemoryCandidateNudge(),
       }).snapshot;
@@ -4163,6 +4322,7 @@ export class BrowserGatewayHelper {
           preparedWebAccess,
           params.modelContext.credential,
           params.modelContext.model,
+          params.modelContext.ownerId,
           params.signal,
         );
         this.recordAskAgentSemanticDelta();
@@ -4585,12 +4745,13 @@ export class BrowserGatewayHelper {
   private async executeAskAgentGenerateImageTool(
     toolCall: BrowserGatewayAskAgentToolCall,
     _target: BrowserGatewayInstanceRecord | null,
+    modelOwnerId: string,
     signal: AbortSignal,
   ): Promise<AskAgentToolExecutionResult> {
     const generatedImages: CodexGeneratedImage[] = [];
     try {
       const input = this.normalizeAskAgentImageInput(toolCall.input);
-      const snapshot = this.modelCatalogSnapshot;
+      const snapshot = this.getModelCatalogSnapshot(modelOwnerId);
       const credential = snapshot
         ? this.modelCredentialCache.getCredential({
             grantedByOwnerId: snapshot.publishedByOwnerId,
@@ -4918,6 +5079,7 @@ export class BrowserGatewayHelper {
     preparedWebAccess: PreparedAskAgentWebAccess,
     credential: BrowserGatewayModelCredentialRecord | undefined,
     model: string,
+    modelOwnerId: string,
     signal: AbortSignal,
   ): Promise<AskAgentToolExecutionResult> {
     const startedAt = Date.now();
@@ -4974,6 +5136,7 @@ export class BrowserGatewayHelper {
       return await this.executeAskAgentGenerateImageTool(
         toolCall,
         mcpBridgeTarget,
+        modelOwnerId,
         signal,
       );
     }
@@ -5541,7 +5704,7 @@ export class BrowserGatewayHelper {
       const body = (await readJsonBody(req).catch((err) => {
         if (err instanceof Error && err.message === "invalid_json") throw err;
         return null;
-      })) as { sessionId?: unknown } | null;
+      })) as { sessionId?: unknown; instanceId?: unknown } | null;
       const requestedSessionId =
         typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
       if (!requestedSessionId) {
@@ -5563,7 +5726,12 @@ export class BrowserGatewayHelper {
         writeJson(res, 404, { error: "ask_agent_session_not_found" });
         return;
       }
-      const modelContext = this.getAskAgentModelExecutionContext(now);
+      const requestedOwnerId =
+        typeof body?.instanceId === "string" ? body.instanceId.trim() : "";
+      const modelContext = this.getAskAgentModelExecutionContext(
+        now,
+        requestedOwnerId || undefined,
+      );
       if (!modelContext) {
         this.logAskAgentEvent("ask-agent.retry", {
           sessionId: requestedSessionId,
@@ -5597,6 +5765,7 @@ export class BrowserGatewayHelper {
         writeJson(res, 409, { error: "ask_agent_retry_unavailable" });
         return;
       }
+      await this.pinAskAgentModelOwner(modelContext);
 
       const { userMessage } = retryableTurn;
       const retryToolResults = retryableTurn.toolResults.map((toolResult) => {
@@ -5666,7 +5835,10 @@ export class BrowserGatewayHelper {
       const streamSnapshot = this.askAgentController.projectState({
         now,
         theme,
-        modelCredentialStatus: this.getAskAgentModelCredentialStatus(now),
+        modelCredentialStatus: this.getAskAgentModelCredentialStatus(
+          now,
+          modelContext.ownerId,
+        ),
         approval: this.askAgentController.getPendingApproval(),
         memoryCandidateNudge: this.askAgentController.getMemoryCandidateNudge(),
       });
@@ -5775,6 +5947,7 @@ export class BrowserGatewayHelper {
         attachments?: unknown;
         images?: unknown;
         documents?: unknown;
+        instanceId?: unknown;
       } | null;
       const images = parseAskAgentMediaItems(body?.images);
       const documents = parseAskAgentMediaItems(body?.documents);
@@ -5822,7 +5995,21 @@ export class BrowserGatewayHelper {
       const activeSessionId = this.askAgentSessionStore.getActiveSessionId();
       const priorUserTexts =
         this.askAgentSessionStore.getActiveUserMessageTexts();
-      const modelContext = this.getAskAgentModelExecutionContext(now);
+      const requestedOwnerId =
+        typeof body.instanceId === "string" ? body.instanceId.trim() : "";
+      const modelContext = this.getAskAgentModelExecutionContext(
+        now,
+        requestedOwnerId || undefined,
+      );
+      if (requestedOwnerId && !modelContext) {
+        this.logAskAgentEvent("ask-agent.send", {
+          instanceId: requestedOwnerId,
+          ok: false,
+          error: "credential_missing",
+        });
+        writeJson(res, 409, { error: "credential_missing" });
+        return;
+      }
       let response: AskAgentSessionResponse | null = null;
       const sendLogFields = {
         sessionId: typeof body.sessionId === "string" ? body.sessionId : "none",
@@ -5862,6 +6049,7 @@ export class BrowserGatewayHelper {
         return;
       }
       if (!duplicateUserMessage && modelContext) {
+        await this.pinAskAgentModelOwner(modelContext);
         this.askAgentSessionStore.appendUserMessage({
           id: typeof body.id === "string" ? body.id : undefined,
           text: body.text,
@@ -5878,7 +6066,10 @@ export class BrowserGatewayHelper {
         const streamSnapshot = this.askAgentController.projectState({
           now,
           theme,
-          modelCredentialStatus: this.getAskAgentModelCredentialStatus(now),
+          modelCredentialStatus: this.getAskAgentModelCredentialStatus(
+            now,
+            modelContext.ownerId,
+          ),
           approval: this.askAgentController.getPendingApproval(),
           memoryCandidateNudge:
             this.askAgentController.getMemoryCandidateNudge(),
@@ -6732,11 +6923,20 @@ export class BrowserGatewayHelper {
         openAiCompatibleRuntimeProfiles:
           body.openAiCompatibleRuntimeProfiles ?? {},
       };
-      this.modelCatalogSnapshot = candidateSnapshot;
-      this.applyPublishedModelCatalogToAskAgent();
+      this.modelCatalogSnapshots.set(
+        candidateSnapshot.publishedByOwnerId,
+        candidateSnapshot,
+      );
+      this.latestModelCatalogOwnerId = candidateSnapshot.publishedByOwnerId;
+      if (
+        !this.askAgentModelOwnerId ||
+        this.askAgentModelOwnerId === candidateSnapshot.publishedByOwnerId
+      ) {
+        this.applyModelCatalogForOwner(candidateSnapshot.publishedByOwnerId);
+      }
       this.logAskAgentEvent("model-catalog.published", {
-        ownerId: this.modelCatalogSnapshot.publishedByOwnerId,
-        modelCount: this.modelCatalogSnapshot.models.length,
+        ownerId: candidateSnapshot.publishedByOwnerId,
+        modelCount: candidateSnapshot.models.length,
       });
       const response = this.buildAskAgentSnapshotResponse(
         publishedAt,
@@ -6746,7 +6946,7 @@ export class BrowserGatewayHelper {
       writeJson(res, 200, {
         ok: true,
         publishedAt,
-        modelCount: this.modelCatalogSnapshot.models.length,
+        modelCount: candidateSnapshot.models.length,
       });
     } catch (err) {
       const invalidJson =

@@ -38,6 +38,8 @@ interface SessionState {
   networkRules: NetworkRule[];
   pathRules: PathRule[];
   writeRules: PathRule[];
+  mcpToolApprovals: string[];
+  mcpServerApprovals: string[];
   lastActivity: number;
 }
 
@@ -82,7 +84,7 @@ const PRUNE_INTERVAL = 60 * 60_000; // 1 hour
 const APPROVAL_SESSIONS_KEY = "approvalSessions";
 const APPROVAL_SESSION_KEY_PREFIX = "approvalSession:";
 const APPROVAL_SESSION_STORAGE_VERSION_KEY = "approvalSessionStorageVersion";
-const APPROVAL_SESSION_STORAGE_VERSION = 2;
+const APPROVAL_SESSION_STORAGE_VERSION = 3;
 
 export class ApprovalManager {
   private pruneTimer: ReturnType<typeof setInterval>;
@@ -101,8 +103,6 @@ export class ApprovalManager {
   private activeSessionPersistence = new Map<string, Promise<void>>();
   private sessionProjects = new Map<string, SessionProjectBinding>();
 
-  // Per-session MCP approvals, scoped to either one tool or an entire server.
-  private mcpApprovals = new Set<string>();
   private configStoreListener: vscode.Disposable;
   private commandRuleStore: CommandRuleStore;
   private networkRuleStore: NetworkRuleStore;
@@ -165,32 +165,37 @@ export class ApprovalManager {
     });
   }
 
-  // --- MCP tool approvals (in-memory, session-scoped) ---
+  // --- MCP tool approvals (persisted, session-scoped) ---
 
   /** True if this tool (or its server) has been approved for this session. */
   isMcpApproved(sessionId: string, toolName: string): boolean {
     const server = parseMcpToolName(toolName)?.serverName ?? "";
+    const session = this.getSession(sessionId);
     return (
-      this.mcpApprovals.has(`${sessionId}:tool:${toolName}`) ||
-      this.mcpApprovals.has(`${sessionId}:server:${server}`)
+      session.mcpToolApprovals.includes(toolName) ||
+      session.mcpServerApprovals.includes(server)
     );
   }
 
   /** Approve a single tool for the rest of this session. */
   approveMcpTool(sessionId: string, toolName: string): void {
     this.touchSession(sessionId);
-    const key = `${sessionId}:tool:${toolName}`;
-    if (this.mcpApprovals.has(key)) return;
-    this.mcpApprovals.add(key);
+    const session = this.sessions.get(sessionId)!;
+    if (session.mcpToolApprovals.includes(toolName)) return;
+    session.mcpToolApprovals.push(toolName);
+    session.lastActivity = Date.now();
+    this.persistSessions();
     this._onDidChange.fire();
   }
 
   /** Approve all tools from a server for the rest of this session. */
   approveMcpServer(sessionId: string, serverName: string): void {
     this.touchSession(sessionId);
-    const key = `${sessionId}:server:${serverName}`;
-    if (this.mcpApprovals.has(key)) return;
-    this.mcpApprovals.add(key);
+    const session = this.sessions.get(sessionId)!;
+    if (session.mcpServerApprovals.includes(serverName)) return;
+    session.mcpServerApprovals.push(serverName);
+    session.lastActivity = Date.now();
+    this.persistSessions();
     this._onDidChange.fire();
   }
 
@@ -266,7 +271,6 @@ export class ApprovalManager {
       session && now - session.lastActivity > SESSION_TTL,
     );
     if (expired) {
-      this.clearMcpApprovalsForSession(sessionId);
       session = undefined;
     }
     session ??= this.newSession();
@@ -279,7 +283,6 @@ export class ApprovalManager {
   clearSession(sessionId: string): void {
     this.sessions.delete(sessionId);
     this.sessionProjects.delete(sessionId);
-    this.clearMcpApprovalsForSession(sessionId);
     this.persistSessions();
   }
 
@@ -293,7 +296,6 @@ export class ApprovalManager {
       if (now - session.lastActivity > SESSION_TTL) {
         this.sessions.delete(id);
         this.sessionProjects.delete(id);
-        this.clearMcpApprovalsForSession(id);
         changed = true;
       }
     }
@@ -433,15 +435,16 @@ export class ApprovalManager {
     sessionId: string,
     scope: RuleScope,
     targetPath?: string,
-  ): void {
+  ): boolean {
+    let saved = true;
     if (scope === "global") {
-      this.configStore.updateGlobalConfig((c) => {
+      saved = this.configStore.updateGlobalConfig((c) => {
         c.agentWriteApproved = true;
       });
     } else if (scope === "project") {
       const projectRoot = this.getProjectRoot(sessionId, targetPath);
-      if (!projectRoot) return;
-      this.configStore.updateProjectConfig(projectRoot, (c) => {
+      if (!projectRoot) return false;
+      saved = this.configStore.updateProjectConfig(projectRoot, (c) => {
         c.agentWriteApproved = true;
       });
     } else {
@@ -451,7 +454,8 @@ export class ApprovalManager {
       this.sessions.set(sessionId, session);
       this.persistSessions();
     }
-    this._onDidChange.fire();
+    if (saved) this._onDidChange.fire();
+    return saved;
   }
 
   /**
@@ -500,13 +504,28 @@ export class ApprovalManager {
         ...(destination.writeRules ?? []),
         ...(source.writeRules ?? []),
       ]);
+      destination.mcpToolApprovals = [
+        ...new Set([
+          ...destination.mcpToolApprovals,
+          ...source.mcpToolApprovals,
+        ]),
+      ];
+      destination.mcpServerApprovals = [
+        ...new Set([
+          ...destination.mcpServerApprovals,
+          ...source.mcpServerApprovals,
+        ]),
+      ];
       destination.lastActivity = Math.max(
         destination.lastActivity,
         source.lastActivity,
         Date.now(),
       );
     } else {
-      this.sessions.set(toId, { ...source, lastActivity: Date.now() });
+      this.sessions.set(toId, {
+        ...this.cloneSessionState(source),
+        lastActivity: Date.now(),
+      });
     }
 
     if (sourceProject) {
@@ -548,7 +567,6 @@ export class ApprovalManager {
     const restoredSource = this.sessions.get(fromId);
     if (restoredSource && now - restoredSource.lastActivity > SESSION_TTL) {
       this.sessions.delete(fromId);
-      this.clearMcpApprovalsForSession(fromId);
       this.persistSessions();
       this._onDidChange.fire();
     }
@@ -575,6 +593,18 @@ export class ApprovalManager {
         destination?.writeRules ?? [],
         source.writeRules,
       );
+      const mcpToolApprovals = [
+        ...new Set([
+          ...(destination?.mcpToolApprovals ?? []),
+          ...source.mcpToolApprovals,
+        ]),
+      ];
+      const mcpServerApprovals = [
+        ...new Set([
+          ...(destination?.mcpServerApprovals ?? []),
+          ...source.mcpServerApprovals,
+        ]),
+      ];
       sessionChanged =
         (!(destination?.writeApproved ?? false) && source.writeApproved) ||
         (!(destination?.agentWriteApproved ?? false) &&
@@ -582,7 +612,15 @@ export class ApprovalManager {
         !rulesEqual(commandRules, destination?.commandRules ?? []) ||
         !rulesEqual(networkRules, destination?.networkRules ?? []) ||
         !rulesEqual(pathRules, destination?.pathRules ?? []) ||
-        !rulesEqual(writeRules, destination?.writeRules ?? []);
+        !rulesEqual(writeRules, destination?.writeRules ?? []) ||
+        !stringSetsEqual(
+          mcpToolApprovals,
+          destination?.mcpToolApprovals ?? [],
+        ) ||
+        !stringSetsEqual(
+          mcpServerApprovals,
+          destination?.mcpServerApprovals ?? [],
+        );
 
       if (sessionChanged) {
         this.sessions.set(toId, {
@@ -595,25 +633,12 @@ export class ApprovalManager {
           networkRules,
           pathRules,
           writeRules,
+          mcpToolApprovals,
+          mcpServerApprovals,
           lastActivity: now,
         });
         changed = true;
       }
-    }
-
-    const sourcePrefix = `${fromId}:`;
-    const destinationPrefix = `${toId}:`;
-    for (const approval of Array.from(this.mcpApprovals)) {
-      if (!approval.startsWith(sourcePrefix)) continue;
-      const inherited = `${destinationPrefix}${approval.slice(sourcePrefix.length)}`;
-      if (this.mcpApprovals.has(inherited)) continue;
-      this.mcpApprovals.add(inherited);
-      changed = true;
-    }
-
-    if (changed && !sessionChanged && !destination) {
-      this.sessions.set(toId, { ...this.newSession(), lastActivity: now });
-      sessionChanged = true;
     }
     if (sessionChanged) this.persistSessions();
     if (changed) this._onDidChange.fire();
@@ -794,17 +819,15 @@ export class ApprovalManager {
     );
   }
 
-  addPathRule(sessionId: string, rule: PathRule, scope: RuleScope): void {
-    if (
-      this.pathRuleStore.add(
-        sessionId,
-        rule,
-        scope,
-        this.getProjectRoot(sessionId),
-      )
-    ) {
-      this._onDidChange.fire();
-    }
+  addPathRule(sessionId: string, rule: PathRule, scope: RuleScope): boolean {
+    const added = this.pathRuleStore.add(
+      sessionId,
+      rule,
+      scope,
+      this.getProjectRoot(sessionId),
+    );
+    if (added) this._onDidChange.fire();
+    return added;
   }
 
   removePathRule(pattern: string, scope: RuleScope, sessionId?: string): void {
@@ -907,17 +930,15 @@ export class ApprovalManager {
     rule: PathRule,
     scope: RuleScope,
     targetPath?: string,
-  ): void {
-    if (
-      this.writeRuleStore.add(
-        sessionId,
-        rule,
-        scope,
-        this.getProjectRoot(sessionId, targetPath),
-      )
-    ) {
-      this._onDidChange.fire();
-    }
+  ): boolean {
+    const added = this.writeRuleStore.add(
+      sessionId,
+      rule,
+      scope,
+      this.getProjectRoot(sessionId, targetPath),
+    );
+    if (added) this._onDidChange.fire();
+    return added;
   }
 
   removeWriteRule(pattern: string, scope: RuleScope, sessionId?: string): void {
@@ -1044,17 +1065,15 @@ export class ApprovalManager {
     rule: CommandRule,
     scope: RuleScope,
     cwd?: string,
-  ): void {
-    if (
-      this.commandRuleStore.add(
-        sessionId,
-        rule,
-        scope,
-        this.getProjectRoot(sessionId, cwd),
-      )
-    ) {
-      this._onDidChange.fire();
-    }
+  ): boolean {
+    const added = this.commandRuleStore.add(
+      sessionId,
+      rule,
+      scope,
+      this.getProjectRoot(sessionId, cwd),
+    );
+    if (added) this._onDidChange.fire();
+    return added;
   }
 
   editCommandRule(
@@ -1301,15 +1320,6 @@ export class ApprovalManager {
     return this.sessions.get(sessionId) ?? this.emptySession;
   }
 
-  private clearMcpApprovalsForSession(sessionId: string): void {
-    const prefix = `${sessionId}:`;
-    for (const key of this.mcpApprovals) {
-      if (key.startsWith(prefix)) {
-        this.mcpApprovals.delete(key);
-      }
-    }
-  }
-
   private loadPersistedSessions(): void {
     for (const key of this.globalState.keys()) {
       if (!key.startsWith(APPROVAL_SESSION_KEY_PREFIX)) continue;
@@ -1506,6 +1516,8 @@ export class ApprovalManager {
       networkRules: [...(session.networkRules ?? [])],
       pathRules: [...(session.pathRules ?? [])],
       writeRules: [...(session.writeRules ?? [])],
+      mcpToolApprovals: [...(session.mcpToolApprovals ?? [])],
+      mcpServerApprovals: [...(session.mcpServerApprovals ?? [])],
       lastActivity: session.lastActivity || Date.now(),
     };
   }
@@ -1517,6 +1529,8 @@ export class ApprovalManager {
       networkRules: session.networkRules.map((rule) => ({ ...rule })),
       pathRules: session.pathRules.map((rule) => ({ ...rule })),
       writeRules: session.writeRules.map((rule) => ({ ...rule })),
+      mcpToolApprovals: [...session.mcpToolApprovals],
+      mcpServerApprovals: [...session.mcpServerApprovals],
     };
   }
 
@@ -1527,6 +1541,8 @@ export class ApprovalManager {
     networkRules: [],
     pathRules: [],
     writeRules: [],
+    mcpToolApprovals: [],
+    mcpServerApprovals: [],
     lastActivity: 0,
   });
 
@@ -1538,6 +1554,8 @@ export class ApprovalManager {
       networkRules: [],
       pathRules: [],
       writeRules: [],
+      mcpToolApprovals: [],
+      mcpServerApprovals: [],
       lastActivity: Date.now(),
     };
   }
@@ -1591,6 +1609,12 @@ function rulesEqual<T extends InheritableRule>(left: T[], right: T[]): boolean {
   );
 }
 
+function stringSetsEqual(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length && left.every((value) => right.includes(value))
+  );
+}
+
 function mergeConcurrentSessionState(
   base: SessionState | undefined,
   local: SessionState,
@@ -1603,6 +1627,8 @@ function mergeConcurrentSessionState(
     networkRules: [],
     pathRules: [],
     writeRules: [],
+    mcpToolApprovals: [],
+    mcpServerApprovals: [],
     lastActivity: 0,
   };
   return {
@@ -1634,6 +1660,12 @@ function mergeConcurrentSessionState(
       local.writeRules,
       remote.writeRules,
     ),
+    mcpToolApprovals: [
+      ...new Set([...remote.mcpToolApprovals, ...local.mcpToolApprovals]),
+    ],
+    mcpServerApprovals: [
+      ...new Set([...remote.mcpServerApprovals, ...local.mcpServerApprovals]),
+    ],
     lastActivity: Math.max(local.lastActivity, remote.lastActivity),
   };
 }

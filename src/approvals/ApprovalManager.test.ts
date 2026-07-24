@@ -902,7 +902,7 @@ describe("ApprovalManager session approval persistence", () => {
 
   it("merges same-session changes and stale activity touches across live managers", async () => {
     const memento = new MockMemento();
-    await memento.update("approvalSessionStorageVersion", 2);
+    await memento.update("approvalSessionStorageVersion", 3);
     const first = await createManagers(memento);
     const second = await createManagers(memento);
     const sessionId = "shared-live-session";
@@ -931,9 +931,42 @@ describe("ApprovalManager session approval persistence", () => {
     disposeManagers(restored);
   });
 
+  it("merges concurrent MCP session grants across live managers", async () => {
+    const memento = new MockMemento();
+    await memento.update("approvalSessionStorageVersion", 3);
+    const first = await createManagers(memento);
+    const second = await createManagers(memento);
+
+    first.approvalManager.approveMcpTool(
+      "shared-mcp-session",
+      "linear__create_issue",
+    );
+    await memento.flush();
+    second.approvalManager.approveMcpServer("shared-mcp-session", "github");
+    await memento.flush();
+
+    const restored = await createManagers(memento);
+    expect(
+      restored.approvalManager.isMcpApproved(
+        "shared-mcp-session",
+        "linear__create_issue",
+      ),
+    ).toBe(true);
+    expect(
+      restored.approvalManager.isMcpApproved(
+        "shared-mcp-session",
+        "github__get_issue",
+      ),
+    ).toBe(true);
+
+    disposeManagers(first);
+    disposeManagers(second);
+    disposeManagers(restored);
+  });
+
   it("retries a failed per-session persistence write on the next touch", async () => {
     const memento = new MockMemento();
-    await memento.update("approvalSessionStorageVersion", 2);
+    await memento.update("approvalSessionStorageVersion", 3);
     const first = await createManagers(memento);
     memento.rejectNextUpdate("approvalSession:retry-session");
 
@@ -978,7 +1011,7 @@ describe("ApprovalManager session approval persistence", () => {
       "session",
     );
     await vi.waitFor(() => {
-      expect(memento.get("approvalSessionStorageVersion")).toBe(2);
+      expect(memento.get("approvalSessionStorageVersion")).toBe(3);
       expect(memento.get("approvalSessions")).toBeUndefined();
     });
     expect(memento.keys()).toContain("approvalSession:legacy");
@@ -1529,6 +1562,9 @@ describe("ApprovalManager session approval persistence", () => {
     expect(approvalManager.getPathRules("child").session).toEqual([
       { pattern: "/outside/review", mode: "prefix" },
     ]);
+    expect(
+      approvalManager.isPathTrusted("child", "/outside/review/example.ts"),
+    ).toBe(true);
     expect(approvalManager.getWriteRules("child").session).toEqual([
       { pattern: "src/**", mode: "glob" },
     ]);
@@ -1621,7 +1657,7 @@ describe("ApprovalManager session approval persistence", () => {
       const startedAt = Date.parse("2026-07-01T00:00:00Z");
       vi.setSystemTime(startedAt);
       const memento = new MockMemento();
-      await memento.update("approvalSessionStorageVersion", 2);
+      await memento.update("approvalSessionStorageVersion", 3);
       const first = await createManagers(memento);
       first.approvalManager.setAgentWriteApproval("parent", "session");
       first.approvalManager.addWriteRule(
@@ -1695,6 +1731,40 @@ describe("ApprovalManager session approval persistence", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("restores MCP session authority after an extension reload", async () => {
+    const memento = new MockMemento();
+    const first = await createManagers(memento);
+    first.approvalManager.approveMcpTool(
+      "restored-mcp",
+      "linear__create_issue",
+    );
+    first.approvalManager.approveMcpServer("restored-mcp", "github");
+    await memento.flush();
+    disposeManagers(first);
+
+    const restored = await createManagers(memento);
+    expect(
+      restored.approvalManager.isMcpApproved(
+        "restored-mcp",
+        "linear__create_issue",
+      ),
+    ).toBe(true);
+    expect(
+      restored.approvalManager.isMcpApproved(
+        "restored-mcp",
+        "github__get_issue",
+      ),
+    ).toBe(true);
+    expect(
+      restored.approvalManager.isMcpApproved(
+        "restored-mcp",
+        "slack__send_message",
+      ),
+    ).toBe(false);
+
+    disposeManagers(restored);
   });
 
   it("refreshes inherited command and network rule decisions", async () => {

@@ -57,6 +57,7 @@ function replay(
       terminalRunning: true,
       blocks: [],
     },
+    anchors: [],
   };
 }
 
@@ -86,6 +87,7 @@ class FakeRenderer implements TerminalRenderer {
   readonly findPrevious = vi.fn(() => true);
   readonly registerBlockBoundary = vi.fn(() => true);
   readonly retainBlockAnchors = vi.fn();
+  readonly scrollToBlock = vi.fn(() => true);
   readonly writes: Array<{ data: string; source: "live" | "replay" }> = [];
   readonly pendingWrites: Array<() => void> = [];
   fitDimensions = { columns: 80, rows: 24 };
@@ -1137,6 +1139,103 @@ describe("TerminalWebviewController", () => {
     expect(
       test.controller.getSnapshot().blockStates["terminal-1"]?.blocks,
     ).toEqual([]);
+  });
+
+  it("projects the renderer's sticky block and reveals it on demand", async () => {
+    const test = harness();
+    await test.controller.receive(bootstrap());
+    const renderer = test.renderers[0];
+
+    renderer.callbacks.onStickyBlockChanged("block-1");
+    expect(
+      test.controller.getSnapshot().blockStates["terminal-1"]?.stickyBlockId,
+    ).toBe("block-1");
+
+    test.controller.revealBlock("terminal-1", "block-1");
+    expect(renderer.scrollToBlock).toHaveBeenCalledWith("block-1");
+
+    renderer.callbacks.onStickyBlockChanged(undefined);
+    expect(
+      test.controller.getSnapshot().blockStates["terminal-1"]?.stickyBlockId,
+    ).toBeUndefined();
+
+    test.controller.revealBlock("missing-terminal", "block-1");
+    expect(renderer.scrollToBlock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-registers block markers at replay anchors during bootstrap", async () => {
+    const test = harness();
+    const snapshot = replay("terminal-1", "instance-1", "$ hello\r\n$ ", 3);
+    const anchoredSnapshot: typeof snapshot = {
+      ...snapshot,
+      blocks: {
+        ...snapshot.blocks,
+        mode: "integrated",
+        blocks: [
+          {
+            id: "host-block-1",
+            kind: "prompt",
+            cwd: "/workspace",
+            status: "closed",
+            output: "$ ",
+            outputBytes: 2,
+            droppedOutputBytes: 0,
+          },
+          {
+            id: "host-block-2",
+            kind: "command",
+            cwd: "/workspace",
+            command: "echo hello",
+            status: "exited",
+            exitCode: 0,
+            output: "hello\r\n",
+            outputBytes: 7,
+            droppedOutputBytes: 0,
+          },
+        ],
+      },
+      presentation: {
+        alternateScreen: false,
+        terminalRunning: true,
+        blocks: [
+          { blockId: "host-block-1", decoration: "completed", actions: [] },
+          { blockId: "host-block-2", decoration: "completed", actions: [] },
+        ],
+      },
+      anchors: [
+        { blockId: "host-block-1", offset: 0 },
+        { blockId: "host-block-2", offset: 2 },
+        { blockId: "unknown-block", offset: 4 },
+        { blockId: "host-block-1", offset: 99 },
+      ],
+    };
+    await test.controller.receive(bootstrap([tab()], [anchoredSnapshot]));
+    await waitFor(() =>
+      expect(test.renderers[0].writes.length).toBeGreaterThanOrEqual(2),
+    );
+
+    expect(test.renderers[0].writes).toEqual([
+      { data: "$ ", source: "replay" },
+      { data: "hello\r\n$ ", source: "replay" },
+    ]);
+    expect(test.renderers[0].registerBlockBoundary).toHaveBeenNthCalledWith(
+      1,
+      "host-block-1",
+      "prompt-start",
+    );
+    expect(test.renderers[0].registerBlockBoundary).toHaveBeenNthCalledWith(
+      2,
+      "host-block-2",
+      "command-start",
+    );
+    expect(test.renderers[0].registerBlockBoundary).toHaveBeenCalledTimes(2);
+    await waitFor(() =>
+      expect(
+        test.controller
+          .getSnapshot()
+          .blockStates["terminal-1"]?.blocks.map((block) => block.anchored),
+      ).toEqual([true, true]),
+    );
   });
 
   it("requests one resync without writing or acknowledging a sequence gap", async () => {

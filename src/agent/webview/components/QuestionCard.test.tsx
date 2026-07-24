@@ -10,6 +10,53 @@ afterEach(() => {
   cleanup();
 });
 
+describe("QuestionCard progress publishing", () => {
+  it("does not publish untouched mount state or echo remote progress", () => {
+    const onSubmit = vi.fn();
+    const onProgressChange = vi.fn();
+    const questions = [
+      {
+        id: "choice",
+        type: "multiple_choice" as const,
+        question: "Which option?",
+        options: ["A", "B"],
+      },
+    ];
+    const { getByRole, rerender } = render(
+      <QuestionCard
+        id="request-1"
+        context="Choose."
+        questions={questions}
+        onProgressChange={onProgressChange}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    expect(onProgressChange).not.toHaveBeenCalled();
+
+    rerender(
+      <QuestionCard
+        id="request-1"
+        context="Choose."
+        questions={questions}
+        remoteProgress={{ step: 0, answers: { choice: "A" }, notes: {} }}
+        onProgressChange={onProgressChange}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    expect(onProgressChange).not.toHaveBeenCalled();
+
+    fireEvent.click(getByRole("button", { name: /^B$/ }));
+
+    expect(onProgressChange).toHaveBeenCalledWith({
+      step: 0,
+      answers: { choice: "B" },
+      notes: {},
+    });
+  });
+});
+
 describe("QuestionCard other context", () => {
   it("commits composer text and allows an attachment-only answer", () => {
     const onSubmit = vi.fn();

@@ -159,6 +159,11 @@ export const BROWSER_GATEWAY_SNAPSHOT_PARITY_CONTRACT = {
         "checkpoint",
         "owner_event",
       ),
+      originalPrompt: covered(
+        "Projected into checkpoint.foreground.originalPrompt.",
+        "checkpoint",
+        "owner_event",
+      ),
       mode: covered(
         "Projected into checkpoint.foreground.mode.",
         "checkpoint",
@@ -176,6 +181,11 @@ export const BROWSER_GATEWAY_SNAPSHOT_PARITY_CONTRACT = {
       ),
       streaming: covered(
         "Projected into checkpoint.foreground.streaming.",
+        "checkpoint",
+        "owner_event",
+      ),
+      interrupted: covered(
+        "Projected into checkpoint.foreground.interrupted so every browser transport exposes the safe resume path.",
         "checkpoint",
         "owner_event",
       ),

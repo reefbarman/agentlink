@@ -1,6 +1,7 @@
 import * as crypto from "crypto";
 import * as nodePath from "path";
 import { fileURLToPath, pathToFileURL } from "url";
+import { isDeepStrictEqual } from "util";
 
 import type { AgentConfig, AgentMessage, SessionInfo } from "./types.js";
 import type {
@@ -27,9 +28,12 @@ import type {
 import type { NativeWebToolExecutionRequest } from "../core/capabilities/web.js";
 import type {
   PendingQuestionRecoveryState,
+  PersistDurability,
   PersistedFleetMetadata,
+  PersistedPendingToolResult,
   PersistResult,
   PersistedSessionRecord,
+  PersistedSessionRunState,
   PersistenceRevision,
   RevertRecoveryState,
 } from "./persistenceContracts.js";
@@ -45,7 +49,7 @@ import {
 } from "../approvals/commandApprovalReview.js";
 import { AgentSession } from "./AgentSession.js";
 import type { WorkspaceFolderInfo } from "./systemPrompt.js";
-import { AgentEngine } from "./AgentEngine.js";
+import { AgentEngine, toolResultToContent } from "./AgentEngine.js";
 import type { AgentEvent } from "./types.js";
 import { BUILT_IN_MODES, resolveMode, type AgentMode } from "./modes.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
@@ -376,9 +380,131 @@ function restoredApprovalMode(
   });
 }
 
+const INTERRUPTED_TOOL_RESULT =
+  "[Session was interrupted before this tool's result could be saved. The tool may or may not have completed; inspect current state and re-run it if the result is still needed.]";
+
+export function recoverInterruptedRunMessages(
+  messages: AgentMessage[],
+  runState: PersistedSessionRunState | undefined,
+): {
+  messages: AgentMessage[];
+  runState: PersistedSessionRunState | undefined;
+  changed: boolean;
+} {
+  if (
+    runState?.phase !== "running" ||
+    (!runState.partialAssistantText && !runState.pendingToolTurn)
+  ) {
+    return { messages, runState, changed: false };
+  }
+
+  const { partialAssistantText, pendingToolTurn, ...recoveredRunState } =
+    runState;
+
+  if (pendingToolTurn) {
+    if (
+      pendingToolTurn.schemaVersion !== 1 ||
+      pendingToolTurn.assistantMessage?.role !== "assistant" ||
+      !Array.isArray(pendingToolTurn.assistantMessage.content) ||
+      !Array.isArray(pendingToolTurn.toolResults)
+    ) {
+      return { messages, runState, changed: false };
+    }
+
+    const toolUses = pendingToolTurn.assistantMessage.content.filter(
+      (block) => block.type === "tool_use",
+    );
+    const toolIds = toolUses.map((block) => block.id);
+    const uniqueToolIds = new Set(toolIds);
+    const pendingIsRecoverable =
+      toolIds.length > 0 &&
+      uniqueToolIds.size === toolIds.length &&
+      toolIds.every((id) => typeof id === "string" && id.length > 0);
+    if (!pendingIsRecoverable) {
+      return { messages, runState, changed: false };
+    }
+
+    const tailResults = messages.at(-1);
+    const tailAssistant = messages.at(-2);
+    const tailResultIds =
+      tailResults?.role === "user" && Array.isArray(tailResults.content)
+        ? tailResults.content.flatMap((block) =>
+            block.type === "tool_result" ? [block.tool_use_id] : [],
+          )
+        : [];
+    const alreadyCommitted =
+      isDeepStrictEqual(tailAssistant, pendingToolTurn.assistantMessage) &&
+      tailResultIds.length === toolIds.length &&
+      toolIds.every((id) => tailResultIds.includes(id));
+
+    if (alreadyCommitted) {
+      return {
+        messages,
+        runState: recoveredRunState,
+        changed: true,
+      };
+    }
+
+    const savedResults = new Map(
+      pendingToolTurn.toolResults
+        .filter(
+          (result) =>
+            result?.type === "tool_result" &&
+            uniqueToolIds.has(result.tool_use_id),
+        )
+        .map((result) => [result.tool_use_id, result]),
+    );
+    const recoveredResults: PersistedPendingToolResult[] = toolUses.map(
+      (toolUse) =>
+        savedResults.get(toolUse.id) ?? {
+          type: "tool_result",
+          tool_use_id: toolUse.id,
+          content: INTERRUPTED_TOOL_RESULT,
+          is_error: true,
+        },
+    );
+    return {
+      messages: [
+        ...messages,
+        structuredClone(pendingToolTurn.assistantMessage),
+        { role: "user", content: structuredClone(recoveredResults) },
+      ],
+      runState: recoveredRunState,
+      changed: true,
+    };
+  }
+
+  if (partialAssistantText) {
+    const lastMessage = messages.at(-1);
+    // A normal run always persists its user input before streaming starts. If
+    // canonical history already ends in a non-error assistant message, that is
+    // this response committed just before the host stopped; the metadata text
+    // is only a stale checkpoint and must not be appended a second time.
+    const responseAlreadyCommitted =
+      lastMessage?.role === "assistant" && !lastMessage.runtimeError;
+    return {
+      messages: responseAlreadyCommitted
+        ? messages
+        : [
+            ...messages,
+            {
+              role: "assistant",
+              content: [{ type: "text", text: partialAssistantText }],
+            },
+          ],
+      runState: recoveredRunState,
+      changed: true,
+    };
+  }
+
+  return { messages, runState, changed: false };
+}
+
 export class AgentSessionManager {
   private sessions = new Map<string, AgentSession>();
   private sessionApprovalModes = new Map<string, SessionApprovalMode>();
+  /** Serializes per-session prompt rebuilds triggered by Approve for Me toggles. */
+  private approveForMePromptRebuilds = new Map<string, Promise<void>>();
   private retainedCommandReviewDenials = createRetainedCommandReviewDenials();
   private foregroundId: string | null = null;
   private engine: AgentEngine | null = null;
@@ -403,13 +529,21 @@ export class AgentSessionManager {
   private sessionRevertPending = new Map<string, RevertRecoveryState>();
   private sessionSaveQueues = new Map<string, Promise<void>>();
   /**
-   * Sessions with a deferred save already queued behind an in-flight write.
-   * Deferred saves snapshot state when they run, so queuing more than one per
-   * session would only repeat the same full-transcript write.
+   * Sessions with a deferred save already queued behind an in-flight write,
+   * mapped to the strongest durability requested for it. Deferred saves
+   * snapshot state when they run, so queuing more than one per session would
+   * only repeat the same full-transcript write; a durable request coalescing
+   * into a pending checkpoint save upgrades it instead.
    */
-  private pendingDeferredSaves = new Set<string>();
+  private pendingDeferredSaves = new Map<string, PersistDurability>();
+  /**
+   * Duration of the last persistence write per session. Drives the adaptive
+   * in-flight checkpoint cadence so large transcripts checkpoint less often.
+   */
+  private sessionPersistDurationsMs = new Map<string, number>();
   private sessionRunSettled = new Map<string, Promise<void>>();
   private sessionSendQueues = new Map<string, Promise<void>>();
+  private resumingInterruptedSessions = new Set<string>();
   private log?: (msg: string) => void;
   private readonly host: AgentSessionManagerHost;
   private readonly projectCatalog: ProjectScopeResolver;
@@ -1675,8 +1809,145 @@ export class AgentSessionManager {
     }
   }
 
+  private async persistPendingToolTurn(
+    session: AgentSession,
+    assistantMessage: AgentMessage,
+  ): Promise<void> {
+    if (session.background) return;
+    const current =
+      session.runState?.phase === "running"
+        ? session.runState
+        : { phase: "running" as const, startedAt: Date.now() };
+    session.runState = {
+      ...current,
+      partialAssistantText: undefined,
+      pendingToolTurn: {
+        schemaVersion: 1,
+        assistantMessage: structuredClone(assistantMessage),
+        toolResults: [],
+      },
+    };
+    await this.saveSessionNow(session.id);
+  }
+
+  private clearInterruptedRunProgress(session: AgentSession): void {
+    if (
+      session.background ||
+      session.runState?.phase !== "running" ||
+      (!session.runState.partialAssistantText &&
+        !session.runState.pendingToolTurn)
+    ) {
+      return;
+    }
+    const {
+      partialAssistantText: _partialAssistantText,
+      pendingToolTurn: _pendingToolTurn,
+      ...runState
+    } = session.runState;
+    session.runState = runState;
+  }
+
+  private materializeInterruptedRunProgress(session: AgentSession): void {
+    const messages = session.getAllMessages();
+    const recovery = recoverInterruptedRunMessages(messages, session.runState);
+    if (!recovery.changed) return;
+
+    for (const message of recovery.messages.slice(messages.length)) {
+      if (message.role === "assistant") {
+        session.appendAssistantMessage(message);
+      } else if (
+        message.role === "user" &&
+        Array.isArray(message.content) &&
+        message.content.every((block) => block.type === "tool_result")
+      ) {
+        session.appendToolResults(
+          message.content as PersistedPendingToolResult[],
+        );
+      }
+    }
+    session.runState = recovery.runState;
+  }
+
+  private updateInterruptedRunProgress(
+    session: AgentSession,
+    event: AgentEvent,
+  ): void {
+    if (session.background || !session.runState) return;
+
+    if (
+      event.type === "api_request_start" &&
+      session.runState.phase === "running" &&
+      session.runState.partialAssistantText &&
+      !session.runState.pendingToolTurn
+    ) {
+      const { partialAssistantText: _partialAssistantText, ...runState } =
+        session.runState;
+      session.runState = runState;
+      session.lastActiveAt = Date.now();
+      return;
+    }
+
+    if (event.type === "text_delta" && session.runState.phase === "running") {
+      if (session.runState.pendingToolTurn) return;
+      session.runState = {
+        ...session.runState,
+        partialAssistantText:
+          (session.runState.partialAssistantText ?? "") + event.text,
+      };
+      session.lastActiveAt = Date.now();
+      return;
+    }
+
+    if (
+      event.type !== "tool_result" ||
+      event.parentCallId !== undefined ||
+      !session.runState.pendingToolTurn
+    ) {
+      return;
+    }
+
+    const pendingToolTurn = session.runState.pendingToolTurn;
+    const assistantContent = pendingToolTurn.assistantMessage.content;
+    const hasMatchingTool =
+      Array.isArray(assistantContent) &&
+      assistantContent.some(
+        (block) => block.type === "tool_use" && block.id === event.toolCallId,
+      );
+    if (!hasMatchingTool) return;
+
+    const result: PersistedPendingToolResult = {
+      type: "tool_result",
+      tool_use_id: event.toolCallId,
+      content:
+        event.historyContent ??
+        toolResultToContent(
+          { content: event.result },
+          event.toolCallId,
+          event.toolName,
+        ),
+      mcpApprovalPromotion: event.mcpApprovalPromotion,
+      composeTrace: event.composeTrace,
+    };
+    session.runState = {
+      ...session.runState,
+      pendingToolTurn: {
+        ...pendingToolTurn,
+        toolResults: [
+          ...pendingToolTurn.toolResults.filter(
+            (saved) => saved.tool_use_id !== event.toolCallId,
+          ),
+          result,
+        ],
+      },
+    };
+    session.lastActiveAt = Date.now();
+  }
+
   private recordAndEmitEvent(sessionId: string, event: AgentEvent): void {
     const session = this.sessions.get(sessionId);
+    if (session) {
+      this.updateInterruptedRunProgress(session, event);
+    }
     if (session && event.type === "warning" && event.modelFallback) {
       session.model = event.modelFallback.effectiveModel;
       this.applyThresholdToSession(session);
@@ -2094,6 +2365,7 @@ export class AgentSessionManager {
     if (pendingApprovalMode) {
       this.sessionApprovalModes.set(session.id, pendingApprovalMode);
       this.sessionApprovalModes.delete("agent");
+      this.syncSessionApproveForMe(session);
     }
     this.foregroundId = session.id;
     this.notifySessionsChanged();
@@ -2184,8 +2456,92 @@ export class AgentSessionManager {
   setSessionApprovalMode(sessionId: string, mode: SessionApprovalMode): void {
     if (!this.sessions.has(sessionId) && sessionId !== "agent") return;
     this.sessionApprovalModes.set(sessionId, Object.freeze({ ...mode }));
-    if (sessionId !== "agent") this.saveSession(sessionId);
+    this.syncSessionApproveForMe(this.sessions.get(sessionId));
+    if (sessionId !== "agent") {
+      this.saveSession(sessionId);
+      this.propagateBackgroundApprovalMode(sessionId, mode);
+    }
     this.notifySessionsChanged();
+  }
+
+  private propagateBackgroundApprovalMode(
+    parentSessionId: string,
+    mode: SessionApprovalMode,
+  ): void {
+    const pendingParents = [parentSessionId];
+    const visited = new Set(pendingParents);
+
+    while (pendingParents.length > 0) {
+      const currentParentId = pendingParents.shift()!;
+      for (const child of this.sessions.values()) {
+        if (
+          visited.has(child.id) ||
+          !child.background ||
+          child.providerId === "worktree" ||
+          this.getBackgroundParentSessionId(child.id) !== currentParentId
+        ) {
+          continue;
+        }
+        const lifecycle = child.fleetMetadata?.lifecycle;
+        const active =
+          lifecycle === "queued" ||
+          lifecycle === "running" ||
+          lifecycle === "paused" ||
+          child.status === "streaming" ||
+          child.status === "tool_executing" ||
+          child.status === "awaiting_approval";
+        if (!active) continue;
+
+        visited.add(child.id);
+        this.sessionApprovalModes.set(child.id, Object.freeze({ ...mode }));
+        this.syncSessionApproveForMe(child);
+        this.saveSession(child.id);
+        pendingParents.push(child.id);
+      }
+    }
+  }
+
+  /**
+   * Keep the session's prompt-facing Approve for Me flag in step with its
+   * command approval policy. When the flag crosses the approve-for-me boundary,
+   * rebuild the system prompt so mode-switch guidance flips between user
+   * consent and automatic guardian review. Rebuilds are fire-and-forget and
+   * serialized per session; the engine picks up the new prompt on its next
+   * API request.
+   */
+  private syncSessionApproveForMe(session: AgentSession | undefined): void {
+    if (!session) return;
+    const approveForMe =
+      this.sessionApprovalModes.get(session.id)?.commandApprovalPolicy ===
+      "approve-for-me";
+    if (session.approveForMe === approveForMe) return;
+    session.approveForMe = approveForMe;
+    if (session.projectAvailability !== "available") return;
+    const previous =
+      this.approveForMePromptRebuilds.get(session.id) ?? Promise.resolve();
+    const next = previous
+      .then(() =>
+        session.rebuildSystemPrompt({
+          devMode: this.devMode,
+          workspaceFolders: this.getWorkspaceFolders(),
+        }),
+      )
+      .then(() => {
+        this.log?.(
+          `[approval] rebuilt system prompt for ${session.id} (Approve for Me ${approveForMe ? "on" : "off"})`,
+        );
+      })
+      .catch((err) => {
+        this.log?.(
+          `[approval] failed to rebuild system prompt after approval policy change: ${err}`,
+        );
+      })
+      .finally(() => {
+        if (this.approveForMePromptRebuilds.get(session.id) === next) {
+          this.approveForMePromptRebuilds.delete(session.id);
+        }
+      });
+    this.approveForMePromptRebuilds.set(session.id, next);
   }
 
   setCommandApprovalPolicy(
@@ -2201,6 +2557,7 @@ export class AgentSessionManager {
 
   clearSessionCommandApprovalPolicy(sessionId: string): void {
     if (!this.sessionApprovalModes.delete(sessionId)) return;
+    this.syncSessionApproveForMe(this.sessions.get(sessionId));
     if (sessionId !== "agent") this.saveSession(sessionId);
     this.notifySessionsChanged();
   }
@@ -2247,12 +2604,13 @@ export class AgentSessionManager {
     this.sessionRevisions.delete(session.id);
     this.sessionSaveQueues.delete(session.id);
     this.pendingDeferredSaves.delete(session.id);
+    this.sessionPersistDurationsMs.delete(session.id);
     if (this.foregroundId === session.id) {
       this.foregroundId = null;
     }
   }
 
-  saveSession(id: string): void {
+  saveSession(id: string, opts?: { durability?: PersistDurability }): void {
     if (!this.persistence || !this.sessions.has(id)) return;
 
     if (typeof this.persistence.saveSession !== "function") {
@@ -2261,16 +2619,27 @@ export class AgentSessionManager {
       return;
     }
 
+    const durability = opts?.durability ?? "durable";
+
     // The queued run reads live session state when it executes, so one deferred
-    // save behind the in-flight write covers all later requests — coalesce them.
-    if (this.pendingDeferredSaves.has(id)) return;
+    // save behind the in-flight write covers all later requests — coalesce
+    // them, upgrading the pending save's durability rather than downgrading it.
+    const pendingDurability = this.pendingDeferredSaves.get(id);
+    if (pendingDurability) {
+      if (pendingDurability === "checkpoint" && durability === "durable") {
+        this.pendingDeferredSaves.set(id, "durable");
+      }
+      return;
+    }
 
     const run = () => {
+      const effectiveDurability =
+        this.pendingDeferredSaves.get(id) ?? durability;
       this.pendingDeferredSaves.delete(id);
-      return this.saveSessionRevisionAware(id);
+      return this.saveSessionRevisionAware(id, effectiveDurability);
     };
     const previous = this.sessionSaveQueues.get(id);
-    if (previous) this.pendingDeferredSaves.add(id);
+    if (previous) this.pendingDeferredSaves.set(id, durability);
     const next = previous ? previous.then(run, run) : run();
     const tracked = next.finally(() => {
       if (this.sessionSaveQueues.get(id) === tracked) {
@@ -2307,12 +2676,16 @@ export class AgentSessionManager {
     this.notifySessionChangeListeners();
   }
 
-  private async saveSessionRevisionAware(id: string): Promise<void> {
+  private async saveSessionRevisionAware(
+    id: string,
+    durability: PersistDurability = "durable",
+  ): Promise<void> {
     const session = this.sessions.get(id);
     if (!session || !this.persistence) return;
     await this.saveSessionRecordRevisionAware(
       id,
       this.buildPersistedSessionRecord(session),
+      durability,
     );
   }
 
@@ -2337,21 +2710,26 @@ export class AgentSessionManager {
   private async saveSessionRecordRevisionAware(
     id: string,
     record: PersistedSessionRecord,
+    durability: PersistDurability = "durable",
   ): Promise<void> {
     if (!this.persistence) return;
 
     const expectedRevision = this.sessionRevisions.get(id) ?? null;
+    const persistStartedAt = Date.now();
     let result;
     try {
       result = await this.persistence.saveSession({
         session: record,
         expectedRevision,
+        durability,
       });
     } catch (error) {
       this.log?.(
         `[session] persistence save failed for ${id}: ${error instanceof Error ? error.message : String(error)}`,
       );
       return;
+    } finally {
+      this.sessionPersistDurationsMs.set(id, Date.now() - persistStartedAt);
     }
 
     if (result.ok) {
@@ -2373,6 +2751,42 @@ export class AgentSessionManager {
     );
   }
 
+  /**
+   * Delay before the next in-flight checkpoint, scaled from the session's last
+   * persistence write so checkpointing stays under a ~4% event-loop duty
+   * cycle: small sessions keep the 1 s cadence while a transcript that takes
+   * 200 ms to persist checkpoints every 5 s, capped at 30 s.
+   */
+  private nextInFlightPersistDelayMs(sessionId: string): number {
+    const lastDurationMs = this.sessionPersistDurationsMs.get(sessionId) ?? 0;
+    return Math.min(30_000, Math.max(1_000, lastDurationMs * 25));
+  }
+
+  /**
+   * Start the adaptive in-flight checkpoint loop for a running turn. Uses a
+   * self-rescheduling timeout instead of a fixed interval so each tick can
+   * pick its delay from the latest persistence cost. Returns a stop function.
+   */
+  private startInFlightPersistLoop(
+    sessionId: string,
+    persistCheckpoint: () => void,
+  ): () => void {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => {
+      timer = this.host.timers.setTimeout(() => {
+        if (stopped) return;
+        persistCheckpoint();
+        schedule();
+      }, this.nextInFlightPersistDelayMs(sessionId));
+    };
+    schedule();
+    return () => {
+      stopped = true;
+      if (timer !== undefined) this.host.timers.clearTimeout(timer);
+    };
+  }
+
   private buildPersistedSessionRecord(
     session: AgentSession,
     opts?: {
@@ -2382,6 +2796,10 @@ export class AgentSessionManager {
     },
   ): PersistedSessionRecord {
     const messages = opts?.messages ?? session.getAllMessages();
+    // Only records persisting the live transcript may carry the skip counter;
+    // an override snapshot (e.g. pre-revert history) must always be written.
+    const transcriptRevision =
+      opts?.messages === undefined ? session.transcriptRevision : undefined;
     const revertPending =
       opts?.revertPending === null
         ? undefined
@@ -2402,6 +2820,7 @@ export class AgentSessionManager {
         projectScope: session.projectScope,
       },
       messages,
+      transcriptRevision,
       metadata: {
         projectScope: session.projectScope,
         activeContextResourceUri: session.activeContextResourceUri,
@@ -2417,7 +2836,10 @@ export class AgentSessionManager {
         reasoningEffort: session.reasoningEffort,
         loadedSkills: session.getLoadedSkills?.() ?? [],
         runState: session.runState
-          ? { ...session.runState, projectId: session.projectScope.projectId }
+          ? {
+              ...structuredClone(session.runState),
+              projectId: session.projectScope.projectId,
+            }
           : undefined,
         fleet: session.fleetMetadata
           ? {
@@ -2883,6 +3305,7 @@ export class AgentSessionManager {
       if (previousRunSettled) {
         await previousRunSettled;
       }
+      this.materializeInterruptedRunProgress(session);
 
       const engine = this.getEngine();
       const preparedTurn = await this.prepareInteractiveTurnExecution(session);
@@ -3000,18 +3423,20 @@ export class AgentSessionManager {
         await this.saveSessionNow(session.id);
         let lastPersistedActiveAt = session.lastActiveAt;
 
-        const persistIfHistoryChanged = () => {
+        const persistIfHistoryChanged = (
+          durability: PersistDurability = "durable",
+        ) => {
           if (session.lastActiveAt !== lastPersistedActiveAt) {
-            this.saveSession(session.id);
+            this.saveSession(session.id, { durability });
             lastPersistedActiveAt = session.lastActiveAt;
           }
         };
 
         // Keep checkpointing in-flight turns so reloads don't drop recent transcript
         // progress. The guard above avoids writes unless message history changed.
-        const inFlightPersistTimer = this.host.timers.setInterval(
-          persistIfHistoryChanged,
-          1000,
+        const stopInFlightPersistLoop = this.startInFlightPersistLoop(
+          session.id,
+          () => persistIfHistoryChanged("checkpoint"),
         );
 
         this.notifySessionsChanged();
@@ -3038,6 +3463,10 @@ export class AgentSessionManager {
               webAccessPolicy: preparedTurn.policy,
               mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
               mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+              onPendingToolTurn: (assistantMessage) =>
+                this.persistPendingToolTurn(session, assistantMessage),
+              onAssistantTurnCommitted: () =>
+                this.clearInterruptedRunProgress(session),
             })) {
               if (
                 session.isAborted ||
@@ -3084,6 +3513,18 @@ export class AgentSessionManager {
               session.isAborted ||
               session.abortGeneration !== runAbortGeneration
             ) {
+              break;
+            }
+
+            if (!naturalDone) {
+              await this.saveSessionNow(session.id);
+              this.recordAndEmitEvent(session.id, {
+                type: "done",
+                totalInputTokens: session.totalInputTokens,
+                totalOutputTokens: session.totalOutputTokens,
+                totalCacheReadTokens: session.totalCacheReadTokens,
+                totalCacheCreationTokens: session.totalCacheCreationTokens,
+              });
               break;
             }
 
@@ -3180,7 +3621,7 @@ export class AgentSessionManager {
             totalCacheCreationTokens: session.totalCacheCreationTokens,
           });
         } finally {
-          this.host.timers.clearInterval(inFlightPersistTimer);
+          stopInFlightPersistLoop();
           persistIfHistoryChanged();
           if (this.sessionRunSettled.get(session.id) === runSettled) {
             this.sessionRunSettled.delete(session.id);
@@ -3249,6 +3690,19 @@ export class AgentSessionManager {
       .map((candidate) => candidate.id);
     for (const childId of childIds) this.stopSession(childId);
 
+    this.stopSingleSession(sessionId);
+  }
+
+  /**
+   * Abort only the current run for one session. Unlike an explicit session
+   * stop, steering replaces the foreground turn without cancelling background
+   * agents that the session already owns.
+   */
+  interruptSession(sessionId: string): void {
+    this.stopSingleSession(sessionId);
+  }
+
+  private stopSingleSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
       const exchangeId = session.fleetMetadata?.worktreeExchangeId;
@@ -3305,6 +3759,10 @@ export class AgentSessionManager {
         context,
         questions: structuredClone(questions),
       },
+      pendingToolTurn:
+        session.runState?.phase === "running"
+          ? session.runState.pendingToolTurn
+          : undefined,
     };
     await this.saveSessionNow(session.id);
   }
@@ -3320,7 +3778,11 @@ export class AgentSessionManager {
     ) {
       return;
     }
-    session.runState = { phase: "running", startedAt: Date.now() };
+    session.runState = {
+      phase: "running",
+      startedAt: Date.now(),
+      pendingToolTurn: session.runState.pendingToolTurn,
+    };
     void this.saveSessionNow(session.id);
   }
 
@@ -3370,21 +3832,61 @@ export class AgentSessionManager {
       return false;
     }
 
-    const toolResult = await buildAskUserToolResult({
-      context: question.context,
-      questions: question.questions,
-      response,
-      modeSwitchProvider,
-    });
-    session.appendAssistantTurn(structuredClone(question.assistantContent));
+    const claimedRunState: PersistedSessionRunState = {
+      phase: "running",
+      startedAt: Date.now(),
+      pendingToolTurn: runState.pendingToolTurn,
+    };
+    session.runState = claimedRunState;
+    await this.saveSessionNow(session.id);
+
+    let toolResult: ToolResult;
+    try {
+      toolResult = await buildAskUserToolResult({
+        context: question.context,
+        questions: question.questions,
+        response,
+        modeSwitchProvider,
+      });
+    } catch (error) {
+      if (session.runState === claimedRunState) {
+        session.runState = runState;
+        await this.saveSessionNow(session.id);
+      }
+      throw error;
+    }
+
+    const pendingAssistant = runState.pendingToolTurn?.assistantMessage;
+    const pendingAssistantContent = pendingAssistant?.content;
+    const assistantMessage =
+      pendingAssistant?.role === "assistant" &&
+      Array.isArray(pendingAssistantContent) &&
+      pendingAssistantContent.some(
+        (block) => block.type === "tool_use" && block.id === question.toolUseId,
+      )
+        ? structuredClone(pendingAssistant)
+        : {
+            role: "assistant" as const,
+            content: structuredClone(question.assistantContent),
+          };
+    session.appendAssistantMessage(assistantMessage);
     const toolResultText =
       toolResult.content.find((block) => block.type === "text")?.text ??
       JSON.stringify(toolResult.content);
+    const savedSiblingResults = new Map(
+      (runState.pendingToolTurn?.toolResults ?? []).map((result) => [
+        result.tool_use_id,
+        result,
+      ]),
+    );
     // Sibling tool calls from the same turn ran (or were still running) when
-    // the session was interrupted and their results were never persisted, so
-    // answer them with synthetic results to keep the transcript well-formed.
+    // the session was interrupted. Reuse any checkpointed results and answer
+    // the rest synthetically so the transcript remains well-formed.
     session.appendToolResults(
-      question.assistantContent
+      (Array.isArray(assistantMessage.content)
+        ? assistantMessage.content
+        : question.assistantContent
+      )
         .filter(
           (
             block,
@@ -3398,12 +3900,12 @@ export class AgentSessionManager {
                 tool_use_id: question.toolUseId,
                 content: toolResultText,
               }
-            : {
+            : (savedSiblingResults.get(block.id) ?? {
                 type: "tool_result" as const,
                 tool_use_id: block.id,
-                content:
-                  "[Session was interrupted before this tool's result could be saved. The tool may or may not have completed; inspect current state and re-run it if the result is still needed.]",
-              },
+                content: INTERRUPTED_TOOL_RESULT,
+                is_error: true,
+              }),
         ),
     );
     session.runState = { phase: "running", startedAt: Date.now() };
@@ -3414,7 +3916,14 @@ export class AgentSessionManager {
 
   async resumeInterruptedSession(sessionId: string): Promise<boolean> {
     const session = this.sessions.get(sessionId);
-    if (!session || session.background || !session.runState) return false;
+    if (
+      !session ||
+      session.background ||
+      !session.runState ||
+      this.resumingInterruptedSessions.has(sessionId)
+    ) {
+      return false;
+    }
     if (session.runState.phase === "awaiting_question") return false;
     if (session.status !== "idle" && session.status !== "error") return false;
 
@@ -3426,12 +3935,17 @@ export class AgentSessionManager {
       "</interrupted_session_resume>",
     ].join("\n");
 
-    await this.sendMessage(session.id, prompt, session.mode, {
-      displayText: "Resume interrupted session",
-      isSlashCommand: true,
-      slashCommandLabel: "/resume interrupted session",
-    });
-    return true;
+    this.resumingInterruptedSessions.add(sessionId);
+    try {
+      await this.sendMessage(session.id, prompt, session.mode, {
+        displayText: "Resume interrupted session",
+        isSlashCommand: true,
+        slashCommandLabel: "/resume interrupted session",
+      });
+      return true;
+    } finally {
+      this.resumingInterruptedSessions.delete(sessionId);
+    }
   }
 
   /**
@@ -3463,16 +3977,18 @@ export class AgentSessionManager {
     }
     let lastPersistedActiveAt = session.lastActiveAt;
 
-    const persistIfHistoryChanged = () => {
+    const persistIfHistoryChanged = (
+      durability: PersistDurability = "durable",
+    ) => {
       if (session.lastActiveAt !== lastPersistedActiveAt) {
-        this.saveSession(session.id);
+        this.saveSession(session.id, { durability });
         lastPersistedActiveAt = session.lastActiveAt;
       }
     };
 
-    const inFlightPersistTimer = this.host.timers.setInterval(
-      persistIfHistoryChanged,
-      1000,
+    const stopInFlightPersistLoop = this.startInFlightPersistLoop(
+      session.id,
+      () => persistIfHistoryChanged("checkpoint"),
     );
     this.notifySessionsChanged();
 
@@ -3484,6 +4000,10 @@ export class AgentSessionManager {
           webAccessPolicy: preparedTurn.policy,
           mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
           mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+          onPendingToolTurn: (assistantMessage) =>
+            this.persistPendingToolTurn(session, assistantMessage),
+          onAssistantTurnCommitted: () =>
+            this.clearInterruptedRunProgress(session),
         })) {
           if (event.type === "done") {
             // Defer done — a queued mode-switch resume may continue this turn.
@@ -3542,7 +4062,7 @@ export class AgentSessionManager {
       });
     } finally {
       this.releaseSessionToolContext(session.id, requestToolContext);
-      this.host.timers.clearInterval(inFlightPersistTimer);
+      stopInFlightPersistLoop();
       persistIfHistoryChanged();
       this.notifySessionsChanged();
     }
@@ -4310,6 +4830,10 @@ export class AgentSessionManager {
     }
 
     // Restore persisted state
+    const interruptedRunRecovery = recoverInterruptedRunMessages(
+      messages,
+      metadata.runState,
+    );
     session.restoreFromStore({
       id: sessionId,
       title: summary.title,
@@ -4324,13 +4848,17 @@ export class AgentSessionManager {
       lastCacheReadTokens: 0,
       reasoningEffort: metadata.reasoningEffort,
       loadedSkills: metadata.loadedSkills ?? [],
-      runState: metadata.runState,
-      messages,
+      runState: interruptedRunRecovery.runState,
+      messages: interruptedRunRecovery.messages,
     });
 
     if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
     this.sessions.set(sessionId, session);
+    this.syncSessionApproveForMe(session);
     this.foregroundId = sessionId;
+    if (interruptedRunRecovery.changed) {
+      await this.saveSessionNow(session.id);
+    }
     await this.restorePersistedBackgroundSessions(sessionId);
     this.notifySessionsChanged();
     return session;
@@ -4380,6 +4908,7 @@ export class AgentSessionManager {
       this.sessionRevisions.delete(sessionId);
       this.sessionSaveQueues.delete(sessionId);
       this.pendingDeferredSaves.delete(sessionId);
+      this.sessionPersistDurationsMs.delete(sessionId);
       this.sessionApprovalModes.delete(sessionId);
       this.retainedCommandReviewDenials.clearSession(sessionId);
       this.bgFinalResults.delete(sessionId);
@@ -4510,6 +5039,7 @@ export class AgentSessionManager {
         }
       }
       this.sessions.set(session.id, session);
+      this.syncSessionApproveForMe(session);
       this.restoredBackgroundSessionIds.add(session.id);
       this.sessionRevisions.set(session.id, readResult.revision);
       restored.push(session);
@@ -4567,6 +5097,7 @@ export class AgentSessionManager {
     this.sessionRevisions.delete(sessionId);
     this.sessionSaveQueues.delete(sessionId);
     this.pendingDeferredSaves.delete(sessionId);
+    this.sessionPersistDurationsMs.delete(sessionId);
     this.sessionApprovalModes.delete(sessionId);
     this.retainedCommandReviewDenials.clearSession(sessionId);
     if (this.sessions.has(sessionId)) {
@@ -4725,6 +5256,7 @@ export class AgentSessionManager {
       childSessionId,
       Object.freeze({ ...parentMode }),
     );
+    this.syncSessionApproveForMe(this.sessions.get(childSessionId));
   }
 
   private inheritSharedBackgroundSessionApprovals(
@@ -5131,15 +5663,17 @@ export class AgentSessionManager {
       let promptResponse: PromptResponse | undefined;
       const runAcpBackground = async () => {
         let lastPersistedPartialResult = session.fleetMetadata?.partialResult;
-        const persistPartialResult = () => {
+        const persistPartialResult = (
+          durability: PersistDurability = "durable",
+        ) => {
           const partialResult = session.fleetMetadata?.partialResult;
           if (partialResult === lastPersistedPartialResult) return;
-          this.saveSession(session.id);
+          this.saveSession(session.id, { durability });
           lastPersistedPartialResult = partialResult;
         };
-        const inFlightPersistTimer = this.host.timers.setInterval(
-          persistPartialResult,
-          1000,
+        const stopInFlightPersistLoop = this.startInFlightPersistLoop(
+          session.id,
+          () => persistPartialResult("checkpoint"),
         );
         try {
           await this.host.acpBackgroundRunner.run({
@@ -5240,7 +5774,7 @@ export class AgentSessionManager {
             });
           }
         } finally {
-          this.host.timers.clearInterval(inFlightPersistTimer);
+          stopInFlightPersistLoop();
           persistPartialResult();
           this.releaseSessionToolContext(session.id, acpRequestContext);
           if (session.fleetMetadata?.lifecycle === "paused") {
@@ -5464,20 +5998,22 @@ export class AgentSessionManager {
       let lastPersistedActiveAt = session.lastActiveAt;
       let lastPersistedPartialResult = session.fleetMetadata?.partialResult;
       let terminalEngineError: (AgentEvent & { type: "error" }) | undefined;
-      const persistIfHistoryChanged = () => {
+      const persistIfHistoryChanged = (
+        durability: PersistDurability = "durable",
+      ) => {
         const partialResult = session.fleetMetadata?.partialResult;
         if (
           session.lastActiveAt !== lastPersistedActiveAt ||
           partialResult !== lastPersistedPartialResult
         ) {
-          this.saveSession(session.id);
+          this.saveSession(session.id, { durability });
           lastPersistedActiveAt = session.lastActiveAt;
           lastPersistedPartialResult = partialResult;
         }
       };
-      const inFlightPersistTimer = this.host.timers.setInterval(
-        persistIfHistoryChanged,
-        1000,
+      const stopInFlightPersistLoop = this.startInFlightPersistLoop(
+        session.id,
+        () => persistIfHistoryChanged("checkpoint"),
       );
 
       // Session-scoped caps also flow into the engine as a final safety net.
@@ -5585,7 +6121,7 @@ export class AgentSessionManager {
         });
       } finally {
         this.releaseSessionToolContext(session.id, bgCtx);
-        this.host.timers.clearInterval(inFlightPersistTimer);
+        stopInFlightPersistLoop();
         persistIfHistoryChanged();
       }
 

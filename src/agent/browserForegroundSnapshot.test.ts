@@ -35,6 +35,7 @@ function createState(overrides: Partial<AppState> = {}): AppState {
     lastCacheReadTokens: 56,
     estimatedTotalUsed: 78,
     statusOverride: "Working",
+    originalPrompt: "Original prompt",
     messages: [
       {
         id: "message-1",
@@ -108,6 +109,7 @@ describe("createBrowserForegroundSnapshot", () => {
 
     expect(snapshot).toMatchObject({
       sessionId: "session-1",
+      originalPrompt: "Original prompt",
       mode: "code",
       model: "claude-sonnet-4-6",
       streaming: true,

@@ -94,7 +94,7 @@ describe("approveOutsideWorkspaceAccess Guardian review", () => {
 
   it("falls back to the human panel after a reviewed denial", async () => {
     const filePath = outsideFile();
-    const addPathRule = vi.fn();
+    const addPathRule = vi.fn(() => true);
     const enqueuePathApproval = vi.fn(() => ({
       promise: Promise.resolve({
         decision: "allow-session",
@@ -131,5 +131,30 @@ describe("approveOutsideWorkspaceAccess Guardian review", () => {
       { pattern: filePath, mode: "exact" },
       "session",
     );
+  });
+
+  it("rejects access when a persistent path rule cannot be saved", async () => {
+    const filePath = outsideFile();
+    const enqueuePathApproval = vi.fn(() => ({
+      promise: Promise.resolve({
+        decision: "allow-project",
+        rulePattern: filePath,
+        ruleMode: "exact",
+      }),
+    }));
+
+    const result = await approveOutsideWorkspaceAccess(
+      filePath,
+      { addPathRule: vi.fn(() => false) } as never,
+      { enqueuePathApproval } as never,
+      "session-1",
+    );
+
+    expect(result).toEqual({
+      approved: false,
+      reason: expect.stringContaining(
+        "Could not save the project outside-path approval",
+      ),
+    });
   });
 });

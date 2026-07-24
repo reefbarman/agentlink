@@ -116,10 +116,12 @@ export interface BrowserGatewayRevertRecoveryNotice {
 export interface BrowserGatewayForegroundControlState {
   sessionId: string;
   title: string;
+  originalPrompt?: string;
   mode: string;
   model: string;
   status: string;
   streaming: boolean;
+  interrupted?: boolean;
   estimatedTokens?: number;
   maximumTokens?: number;
   statusOverride?: string | null;
@@ -1294,10 +1296,12 @@ function parseForeground(
   const object = strictRecord(value, path, [
     "sessionId",
     "title",
+    "originalPrompt",
     "mode",
     "model",
     "status",
     "streaming",
+    "interrupted",
     "estimatedTokens",
     "maximumTokens",
     "statusOverride",
@@ -1363,10 +1367,24 @@ function parseForeground(
   return {
     sessionId: nonEmptyString(object.sessionId, `${path}.sessionId`, 256),
     title: boundedString(object.title, `${path}.title`, 1_000),
+    ...(object.originalPrompt !== undefined
+      ? {
+          originalPrompt: boundedString(
+            object.originalPrompt,
+            `${path}.originalPrompt`,
+            16_000,
+          ),
+        }
+      : {}),
     mode: nonEmptyString(object.mode, `${path}.mode`, 128),
     model: nonEmptyString(object.model, `${path}.model`, 256),
     status: nonEmptyString(object.status, `${path}.status`, 128),
     streaming: booleanValue(object.streaming, `${path}.streaming`),
+    ...(object.interrupted !== undefined
+      ? {
+          interrupted: booleanValue(object.interrupted, `${path}.interrupted`),
+        }
+      : {}),
     ...(estimatedTokens !== undefined ? { estimatedTokens } : {}),
     ...(maximumTokens !== undefined ? { maximumTokens } : {}),
     ...(statusOverride.present ? { statusOverride: statusOverride.value } : {}),

@@ -308,6 +308,47 @@ describe("AgentSession", () => {
       expect(messages[0]).toEqual({ role: "user", content: "hello" });
     });
 
+    it("bumps transcriptRevision on every transcript mutation and holds it steady on reads", async () => {
+      const session = await makeSession();
+      expect(session.transcriptRevision).toBe(0);
+
+      session.addUserMessage("hello");
+      expect(session.transcriptRevision).toBe(1);
+
+      session.appendAssistantTurn([{ type: "text", text: "hi" }]);
+      expect(session.transcriptRevision).toBe(2);
+
+      session.appendToolResults([
+        { type: "tool_result", tool_use_id: "t1", content: "ok" },
+      ]);
+      expect(session.transcriptRevision).toBe(3);
+
+      expect(
+        session.applyFinalMarker({ status: "completed", source: "engine" }),
+      ).toBe(true);
+      expect(session.transcriptRevision).toBe(4);
+
+      session.appendRuntimeError({ message: "boom", retryable: false });
+      expect(session.transcriptRevision).toBe(5);
+      // In-place update of the matching runtime error still counts as a mutation.
+      session.appendRuntimeError({ message: "boom", retryable: true });
+      expect(session.transcriptRevision).toBe(6);
+
+      expect(session.popLastMessage("assistant")).toBeDefined();
+      expect(session.transcriptRevision).toBe(7);
+      // A non-matching pop leaves the transcript (and revision) untouched.
+      expect(session.popLastMessage("assistant")).toBeUndefined();
+      expect(session.transcriptRevision).toBe(7);
+
+      session.replaceMessages([{ role: "user", content: "condensed" }]);
+      expect(session.transcriptRevision).toBe(8);
+
+      // Reads never bump the revision.
+      session.getAllMessages();
+      session.getMessages();
+      expect(session.transcriptRevision).toBe(8);
+    });
+
     it("persists user-message origin metadata in uiHint", async () => {
       const session = await makeSession();
       session.addUserMessage("hello from phone", { origin: "browser" });
@@ -780,6 +821,34 @@ describe("AgentSession", () => {
         "code",
         "/test",
         expect.objectContaining({ isBackground: true }),
+      );
+    });
+
+    it("forwards the Approve for Me flag on rebuild and mode switch", async () => {
+      const session = await makeSession();
+      mockedBuildPromptArtifacts.mockClear();
+      await session.rebuildSystemPrompt();
+      expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
+        "code",
+        "/test",
+        expect.objectContaining({ approveForMe: false }),
+      );
+
+      session.approveForMe = true;
+      mockedBuildPromptArtifacts.mockClear();
+      await session.rebuildSystemPrompt();
+      expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
+        "code",
+        "/test",
+        expect.objectContaining({ approveForMe: true }),
+      );
+
+      mockedBuildPromptArtifacts.mockClear();
+      await session.setMode("architect");
+      expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
+        "architect",
+        "/test",
+        expect.objectContaining({ approveForMe: true }),
       );
     });
   });

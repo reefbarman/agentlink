@@ -856,7 +856,7 @@ describe("createVscodeRenameSymbolProvider", () => {
     const approvalManager = {
       isPathTrusted: vi.fn(() => true),
       isAgentWriteApproved: vi.fn(() => false),
-      setAgentWriteApproval: vi.fn(),
+      setAgentWriteApproval: vi.fn(() => true),
     };
     const onApprovalRequest = vi.fn(async () => ({
       decision: "accept-session",
@@ -1256,9 +1256,9 @@ describe("createVscodeWriteApprovalPolicyProvider", () => {
 
   it("records accept-session decisions through the approval manager", () => {
     const approvalManager = {
-      setAgentWriteApproval: vi.fn(),
-      addWriteRule: vi.fn(),
-      addPathRule: vi.fn(),
+      setAgentWriteApproval: vi.fn(() => true),
+      addWriteRule: vi.fn(() => true),
+      addPathRule: vi.fn(() => true),
     };
     const provider = createVscodeWriteApprovalPolicyProvider(
       approvalManager as never,

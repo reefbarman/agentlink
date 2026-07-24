@@ -3,7 +3,6 @@ dist/
 *.vsix
 .claude/
 .vscode/
-.agentlink/
 telemetry-reports/
 releases/
 .env.local

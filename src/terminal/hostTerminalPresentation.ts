@@ -4,6 +4,9 @@ import type {
 } from "./hostTerminalBlocks.js";
 
 import type { AlternateScreenTransition } from "./alternateScreenTracker.js";
+import type { HostTerminalSurfaceCommandSummary } from "./terminalSurfaceProtocol.js";
+
+export const MAX_SURFACE_COMMAND_LINE_CHARS = 300;
 
 export type HostTerminalDecorationState =
   | "hidden"
@@ -153,6 +156,22 @@ export function reduceHostTerminalPresentation(
   const alternateScreen = action.transition.type === "enter";
   if (alternateScreen === state.alternateScreen) return state;
   return createState(state.source, alternateScreen, state.terminalRunning);
+}
+
+export function summarizeHostTerminalCommand(
+  block: HostTerminalBlock,
+): HostTerminalSurfaceCommandSummary | undefined {
+  if (block.kind !== "command" || block.command.length === 0) return undefined;
+  const firstLine = block.command.split(/\r\n|\r|\n/, 1)[0];
+  const commandLine = [...firstLine]
+    .slice(0, MAX_SURFACE_COMMAND_LINE_CHARS)
+    .join("");
+  return {
+    commandLine,
+    truncated: commandLine.length < block.command.length,
+    status: block.status,
+    ...(block.exitCode === undefined ? {} : { exitCode: block.exitCode }),
+  };
 }
 
 export function isHostTerminalUserActionAllowed(

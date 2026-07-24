@@ -356,6 +356,7 @@ describe("AgentEngine", () => {
         true,
         expect.anything(),
         expect.objectContaining({ todos }),
+        TEST_MODEL,
       );
       expect(events.some((e) => e.type === "condense")).toBe(true);
     });
@@ -1841,6 +1842,95 @@ describe("AgentEngine", () => {
     });
   });
 
+  describe("pending tool-turn persistence", () => {
+    it("snapshots a provider-complete tool turn before dispatch and clears it after commit", async () => {
+      let streamCall = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCall += 1;
+        if (streamCall === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              { type: "text", text: "I’ll inspect that." },
+              {
+                type: "tool_use",
+                id: "call_read",
+                name: "read_file",
+                input: { path: "src/a.ts" },
+              },
+            ],
+          };
+        } else {
+          yield {
+            type: "content_blocks",
+            blocks: [{ type: "text", text: "Done." }],
+          };
+        }
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("inspect the file");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "read_file",
+            description: "read",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: () => true,
+        executeTool: async () => ({
+          content: [{ type: "text", text: "file contents" }],
+        }),
+      });
+      const pendingSnapshots: AgentMessage[] = [];
+      const canonicalCountsAtSnapshot: number[] = [];
+      const committedTurns = vi.fn();
+
+      await collectEvents(
+        engine.run(session, {
+          onPendingToolTurn: (assistantMessage) => {
+            pendingSnapshots.push(assistantMessage);
+            canonicalCountsAtSnapshot.push(session.messageCount);
+          },
+          onAssistantTurnCommitted: committedTurns,
+        }),
+      );
+
+      expect(canonicalCountsAtSnapshot).toEqual([1]);
+      expect(pendingSnapshots).toEqual([
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_use",
+              id: "call_read",
+            }),
+          ]),
+        }),
+      ]);
+      expect(committedTurns).toHaveBeenCalledTimes(2);
+      expect(session.getAllMessages()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: [
+              expect.objectContaining({
+                type: "tool_result",
+                tool_use_id: "call_read",
+                content: "file contents",
+              }),
+            ],
+          }),
+        ]),
+      );
+    });
+  });
+
   describe("pending question recovery arming", () => {
     const runAskUserTurn = async (blocks: CoreModelContentBlock[]) => {
       let streamCall = 0;
@@ -2612,9 +2702,15 @@ describe("AgentEngine", () => {
       const session = await makeSession();
       session.addUserMessage("search");
       const engine = new AgentEngine(makeRegistry(provider));
-      await collectEvents(engine.run(session));
+      const committedTurns = vi.fn();
+      await collectEvents(
+        engine.run(session, {
+          onAssistantTurnCommitted: committedTurns,
+        }),
+      );
 
       expect(streamCalls).toHaveLength(2);
+      expect(committedTurns).toHaveBeenCalledTimes(2);
       expect(streamCalls[1].messages).toEqual([
         { role: "user", content: "search" },
         pausedMessage,
@@ -2687,6 +2783,71 @@ describe("AgentEngine", () => {
         }),
       );
       expect(events.some((event) => event.type === "done")).toBe(false);
+    });
+
+    it("keeps a running turn on the model resolved at its boundary", async () => {
+      const requests: StreamRequest[] = [];
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.getCapabilities = (model: string) => {
+        if (model !== TEST_MODEL) {
+          throw new Error(`Unknown model "${model}" for provider "mock"`);
+        }
+        return TEST_CAPABILITIES;
+      };
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        streamCount += 1;
+        if (streamCount === 1) {
+          session.model = "other-model";
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call_read",
+                name: "read_file",
+                input: { path: "src/a.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("run one tool");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "read_file",
+            description: "read",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: () => true,
+        executeTool: async () => ({
+          content: [{ type: "text", text: "file contents" }],
+        }),
+      });
+
+      const events = await collectEvents(engine.run(session));
+
+      expect(requests.map((request) => request.model)).toEqual([
+        TEST_MODEL,
+        TEST_MODEL,
+      ]);
+      expect(
+        events
+          .filter((event) => event.type === "api_request")
+          .map((event) => event.model),
+      ).toEqual([TEST_MODEL, TEST_MODEL]);
+      expect(events.some((event) => event.type === "error")).toBe(false);
+      expect(session.model).toBe("other-model");
     });
 
     it("surfaces model fallback and records the effective model", async () => {

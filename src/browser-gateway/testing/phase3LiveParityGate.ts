@@ -9,7 +9,6 @@ import {
   type BrowserGatewayTranscriptMessage,
 } from "../dataPlane/protocol.js";
 import type { BrowserGatewayOwnerProjectionPublication } from "../dataPlane/ownerProjectionAdapter.js";
-import type { GatewaySnapshot } from "../webview/BrowserGatewayApp.js";
 import { RelaySnapshotProjector } from "../webview/relay/relaySnapshotProjection.js";
 import {
   BrowserGatewayRelayProjectionAccumulator,
@@ -529,7 +528,7 @@ function projectLegacyMessage(
 }
 
 function toOracleSnapshot(
-  snapshot: GatewaySnapshot,
+  snapshot: BrowserGatewaySnapshotState,
 ): BrowserGatewaySnapshotState {
   const foreground = snapshot.session.foreground;
   return {

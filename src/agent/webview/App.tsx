@@ -873,6 +873,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             type: "LOAD_SESSION",
             sessionId: msg.sessionId,
             title: msg.title,
+            originalPrompt: msg.originalPrompt,
             mode: msg.mode,
             model: msg.model,
             messages: agentMessagesToChatMessages(msg.messages as unknown[]),
@@ -2688,6 +2689,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           messages={state.messages}
           streaming={state.streaming}
           sessionId={state.chatState.sessionId}
+          originalPrompt={state.originalPrompt}
           earlierUserTurnCount={state.loadedUserTurnOffset}
           onLoadEarlierMessages={handleLoadEarlierSessionMessages}
           detectedQuestion={state.detectedQuestion}

@@ -21,6 +21,7 @@ describe("BrowserGatewayAskAgentPreferencesStore", () => {
     expect(await store.read()).toEqual({});
     await store.update({
       model: " claude-sonnet-4-5 ",
+      modelOwnerId: " vscode-owner-1 ",
       reasoningEffort: "high",
       webPolicy: {
         settings: {
@@ -43,6 +44,7 @@ describe("BrowserGatewayAskAgentPreferencesStore", () => {
     const reloaded = new BrowserGatewayAskAgentPreferencesStore({ filePath });
     expect(await reloaded.read()).toEqual({
       model: "claude-sonnet-4-5",
+      modelOwnerId: "vscode-owner-1",
       reasoningEffort: "high",
       webPolicy: {
         settings: expect.objectContaining({
@@ -57,7 +59,11 @@ describe("BrowserGatewayAskAgentPreferencesStore", () => {
 
     await fs.writeFile(
       filePath,
-      JSON.stringify({ model: " ", reasoningEffort: "invalid" }),
+      JSON.stringify({
+        model: " ",
+        modelOwnerId: " ",
+        reasoningEffort: "invalid",
+      }),
       "utf-8",
     );
     expect(await reloaded.read()).toEqual({});

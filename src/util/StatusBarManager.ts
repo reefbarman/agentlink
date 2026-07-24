@@ -6,7 +6,6 @@ import * as vscode from "vscode";
 export class StatusBarManager implements vscode.Disposable {
   private readonly item: vscode.StatusBarItem;
 
-  private flashInterval: ReturnType<typeof setInterval> | undefined;
   private alertGeneration = 0;
   private alert:
     | { generation: number; message: string; command: string }
@@ -25,36 +24,33 @@ export class StatusBarManager implements vscode.Disposable {
 
   /** Set an error message. Shown as "Error" with error background. */
   setError(message: string): void {
-    this.stopFlash();
     this.errorMessage = message;
     this.renderError();
   }
 
   /** Clear the error state and return the primary item to its idle state. */
   clearError(): void {
+    if (!this.errorMessage) return;
     this.errorMessage = undefined;
     this.restoreBaseState();
   }
 
   /**
-   * Show a flashing approval alert on the primary item.
+   * Show a persistent approval alert on the primary item.
    * Returns a Disposable that restores the previous base state.
    */
   showAlert(message: string, command?: string): vscode.Disposable {
-    this.stopFlash();
     const generation = ++this.alertGeneration;
     this.alert = {
       generation,
       message,
       command: command ?? "agentLink.focusApproval",
     };
-    this.renderAlert(true);
-    this.startFlash();
+    this.renderAlert();
 
     return {
       dispose: () => {
         if (generation !== this.alert?.generation) return;
-        this.stopFlash();
         this.alert = undefined;
         this.restoreBaseState();
       },
@@ -66,22 +62,13 @@ export class StatusBarManager implements vscode.Disposable {
     this.pendingCount = Math.max(0, count);
     if (this.errorMessage) return;
     if (this.alert) {
-      this.renderAlert(true);
+      this.renderAlert();
       return;
     }
     this.restoreBaseState();
   }
 
-  private startFlash(): void {
-    let visible = true;
-    this.flashInterval = setInterval(() => {
-      if (!this.alert || this.errorMessage) return;
-      visible = !visible;
-      this.renderAlert(visible);
-    }, 800);
-  }
-
-  private renderAlert(showIcon: boolean): void {
+  private renderAlert(): void {
     if (!this.alert) return;
     const countSuffix =
       this.pendingCount > 0 ? ` (+${this.pendingCount} pending)` : "";
@@ -89,7 +76,7 @@ export class StatusBarManager implements vscode.Disposable {
       this.pendingCount > 0
         ? `\n${this.pendingCount} more approval${this.pendingCount > 1 ? "s" : ""} pending`
         : "";
-    this.item.text = `${showIcon ? "$(alert)" : "    "} ${this.alert.message}${countSuffix}`;
+    this.item.text = `$(link) AgentLink — ${this.alert.message}${countSuffix}`;
     this.item.tooltip = `${this.alert.message}${queuedTooltip}`;
     this.item.backgroundColor = new vscode.ThemeColor(
       "statusBarItem.warningBackground",
@@ -99,7 +86,7 @@ export class StatusBarManager implements vscode.Disposable {
   }
 
   private renderPending(): void {
-    this.item.text = `$(alert) AgentLink — ${this.pendingCount} approval${this.pendingCount > 1 ? "s" : ""} pending`;
+    this.item.text = `$(link) AgentLink — ${this.pendingCount} approval${this.pendingCount > 1 ? "s" : ""} pending`;
     this.item.tooltip = `${this.pendingCount} AgentLink approval${this.pendingCount > 1 ? "s" : ""} pending`;
     this.item.backgroundColor = new vscode.ThemeColor(
       "statusBarItem.warningBackground",
@@ -125,8 +112,7 @@ export class StatusBarManager implements vscode.Disposable {
       return;
     }
     if (this.alert) {
-      this.renderAlert(true);
-      this.startFlash();
+      this.renderAlert();
       return;
     }
     if (this.pendingCount > 0) {
@@ -140,16 +126,8 @@ export class StatusBarManager implements vscode.Disposable {
     this.item.hide();
   }
 
-  private stopFlash(): void {
-    if (this.flashInterval) {
-      clearInterval(this.flashInterval);
-      this.flashInterval = undefined;
-    }
-  }
-
   dispose(): void {
     this.alertGeneration++;
-    this.stopFlash();
     this.item.dispose();
   }
 }

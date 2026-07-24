@@ -4,6 +4,10 @@ import * as os from "os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { evaluateCommandRulePolicy } from "../approvals/commandRulePolicy.js";
+import {
+  createCommandReviewTurnCircuit,
+  createRetainedCommandReviewDenials,
+} from "../approvals/commandApprovalReview.js";
 
 const {
   getWorkspaceRoots,
@@ -710,7 +714,7 @@ describe("handleExecuteCommand", () => {
   });
 
   it("uses the standard command approval card when fresh native review denies", async () => {
-    const addCommandRule = vi.fn();
+    const addCommandRule = vi.fn(() => true);
     const review = vi.fn(async () => ({
       outcome: "deny" as const,
       risk: "high" as const,
@@ -866,6 +870,128 @@ describe("handleExecuteCommand", () => {
         permissionIntent: "native-escalation",
       },
     });
+  });
+
+  it("passes filesystem evidence about the command to the guardian review", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const review = vi.fn(async () => ({
+      outcome: "allow" as const,
+      risk: "low" as const,
+      userAuthorization: "high" as const,
+      rationale: "Bounded artifact cleanup",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "rm -rf shots" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      { enqueueCommandApproval: vi.fn() } as never,
+      "session-review-evidence",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(review).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "rm -rf shots",
+        evidence: {
+          referencedScripts: [],
+          deletionTargets: [
+            expect.objectContaining({
+              target: "shots",
+              resolvedPath: "/workspace/shots",
+              glob: false,
+              insideWorkspace: true,
+              exists: false,
+            }),
+          ],
+          deletionTargetsOmitted: 0,
+        },
+      }),
+    );
+    expect(textPayload(result)).toMatchObject({
+      approval: { by: "model_reviewer" },
+    });
+  });
+
+  it("clears a retained guardian denial once a human approves the command", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const retained = createRetainedCommandReviewDenials();
+    const review = vi.fn(async () => ({
+      outcome: "deny" as const,
+      risk: "high" as const,
+      userAuthorization: "unknown" as const,
+      rationale: "Deletion scope is not confirmed",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const enqueueCommandApproval = vi
+      .fn()
+      .mockReturnValueOnce({
+        promise: Promise.resolve({
+          decision: "reject",
+          rejectionReason: "Not now",
+        }),
+        commitApprovalRecording: vi.fn(),
+      })
+      .mockReturnValueOnce({
+        promise: Promise.resolve({ decision: "run-once" }),
+        commitApprovalRecording: vi.fn(),
+      });
+    const providers = {
+      terminalProvider,
+      getCommandApprovalPolicy: () => "approve-for-me" as const,
+      commandApprovalReviewer: { review },
+      commandReviewTurnCircuit: createCommandReviewTurnCircuit(),
+      retainedCommandReviewDenials: retained,
+      isSessionActive: () => true,
+    };
+    const approvalManager = {
+      isCommandApproved: () => false,
+      findMatchingCommandRule: vi.fn(),
+    } as never;
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const rejected = await handleExecuteCommand(
+      { command: "rm -rf shots" },
+      approvalManager,
+      { enqueueCommandApproval } as never,
+      "session-retained-denial",
+      undefined,
+      providers,
+    );
+    expect(textPayload(rejected)).toMatchObject({ status: "rejected_by_user" });
+    expect(retained.list("session-retained-denial")).toHaveLength(1);
+
+    const approved = await handleExecuteCommand(
+      { command: "rm -rf shots" },
+      approvalManager,
+      { enqueueCommandApproval } as never,
+      "session-retained-denial",
+      undefined,
+      providers,
+    );
+    expect(retained.list("session-retained-denial")).toEqual([]);
+    expect(textPayload(approved)).toMatchObject({ approval: { by: "human" } });
   });
 
   it("uses explicit all-segment allow rules as native authority under Approve for Me", async () => {
@@ -4381,6 +4507,49 @@ describe("handleExecuteCommand", () => {
     });
     expect(commitApprovalRecording).not.toHaveBeenCalled();
     expect(addCommandRule).not.toHaveBeenCalled();
+    expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("does not execute when a persistent command approval cannot be saved", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm install package" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+        addCommandRule: vi.fn(() => false),
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval: () => ({
+          promise: Promise.resolve({
+            decision: "run-once",
+            rules: [
+              {
+                pattern: "npm install",
+                mode: "prefix",
+                decision: "allow",
+                scope: "project",
+              },
+            ],
+          }),
+          commitApprovalRecording: vi.fn(),
+        }),
+      } as never,
+      "session-persistence-failure",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(textPayload(result).error).toMatch(
+      /Could not save the project command approval/,
+    );
     expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
   });
 

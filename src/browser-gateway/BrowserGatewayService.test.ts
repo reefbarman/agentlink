@@ -126,6 +126,7 @@ function projectedForeground(overrides: Record<string, unknown> = {}) {
     mode: "code",
     model: "claude-sonnet-4-6",
     streaming: false,
+    interrupted: false,
     statusOverride: null,
     projectedMessages: [
       {
@@ -203,6 +204,7 @@ describe("BrowserGatewayService", () => {
       displayName: "Project A",
       availability: "available",
     });
+    expect(snapshot.session.foreground?.originalPrompt).toBe("hello");
     expect(snapshot.session.sessions[0]?.project).toEqual({
       projectId: "project-a",
       displayName: "Project A",
@@ -213,6 +215,29 @@ describe("BrowserGatewayService", () => {
     expect(serializedSession).not.toContain("file://");
     expect(serializedSession).not.toContain("workspaceFolderUri");
     expect(serializedSession).not.toContain("rootPath");
+
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("forwards the projected interrupted-session state to browser snapshots", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const service = new BrowserGatewayService(
+      hub,
+      makeSessionManagerStub() as never,
+      () => themeSnapshotStub,
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => projectedForeground({ interrupted: true }) as never,
+      () => [],
+    );
+
+    expect(service.getSerializableSessionState().foreground).toMatchObject({
+      sessionId: "session-1",
+      interrupted: true,
+      streaming: false,
+    });
 
     service.dispose();
     hub.dispose();
@@ -284,6 +309,7 @@ describe("BrowserGatewayService", () => {
     expect(readSet.foreground).toMatchObject({
       sessionId: "session-1",
       title: "Test Session",
+      originalPrompt: "hello",
       status: "idle",
       messages: [
         expect.objectContaining({ role: "user", content: "hello" }),

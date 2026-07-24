@@ -12,9 +12,9 @@ function createApprovalManagerMock(): Pick<
   "setAgentWriteApproval" | "addWriteRule" | "addPathRule"
 > {
   return {
-    setAgentWriteApproval: vi.fn(),
-    addWriteRule: vi.fn(),
-    addPathRule: vi.fn(),
+    setAgentWriteApproval: vi.fn(() => true),
+    addWriteRule: vi.fn(() => true),
+    addPathRule: vi.fn(() => true),
   };
 }
 
@@ -102,5 +102,23 @@ describe("saveWriteTrustRules", () => {
       "/workspace/project-b/src/file.ts",
     );
     expect(approvalManager.setAgentWriteApproval).not.toHaveBeenCalled();
+  });
+
+  it("fails visibly when a persistent write approval cannot be saved", () => {
+    const approvalManager = createApprovalManagerMock();
+    vi.mocked(approvalManager.addWriteRule).mockReturnValue(false);
+
+    expect(() =>
+      saveInlineWriteTrustRules({
+        response: {
+          decision: "accept-project",
+          trustScope: "this-file",
+        },
+        approvalManager: approvalManager as ApprovalManager,
+        sessionId: "session-1",
+        absolutePath: "/workspace/src/file.ts",
+        relPath: "src/file.ts",
+      }),
+    ).toThrow("Could not save the project file-write rule approval");
   });
 });

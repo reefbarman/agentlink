@@ -15,12 +15,15 @@ import type { ChatMessage } from "../types";
 import type { DetectedQuestion } from "../questionDetection";
 import { ErrorBlock } from "./ErrorBlock";
 import type { FinalMarkerToolCall } from "../../../shared/finalStatus";
+import { LiveLinkIndicator } from "./LiveLinkIndicator";
 import { PairingCodeBlock } from "./PairingCodeBlock";
 import { QuestionAnswerBlock } from "./QuestionAnswerBlock";
 import { SkillLoadBlock } from "./SkillLoadBlock";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
+import { ThinkingContent } from "./ThinkingContent";
 import { ToolCallBlock } from "./ToolCallBlock";
+import { getStreamingActivity } from "./activityPresentation";
 import { getFinalMessageContinueAction } from "../../../shared/finalStatus";
 
 const TOOL_GROUP_SETTLE_MS = 350;
@@ -85,26 +88,50 @@ export function MessageBubble({
   const [settledToolIds, setSettledToolIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const toolSettleTimers = useRef<Map<string, number>>(new Map());
 
   // Hide spawn_background_agent tool_call — it's replaced by the bg_agent block.
   // Keep get_background_status/result/kill visible so users can see what the foreground
   // agent is doing (e.g. waiting for bg results vs actually stuck).
   const finalMarkerToolId = message.finalMarker?.toolCall?.id;
-  const blocks = useMemo(
+  const activityBlocks = useMemo(
     () =>
       message.role === "assistant"
         ? (message.blocks ?? []).filter(
             (b) =>
               !(
                 b.type === "tool_call" && b.name === "spawn_background_agent"
-              ) &&
-              !(b.type === "tool_call" && b.id === finalMarkerToolId) &&
-              !(b.type === "thinking" && !b.complete),
+              ) && !(b.type === "tool_call" && b.id === finalMarkerToolId),
           )
         : [],
     [message.role, message.blocks, finalMarkerToolId],
   );
+  const blocks = useMemo(
+    () =>
+      activityBlocks.filter(
+        (block) => !(block.type === "thinking" && !block.complete),
+      ),
+    [activityBlocks],
+  );
+  const streamingActivity = streaming
+    ? getStreamingActivity(activityBlocks)
+    : undefined;
+  const activeThinking =
+    streamingActivity?.phase === "reasoning"
+      ? [...activityBlocks]
+          .reverse()
+          .find((block) => block.type === "thinking" && !block.complete)
+      : undefined;
+  const canExpandThinking =
+    activeThinking?.type === "thinking" &&
+    activeThinking.text.trim().length > 0;
+  const activeThinkingId =
+    activeThinking?.type === "thinking" ? activeThinking.id : null;
+
+  useEffect(() => {
+    setThinkingExpanded(false);
+  }, [activeThinkingId]);
 
   const blockSegments = useMemo(
     () =>
@@ -381,6 +408,44 @@ export function MessageBubble({
               );
           }
         })}
+
+        {/* General live activity stays visible through every streaming gap. */}
+        {streamingActivity && (
+          <div
+            class={`streaming-indicator${canExpandThinking ? " streaming-indicator-expandable" : ""}`}
+          >
+            {canExpandThinking ? (
+              <>
+                <button
+                  class="streaming-indicator-summary"
+                  type="button"
+                  aria-expanded={thinkingExpanded}
+                  onClick={() => setThinkingExpanded((expanded) => !expanded)}
+                >
+                  <LiveLinkIndicator motion={streamingActivity.motion} />
+                  <span class="streaming-activity-label">
+                    {streamingActivity.label}
+                  </span>
+                  <i
+                    class={`codicon codicon-chevron-${thinkingExpanded ? "down" : "right"} streaming-indicator-chevron`}
+                  />
+                </button>
+                {thinkingExpanded && (
+                  <div class="streaming-indicator-thinking-content">
+                    <ThinkingContent text={activeThinking.text} />
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <LiveLinkIndicator motion={streamingActivity.motion} />
+                <span class="streaming-activity-label">
+                  {streamingActivity.label}
+                </span>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Empty response fallback — shown when streaming ended with no visible content */}
         {!streaming &&

@@ -1218,6 +1218,14 @@ describe("spawn_background_agent tool", () => {
       ...mockCtx,
       projectRoot: "/tmp/project-a",
       workspaceProjectRoots: ["/tmp/project-a", "/tmp/project-b"],
+      approvalManager: {
+        ...mockCtx.approvalManager,
+        isPathTrusted: vi.fn(() => false),
+        getFileWriteAuthorization: vi.fn(() => ({
+          allowed: false,
+          basis: "none" as const,
+        })),
+      } as unknown as ToolDispatchContext["approvalManager"],
       delegationPolicy: {
         forbiddenPaths: ["blocked"],
         onDecision,
@@ -1237,6 +1245,128 @@ describe("spawn_background_agent tool", () => {
         reason: "outside_workspace_roots",
       }),
     );
+  });
+
+  it("allows delegated outside-workspace writes with matching inherited path and write authority", async () => {
+    const onDecision = vi.fn();
+    const outsideFile = path.join(
+      fs.realpathSync("/tmp"),
+      "outside",
+      "file.ts",
+    );
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      projectRoot: "/tmp/project-a",
+      workspaceProjectRoots: ["/tmp/project-a"],
+      approvalManager: {
+        ...mockCtx.approvalManager,
+        isPathTrusted: vi.fn(
+          (sessionId, filePath) =>
+            sessionId === "background-session" && filePath === outsideFile,
+        ),
+        getFileWriteAuthorization: vi.fn((sessionId, filePath) =>
+          sessionId === "background-session" && filePath === outsideFile
+            ? {
+                allowed: true,
+                basis: "write_rule" as const,
+                scope: "session" as const,
+                rule: {
+                  pattern: outsideFile,
+                  mode: "exact" as const,
+                },
+              }
+            : { allowed: false, basis: "none" as const },
+        ),
+      } as unknown as ToolDispatchContext["approvalManager"],
+      sessionId: "background-session",
+      delegationPolicy: {
+        onDecision,
+      },
+    });
+
+    await expect(
+      runtime.executeTool({
+        name: "write_file",
+        input: { path: outsideFile, content: "allowed" },
+        context: { sessionId: "background-session", mode: "code" },
+      }),
+    ).resolves.toBeDefined();
+    expect(onDecision).toHaveBeenCalledWith({
+      decision: "allowed",
+      operation: "write_file",
+      reason: "matching_outside_workspace_authority",
+      path: outsideFile,
+    });
+  });
+
+  it("keeps delegated outside-workspace writes denied when only read authority matches", async () => {
+    const onDecision = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      projectRoot: "/tmp/project-a",
+      workspaceProjectRoots: ["/tmp/project-a"],
+      approvalManager: {
+        ...mockCtx.approvalManager,
+        isPathTrusted: vi.fn(() => true),
+        getFileWriteAuthorization: vi.fn(() => ({
+          allowed: false,
+          basis: "none" as const,
+        })),
+      } as unknown as ToolDispatchContext["approvalManager"],
+      sessionId: "background-session",
+      delegationPolicy: {
+        onDecision,
+      },
+    });
+
+    await expect(
+      runtime.executeTool({
+        name: "write_file",
+        input: { path: "/tmp/outside/file.ts", content: "denied" },
+        context: { sessionId: "background-session", mode: "code" },
+      }),
+    ).rejects.toThrow(/outside workspace roots/);
+    expect(onDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "denied",
+        reason: "outside_workspace_roots",
+      }),
+    );
+  });
+
+  it("still enforces owned paths for approved outside-workspace writes", async () => {
+    const outsideFile = path.join(
+      fs.realpathSync("/tmp"),
+      "outside",
+      "file.ts",
+    );
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      projectRoot: "/tmp/project-a",
+      workspaceProjectRoots: ["/tmp/project-a"],
+      approvalManager: {
+        ...mockCtx.approvalManager,
+        isPathTrusted: vi.fn(() => true),
+        getFileWriteAuthorization: vi.fn(() => ({
+          allowed: true,
+          basis: "write_rule" as const,
+          scope: "session" as const,
+          rule: { pattern: outsideFile, mode: "exact" as const },
+        })),
+      } as unknown as ToolDispatchContext["approvalManager"],
+      sessionId: "background-session",
+      delegationPolicy: {
+        ownedPaths: ["src"],
+      },
+    });
+
+    await expect(
+      runtime.executeTool({
+        name: "write_file",
+        input: { path: outsideFile, content: "denied" },
+        context: { sessionId: "background-session", mode: "code" },
+      }),
+    ).rejects.toThrow(/outside owned paths/);
   });
 
   it("schema includes routing, delegation, and budget params", () => {
@@ -4484,6 +4614,37 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("sends the full MCP input in the approval detail and truncates only oversized payloads", async () => {
+    const onApprovalRequest = vi.fn().mockResolvedValue("allow-once");
+    const mcpHub = {
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+    const ctx = {
+      ...mockCtx,
+      approvalManager: {
+        isMcpApproved: vi.fn().mockReturnValue(false),
+        approveMcpTool: vi.fn(),
+      } as any,
+      onApprovalRequest,
+      mcpHub: mcpHub as any,
+    };
+
+    const longInput = { description: "x".repeat(2_000) };
+    await dispatchToolCall("linear__create_issue", longInput, ctx);
+    expect(onApprovalRequest.mock.calls[0][0].detail).toBe(
+      JSON.stringify(longInput, null, 2),
+    );
+
+    const oversizedInput = { blob: "y".repeat(30_000) };
+    await dispatchToolCall("linear__create_issue", oversizedInput, ctx);
+    const detail = onApprovalRequest.mock.calls[1][0].detail as string;
+    expect(detail.length).toBeLessThan(21_000);
+    expect(detail).toMatch(/… \[input truncated: \d+ more characters\]$/);
+  });
+
   it("allows every tool from an MCP server for the rest of the session", async () => {
     const onApprovalRequest = vi
       .fn()
@@ -4519,6 +4680,47 @@ describe("dispatchToolCall", () => {
       { query: "bug" },
       { signal: undefined },
     );
+  });
+
+  it("does not run an MCP tool when its persistent approval cannot be saved", async () => {
+    const invalidProjectRoot = path.join(
+      os.tmpdir(),
+      `agentlink-mcp-approval-${Date.now()}`,
+    );
+    fs.writeFileSync(invalidProjectRoot, "not a directory");
+    const approveMcpTool = vi.fn();
+    const mcpHub = {
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn(),
+    };
+
+    try {
+      const result = await dispatchToolCall(
+        "linear__list_issues",
+        { query: "bug" },
+        {
+          ...mockCtx,
+          projectRoot: invalidProjectRoot,
+          approvalManager: {
+            isMcpApproved: vi.fn().mockReturnValue(false),
+            approveMcpTool,
+          } as any,
+          onApprovalRequest: vi.fn().mockResolvedValue("always-tool-project"),
+          mcpHub: mcpHub as any,
+        },
+      );
+
+      const payload = JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      );
+      expect(payload.error).toMatch(
+        /Could not save the project MCP tool approval/,
+      );
+      expect(approveMcpTool).not.toHaveBeenCalled();
+      expect(mcpHub.callTool).not.toHaveBeenCalled();
+    } finally {
+      fs.unlinkSync(invalidProjectRoot);
+    }
   });
 
   it("returns the typed rejection reason and follow-up when the user denies an MCP tool", async () => {

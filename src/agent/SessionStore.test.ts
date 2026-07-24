@@ -55,6 +55,7 @@ function createRecord(
   return {
     summary,
     messages,
+    transcriptRevision: overrides.transcriptRevision,
     metadata: {
       mode: summary.mode,
       model: summary.model,
@@ -69,6 +70,46 @@ function createRecord(
       ...overrides.metadata,
     },
   };
+}
+
+/**
+ * Async atomic-file-ops seam that performs real fs work while recording
+ * fsyncs and renames. Temp-file names are normalized to their target basename
+ * so events read as `fsync:messages.json` / `rename:metadata.json`;
+ * directory fsyncs record as `fsync:dir:<basename>`.
+ */
+function createRecordingAtomicFileOps() {
+  const events: string[] = [];
+  const normalize = (name: string) => {
+    const tempMatch = /^\.(.+?)\.\d+\..*\.tmp$/.exec(name);
+    return tempMatch ? tempMatch[1] : name;
+  };
+  const ops = {
+    open: async (filePath: fs.PathLike, flags: string | number) => {
+      const isDirectory =
+        fs.existsSync(filePath) && fs.statSync(filePath).isDirectory();
+      const name = isDirectory
+        ? `dir:${path.basename(String(filePath))}`
+        : normalize(path.basename(String(filePath)));
+      const handle = await fs.promises.open(filePath, flags);
+      return {
+        writeFile: (data: string, options: BufferEncoding) =>
+          handle.writeFile(data, options),
+        sync: async () => {
+          events.push(`fsync:${name}`);
+          await handle.sync();
+        },
+        close: () => handle.close(),
+      };
+    },
+    rename: async (oldPath: fs.PathLike, newPath: fs.PathLike) => {
+      events.push(`rename:${normalize(path.basename(String(newPath)))}`);
+      await fs.promises.rename(oldPath, newPath);
+    },
+    rm: (filePath: fs.PathLike, options: fs.RmOptions) =>
+      fs.promises.rm(filePath, options),
+  };
+  return { events, ops };
 }
 
 function writeLegacySession(
@@ -169,7 +210,7 @@ describe("SessionStore", () => {
     ).toBe(true);
   });
 
-  it("excludes background sessions from list() but keeps them addressable by id", () => {
+  it("excludes background sessions from list() but keeps them addressable by id", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
     const store = new SessionStore(tmpDir);
 
@@ -202,6 +243,10 @@ describe("SessionStore", () => {
       background: true,
     });
 
+    await Promise.all([
+      (store as any).sessionWriteQueues.get("foreground-1"),
+      (store as any).sessionWriteQueues.get("background-1"),
+    ]);
     const listed = store.list();
     expect(listed.map((s) => s.id)).toEqual(["foreground-1"]);
     expect(store.get("background-1")?.background).toBe(true);
@@ -940,7 +985,7 @@ describe("SessionStore", () => {
 
   it("fsyncs temp files before atomic renames and best-effort fsyncs parent directories", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
-    const calls: string[] = [];
+    const { events, ops } = createRecordingAtomicFileOps();
     const store = new SessionStore(
       tmpDir,
       {
@@ -948,42 +993,7 @@ describe("SessionStore", () => {
         surface: "test",
         startedAt: 1,
       },
-      {
-        openSync: (filePath, flags) => {
-          const stat = fs.existsSync(filePath) ? fs.statSync(filePath) : null;
-          calls.push(
-            `open:${path.basename(String(filePath))}:${flags}:${stat?.isDirectory() ? "dir" : "file"}`,
-          );
-          return fs.openSync(filePath, flags);
-        },
-        writeFileSync: (fd, data, options) => {
-          calls.push("write");
-          fs.writeFileSync(fd, data, options);
-        },
-        fsyncSync: (fd) => {
-          let openCall: string | undefined;
-          for (let i = calls.length - 1; i >= 0; i--) {
-            const call = calls[i];
-            if (call?.startsWith("open:")) {
-              openCall = call;
-              break;
-            }
-          }
-          calls.push(openCall?.endsWith(":dir") ? "fsync:dir" : "fsync:file");
-          fs.fsyncSync(fd);
-        },
-        closeSync: (fd) => {
-          calls.push("close");
-          fs.closeSync(fd);
-        },
-        renameSync: (oldPath, newPath) => {
-          calls.push(
-            `rename:${path.basename(String(oldPath))}:${path.basename(String(newPath))}`,
-          );
-          fs.renameSync(oldPath, newPath);
-        },
-        rmSync: (filePath, options) => fs.rmSync(filePath, options),
-      },
+      ops,
     );
 
     const createResult = await store.saveSession({
@@ -994,12 +1004,21 @@ describe("SessionStore", () => {
     });
 
     expect(createResult.ok).toBe(true);
-    const firstRenameIndex = calls.findIndex((call) =>
-      call.startsWith("rename:"),
+    const firstRenameIndex = events.findIndex((event) =>
+      event.startsWith("rename:"),
     );
     expect(firstRenameIndex).toBeGreaterThan(0);
-    expect(calls.indexOf("fsync:file")).toBeLessThan(firstRenameIndex);
-    expect(calls.indexOf("fsync:dir")).toBeGreaterThan(firstRenameIndex);
+    const fileFsyncIndex = events.findIndex(
+      (event) => event.startsWith("fsync:") && !event.startsWith("fsync:dir:"),
+    );
+    expect(fileFsyncIndex).toBeGreaterThanOrEqual(0);
+    expect(fileFsyncIndex).toBeLessThan(firstRenameIndex);
+    expect(
+      events.findIndex(
+        (event, index) =>
+          index > firstRenameIndex && event.startsWith("fsync:dir:"),
+      ),
+    ).toBeGreaterThan(firstRenameIndex);
   });
 
   it("does not rename over the previous file when temp-file fsync fails", async () => {
@@ -1021,7 +1040,17 @@ describe("SessionStore", () => {
       "sessions.json",
     );
     const previousIndex = fs.readFileSync(sessionsFile, "utf-8");
-    const renameCalls: string[] = [];
+    const { events, ops } = createRecordingAtomicFileOps();
+    const open = ops.open;
+    ops.open = async (filePath, flags) => {
+      const handle = await open(filePath, flags);
+      return {
+        ...handle,
+        sync: async () => {
+          throw new Error("fsync failed");
+        },
+      };
+    };
     const failingStore = new SessionStore(
       tmpDir,
       {
@@ -1029,20 +1058,7 @@ describe("SessionStore", () => {
         surface: "test",
         startedAt: 1,
       },
-      {
-        openSync: (filePath, flags) => fs.openSync(filePath, flags),
-        writeFileSync: (fd, data, options) =>
-          fs.writeFileSync(fd, data, options),
-        fsyncSync: () => {
-          throw new Error("fsync failed");
-        },
-        closeSync: (fd) => fs.closeSync(fd),
-        renameSync: (oldPath, newPath) => {
-          renameCalls.push(`${oldPath}:${newPath}`);
-          fs.renameSync(oldPath, newPath);
-        },
-        rmSync: (filePath, options) => fs.rmSync(filePath, options),
-      },
+      ops,
     );
 
     const updateResult = await failingStore.saveSession({
@@ -1057,13 +1073,293 @@ describe("SessionStore", () => {
       reason: "io_error",
       message: "fsync failed",
     });
-    expect(renameCalls).toEqual([]);
+    expect(events.filter((event) => event.startsWith("rename:"))).toEqual([]);
     expect(fs.readFileSync(sessionsFile, "utf-8")).toBe(previousIndex);
     expect(
       fs
-        .readdirSync(path.dirname(sessionsFile))
+        .readdirSync(path.join(tmpDir, ".agentlink", "history", "session-1"))
         .filter((entry) => entry.endsWith(".tmp")),
     ).toEqual([]);
+  });
+
+  it("skips every fsync for checkpoint-durability saves while keeping atomic renames", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const { events, ops } = createRecordingAtomicFileOps();
+    const store = new SessionStore(
+      tmpDir,
+      { ownerId: "test-owner", surface: "test", startedAt: 1 },
+      ops,
+    );
+
+    events.length = 0;
+    const result = await store.saveSession({
+      session: createRecord({ transcriptRevision: 1 }),
+      expectedRevision: null,
+      durability: "checkpoint",
+    });
+
+    expect(result).toEqual({ ok: true, revision: "1" });
+    expect(events.filter((event) => event.startsWith("fsync:"))).toEqual([]);
+    expect(events).toContain("rename:messages.json");
+    expect(events).toContain("rename:metadata.json");
+    expect(events).toContain("rename:sessions.json");
+
+    const read = await store.readSession("session-1");
+    expect(read.ok).toBe(true);
+    if (read.ok) {
+      expect(read.value.messages).toEqual([{ role: "user", content: "hello" }]);
+    }
+  });
+
+  it("fsyncs a checkpoint-written transcript when the next durable save skips rewriting it", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const { events, ops } = createRecordingAtomicFileOps();
+    const store = new SessionStore(
+      tmpDir,
+      { ownerId: "test-owner", surface: "test", startedAt: 1 },
+      ops,
+    );
+
+    await store.saveSession({
+      session: createRecord({ transcriptRevision: 1 }),
+      expectedRevision: null,
+      durability: "checkpoint",
+    });
+
+    events.length = 0;
+    const durableResult = await store.saveSession({
+      session: createRecord({ transcriptRevision: 1 }),
+      expectedRevision: "1",
+      durability: "durable",
+    });
+
+    expect(durableResult).toEqual({ ok: true, revision: "2" });
+    // The unchanged transcript is not rewritten…
+    expect(events).not.toContain("rename:messages.json");
+    // …but its checkpoint-tier bytes are flushed before the durable metadata
+    // revision that references them is renamed into place.
+    const transcriptFsyncIndex = events.indexOf("fsync:messages.json");
+    expect(transcriptFsyncIndex).toBeGreaterThanOrEqual(0);
+    expect(transcriptFsyncIndex).toBeLessThan(
+      events.indexOf("rename:metadata.json"),
+    );
+
+    // Once upgraded, further durable saves stop re-flushing the transcript.
+    events.length = 0;
+    await store.saveSession({
+      session: createRecord({ transcriptRevision: 1 }),
+      expectedRevision: "2",
+      durability: "durable",
+    });
+    expect(events).not.toContain("fsync:messages.json");
+  });
+
+  it("skips transcript rewrites while transcriptRevision is unchanged and rewrites when it advances", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const { events, ops } = createRecordingAtomicFileOps();
+    const store = new SessionStore(
+      tmpDir,
+      { ownerId: "test-owner", surface: "test", startedAt: 1 },
+      ops,
+    );
+
+    await store.saveSession({
+      session: createRecord({ transcriptRevision: 3 }),
+      expectedRevision: null,
+    });
+
+    events.length = 0;
+    await store.saveSession({
+      session: createRecord({ transcriptRevision: 3 }),
+      expectedRevision: "1",
+    });
+    expect(events).not.toContain("rename:messages.json");
+    expect(events).toContain("rename:metadata.json");
+
+    const grownMessages: AgentMessage[] = [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: [{ type: "text", text: "hi" }] },
+    ];
+    events.length = 0;
+    await store.saveSession({
+      session: createRecord({ messages: grownMessages, transcriptRevision: 4 }),
+      expectedRevision: "2",
+    });
+    expect(events).toContain("rename:messages.json");
+    expect(store.loadMessages("session-1")).toHaveLength(2);
+  });
+
+  it("never stale-skips transcripts when records alternate between revision counters and digests", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const { events, ops } = createRecordingAtomicFileOps();
+    const store = new SessionStore(
+      tmpDir,
+      { ownerId: "test-owner", surface: "test", startedAt: 1 },
+      ops,
+    );
+
+    await store.saveSession({
+      session: createRecord(),
+      expectedRevision: null,
+    });
+
+    // Counter-less records with identical content still skip via the digest.
+    events.length = 0;
+    await store.saveSession({ session: createRecord(), expectedRevision: "1" });
+    expect(events).not.toContain("rename:messages.json");
+
+    // Switching to a counter-carrying record rewrites once (no counter state).
+    events.length = 0;
+    await store.saveSession({
+      session: createRecord({ transcriptRevision: 1 }),
+      expectedRevision: "2",
+    });
+    expect(events).toContain("rename:messages.json");
+
+    // Dropping back to a counter-less record rewrites instead of trusting the
+    // digest recorded before the counter-tracked write.
+    events.length = 0;
+    await store.saveSession({ session: createRecord(), expectedRevision: "3" });
+    expect(events).toContain("rename:messages.json");
+  });
+
+  it("serializes overlapping saves for the same session before checking revisions", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+
+    const create = store.saveSession({
+      session: createRecord({
+        summary: createSummary({ id: "session-1", title: "Created" }),
+      }),
+      expectedRevision: null,
+    });
+    const update = store.saveSession({
+      session: createRecord({
+        summary: createSummary({ id: "session-1", title: "Updated" }),
+      }),
+      expectedRevision: "1",
+    });
+
+    await expect(create).resolves.toEqual({ ok: true, revision: "1" });
+    await expect(update).resolves.toEqual({ ok: true, revision: "2" });
+    await expect(store.readSession("session-1")).resolves.toEqual(
+      expect.objectContaining({
+        ok: true,
+        revision: "2",
+        value: expect.objectContaining({
+          summary: expect.objectContaining({ title: "Updated" }),
+        }),
+      }),
+    );
+  });
+
+  it("serializes an overlapping delete after the session save commits", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+
+    const save = store.saveSession({
+      session: createRecord({
+        summary: createSummary({ id: "session-1", title: "Ephemeral" }),
+      }),
+      expectedRevision: null,
+    });
+    const deletion = store.deleteSession({
+      sessionId: "session-1",
+      expectedRevision: "1",
+    });
+
+    await expect(save).resolves.toEqual({ ok: true, revision: "1" });
+    await expect(deletion).resolves.toEqual({ ok: true, revision: "1" });
+
+    const sessionDir = path.join(tmpDir, ".agentlink", "history", "session-1");
+    expect(fs.existsSync(sessionDir)).toBe(false);
+    const reloadedStore = new SessionStore(tmpDir);
+    expect(reloadedStore.list()).toEqual([]);
+    await expect(reloadedStore.readSession("session-1")).resolves.toEqual({
+      ok: false,
+      reason: "not_found",
+    });
+  });
+
+  it("coalesces concurrent index flushes while preserving the newest index", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const { events, ops } = createRecordingAtomicFileOps();
+    const rename = ops.rename;
+    let releaseFirstIndexRename: (() => void) | undefined;
+    const firstIndexRenameGate = new Promise<void>((resolve) => {
+      releaseFirstIndexRename = resolve;
+    });
+    let markFirstIndexRenameStarted: (() => void) | undefined;
+    const firstIndexRenameStarted = new Promise<void>((resolve) => {
+      markFirstIndexRenameStarted = resolve;
+    });
+    let gatedFirstIndexRename = false;
+    ops.rename = async (oldPath, newPath) => {
+      if (
+        !gatedFirstIndexRename &&
+        path.basename(String(newPath)) === "sessions.json"
+      ) {
+        gatedFirstIndexRename = true;
+        markFirstIndexRenameStarted?.();
+        await firstIndexRenameGate;
+      }
+      await rename(oldPath, newPath);
+    };
+    const store = new SessionStore(
+      tmpDir,
+      { ownerId: "test-owner", surface: "test", startedAt: 1 },
+      ops,
+    );
+
+    const saves = [1, 2, 3].map((number) =>
+      store.saveSession({
+        session: createRecord({
+          summary: createSummary({
+            id: `session-${number}`,
+            title: `Session ${number}`,
+            lastActiveAt: number,
+          }),
+        }),
+        expectedRevision: null,
+      }),
+    );
+
+    try {
+      await firstIndexRenameStarted;
+      const historyDir = path.join(tmpDir, ".agentlink", "history");
+      const deadline = Date.now() + 2_000;
+      while (
+        ((store as any).pendingIndexFlush === null ||
+          !fs.existsSync(path.join(historyDir, "session-2", "metadata.json")) ||
+          !fs.existsSync(
+            path.join(historyDir, "session-3", "metadata.json"),
+          )) &&
+        Date.now() < deadline
+      ) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect((store as any).pendingIndexFlush).not.toBeNull();
+      expect(
+        fs.existsSync(path.join(historyDir, "session-2", "metadata.json")),
+      ).toBe(true);
+      expect(
+        fs.existsSync(path.join(historyDir, "session-3", "metadata.json")),
+      ).toBe(true);
+    } finally {
+      releaseFirstIndexRename?.();
+    }
+    await expect(Promise.all(saves)).resolves.toEqual([
+      { ok: true, revision: "1" },
+      { ok: true, revision: "1" },
+      { ok: true, revision: "1" },
+    ]);
+
+    expect(
+      events.filter((event) => event === "rename:sessions.json"),
+    ).toHaveLength(2);
+    expect(
+      new SessionStore(tmpDir).list().map((summary) => summary.id),
+    ).toEqual(["session-3", "session-2", "session-1"]);
   });
 
   it("preserves multiple different-session saves in the shared derived index", async () => {
@@ -1121,6 +1417,14 @@ describe("SessionStore", () => {
     const sessionsFile = path.join(historyDir, "sessions.json");
     fs.writeFileSync(sessionsFile, "[]\n", "utf-8");
 
+    const { ops } = createRecordingAtomicFileOps();
+    const rename = ops.rename;
+    ops.rename = async (oldPath, newPath) => {
+      if (path.basename(String(newPath)) === "sessions.json") {
+        throw new Error("index flush failed");
+      }
+      await rename(oldPath, newPath);
+    };
     const failingStore = new SessionStore(
       tmpDir,
       {
@@ -1128,20 +1432,7 @@ describe("SessionStore", () => {
         surface: "test",
         startedAt: 1,
       },
-      {
-        openSync: (filePath, flags) => fs.openSync(filePath, flags),
-        writeFileSync: (fd, data, options) =>
-          fs.writeFileSync(fd, data, options),
-        fsyncSync: (fd) => fs.fsyncSync(fd),
-        closeSync: (fd) => fs.closeSync(fd),
-        renameSync: (oldPath, newPath) => {
-          if (path.basename(String(newPath)) === "sessions.json") {
-            throw new Error("index flush failed");
-          }
-          fs.renameSync(oldPath, newPath);
-        },
-        rmSync: (filePath, options) => fs.rmSync(filePath, options),
-      },
+      ops,
     );
 
     const saveResult = await failingStore.saveSession({

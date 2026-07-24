@@ -17,6 +17,7 @@ import { App } from "./App.js";
 import {
   TerminalWebviewController,
   type TerminalRenderer,
+  type TerminalRendererCallbacks,
 } from "./terminalWebviewController.js";
 
 const resizeObserverCallbacks: ResizeObserverCallback[] = [];
@@ -34,17 +35,24 @@ function controller() {
     isBracketedPasteMode: vi.fn(() => true),
     registerBlockBoundary: vi.fn(() => true),
     retainBlockAnchors: vi.fn(),
+    scrollToBlock: vi.fn(() => true),
     updateConfiguration: vi.fn(),
     dispose: vi.fn(),
   };
   const postMessage = vi.fn();
+  const rendererCallbacks: { current?: TerminalRendererCallbacks } = {};
   const terminalController = new TerminalWebviewController({
     vscodeApi: { postMessage },
-    rendererFactory: { create: () => renderer },
+    rendererFactory: {
+      create: (_configuration, callbacks) => {
+        rendererCallbacks.current = callbacks;
+        return renderer;
+      },
+    },
     createRequestId: () => "request-id",
     createResizeObserver: () => ({ observe: vi.fn(), disconnect: vi.fn() }),
   });
-  return { postMessage, renderer, terminalController };
+  return { postMessage, renderer, rendererCallbacks, terminalController };
 }
 
 beforeEach(() => {
@@ -188,6 +196,7 @@ describe("terminal App", () => {
             terminalRunning: true,
             blocks: [],
           },
+          anchors: [],
         },
       ],
     });
@@ -257,6 +266,7 @@ describe("terminal App", () => {
             terminalRunning: true,
             blocks: [],
           },
+          anchors: [],
         },
       ],
     });
@@ -341,6 +351,7 @@ describe("terminal App", () => {
               },
             ],
           },
+          anchors: [],
         },
       ],
     });
@@ -349,7 +360,7 @@ describe("terminal App", () => {
       screen.queryByText("Raw shell — command tracking unavailable"),
     ).toBeNull();
     expect(screen.queryByText("Raw output")).toBeNull();
-    expect(screen.queryByLabelText("Command actions")).toBeNull();
+    expect(screen.queryByLabelText("Latest command")).toBeNull();
 
     await test.terminalController.receive({
       type: "terminal-view/render-batch",
@@ -385,7 +396,7 @@ describe("terminal App", () => {
       suppressedOutputCharacters: 0,
       outputPolicyDecisions: [],
     });
-    expect(screen.getByLabelText("Command actions")).toBeTruthy();
+    expect(screen.getByLabelText("Latest command")).toBeTruthy();
     expect(screen.getByText("Interrupt")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Interrupt command" }),
@@ -457,6 +468,172 @@ describe("terminal App", () => {
     expect(
       screen.queryByRole("button", { name: "Interrupt command" }),
     ).toBeNull();
+  });
+
+  it("shows the latest command summary and a clickable sticky header", async () => {
+    const test = controller();
+    render(
+      <App
+        vscodeApi={{ postMessage: test.postMessage }}
+        controller={test.terminalController}
+      />,
+    );
+    await test.terminalController.receive({
+      type: "terminal-view/bootstrap",
+      protocolVersion: 1,
+      rendererEpoch: "renderer-1",
+      state: {
+        tabs: [
+          {
+            id: "terminal-1",
+            title: "zsh",
+            cwd: "/workspace",
+            profileName: "zsh",
+            dimensions: { columns: 80, rows: 24 },
+            status: "running",
+          },
+        ],
+        activeTabId: "terminal-1",
+      },
+      configuration: { scrollback: 1000 },
+      replay: [
+        {
+          terminalId: "terminal-1",
+          terminalInstanceId: "instance-1",
+          sequence: 0,
+          data: "",
+          byteLength: 0,
+          droppedBytes: 0,
+          replayTruncated: false,
+          replayPendingControl: false,
+          blocks: {
+            blocks: [],
+            currentCwd: "/workspace",
+            mode: "raw",
+            droppedBlocks: 0,
+            nextBlockNumber: 1,
+            maxBlockOutputBytes: 1000,
+            maxBlocks: 20,
+          },
+          presentation: {
+            alternateScreen: false,
+            terminalRunning: true,
+            blocks: [],
+          },
+          anchors: [],
+        },
+      ],
+    });
+
+    await test.terminalController.receive({
+      type: "terminal-view/render-batch",
+      terminalId: "terminal-1",
+      terminalInstanceId: "instance-1",
+      sequence: 1,
+      operations: [
+        {
+          type: "block-boundary",
+          boundary: "command-start",
+          blockId: "host-block-2",
+        },
+        {
+          type: "presentation",
+          alternateScreen: false,
+          blocks: [
+            {
+              blockId: "host-block-2",
+              decoration: "active",
+              actions: ["interrupt-command"],
+              command: {
+                commandLine: "npm test",
+                truncated: false,
+                status: "running",
+              },
+            },
+          ],
+        },
+      ],
+      droppedRenderBytes: 0,
+      replayTruncated: false,
+      replayPendingControl: false,
+      suppressedOutputCharacters: 0,
+      outputPolicyDecisions: [],
+    });
+
+    expect(screen.getByLabelText("Latest command")).toBeTruthy();
+    expect(screen.getByText("npm test")).toBeTruthy();
+    expect(screen.getByLabelText("Command running")).toBeTruthy();
+    expect(screen.queryByTitle("Scroll to this command")).toBeNull();
+
+    act(() =>
+      test.rendererCallbacks.current?.onStickyBlockChanged("host-block-2"),
+    );
+    const sticky = screen.getByTitle("Scroll to this command");
+    fireEvent.click(sticky);
+    expect(test.renderer.scrollToBlock).toHaveBeenCalledWith("host-block-2");
+
+    act(() => test.rendererCallbacks.current?.onStickyBlockChanged(undefined));
+    expect(screen.queryByTitle("Scroll to this command")).toBeNull();
+
+    await test.terminalController.receive({
+      type: "terminal-view/render-batch",
+      terminalId: "terminal-1",
+      terminalInstanceId: "instance-1",
+      sequence: 2,
+      operations: [
+        {
+          type: "block-boundary",
+          boundary: "prompt-start",
+          blockId: "host-block-1",
+        },
+        {
+          type: "presentation",
+          alternateScreen: false,
+          blocks: [
+            {
+              blockId: "host-block-1",
+              decoration: "completed",
+              actions: [],
+            },
+            {
+              blockId: "host-block-2",
+              decoration: "completed",
+              actions: [],
+              command: {
+                commandLine: "npm test",
+                truncated: true,
+                status: "exited",
+                exitCode: 1,
+              },
+            },
+          ],
+        },
+      ],
+      droppedRenderBytes: 0,
+      replayTruncated: false,
+      replayPendingControl: false,
+      suppressedOutputCharacters: 0,
+      outputPolicyDecisions: [],
+    });
+
+    expect(screen.getByText("npm test…")).toBeTruthy();
+    expect(screen.getByText("exit 1")).toBeTruthy();
+    expect(screen.getByLabelText("Command failed (exit code 1)")).toBeTruthy();
+
+    // A prompt at the viewport top keeps tracking the command it launched.
+    act(() =>
+      test.rendererCallbacks.current?.onStickyBlockChanged("host-block-1"),
+    );
+    fireEvent.click(screen.getByTitle("Scroll to this command"));
+    expect(test.renderer.scrollToBlock).toHaveBeenLastCalledWith(
+      "host-block-2",
+    );
+
+    // A sticky block that is not a known command block renders no header.
+    act(() =>
+      test.rendererCallbacks.current?.onStickyBlockChanged("host-block-9"),
+    );
+    expect(screen.queryByTitle("Scroll to this command")).toBeNull();
   });
 
   it("reveals the terminal list when a second terminal opens in a narrow panel", async () => {
@@ -580,6 +757,7 @@ describe("terminal App", () => {
             terminalRunning: true,
             blocks: [],
           },
+          anchors: [],
         },
       ],
     });
@@ -675,6 +853,7 @@ describe("terminal App", () => {
             terminalRunning: true,
             blocks: [],
           },
+          anchors: [],
         },
         {
           terminalId: "sandbox-1",
@@ -699,6 +878,7 @@ describe("terminal App", () => {
             terminalRunning: true,
             blocks: [],
           },
+          anchors: [],
         },
       ],
     });
@@ -879,6 +1059,7 @@ describe("terminal App", () => {
             terminalRunning: true,
             blocks: [],
           },
+          anchors: [],
         },
       ],
     });

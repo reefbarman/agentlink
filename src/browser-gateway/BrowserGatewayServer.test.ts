@@ -223,6 +223,7 @@ function makeChatViewProviderStub() {
     submitBrowserSteerQueuedMessage: vi.fn(async () => ({ ok: true })),
     submitBrowserInterjectQueuedMessage: vi.fn(() => ({ ok: true })),
     submitBrowserStop: vi.fn(() => ({ ok: true })),
+    submitBrowserResume: vi.fn(() => ({ ok: true })),
     submitBrowserStopBackground: vi.fn(() => ({ ok: true })),
     submitBrowserAskAgentWebPolicy: vi.fn(() => ({
       ok: true,
@@ -2311,6 +2312,36 @@ describe("BrowserGatewayServer", () => {
     expect(chatViewProvider.submitBrowserStop).toHaveBeenCalledWith(
       "session-1",
     );
+
+    const authorizedResume = await fetch(`${baseUrl}/api/resume`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ sessionId: "session-1" }),
+    });
+    expect(authorizedResume.status).toBe(202);
+    expect(await authorizedResume.json()).toEqual({ ok: true });
+    expect(chatViewProvider.submitBrowserResume).toHaveBeenCalledWith(
+      "session-1",
+    );
+
+    const invalidResume = await fetch(`${baseUrl}/api/resume`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({}),
+    });
+    expect(invalidResume.status).toBe(400);
+    const unauthorizedResume = await fetch(`${baseUrl}/api/resume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "session-1" }),
+    });
+    expect(unauthorizedResume.status).toBe(401);
 
     const authorizedBgStop = await fetch(`${baseUrl}/api/background/stop`, {
       method: "POST",

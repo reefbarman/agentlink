@@ -25,6 +25,7 @@ export interface BrowserGatewayAskAgentWebPolicyCache {
 
 export interface BrowserGatewayAskAgentPreferencesSnapshot {
   model?: string;
+  modelOwnerId?: string;
   reasoningEffort?: ReasoningEffort;
   webPolicy?: BrowserGatewayAskAgentWebPolicyCache;
 }
@@ -35,6 +36,7 @@ function normalizePreferences(
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const candidate = value as {
     model?: unknown;
+    modelOwnerId?: unknown;
     reasoningEffort?: unknown;
     webPolicy?: unknown;
   };
@@ -70,6 +72,11 @@ function normalizePreferences(
     model:
       typeof candidate.model === "string" && candidate.model.trim()
         ? candidate.model.trim()
+        : undefined,
+    modelOwnerId:
+      typeof candidate.modelOwnerId === "string" &&
+      candidate.modelOwnerId.trim()
+        ? candidate.modelOwnerId.trim()
         : undefined,
     reasoningEffort: isCoreReasoningEffort(candidate.reasoningEffort)
       ? candidate.reasoningEffort

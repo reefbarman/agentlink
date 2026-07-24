@@ -15,6 +15,7 @@ import {
   createHostTerminalPresentationState,
   isHostTerminalUserActionAllowed,
   reduceHostTerminalPresentation,
+  summarizeHostTerminalCommand,
   type HostTerminalPresentationState,
 } from "./hostTerminalPresentation.js";
 import type {
@@ -33,6 +34,7 @@ import {
   type HostTerminalBlockBoundary,
   type HostTerminalRenderBatch,
   type HostTerminalRenderOperation,
+  type HostTerminalReplayAnchor,
   type HostTerminalReplaySnapshot,
   type HostTerminalSurfaceAction,
   type HostTerminalSurfaceBlockPresentation,
@@ -157,6 +159,9 @@ export class HostTerminalRuntime {
   private replayControlPending = "";
   private replayControlPendingBytes = 0;
   private replayControlOverflow = false;
+  private totalReplayChars = 0;
+  private trimmedReplayChars = 0;
+  private readonly replayAnchorPositions = new Map<string, number>();
   private nextSequence = 1;
   private lastDeliveredSequence = 0;
   private lastAcknowledgedSequence = 0;
@@ -463,20 +468,22 @@ export class HostTerminalRuntime {
   }
 
   snapshot(): HostTerminalReplaySnapshot {
+    const data = this.replay.units
+      .slice(this.replay.startIndex)
+      .map((unit) => unit.data)
+      .join("");
     return {
       terminalId: this.terminalId,
       terminalInstanceId: this.terminalInstanceId,
       sequence: this.nextSequence - 1,
-      data: this.replay.units
-        .slice(this.replay.startIndex)
-        .map((unit) => unit.data)
-        .join(""),
+      data,
       byteLength: this.replay.byteLength,
       droppedBytes: this.replay.droppedBytes,
       replayTruncated: this.replay.droppedBytes > 0,
       replayPendingControl: this.replayControlPendingBytes > 0,
       blocks: this.blocks,
       presentation: this.surfacePresentation(),
+      anchors: this.replayAnchors(data.length),
     };
   }
 
@@ -625,6 +632,9 @@ export class HostTerminalRuntime {
       );
       if (boundary && blockId) {
         operations.push({ type: "block-boundary", boundary, blockId });
+        if (boundary === "prompt-start" || boundary === "command-start") {
+          this.recordReplayAnchor(blockId);
+        }
       }
     }
     return { suppressedOutputCharacters, writtenBytes };
@@ -739,6 +749,7 @@ export class HostTerminalRuntime {
       this.replay.units.push({ data, byteLength, splittable });
     }
     this.replay.byteLength += byteLength;
+    this.totalReplayChars += data.length;
 
     while (this.replay.byteLength > this.maxRenderReplayBytes) {
       const first = this.replay.units[this.replay.startIndex];
@@ -748,11 +759,13 @@ export class HostTerminalRuntime {
         this.replay.startIndex += 1;
         this.replay.byteLength -= first.byteLength;
         this.replay.droppedBytes += first.byteLength;
+        this.trimmedReplayChars += first.data.length;
         continue;
       }
       const retained = trimUtf8Prefix(first.data, excess);
       const retainedBytes = Buffer.byteLength(retained, "utf8");
       const dropped = first.byteLength - retainedBytes;
+      this.trimmedReplayChars += first.data.length - retained.length;
       first.data = retained;
       first.byteLength = retainedBytes;
       this.replay.byteLength -= dropped;
@@ -774,6 +787,30 @@ export class HostTerminalRuntime {
     this.replay.startIndex = 0;
   }
 
+  private recordReplayAnchor(blockId: string): void {
+    this.replayAnchorPositions.set(blockId, this.totalReplayChars);
+    if (this.replayAnchorPositions.size <= this.blocks.maxBlocks * 2) return;
+    const retained = new Set(this.blocks.blocks.map((block) => block.id));
+    for (const anchorBlockId of this.replayAnchorPositions.keys()) {
+      if (!retained.has(anchorBlockId)) {
+        this.replayAnchorPositions.delete(anchorBlockId);
+      }
+    }
+  }
+
+  private replayAnchors(dataLength: number): HostTerminalReplayAnchor[] {
+    const anchors: HostTerminalReplayAnchor[] = [];
+    for (const block of this.blocks.blocks) {
+      const position = this.replayAnchorPositions.get(block.id);
+      if (position === undefined) continue;
+      const offset = position - this.trimmedReplayChars;
+      if (offset >= 0 && offset <= dataLength) {
+        anchors.push({ blockId: block.id, offset });
+      }
+    }
+    return anchors;
+  }
+
   private blockIdForBoundary(
     event: ShellIntegrationEvent,
     previous: HostTerminalBlockState,
@@ -790,9 +827,11 @@ export class HostTerminalRuntime {
     return this.presentation.blocks.map((block) => {
       const source = this.getBlock(block.blockId);
       const completeOutput = source?.droppedOutputBytes === 0;
+      const command = source && summarizeHostTerminalCommand(source);
       return {
         blockId: block.blockId,
         decoration: block.decoration,
+        ...(command === undefined ? {} : { command }),
         actions: block.actions.filter(
           (action): action is HostTerminalSurfaceAction =>
             PHASE_1_ACTIONS.has(action as HostTerminalSurfaceAction) &&

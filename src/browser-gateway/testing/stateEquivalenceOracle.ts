@@ -71,10 +71,12 @@ export interface BrowserGatewayNormalizedSemanticState {
   readonly foreground: {
     readonly sessionId: string;
     readonly title: string;
+    readonly originalPrompt: string | null;
     readonly mode: string;
     readonly model: string;
     readonly status: string;
     readonly streaming: boolean;
+    readonly interrupted: boolean;
     readonly statusOverride: string | null;
     readonly thinkingEnabled: boolean;
     readonly reasoningEffort: NonNullable<
@@ -278,10 +280,12 @@ export function normalizeLegacyBrowserGatewaySnapshot(
       ? {
           sessionId: foreground.sessionId,
           title: foreground.title,
+          originalPrompt: foreground.originalPrompt ?? null,
           mode: foreground.mode,
           model: foreground.model,
           status: foreground.status,
           streaming: foreground.streaming,
+          interrupted: foreground.interrupted ?? false,
           statusOverride: foreground.statusOverride ?? null,
           thinkingEnabled: foreground.thinkingEnabled ?? true,
           reasoningEffort: foreground.reasoningEffort ?? "high",
@@ -887,10 +891,12 @@ function normalizeRelayForeground(
   return {
     sessionId: foreground.sessionId,
     title: foreground.title,
+    originalPrompt: foreground.originalPrompt ?? null,
     mode: foreground.mode,
     model: foreground.model,
     status: foreground.status,
     streaming: foreground.streaming,
+    interrupted: foreground.interrupted ?? false,
     statusOverride: foreground.statusOverride ?? null,
     thinkingEnabled: foreground.thinkingEnabled ?? true,
     reasoningEffort: foreground.reasoningEffort ?? "high",

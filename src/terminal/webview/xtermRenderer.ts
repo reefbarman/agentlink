@@ -293,6 +293,23 @@ export function registerReplayResponseSuppression(
   };
 }
 
+export function computeStickyBlockId(
+  markers: ReadonlyMap<string, Pick<IMarker, "line" | "isDisposed">>,
+  viewportTopLine: number,
+): string | undefined {
+  let stickyBlockId: string | undefined;
+  let stickyLine = -1;
+  for (const [blockId, marker] of markers) {
+    if (marker.isDisposed || marker.line >= viewportTopLine) continue;
+    // ">=" lets a same-line marker registered later win, matching block order.
+    if (marker.line >= stickyLine) {
+      stickyLine = marker.line;
+      stickyBlockId = blockId;
+    }
+  }
+  return stickyBlockId;
+}
+
 function createTerminalHttpLinkProvider(
   terminal: Terminal,
   onLink: (url: string) => void,
@@ -351,6 +368,7 @@ class XtermRenderer implements TerminalRenderer {
   private readonly abortController = new AbortController();
   private readonly ariaLabel: string;
   private readonly callbacks: TerminalRendererCallbacks;
+  private lastStickyBlockId: string | undefined;
 
   constructor(
     configuration: TerminalSurfaceConfiguration,
@@ -387,6 +405,7 @@ class XtermRenderer implements TerminalRenderer {
     });
     this.subscriptions.push(
       this.terminal.onData(callbacks.onData),
+      this.terminal.onScroll(() => this.notifyStickyBlock()),
       this.terminal.registerLinkProvider(
         createTerminalHttpLinkProvider(this.terminal, callbacks.onLink),
       ),
@@ -407,6 +426,7 @@ class XtermRenderer implements TerminalRenderer {
   async write(data: string, source: "live" | "replay" = "live"): Promise<void> {
     if (source === "live") {
       await write(this.terminal, data);
+      this.notifyStickyBlock();
       return;
     }
     const suppression = registerReplayResponseSuppression(this.terminal);
@@ -415,11 +435,13 @@ class XtermRenderer implements TerminalRenderer {
     } finally {
       suppression.dispose();
     }
+    this.notifyStickyBlock();
   }
 
   reset(): void {
     this.disposeBlockMarkers();
     this.terminal.reset();
+    this.notifyStickyBlock();
   }
 
   focus(): void {
@@ -467,7 +489,9 @@ class XtermRenderer implements TerminalRenderer {
       if (this.blockMarkers.get(blockId) !== marker) return;
       this.blockMarkers.delete(blockId);
       this.callbacks.onBlockAnchorDisposed(blockId);
+      this.notifyStickyBlock();
     });
+    this.notifyStickyBlock();
     return true;
   }
 
@@ -477,6 +501,15 @@ class XtermRenderer implements TerminalRenderer {
       this.blockMarkers.delete(blockId);
       marker.dispose();
     }
+    this.notifyStickyBlock();
+  }
+
+  scrollToBlock(blockId: string): boolean {
+    const marker = this.blockMarkers.get(blockId);
+    if (!marker || marker.isDisposed) return false;
+    this.terminal.scrollToLine(marker.line);
+    this.notifyStickyBlock();
+    return true;
   }
 
   updateConfiguration(configuration: TerminalSurfaceConfiguration): void {
@@ -496,6 +529,16 @@ class XtermRenderer implements TerminalRenderer {
     const markers = [...this.blockMarkers.values()];
     this.blockMarkers.clear();
     for (const marker of markers) marker.dispose();
+  }
+
+  private notifyStickyBlock(): void {
+    const stickyBlockId = computeStickyBlockId(
+      this.blockMarkers,
+      this.terminal.buffer.active.viewportY,
+    );
+    if (stickyBlockId === this.lastStickyBlockId) return;
+    this.lastStickyBlockId = stickyBlockId;
+    this.callbacks.onStickyBlockChanged(stickyBlockId);
   }
 }
 

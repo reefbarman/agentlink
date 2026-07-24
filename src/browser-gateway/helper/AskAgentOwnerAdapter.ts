@@ -498,10 +498,13 @@ function snapshotToReadSet(
     foreground: {
       sessionId: foreground.sessionId,
       title: foreground.title,
+      originalPrompt: messages.find((message) => message.role === "user")
+        ?.content,
       mode: foreground.mode,
       model: foreground.model,
       status: foreground.status,
       streaming: foreground.streaming,
+      interrupted: false,
       estimatedTokens: foreground.estimatedTotalUsed,
       statusOverride: foreground.statusOverride,
       thinkingEnabled: foreground.thinkingEnabled,

@@ -10,6 +10,7 @@ import type {
   BrowserGatewayOwnerEvent,
 } from "../../dataPlane/protocol";
 import type { GatewaySnapshot } from "../BrowserGatewayApp";
+import type { BrowserGatewayOwnerInteractionPayload } from "../../dataPlane/interactionPayload";
 import { RelayConnectionManager } from "./RelayConnectionManager";
 import { RelayOwnerStore, type RelayCatalogOwner } from "./RelayOwnerStore";
 import {
@@ -77,6 +78,17 @@ export function queueAcceptedRelaySourceEventPaint(
   if (accepted && marker) queue?.(marker);
 }
 
+interface HydratedRelayInteraction {
+  kind: string;
+  requestId: string;
+  handleId: string;
+  payload: BrowserGatewayOwnerInteractionPayload;
+}
+
+type RelayInteractionCacheEntry =
+  | { state: "pending"; value: Promise<unknown> }
+  | { state: "resolved"; value: unknown };
+
 export interface RelayGatewayConnectionOptions {
   enabled: boolean;
   selectedTabId: string;
@@ -109,7 +121,8 @@ export function useRelayGatewayConnection(
     if (!options.enabled) return;
     const store = new RelayOwnerStore();
     const projectors = new Map<string, RelaySnapshotProjector>();
-    const interactionCache = new Map<string, unknown>();
+    const interactionCache = new Map<string, RelayInteractionCacheEntry>();
+    const hydratedInteractions = new Map<string, HydratedRelayInteraction>();
     let checkpointCommitId = 0;
     const manager = new RelayConnectionManager({
       store,
@@ -128,6 +141,7 @@ export function useRelayGatewayConnection(
             : undefined,
           projectors,
           interactionCache,
+          hydratedInteractions,
           isCurrent: () => commitId === checkpointCommitId,
           latest,
           catalog: catalogRef,
@@ -187,7 +201,8 @@ export async function commitRelayCheckpoint(options: {
   ownerGenerationId: string;
   sourceEventPaint?: RelaySourceEventPaintMarker;
   projectors: Map<string, RelaySnapshotProjector>;
-  interactionCache: Map<string, unknown>;
+  interactionCache: Map<string, RelayInteractionCacheEntry>;
+  hydratedInteractions: Map<string, HydratedRelayInteraction>;
   fetch?: typeof globalThis.fetch;
   isCurrent: () => boolean;
   latest: { current: RelayGatewayConnectionOptions };
@@ -214,6 +229,7 @@ export async function commitRelayCheckpoint(options: {
   const interaction = options.checkpoint.ui.interaction;
   const handle = interaction?.detailHandle;
   if (!interaction || !handle) {
+    options.hydratedInteractions.delete(key);
     current.commitSnapshot(
       projector.project(options.checkpoint),
       current.selectedTabId,
@@ -222,12 +238,22 @@ export async function commitRelayCheckpoint(options: {
     );
     return;
   }
+  const detailIsUsable = detailMatchesCheckpoint(handle, options.checkpoint);
+  const hydrated = options.hydratedInteractions.get(key);
+  const reusablePayload =
+    detailIsUsable &&
+    hydrated?.kind === interaction.kind &&
+    hydrated.requestId === interaction.requestId &&
+    hydrated.handleId === handle.handleId
+      ? hydrated.payload
+      : null;
   current.commitSnapshot(
-    projector.project(options.checkpoint),
+    projector.project(options.checkpoint, reusablePayload),
     current.selectedTabId,
     current.selectedTabGeneration,
   );
-  if (!detailMatchesCheckpoint(handle, options.checkpoint)) {
+  if (!detailIsUsable) {
+    options.hydratedInteractions.delete(key);
     current.setStatus("Relay interaction unavailable — reconnecting…");
     return;
   }
@@ -238,16 +264,42 @@ export async function commitRelayCheckpoint(options: {
       handle.ownerGenerationId,
       handle.handleId,
     ].join("\u0000");
-    let value = options.interactionCache.get(detailKey);
-    if (value === undefined) {
-      value = await fetchRelayInteractionDetail(
+    let cachedDetail = options.interactionCache.get(detailKey);
+    if (!cachedDetail) {
+      const pendingDetail = fetchRelayInteractionDetail(
         handle,
         options.fetch ?? globalThis.fetch,
       );
-      options.interactionCache.set(detailKey, value);
+      cachedDetail = { state: "pending", value: pendingDetail };
+      options.interactionCache.set(detailKey, cachedDetail);
+    }
+    let value: unknown;
+    if (cachedDetail.state === "pending") {
+      try {
+        value = await cachedDetail.value;
+      } catch (error) {
+        if (options.interactionCache.get(detailKey) === cachedDetail) {
+          options.interactionCache.delete(detailKey);
+        }
+        throw error;
+      }
+      if (options.interactionCache.get(detailKey) === cachedDetail) {
+        options.interactionCache.set(detailKey, {
+          state: "resolved",
+          value,
+        });
+      }
+    } else {
+      value = cachedDetail.value;
     }
     const payload = parseRelayInteractionPayload(value, interaction);
     if (!options.isCurrent()) return;
+    options.hydratedInteractions.set(key, {
+      kind: interaction.kind,
+      requestId: interaction.requestId,
+      handleId: handle.handleId,
+      payload,
+    });
     if (!detailMatchesCheckpoint(handle, options.checkpoint)) {
       throw new Error("relay_detail_expired_during_hydration");
     }
@@ -270,6 +322,9 @@ export async function commitRelayCheckpoint(options: {
     );
   } catch {
     if (!options.isCurrent()) return;
+    if (!detailMatchesCheckpoint(handle, options.checkpoint)) {
+      options.hydratedInteractions.delete(key);
+    }
     current.setStatus("Relay interaction unavailable — reconnecting…");
   }
 }

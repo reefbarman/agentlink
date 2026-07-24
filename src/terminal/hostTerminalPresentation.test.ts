@@ -6,7 +6,9 @@ import {
 } from "./hostTerminalBlocks.js";
 import {
   createHostTerminalPresentationState,
+  MAX_SURFACE_COMMAND_LINE_CHARS,
   reduceHostTerminalPresentation,
+  summarizeHostTerminalCommand,
   type HostTerminalPresentationState,
 } from "./hostTerminalPresentation.js";
 import { createAlternateScreenTracker } from "./alternateScreenTracker.js";
@@ -344,5 +346,50 @@ describe("host terminal presentation policy", () => {
         actions: ["copy-command", "interrupt-command"],
       },
     ]);
+  });
+
+  it("summarizes command blocks with a bounded single display line", () => {
+    const running = blocks(
+      shell({ type: "command-start", command: "npm test\n--verbose" }),
+    );
+    expect(summarizeHostTerminalCommand(running.blocks[0])).toEqual({
+      commandLine: "npm test",
+      truncated: true,
+      status: "running",
+    });
+
+    const exited = blocks(
+      shell({ type: "command-start", command: "npm test" }),
+      shell({ type: "command-end", exitCode: 2 }),
+    );
+    expect(summarizeHostTerminalCommand(exited.blocks[0])).toEqual({
+      commandLine: "npm test",
+      truncated: false,
+      status: "exited",
+      exitCode: 2,
+    });
+
+    const long = blocks(
+      shell({
+        type: "command-start",
+        command: "x".repeat(MAX_SURFACE_COMMAND_LINE_CHARS + 1),
+      }),
+    );
+    expect(summarizeHostTerminalCommand(long.blocks[0])).toEqual({
+      commandLine: "x".repeat(MAX_SURFACE_COMMAND_LINE_CHARS),
+      truncated: true,
+      status: "running",
+    });
+  });
+
+  it("summarizes only command blocks that carry command text", () => {
+    const prompt = blocks(shell({ type: "prompt-start" }), data("$ "));
+    expect(summarizeHostTerminalCommand(prompt.blocks[0])).toBeUndefined();
+
+    const rawBlock = blocks(data("raw output"));
+    expect(summarizeHostTerminalCommand(rawBlock.blocks[0])).toBeUndefined();
+
+    const empty = blocks(shell({ type: "command-start", command: "" }));
+    expect(summarizeHostTerminalCommand(empty.blocks[0])).toBeUndefined();
   });
 });

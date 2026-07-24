@@ -28,6 +28,9 @@ export interface TerminalRendererCallbacks {
   onData(data: string): void;
   onLink(url: string): void;
   onPaste(bracketedPasteMode: boolean): void;
+  /** The most recent block whose start line is scrolled above the viewport
+   * top, i.e. the block whose content spans the visible top edge. */
+  onStickyBlockChanged(blockId: string | undefined): void;
 }
 
 export interface TerminalRenderer {
@@ -45,6 +48,7 @@ export interface TerminalRenderer {
     boundary: HostTerminalBlockBoundary,
   ): boolean;
   retainBlockAnchors(blockIds: ReadonlySet<string>): void;
+  scrollToBlock(blockId: string): boolean;
   updateConfiguration(configuration: TerminalSurfaceConfiguration): void;
   dispose(): void;
 }
@@ -79,6 +83,7 @@ export interface TerminalBlockStateView {
   alternateScreen: boolean;
   terminalRunning: boolean;
   blocks: readonly TerminalBlockView[];
+  stickyBlockId?: string;
 }
 
 export interface TerminalConfirmationView {
@@ -117,6 +122,7 @@ interface RendererEntry {
   blockMode: "raw" | "integrated";
   blockKinds: Map<string, TerminalBlockView["kind"]>;
   anchoredBlockIds: Set<string>;
+  stickyBlockId?: string;
   presentation: HostTerminalSurfacePresentation;
   renderQueue: Promise<void>;
   renderGeneration: number;
@@ -345,6 +351,12 @@ export class TerminalWebviewController {
       return;
     }
     this.postTarget(entry, { type: "terminal-view/action", blockId, action });
+  }
+
+  revealBlock(terminalId: string, blockId: string): void {
+    const entry = this.entries.get(terminalId);
+    if (!entry || entry.presentation.alternateScreen) return;
+    entry.renderer.scrollToBlock(blockId);
   }
 
   respondToConfirmation(accept: boolean): void {
@@ -721,13 +733,13 @@ export class TerminalWebviewController {
             return;
           }
           entry.renderer.reset();
-          if (snapshot.data)
-            await entry.renderer.write(snapshot.data, "replay");
+          await this.replayWithAnchors(entry, snapshot, renderGeneration);
           if (
             this.entries.get(entry.terminalId) === entry &&
             entry.renderGeneration === renderGeneration
           ) {
             entry.lastSequence = snapshot.sequence;
+            this.patchState({ blockStates: this.projectBlockStates() });
           }
         })
         .catch((error: unknown) => {
@@ -969,6 +981,13 @@ export class TerminalWebviewController {
           this.patchState({ blockStates: this.projectBlockStates() });
         }
       },
+      onStickyBlockChanged: (blockId) => {
+        if (entry.stickyBlockId === blockId) return;
+        entry.stickyBlockId = blockId;
+        if (this.entries.get(entry.terminalId) === entry) {
+          this.patchState({ blockStates: this.projectBlockStates() });
+        }
+      },
     });
     entry = {
       terminalId: tab.id,
@@ -987,6 +1006,49 @@ export class TerminalWebviewController {
       renderGeneration: 0,
     };
     return entry;
+  }
+
+  /** Replays retained output in chunks, re-registering block markers at the
+   * host-provided anchors so sticky-command tracking survives a replay. */
+  private async replayWithAnchors(
+    entry: RendererEntry,
+    snapshot: HostTerminalReplaySnapshot,
+    renderGeneration: number,
+  ): Promise<void> {
+    const anchors = snapshot.anchors
+      .filter(
+        (anchor) =>
+          Number.isInteger(anchor.offset) &&
+          anchor.offset >= 0 &&
+          anchor.offset <= snapshot.data.length &&
+          entry.blockKinds.has(anchor.blockId),
+      )
+      .sort((left, right) => left.offset - right.offset);
+
+    let cursor = 0;
+    for (const anchor of anchors) {
+      if (anchor.offset > cursor) {
+        await entry.renderer.write(
+          snapshot.data.slice(cursor, anchor.offset),
+          "replay",
+        );
+        cursor = anchor.offset;
+        if (
+          this.entries.get(entry.terminalId) !== entry ||
+          entry.renderGeneration !== renderGeneration
+        ) {
+          return;
+        }
+      }
+      const kind = entry.blockKinds.get(anchor.blockId);
+      const boundary = kind === "prompt" ? "prompt-start" : "command-start";
+      if (entry.renderer.registerBlockBoundary(anchor.blockId, boundary)) {
+        entry.anchoredBlockIds.add(anchor.blockId);
+      }
+    }
+    if (cursor < snapshot.data.length) {
+      await entry.renderer.write(snapshot.data.slice(cursor), "replay");
+    }
   }
 
   private applyPresentation(
@@ -1034,6 +1096,9 @@ export class TerminalWebviewController {
         mode: entry.blockMode,
         alternateScreen: entry.presentation.alternateScreen,
         terminalRunning: entry.presentation.terminalRunning,
+        ...(entry.stickyBlockId === undefined
+          ? {}
+          : { stickyBlockId: entry.stickyBlockId }),
         blocks: entry.presentation.blocks.map((block) => ({
           ...block,
           kind:

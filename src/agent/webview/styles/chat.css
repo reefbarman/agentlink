@@ -1105,8 +1105,6 @@ body.chat-activity-shelf-resizing * {
 }
 
 .thinking-block-complete {
-  border-left: 2px solid
-    color-mix(in srgb, #4ec9b0 42%, var(--vscode-panel-border));
   background: linear-gradient(
     90deg,
     color-mix(in srgb, #4ec9b0 5%, transparent),
@@ -2369,6 +2367,76 @@ body.chat-activity-shelf-resizing * {
     color: CanvasText;
     filter: none;
   }
+}
+
+/* ── Streaming activity ── */
+
+.streaming-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+}
+
+.streaming-indicator-expandable {
+  display: block;
+}
+
+.streaming-indicator-summary {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.streaming-indicator-summary:hover .streaming-activity-label {
+  opacity: 0.9;
+}
+
+.streaming-indicator-summary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.streaming-indicator-chevron {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  opacity: 0.55;
+}
+
+.streaming-indicator-thinking-content {
+  max-height: min(180px, 28vh);
+  overflow-y: auto;
+  padding: 6px 8px 2px 20px;
+}
+
+.streaming-indicator-thinking-content pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.streaming-indicator-thinking-content .thinking-steps {
+  font-size: 11px;
+}
+
+.streaming-activity-label {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.6;
+  white-space: nowrap;
 }
 
 .empty-response {
@@ -3645,6 +3713,11 @@ body.chat-activity-shelf-resizing * {
   padding: 4px 4px 4px 10px;
   max-height: 216px;
   overflow-y: auto;
+  /* Reserve the scrollbar gutter unconditionally so the textarea autosize
+     measurement (which momentarily collapses content below the overflow
+     threshold) sees the same width as the final layout; without this the
+     measured height is stale and the last lines clip under overflow:hidden. */
+  scrollbar-gutter: stable;
 }
 
 .input-wrapper.slash-match-active {

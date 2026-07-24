@@ -469,11 +469,12 @@ describe("browser project discovery", () => {
     await expect(
       provider.searchBrowserFiles("project", "project-b"),
     ).resolves.toEqual([{ path: "src/project-b.ts", kind: "file" }]);
+    const insensitivePattern = "**/*[pP][rR][oO][jJ][eE][cC][tT]*";
     expect(mockFindFiles).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         base: "/workspace/b",
-        pattern: "**/*project*",
+        pattern: insensitivePattern,
       }),
       "**/node_modules/**",
       50,
@@ -482,10 +483,43 @@ describe("browser project discovery", () => {
       2,
       expect.objectContaining({
         base: "/workspace/b",
-        pattern: "**/*project*",
+        pattern: insensitivePattern,
       }),
       null,
       200,
+    );
+  });
+
+  it("finds files from a pasted absolute path inside the project", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getWorkspaceProjects: () => [
+        {
+          id: "project-a",
+          name: "Project A",
+          uri: "file:///workspace/a",
+          rootPath: "/workspace/a",
+          availability: { status: "available" },
+        },
+      ],
+    };
+    mockFindFiles.mockResolvedValue([{ fsPath: "/workspace/a/src/Foo.ts" }]);
+
+    await expect(
+      provider.searchBrowserFiles("/workspace/a/src/Foo.ts", "project-a"),
+    ).resolves.toEqual([{ path: "src/Foo.ts", kind: "file" }]);
+    expect(mockFindFiles).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        base: "/workspace/a",
+        pattern: "**/*[sS][rR][cC]/[fF][oO][oO].[tT][sS]*",
+      }),
+      "**/node_modules/**",
+      50,
     );
   });
 
@@ -1976,6 +2010,7 @@ describe("ChatViewProvider session state sync", () => {
       expect.objectContaining({
         type: "agentSessionLoaded",
         sessionId: "session-1",
+        originalPrompt: "original task",
         todos,
         hasMoreBefore: true,
       }),
@@ -2065,6 +2100,152 @@ describe("ChatViewProvider session state sync", () => {
           message.id === "question-1",
       ),
     ).toBe(true);
+  });
+
+  it("forwards pending ask_user recovery through the production tool question handler", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = {
+      id: "session-1",
+      title: "Session 1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "tool_executing",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      getAllMessages: () => [] as unknown[],
+    };
+    const persistPendingQuestionRecovery = vi.fn(
+      async (..._args: unknown[]) => {},
+    );
+    const clearPendingQuestionRecovery = vi.fn();
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      persistPendingQuestionRecovery,
+      clearPendingQuestionRecovery,
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    } as never);
+    const questions = [
+      {
+        id: "choice",
+        type: "multiple_choice" as const,
+        question: "Which path?",
+        options: ["A", "B"],
+      },
+    ];
+    const pendingQuestionRecovery = {
+      schemaVersion: 1 as const,
+      assistantContent: [
+        {
+          type: "tool_use" as const,
+          id: "toolu-1",
+          name: "ask_user",
+          input: { context: "Pick one.", questions },
+        },
+      ],
+      toolUseId: "toolu-1",
+      toolName: "ask_user" as const,
+      toolInput: { context: "Pick one.", questions },
+    };
+
+    const response = provider.handleToolQuestion(
+      "Pick one.",
+      questions,
+      "session-1",
+      undefined,
+      pendingQuestionRecovery,
+    );
+
+    expect(persistPendingQuestionRecovery).toHaveBeenCalledWith(
+      "session-1",
+      expect.any(String),
+      "Pick one.",
+      questions,
+      pendingQuestionRecovery,
+    );
+    const questionRequestId = persistPendingQuestionRecovery.mock.calls[0]?.[1];
+    if (typeof questionRequestId !== "string") {
+      throw new Error("Expected a persisted question request ID");
+    }
+    const pendingQuestions = (
+      provider as unknown as {
+        pendingQuestions: Map<string, (raw: unknown) => void>;
+      }
+    ).pendingQuestions;
+    pendingQuestions.get(questionRequestId)?.({
+      answers: { choice: "A" },
+      notes: {},
+    });
+
+    await expect(response).resolves.toEqual({
+      answers: { choice: "A" },
+      notes: {},
+      attachments: undefined,
+    });
+    expect(clearPendingQuestionRecovery).toHaveBeenCalledWith(
+      "session-1",
+      questionRequestId,
+    );
+  });
+
+  it("uses the recovery-preserving question handler in extension composition", () => {
+    const extensionSource = fs.readFileSync("src/extension.ts", "utf8");
+
+    // A shorter callback is type-compatible and silently drops the optional
+    // recovery argument, so keep the production composition on the typed handler.
+    expect(extensionSource).toMatch(
+      /\bonQuestion:\s*chatViewProvider\.handleToolQuestion\b/,
+    );
+  });
+
+  it("routes an eligible browser resume through interrupted-session recovery", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = {
+      id: "session-1",
+      background: false,
+      status: "idle",
+      runState: { phase: "running", startedAt: 123 },
+    };
+    const resumeInterruptedSession = vi.fn(async () => true);
+    provider.setSessionManager({
+      getSession: vi.fn(() => session),
+      getForegroundSession: vi.fn(() => session),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      resumeInterruptedSession,
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    } as never);
+
+    expect(provider.submitBrowserResume("session-1")).toEqual({ ok: true });
+    await Promise.resolve();
+    expect(resumeInterruptedSession).toHaveBeenCalledWith("session-1");
+
+    session.runState = {
+      phase: "awaiting_question",
+      startedAt: 124,
+    } as never;
+    expect(provider.submitBrowserResume("session-1")).toEqual({ ok: false });
   });
 
   it("does not mark a restored ask_user question as an interrupted session", async () => {
@@ -2189,7 +2370,17 @@ describe("ChatViewProvider session state sync", () => {
       { fsPath: "/tmp/ext" } as never,
       { get: vi.fn(), update: vi.fn() } as never,
     );
-    const session = { id: "session-1" };
+    const session = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle",
+      title: "Recovered session",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      getAllMessages: vi.fn(() => [] as AgentMessage[]),
+    };
     const manager = {
       getForegroundSession: vi.fn(() => session),
       getPendingQuestionRecovery: vi.fn(() => ({
@@ -2234,6 +2425,14 @@ describe("ChatViewProvider session state sync", () => {
     const session = {
       id: "session-1",
       projectScope: { projectId: "project-1" },
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle",
+      title: "Recovered session",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      getAllMessages: vi.fn(() => [] as AgentMessage[]),
     };
     const manager = {
       getForegroundSession: vi.fn(() => session),
@@ -2287,6 +2486,110 @@ describe("ChatViewProvider session state sync", () => {
       },
       expect.objectContaining({ switchMode: expect.any(Function) }),
     );
+  });
+
+  it("resyncs both surfaces with the recovered ask_user turn after answering", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+
+    const askUserResult = JSON.stringify({
+      context: "Pick one.",
+      responses: [{ question: "Which option?", answer: "A" }],
+    });
+    const recoveredMessages = [
+      { role: "user", content: "original task" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu-ask-1",
+            name: "ask_user",
+            input: { context: "Pick one." },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu-ask-1",
+            content: askUserResult,
+          },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+    const session = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle",
+      title: "Recovered session",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      getAllMessages: vi.fn(() => [] as AgentMessage[]),
+    };
+    const manager = {
+      getForegroundSession: vi.fn(() => session),
+      getPendingQuestionRecovery: vi.fn(() => ({
+        questionRequestId: "question-1",
+      })),
+      // Production appends the recovered ask_user turn to session history
+      // before resolving; simulate that so the resync has it to project.
+      answerRecoveredQuestion: vi.fn(async () => {
+        session.getAllMessages = vi.fn(() => recoveredMessages);
+        return true;
+      }),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+
+    const accepted = await provider.submitBrowserQuestionResponse({
+      id: "question-1",
+      answers: { q1: "A" },
+      notes: {},
+    });
+
+    expect(accepted).toBe(true);
+
+    // VS Code webview boundary: the resync posts the recovered turn.
+    const loaded = mockPostMessage.mock.calls.find(
+      ([message]) =>
+        message.type === "agentSessionLoaded" &&
+        message.sessionId === "session-1",
+    )?.[0];
+    expect(loaded).toBeDefined();
+    expect(JSON.stringify(loaded?.messages)).toContain("ask_user");
+    expect(JSON.stringify(loaded?.messages)).toContain("toolu-ask-1");
+
+    // Browser surface boundary: the projected foreground snapshot renders the
+    // recovered tool call and its answer summary.
+    const snapshot = provider.getBrowserProjectedForegroundState();
+    const blocks =
+      snapshot?.projectedMessages.flatMap((message) => message.blocks) ?? [];
+    expect(
+      blocks.some(
+        (block) => block.type === "tool_call" && block.name === "ask_user",
+      ),
+    ).toBe(true);
+    expect(blocks.some((block) => block.type === "question_answer")).toBe(true);
   });
 
   it("uses async detect result for projected detected question in browser state", async () => {
@@ -3004,6 +3307,82 @@ describe("ChatViewProvider session state sync", () => {
         interjectionReady: true,
       },
     ]);
+  });
+
+  it("interrupts only the foreground turn when steering a queued message", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "tool_executing",
+      reasoningEffort: "high",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+      activeFilePath: undefined,
+      projectScope: {
+        projectId: "project-a",
+        workspaceFolderUri: "file:///workspace/a",
+        displayName: "Project A",
+        rootPath: "/workspace/a",
+      },
+      projectAvailability: "available",
+    };
+    const interruptSession = vi.fn();
+    const stopSession = vi.fn();
+    const sendMessage = vi.fn(async () => undefined);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      interruptSession,
+      stopSession,
+      sendMessage,
+    } as never);
+
+    await (
+      provider as unknown as {
+        steerQueuedMessageFromUi(input: {
+          sessionId: string;
+          queueId: string;
+          text: string;
+          attachments: string[];
+          images: Array<{ name: string; mimeType: string; base64: string }>;
+          documents: Array<{ name: string; mimeType: string; base64: string }>;
+        }): Promise<void>;
+      }
+    ).steerQueuedMessageFromUi({
+      sessionId: session.id,
+      queueId: "queue-1",
+      text: "change direction",
+      attachments: [],
+      images: [],
+      documents: [],
+    });
+
+    expect(interruptSession).toHaveBeenCalledWith(session.id);
+    expect(stopSession).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      session.id,
+      "change direction",
+      "code",
+      expect.any(Object),
+    );
   });
 
   it("can register a queued message as a pending interjection", async () => {

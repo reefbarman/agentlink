@@ -2040,13 +2040,7 @@ export function activate(context: vscode.ExtensionContext): void {
       chatViewProvider.handleModeSwitch(mode, reason, silent, sessionId),
     onApprovalRequest: (request, sessionId) =>
       chatViewProvider.requestApproval(request, sessionId),
-    onQuestion: (context, questions, sessionId, backgroundTask) =>
-      chatViewProvider.requestQuestion(
-        context,
-        questions,
-        sessionId,
-        backgroundTask,
-      ),
+    onQuestion: chatViewProvider.handleToolQuestion,
     onFileRead: (filePath) => {
       agentSessionManager.getForegroundSession()?.trackFileRead(filePath);
     },

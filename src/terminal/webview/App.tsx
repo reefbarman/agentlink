@@ -8,7 +8,10 @@ import {
   type VsCodeApi,
 } from "./terminalWebviewController.js";
 import { xtermRendererFactory } from "./xtermRenderer.js";
-import type { HostTerminalSurfaceAction } from "../terminalSurfaceProtocol.js";
+import type {
+  HostTerminalSurfaceAction,
+  HostTerminalSurfaceCommandSummary,
+} from "../terminalSurfaceProtocol.js";
 
 export interface AppProps {
   vscodeApi: VsCodeApi;
@@ -86,6 +89,74 @@ const ACTION_DETAILS: Partial<
   },
 };
 
+function commandStatusDetails(command: HostTerminalSurfaceCommandSummary): {
+  icon: string;
+  label: string;
+  className: string;
+} {
+  if (command.status === "running") {
+    return {
+      icon: "loading codicon-modifier-spin",
+      label: "Command running",
+      className: "running",
+    };
+  }
+  if (command.exitCode === 0) {
+    return { icon: "check", label: "Command succeeded", className: "success" };
+  }
+  return {
+    icon: "error",
+    label:
+      command.exitCode === undefined
+        ? "Command exited"
+        : `Command failed (exit code ${command.exitCode})`,
+    className: "error",
+  };
+}
+
+function CommandSummaryLabel({
+  command,
+}: {
+  command: HostTerminalSurfaceCommandSummary;
+}) {
+  const status = commandStatusDetails(command);
+  const text = `${command.commandLine}${command.truncated ? "…" : ""}`;
+  return (
+    <>
+      <span
+        class={`codicon codicon-${status.icon} terminal-command-status-icon ${status.className}`}
+        title={status.label}
+        aria-label={status.label}
+        role="img"
+      />
+      <span class="terminal-command-text" title={text}>
+        {text}
+      </span>
+      {command.status === "exited" &&
+        command.exitCode !== undefined &&
+        command.exitCode !== 0 && (
+          <span class="terminal-command-exit">exit {command.exitCode}</span>
+        )}
+    </>
+  );
+}
+
+function latestCommandBlock(
+  blockState: TerminalBlockStateView,
+): TerminalBlockStateView["blocks"][number] | undefined {
+  for (let index = blockState.blocks.length - 1; index >= 0; index -= 1) {
+    const block = blockState.blocks[index];
+    if (block.kind !== "command" || block.decoration === "hidden") continue;
+    if (
+      block.command !== undefined ||
+      block.actions.some((action) => ACTION_DETAILS[action] !== undefined)
+    ) {
+      return block;
+    }
+  }
+  return undefined;
+}
+
 function BlockStrip({
   blockState,
   controller,
@@ -105,23 +176,18 @@ function BlockStrip({
     );
   }
 
-  let command: TerminalBlockStateView["blocks"][number] | undefined;
-  for (let index = blockState.blocks.length - 1; index >= 0; index -= 1) {
-    const block = blockState.blocks[index];
-    if (
-      block.kind === "command" &&
-      block.decoration !== "hidden" &&
-      block.actions.some((action) => ACTION_DETAILS[action] !== undefined)
-    ) {
-      command = block;
-      break;
-    }
-  }
+  const command = latestCommandBlock(blockState);
   if (!command) return null;
 
   return (
-    <section class="terminal-block-strip" aria-label="Command actions">
-      <span class="terminal-block-mode">Command actions</span>
+    <section class="terminal-block-strip" aria-label="Latest command">
+      {command.command ? (
+        <span class="terminal-block-command">
+          <CommandSummaryLabel command={command.command} />
+        </span>
+      ) : (
+        <span class="terminal-block-mode">Command actions</span>
+      )}
       <div class="terminal-block-actions">
         {command.actions.map((action) => {
           const details = ACTION_DETAILS[action];
@@ -146,6 +212,50 @@ function BlockStrip({
         })}
       </div>
     </section>
+  );
+}
+
+function StickyCommandHeader({
+  blockState,
+  controller,
+  terminalId,
+}: {
+  blockState?: TerminalBlockStateView;
+  controller: TerminalWebviewController;
+  terminalId: string;
+}) {
+  if (!blockState || blockState.alternateScreen || !blockState.stickyBlockId) {
+    return null;
+  }
+  const index = blockState.blocks.findIndex(
+    (candidate) => candidate.blockId === blockState.stickyBlockId,
+  );
+  if (index < 0) return null;
+  let block = blockState.blocks[index];
+  if (block.kind === "prompt") {
+    // A prompt at the viewport top means its command line has scrolled off;
+    // keep tracking the command it launched instead of blinking the header.
+    const launched = blockState.blocks
+      .slice(index + 1)
+      .find((candidate) => candidate.kind === "command");
+    if (launched) block = launched;
+  }
+  if (
+    block.kind !== "command" ||
+    block.command === undefined ||
+    block.decoration === "hidden"
+  ) {
+    return null;
+  }
+  return (
+    <button
+      type="button"
+      class="terminal-sticky-command"
+      title="Scroll to this command"
+      onClick={() => controller.revealBlock(terminalId, block.blockId)}
+    >
+      <CommandSummaryLabel command={block.command} />
+    </button>
   );
 }
 
@@ -184,11 +294,18 @@ function TerminalPane({
         </div>
       ) : (
         <div class="terminal-pane-body">
-          <div
-            class="terminal-xterm-host"
-            ref={attachContainer}
-            onMouseDown={() => controller.focusActive()}
-          />
+          <div class="terminal-xterm-region">
+            <div
+              class="terminal-xterm-host"
+              ref={attachContainer}
+              onMouseDown={() => controller.focusActive()}
+            />
+            <StickyCommandHeader
+              blockState={blockState}
+              controller={controller}
+              terminalId={tab.id}
+            />
+          </div>
           <BlockStrip
             blockState={blockState}
             controller={controller}

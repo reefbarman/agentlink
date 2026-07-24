@@ -320,6 +320,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   retainedHttp(
     "vscode_gateway",
     "POST",
+    "/api/resume",
+    "Requires a foreground-session resume command before Stage 5.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
     "/api/background/stop",
     "Requires a background-session command before Stage 5.",
   ),

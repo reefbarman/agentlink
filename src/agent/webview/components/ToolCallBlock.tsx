@@ -1,7 +1,9 @@
 import { useCallback, useMemo, useState } from "preact/hooks";
 
 import type { ContentBlock } from "../types";
+import { JsonHighlight } from "../../../shared/ui/JsonHighlight";
 import { InlineDiff } from "./InlineDiff";
+import { matchFilePaths } from "./filePathLinks";
 
 export type ToolCallData = ContentBlock & { type: "tool_call" };
 
@@ -35,6 +37,49 @@ interface ToolCallBlockProps {
     bareToolName: string;
     scope: "session" | "project" | "global";
   }) => void;
+}
+
+function FilePathLinkedText({
+  text,
+  onOpenFile,
+}: {
+  text: string;
+  onOpenFile?: (path: string, line?: number) => void;
+}) {
+  const matches = useMemo(
+    () => (onOpenFile ? matchFilePaths(text) : []),
+    [onOpenFile, text],
+  );
+  if (matches.length === 0) return <>{text}</>;
+
+  const parts = [];
+  let lastIndex = 0;
+  for (const match of matches) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    parts.push(
+      <a
+        key={`${match.index}:${match.fullMatch}`}
+        class="tool-file-link"
+        href="#"
+        title={`Open ${match.filePath}${match.line !== undefined ? `:${match.line}` : ""}`}
+        onClick={(event: MouseEvent) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onOpenFile?.(match.filePath, match.line);
+        }}
+      >
+        {match.fullMatch}
+      </a>,
+    );
+    lastIndex = match.index + match.fullMatch.length;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return <>{parts}</>;
 }
 
 /** Format duration as human-readable string. */
@@ -356,93 +401,6 @@ function formatJson(text: string): string {
   } catch {
     return text;
   }
-}
-
-/** Tokenize a JSON string into highlighted spans. */
-function JsonHighlight({ json }: { json: string }) {
-  const tokens = useMemo(() => tokenizeJson(json), [json]);
-  return (
-    <pre class="tool-call-code">
-      {tokens.map((tok, i) =>
-        tok.cls ? (
-          <span key={i} class={tok.cls}>
-            {tok.text}
-          </span>
-        ) : (
-          tok.text
-        ),
-      )}
-    </pre>
-  );
-}
-
-type Token = { text: string; cls?: string };
-
-function tokenizeJson(src: string): Token[] {
-  const tokens: Token[] = [];
-  let i = 0;
-
-  while (i < src.length) {
-    // String
-    if (src[i] === '"') {
-      let j = i + 1;
-      while (j < src.length) {
-        if (src[j] === "\\") {
-          j += 2;
-        } else if (src[j] === '"') {
-          j++;
-          break;
-        } else {
-          j++;
-        }
-      }
-      const str = src.slice(i, j);
-      // Look ahead past whitespace for a colon → it's a key
-      let k = j;
-      while (k < src.length && (src[k] === " " || src[k] === "\t")) k++;
-      const cls = src[k] === ":" ? "json-key" : "json-string";
-      tokens.push({ text: str, cls });
-      i = j;
-      continue;
-    }
-    // Number
-    if (src[i] === "-" || (src[i] >= "0" && src[i] <= "9")) {
-      let j = i + 1;
-      while (
-        j < src.length &&
-        ((src[j] >= "0" && src[j] <= "9") ||
-          src[j] === "." ||
-          src[j] === "e" ||
-          src[j] === "E" ||
-          src[j] === "+" ||
-          src[j] === "-")
-      )
-        j++;
-      tokens.push({ text: src.slice(i, j), cls: "json-number" });
-      i = j;
-      continue;
-    }
-    // Boolean / null
-    if (src.startsWith("true", i)) {
-      tokens.push({ text: "true", cls: "json-boolean" });
-      i += 4;
-      continue;
-    }
-    if (src.startsWith("false", i)) {
-      tokens.push({ text: "false", cls: "json-boolean" });
-      i += 5;
-      continue;
-    }
-    if (src.startsWith("null", i)) {
-      tokens.push({ text: "null", cls: "json-null" });
-      i += 4;
-      continue;
-    }
-    // Plain character (punctuation, whitespace, newlines)
-    tokens.push({ text: src[i] });
-    i++;
-  }
-  return tokens;
 }
 
 export function getCommandApprovalBadge(
@@ -858,7 +816,15 @@ export function ToolCallBlock({
           {formattedInput && (
             <div class="tool-call-section">
               <div class="tool-call-section-label">Input</div>
-              <JsonHighlight json={formattedInput} />
+              <JsonHighlight
+                json={formattedInput}
+                renderTokenText={(token) => (
+                  <FilePathLinkedText
+                    text={token.text}
+                    onOpenFile={onOpenFile}
+                  />
+                )}
+              />
             </div>
           )}
           {composeTrace && (
@@ -912,9 +878,22 @@ export function ToolCallBlock({
               <div class="tool-call-section-label">Result</div>
               {displayedResult &&
                 (isJson(displayedResult) ? (
-                  <JsonHighlight json={formatJson(displayedResult)} />
+                  <JsonHighlight
+                    json={formatJson(displayedResult)}
+                    renderTokenText={(token) => (
+                      <FilePathLinkedText
+                        text={token.text}
+                        onOpenFile={onOpenFile}
+                      />
+                    )}
+                  />
                 ) : (
-                  <pre class="tool-call-code">{displayedResult}</pre>
+                  <pre class="tool-call-code">
+                    <FilePathLinkedText
+                      text={displayedResult}
+                      onOpenFile={onOpenFile}
+                    />
+                  </pre>
                 ))}
               {resultImages.length > 0 && (
                 <div class="tool-result-image-previews">

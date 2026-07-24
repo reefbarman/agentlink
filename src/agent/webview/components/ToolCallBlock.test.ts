@@ -36,6 +36,72 @@ describe("ToolCallBlock", () => {
     expect(screen.getAllByText(/src\/agent\/AgentEngine\.ts/)).toHaveLength(2);
   });
 
+  it("opens file paths from expanded JSON input and results", () => {
+    const onOpenFile = vi.fn();
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "json-paths",
+          name: "custom_tool",
+          inputJson: JSON.stringify({ path: "src/agent/AgentEngine.ts" }),
+          result: JSON.stringify({
+            source: "src/agent/ChatViewProvider.ts:42",
+          }),
+          complete: true,
+        },
+        onOpenFile,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /custom_tool/i }));
+    fireEvent.click(
+      screen.getByRole("link", { name: "src/agent/AgentEngine.ts" }),
+    );
+    fireEvent.click(
+      screen.getByRole("link", {
+        name: "src/agent/ChatViewProvider.ts:42",
+      }),
+    );
+
+    expect(onOpenFile).toHaveBeenNthCalledWith(
+      1,
+      "src/agent/AgentEngine.ts",
+      undefined,
+    );
+    expect(onOpenFile).toHaveBeenNthCalledWith(
+      2,
+      "src/agent/ChatViewProvider.ts",
+      42,
+    );
+  });
+
+  it("opens file paths from expanded plain-text results", () => {
+    const onOpenFile = vi.fn();
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "text-path",
+          name: "custom_tool",
+          inputJson: "{}",
+          result: "Updated src/agent/webview/App.tsx:2337",
+          complete: true,
+        },
+        onOpenFile,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /custom_tool/i }));
+    fireEvent.click(
+      screen.getByRole("link", {
+        name: "src/agent/webview/App.tsx:2337",
+      }),
+    );
+
+    expect(onOpenFile).toHaveBeenCalledWith("src/agent/webview/App.tsx", 2337);
+  });
+
   it("shows image results as previews instead of placeholder text when expanded", () => {
     render(
       h(ToolCallBlock, {

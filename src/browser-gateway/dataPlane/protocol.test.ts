@@ -49,10 +49,12 @@ function checkpoint(
     foreground: {
       sessionId: "session-1",
       title: "Data plane",
+      originalPrompt: "Implement the data plane",
       mode: "code",
       model: "claude-sonnet-4-6",
       status: "running",
       streaming: true,
+      interrupted: true,
       estimatedTokens: 100,
       maximumTokens: 10_000,
       statusOverride: "Restoring session",
@@ -390,6 +392,7 @@ describe("browser gateway owner protocol", () => {
       ...identity,
       checkpointSequence: 0,
       foreground: {
+        originalPrompt: "Implement the data plane",
         statusOverride: "Restoring session",
         thinkingEnabled: false,
         reasoningEffort: "medium",

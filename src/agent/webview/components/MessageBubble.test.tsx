@@ -108,7 +108,38 @@ describe("MessageBubble thinking rendering", () => {
     );
 
     expect(container.querySelector(".thinking-block")).toBeNull();
-    expect(container.querySelector(".streaming-indicator")).toBeNull();
+    expect(container.querySelector(".streaming-indicator")).toBeTruthy();
+    expect(screen.getByText("Thinking…")).toBeTruthy();
+  });
+
+  it("expands active thinking from the general Live Link row", () => {
+    const message: ChatMessage = {
+      id: "assistant-thinking-expandable",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "thinking",
+          id: "thinking-expandable",
+          text: "**Inspecting state\\*\\*\\*\\*Planning the fix**",
+          complete: false,
+        },
+      ],
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={true} />,
+    );
+
+    const summary = screen.getByRole("button", { name: "Thinking…" });
+    expect(container.querySelector(".thinking-block")).toBeNull();
+
+    fireEvent.click(summary);
+
+    expect(
+      screen.getAllByRole("listitem").map((item) => item.textContent),
+    ).toEqual(["Inspecting state", "Planning the fix"]);
   });
 
   it("renders completed thinking as a subtle expandable step list", () => {

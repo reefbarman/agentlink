@@ -737,10 +737,19 @@ export class BrowserGatewayAskAgentSessionStore {
     }));
   }
 
+  getFallbackModels(): WebviewModelInfo[] {
+    return BROWSER_GATEWAY_ASK_AGENT_FALLBACK_MODELS.map((model) => ({
+      ...model,
+      authenticated: true,
+    }));
+  }
+
   updateAvailableModels(models: WebviewModelInfo[]): void {
     const validModels = models.filter((model) => model.id.trim());
-    if (validModels.length === 0) return;
-    this.availableModels = validModels;
+    this.availableModels =
+      validModels.length > 0
+        ? validModels
+        : BROWSER_GATEWAY_ASK_AGENT_FALLBACK_MODELS;
     if (
       this.preferredModel &&
       this.availableModels.some((model) => model.id === this.preferredModel)

@@ -129,11 +129,17 @@ export async function approveOutsideWorkspaceAccess(
         : response.decision === "allow-project"
           ? "project"
           : "global";
-    approvalManager.addPathRule(
+    const saved = approvalManager.addPathRule(
       sessionId,
       { pattern: response.rulePattern, mode: response.ruleMode },
       scope,
     );
+    if (!saved) {
+      return {
+        approved: false,
+        reason: `Could not save the ${scope} outside-path approval. Access was not authorized; check the approval config path and try again.`,
+      };
+    }
   }
 
   return { approved: true };

@@ -46,6 +46,9 @@ describe("browser gateway snapshot parity contract", () => {
     expect(byPath.get("session.foreground.thinkingEnabled")?.status).toBe(
       "covered",
     );
+    expect(byPath.get("session.foreground.interrupted")?.status).toBe(
+      "covered",
+    );
     expect(byPath.get("session.foreground.revertRecoveryNotice")?.status).toBe(
       "covered",
     );

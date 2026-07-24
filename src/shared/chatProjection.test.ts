@@ -8,6 +8,50 @@ import {
   reducer,
 } from "./chatProjection.js";
 
+describe("original prompt projection", () => {
+  it("keeps the first submitted prompt stable across later user turns", () => {
+    const afterFirst = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "Original prompt",
+    });
+    const afterSecond = reducer(afterFirst, {
+      type: "ADD_USER_MESSAGE",
+      text: "Later follow-up",
+    });
+
+    expect(afterFirst.originalPrompt).toBe("Original prompt");
+    expect(afterSecond.originalPrompt).toBe("Original prompt");
+    expect(reducer(afterSecond, { type: "NEW_SESSION" }).originalPrompt).toBe(
+      null,
+    );
+  });
+
+  it("uses the explicit original prompt when a restored transcript contains only a tail", () => {
+    const restored = reducer(initialState, {
+      type: "LOAD_SESSION",
+      sessionId: "session-1",
+      title: "Session",
+      originalPrompt: "Original prompt",
+      mode: "code",
+      model: "model",
+      messages: [
+        {
+          id: "recent-user",
+          role: "user",
+          content: "Recent follow-up",
+          timestamp: 1,
+          blocks: [],
+        },
+      ],
+      todos: [],
+      userTurnOffset: 8,
+      hasMoreBefore: true,
+    });
+
+    expect(restored.originalPrompt).toBe("Original prompt");
+  });
+});
+
 describe("legacy web activity chat projection", () => {
   it("assigns distinct fallback IDs to malformed persisted activities", () => {
     const messages = agentMessagesToChatMessages([

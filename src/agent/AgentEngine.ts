@@ -57,6 +57,7 @@ import {
   toCoreModelDocumentMediaType,
   type CoreModelMessage,
   type CoreModelStopReason,
+  type CoreModelToolResultBlock,
 } from "../core/modelRuntime.js";
 import {
   DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS,
@@ -180,12 +181,15 @@ function extractAgentDisplayArgs(
   }
 }
 
-function buildProviderCacheKey(session: AgentSession): string {
+function buildProviderCacheKey(
+  session: AgentSession,
+  model = session.model,
+): string {
   const projectHash = createHash("sha1")
     .update(session.projectScope.projectId)
     .digest("hex")
     .slice(0, 12);
-  return `codex:${projectHash}:${session.id}:${session.model}`;
+  return `codex:${projectHash}:${session.id}:${model}`;
 }
 
 /** Custom error for auth failures, so the outer catch can mark them specially. */
@@ -261,8 +265,9 @@ function estimateToolResultContentChars(
 function getOutputReservation(
   session: AgentSession,
   provider: ModelProvider,
+  model = session.model,
 ): number {
-  const caps = provider.getCapabilities(session.model);
+  const caps = provider.getCapabilities(model);
   return Math.min(
     Math.max(session.maxTokens, session.thinkingBudget + 4096),
     caps.maxOutputTokens,
@@ -281,6 +286,7 @@ function hasVisibleOrActionableOutput(blocks: ContentBlock[]): boolean {
 function getCondenseBudgetSnapshot(
   session: AgentSession,
   provider: ModelProvider,
+  model = session.model,
 ): {
   usedTokens: number;
   contextWindow: number;
@@ -292,8 +298,8 @@ function getCondenseBudgetSnapshot(
   effectiveThreshold: number;
   triggerReason: "soft_threshold" | "hard_budget" | null;
 } {
-  const caps = provider.getCapabilities(session.model);
-  const outputReservation = getOutputReservation(session, provider);
+  const caps = provider.getCapabilities(model);
+  const outputReservation = getOutputReservation(session, provider, model);
   const derivedInputLimit = Math.max(
     0,
     caps.contextWindow - caps.maxOutputTokens,
@@ -338,9 +344,12 @@ function getCondenseBudgetSnapshot(
 function isOverCondenseThresholdInternal(
   session: AgentSession,
   provider: ModelProvider,
+  model = session.model,
 ): boolean {
   if (!session.autoCondense || session.lastInputTokens === 0) return false;
-  return getCondenseBudgetSnapshot(session, provider).triggerReason !== null;
+  return (
+    getCondenseBudgetSnapshot(session, provider, model).triggerReason !== null
+  );
 }
 
 function hasUnansweredUserTurn(session: AgentSession): boolean {
@@ -361,6 +370,7 @@ interface ToolCallResult {
   tool_use_id: string;
   toolName: string;
   result: ToolResult;
+  historyContent?: CoreModelToolResultBlock["content"];
   durationMs: number;
   mcpApprovalPromotion?: McpApprovalPromotionMeta;
   composeTrace?: import("../shared/composeTypes.js").ComposeTrace;
@@ -517,7 +527,7 @@ function buildToolFingerprint(tools: ToolDefinition[] | undefined): string {
 }
 
 /** Convert our ToolResult content to provider-agnostic tool_result content. */
-function toolResultToContent(
+export function toolResultToContent(
   result: ToolResult,
   toolUseId: string | undefined,
   toolName: string,
@@ -610,6 +620,19 @@ export class AgentEngine {
       >;
       /** Exact cloned MCP catalog used to build the prepared disclosure/policy. */
       mcpToolDefinitions?: readonly ToolDefinition[];
+      /**
+       * Persists a provider-complete assistant tool turn before dispatch starts.
+       * The turn remains outside canonical live history until every tool result
+       * is available, but can be recovered if the host reloads mid-dispatch.
+       */
+      onPendingToolTurn?: (
+        assistantMessage: AgentMessage,
+      ) => void | Promise<void>;
+      /**
+       * Signals that an assistant message and any paired tool-result carrier
+       * are now present in canonical session history.
+       */
+      onAssistantTurnCommitted?: () => void;
       /** Time to first raw transport activity (normally response headers). */
       providerFirstEventTimeoutMs?: number;
       /** Maximum silence between raw response body chunks/provider events. */
@@ -628,8 +651,11 @@ export class AgentEngine {
     // to return false in this (still-running) loop and allowing spurious API calls.
     const { signal } = ac;
 
-    // Resolve the provider for this session's model
-    const provider = this.registry.resolveProvider(session.model);
+    // Model selection can change while a turn is running. Keep this turn on
+    // the provider/model pair resolved at its boundary; provider-owned
+    // fallback updates activeModel explicitly below.
+    let activeModel = session.model;
+    const provider = this.registry.resolveProvider(activeModel);
 
     // Cache assembled tool list across turns — rebuild only when the tool set changes.
     let cachedTools: ToolDefinition[] | undefined;
@@ -774,7 +800,7 @@ export class AgentEngine {
         };
 
         if (
-          this.isOverCondenseThreshold(session, provider) &&
+          isOverCondenseThresholdInternal(session, provider, activeModel) &&
           !hasUnansweredUserTurn(session)
         ) {
           yield* this.condenseSession(
@@ -782,6 +808,7 @@ export class AgentEngine {
             true,
             provider,
             preservedContext,
+            activeModel,
           );
           if (signal.aborted) break;
           // Drain every pending interjection FIFO so multiple queued messages
@@ -828,17 +855,17 @@ export class AgentEngine {
         let timeToFirstToken = 0;
         let providerQueueWaitMs = 0;
 
-        const capabilities = provider.getCapabilities(session.model);
+        const capabilities = provider.getCapabilities(activeModel);
         const reasoningEffort = normalizeReasoningEffort(
           session.reasoningEffort,
           capabilities,
         );
         if (reasoningEffort !== session.reasoningEffort) {
-          const downgradeKey = `${session.model}:${session.reasoningEffort}->${reasoningEffort}`;
+          const downgradeKey = `${activeModel}:${session.reasoningEffort}->${reasoningEffort}`;
           if (downgradeKey !== lastLoggedEffortDowngrade) {
             lastLoggedEffortDowngrade = downgradeKey;
             this.log?.(
-              `[agent] reasoning effort "${session.reasoningEffort}" is not supported by ${session.model}; sending "${reasoningEffort}" instead`,
+              `[agent] reasoning effort "${session.reasoningEffort}" is not supported by ${activeModel}; sending "${reasoningEffort}" instead`,
             );
           }
         }
@@ -1063,7 +1090,7 @@ export class AgentEngine {
             : undefined;
           const currentCache = isCodex
             ? {
-                key: buildProviderCacheKey(session),
+                key: buildProviderCacheKey(session, activeModel),
                 retention: "24h" as const,
               }
             : undefined;
@@ -1088,7 +1115,7 @@ export class AgentEngine {
             type: "api_request_start",
             requestId,
             provider: provider.id,
-            model: session.model,
+            model: activeModel,
             startedAt: startTime,
             schedulerQueued,
           };
@@ -1107,7 +1134,7 @@ export class AgentEngine {
             requestController,
           );
           const streamGen = provider.stream({
-            model: session.model,
+            model: activeModel,
             systemPrompt: session.systemPrompt,
             messages: apiMessages,
             tools,
@@ -1143,7 +1170,8 @@ export class AgentEngine {
 
               switch (event.type) {
                 case "model_fallback":
-                  session.model = event.effectiveModel;
+                  activeModel = event.effectiveModel;
+                  session.model = activeModel;
                   yield {
                     type: "warning",
                     message: `${event.requestedModel} is unavailable for this account. Switched to ${event.effectiveModel}.`,
@@ -1341,6 +1369,7 @@ export class AgentEngine {
                 true,
                 provider,
                 preservedContext,
+                activeModel,
               );
               if (signal.aborted) break;
               if (condensed) {
@@ -1457,7 +1486,7 @@ export class AgentEngine {
         yield {
           type: "api_request",
           requestId,
-          model: session.model,
+          model: activeModel,
           reasoningEffort,
           inputTokens: totalInputTokens,
           uncachedInputTokens: inputTokens,
@@ -1498,12 +1527,14 @@ export class AgentEngine {
             );
           }
           appendCommittedAssistantMessage();
+          opts?.onAssistantTurnCommitted?.();
           continue;
         }
         providerPauseTurnCount = 0;
 
         if (modelStopReason === "max_tokens") {
           appendCommittedAssistantMessage();
+          opts?.onAssistantTurnCommitted?.();
           yield {
             type: "warning",
             message:
@@ -1521,6 +1552,7 @@ export class AgentEngine {
             // Hard stop after too many wrap-up attempts to prevent infinite loops
             if (wrapUpAttempts > MAX_WRAP_UP_ATTEMPTS) {
               appendCommittedAssistantMessage();
+              opts?.onAssistantTurnCommitted?.();
               yield {
                 type: "warning",
                 message: `Background agent exceeded ${MAX_WRAP_UP_ATTEMPTS} wrap-up attempts. Force-stopping.`,
@@ -1541,6 +1573,7 @@ export class AgentEngine {
                   "[Turn limit reached — tool not executed. Deliver your findings now with the information you have.]",
               })),
             );
+            opts?.onAssistantTurnCommitted?.();
             yield {
               type: "warning",
               message: `Background agent turn limit reached (${maxApiTurns}). Requesting wrap-up.`,
@@ -1596,6 +1629,7 @@ export class AgentEngine {
               true,
               provider,
               preservedContext,
+              activeModel,
             );
             if (signal.aborted) break;
             if (condensed) {
@@ -1624,12 +1658,14 @@ export class AgentEngine {
         if (toolUseBlocks.length === 0) {
           // No tool calls — append the assistant turn on its own and finish.
           appendCommittedAssistantMessage();
+          opts?.onAssistantTurnCommitted?.();
           break;
         }
 
         if (!this.toolRuntime) {
           // No dispatch runtime — append and finish without executing tools.
           appendCommittedAssistantMessage();
+          opts?.onAssistantTurnCommitted?.();
           break;
         }
 
@@ -1645,6 +1681,7 @@ export class AgentEngine {
           wrapUpAttempts++;
           if (wrapUpAttempts > MAX_WRAP_UP_ATTEMPTS) {
             appendCommittedAssistantMessage();
+            opts?.onAssistantTurnCommitted?.();
             yield {
               type: "warning",
               message: `Background agent exceeded ${MAX_WRAP_UP_ATTEMPTS} wrap-up attempts. Force-stopping.`,
@@ -1660,6 +1697,7 @@ export class AgentEngine {
                 "[Tool call budget exceeded — tool not executed. Deliver your findings now with the information you have.]",
             })),
           );
+          opts?.onAssistantTurnCommitted?.();
           yield {
             type: "warning",
             message: `Background agent tool call limit reached (${maxToolCalls}). Requesting wrap-up.`,
@@ -1671,6 +1709,14 @@ export class AgentEngine {
         // tool calls that will actually dispatch; provisional calls from
         // failed/retried streams and calls refused at a hard limit never reach
         // UI or background budget accounting.
+        if (
+          opts?.onPendingToolTurn &&
+          toolUseBlocks.some((block) => block.name !== TODO_TOOL_NAME)
+        ) {
+          await opts.onPendingToolTurn(
+            structuredClone(committedAssistantMessage as AgentMessage),
+          );
+        }
         for (const block of toolUseBlocks) {
           session.currentTool = block.name;
           yield {
@@ -1828,11 +1874,17 @@ export class AgentEngine {
             session,
             (tr) => {
               const toolUseBlock = toolUseBlocksById.get(tr.tool_use_id);
+              tr.historyContent = toolResultToContent(
+                tr.result,
+                tr.tool_use_id,
+                tr.toolName,
+              );
               pushDispatchEvent({
                 type: "tool_result" as const,
                 toolCallId: tr.tool_use_id,
                 toolName: tr.toolName,
                 result: tr.result.content,
+                historyContent: tr.historyContent,
                 durationMs: tr.durationMs,
                 input: toolUseBlock?.input,
                 mcpApprovalPromotion: tr.mcpApprovalPromotion,
@@ -1935,8 +1987,10 @@ export class AgentEngine {
           yield { type: "final_marker", marker: finalMarkerForTurn };
           pendingFinalMarker = null;
         }
-        const toolResultContents = toolResults.map((tr) =>
-          toolResultToContent(tr.result, tr.tool_use_id, tr.toolName),
+        const toolResultContents = toolResults.map(
+          (tr) =>
+            tr.historyContent ??
+            toolResultToContent(tr.result, tr.tool_use_id, tr.toolName),
         );
         session.appendToolResults(
           toolResults.map((tr, index) => ({
@@ -1947,6 +2001,7 @@ export class AgentEngine {
             composeTrace: tr.composeTrace,
           })),
         );
+        opts?.onAssistantTurnCommitted?.();
 
         // Feed estimated token size of tool results to the running accumulator,
         // attributed per tool so jump telemetry can name the contributors.
@@ -1998,13 +2053,14 @@ export class AgentEngine {
         // session accumulator above. Check if we've crossed the threshold.
         if (
           !signal.aborted &&
-          this.isOverCondenseThreshold(session, provider)
+          isOverCondenseThresholdInternal(session, provider, activeModel)
         ) {
           yield* this.condenseSession(
             session,
             true,
             provider,
             preservedContext,
+            activeModel,
           );
         }
 
@@ -2354,6 +2410,7 @@ export class AgentEngine {
     isAutomatic: boolean,
     provider?: ModelProvider,
     preservedContext?: PreservedRuntimeContext,
+    activeModel = session.model,
   ): AsyncGenerator<AgentEvent, boolean> {
     const condenseStartedAt = Date.now();
     yield { type: "condense_start", isAutomatic };
@@ -2362,13 +2419,13 @@ export class AgentEngine {
 
     // Resolve the provider for condensing — use the session's provider if available
     const resolvedProvider =
-      provider ?? this.registry.resolveProvider(session.model);
+      provider ?? this.registry.resolveProvider(activeModel);
 
     const result = await summarizeConversation(
       {
         messages: session.getAllMessages(),
         provider: resolvedProvider,
-        activeModel: session.model,
+        activeModel,
         systemPrompt: session.systemPrompt,
         isAutomatic,
         filesRead: [...session.filesRead],

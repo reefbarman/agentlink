@@ -15,7 +15,19 @@ export function autosizeTextarea(
 ): void {
   if (!textarea) return;
   textarea.style.height = "auto";
-  textarea.style.height = `${textarea.scrollHeight}px`;
+  const measured = textarea.scrollHeight;
+  textarea.style.height = `${measured}px`;
+  // Collapsing to "auto" can shrink the surrounding scroller below its
+  // overflow threshold, hiding its scrollbar during measurement. The measured
+  // height then belongs to a wider textarea than the one that renders once the
+  // scrollbar returns: text rewraps taller and the last lines sit clipped
+  // under overflow:hidden, unreachable by scrolling (only caret movement
+  // reveals them). Re-read at the settled width and correct; this converges
+  // because a taller textarea cannot change the scrollbar state again.
+  const settled = textarea.scrollHeight;
+  if (settled !== measured) {
+    textarea.style.height = `${settled}px`;
+  }
 }
 
 export function focusAndAutosizeTextarea(

@@ -178,6 +178,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     path: string;
     mode: "glob" | "prefix" | "exact";
     timestamp: number;
+    sessionId?: string;
     projectId?: string;
     projectResourceUri?: string;
   }> = [];
@@ -1036,10 +1037,12 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     projectId = "unscoped",
     requiredAuthority = "unspecified",
     permissionIntent = "unspecified",
+    sessionId?: string,
   ): boolean {
     if (kind !== "command") return false;
     return this.hasRecentApproval(
       this.commandApprovalKey(
+        sessionId,
         projectId,
         requiredAuthority,
         permissionIntent,
@@ -1075,12 +1078,13 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   }
 
   private commandApprovalKey(
+    sessionId: string | undefined,
     projectId: string,
     requiredAuthority: string,
     permissionIntent: string,
     command: string,
   ): string {
-    return `${projectId}:cmd:${requiredAuthority}:${permissionIntent}:${command}`;
+    return `${projectId}:session:${sessionId ?? "unscoped"}:cmd:${requiredAuthority}:${permissionIntent}:${command}`;
   }
 
   private approvalKeyForRequest(request: InternalRequest): string | undefined {
@@ -1089,6 +1093,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       case "command":
         return request.fullCommand
           ? this.commandApprovalKey(
+              request.sessionId,
               projectPrefix,
               request.security?.requiredAuthority ?? "unspecified",
               request.security?.permissionIntent ?? "unspecified",
@@ -1133,6 +1138,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     this.pruneRecentPathApprovals(request);
     return this.recentPathApprovals.some(
       (approval) =>
+        approval.sessionId === request.sessionId &&
         approval.projectId === request.sourceProject?.projectId &&
         this.matchesPathApproval(request.filePath!, approval),
     );
@@ -1186,6 +1192,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     this.recentPathApprovals.push({
       ...rule,
       timestamp: Date.now(),
+      sessionId: request.sessionId,
       projectId: request.sourceProject?.projectId,
       projectResourceUri: request.projectResourceUri,
     });

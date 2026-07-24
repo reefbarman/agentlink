@@ -115,6 +115,86 @@ describe("HostTerminalRuntime", () => {
     ).toBe(true);
   });
 
+  it("exposes replay anchors at each retained block's stream offset", () => {
+    const runtime = integrated();
+    runtime.processData(
+      [
+        marker("A"),
+        "$ ",
+        marker("B"),
+        marker("C", encodeShellIntegrationValue("echo hello")),
+        "hello\r\n",
+        marker("D", "0"),
+        marker("A"),
+        "$ ",
+      ].join(""),
+    );
+
+    const snapshot = runtime.snapshot();
+    expect(snapshot.data).toBe("$ hello\r\n$ ");
+    expect(snapshot.anchors).toEqual([
+      { blockId: "host-block-1", offset: 0 },
+      { blockId: "host-block-2", offset: 2 },
+      { blockId: "host-block-3", offset: 9 },
+    ]);
+  });
+
+  it("drops replay anchors whose stream position was trimmed", () => {
+    const runtime = integrated({ maxRenderReplayBytes: 4 });
+    runtime.processData(
+      [
+        marker("A"),
+        "$ ",
+        marker("B"),
+        marker("C", encodeShellIntegrationValue("seq 10")),
+        "0123456789",
+        marker("D", "0"),
+        marker("A"),
+        "$ ",
+      ].join(""),
+    );
+
+    const snapshot = runtime.snapshot();
+    expect(snapshot.data).toBe("89$ ");
+    expect(snapshot.anchors).toEqual([{ blockId: "host-block-3", offset: 2 }]);
+  });
+
+  it("advertises bounded command summaries on surfaced command blocks", () => {
+    const runtime = integrated();
+    runtime.processData(
+      [
+        marker("A"),
+        "$ ",
+        marker("B"),
+        marker("C", encodeShellIntegrationValue("npm test\n--verbose")),
+        "running\r\n",
+      ].join(""),
+    );
+
+    const running = runtime.snapshot().presentation.blocks;
+    expect(running[0]?.command).toBeUndefined();
+    expect(running[1]?.command).toEqual({
+      commandLine: "npm test",
+      truncated: true,
+      status: "running",
+    });
+
+    const update = runtime.processData(marker("D", "2"));
+    const presentation = update.batch?.operations
+      .filter((operation) => operation.type === "presentation")
+      .at(-1);
+    expect(
+      presentation?.type === "presentation"
+        ? presentation.blocks[1]?.command
+        : undefined,
+    ).toEqual({
+      commandLine: "npm test",
+      truncated: true,
+      status: "exited",
+      exitCode: 2,
+    });
+  });
+
   it("treats a user terminal as busy unless host state proves an idle integrated prompt", () => {
     const integratedRuntime = integrated();
     expect(integratedRuntime.userMayBeBusy).toBe(true);

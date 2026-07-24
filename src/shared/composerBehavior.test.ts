@@ -75,6 +75,20 @@ describe("autosizeTextarea", () => {
     expect(() => autosizeTextarea(null)).not.toThrow();
     expect(() => autosizeTextarea(undefined)).not.toThrow();
   });
+
+  it("re-measures when applying the height rewraps the content", () => {
+    // Collapsing to "auto" can hide the surrounding scroller's scrollbar, so
+    // the first measurement sees a wider textarea (626px of content) than the
+    // final layout, where the returning scrollbar rewraps the text taller
+    // (645px). The stale height would clip the last lines under
+    // overflow:hidden.
+    const textarea = document.createElement("textarea");
+    Object.defineProperty(textarea, "scrollHeight", {
+      get: () => (textarea.style.height === "auto" ? 626 : 645),
+    });
+    autosizeTextarea(textarea);
+    expect(textarea.style.height).toBe("645px");
+  });
 });
 
 describe("observeTextareaAutosize", () => {

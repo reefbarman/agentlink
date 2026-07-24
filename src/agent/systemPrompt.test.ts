@@ -238,6 +238,36 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Findings");
   });
 
+  it("omits the Approve for Me mode-switch section by default", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).not.toContain("Mode Switching Under Approve for Me");
+  });
+
+  it("routes mode switches through switch_mode when Approve for Me is on", async () => {
+    const result = await buildSystemPrompt("code", tmpDir, {
+      approveForMe: true,
+    });
+    expect(result).toContain("Mode Switching Under Approve for Me");
+    expect(result).toContain(
+      "call `switch_mode` directly with a clear `reason`",
+    );
+    expect(result).toContain(
+      "Do not use `ask_user` to request permission to switch modes",
+    );
+    expect(result).toContain(
+      "Never ask a question whose only purpose is mode-change or plan-approval consent",
+    );
+    expect(result).not.toContain("architect review loop is autonomous");
+  });
+
+  it("tells architect mode not to wait for plan approval under Approve for Me", async () => {
+    const result = await buildSystemPrompt("architect", tmpDir, {
+      approveForMe: true,
+    });
+    expect(result).toContain("The architect review loop is autonomous");
+    expect(result).toContain("Do not wait for the user to approve the plan");
+  });
+
   it("includes global technical judgment guidance", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).toContain("Technical Judgment");

@@ -39,7 +39,11 @@ describe("McpCard", () => {
     );
 
     expect(screen.getByText("linear / list_issues")).toBeTruthy();
-    expect(screen.getByText(/"team": "ENG"/)).toBeTruthy();
+    // The detail is rendered as syntax-highlighted JSON, so match on the
+    // containing block's text content rather than a single text node.
+    const detail = document.querySelector(".approval-detail-text");
+    expect(detail?.textContent).toContain('"team": "ENG"');
+    expect(detail?.querySelector(".json-key")?.textContent).toBe('"team"');
     expect(screen.getByRole("button", { name: "Allow Once" })).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /Auto Approval Rules/ }),

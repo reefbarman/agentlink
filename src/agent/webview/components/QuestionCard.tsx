@@ -112,6 +112,7 @@ export function QuestionCard({
   const [notes, setNotes] = useState<Record<string, string>>({});
   const lastAppliedRemoteRef = useRef<string | null>(null);
   const lastPublishedRef = useRef<string | null>(null);
+  const hasLocalProgressEditRef = useRef(false);
 
   useEffect(() => {
     if (!remoteProgress) return;
@@ -129,7 +130,7 @@ export function QuestionCard({
   }, [remoteProgress, step, answers, notes]);
 
   useEffect(() => {
-    if (!onProgressChange) return;
+    if (!onProgressChange || !hasLocalProgressEditRef.current) return;
     const snapshot: QuestionProgress = { step, answers, notes };
     const serialized = serializeProgress(snapshot);
     if (serialized === lastPublishedRef.current) return;
@@ -152,6 +153,7 @@ export function QuestionCard({
 
   const setAnswer = useCallback(
     (value: string | string[] | number | boolean | undefined) => {
+      hasLocalProgressEditRef.current = true;
       setAnswers((prev) => {
         if (value === undefined) {
           const next = { ...prev };
@@ -166,6 +168,7 @@ export function QuestionCard({
 
   const setNote = useCallback(
     (text: string) => {
+      hasLocalProgressEditRef.current = true;
       setNotes((prev) => ({ ...prev, [q.id]: text }));
     },
     [q.id],
@@ -173,11 +176,13 @@ export function QuestionCard({
 
   const handleNext = useCallback(() => {
     if (!isAnswered()) return;
+    hasLocalProgressEditRef.current = true;
     setAnswers((prev) => normalizeQuestionAnswer(q, prev));
     setStep((s) => s + 1);
   }, [isAnswered, q]);
 
   const handleBack = useCallback(() => {
+    hasLocalProgressEditRef.current = true;
     setStep((s) => Math.max(0, s - 1));
   }, []);
 
@@ -193,6 +198,7 @@ export function QuestionCard({
       if (isLast) {
         onSubmit(id, answers, notes);
       } else {
+        hasLocalProgressEditRef.current = true;
         setStep((s) => s + 1);
       }
       return;
@@ -202,6 +208,7 @@ export function QuestionCard({
     if (isLast) {
       onSubmit(id, nextAnswers, notes);
     } else {
+      hasLocalProgressEditRef.current = true;
       setAnswers(nextAnswers);
       setStep((s) => s + 1);
     }

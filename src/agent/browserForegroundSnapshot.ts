@@ -4,6 +4,7 @@ import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.j
 
 export interface BrowserForegroundSnapshot {
   sessionId: string;
+  originalPrompt?: string;
   mode: string;
   model: string;
   streaming: boolean;
@@ -43,6 +44,7 @@ export function createBrowserForegroundSnapshot(
 ): BrowserForegroundSnapshot {
   return {
     sessionId,
+    originalPrompt: state.originalPrompt ?? undefined,
     mode: state.chatState.mode,
     model: state.chatState.model,
     streaming: state.streaming,

@@ -25,8 +25,8 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 
 - `commandAutoApproveTier` — auto-approve commands at or below a safety tier
 - `writeRules` — glob patterns whose writes are always auto-approved
-- `recentApprovalTtl` — seconds a single-use command approval repeats without re-prompting
-- `masterBypass` — skip ALL approval prompts
+- `recentApprovalTtl` — seconds an identical command approval repeats within the same session without re-prompting
+- `masterBypass` — skip ordinary command and file-write prompts; native escalation, outside-path reads, MCP tools, protected paths, and read-only/delegation boundaries still apply
 
 ## Web access
 

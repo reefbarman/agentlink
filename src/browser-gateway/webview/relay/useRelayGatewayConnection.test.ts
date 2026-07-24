@@ -353,6 +353,7 @@ describe("commitRelayCheckpoint", () => {
       sourceEventPaint: marker,
       projectors: new Map<string, RelaySnapshotProjector>(),
       interactionCache: new Map(),
+      hydratedInteractions: new Map(),
       fetch: fetch as unknown as typeof globalThis.fetch,
       isCurrent: () => true,
       latest: harness.latest,
@@ -377,6 +378,166 @@ describe("commitRelayCheckpoint", () => {
     );
   });
 
+  it("keeps same-request interaction UI mounted while hydrating a rotated detail", async () => {
+    const payload = {
+      approval: { id: "approval-1", kind: "command", command: "npm test" },
+      question: null,
+      questionProgress: null,
+      formElicitation: null,
+      urlElicitation: null,
+    };
+    const first = createHarness(payload);
+    const projectors = new Map<string, RelaySnapshotProjector>();
+    const interactionCache = new Map();
+    const hydratedInteractions = new Map();
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response(first.content, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    await commitRelayCheckpoint({
+      checkpoint: checkpoint(first.handle),
+      ...identity,
+      projectors,
+      interactionCache,
+      hydratedInteractions,
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      isCurrent: () => true,
+      latest: first.latest,
+      catalog: first.catalog,
+    });
+
+    expect(first.commits).toHaveLength(2);
+    expect(first.commits[0]?.ui.approval).toBeNull();
+    expect(first.commits[1]?.ui.approval).toEqual(payload.approval);
+
+    const updatedPayload = {
+      ...payload,
+      approval: { ...payload.approval, command: "npm run lint" },
+    };
+    const second = createHarness(updatedPayload);
+    second.handle.handleId = "interaction-2";
+    fetch.mockImplementation(
+      async (_input: RequestInfo | URL) =>
+        new Response(second.content, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    await commitRelayCheckpoint({
+      checkpoint: checkpoint(second.handle),
+      ...identity,
+      projectors,
+      interactionCache,
+      hydratedInteractions,
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      isCurrent: () => true,
+      latest: second.latest,
+      catalog: second.catalog,
+    });
+
+    expect(second.commits).toHaveLength(2);
+    expect(second.commits[0]?.ui.approval).toBeNull();
+    expect(second.commits[1]?.ui.approval).toEqual(updatedPayload.approval);
+
+    const nextPayload = {
+      ...payload,
+      approval: { ...payload.approval, id: "approval-2" },
+    };
+    const next = createHarness(nextPayload);
+    next.handle.handleId = "interaction-3";
+    fetch.mockImplementation(
+      async (_input: RequestInfo | URL) =>
+        new Response(next.content, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const nextCheckpoint = checkpoint(next.handle);
+    nextCheckpoint.ui.interaction!.requestId = "approval-2";
+    await commitRelayCheckpoint({
+      checkpoint: nextCheckpoint,
+      ...identity,
+      projectors,
+      interactionCache,
+      hydratedInteractions,
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      isCurrent: () => true,
+      latest: next.latest,
+      catalog: next.catalog,
+    });
+
+    expect(next.commits).toHaveLength(2);
+    expect(next.commits[0]?.ui.approval).toBeNull();
+    expect(next.commits[1]?.ui.approval).toEqual(nextPayload.approval);
+  });
+
+  it("shares pending interaction hydration across newer checkpoints", async () => {
+    const payload = {
+      approval: { id: "approval-1", kind: "command", command: "npm test" },
+      question: null,
+      questionProgress: null,
+      formElicitation: null,
+      urlElicitation: null,
+    };
+    const harness = createHarness(payload);
+    let resolveFetch!: (response: Response) => void;
+    const fetch = vi.fn(
+      (_input: RequestInfo | URL) =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    const projectors = new Map<string, RelaySnapshotProjector>();
+    const interactionCache = new Map();
+    const hydratedInteractions = new Map();
+    let currentCommit = 1;
+    const first = commitRelayCheckpoint({
+      checkpoint: checkpoint(harness.handle),
+      ...identity,
+      projectors,
+      interactionCache,
+      hydratedInteractions,
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      isCurrent: () => currentCommit === 1,
+      latest: harness.latest,
+      catalog: harness.catalog,
+    });
+
+    currentCommit = 2;
+    const newerCheckpoint = checkpoint(harness.handle);
+    newerCheckpoint.checkpointSequence = 2;
+    newerCheckpoint.foreground = {
+      ...newerCheckpoint.foreground!,
+      status: "streaming",
+      streaming: true,
+    };
+    const second = commitRelayCheckpoint({
+      checkpoint: newerCheckpoint,
+      ...identity,
+      projectors,
+      interactionCache,
+      hydratedInteractions,
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      isCurrent: () => currentCommit === 2,
+      latest: harness.latest,
+      catalog: harness.catalog,
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    resolveFetch(new Response(harness.content, { status: 200 }));
+    await Promise.all([first, second]);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(harness.commits).toHaveLength(3);
+    expect(harness.commits[0]?.ui.approval).toBeNull();
+    expect(harness.commits[1]?.ui.approval).toBeNull();
+    expect(harness.commits[2]?.ui.approval).toEqual(payload.approval);
+    expect(harness.commits[2]?.session.foreground?.status).toBe("streaming");
+  });
+
   it("does not commit an interaction detail that expires during hydration", async () => {
     const payload = {
       approval: { id: "approval-1", kind: "command", command: "npm test" },
@@ -398,6 +559,7 @@ describe("commitRelayCheckpoint", () => {
       ...identity,
       projectors: new Map<string, RelaySnapshotProjector>(),
       interactionCache: new Map(),
+      hydratedInteractions: new Map(),
       fetch: fetch as unknown as typeof globalThis.fetch,
       isCurrent: () => true,
       latest: harness.latest,
@@ -448,6 +610,7 @@ describe("commitRelayCheckpoint", () => {
       sourceEventPaint: marker,
       projectors: new Map<string, RelaySnapshotProjector>(),
       interactionCache: new Map(),
+      hydratedInteractions: new Map(),
       fetch: fetch as unknown as typeof globalThis.fetch,
       isCurrent: () => true,
       latest: harness.latest,

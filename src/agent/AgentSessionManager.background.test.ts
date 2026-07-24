@@ -223,8 +223,16 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
-  it("snapshots the parent's full approval mode for a shared child", async () => {
-    const mgr = new AgentSessionManager(config, "/tmp");
+  it("inherits and live-syncs the parent's full approval mode for a shared child", async () => {
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 0 },
+    );
     const parent = await mgr.createSession("code");
     const inheritSessionApprovalState = vi.fn();
     mgr.setSessionApprovalMode(parent.id, {
@@ -270,10 +278,10 @@ describe("AgentSessionManager background agents", () => {
       executionPreset: "workspace-write",
     });
     expect(mgr.getSessionApprovalMode(child.sessionId)).toEqual({
-      commandApprovalPolicy: "sensitive",
+      commandApprovalPolicy: "safe",
       approvalPolicy: "on-request",
-      approvalReviewer: "auto-review",
-      executionPreset: "native-manual",
+      approvalReviewer: "user",
+      executionPreset: "workspace-write",
     });
   });
 
@@ -306,6 +314,44 @@ describe("AgentSessionManager background agents", () => {
     expect(inheritSessionApprovalState).toHaveBeenCalledWith(
       parent.id,
       child.sessionId,
+    );
+  });
+
+  it("propagates later approval-mode changes through active shared descendants", async () => {
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 0 },
+    );
+    const root = await mgr.createSession("code");
+    mgr.setToolContext({
+      ...toolCtx,
+      inheritSessionApprovalState: vi.fn(),
+    });
+    const child = await mgr.spawnBackground(
+      { task: "child", message: "inspect" },
+      root.id,
+    );
+    const grandchild = await mgr.spawnBackground(
+      { task: "grandchild", message: "inspect more" },
+      child.sessionId,
+    );
+    const updatedMode = {
+      commandApprovalPolicy: "approve-for-me" as const,
+      approvalPolicy: "on-request" as const,
+      approvalReviewer: "auto-review" as const,
+      executionPreset: "workspace-write" as const,
+    };
+
+    mgr.setSessionApprovalMode(root.id, updatedMode);
+
+    expect(mgr.getSessionApprovalMode(child.sessionId)).toEqual(updatedMode);
+    expect(mgr.getSessionApprovalMode(grandchild.sessionId)).toEqual(
+      updatedMode,
     );
   });
 
@@ -2446,6 +2492,40 @@ describe("AgentSessionManager background agents", () => {
         terminalReason: "cancelled_by_user",
       }),
     );
+  });
+
+  it("keeps background agents running when only the foreground turn is interrupted", async () => {
+    mocks.runBehavior.mockImplementation(() =>
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const child = await mgr.spawnBackground({
+      task: "child",
+      message: "keep working",
+    });
+
+    mgr.interruptSession(foreground.id);
+
+    expect(foreground.status).toBe("idle");
+    expect(mgr.getBackgroundStatus(child.sessionId).status).not.toBe(
+      "cancelled",
+    );
+    expect((mgr as any).sessions.get(child.sessionId).isAborted).toBe(false);
+    expect(
+      (mgr as any).sessions.get(child.sessionId).fleetMetadata,
+    ).not.toEqual(
+      expect.objectContaining({
+        lifecycle: "cancelled",
+        terminalReason: "cancelled_by_user",
+      }),
+    );
+
+    mgr.stopSession(foreground.id);
   });
 
   it("creates native review agents with the full prompt path", async () => {

@@ -51,6 +51,7 @@ import {
   type CommandReviewTurnCircuit,
   type RetainedCommandReviewDenials,
 } from "../approvals/commandApprovalReview.js";
+import { collectCommandReviewEvidence } from "../approvals/commandReviewEvidence.js";
 import type {
   CommandReviewSummary,
   NetworkReviewSummary,
@@ -1883,6 +1884,10 @@ async function approveSubCommands(
         classified: tierInfo,
         security: options?.security,
         inlineFiles,
+        evidence: collectCommandReviewEvidence(reviewedCommand, {
+          cwd,
+          workspaceRoots,
+        }),
         signal: reviewProviders.toolAbortSignal,
       });
       if (options?.security && reviewProviders.terminalProvider) {
@@ -2027,7 +2032,7 @@ async function approveSubCommands(
     for (const rule of response.rules ?? []) {
       if (rule.mode === "skip" || rule.scope === "skip" || !rule.pattern)
         continue;
-      approvalManager.addCommandRule(
+      const saved = approvalManager.addCommandRule(
         sessionId,
         {
           pattern: rule.pattern,
@@ -2037,6 +2042,11 @@ async function approveSubCommands(
         rule.scope,
         cwd,
       );
+      if (!saved) {
+        throw new Error(
+          `Could not save the ${rule.scope} command approval. The command was not executed; check the approval config path and try again.`,
+        );
+      }
     }
   };
 
@@ -2049,6 +2059,9 @@ async function approveSubCommands(
       commitMutations,
     };
   }
+  // A direct human approval outranks an earlier guardian denial of the same
+  // action, so stop the retained denial from blocking fast paths on repeats.
+  reviewProviders?.retainedCommandReviewDenials?.clear(sessionId, actionKey);
   return {
     approved: true,
     approval: response.recentApproval

@@ -80,10 +80,20 @@ export type HostTerminalBlockBoundary =
   | "command-start"
   | "command-end";
 
+export interface HostTerminalSurfaceCommandSummary {
+  /** First line of the command, bounded for display surfaces. */
+  commandLine: string;
+  /** True when the command has more lines or characters than commandLine. */
+  truncated: boolean;
+  status: "running" | "exited";
+  exitCode?: number;
+}
+
 export interface HostTerminalSurfaceBlockPresentation {
   blockId: string;
   decoration: "hidden" | "undecorated" | "active" | "completed";
   actions: readonly HostTerminalSurfaceAction[];
+  command?: HostTerminalSurfaceCommandSummary;
 }
 
 export interface HostTerminalSurfacePresentation {
@@ -175,6 +185,13 @@ export interface HostTerminalRenderBatch {
   outputPolicyDecisions: readonly TerminalOutputPolicyDecision[];
 }
 
+/** Position of a retained block's first line inside replay `data`, in UTF-16
+ * code units. Lets the renderer re-register block markers after a replay. */
+export interface HostTerminalReplayAnchor {
+  blockId: string;
+  offset: number;
+}
+
 export interface HostTerminalReplaySnapshot {
   terminalId: string;
   terminalInstanceId: string;
@@ -186,6 +203,7 @@ export interface HostTerminalReplaySnapshot {
   replayPendingControl: boolean;
   blocks: HostTerminalBlockState;
   presentation: HostTerminalSurfacePresentation;
+  anchors: readonly HostTerminalReplayAnchor[];
 }
 
 export interface HostTerminalFallbackState {

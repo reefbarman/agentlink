@@ -1,15 +1,26 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { pathToFileURL } from "url";
 
 import type { AgentConfig, AgentMessage } from "./types.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AgentSessionManager } from "./AgentSessionManager.js";
+import {
+  AgentSessionManager,
+  recoverInterruptedRunMessages,
+} from "./AgentSessionManager.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
-import type { PersistedSessionRecord } from "./persistenceContracts.js";
+import { SessionStore } from "./SessionStore.js";
+import type {
+  PersistedSessionRecord,
+  PersistedSessionRunState,
+} from "./persistenceContracts.js";
 import { ProviderRegistry } from "./providers/index.js";
-import { isProjectlessSessionScope } from "../core/workspaceProjects.js";
+import {
+  createWorkspaceProjectId,
+  isProjectlessSessionScope,
+} from "../core/workspaceProjects.js";
 
 const mocks = vi.hoisted(() => {
   const createSession = vi.fn(
@@ -509,6 +520,27 @@ describe("AgentSessionManager host injection", () => {
     expect(mgr.getCommandApprovalPolicy(session.id)).toBe("sensitive");
     mgr.clearSessionCommandApprovalPolicy(session.id);
     expect(mgr.getCommandApprovalPolicy(session.id, "manual")).toBe("manual");
+  });
+
+  it("syncs the session's Approve for Me prompt flag and rebuilds the prompt on policy toggle", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    session.approveForMe = false;
+
+    mgr.setCommandApprovalPolicy(session.id, "approve-for-me");
+    expect(session.approveForMe).toBe(true);
+    await flushPromises();
+    expect(session.rebuildSystemPrompt).toHaveBeenCalledTimes(1);
+
+    // Re-applying the same policy must not schedule a redundant rebuild.
+    mgr.setCommandApprovalPolicy(session.id, "approve-for-me");
+    await flushPromises();
+    expect(session.rebuildSystemPrompt).toHaveBeenCalledTimes(1);
+
+    mgr.setCommandApprovalPolicy(session.id, "safe");
+    expect(session.approveForMe).toBe(false);
+    await flushPromises();
+    expect(session.rebuildSystemPrompt).toHaveBeenCalledTimes(2);
   });
 
   it("starts an explicit new foreground session with Approve for Me off", async () => {
@@ -1798,6 +1830,482 @@ describe("AgentSessionManager in-flight persistence", () => {
     vi.useRealTimers();
   });
 
+  it("recovers a pending tool turn with saved and synthetic results", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "inspect both files" },
+    ];
+    const runState: PersistedSessionRunState = {
+      phase: "running",
+      startedAt: 123,
+      pendingToolTurn: {
+        schemaVersion: 1,
+        assistantMessage: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Checking both." },
+            {
+              type: "tool_use",
+              id: "call_a",
+              name: "read_file",
+              input: { path: "a.ts" },
+            },
+            {
+              type: "tool_use",
+              id: "call_b",
+              name: "read_file",
+              input: { path: "b.ts" },
+            },
+          ],
+        },
+        toolResults: [
+          {
+            type: "tool_result",
+            tool_use_id: "call_a",
+            content: "contents of a.ts",
+          },
+        ],
+      },
+    };
+
+    const recovered = recoverInterruptedRunMessages(messages, runState);
+
+    expect(recovered.changed).toBe(true);
+    expect(recovered.runState).toEqual({
+      phase: "running",
+      startedAt: 123,
+    });
+    expect(recovered.messages).toHaveLength(3);
+    expect(recovered.messages[1]).toEqual(
+      runState.pendingToolTurn?.assistantMessage,
+    );
+    expect(recovered.messages[2]).toMatchObject({
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "call_a",
+          content: "contents of a.ts",
+        },
+        {
+          type: "tool_result",
+          tool_use_id: "call_b",
+          content: expect.stringContaining("interrupted"),
+          is_error: true,
+        },
+      ],
+    });
+
+    const deduplicated = recoverInterruptedRunMessages(
+      recovered.messages,
+      runState,
+    );
+    expect(deduplicated.messages).toHaveLength(recovered.messages.length);
+    expect(deduplicated.runState).toEqual({
+      phase: "running",
+      startedAt: 123,
+    });
+  });
+
+  it("recovers partial streamed assistant text without duplicating a newer committed response", () => {
+    const partialState: PersistedSessionRunState = {
+      phase: "running",
+      startedAt: 123,
+      partialAssistantText: "A partially streamed answer",
+    };
+
+    const recovered = recoverInterruptedRunMessages(
+      [{ role: "user", content: "answer this" }],
+      partialState,
+    );
+    expect(recovered.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "A partially streamed answer" }],
+    });
+
+    const deduplicated = recoverInterruptedRunMessages(
+      [
+        { role: "user", content: "answer this" },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "A partially streamed answer, done." },
+          ],
+        },
+      ],
+      {
+        ...partialState,
+        partialAssistantText: "A partially streamed answer",
+      },
+    );
+    expect(deduplicated.messages).toHaveLength(2);
+    expect(deduplicated.runState).toEqual({
+      phase: "running",
+      startedAt: 123,
+    });
+  });
+
+  it("preserves an unknown pending tool-turn schema for a newer build", () => {
+    const runState = {
+      phase: "running",
+      startedAt: 123,
+      pendingToolTurn: {
+        schemaVersion: 2,
+        assistantMessage: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "call_future",
+              name: "future_tool",
+              input: {},
+            },
+          ],
+        },
+        toolResults: [],
+      },
+    } as unknown as PersistedSessionRunState;
+    const messages: AgentMessage[] = [
+      { role: "user", content: "use the future tool" },
+    ];
+
+    expect(recoverInterruptedRunMessages(messages, runState)).toEqual({
+      messages,
+      runState,
+      changed: false,
+    });
+  });
+
+  it("materializes a pending tool turn exactly once across real store reloads", async () => {
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-recovery-roundtrip-"),
+    );
+
+    try {
+      const workspaceFolderUri = pathToFileURL(workspace).toString();
+      const projectScope = {
+        schemaVersion: 1 as const,
+        kind: "project" as const,
+        projectId: createWorkspaceProjectId(workspaceFolderUri),
+        workspaceFolderUri,
+        displayName: workspace,
+        rootPath: workspace,
+      };
+      const summary = {
+        schemaVersion: 1 as const,
+        id: "session-1",
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        title: "Interrupted",
+        messageCount: 1,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        createdAt: 100,
+        lastActiveAt: 123,
+        projectScope,
+      };
+      const seedStore = new SessionStore(workspace);
+      await expect(
+        seedStore.saveSession({
+          expectedRevision: null,
+          session: {
+            summary,
+            messages: [
+              { role: "user", content: "inspect both files" },
+            ] satisfies AgentMessage[],
+            metadata: {
+              projectScope,
+              mode: summary.mode,
+              model: summary.model,
+              totalInputTokens: 0,
+              totalOutputTokens: 0,
+              totalCacheReadTokens: 0,
+              totalCacheCreationTokens: 0,
+              lastInputTokens: 0,
+              lastCacheReadTokens: 0,
+              loadedSkills: [],
+              checkpointState: {
+                projectId: projectScope.projectId,
+                baseCommit: null,
+                checkpoints: [],
+              },
+              runState: {
+                phase: "running",
+                projectId: projectScope.projectId,
+                startedAt: 123,
+                pendingToolTurn: {
+                  schemaVersion: 1,
+                  assistantMessage: {
+                    role: "assistant",
+                    content: [
+                      { type: "text", text: "Checking both." },
+                      {
+                        type: "tool_use",
+                        id: "call-a",
+                        name: "read_file",
+                        input: { path: "a.ts" },
+                      },
+                      {
+                        type: "tool_use",
+                        id: "call-b",
+                        name: "read_file",
+                        input: { path: "b.ts" },
+                      },
+                    ],
+                  },
+                  toolResults: [
+                    {
+                      type: "tool_result",
+                      tool_use_id: "call-a",
+                      content: "saved a.ts contents",
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      ).resolves.toEqual({ ok: true, revision: "1" });
+
+      const makeRestoredHarness = () => {
+        const messages: AgentMessage[] = [];
+        const session = {
+          id: "unrestored",
+          mode: "code",
+          model: "claude-sonnet-4-6",
+          projectScope,
+          projectAvailability: "available",
+          title: "New Chat",
+          createdAt: 0,
+          lastActiveAt: 0,
+          background: false,
+          status: "idle",
+          messageCount: 0,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+          lastInputTokens: 0,
+          lastOutputTokens: 0,
+          lastCacheReadTokens: 0,
+          reasoningEffort: "high",
+          currentTool: undefined,
+          runState: undefined,
+          isAborted: false,
+          abortGeneration: 0,
+          getLoadedSkills: vi.fn(() => []),
+          getAllMessages: vi.fn(() => messages),
+          restoreFromStore: vi.fn((data: any) => {
+            Object.assign(session, data);
+            messages.splice(0, messages.length, ...data.messages);
+            session.messageCount = messages.length;
+          }),
+          rebuildSystemPrompt: vi.fn(async () => {}),
+          consumePendingInterjection: vi.fn(() => null),
+          consumePendingModeResume: vi.fn(() => null),
+          autoTitle: vi.fn(),
+        } as any;
+        return { session, messages };
+      };
+
+      const first = makeRestoredHarness();
+      const second = makeRestoredHarness();
+      mocks.createSession
+        .mockResolvedValueOnce(first.session)
+        .mockResolvedValueOnce(second.session);
+
+      const firstManager = new AgentSessionManager(
+        makeConfig(),
+        workspace,
+        undefined,
+        false,
+        new SessionStore(workspace),
+      );
+      await expect(firstManager.restoreLastSession()).resolves.toBe(
+        first.session,
+      );
+
+      expect(first.messages).toHaveLength(3);
+      expect(first.messages[1]).toMatchObject({
+        role: "assistant",
+        content: expect.arrayContaining([
+          expect.objectContaining({ type: "tool_use", id: "call-a" }),
+          expect.objectContaining({ type: "tool_use", id: "call-b" }),
+        ]),
+      });
+      expect(first.messages[2]).toMatchObject({
+        role: "user",
+        content: [
+          expect.objectContaining({
+            tool_use_id: "call-a",
+            content: "saved a.ts contents",
+          }),
+          expect.objectContaining({
+            tool_use_id: "call-b",
+            is_error: true,
+            content: expect.stringContaining("interrupted"),
+          }),
+        ],
+      });
+
+      const rewrittenStore = new SessionStore(workspace);
+      const rewritten = await rewrittenStore.readSession("session-1");
+      if (!rewritten.ok) throw new Error("Expected rewritten session");
+      expect(rewritten.revision).toBe("2");
+      expect(rewritten.value.summary.messageCount).toBe(3);
+      expect(rewritten.value.metadata.runState).toEqual({
+        phase: "running",
+        projectId: projectScope.projectId,
+        startedAt: 123,
+      });
+
+      const secondManagerStore = new SessionStore(workspace);
+      const beforeSecondReload =
+        await secondManagerStore.readSession("session-1");
+      if (!beforeSecondReload.ok) {
+        throw new Error("Expected saved session before second reload");
+      }
+      const secondManager = new AgentSessionManager(
+        makeConfig(),
+        workspace,
+        undefined,
+        false,
+        secondManagerStore,
+      );
+      await expect(secondManager.restoreLastSession()).resolves.toBe(
+        second.session,
+      );
+      const afterSecondReload =
+        await secondManagerStore.readSession("session-1");
+      if (!afterSecondReload.ok) {
+        throw new Error("Expected saved session after second reload");
+      }
+
+      expect(second.messages).toEqual(rewritten.value.messages);
+      expect(second.messages).toHaveLength(3);
+      expect(afterSecondReload.revision).toBe(beforeSecondReload.revision);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("persists the engine's pending tool-turn snapshot through production manager wiring", async () => {
+    const savedRecords: PersistedSessionRecord[] = [];
+    const store = {
+      saveSession: vi.fn(async (args: { session: PersistedSessionRecord }) => {
+        savedRecords.push(structuredClone(args.session));
+        return { ok: true, revision: String(savedRecords.length) };
+      }),
+      list: vi.fn(() => []),
+      get: vi.fn(),
+      loadMessages: vi.fn(),
+      loadMetadata: vi.fn(),
+    } as any;
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    const session = await mgr.createSession("code");
+    const messages: AgentMessage[] = [];
+    (session as any).messageCount = 0;
+    (session as any).isAborted = false;
+    (session as any).lastActiveAt = 123;
+    (session as any).getAllMessages = vi.fn(() => messages);
+    (session as any).addUserMessage = vi.fn((text: string) => {
+      messages.push({ role: "user", content: text });
+      (session as any).messageCount = messages.length;
+      session.lastActiveAt += 1;
+    });
+    (session as any).consumePendingInterjection = vi.fn(() => null);
+    (session as any).consumePendingModeResume = vi.fn(() => null);
+    (session as any).autoTitle = vi.fn();
+    (mgr as any).engine = {
+      run: vi.fn(async function* (_session: unknown, opts: any) {
+        yield {
+          type: "text_delta",
+          text: "Already committed prefix",
+        };
+        opts.onAssistantTurnCommitted();
+        yield {
+          type: "text_delta",
+          text: "Distinct streamed partial",
+        };
+        await new Promise<void>((resolve) => setTimeout(resolve, 1_100));
+        await opts.onPendingToolTurn({
+          role: "assistant",
+          content: [
+            { type: "text", text: "Distinct recovery text" },
+            {
+              type: "tool_use",
+              id: "call_distinct",
+              name: "read_file",
+              input: { path: "distinct.ts" },
+            },
+          ],
+        });
+        yield {
+          type: "tool_start",
+          toolCallId: "call_distinct",
+          toolName: "read_file",
+        };
+        yield {
+          type: "tool_result",
+          toolCallId: "call_distinct",
+          toolName: "read_file",
+          result: [{ type: "text", text: "full UI result" }],
+          historyContent: "Distinct saved tool result",
+          durationMs: 5,
+        };
+        await new Promise<void>((resolve) => setTimeout(resolve, 1_100));
+        opts.onAssistantTurnCommitted();
+        yield {
+          type: "done",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        };
+      }),
+    };
+
+    const send = mgr.sendMessage(session.id, "start", session.mode);
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(2_500);
+    await send;
+
+    expect(
+      savedRecords.some(
+        (record) =>
+          record.metadata.runState?.phase === "running" &&
+          (
+            JSON.stringify(
+              record.metadata.runState.pendingToolTurn?.assistantMessage
+                .content,
+            ) ?? ""
+          ).includes("Distinct recovery text"),
+      ),
+    ).toBe(true);
+    expect(
+      savedRecords.some(
+        (record) =>
+          record.metadata.runState?.phase === "running" &&
+          record.metadata.runState.partialAssistantText ===
+            "Distinct streamed partial",
+      ),
+    ).toBe(true);
+    expect(
+      savedRecords.some(
+        (record) =>
+          record.metadata.runState?.pendingToolTurn?.toolResults[0]
+            ?.tool_use_id === "call_distinct" &&
+          record.metadata.runState.pendingToolTurn.toolResults[0]?.content ===
+            "Distinct saved tool result",
+      ),
+    ).toBe(true);
+  });
+
   it("persists runState while a foreground turn is in-flight and clears it on done", async () => {
     const savedRunStates: Array<string | null> = [];
     const store = {
@@ -1930,7 +2438,7 @@ describe("AgentSessionManager in-flight persistence", () => {
       store,
     );
     const session = await mgr.createSession("code");
-    (session as any).appendAssistantTurn = vi.fn();
+    (session as any).appendAssistantMessage = vi.fn();
     (session as any).appendToolResults = vi.fn();
 
     await mgr.persistPendingQuestionRecovery(
@@ -1962,7 +2470,7 @@ describe("AgentSessionManager in-flight persistence", () => {
       }),
     ).resolves.toBe(false);
 
-    expect(session.appendAssistantTurn).not.toHaveBeenCalled();
+    expect(session.appendAssistantMessage).not.toHaveBeenCalled();
     expect(session.appendToolResults).not.toHaveBeenCalled();
     expect(session.runState?.phase).toBe("running");
   });
@@ -1985,8 +2493,8 @@ describe("AgentSessionManager in-flight persistence", () => {
     );
     const session = await mgr.createSession("code");
     const appended: AgentMessage[] = [];
-    (session as any).appendAssistantTurn = vi.fn((content: any) => {
-      appended.push({ role: "assistant", content });
+    (session as any).appendAssistantMessage = vi.fn((message: AgentMessage) => {
+      appended.push(message);
     });
     (session as any).appendToolResults = vi.fn((content: any) => {
       appended.push({ role: "user", content });
@@ -2046,7 +2554,7 @@ describe("AgentSessionManager in-flight persistence", () => {
     expect(retrySession).toHaveBeenCalledWith(session.id);
   });
 
-  it("answers a recovered ask_user with synthetic results for sibling tool calls", async () => {
+  it("answers a recovered ask_user with saved results for completed sibling tool calls", async () => {
     const store = {
       saveSession: vi.fn(async () => ({ ok: true, revision: "1" })),
       list: vi.fn(() => []),
@@ -2064,13 +2572,51 @@ describe("AgentSessionManager in-flight persistence", () => {
     );
     const session = await mgr.createSession("code");
     const appended: AgentMessage[] = [];
-    (session as any).appendAssistantTurn = vi.fn((content: any) => {
-      appended.push({ role: "assistant", content });
+    (session as any).appendAssistantMessage = vi.fn((message: AgentMessage) => {
+      appended.push(message);
     });
     (session as any).appendToolResults = vi.fn((content: any) => {
       appended.push({ role: "user", content });
     });
     vi.spyOn(mgr, "retrySession").mockResolvedValue(undefined);
+
+    session.runState = {
+      phase: "running",
+      startedAt: 1,
+      pendingToolTurn: {
+        schemaVersion: 1,
+        assistantMessage: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu-sibling",
+              name: "get_background_status",
+              input: { sessionId: "bg-1" },
+            },
+            {
+              type: "tool_use",
+              id: "toolu-1",
+              name: "ask_user",
+              input: { context: "Pick one." },
+            },
+          ],
+          providerReplay: {
+            providerId: "anthropic",
+            codecVersion: 1,
+            payload: { id: "provider-response-1" },
+            serializedBytes: 1,
+          },
+        },
+        toolResults: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu-sibling",
+            content: "saved sibling status",
+          },
+        ],
+      },
+    };
 
     await mgr.persistPendingQuestionRecovery(
       session.id,
@@ -2114,13 +2660,20 @@ describe("AgentSessionManager in-flight persistence", () => {
       }),
     ).resolves.toBe(true);
 
+    expect(appended[0]).toMatchObject({
+      role: "assistant",
+      providerReplay: {
+        providerId: "anthropic",
+        payload: { id: "provider-response-1" },
+      },
+    });
     expect(appended[1]).toMatchObject({
       role: "user",
       content: [
         expect.objectContaining({
           type: "tool_result",
           tool_use_id: "toolu-sibling",
-          content: expect.stringContaining("interrupted"),
+          content: "saved sibling status",
         }),
         expect.objectContaining({
           type: "tool_result",
@@ -2236,7 +2789,12 @@ describe("AgentSessionManager in-flight persistence", () => {
       }),
     };
 
-    await expect(mgr.resumeInterruptedSession("session-1")).resolves.toBe(true);
+    await expect(
+      Promise.all([
+        mgr.resumeInterruptedSession("session-1"),
+        mgr.resumeInterruptedSession("session-1"),
+      ]),
+    ).resolves.toEqual([true, false]);
 
     const flattened = savedMessages.flat().map((message) => message.content);
     expect(flattened).toEqual(
@@ -2244,6 +2802,13 @@ describe("AgentSessionManager in-flight persistence", () => {
         expect.stringContaining("<interrupted_session_resume>"),
       ]),
     );
+    expect(
+      restoredMessages.filter(
+        (message) =>
+          typeof message.content === "string" &&
+          message.content.includes("<interrupted_session_resume>"),
+      ),
+    ).toHaveLength(1);
     expect(loaded?.runState).toBeUndefined();
   });
 
@@ -2344,6 +2909,154 @@ describe("AgentSessionManager in-flight persistence", () => {
 
     const inFlightSaveOccurred = savedCounts.some((count) => count >= 2);
     expect(inFlightSaveOccurred).toBe(true);
+  });
+
+  it("upgrades a coalesced deferred checkpoint save to durable and never downgrades it", async () => {
+    const durabilities: Array<string | undefined> = [];
+    let resolveFirstSave!: () => void;
+    const firstSaveGate = new Promise<void>((resolve) => {
+      resolveFirstSave = resolve;
+    });
+    const store = {
+      saveSession: vi.fn(async (args: { durability?: string }) => {
+        durabilities.push(args.durability);
+        if (durabilities.length === 1) await firstSaveGate;
+        return { ok: true, revision: String(durabilities.length) };
+      }),
+      list: vi.fn(() => []),
+      get: vi.fn(),
+      loadMessages: vi.fn(),
+      loadMetadata: vi.fn(),
+    } as any;
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    const session = await mgr.createSession("code");
+    await flushPromises();
+    const baseline = durabilities.length;
+
+    mgr.saveSession(session.id, { durability: "checkpoint" }); // runs immediately
+    mgr.saveSession(session.id, { durability: "checkpoint" }); // deferred behind it
+    mgr.saveSession(session.id, { durability: "durable" }); // upgrades the deferred save
+    mgr.saveSession(session.id, { durability: "checkpoint" }); // must not downgrade it
+    resolveFirstSave();
+    await flushPromises();
+
+    expect(durabilities.slice(baseline)).toEqual(["checkpoint", "durable"]);
+  });
+
+  it("scales the in-flight checkpoint delay from the last persistence duration with clamping", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const anyMgr = mgr as any;
+
+    expect(anyMgr.nextInFlightPersistDelayMs("s1")).toBe(1_000);
+    anyMgr.sessionPersistDurationsMs.set("s1", 200);
+    expect(anyMgr.nextInFlightPersistDelayMs("s1")).toBe(5_000);
+    anyMgr.sessionPersistDurationsMs.set("s1", 10_000);
+    expect(anyMgr.nextInFlightPersistDelayMs("s1")).toBe(30_000);
+  });
+
+  it("reschedules in-flight checkpoints using the adaptive delay until stopped", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const anyMgr = mgr as any;
+    let ticks = 0;
+
+    anyMgr.sessionPersistDurationsMs.set("s1", 200); // → 5 s cadence
+    const stop = anyMgr.startInFlightPersistLoop("s1", () => {
+      ticks += 1;
+    });
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(ticks).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ticks).toBe(1);
+
+    // Each tick picks the delay for the next one, so the tick scheduled with
+    // the old 5 s cadence still fires 5 s out; the one after drops to 1 s.
+    anyMgr.sessionPersistDurationsMs.set("s1", 0);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(ticks).toBe(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(ticks).toBe(3);
+
+    stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(ticks).toBe(3);
+  });
+
+  it("delivers checkpoint durability and the transcript-revision skip through production store wiring", async () => {
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-durability-"),
+    );
+    try {
+      const events: string[] = [];
+      const normalize = (name: string) => {
+        const tempMatch = /^\.(.+?)\.\d+\..*\.tmp$/.exec(name);
+        return tempMatch ? tempMatch[1] : name;
+      };
+      const store = new SessionStore(
+        workspace,
+        { ownerId: "test-owner", surface: "test", startedAt: 1 },
+        {
+          open: async (filePath, flags) => {
+            const name = normalize(path.basename(String(filePath)));
+            const handle = await fs.promises.open(filePath, flags);
+            return {
+              writeFile: (data, options) => handle.writeFile(data, options),
+              sync: async () => {
+                events.push(`fsync:${name}`);
+                await handle.sync();
+              },
+              close: () => handle.close(),
+            };
+          },
+          rename: async (oldPath, newPath) => {
+            events.push(`rename:${normalize(path.basename(String(newPath)))}`);
+            await fs.promises.rename(oldPath, newPath);
+          },
+          rm: (filePath, options) => fs.promises.rm(filePath, options),
+        },
+      );
+      const mgr = new AgentSessionManager(
+        makeConfig(),
+        workspace,
+        undefined,
+        false,
+        store,
+      );
+      const session = await mgr.createSession("code");
+      (session as any).getAllMessages = vi.fn(() => [
+        { role: "user", content: "distinct checkpoint transcript" },
+      ]);
+      (session as any).transcriptRevision = 7;
+      await (mgr as any).sessionSaveQueues.get(session.id);
+
+      events.length = 0;
+      mgr.saveSession(session.id, { durability: "checkpoint" });
+      await (mgr as any).sessionSaveQueues.get(session.id);
+
+      // The in-flight checkpoint tier reached the store: transcript written
+      // atomically with no fsync anywhere in the save.
+      expect(events).toContain("rename:messages.json");
+      expect(events.filter((event) => event.startsWith("fsync:"))).toEqual([]);
+
+      events.length = 0;
+      mgr.saveSession(session.id, { durability: "durable" });
+      await (mgr as any).sessionSaveQueues.get(session.id);
+
+      // The durable save skipped rewriting the unchanged transcript via the
+      // session's transcriptRevision, but flushed the checkpoint-tier bytes.
+      expect(events).not.toContain("rename:messages.json");
+      expect(events).toContain("fsync:messages.json");
+      expect(store.loadMessages(session.id)).toEqual([
+        { role: "user", content: "distinct checkpoint transcript" },
+      ]);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });
 

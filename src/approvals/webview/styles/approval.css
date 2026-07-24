@@ -300,6 +300,29 @@ body {
   overflow: auto;
 }
 
+/* ── JSON syntax highlighting (MCP tool input) ───────────────────────── */
+
+.json-key {
+  color: var(--vscode-symbolIcon-fieldForeground, #9cdcfe);
+}
+
+.json-string {
+  color: var(--vscode-debugTokenExpression-string, #ce9178);
+}
+
+.json-number {
+  color: var(--vscode-debugTokenExpression-number, #b5cea8);
+}
+
+.json-boolean {
+  color: var(--vscode-debugTokenExpression-boolean, #569cd6);
+}
+
+.json-null {
+  color: var(--vscode-debugTokenExpression-boolean, #569cd6);
+  opacity: 0.7;
+}
+
 /* ── Command box (path approvals) ────────────────────────────────────── */
 
 .command-box {

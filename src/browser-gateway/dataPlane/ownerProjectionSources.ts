@@ -67,10 +67,12 @@ export interface BrowserGatewayOwnerQueueSource {
 export interface BrowserGatewayOwnerForegroundSource {
   sessionId: string;
   title: string;
+  originalPrompt?: string;
   mode: string;
   model: string;
   status: string;
   streaming: boolean;
+  interrupted?: boolean;
   estimatedTokens?: number;
   maximumTokens?: number;
   statusOverride: string | null;

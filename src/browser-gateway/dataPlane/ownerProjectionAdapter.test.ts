@@ -87,10 +87,12 @@ function readSet(): BrowserGatewayOwnerProjectionReadSet {
     foreground: {
       sessionId: "session-1",
       title: "Relay work",
+      originalPrompt: "Review the relay implementation",
       mode: "code",
       model: "gpt-5.6-sol",
       status: "streaming",
       streaming: true,
+      interrupted: true,
       estimatedTokens: 1_000,
       maximumTokens: 200_000,
       statusOverride: "Refreshing credentials…",
@@ -449,6 +451,8 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
       }),
     ]);
     expect(checkpoint.foreground).toMatchObject({
+      originalPrompt: "Review the relay implementation",
+      interrupted: true,
       statusOverride: "Refreshing credentials…",
       thinkingEnabled: false,
       reasoningEffort: "medium",

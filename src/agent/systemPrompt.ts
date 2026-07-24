@@ -986,6 +986,8 @@ export async function buildPromptArtifacts(
     workspaceFolders?: WorkspaceFolderInfo[];
     mcpToolCatalog?: McpToolDisclosureCatalogEntry[];
     agentMode?: AgentMode;
+    /** Approve for Me is active: mode switches are reviewed automatically, not by the user. */
+    approveForMe?: boolean;
   },
 ): Promise<PromptArtifacts> {
   // Lightweight path: minimal prompt for background review agents
@@ -1055,6 +1057,19 @@ export async function buildPromptArtifacts(
       ? `\n- Plans folder (\`./plans\`): ${fs.existsSync(path.join(cwd, "plans")) ? "exists" : "does not exist yet"}`
       : "";
 
+  const architectApproveForMeBullet =
+    mode === "architect"
+      ? `\n- The architect review loop is autonomous: self-review the plan (including the background review agent where warranted), resolve genuine open questions with \`ask_user\` if any remain, then summarize the plan in your response and call \`switch_mode\` to \`code\` to begin implementation. Do not wait for the user to approve the plan.`
+      : "";
+  const approveForMeSection = options?.approveForMe
+    ? `\n\n## Mode Switching Under Approve for Me
+
+Approve for Me is enabled for this session: mode switches are reviewed automatically on the user's behalf, so an approved \`switch_mode\` call does not interrupt the user. This section overrides the mode-switch consent guidance elsewhere in this prompt:
+
+- When a mode change is warranted, call \`switch_mode\` directly with a clear \`reason\`. Do not use \`ask_user\` to request permission to switch modes or to proceed — approval is handled automatically.
+- Never ask a question whose only purpose is mode-change or plan-approval consent. Keep using \`ask_user\` whenever you genuinely need the user's input on requirements, trade-offs, or open design decisions; if such a question's answer naturally implies a mode, you may still attach a \`modeSwitch\` map — the user's explicit choice remains valid consent.${architectApproveForMeBullet}`
+    : "";
+
   const boundedReviewSection =
     options?.isBackground && mode === "review"
       ? `\n\n### Bounded Review Loop\n\nReview the exact delegated change set and only the directly affected callers, dependencies, and tests needed to validate concrete risks. Do not explore adjacent subsystems merely to increase general confidence.\n\nBefore every additional tool call, identify the unresolved hypothesis it will test and the meaningful finding it could produce. Continue only when the result could reasonably reveal a new medium-or-higher issue, validate an existing finding, or resolve a material uncertainty. If no such hypothesis remains, finish the review.\n\nOnce the changed code, directly affected behavior, and relevant tests have been checked, return the best evidence-backed review you have. Report residual uncertainty as an assumption instead of searching indefinitely. Prefer a small number of strong findings over exhaustive low-value coverage.`
@@ -1067,6 +1082,7 @@ export async function buildPromptArtifacts(
   const sections = [
     measureContextItem("base", base),
     measureContextItem(`mode:${mode}`, modePrompt),
+    measureContextItem("approve for me", approveForMeSection),
     measureContextItem(
       options?.providerId ? `provider:${options.providerId}` : "provider",
       providerPrompt,
@@ -1090,7 +1106,7 @@ export async function buildPromptArtifacts(
     measureContextItem("background agent", backgroundSection),
   ];
   const systemPrompt = `${base}
-${modePrompt}
+${modePrompt}${approveForMeSection}
 ${providerPrompt}
 ${systemInfo}${plansSection}
 ${devFeedback}${customSection}${instructionSections.ruleCatalogSection}${memorySection}${rulesSection}${skillsSection}${mcpToolCatalogSection}${backgroundSection}`.trimEnd();
@@ -1118,6 +1134,8 @@ export async function buildSystemPrompt(
     workspaceFolders?: WorkspaceFolderInfo[];
     mcpToolCatalog?: McpToolDisclosureCatalogEntry[];
     agentMode?: AgentMode;
+    /** Approve for Me is active: mode switches are reviewed automatically, not by the user. */
+    approveForMe?: boolean;
   },
 ): Promise<string> {
   const artifacts = await buildPromptArtifacts(mode, cwd, options);

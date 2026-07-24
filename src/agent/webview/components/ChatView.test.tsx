@@ -84,6 +84,40 @@ describe("ChatView message windowing", () => {
     expect(screen.getByTitle("Message 1")).toBeTruthy();
   });
 
+  it("keeps the prompt preview on the original prompt when only a tail is loaded", () => {
+    const { rerender } = render(
+      h(ChatView, {
+        messages: makeMessages(2).map((message, index) => ({
+          ...message,
+          content: `Recent prompt ${index + 1}`,
+        })),
+        streaming: false,
+        sessionId: "session-1",
+        originalPrompt: "The actual original prompt",
+        earlierUserTurnCount: 6,
+      }),
+    );
+
+    expect(screen.getByTitle("The actual original prompt")).toBeTruthy();
+    expect(screen.queryByTitle("Recent prompt 1")).toBeNull();
+
+    rerender(
+      h(ChatView, {
+        messages: makeMessages(4).map((message, index) => ({
+          ...message,
+          content: `Earlier loaded prompt ${index + 1}`,
+        })),
+        streaming: false,
+        sessionId: "session-1",
+        originalPrompt: "The actual original prompt",
+        earlierUserTurnCount: 4,
+      }),
+    );
+
+    expect(screen.getByTitle("The actual original prompt")).toBeTruthy();
+    expect(screen.queryByTitle("Earlier loaded prompt 1")).toBeNull();
+  });
+
   it("uses the foreground chat surface for background transcripts with todos", () => {
     const { container } = render(
       h(TranscriptView, {

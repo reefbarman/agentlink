@@ -62,10 +62,12 @@ function checkpoint(
     foreground: {
       sessionId: "session-1",
       title: "Session",
+      originalPrompt: "Original relay prompt",
       mode: "code",
       model: "model-1",
       status: "streaming",
       streaming: true,
+      interrupted: true,
       estimatedTokens: 12,
       statusOverride: "Restoring session",
       thinkingEnabled: false,
@@ -182,6 +184,8 @@ describe("RelaySnapshotProjector", () => {
     expect(snapshot.session.foreground).toMatchObject({
       sessionId: "session-1",
       project: { projectId: "project-1" },
+      originalPrompt: "Original relay prompt",
+      interrupted: true,
       statusOverride: "Restoring session",
       thinkingEnabled: false,
       reasoningEffort: "medium",

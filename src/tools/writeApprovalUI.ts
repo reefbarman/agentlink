@@ -25,6 +25,17 @@ type WriteTrustApprovalResponse = {
 
 type RawInlineApprovalResponse = Awaited<ReturnType<OnApprovalRequest>>;
 
+function requireApprovalSaved(
+  saved: boolean,
+  scope: RuleScope,
+  authority: string,
+): void {
+  if (saved) return;
+  throw new Error(
+    `Could not save the ${scope} ${authority} approval. The write was not authorized; check the approval config path and try again.`,
+  );
+}
+
 /**
  * Map a DiffDecision to a rule scope. Returns null for non-scoped decisions (accept/reject).
  */
@@ -81,7 +92,11 @@ export function saveWriteTrustRules(opts: {
   } else {
     // Title bar / legacy inline acceptance — no trust scope UI was shown,
     // so default to blanket "all-files" write approval at the chosen scope.
-    approvalManager.setAgentWriteApproval(sessionId, scope, absolutePath);
+    requireApprovalSaved(
+      approvalManager.setAgentWriteApproval(sessionId, scope, absolutePath),
+      scope,
+      "write",
+    );
   }
 }
 
@@ -150,12 +165,24 @@ export function applyInlineTrustScope(
   inWorkspace = true,
 ): void {
   if (panelResponse.trustScope === "all-files") {
-    approvalManager.setAgentWriteApproval(sessionId, scope, absolutePath);
+    requireApprovalSaved(
+      approvalManager.setAgentWriteApproval(sessionId, scope, absolutePath),
+      scope,
+      "write",
+    );
   } else if (panelResponse.trustScope === "this-file") {
     const rule = { pattern: relPath, mode: "exact" as const };
-    approvalManager.addWriteRule(sessionId, rule, scope, absolutePath);
+    requireApprovalSaved(
+      approvalManager.addWriteRule(sessionId, rule, scope, absolutePath),
+      scope,
+      "file-write rule",
+    );
     if (!inWorkspace) {
-      approvalManager.addPathRule(sessionId, rule, scope);
+      requireApprovalSaved(
+        approvalManager.addPathRule(sessionId, rule, scope),
+        scope,
+        "outside-path rule",
+      );
     }
   } else if (
     panelResponse.trustScope === "pattern" &&
@@ -166,9 +193,17 @@ export function applyInlineTrustScope(
       pattern: panelResponse.rulePattern,
       mode: panelResponse.ruleMode,
     };
-    approvalManager.addWriteRule(sessionId, rule, scope, absolutePath);
+    requireApprovalSaved(
+      approvalManager.addWriteRule(sessionId, rule, scope, absolutePath),
+      scope,
+      "file-write rule",
+    );
     if (!inWorkspace) {
-      approvalManager.addPathRule(sessionId, rule, scope);
+      requireApprovalSaved(
+        approvalManager.addPathRule(sessionId, rule, scope),
+        scope,
+        "outside-path rule",
+      );
     }
   }
 }

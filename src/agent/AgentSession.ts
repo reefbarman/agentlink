@@ -106,6 +106,12 @@ export class AgentSession {
 
   /** Full conversation history including condensed messages */
   private messages: AgentMessage[] = [];
+  /**
+   * Monotonic counter bumped on every transcript mutation. Persistence
+   * compares it against the last written value to detect unchanged
+   * transcripts without serializing or hashing the full history.
+   */
+  private messagesRevision = 0;
   /** Files read during this session (for folded file context on condense) */
   readonly filesRead = new Set<string>();
   /** Skills advertised in the current system prompt, keyed by path for allowlist validation. */
@@ -143,6 +149,11 @@ export class AgentSession {
 
   /** Provider ID (e.g. "anthropic", "codex") — used for provider-specific system prompt tuning. */
   providerId: string | undefined;
+  /** Approve for Me is active for this session — switches the system prompt's
+   *  mode-switch guidance from user consent to automatic guardian review.
+   *  Owned by AgentSessionManager, which syncs it from the session's command
+   *  approval policy and rebuilds the prompt when it changes. */
+  approveForMe = false;
   /** Last OpenAI/Codex Responses API response ID used for optional stateful chaining. */
   providerResponseId: string | undefined;
 
@@ -432,6 +443,7 @@ export class AgentSession {
         workspaceFolders: this.workspaceFolders,
         mcpToolCatalog: this.mcpToolDisclosure?.catalog,
         agentMode: this.agentMode,
+        approveForMe: this.approveForMe,
       },
     );
     this.systemPrompt = artifacts.systemPrompt;
@@ -461,6 +473,7 @@ export class AgentSession {
         workspaceFolders: this.workspaceFolders,
         mcpToolCatalog: this.mcpToolDisclosure?.catalog,
         agentMode: opts?.agentMode,
+        approveForMe: this.approveForMe,
       },
     );
     const agentMode =
@@ -482,6 +495,11 @@ export class AgentSession {
   /** Full history (for persistence, rewind, etc.) */
   getAllMessages(): AgentMessage[] {
     return this.messages;
+  }
+
+  /** Current transcript mutation counter — see `messagesRevision`. */
+  get transcriptRevision(): number {
+    return this.messagesRevision;
   }
 
   /**
@@ -513,6 +531,7 @@ export class AgentSession {
   popLastMessage(role: "user" | "assistant"): AgentMessage | undefined {
     const last = this.messages[this.messages.length - 1];
     if (last?.role === role) {
+      this.messagesRevision++;
       return this.messages.pop();
     }
     return undefined;
@@ -530,6 +549,7 @@ export class AgentSession {
     },
   ): void {
     this.activeSkillName = undefined;
+    this.messagesRevision++;
     this.messages.push({
       role: "user",
       content: text,
@@ -569,9 +589,11 @@ export class AgentSession {
       last.runtimeError.retryable = error.retryable;
       last.runtimeError.code = error.code;
       last.runtimeError.actions = error.actions;
+      this.messagesRevision++;
       this.lastActiveAt = Date.now();
       return;
     }
+    this.messagesRevision++;
     this.messages.push({
       role: "assistant",
       content: [{ type: "text", text: error.message }],
@@ -593,6 +615,7 @@ export class AgentSession {
     if (message.role !== "assistant") {
       throw new Error("appendAssistantMessage requires an assistant message");
     }
+    this.messagesRevision++;
     this.messages.push(message);
     this.lastActiveAt = Date.now();
   }
@@ -605,6 +628,7 @@ export class AgentSession {
         ...msg.uiHint,
         finalMarker: marker,
       };
+      this.messagesRevision++;
       this.lastActiveAt = Date.now();
       return true;
     }
@@ -628,12 +652,14 @@ export class AgentSession {
       composeTrace?: import("../shared/composeTypes.js").ComposeTrace;
     }>,
   ): void {
+    this.messagesRevision++;
     this.messages.push({ role: "user", content: results } as AgentMessage);
     this.lastActiveAt = Date.now();
   }
 
   /** Replace full message history after condensing */
   replaceMessages(messages: AgentMessage[]): void {
+    this.messagesRevision++;
     this.messages = messages;
     this.resetProviderResponseState();
     this.lastActiveAt = Date.now();
@@ -675,6 +701,7 @@ export class AgentSession {
     // session resumable without pretending the old in-memory run still exists.
     this.runState = data.runState;
     this.fleetMetadata = data.fleetMetadata;
+    this.messagesRevision++;
     this.messages = data.messages;
     this.resetProviderResponseState();
     this.loadedSkills.clear();

@@ -128,10 +128,18 @@ async function provisionAskAgentModelForTest(params: {
   discovery: { clientSharedSecret: string; helperGenerationId: string };
   grantCredential?: boolean;
   credentialMethod?: "oauth" | "apiKey";
+  credentialBearerToken?: string;
   providerId?: string;
   model?: Record<string, unknown>;
+  models?: Array<Record<string, unknown>>;
   openAiCompatibleRuntimeProfiles?: Record<string, unknown>;
+  ownerId?: string;
+  ownerGenerationId?: string;
+  instanceId?: string;
 }): Promise<Record<string, string>> {
+  const ownerId = params.ownerId ?? "vscode-owner";
+  const ownerGenerationId = params.ownerGenerationId ?? "vscode-generation-1";
+  const instanceId = params.instanceId ?? "vscode-instance-1";
   const internalHeaders = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${params.discovery.clientSharedSecret}`,
@@ -142,7 +150,7 @@ async function provisionAskAgentModelForTest(params: {
       method: "POST",
       headers: internalHeaders,
       body: JSON.stringify({
-        ownerId: "vscode-owner",
+        ownerId,
         ownerKind: "vscode",
         displayName: "VS Code Test Owner",
         scope: {
@@ -150,8 +158,8 @@ async function provisionAskAgentModelForTest(params: {
           workspaceId: "workspace-test",
           displayName: "Workspace Test",
         },
-        ownerGenerationId: "vscode-generation-1",
-        instanceId: "vscode-instance-1",
+        ownerGenerationId,
+        instanceId,
         processId: process.pid,
       }),
     },
@@ -163,10 +171,10 @@ async function provisionAskAgentModelForTest(params: {
       method: "POST",
       headers: internalHeaders,
       body: JSON.stringify({
-        publishedByOwnerId: "vscode-owner",
-        publishedByOwnerGenerationId: "vscode-generation-1",
+        publishedByOwnerId: ownerId,
+        publishedByOwnerGenerationId: ownerGenerationId,
         helperGenerationId: params.discovery.helperGenerationId,
-        models: [
+        models: params.models ?? [
           params.model ?? {
             id: "gpt-5.6-luna",
             displayName: "GPT-5.6 Luna",
@@ -197,9 +205,9 @@ async function provisionAskAgentModelForTest(params: {
         body: JSON.stringify({
           providerId: params.providerId ?? "openai-codex",
           method: params.credentialMethod ?? "oauth",
-          bearerToken: "test-token",
-          grantedByOwnerId: "vscode-owner",
-          grantedByOwnerGenerationId: "vscode-generation-1",
+          bearerToken: params.credentialBearerToken ?? "test-token",
+          grantedByOwnerId: ownerId,
+          grantedByOwnerGenerationId: ownerGenerationId,
           modelScopes: ["chat"],
           helperGenerationId: params.discovery.helperGenerationId,
           ttlMs: 60_000,
@@ -219,6 +227,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
   credentialMethod?: "oauth" | "apiKey";
   providerId?: string;
   model?: Record<string, unknown>;
+  models?: Array<Record<string, unknown>>;
   openAiCompatibleRuntimeProfiles?: Record<string, unknown>;
   cachedWebPolicy?: Parameters<
     BrowserGatewayAskAgentPreferencesStore["update"]
@@ -233,6 +242,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
   cookie: string;
   askAgentLogPath: string;
   askAgentHistoryPath: string;
+  preferencesStore: BrowserGatewayAskAgentPreferencesStore;
 }> {
   const extensionRootPath = await makeExtensionRoot();
   const helperPort = await getAvailablePort();
@@ -288,6 +298,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
     credentialMethod: params.credentialMethod,
     providerId: params.providerId,
     model: params.model,
+    models: params.models,
     openAiCompatibleRuntimeProfiles: params.openAiCompatibleRuntimeProfiles,
   });
   const owner = await fetch(`${helperBase}/api/ask-agent/session`, {
@@ -325,6 +336,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
     cookie,
     askAgentLogPath,
     askAgentHistoryPath,
+    preferencesStore,
   };
 }
 
@@ -2441,7 +2453,9 @@ describe("BrowserGatewayHelper proxy routing", () => {
     });
     await expect(askAgentPreferencesStore.read()).resolves.toEqual({
       model: "claude-sonnet-4-5",
+      modelOwnerId: "vscode-owner",
       reasoningEffort: "high",
+      webPolicy: undefined,
     });
 
     const codexModelResponse = await fetch(
@@ -5154,10 +5168,57 @@ describe("BrowserGatewayHelper proxy routing", () => {
     helper = harness.helper;
     servers.push(harness.helperServer);
 
+    const discovery = JSON.parse(
+      await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
+    ) as { clientSharedSecret: string; helperGenerationId: string };
+    await provisionAskAgentModelForTest({
+      helperBase: harness.helperBase,
+      discovery,
+      grantCredential: false,
+      ownerId: "vscode-owner-later",
+      ownerGenerationId: "vscode-generation-later",
+      instanceId: "vscode-instance-later",
+      model: {
+        id: "gpt-5.6-sol",
+        displayName: "GPT-5.6 Sol",
+        providerId: "openai-codex",
+        contextWindow: 481_000,
+        maxInputTokens: 353_000,
+        authenticated: true,
+      },
+    });
+
+    const models = await fetch(
+      `${harness.helperBase}/api/ask-agent/models?instanceId=vscode-instance-1`,
+      { headers: { Cookie: harness.cookie } },
+    );
+    await expect(models.json()).resolves.toMatchObject({
+      publishedByOwnerId: "vscode-owner",
+      models: [expect.objectContaining({ id: modelId, provider: providerId })],
+    });
+    const selectModel = await fetch(
+      `${harness.helperBase}/api/ask-agent/model`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({
+          model: modelId,
+          instanceId: "vscode-instance-1",
+        }),
+      },
+    );
+    expect(selectModel.ok).toBe(true);
+
     const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: harness.cookie },
-      body: JSON.stringify({ text: "Answer without web" }),
+      body: JSON.stringify({
+        text: "Answer without web",
+        instanceId: "vscode-instance-1",
+      }),
     });
     const body = await send.text();
 
@@ -5165,12 +5226,244 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(body).toContain("Kimi answered without native web.");
     expect(completionParams).toHaveLength(1);
     expect(completionParams[0]?.model).toBe(modelId);
+    expect(completionParams[0]?.providerId).toBe(providerId);
+    expect(completionParams[0]?.openAiCompatibleRuntimeProfile).toMatchObject({
+      providerId,
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
     expect(completionParams[0]?.hostedTools).toBeUndefined();
     const toolNames =
       completionParams[0]?.tools?.map((tool) => tool.name) ?? [];
     expect(toolNames).not.toContain("web_search");
     expect(toolNames).not.toContain("web_fetch");
     expect(toolNames).toContain("set_task_status");
+
+    const unknownOwnerSend = await fetch(
+      `${harness.helperBase}/api/ask-agent/send`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({
+          text: "Do not route this",
+          instanceId: "missing-instance",
+        }),
+      },
+    );
+    expect(unknownOwnerSend.status).toBe(409);
+    await expect(unknownOwnerSend.json()).resolves.toEqual({
+      error: "credential_missing",
+    });
+    expect(completionParams).toHaveLength(1);
+
+    const internalHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${discovery.clientSharedSecret}`,
+    };
+    const rotatedOwner = await fetch(
+      `${harness.helperBase}/internal/core-owners/register`,
+      {
+        method: "POST",
+        headers: internalHeaders,
+        body: JSON.stringify({
+          ownerId: "vscode-owner",
+          ownerKind: "vscode",
+          displayName: "VS Code Test Owner",
+          scope: {
+            kind: "workspace",
+            workspaceId: "workspace-test",
+            displayName: "Workspace Test",
+          },
+          ownerGenerationId: "vscode-generation-2",
+          instanceId: "vscode-instance-1",
+        }),
+      },
+    );
+    expect(rotatedOwner.ok).toBe(true);
+
+    const staleGenerationSend = await fetch(
+      `${harness.helperBase}/api/ask-agent/send`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({
+          text: "Do not use stale credentials",
+          instanceId: "vscode-instance-1",
+        }),
+      },
+    );
+    expect(staleGenerationSend.status).toBe(409);
+    await expect(staleGenerationSend.json()).resolves.toEqual({
+      error: "credential_missing",
+    });
+    expect(completionParams).toHaveLength(1);
+  });
+
+  it("switches from an owner-pinned custom model to Codex credentials from another connected owner", async () => {
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      return {
+        text:
+          params.providerId === "openai-codex"
+            ? "Sol answered."
+            : "Kimi answered.",
+        toolCalls: [],
+      };
+    });
+    const customProviderId = "openai-compatible:openrouter-main";
+    const customModelId = "openrouter-moonshotai-kimi-k3";
+    const codexModelId = "gpt-5.6-sol";
+    const codexModel = {
+      id: codexModelId,
+      displayName: "GPT-5.6 Sol",
+      providerId: "codex",
+      contextWindow: 481_000,
+      maxInputTokens: 353_000,
+      authenticated: true,
+    };
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      credentialMethod: "apiKey",
+      providerId: customProviderId,
+      models: [
+        {
+          id: customModelId,
+          displayName: "Kimi K3",
+          providerId: customProviderId,
+          providerDisplayName: "OpenRouter",
+          supportsToolUse: true,
+          contextWindow: 32_768,
+          maxOutputTokens: 4_096,
+          authenticated: true,
+        },
+        codexModel,
+      ],
+      openAiCompatibleRuntimeProfiles: {
+        [customProviderId]: {
+          providerId: customProviderId,
+          baseUrl: "https://openrouter.ai/api/v1",
+          profile: "openrouter",
+          headers: {},
+          timeoutMs: 30_000,
+          authRequired: true,
+          models: {
+            [customModelId]: {
+              id: customModelId,
+              model: "moonshotai/kimi-k3",
+              capabilities: {
+                supportsThinking: false,
+                supportsCaching: false,
+                supportsImages: false,
+                supportsToolUse: true,
+                contextWindow: 32_768,
+                maxOutputTokens: 4_096,
+              },
+            },
+          },
+        },
+      },
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const discovery = JSON.parse(
+      await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
+    ) as { clientSharedSecret: string; helperGenerationId: string };
+    await provisionAskAgentModelForTest({
+      helperBase: harness.helperBase,
+      discovery,
+      credentialBearerToken: "codex-owner-token",
+      ownerId: "codex-owner",
+      ownerGenerationId: "codex-generation-1",
+      instanceId: "codex-instance",
+      providerId: "openai-codex",
+      model: codexModel,
+    });
+
+    const selectModel = async (model: string) =>
+      fetch(`${harness.helperBase}/api/ask-agent/model`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({ model, instanceId: "vscode-instance-1" }),
+      });
+    const send = async (text: string) =>
+      fetch(`${harness.helperBase}/api/ask-agent/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({ text, instanceId: "vscode-instance-1" }),
+      });
+
+    expect((await selectModel(customModelId)).ok).toBe(true);
+    expect((await send("Use Kimi")).ok).toBe(true);
+    expect(completionParams[0]).toMatchObject({
+      model: customModelId,
+      providerId: customProviderId,
+      credential: {
+        bearerToken: "test-token",
+        grantedByOwnerId: "vscode-owner",
+      },
+    });
+
+    expect((await selectModel(codexModelId)).ok).toBe(true);
+    const solSend = await send("Switch to Sol immediately");
+    expect(solSend.ok).toBe(true);
+    expect(completionParams[1]).toMatchObject({
+      model: codexModelId,
+      providerId: "openai-codex",
+      credential: {
+        bearerToken: "codex-owner-token",
+        grantedByOwnerId: "codex-owner",
+      },
+    });
+    await expect(harness.preferencesStore.read()).resolves.toMatchObject({
+      model: codexModelId,
+      modelOwnerId: "vscode-owner",
+    });
+
+    const rotatedOwner = await fetch(
+      `${harness.helperBase}/internal/core-owners/register`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${discovery.clientSharedSecret}`,
+        },
+        body: JSON.stringify({
+          ownerId: "codex-owner",
+          ownerKind: "vscode",
+          displayName: "VS Code Codex Owner",
+          scope: {
+            kind: "workspace",
+            workspaceId: "workspace-test",
+            displayName: "Workspace Test",
+          },
+          ownerGenerationId: "codex-generation-2",
+          instanceId: "codex-instance",
+          processId: process.pid,
+        }),
+      },
+    );
+    expect(rotatedOwner.ok).toBe(true);
+    const staleCredentialSend = await send(
+      "Do not use stale Codex credentials",
+    );
+    expect(staleCredentialSend.status).toBe(409);
+    await expect(staleCredentialSend.json()).resolves.toEqual({
+      error: "credential_missing",
+    });
+    expect(completionParams).toHaveLength(2);
   });
 
   it("uses cached provider policy for API-key hosted search without a VS Code instance", async () => {

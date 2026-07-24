@@ -399,13 +399,27 @@ describe("ApprovalPanelProvider project attribution", () => {
     });
     await expect(first.promise).resolves.toEqual({ decision: "run-once" });
     expect(
-      provider.isRecentlyApproved("command", "npm test", "project-a"),
+      provider.isRecentlyApproved(
+        "command",
+        "npm test",
+        "project-a",
+        "unspecified",
+        "unspecified",
+        "session-a",
+      ),
     ).toBe(false);
 
     first.commitApprovalRecording();
     first.commitApprovalRecording();
     expect(
-      provider.isRecentlyApproved("command", "npm test", "project-a"),
+      provider.isRecentlyApproved(
+        "command",
+        "npm test",
+        "project-a",
+        "unspecified",
+        "unspecified",
+        "session-a",
+      ),
     ).toBe(true);
 
     await expect(
@@ -414,6 +428,41 @@ describe("ApprovalPanelProvider project attribution", () => {
       }).promise,
     ).resolves.toEqual({ decision: "run-once", recentApproval: true });
     expect(shown).toEqual(["npm test"]);
+  });
+
+  it("does not reuse a recent command approval across sessions in the same project", async () => {
+    const { provider } = createProvider(() => ({
+      sourceProject: {
+        projectId: "project-a",
+        displayName: "Project A",
+        availability: "available",
+      },
+      projectResourceUri: "file:///workspace/a",
+    }));
+    const shownCommands: string[] = [];
+
+    provider.onForwardApproval = (request, respond) => {
+      shownCommands.push(request.command ?? "");
+      respond({
+        type: "decision",
+        id: request.id,
+        approvalKind: request.kind,
+        decision: "run-once",
+      });
+    };
+
+    await expect(
+      provider.enqueueCommandApproval("npm test", "npm test", {
+        sessionId: "session-a",
+      }).promise,
+    ).resolves.toEqual({ decision: "run-once" });
+    await expect(
+      provider.enqueueCommandApproval("npm test", "npm test", {
+        sessionId: "session-b",
+      }).promise,
+    ).resolves.toEqual({ decision: "run-once" });
+
+    expect(shownCommands).toEqual(["npm test", "npm test"]);
   });
 
   it("bypasses a matching recent approval when a fresh decision is required", async () => {
@@ -895,6 +944,61 @@ describe("ApprovalPanelProvider path approval queue", () => {
     await expect(first).resolves.toEqual({ decision: "allow-once" });
     await expect(second).resolves.toEqual({ decision: "allow-once" });
     expect(shownPaths).toEqual(["/outside/one/a.txt", "/outside/two/b.txt"]);
+  });
+
+  it("does not reuse a queued path approval across sessions in the same project", async () => {
+    const { provider } = createProvider(() => ({
+      sourceProject: {
+        projectId: "project-a",
+        displayName: "Project A",
+        availability: "available",
+      },
+      projectResourceUri: "file:///workspace/a",
+    }));
+    const shownPaths: string[] = [];
+    let firstApproval:
+      | {
+          request: ApprovalRequest;
+          respond: (msg: DecisionMessage) => void;
+        }
+      | undefined;
+
+    provider.onForwardApproval = (request, respond) => {
+      shownPaths.push(request.filePath ?? "");
+      if (!firstApproval) {
+        firstApproval = { request, respond };
+        return;
+      }
+      respond({
+        type: "decision",
+        id: request.id,
+        approvalKind: request.kind,
+        decision: "allow-once",
+      });
+    };
+
+    const first = provider.enqueuePathApproval(
+      "/outside/sibling/a.txt",
+      "session-a",
+    ).promise;
+    const second = provider.enqueuePathApproval(
+      "/outside/sibling/b.txt",
+      "session-b",
+    ).promise;
+
+    firstApproval!.respond({
+      type: "decision",
+      id: firstApproval!.request.id,
+      approvalKind: firstApproval!.request.kind,
+      decision: "allow-once",
+    });
+
+    await expect(first).resolves.toEqual({ decision: "allow-once" });
+    await expect(second).resolves.toEqual({ decision: "allow-once" });
+    expect(shownPaths).toEqual([
+      "/outside/sibling/a.txt",
+      "/outside/sibling/b.txt",
+    ]);
   });
 
   it("does not auto-approve later path requests after the queue drains", async () => {

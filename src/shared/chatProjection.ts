@@ -379,6 +379,8 @@ export interface LoadedInstructionDebugInfo {
 
 export interface AppState {
   messages: ChatMessage[];
+  /** Original visible user prompt, kept independent of transcript pagination. */
+  originalPrompt: string | null;
   chatState: ChatState;
   streaming: boolean;
   thinkingEnabled: boolean;
@@ -610,6 +612,7 @@ export type AppAction =
       type: "LOAD_SESSION";
       sessionId: string;
       title: string;
+      originalPrompt?: string;
       mode: string;
       model: string;
       messages: ChatMessage[];
@@ -1545,6 +1548,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       );
       return {
         ...state,
+        originalPrompt: state.originalPrompt ?? action.text,
         chatState: { ...state.chatState, streaming: true, interrupted: false },
         streaming: true,
         detectedQuestion: null,
@@ -2195,6 +2199,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         messages: [],
+        originalPrompt: null,
         streaming: false,
         loadedUserTurnOffset: 0,
         pendingCheckpoints: [],
@@ -2403,6 +2408,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         );
         return {
           ...state,
+          originalPrompt: state.originalPrompt ?? action.text,
           messages: appliedPending.messages,
           pendingCheckpoints: appliedPending.pending,
         };
@@ -2439,6 +2445,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       );
       return {
         ...state,
+        originalPrompt: state.originalPrompt ?? action.text,
         streaming: true,
         messages: appliedPending.messages,
         pendingCheckpoints: appliedPending.pending,
@@ -2757,6 +2764,10 @@ export function reducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         messages: restoredMessages,
+        originalPrompt:
+          action.originalPrompt ??
+          action.messages.find((message) => message.role === "user")?.content ??
+          null,
         streaming: false,
         restoringSession: false,
         loadedUserTurnOffset: userTurnOffset,
@@ -2891,6 +2902,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
 
 export const initialState: AppState = {
   messages: [],
+  originalPrompt: null,
   chatState: {
     sessionId: null,
     mode: "code",
