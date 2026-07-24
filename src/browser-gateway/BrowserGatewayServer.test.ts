@@ -2,6 +2,7 @@ import * as http from "http";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { BrowserGatewayInstanceRecord } from "./browserGatewayRegistry.js";
 import { BrowserGatewayServer } from "./BrowserGatewayServer.js";
 import { BrowserGatewayService } from "./BrowserGatewayService.js";
 import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
@@ -10,6 +11,41 @@ import type { SessionApprovalMode } from "../agent/AgentSessionManager.js";
 import { StreamingBaselineRecorder } from "../shared/streamingBaselineMetrics.js";
 import { buildBrowserGatewayHelperTrustHeaders } from "./browserGatewayRequestTrust.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
+
+const browserGatewayRegistryRecords = vi.hoisted(
+  () => new Map<string, BrowserGatewayInstanceRecord>(),
+);
+
+vi.mock("./browserGatewayDiscovery.js", () => ({
+  writeBrowserGatewayDiscovery: vi.fn(async () => {}),
+  clearBrowserGatewayDiscovery: vi.fn(async () => {}),
+}));
+
+vi.mock("./browserGatewayRegistry.js", () => {
+  const listRecords = (): BrowserGatewayInstanceRecord[] =>
+    [...browserGatewayRegistryRecords.values()].sort(
+      (a, b) =>
+        a.workspaceName.localeCompare(b.workspaceName) ||
+        a.instanceId.localeCompare(b.instanceId),
+    );
+
+  return {
+    getBrowserGatewayRegistryPath: vi.fn(() => "/tmp/browser-gateways.json"),
+    upsertBrowserGatewayInstance: vi.fn(
+      async (record: BrowserGatewayInstanceRecord) => {
+        browserGatewayRegistryRecords.set(record.instanceId, record);
+      },
+    ),
+    removeBrowserGatewayInstance: vi.fn(async (instanceId: string) => {
+      browserGatewayRegistryRecords.delete(instanceId);
+    }),
+    listCheckedBrowserGatewayInstances: vi.fn(async () => {
+      const records = listRecords();
+      return { registered: records, healthy: records };
+    }),
+    listRegisteredBrowserGatewayInstances: vi.fn(async () => listRecords()),
+  };
+});
 
 vi.mock("vscode", () => {
   type Listener<T> = (event: T) => void;
@@ -284,6 +320,7 @@ function makeChatViewProviderStub() {
 }
 
 beforeEach(() => {
+  browserGatewayRegistryRecords.clear();
   vi.clearAllMocks();
 });
 
@@ -401,7 +438,7 @@ describe("BrowserGatewayServer", () => {
       });
       recorder.reset();
 
-      hub.publishApproval({
+      hub.publishApproval("session-1", {
         kind: "write",
         id: "metrics-approval",
         filePath: "src/file.ts",
@@ -456,7 +493,7 @@ describe("BrowserGatewayServer", () => {
     vi.spyOn(service, "createSnapshotPublication").mockImplementationOnce(
       () => {
         const stale = createInitial();
-        hub.publishApproval({
+        hub.publishApproval("session-1", {
           kind: "write",
           id: "connect-time-approval",
           filePath: "src/connect.ts",
@@ -539,7 +576,7 @@ describe("BrowserGatewayServer", () => {
       const response = await fetch(`http://127.0.0.1:${port}/events`);
       reader = response.body!.getReader();
       await reader.read();
-      hub.publishApproval({
+      hub.publishApproval("session-1", {
         kind: "write",
         id: "single-update-after-retry",
         filePath: "src/retry.ts",
@@ -599,7 +636,7 @@ describe("BrowserGatewayServer", () => {
       await server.stop();
       await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toThrow();
 
-      hub.publishApproval({
+      hub.publishApproval("session-1", {
         kind: "write",
         id: "approval-while-stopped",
         filePath: "src/reconnect.ts",
@@ -614,7 +651,7 @@ describe("BrowserGatewayServer", () => {
       expect(snapshotChunk).toContain("event: snapshot");
       expect(snapshotChunk).toContain('"approval-while-stopped"');
 
-      hub.publishApprovalIdle();
+      hub.publishApprovalIdle("session-1", "approval-while-stopped");
       const update = await reader.read();
       const updateChunk = new TextDecoder().decode(update.value);
       expect(updateChunk).toContain("event: update");
@@ -726,7 +763,7 @@ describe("BrowserGatewayServer", () => {
     const port = await server.start(0);
     const baseUrl = `http://127.0.0.1:${port}`;
 
-    hub.publishApproval({
+    hub.publishApproval("session-1", {
       kind: "write",
       id: "approval-1",
       filePath: "src/file.ts",
@@ -744,6 +781,7 @@ describe("BrowserGatewayServer", () => {
       ],
     };
     hub.publishQuestionRequest(
+      "session-1",
       projectedQuestionRequest.id,
       projectedQuestionRequest.context,
       projectedQuestionRequest.questions,
@@ -1445,7 +1483,7 @@ describe("BrowserGatewayServer", () => {
     expect(snapshotChunk).toContain('"session-1"');
     expect(snapshotChunk).toContain('"bg-1"');
 
-    hub.publishApprovalIdle();
+    hub.publishApprovalIdle("session-1", "approval-1");
 
     const secondChunk = await reader.read();
     const updateChunk = decoder.decode(secondChunk.value, { stream: true });

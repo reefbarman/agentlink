@@ -80,10 +80,11 @@ describe("requeueCommandApprovalsForPolicyChange", () => {
     const { provider } = createProvider();
     const forwarded: ApprovalRequest[] = [];
     const cancelled: string[] = [];
-    provider.onForwardApproval = (request) => {
+    provider.onForwardApproval = ({ request }) => {
       forwarded.push(request);
     };
-    provider.onForwardApprovalCancelled = (id) => cancelled.push(id);
+    provider.onForwardApprovalCancelled = (_sessionId, id) =>
+      cancelled.push(id);
 
     const first = provider.enqueueCommandApproval("npm test", "npm test", {
       sessionId: "session-a",
@@ -126,7 +127,8 @@ describe("requeueCommandApprovalsForPolicyChange", () => {
     const { provider } = createProvider();
     const cancelled: string[] = [];
     provider.onForwardApproval = () => {};
-    provider.onForwardApprovalCancelled = (id) => cancelled.push(id);
+    provider.onForwardApprovalCancelled = (_sessionId, id) =>
+      cancelled.push(id);
 
     provider.enqueueWriteApproval("src/file.ts", {
       operation: "modify",
@@ -195,11 +197,13 @@ describe("ApprovalPanelProvider forwarded approval attention", () => {
     let pending:
       | { request: ApprovalRequest; respond: (msg: DecisionMessage) => void }
       | undefined;
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       pending = { request, respond };
     };
 
-    const approval = provider.enqueueCommandApproval("npm test", "npm test");
+    const approval = provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "session-1",
+    });
 
     expect(statusBarManager.showAlert).toHaveBeenCalledWith(
       "Command approval required",
@@ -225,13 +229,14 @@ describe("ApprovalPanelProvider command rule decisions", () => {
     let pending:
       | { request: ApprovalRequest; respond: (msg: DecisionMessage) => boolean }
       | undefined;
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       pending = { request, respond };
     };
 
     const approval = provider.enqueueCommandApproval(
       "npm publish",
       "npm publish",
+      { sessionId: "session-1" },
     );
     expect(
       pending!.respond({
@@ -277,7 +282,7 @@ describe("ApprovalPanelProvider command security projection", () => {
   it("forwards token-free security and project attribution together", async () => {
     const { provider } = createProvider(projectContext);
     let shown: ApprovalRequest | undefined;
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shown = request;
       respond({
         type: "decision",
@@ -345,7 +350,7 @@ describe("ApprovalPanelProvider project attribution", () => {
     const { provider } = createProvider(resolveProjectContext);
     let shownRequest: ApprovalRequest | undefined;
 
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shownRequest = request;
       respond({
         type: "decision",
@@ -383,7 +388,7 @@ describe("ApprovalPanelProvider project attribution", () => {
     const { provider } = createProvider(projectContext);
     const shown: string[] = [];
 
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shown.push(request.command ?? "");
       respond({
         type: "decision",
@@ -441,7 +446,7 @@ describe("ApprovalPanelProvider project attribution", () => {
     }));
     const shownCommands: string[] = [];
 
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shownCommands.push(request.command ?? "");
       respond({
         type: "decision",
@@ -469,7 +474,7 @@ describe("ApprovalPanelProvider project attribution", () => {
     const { provider } = createProvider(projectContext);
     const shown: string[] = [];
 
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shown.push(request.command ?? "");
       respond({
         type: "decision",
@@ -547,7 +552,7 @@ describe("ApprovalPanelProvider project attribution", () => {
       preparedAt: 100,
     });
 
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shownAuthorities.push(
         `${request.security?.requiredAuthority ?? "unspecified"}:${request.security?.permissionIntent ?? "unspecified"}`,
       );
@@ -589,7 +594,7 @@ describe("ApprovalPanelProvider project attribution", () => {
     const { provider } = createProvider(projectContext);
     const shownProjects: string[] = [];
 
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shownProjects.push(request.sourceProject?.projectId ?? "unscoped");
       respond({
         type: "decision",
@@ -624,7 +629,7 @@ describe("ApprovalPanelProvider project attribution", () => {
         }
       | undefined;
 
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shownProjects.push(request.sourceProject?.projectId ?? "unscoped");
       if (!firstPending) {
         firstPending = { id: request.id, kind: request.kind, respond };
@@ -671,7 +676,7 @@ describe("ApprovalPanelProvider project attribution", () => {
     const { provider } = createProvider(projectContext);
     const shownProjects: string[] = [];
 
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shownProjects.push(request.sourceProject?.projectId ?? "unscoped");
       respond({
         type: "decision",
@@ -722,7 +727,7 @@ describe("ApprovalPanelProvider network approvals", () => {
   it("forwards structured destination evidence and never reuses allow-once", async () => {
     const { provider, statusBarManager } = createProvider(projectContext);
     const shown: ApprovalRequest[] = [];
-    provider.onForwardApproval = (approval, respond) => {
+    provider.onForwardApproval = ({ request: approval }, respond) => {
       shown.push(approval);
       respond({
         type: "decision",
@@ -761,7 +766,7 @@ describe("ApprovalPanelProvider network approvals", () => {
           respond: (message: DecisionMessage) => boolean;
         }
       | undefined;
-    provider.onForwardApproval = (approval, respond) => {
+    provider.onForwardApproval = ({ request: approval }, respond) => {
       pending = { request: approval, respond };
     };
     const approval = provider.enqueueNetworkApproval({ request });
@@ -814,10 +819,11 @@ describe("ApprovalPanelProvider cancellation", () => {
     const { provider, statusBarManager } = createProvider();
     const controller = new AbortController();
     const cancelled = vi.fn();
-    const idle = vi.fn();
-    provider.onForwardApproval = vi.fn();
+    let forwardedSessionId: string | undefined;
+    provider.onForwardApproval = ({ sessionId }) => {
+      forwardedSessionId = sessionId;
+    };
     provider.onForwardApprovalCancelled = cancelled;
-    provider.onForwardApprovalIdle = idle;
 
     const { promise, id } = provider.enqueuePathApproval(
       "/outside/current.txt",
@@ -827,9 +833,9 @@ describe("ApprovalPanelProvider cancellation", () => {
     controller.abort();
 
     await expect(promise).resolves.toEqual({ decision: "reject" });
-    expect(cancelled).toHaveBeenCalledWith(id);
+    expect(forwardedSessionId).toBe("session-1");
+    expect(cancelled).toHaveBeenCalledWith("session-1", id);
     expect(statusBarManager.setPendingCount).toHaveBeenLastCalledWith(0);
-    expect(idle).toHaveBeenCalledOnce();
   });
 
   it("removes only the aborted queued approval", async () => {
@@ -840,7 +846,7 @@ describe("ApprovalPanelProvider cancellation", () => {
     let firstApproval:
       | { request: ApprovalRequest; respond: (msg: DecisionMessage) => void }
       | undefined;
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       firstApproval = { request, respond };
     };
     provider.onForwardApprovalCancelled = cancelled;
@@ -858,7 +864,7 @@ describe("ApprovalPanelProvider cancellation", () => {
 
     secondController.abort();
     await expect(second.promise).resolves.toEqual({ decision: "reject" });
-    expect(cancelled).toHaveBeenCalledWith(second.id);
+    expect(cancelled).toHaveBeenCalledWith("session-1", second.id);
     expect(statusBarManager.setPendingCount).toHaveBeenLastCalledWith(0);
 
     firstApproval!.respond({
@@ -899,16 +905,18 @@ describe("ApprovalPanelProvider path approval queue", () => {
         }
       | undefined;
 
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shownPaths.push(request.filePath ?? "");
       pendingApproval = { request, respond };
     };
 
     const first = provider.enqueuePathApproval(
       "/outside/sibling/a.txt",
+      "session-1",
     ).promise;
     const second = provider.enqueuePathApproval(
       "/outside/sibling/b.txt",
+      "session-1",
     ).promise;
 
     expect(pendingApproval).toBeDefined();
@@ -928,7 +936,7 @@ describe("ApprovalPanelProvider path approval queue", () => {
     const { provider } = createProvider();
     const shownPaths: string[] = [];
 
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shownPaths.push(request.filePath ?? "");
       respond({
         type: "decision",
@@ -938,8 +946,14 @@ describe("ApprovalPanelProvider path approval queue", () => {
       });
     };
 
-    const first = provider.enqueuePathApproval("/outside/one/a.txt").promise;
-    const second = provider.enqueuePathApproval("/outside/two/b.txt").promise;
+    const first = provider.enqueuePathApproval(
+      "/outside/one/a.txt",
+      "session-1",
+    ).promise;
+    const second = provider.enqueuePathApproval(
+      "/outside/two/b.txt",
+      "session-1",
+    ).promise;
 
     await expect(first).resolves.toEqual({ decision: "allow-once" });
     await expect(second).resolves.toEqual({ decision: "allow-once" });
@@ -963,7 +977,7 @@ describe("ApprovalPanelProvider path approval queue", () => {
         }
       | undefined;
 
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shownPaths.push(request.filePath ?? "");
       if (!firstApproval) {
         firstApproval = { request, respond };
@@ -1005,7 +1019,7 @@ describe("ApprovalPanelProvider path approval queue", () => {
     const { provider } = createProvider();
     const shownPaths: string[] = [];
 
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shownPaths.push(request.filePath ?? "");
       respond({
         type: "decision",
@@ -1016,10 +1030,12 @@ describe("ApprovalPanelProvider path approval queue", () => {
     };
 
     await expect(
-      provider.enqueuePathApproval("/outside/sibling/a.txt").promise,
+      provider.enqueuePathApproval("/outside/sibling/a.txt", "session-1")
+        .promise,
     ).resolves.toEqual({ decision: "allow-once" });
     await expect(
-      provider.enqueuePathApproval("/outside/sibling/b.txt").promise,
+      provider.enqueuePathApproval("/outside/sibling/b.txt", "session-1")
+        .promise,
     ).resolves.toEqual({ decision: "allow-once" });
 
     expect(shownPaths).toEqual([
@@ -1038,16 +1054,18 @@ describe("ApprovalPanelProvider path approval queue", () => {
           respond: (msg: DecisionMessage) => void;
         }
       | undefined;
-    provider.onForwardApproval = (request, respond) => {
+    provider.onForwardApproval = ({ request }, respond) => {
       shownPaths.push(request.filePath ?? "");
       pendingApproval = { request, respond };
     };
 
     const first = provider.enqueuePathApproval(
       "/outside/project/a.txt",
+      "session-1",
     ).promise;
     const second = provider.enqueuePathApproval(
       "/outside/project/nested/b.txt",
+      "session-1",
     ).promise;
 
     expect(pendingApproval).toBeDefined();

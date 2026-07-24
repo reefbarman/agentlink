@@ -5457,6 +5457,60 @@ export class AgentSessionManager {
     }
   }
 
+  private buildBackgroundInteractionOverrides(
+    session: AgentSession,
+    task: string,
+    baseCtx: ToolDispatchContext,
+  ): Pick<ToolDispatchContext, "onApprovalRequest" | "onQuestion"> {
+    const onApprovalRequest: NonNullable<
+      ToolDispatchContext["onApprovalRequest"]
+    > = async (request, requestSessionId) => {
+      this.noteBackgroundProgress(session.id, "awaiting_approval");
+      this.appendPolicyAudit(session, {
+        decision: "approval_requested",
+        operation: request.kind,
+        reason: request.title || "approval_required",
+      });
+      this.appendFleetEvent(
+        session,
+        "approval",
+        request.title || "Approval required",
+      );
+      return baseCtx.onApprovalRequest!(
+        { ...request, backgroundTask: task },
+        requestSessionId ?? session.id,
+      );
+    };
+    const onQuestion: NonNullable<ToolDispatchContext["onQuestion"]> = (
+      context,
+      questions,
+      backgroundSessionId,
+      _backgroundTask,
+      pendingQuestionRecovery,
+    ) => {
+      this.noteBackgroundProgress(session.id, "awaiting_approval");
+      this.appendFleetEvent(
+        session,
+        "question",
+        questions[0]?.question || "Answer required",
+      );
+      return baseCtx.onQuestion!(
+        context,
+        questions,
+        backgroundSessionId,
+        task,
+        pendingQuestionRecovery,
+      );
+    };
+
+    return {
+      onApprovalRequest: baseCtx.onApprovalRequest
+        ? onApprovalRequest
+        : undefined,
+      onQuestion: baseCtx.onQuestion ? onQuestion : undefined,
+    };
+  }
+
   /**
    * Spawn a background agent session and return the resolved routing metadata.
    */
@@ -5934,6 +5988,11 @@ export class AgentSessionManager {
         ? "review"
         : route.toolProfile;
     const baseCtx = parentRequestContext ?? this.toolCtx;
+    const interactionOverrides = this.buildBackgroundInteractionOverrides(
+      session,
+      task,
+      baseCtx,
+    );
     const bgContextOverrides: Partial<ToolDispatchContext> = {
       commandExecutionPolicy:
         effectiveToolProfile === "review" ||
@@ -5945,33 +6004,7 @@ export class AgentSessionManager {
         forbiddenPaths: request.forbiddenPaths,
         onDecision: (decision) => this.appendPolicyAudit(session, decision),
       },
-      onApprovalRequest: baseCtx.onApprovalRequest
-        ? (req) => {
-            this.noteBackgroundProgress(session.id, "awaiting_approval");
-            this.appendPolicyAudit(session, {
-              decision: "approval_requested",
-              operation: req.kind,
-              reason: req.title || "approval_required",
-            });
-            this.appendFleetEvent(
-              session,
-              "approval",
-              req.title || "Approval required",
-            );
-            return baseCtx.onApprovalRequest!({ ...req, backgroundTask: task });
-          }
-        : undefined,
-      onQuestion: baseCtx.onQuestion
-        ? (context, questions, bgSessionId) => {
-            this.noteBackgroundProgress(session.id, "awaiting_approval");
-            this.appendFleetEvent(
-              session,
-              "question",
-              questions[0]?.question || "Answer required",
-            );
-            return baseCtx.onQuestion!(context, questions, bgSessionId, task);
-          }
-        : undefined,
+      ...interactionOverrides,
     };
 
     const bgEngine = this.host.createEngine(this.host.providers, this.log);

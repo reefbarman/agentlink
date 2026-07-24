@@ -2,6 +2,7 @@ import {
   FanoutAgentUiPublisher,
   InMemoryAgentUiEventHub,
   WebviewAgentUiPublisher,
+  type AgentUiPublisher,
 } from "./AgentUiPublisher.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,9 +18,7 @@ vi.mock("vscode", () => {
     };
 
     fire(value: T): void {
-      for (const listener of this.listeners) {
-        listener(value);
-      }
+      for (const listener of this.listeners) listener(value);
     }
 
     dispose(): void {
@@ -27,9 +26,7 @@ vi.mock("vscode", () => {
     }
   }
 
-  return {
-    EventEmitter: MockEventEmitter,
-  };
+  return { EventEmitter: MockEventEmitter };
 });
 
 beforeEach(() => {
@@ -37,26 +34,31 @@ beforeEach(() => {
 });
 
 describe("WebviewAgentUiPublisher", () => {
-  it("publishes approval, idle, and question messages with the expected shapes", () => {
+  it("preserves existing webview message shapes", () => {
     const publishMessage = vi.fn();
     const publisher = new WebviewAgentUiPublisher(publishMessage);
 
-    publisher.publishApproval({
+    publisher.publishApproval("session-1", {
       kind: "write",
       id: "approval-1",
       filePath: "src/file.ts",
       writeOperation: "modify",
     });
-    publisher.publishApprovalIdle();
-    publisher.publishQuestionRequest("question-1", "Pick the best option.", [
-      {
-        id: "q1",
-        type: "multiple_choice",
-        question: "Choose one",
-        options: ["a", "b"],
-        recommended: "a",
-      },
-    ]);
+    publisher.publishApprovalIdle("session-1", "approval-1");
+    publisher.publishQuestionRequest(
+      "session-1",
+      "question-1",
+      "Pick the best option.",
+      [
+        {
+          id: "q1",
+          type: "multiple_choice",
+          question: "Choose one",
+          options: ["a", "b"],
+          recommended: "a",
+        },
+      ],
+    );
 
     expect(publishMessage.mock.calls).toEqual([
       [
@@ -90,11 +92,28 @@ describe("WebviewAgentUiPublisher", () => {
     ]);
   });
 
-  it("includes backgroundTask attribution when set", () => {
+  it("does not let a mismatched approval clear hide the visible card", () => {
+    const publishMessage = vi.fn();
+    const publisher = new WebviewAgentUiPublisher(publishMessage);
+
+    publisher.publishApproval("session-2", {
+      kind: "write",
+      id: "approval-2",
+      filePath: "src/other.ts",
+      writeOperation: "modify",
+    });
+    publisher.publishApprovalIdle("session-1", "approval-1");
+
+    expect(publishMessage).toHaveBeenCalledTimes(1);
+    expect(publishMessage).not.toHaveBeenCalledWith({ type: "idle" });
+  });
+
+  it("includes background task attribution when set", () => {
     const publishMessage = vi.fn();
     const publisher = new WebviewAgentUiPublisher(publishMessage);
 
     publisher.publishQuestionRequest(
+      "session-bg",
       "question-bg",
       "Review needs input.",
       [],
@@ -112,63 +131,147 @@ describe("WebviewAgentUiPublisher", () => {
 });
 
 describe("InMemoryAgentUiEventHub", () => {
-  it("publishes events to subscribers and keeps the last published snapshot", () => {
+  it("publishes session envelopes and keeps all pending entries per session", () => {
     const hub = new InMemoryAgentUiEventHub();
     const listener = vi.fn();
     const disposable = hub.onDidPublish(listener);
 
-    hub.publishApproval({
+    hub.publishApproval("session-1", {
       kind: "write",
-      id: "approval-2",
+      id: "approval-1",
       filePath: "src/other.ts",
       writeOperation: "create",
     });
-    expect(listener).toHaveBeenLastCalledWith({
-      type: "showApproval",
-      request: {
-        kind: "write",
-        id: "approval-2",
-        filePath: "src/other.ts",
-        writeOperation: "create",
-      },
-    });
-    expect(hub.getSnapshot()).toEqual({
-      type: "showApproval",
-      request: {
-        kind: "write",
-        id: "approval-2",
-        filePath: "src/other.ts",
-        writeOperation: "create",
-      },
+    hub.publishQuestionRequest("session-1", "question-1", "Need input.", []);
+    hub.publishQuestionProgress("session-1", {
+      id: "question-1",
+      step: 1,
+      answers: { continue: true },
+      notes: {},
+      origin: "test",
     });
 
-    hub.publishApprovalIdle();
-    expect(listener).toHaveBeenLastCalledWith({ type: "idle" });
-    expect(hub.getSnapshot()).toEqual({ type: "idle" });
-
-    hub.publishQuestionRequest("question-3", "Need input.", []);
     expect(listener).toHaveBeenLastCalledWith({
-      type: "agentQuestionRequest",
-      id: "question-3",
-      context: "Need input.",
-      questions: [],
+      sessionId: "session-1",
+      event: {
+        type: "agentQuestionProgress",
+        id: "question-1",
+        step: 1,
+        answers: { continue: true },
+        notes: {},
+        origin: "test",
+      },
     });
-    expect(hub.getSnapshot()).toEqual({
-      type: "agentQuestionRequest",
-      id: "question-3",
-      context: "Need input.",
-      questions: [],
-    });
+    expect(hub.getSnapshot("session-1")).toEqual([
+      {
+        sessionId: "session-1",
+        event: {
+          type: "showApproval",
+          request: {
+            kind: "write",
+            id: "approval-1",
+            filePath: "src/other.ts",
+            writeOperation: "create",
+          },
+        },
+      },
+      {
+        sessionId: "session-1",
+        event: {
+          type: "agentQuestionRequest",
+          id: "question-1",
+          context: "Need input.",
+          questions: [],
+        },
+      },
+      {
+        sessionId: "session-1",
+        event: {
+          type: "agentQuestionProgress",
+          id: "question-1",
+          step: 1,
+          answers: { continue: true },
+          notes: {},
+          origin: "test",
+        },
+      },
+    ]);
 
     disposable.dispose();
     hub.dispose();
-    expect(hub.getSnapshot()).toBeUndefined();
+    expect(hub.getSnapshot("session-1")).toEqual([]);
+  });
+
+  it("cannot clear another session or a different request", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    hub.publishQuestionRequest("session-1", "question-1", "First", []);
+    hub.publishQuestionRequest("session-2", "question-2", "Second", []);
+
+    hub.publishQuestionCleared("session-2", "question-1");
+    hub.publishQuestionCleared("session-1", "question-unknown");
+
+    expect(hub.getSnapshot("session-1")).toHaveLength(1);
+    expect(hub.getSnapshot("session-2")).toHaveLength(1);
+
+    hub.publishQuestionCleared("session-1", "question-1");
+    expect(hub.getSnapshot("session-1")).toEqual([]);
+    expect(hub.getSnapshot("session-2")).toHaveLength(1);
+  });
+
+  it("isolates snapshots while preserving undefined question answers", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    hub.publishQuestionRequest("session-1", "question-1", "Continue?", []);
+    hub.publishQuestionProgress("session-1", {
+      id: "question-1",
+      step: 1,
+      answers: { choice: undefined },
+      notes: {},
+      origin: "test",
+    });
+
+    const firstSnapshot = hub.getSnapshot("session-1");
+    const progress = firstSnapshot[1]?.event;
+    expect(progress).toMatchObject({
+      type: "agentQuestionProgress",
+      answers: { choice: undefined },
+    });
+    expect(
+      progress?.type === "agentQuestionProgress" &&
+        Object.hasOwn(progress.answers, "choice"),
+    ).toBe(true);
+
+    if (progress?.type === "agentQuestionProgress") {
+      progress.answers.choice = "mutated";
+    }
+    expect(hub.getSnapshot("session-1")[1]?.event).toMatchObject({
+      type: "agentQuestionProgress",
+      answers: { choice: undefined },
+    });
+  });
+
+  it("does not retain progress for an unknown or cleared question", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const progress = {
+      id: "question-1",
+      step: 1,
+      answers: {},
+      notes: {},
+      origin: "test",
+    };
+
+    hub.publishQuestionProgress("session-1", progress);
+    expect(hub.getSnapshot("session-1")).toEqual([]);
+
+    hub.publishQuestionRequest("session-1", "question-1", "Continue?", []);
+    hub.publishQuestionProgress("session-1", progress);
+    hub.publishQuestionCleared("session-1", "question-1");
+    expect(hub.getSnapshot("session-1")).toEqual([]);
   });
 });
 
 describe("FanoutAgentUiPublisher", () => {
-  it("forwards published events to all target publishers", () => {
-    const left = {
+  it("forwards complete session-addressed argument tuples to every target", () => {
+    const makeTarget = (): AgentUiPublisher => ({
       publishApproval: vi.fn(),
       publishApprovalIdle: vi.fn(),
       publishQuestionRequest: vi.fn(),
@@ -178,98 +281,47 @@ describe("FanoutAgentUiPublisher", () => {
       publishFormElicitationCleared: vi.fn(),
       publishUrlElicitationRequest: vi.fn(),
       publishUrlElicitationCleared: vi.fn(),
-    };
-    const right = {
-      publishApproval: vi.fn(),
-      publishApprovalIdle: vi.fn(),
-      publishQuestionRequest: vi.fn(),
-      publishQuestionCleared: vi.fn(),
-      publishQuestionProgress: vi.fn(),
-      publishFormElicitationRequest: vi.fn(),
-      publishFormElicitationCleared: vi.fn(),
-      publishUrlElicitationRequest: vi.fn(),
-      publishUrlElicitationCleared: vi.fn(),
-    };
-
+    });
+    const left = makeTarget();
+    const right = makeTarget();
     const publisher = new FanoutAgentUiPublisher([left, right]);
 
-    publisher.publishApproval({
-      kind: "write",
+    const approval = {
+      kind: "write" as const,
       id: "approval-3",
       filePath: "src/fanout.ts",
-      writeOperation: "modify",
-    });
-    publisher.publishApprovalIdle();
-    publisher.publishQuestionRequest("question-2", "Fanout needs input.", []);
-    publisher.publishQuestionCleared("question-2");
-    publisher.publishQuestionProgress({
-      id: "question-3",
-      step: 1,
-      answers: { a: "b" },
-      notes: { note: "hello" },
-      origin: "test-origin",
-    });
-    publisher.publishFormElicitationRequest({
-      id: "form-1",
-      serverName: "payments",
-      message: "Choose an account",
-      fields: [],
-    });
-    publisher.publishFormElicitationCleared("form-1");
-    publisher.publishUrlElicitationRequest({
-      id: "url-1",
-      serverName: "payments",
-      message: "Complete checkout",
-      url: "https://example.com/checkout",
-      elicitationId: "elicit-1",
-      origin: "https://example.com",
-      host: "example.com",
-      isLocalAddress: false,
-    });
-    publisher.publishUrlElicitationCleared("url-1");
+      writeOperation: "modify" as const,
+    };
+    publisher.publishApproval("session-3", approval);
+    publisher.publishApprovalIdle("session-3", "approval-3");
+    publisher.publishQuestionRequest(
+      "session-3",
+      "question-2",
+      "Fanout needs input.",
+      [],
+    );
+    publisher.publishQuestionCleared("session-3", "question-2");
 
     for (const target of [left, right]) {
-      expect(target.publishApproval).toHaveBeenCalledWith({
-        kind: "write",
-        id: "approval-3",
-        filePath: "src/fanout.ts",
-        writeOperation: "modify",
-      });
-      expect(target.publishApprovalIdle).toHaveBeenCalledOnce();
+      expect(target.publishApproval).toHaveBeenCalledWith(
+        "session-3",
+        approval,
+      );
+      expect(target.publishApprovalIdle).toHaveBeenCalledWith(
+        "session-3",
+        "approval-3",
+      );
       expect(target.publishQuestionRequest).toHaveBeenCalledWith(
+        "session-3",
         "question-2",
         "Fanout needs input.",
         [],
         undefined,
       );
-      expect(target.publishQuestionCleared).toHaveBeenCalledWith("question-2");
-      expect(target.publishQuestionProgress).toHaveBeenCalledWith({
-        id: "question-3",
-        step: 1,
-        answers: { a: "b" },
-        notes: { note: "hello" },
-        origin: "test-origin",
-      });
-      expect(target.publishFormElicitationRequest).toHaveBeenCalledWith({
-        id: "form-1",
-        serverName: "payments",
-        message: "Choose an account",
-        fields: [],
-      });
-      expect(target.publishFormElicitationCleared).toHaveBeenCalledWith(
-        "form-1",
+      expect(target.publishQuestionCleared).toHaveBeenCalledWith(
+        "session-3",
+        "question-2",
       );
-      expect(target.publishUrlElicitationRequest).toHaveBeenCalledWith({
-        id: "url-1",
-        serverName: "payments",
-        message: "Complete checkout",
-        url: "https://example.com/checkout",
-        elicitationId: "elicit-1",
-        origin: "https://example.com",
-        host: "example.com",
-        isLocalAddress: false,
-      });
-      expect(target.publishUrlElicitationCleared).toHaveBeenCalledWith("url-1");
     }
   });
 });

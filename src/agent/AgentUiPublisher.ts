@@ -7,7 +7,7 @@ import type { Question } from "./webview/types.js";
 
 export type AgentUiEvent =
   | { type: "showApproval"; request: ApprovalRequest }
-  | { type: "idle" }
+  | { type: "idle"; id: string }
   | {
       type: "agentQuestionRequest";
       id: string;
@@ -31,137 +31,127 @@ export type AgentUiEvent =
   | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
   | { type: "agentUrlElicitationCleared"; id: string };
 
+export interface SessionUiEvent {
+  sessionId: string;
+  event: AgentUiEvent;
+}
+
 export interface AgentUiPublisher {
-  publishApproval(request: ApprovalRequest): void;
-  publishApprovalIdle(): void;
+  publishApproval(sessionId: string, request: ApprovalRequest): void;
+  publishApprovalIdle(sessionId: string, id: string): void;
   publishQuestionRequest(
+    sessionId: string,
     id: string,
     context: string,
     questions: Question[],
     backgroundTask?: string,
   ): void;
-  publishQuestionCleared(id: string): void;
-  publishQuestionProgress(progress: {
-    id: string;
-    step: number;
-    answers: Record<string, string | string[] | number | boolean | undefined>;
-    notes: Record<string, string>;
-    origin: string;
-  }): void;
-  publishFormElicitationRequest(request: McpFormElicitationRequest): void;
-  publishFormElicitationCleared(id: string): void;
-  publishUrlElicitationRequest(request: McpUrlElicitationRequest): void;
-  publishUrlElicitationCleared(id: string): void;
+  publishQuestionCleared(sessionId: string, id: string): void;
+  publishQuestionProgress(
+    sessionId: string,
+    progress: {
+      id: string;
+      step: number;
+      answers: Record<string, string | string[] | number | boolean | undefined>;
+      notes: Record<string, string>;
+      origin: string;
+    },
+  ): void;
+  publishFormElicitationRequest(
+    sessionId: string,
+    request: McpFormElicitationRequest,
+  ): void;
+  publishFormElicitationCleared(sessionId: string, id: string): void;
+  publishUrlElicitationRequest(
+    sessionId: string,
+    request: McpUrlElicitationRequest,
+  ): void;
+  publishUrlElicitationCleared(sessionId: string, id: string): void;
 }
 
 export interface ReadableAgentUiEventHub {
-  readonly onDidPublish: vscode.Event<AgentUiEvent>;
-  getSnapshot(): AgentUiEvent | undefined;
+  readonly onDidPublish: vscode.Event<SessionUiEvent>;
+  getSnapshot(sessionId: string): readonly SessionUiEvent[];
 }
 
 export class FanoutAgentUiPublisher implements AgentUiPublisher {
   constructor(private readonly publishers: readonly AgentUiPublisher[]) {}
 
-  publishApproval(request: ApprovalRequest): void {
-    for (const publisher of this.publishers) {
-      try {
-        publisher.publishApproval(request);
-      } catch {
-        // Keep other sinks alive even if one publisher fails.
-      }
-    }
+  publishApproval(sessionId: string, request: ApprovalRequest): void {
+    this.publish((publisher) => publisher.publishApproval(sessionId, request));
   }
 
-  publishApprovalIdle(): void {
-    for (const publisher of this.publishers) {
-      try {
-        publisher.publishApprovalIdle();
-      } catch {
-        // Keep other sinks alive even if one publisher fails.
-      }
-    }
+  publishApprovalIdle(sessionId: string, id: string): void {
+    this.publish((publisher) => publisher.publishApprovalIdle(sessionId, id));
   }
 
   publishQuestionRequest(
+    sessionId: string,
     id: string,
     context: string,
     questions: Question[],
     backgroundTask?: string,
   ): void {
-    for (const publisher of this.publishers) {
-      try {
-        publisher.publishQuestionRequest(
-          id,
-          context,
-          questions,
-          backgroundTask,
-        );
-      } catch {
-        // Keep other sinks alive even if one publisher fails.
-      }
-    }
+    this.publish((publisher) =>
+      publisher.publishQuestionRequest(
+        sessionId,
+        id,
+        context,
+        questions,
+        backgroundTask,
+      ),
+    );
   }
 
-  publishQuestionCleared(id: string): void {
-    for (const publisher of this.publishers) {
-      try {
-        publisher.publishQuestionCleared(id);
-      } catch {
-        // Keep other sinks alive even if one publisher fails.
-      }
-    }
+  publishQuestionCleared(sessionId: string, id: string): void {
+    this.publish((publisher) =>
+      publisher.publishQuestionCleared(sessionId, id),
+    );
   }
 
-  publishQuestionProgress(progress: {
-    id: string;
-    step: number;
-    answers: Record<string, string | string[] | number | boolean | undefined>;
-    notes: Record<string, string>;
-    origin: string;
-  }): void {
-    for (const publisher of this.publishers) {
-      try {
-        publisher.publishQuestionProgress(progress);
-      } catch {
-        // Keep other sinks alive even if one publisher fails.
-      }
-    }
+  publishQuestionProgress(
+    sessionId: string,
+    progress: Parameters<AgentUiPublisher["publishQuestionProgress"]>[1],
+  ): void {
+    this.publish((publisher) =>
+      publisher.publishQuestionProgress(sessionId, progress),
+    );
   }
 
-  publishFormElicitationRequest(request: McpFormElicitationRequest): void {
-    for (const publisher of this.publishers) {
-      try {
-        publisher.publishFormElicitationRequest(request);
-      } catch {
-        // Keep other sinks alive even if one publisher fails.
-      }
-    }
+  publishFormElicitationRequest(
+    sessionId: string,
+    request: McpFormElicitationRequest,
+  ): void {
+    this.publish((publisher) =>
+      publisher.publishFormElicitationRequest(sessionId, request),
+    );
   }
 
-  publishFormElicitationCleared(id: string): void {
-    for (const publisher of this.publishers) {
-      try {
-        publisher.publishFormElicitationCleared(id);
-      } catch {
-        // Keep other sinks alive even if one publisher fails.
-      }
-    }
+  publishFormElicitationCleared(sessionId: string, id: string): void {
+    this.publish((publisher) =>
+      publisher.publishFormElicitationCleared(sessionId, id),
+    );
   }
 
-  publishUrlElicitationRequest(request: McpUrlElicitationRequest): void {
-    for (const publisher of this.publishers) {
-      try {
-        publisher.publishUrlElicitationRequest(request);
-      } catch {
-        // Keep other sinks alive even if one publisher fails.
-      }
-    }
+  publishUrlElicitationRequest(
+    sessionId: string,
+    request: McpUrlElicitationRequest,
+  ): void {
+    this.publish((publisher) =>
+      publisher.publishUrlElicitationRequest(sessionId, request),
+    );
   }
 
-  publishUrlElicitationCleared(id: string): void {
+  publishUrlElicitationCleared(sessionId: string, id: string): void {
+    this.publish((publisher) =>
+      publisher.publishUrlElicitationCleared(sessionId, id),
+    );
+  }
+
+  private publish(action: (publisher: AgentUiPublisher) => void): void {
     for (const publisher of this.publishers) {
       try {
-        publisher.publishUrlElicitationCleared(id);
+        action(publisher);
       } catch {
         // Keep other sinks alive even if one publisher fails.
       }
@@ -170,19 +160,27 @@ export class FanoutAgentUiPublisher implements AgentUiPublisher {
 }
 
 export class WebviewAgentUiPublisher implements AgentUiPublisher {
+  private visibleApprovalId: string | undefined;
+
   constructor(
-    private readonly publishMessage: (message: AgentUiEvent) => void,
+    private readonly publishMessage: (
+      message: AgentUiEvent | { type: "idle" },
+    ) => void,
   ) {}
 
-  publishApproval(request: ApprovalRequest): void {
+  publishApproval(_sessionId: string, request: ApprovalRequest): void {
+    this.visibleApprovalId = request.id;
     this.publishMessage({ type: "showApproval", request });
   }
 
-  publishApprovalIdle(): void {
+  publishApprovalIdle(_sessionId: string, id: string): void {
+    if (this.visibleApprovalId !== id) return;
+    this.visibleApprovalId = undefined;
     this.publishMessage({ type: "idle" });
   }
 
   publishQuestionRequest(
+    _sessionId: string,
     id: string,
     context: string,
     questions: Question[],
@@ -197,33 +195,36 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
     });
   }
 
-  publishQuestionCleared(id: string): void {
+  publishQuestionCleared(_sessionId: string, id: string): void {
     this.publishMessage({ type: "agentQuestionCleared", id });
   }
 
-  publishQuestionProgress(progress: {
-    id: string;
-    step: number;
-    answers: Record<string, string | string[] | number | boolean | undefined>;
-    notes: Record<string, string>;
-    origin: string;
-  }): void {
+  publishQuestionProgress(
+    _sessionId: string,
+    progress: Parameters<AgentUiPublisher["publishQuestionProgress"]>[1],
+  ): void {
     this.publishMessage({ type: "agentQuestionProgress", ...progress });
   }
 
-  publishFormElicitationRequest(request: McpFormElicitationRequest): void {
+  publishFormElicitationRequest(
+    _sessionId: string,
+    request: McpFormElicitationRequest,
+  ): void {
     this.publishMessage({ type: "agentFormElicitationRequest", request });
   }
 
-  publishFormElicitationCleared(id: string): void {
+  publishFormElicitationCleared(_sessionId: string, id: string): void {
     this.publishMessage({ type: "agentFormElicitationCleared", id });
   }
 
-  publishUrlElicitationRequest(request: McpUrlElicitationRequest): void {
+  publishUrlElicitationRequest(
+    _sessionId: string,
+    request: McpUrlElicitationRequest,
+  ): void {
     this.publishMessage({ type: "agentUrlElicitationRequest", request });
   }
 
-  publishUrlElicitationCleared(id: string): void {
+  publishUrlElicitationCleared(_sessionId: string, id: string): void {
     this.publishMessage({ type: "agentUrlElicitationCleared", id });
   }
 }
@@ -231,30 +232,36 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
 export class InMemoryAgentUiEventHub
   implements AgentUiPublisher, ReadableAgentUiEventHub, vscode.Disposable
 {
-  private readonly eventEmitter = new vscode.EventEmitter<AgentUiEvent>();
-  private lastEvent: AgentUiEvent | undefined;
+  private readonly eventEmitter = new vscode.EventEmitter<SessionUiEvent>();
+  private readonly pendingEventsBySession = new Map<
+    string,
+    Map<string, AgentUiEvent>
+  >();
 
   readonly onDidPublish = this.eventEmitter.event;
 
-  getSnapshot(): AgentUiEvent | undefined {
-    return this.lastEvent;
+  getSnapshot(sessionId: string): readonly SessionUiEvent[] {
+    return [
+      ...(this.pendingEventsBySession.get(sessionId)?.values() ?? []),
+    ].map((event) => ({ sessionId, event: cloneEvent(event) }));
   }
 
-  publishApproval(request: ApprovalRequest): void {
-    this.publish({ type: "showApproval", request });
+  publishApproval(sessionId: string, request: ApprovalRequest): void {
+    this.publish(sessionId, { type: "showApproval", request });
   }
 
-  publishApprovalIdle(): void {
-    this.publish({ type: "idle" });
+  publishApprovalIdle(sessionId: string, id: string): void {
+    this.publish(sessionId, { type: "idle", id });
   }
 
   publishQuestionRequest(
+    sessionId: string,
     id: string,
     context: string,
     questions: Question[],
     backgroundTask?: string,
   ): void {
-    this.publish({
+    this.publish(sessionId, {
       type: "agentQuestionRequest",
       id,
       context,
@@ -263,43 +270,101 @@ export class InMemoryAgentUiEventHub
     });
   }
 
-  publishQuestionCleared(id: string): void {
-    this.publish({ type: "agentQuestionCleared", id });
+  publishQuestionCleared(sessionId: string, id: string): void {
+    this.publish(sessionId, { type: "agentQuestionCleared", id });
   }
 
-  publishQuestionProgress(progress: {
-    id: string;
-    step: number;
-    answers: Record<string, string | string[] | number | boolean | undefined>;
-    notes: Record<string, string>;
-    origin: string;
-  }): void {
-    this.publish({ type: "agentQuestionProgress", ...progress });
+  publishQuestionProgress(
+    sessionId: string,
+    progress: Parameters<AgentUiPublisher["publishQuestionProgress"]>[1],
+  ): void {
+    this.publish(sessionId, { type: "agentQuestionProgress", ...progress });
   }
 
-  publishFormElicitationRequest(request: McpFormElicitationRequest): void {
-    this.publish({ type: "agentFormElicitationRequest", request });
+  publishFormElicitationRequest(
+    sessionId: string,
+    request: McpFormElicitationRequest,
+  ): void {
+    this.publish(sessionId, { type: "agentFormElicitationRequest", request });
   }
 
-  publishFormElicitationCleared(id: string): void {
-    this.publish({ type: "agentFormElicitationCleared", id });
+  publishFormElicitationCleared(sessionId: string, id: string): void {
+    this.publish(sessionId, { type: "agentFormElicitationCleared", id });
   }
 
-  publishUrlElicitationRequest(request: McpUrlElicitationRequest): void {
-    this.publish({ type: "agentUrlElicitationRequest", request });
+  publishUrlElicitationRequest(
+    sessionId: string,
+    request: McpUrlElicitationRequest,
+  ): void {
+    this.publish(sessionId, { type: "agentUrlElicitationRequest", request });
   }
 
-  publishUrlElicitationCleared(id: string): void {
-    this.publish({ type: "agentUrlElicitationCleared", id });
+  publishUrlElicitationCleared(sessionId: string, id: string): void {
+    this.publish(sessionId, { type: "agentUrlElicitationCleared", id });
   }
 
   dispose(): void {
-    this.lastEvent = undefined;
+    this.pendingEventsBySession.clear();
     this.eventEmitter.dispose();
   }
 
-  private publish(event: AgentUiEvent): void {
-    this.lastEvent = event;
-    this.eventEmitter.fire(event);
+  private publish(sessionId: string, event: AgentUiEvent): void {
+    this.updatePendingEvents(sessionId, event);
+    this.eventEmitter.fire({ sessionId, event: cloneEvent(event) });
   }
+
+  private updatePendingEvents(sessionId: string, event: AgentUiEvent): void {
+    const pending =
+      this.pendingEventsBySession.get(sessionId) ??
+      new Map<string, AgentUiEvent>();
+    this.pendingEventsBySession.set(sessionId, pending);
+
+    switch (event.type) {
+      case "showApproval":
+        setLatest(pending, `approval:${event.request.id}`, event);
+        break;
+      case "idle":
+        pending.delete(`approval:${event.id}`);
+        break;
+      case "agentQuestionRequest":
+        setLatest(pending, `question:${event.id}`, event);
+        break;
+      case "agentQuestionCleared":
+        pending.delete(`question:${event.id}`);
+        pending.delete(`question-progress:${event.id}`);
+        break;
+      case "agentQuestionProgress":
+        if (pending.has(`question:${event.id}`)) {
+          setLatest(pending, `question-progress:${event.id}`, event);
+        }
+        break;
+      case "agentFormElicitationRequest":
+        setLatest(pending, `form:${event.request.id}`, event);
+        break;
+      case "agentFormElicitationCleared":
+        pending.delete(`form:${event.id}`);
+        break;
+      case "agentUrlElicitationRequest":
+        setLatest(pending, `url:${event.request.id}`, event);
+        break;
+      case "agentUrlElicitationCleared":
+        pending.delete(`url:${event.id}`);
+        break;
+    }
+
+    if (pending.size === 0) this.pendingEventsBySession.delete(sessionId);
+  }
+}
+
+function setLatest(
+  pending: Map<string, AgentUiEvent>,
+  key: string,
+  event: AgentUiEvent,
+): void {
+  pending.delete(key);
+  pending.set(key, cloneEvent(event));
+}
+
+function cloneEvent(event: AgentUiEvent): AgentUiEvent {
+  return structuredClone(event);
 }

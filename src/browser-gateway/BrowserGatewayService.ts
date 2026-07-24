@@ -31,6 +31,7 @@ import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
 import type {
   AgentUiEvent,
   ReadableAgentUiEventHub,
+  SessionUiEvent,
 } from "../agent/AgentUiPublisher.js";
 
 import type { ApprovalRequest } from "../approvals/webview/types.js";
@@ -250,6 +251,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   // nobody is listening; newly connected clients receive a fresh connect snapshot.
   private hasActiveClientsProbe: (() => boolean) | undefined;
   private approval: ApprovalRequest | undefined;
+  private approvalSessionId: string | undefined;
   private question:
     | {
         id: string;
@@ -258,9 +260,13 @@ export class BrowserGatewayService implements vscode.Disposable {
         backgroundTask?: string;
       }
     | undefined;
+  private questionSessionId: string | undefined;
   private questionProgress: QuestionProgressState | undefined;
   private formElicitation: McpFormElicitationRequest | undefined;
+  private formElicitationSessionId: string | undefined;
   private urlElicitation: McpUrlElicitationRequest | undefined;
+  private urlElicitationSessionId: string | undefined;
+  private seededForegroundSessionId: string | undefined;
   private recentEvents: AgentUiEvent[] = [];
   private modelsVersion = 0;
   private repositoryInfoCache:
@@ -285,7 +291,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   }
 
   constructor(
-    uiEventHub: ReadableAgentUiEventHub,
+    private readonly uiEventHub: ReadableAgentUiEventHub,
     private readonly sessionManager: AgentSessionManager,
     private readonly getThemeSnapshot: () => BrowserGatewayThemeSnapshot,
     private readonly getAgentWriteApprovalState: () => ReturnType<
@@ -310,10 +316,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     ),
     private readonly timers: BrowserGatewayServiceTimerOptions = {},
   ) {
-    const snapshot = uiEventHub.getSnapshot();
-    if (snapshot) {
-      this.applyEvent(snapshot);
-    }
+    this.seedForegroundUiState();
 
     this.disposables.push(
       uiEventHub.onDidPublish((event) => {
@@ -419,6 +422,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   ): void {
     this.disposables.push(
       onDidChangeSessions(() => {
+        this.seedForegroundUiState();
         this.onDidChangeOwnerProjectionEmitter.fire("sessions");
         this.invalidateBrowserSnapshot();
       }),
@@ -845,11 +849,8 @@ export class BrowserGatewayService implements vscode.Disposable {
     }
     this.disposables.length = 0;
     this.cancelPendingForegroundInvalidation();
-    this.approval = undefined;
-    this.question = undefined;
-    this.questionProgress = undefined;
-    this.formElicitation = undefined;
-    this.urlElicitation = undefined;
+    this.clearInteractionState();
+    this.seededForegroundSessionId = undefined;
     this.recentEvents = [];
     this.lastSerializedSnapshot = "";
     this.snapshotRevision = 0;
@@ -1050,13 +1051,67 @@ export class BrowserGatewayService implements vscode.Disposable {
     return value;
   }
 
-  private applyEvent(event: AgentUiEvent): void {
+  private seedForegroundUiState(): void {
+    const sessionId = this.sessionManager.getForegroundSession()?.id;
+    if (sessionId === this.seededForegroundSessionId) return;
+    this.seededForegroundSessionId = sessionId;
+    this.clearInteractionState();
+    if (!sessionId) return;
+    for (const event of this.uiEventHub.getSnapshot(sessionId)) {
+      this.applyEvent(event, false);
+    }
+  }
+
+  private clearInteractionState(): void {
+    this.approval = undefined;
+    this.approvalSessionId = undefined;
+    this.question = undefined;
+    this.questionSessionId = undefined;
+    this.questionProgress = undefined;
+    this.formElicitation = undefined;
+    this.formElicitationSessionId = undefined;
+    this.urlElicitation = undefined;
+    this.urlElicitationSessionId = undefined;
+  }
+
+  private applyEvent(envelope: SessionUiEvent, recordRecent = true): void {
+    const { sessionId, event } = envelope;
+    const selectedSessionId = this.sessionManager.getForegroundSession()?.id;
+    const isSelectedSession = sessionId === selectedSessionId;
+    const isAttributedBackgroundRequest =
+      (event.type === "showApproval" &&
+        Boolean(event.request.backgroundTask)) ||
+      (event.type === "agentQuestionRequest" && Boolean(event.backgroundTask));
+    // Only approvals and questions can be Fleet-attributed background work.
+    // Form and URL elicitations remain selected-session-only and are restored
+    // from that session's snapshot when it becomes foreground.
+    const matchesVisibleBackgroundInteraction =
+      (event.type === "idle" && this.approvalSessionId === sessionId) ||
+      ((event.type === "agentQuestionCleared" ||
+        event.type === "agentQuestionProgress") &&
+        this.questionSessionId === sessionId &&
+        Boolean(this.question?.backgroundTask));
+    if (
+      !isSelectedSession &&
+      !isAttributedBackgroundRequest &&
+      !matchesVisibleBackgroundInteraction
+    ) {
+      return;
+    }
+
     switch (event.type) {
       case "showApproval":
         this.approval = event.request;
+        this.approvalSessionId = sessionId;
         break;
       case "idle":
-        this.approval = undefined;
+        if (
+          this.approvalSessionId === sessionId &&
+          this.approval?.id === event.id
+        ) {
+          this.approval = undefined;
+          this.approvalSessionId = undefined;
+        }
         break;
       case "agentQuestionRequest":
         this.question = {
@@ -1067,43 +1122,63 @@ export class BrowserGatewayService implements vscode.Disposable {
             ? { backgroundTask: event.backgroundTask }
             : {}),
         };
+        this.questionSessionId = sessionId;
         this.questionProgress = undefined;
         break;
-      case "agentQuestionCleared":
-        if (!this.question || this.question.id === event.id) {
+      case "agentQuestionCleared": {
+        const matchesQuestion =
+          this.questionSessionId === sessionId &&
+          this.question?.id === event.id;
+        if (matchesQuestion) {
           this.question = undefined;
-        }
-        if (!this.questionProgress || this.questionProgress.id === event.id) {
           this.questionProgress = undefined;
+          this.questionSessionId = undefined;
         }
         break;
+      }
       case "agentQuestionProgress":
-        this.questionProgress = {
-          id: event.id,
-          step: event.step,
-          answers: { ...event.answers },
-          notes: { ...event.notes },
-          origin: event.origin,
-        };
+        if (
+          this.questionSessionId === sessionId &&
+          this.question?.id === event.id
+        ) {
+          this.questionProgress = {
+            id: event.id,
+            step: event.step,
+            answers: { ...event.answers },
+            notes: { ...event.notes },
+            origin: event.origin,
+          };
+        }
         break;
       case "agentFormElicitationRequest":
         this.formElicitation = cloneFormElicitationRequest(event.request);
+        this.formElicitationSessionId = sessionId;
         break;
       case "agentFormElicitationCleared":
-        if (!this.formElicitation || this.formElicitation.id === event.id) {
+        if (
+          this.formElicitationSessionId === sessionId &&
+          this.formElicitation?.id === event.id
+        ) {
           this.formElicitation = undefined;
+          this.formElicitationSessionId = undefined;
         }
         break;
       case "agentUrlElicitationRequest":
         this.urlElicitation = { ...event.request };
+        this.urlElicitationSessionId = sessionId;
         break;
       case "agentUrlElicitationCleared":
-        if (!this.urlElicitation || this.urlElicitation.id === event.id) {
+        if (
+          this.urlElicitationSessionId === sessionId &&
+          this.urlElicitation?.id === event.id
+        ) {
           this.urlElicitation = undefined;
+          this.urlElicitationSessionId = undefined;
         }
         break;
     }
 
+    if (!recordRecent) return;
     this.recentEvents.push(event);
     if (this.recentEvents.length > this.maxRecentEvents) {
       this.recentEvents.splice(

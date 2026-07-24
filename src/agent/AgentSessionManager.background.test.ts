@@ -2155,6 +2155,71 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("preserves session ownership and evolving arguments through background interaction wrappers", async () => {
+    const onApprovalRequest = vi.fn().mockResolvedValue("reject");
+    const onQuestion = vi.fn().mockResolvedValue({ answers: {}, notes: {} });
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const session = await mgr.createSession("code");
+    const pendingQuestionRecovery = {
+      schemaVersion: 1 as const,
+      assistantContent: [],
+      toolUseId: "tool-use-1",
+      toolName: "ask_user" as const,
+      toolInput: { context: "Need input.", questions: [] },
+    };
+    const overrides = (
+      mgr as unknown as {
+        buildBackgroundInteractionOverrides: (
+          session: unknown,
+          task: string,
+          context: ToolDispatchContext,
+        ) => Pick<ToolDispatchContext, "onApprovalRequest" | "onQuestion">;
+      }
+    ).buildBackgroundInteractionOverrides(session, "review task", {
+      ...toolCtx,
+      onApprovalRequest,
+      onQuestion,
+    });
+
+    await overrides.onApprovalRequest?.({
+      kind: "write",
+      title: "Review write",
+      choices: [],
+    });
+    await overrides.onApprovalRequest?.(
+      { kind: "write", title: "Explicit owner", choices: [] },
+      "distinct-session",
+    );
+    await overrides.onQuestion?.(
+      "Need input.",
+      [],
+      session.id,
+      "stale task",
+      pendingQuestionRecovery,
+    );
+
+    expect(onApprovalRequest).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        title: "Review write",
+        backgroundTask: "review task",
+      }),
+      session.id,
+    );
+    expect(onApprovalRequest).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ title: "Explicit owner" }),
+      "distinct-session",
+    );
+    expect(onQuestion).toHaveBeenCalledWith(
+      "Need input.",
+      [],
+      session.id,
+      "review task",
+      pendingQuestionRecovery,
+    );
+  });
+
   it("wraps background questions with context, session id, and task attribution", async () => {
     const onQuestion = vi.fn().mockResolvedValue({ answers: {}, notes: {} });
     const mgr = new AgentSessionManager(config, "/tmp");
@@ -2178,6 +2243,7 @@ describe("AgentSessionManager background agents", () => {
       [],
       spawned.sessionId,
       "review task",
+      undefined,
     );
   });
 

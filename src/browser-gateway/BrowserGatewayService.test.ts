@@ -348,7 +348,7 @@ describe("BrowserGatewayService", () => {
       .getOwnerProjectionSources()
       .onDidChange(ownerChanges);
 
-    hub.publishApproval({
+    hub.publishApproval("session-1", {
       kind: "write",
       id: "owner-only-approval",
       filePath: "src/owner.ts",
@@ -403,7 +403,7 @@ describe("BrowserGatewayService", () => {
       ],
     };
 
-    hub.publishFormElicitationRequest(request);
+    hub.publishFormElicitationRequest("session-1", request);
 
     expect(service.getSerializableState().formElicitation).toEqual(request);
     expect(service.getInstanceStatusSummary()).toMatchObject({
@@ -411,10 +411,10 @@ describe("BrowserGatewayService", () => {
       label: "MCP Form",
     });
 
-    hub.publishFormElicitationCleared("another-form");
+    hub.publishFormElicitationCleared("session-1", "another-form");
     expect(service.getSerializableState().formElicitation?.id).toBe("form-1");
 
-    hub.publishFormElicitationCleared("form-1");
+    hub.publishFormElicitationCleared("session-1", "form-1");
     expect(service.getSerializableState().formElicitation).toBeNull();
 
     service.dispose();
@@ -427,13 +427,13 @@ describe("BrowserGatewayService", () => {
     const publications = vi.fn();
     const subscription = service.onDidChange(publications);
 
-    hub.publishApproval({
+    hub.publishApproval("session-1", {
       kind: "write",
       id: "approval-1",
       filePath: "src/file.ts",
       writeOperation: "modify",
     });
-    hub.publishApprovalIdle();
+    hub.publishApprovalIdle("session-1", "approval-1");
 
     expect(publications).toHaveBeenCalledTimes(2);
     const [first, second] = publications.mock.calls.map(
@@ -454,7 +454,7 @@ describe("BrowserGatewayService", () => {
   it("serializes managed-network approval evidence for the browser surface", () => {
     const hub = new InMemoryAgentUiEventHub();
     const service = makeService(hub);
-    hub.publishApproval({
+    hub.publishApproval("session-1", {
       kind: "network",
       id: "network-approval-1",
       managedNetwork: {
@@ -508,7 +508,7 @@ describe("BrowserGatewayService", () => {
     );
 
     const initial = service.createSnapshotPublication();
-    hub.publishApproval({
+    hub.publishApproval("session-1", {
       kind: "write",
       id: "approval-after-initial",
       filePath: "src/file.ts",
@@ -595,7 +595,7 @@ describe("BrowserGatewayService", () => {
     const onDidChange = vi.fn();
     const subscription = service.onDidChange(onDidChange);
 
-    hub.publishApproval({
+    hub.publishApproval("session-1", {
       kind: "write",
       id: "approval-1",
       filePath: "src/file.ts",
@@ -711,6 +711,7 @@ describe("BrowserGatewayService", () => {
       ],
     };
     hub.publishQuestionRequest(
+      "session-1",
       projectedQuestionRequest.id,
       projectedQuestionRequest.context,
       projectedQuestionRequest.questions,
@@ -734,7 +735,7 @@ describe("BrowserGatewayService", () => {
       },
     });
 
-    hub.publishApprovalIdle();
+    hub.publishApprovalIdle("session-1", "approval-1");
 
     expect(service.getUiState()).toMatchObject({
       approval: undefined,
@@ -753,7 +754,7 @@ describe("BrowserGatewayService", () => {
 
     service.dispose();
     projectedQuestionRequest = null;
-    hub.publishApproval({
+    hub.publishApproval("session-1", {
       kind: "write",
       id: "approval-after-dispose",
       filePath: "src/ignored.ts",
@@ -772,7 +773,7 @@ describe("BrowserGatewayService", () => {
   it("seeds initial state from the hub snapshot, caps recent event history, and clears state on dispose", () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();
-    hub.publishApproval({
+    hub.publishApproval("session-1", {
       kind: "write",
       id: "approval-seeded",
       filePath: "src/seeded.ts",
@@ -831,8 +832,8 @@ describe("BrowserGatewayService", () => {
       },
     });
 
-    hub.publishQuestionRequest("question-2", "Need input.", []);
-    hub.publishApprovalIdle();
+    hub.publishQuestionRequest("session-1", "question-2", "Need input.", []);
+    hub.publishApprovalIdle("session-1", "approval-seeded");
 
     expect(service.getUiState().recentEvents).toEqual([
       {
@@ -841,7 +842,7 @@ describe("BrowserGatewayService", () => {
         context: "Need input.",
         questions: [],
       },
-      { type: "idle" },
+      { type: "idle", id: "approval-seeded" },
     ]);
 
     service.dispose();
@@ -856,7 +857,7 @@ describe("BrowserGatewayService", () => {
   it("does not expose stale foreground questions from the hub snapshot", () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();
-    hub.publishQuestionRequest("stale-question", "Old question.", [
+    hub.publishQuestionRequest("session-1", "stale-question", "Old question.", [
       {
         id: "continue",
         type: "yes_no",
@@ -951,6 +952,7 @@ describe("BrowserGatewayService", () => {
     );
 
     hub.publishQuestionRequest(
+      "session-1",
       "wrong-session-question",
       "Question for another session.",
       [
@@ -1006,12 +1008,13 @@ describe("BrowserGatewayService", () => {
     );
 
     hub.publishQuestionRequest(
+      "session-1",
       "background-question",
       "Background task needs input.",
       [],
       "Review implementation",
     );
-    hub.publishQuestionProgress({
+    hub.publishQuestionProgress("session-1", {
       id: "background-question",
       step: 1,
       answers: { continue: true },
@@ -1294,6 +1297,75 @@ describe("BrowserGatewayService", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("re-seeds pending UI state for the selected session without cross-session clears", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    hub.publishApproval("session-1", {
+      kind: "write",
+      id: "approval-1",
+      filePath: "src/one.ts",
+      writeOperation: "modify",
+    });
+    hub.publishApproval("session-2", {
+      kind: "write",
+      id: "approval-2",
+      filePath: "src/two.ts",
+      writeOperation: "modify",
+    });
+
+    let foregroundSessionId = "session-1";
+    sessionManager.getForegroundSession.mockImplementation(() => ({
+      id: foregroundSessionId,
+      title: foregroundSessionId,
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle",
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      estimatedTotalUsed: 0,
+      projectScope: {
+        projectId: "project-a",
+        displayName: "Project A",
+      },
+      projectAvailability: "available",
+      getAllMessages: vi.fn(() => []),
+    }));
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => themeSnapshotStub,
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => null,
+      () => [],
+    );
+    let sessionListener: (() => void) | undefined;
+    service.subscribeToSessionChanges((listener) => {
+      sessionListener = listener;
+      return { dispose: vi.fn() } as never;
+    });
+
+    expect(service.getUiState().approval?.id).toBe("approval-1");
+
+    foregroundSessionId = "session-2";
+    sessionListener?.();
+    expect(service.getUiState().approval?.id).toBe("approval-2");
+
+    hub.publishApprovalIdle("session-1", "approval-1");
+    hub.publishApproval("session-1", {
+      kind: "write",
+      id: "approval-1-late",
+      filePath: "src/late.ts",
+      writeOperation: "modify",
+    });
+    expect(service.getUiState().approval?.id).toBe("approval-2");
+
+    service.dispose();
+    hub.dispose();
   });
 
   it("publishes background projection changes through explicit invalidation", () => {
@@ -1948,27 +2020,32 @@ describe("BrowserGatewayService", () => {
               questions: [],
             },
           });
-          hub.publishApproval({
+          hub.publishApproval("session-1", {
             kind: "write",
             id: "matrix-approval",
             filePath: "src/matrix.ts",
             writeOperation: "modify",
           });
-          hub.publishQuestionRequest("matrix-question", "Continue?", []);
-          hub.publishQuestionProgress({
+          hub.publishQuestionRequest(
+            "session-1",
+            "matrix-question",
+            "Continue?",
+            [],
+          );
+          hub.publishQuestionProgress("session-1", {
             id: "matrix-question",
             step: 1,
             answers: { continue: true },
             notes: {},
             origin: "test",
           });
-          hub.publishFormElicitationRequest({
+          hub.publishFormElicitationRequest("session-1", {
             id: "matrix-form",
             serverName: "matrix",
             message: "Provide input",
             fields: [],
           });
-          hub.publishUrlElicitationRequest({
+          hub.publishUrlElicitationRequest("session-1", {
             id: "matrix-url",
             serverName: "matrix",
             message: "Authenticate",
@@ -2125,7 +2202,7 @@ describe("BrowserGatewayService", () => {
 
     try {
       service.setHasActiveClientsProbe(() => false);
-      hub.publishApproval({
+      hub.publishApproval("session-1", {
         kind: "write",
         id: "connect-time-approval",
         filePath: "src/connect.ts",

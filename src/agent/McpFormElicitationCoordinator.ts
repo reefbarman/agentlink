@@ -10,7 +10,7 @@ import { randomId } from "../shared/randomId.js";
 
 interface PendingFormElicitation {
   request: McpFormElicitationRequest;
-  sessionId?: string;
+  sessionId: string;
   resolve: (values: McpElicitationValues) => void;
   cancel: () => void;
 }
@@ -25,8 +25,11 @@ export type McpFormElicitationSubmitResult =
     };
 
 export interface McpFormElicitationCoordinatorOptions {
-  publishRequest: (request: McpFormElicitationRequest) => void;
-  publishCleared: (id: string) => void;
+  publishRequest: (
+    sessionId: string,
+    request: McpFormElicitationRequest,
+  ) => void;
+  publishCleared: (sessionId: string, id: string) => void;
   createId?: () => string;
 }
 
@@ -44,11 +47,15 @@ export class McpFormElicitationCoordinator {
       cancel: () => void;
     },
   ): McpFormElicitationRequest {
+    const sessionId = callbacks.sessionId?.trim();
+    if (!sessionId) {
+      throw new Error("MCP form elicitation requires a session ID");
+    }
     const request: McpFormElicitationRequest = {
       ...input,
       id: this.options.createId?.() ?? `elicit_${randomId()}`,
     };
-    this.queue.push({ request, ...callbacks });
+    this.queue.push({ request, ...callbacks, sessionId });
     this.publishNext();
     return request;
   }
@@ -101,7 +108,7 @@ export class McpFormElicitationCoordinator {
     const active = this.active;
     this.active = undefined;
     if (active) {
-      this.options.publishCleared(active.request.id);
+      this.options.publishCleared(active.sessionId, active.request.id);
       active.cancel();
     }
     for (const pending of this.queue.splice(0)) pending.cancel();
@@ -111,7 +118,7 @@ export class McpFormElicitationCoordinator {
     const pending = this.active;
     if (!pending) return;
     this.active = undefined;
-    this.options.publishCleared(pending.request.id);
+    this.options.publishCleared(pending.sessionId, pending.request.id);
     complete();
     this.publishNext();
   }
@@ -121,6 +128,6 @@ export class McpFormElicitationCoordinator {
     const next = this.queue.shift();
     if (!next) return;
     this.active = next;
-    this.options.publishRequest(next.request);
+    this.options.publishRequest(next.sessionId, next.request);
   }
 }

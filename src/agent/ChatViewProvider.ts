@@ -943,6 +943,9 @@ type ContextBudget = NonNullable<ChatState["contextBudget"]>;
 
 const RESTORE_TAIL_TURNS = 8;
 const RESTORE_BACKFILL_BATCH_TURNS = 12;
+// Non-session UI work still needs a stable ownership bucket for targeted clears.
+// Persisted session IDs are UUIDs, so this sentinel cannot collide with one.
+const AMBIENT_AGENT_SESSION_ID = "agent";
 
 /**
  * Drop attached media (base64 images/PDFs) before sending raw messages to a
@@ -1063,6 +1066,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private pendingUrlElicitations = new Map<
     string,
     {
+      sessionId: string;
       request: McpUrlElicitationRequest;
       resolve: (action: "accept" | "cancel" | "decline") => void;
     }
@@ -1090,6 +1094,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private pendingForwardedApprovals = new Map<
     string,
     {
+      sessionId: string;
       kind: ApprovalRequest["kind"];
       respond: (msg: DecisionMessage) => boolean;
     }
@@ -1114,6 +1119,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   >();
   private activeApprovalRequests = new Map<string, ApprovalRequest>();
+  private approvalSessionById = new Map<string, string>();
   private activeApprovalOrder: string[] = [];
   private visibleApprovalId: string | null = null;
   private pendingQuestions = new Map<
@@ -1124,6 +1130,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   >();
   /** Tracks which pending-question IDs belong to each session, for scoped cancellation on stop */
   private questionSessionIndex = new Map<string, Set<string>>();
+  private questionSessionById = new Map<string, string>();
   /** Tracks which pending-approval IDs belong to each session, for scoped cancellation on stop */
   private approvalSessionIndex = new Map<string, Set<string>>();
 
@@ -1206,10 +1213,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.uiEventHub,
     ]);
     this.formElicitationCoordinator = new McpFormElicitationCoordinator({
-      publishRequest: (request) =>
-        this.uiPublisher.publishFormElicitationRequest(request),
-      publishCleared: (id) =>
-        this.uiPublisher.publishFormElicitationCleared(id),
+      publishRequest: (...args) =>
+        this.uiPublisher.publishFormElicitationRequest(...args),
+      publishCleared: (...args) =>
+        this.uiPublisher.publishFormElicitationCleared(...args),
     });
     this.deltaBufferFlusher = new DeltaBufferFlusher({
       emit: (message) => this.postMessage(message),
@@ -1226,7 +1233,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       cancel,
     ) => {
       this.formElicitationCoordinator.enqueue(request, {
-        sessionId: this.sessionManager?.getForegroundSession()?.id,
+        sessionId: this.getAmbientSessionId(),
         resolve,
         cancel,
       });
@@ -1238,8 +1245,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       McpClientHub["onUrlElicitation"]
     > = (request, resolve) => {
       this.cancelPendingUrlElicitations();
-      this.pendingUrlElicitations.set(request.id, { request, resolve });
-      this.uiPublisher.publishUrlElicitationRequest(request);
+      const sessionId = this.getAmbientSessionId();
+      this.pendingUrlElicitations.set(request.id, {
+        sessionId,
+        request,
+        resolve,
+      });
+      this.uiPublisher.publishUrlElicitationRequest(sessionId, request);
     };
     this.mcpHub.onUrlElicitation = handleMcpUrlElicitation;
     this.askAgentMcpHub.onUrlElicitation = handleMcpUrlElicitation;
@@ -1285,10 +1297,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // don't stay suspended across view lifecycle.
     for (const [id, resolve] of this.pendingQuestions) {
       resolve({ answers: {}, notes: {} });
-      this.uiPublisher.publishQuestionCleared(id);
+      const sessionId = this.questionSessionById.get(id);
+      if (sessionId) this.uiPublisher.publishQuestionCleared(sessionId, id);
     }
     this.pendingQuestions.clear();
     this.questionSessionIndex.clear();
+    this.questionSessionById.clear();
     for (const controller of this.pendingBtwRequests.values()) {
       controller.abort();
     }
@@ -1316,13 +1330,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this.pendingForwardedApprovals.clear();
     this.activeApprovalRequests.clear();
+    this.approvalSessionById.clear();
     this.activeApprovalOrder = [];
     this.visibleApprovalId = null;
 
     this.formElicitationCoordinator.dispose();
     for (const [id, pending] of this.pendingUrlElicitations) {
       pending.resolve("cancel");
-      this.uiPublisher.publishUrlElicitationCleared(id);
+      this.uiPublisher.publishUrlElicitationCleared(pending.sessionId, id);
     }
     this.pendingUrlElicitations.clear();
 
@@ -1341,6 +1356,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   getUiEventHub(): ReadableAgentUiEventHub {
     return this.uiEventHub;
+  }
+
+  private getAmbientSessionId(): string {
+    return (
+      this.sessionManager?.getForegroundSession()?.id ??
+      AMBIENT_AGENT_SESSION_ID
+    );
   }
 
   onDidChangeBrowserProjectedForeground(
@@ -2656,64 +2678,63 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Renders the actual CommandCard/WriteCard/RenameCard/PathCard components inline.
    */
   public forwardApproval(
-    request: ApprovalRequest,
+    forwarded: { sessionId: string; request: ApprovalRequest },
     respond: (msg: DecisionMessage) => boolean,
   ): void {
+    const { sessionId, request } = forwarded;
     this.pendingForwardedApprovals.set(request.id, {
+      sessionId,
       kind: request.kind,
       respond,
     });
-    this.showApprovalRequest(request);
+    this.showApprovalRequest(sessionId, request);
   }
 
-  /**
-   * Notify the chat webview that the forwarded approval queue is empty.
-   *
-   * Foreground and background approvals share one rendered card. A forwarded
-   * queue becoming idle must not blindly clear an unrelated inline approval
-   * that was shown while the queue was active.
-   */
-  public sendApprovalIdle(): void {
-    this.publishVisibleApprovalOrIdle();
-  }
-
-  public cancelForwardedApproval(id: string): void {
+  public cancelForwardedApproval(sessionId: string, id: string): void {
     this.pendingForwardedApprovals.delete(id);
-    this.clearApprovalRequest(id);
+    this.clearApprovalRequest(sessionId, id);
   }
 
-  private showApprovalRequest(request: ApprovalRequest): void {
+  private showApprovalRequest(
+    sessionId: string,
+    request: ApprovalRequest,
+  ): void {
     if (!this.activeApprovalRequests.has(request.id)) {
       this.activeApprovalOrder.push(request.id);
     }
     this.activeApprovalRequests.set(request.id, request);
+    this.approvalSessionById.set(request.id, sessionId);
     this.visibleApprovalId = request.id;
-    this.uiPublisher.publishApproval(request);
+    this.uiPublisher.publishApproval(sessionId, request);
   }
 
-  private clearApprovalRequest(id: string): void {
-    if (!this.activeApprovalRequests.delete(id)) return;
+  private clearApprovalRequest(sessionId: string, id: string): void {
+    if (this.approvalSessionById.get(id) !== sessionId) return;
+    const wasVisible = this.visibleApprovalId === id;
+    this.activeApprovalRequests.delete(id);
+    this.approvalSessionById.delete(id);
     this.activeApprovalOrder = this.activeApprovalOrder.filter(
       (approvalId) => approvalId !== id,
     );
-    if (this.visibleApprovalId === id) {
+    this.uiPublisher.publishApprovalIdle(sessionId, id);
+    if (wasVisible) {
       this.visibleApprovalId = null;
-      this.publishVisibleApprovalOrIdle();
+      this.publishVisibleApproval();
     }
   }
 
-  private publishVisibleApprovalOrIdle(): void {
+  private publishVisibleApproval(): void {
     for (let i = this.activeApprovalOrder.length - 1; i >= 0; i -= 1) {
       const id = this.activeApprovalOrder[i];
       const request = this.activeApprovalRequests.get(id);
-      if (!request) continue;
+      const sessionId = this.approvalSessionById.get(id);
+      if (!request || !sessionId) continue;
       this.visibleApprovalId = id;
-      this.uiPublisher.publishApproval(request);
+      this.uiPublisher.publishApproval(sessionId, request);
       return;
     }
 
     this.visibleApprovalId = null;
-    this.uiPublisher.publishApprovalIdle();
   }
 
   /** Ask the selected provider's fast model for a bounded, context-aware rule. */
@@ -2902,29 +2923,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
   > {
     const id = request.id ?? randomUUID();
+    const ownerSessionId = sessionId?.trim() || this.getAmbientSessionId();
 
     // Build an ApprovalRequest for the rich card system
-    const approvalRequest = this.buildApprovalRequest(id, request, sessionId);
+    const approvalRequest = this.buildApprovalRequest(
+      id,
+      request,
+      ownerSessionId,
+    );
 
-    if (sessionId) {
-      const sessionSet = this.approvalSessionIndex.get(sessionId) ?? new Set();
-      sessionSet.add(id);
-      this.approvalSessionIndex.set(sessionId, sessionSet);
-    }
-    if (request.kind === "write" && request.fileWrite && sessionId) {
+    const sessionSet =
+      this.approvalSessionIndex.get(ownerSessionId) ?? new Set();
+    sessionSet.add(id);
+    this.approvalSessionIndex.set(ownerSessionId, sessionSet);
+    if (request.kind === "write" && request.fileWrite) {
       this.pendingFileWriteApprovalIds.add(id);
     }
 
     return new Promise((resolve) => {
       this.pendingApprovals.set(id, (result) => {
-        this.clearApprovalRequest(id);
-        if (sessionId) {
-          this.approvalSessionIndex.get(sessionId)?.delete(id);
-        }
+        this.clearApprovalRequest(ownerSessionId, id);
+        this.approvalSessionIndex.get(ownerSessionId)?.delete(id);
         this.pendingFileWriteApprovalIds.delete(id);
         resolve(result);
       });
-      this.showApprovalRequest(approvalRequest);
+      this.showApprovalRequest(ownerSessionId, approvalRequest);
     });
   }
 
@@ -3140,6 +3163,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       questions: question.questions,
     });
     this.uiPublisher.publishQuestionRequest(
+      session.id,
       question.questionRequestId,
       question.context,
       question.questions,
@@ -3159,9 +3183,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const sessionSet = this.questionSessionIndex.get(sessionId) ?? new Set();
     sessionSet.add(id);
     this.questionSessionIndex.set(sessionId, sessionSet);
+    this.questionSessionById.set(id, sessionId);
     return new Promise((resolve) => {
       this.pendingQuestions.set(id, (raw) => {
         this.questionSessionIndex.get(sessionId)?.delete(id);
+        this.questionSessionById.delete(id);
         this.sessionManager?.clearPendingQuestionRecovery(sessionId, id);
         resolve({
           answers:
@@ -3191,6 +3217,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
       this.uiPublisher.publishQuestionRequest(
+        sessionId,
         id,
         context,
         questions,
@@ -3264,7 +3291,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const accepted = pending.respond(decision);
     if (!accepted) return false;
     this.pendingForwardedApprovals.delete(id);
-    this.clearApprovalRequest(id);
+    this.clearApprovalRequest(pending.sessionId, id);
     return true;
   }
 
@@ -3308,7 +3335,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           )) === true;
         if (!accepted) return false;
         this.applyProjectedAction({ type: "CLEAR_QUESTION" });
-        this.uiPublisher.publishQuestionCleared(msg.id);
+        this.uiPublisher.publishQuestionCleared(foregroundSession.id, msg.id);
         // The recovered answer was committed straight into session history
         // (assistant ask_user tool_use + tool_result) without flowing through
         // live agent events, so neither surface has the turn in its
@@ -3323,14 +3350,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       return false;
     }
+    const sessionId = this.questionSessionById.get(msg.id);
+    if (!sessionId) return false;
     this.pendingQuestions.delete(msg.id);
+    this.questionSessionById.delete(msg.id);
     resolve({
       answers: msg.answers,
       notes: msg.notes ?? {},
       attachments,
     });
     this.applyProjectedAction({ type: "CLEAR_QUESTION" });
-    this.uiPublisher.publishQuestionCleared(msg.id);
+    this.uiPublisher.publishQuestionCleared(sessionId, msg.id);
     return true;
   }
 
@@ -3342,7 +3372,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     origin: string;
   }): boolean {
     if (!this.pendingQuestions.has(progress.id)) return false;
-    this.uiPublisher.publishQuestionProgress(progress);
+    const sessionId = this.questionSessionById.get(progress.id);
+    if (!sessionId) return false;
+    this.uiPublisher.publishQuestionProgress(sessionId, progress);
     return true;
   }
 
@@ -3367,14 +3399,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!pending) return false;
     this.pendingUrlElicitations.delete(id);
     pending.resolve(action);
-    this.uiPublisher.publishUrlElicitationCleared(id);
+    this.uiPublisher.publishUrlElicitationCleared(pending.sessionId, id);
     return true;
   }
 
   private cancelPendingUrlElicitations(): void {
     for (const [id, pending] of this.pendingUrlElicitations) {
       pending.resolve("cancel");
-      this.uiPublisher.publishUrlElicitationCleared(id);
+      this.uiPublisher.publishUrlElicitationCleared(pending.sessionId, id);
     }
     this.pendingUrlElicitations.clear();
   }
@@ -4602,7 +4634,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     // Clear any active agent tool calls from the sidebar tracker
     this.toolCallTracker?.clearAgentCalls(sessionId);
-    this.publishVisibleApprovalOrIdle();
     this.postMessage({
       type: "agentInteractionPromptsCleared",
       sessionId,
@@ -4615,8 +4646,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const resolve = this.pendingQuestions.get(id);
         if (resolve) {
           this.pendingQuestions.delete(id);
+          this.questionSessionById.delete(id);
           resolve({ answers: {}, notes: {} });
-          this.uiPublisher.publishQuestionCleared(id);
+          this.uiPublisher.publishQuestionCleared(sessionId, id);
         }
       }
       this.questionSessionIndex.delete(sessionId);
@@ -4631,7 +4663,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.pendingApprovals.delete(id);
           resolve("reject");
         } else {
-          this.clearApprovalRequest(id);
+          this.clearApprovalRequest(sessionId, id);
         }
       }
       this.approvalSessionIndex.delete(sessionId);

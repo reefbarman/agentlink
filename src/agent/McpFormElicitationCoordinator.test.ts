@@ -66,8 +66,9 @@ describe("McpFormElicitationCoordinator", () => {
       expect.objectContaining({ count: 2 }),
     );
     expect(firstCancel).not.toHaveBeenCalled();
-    expect(publishCleared).toHaveBeenCalledWith("request-1");
+    expect(publishCleared).toHaveBeenCalledWith("session-1", "request-1");
     expect(publishRequest).toHaveBeenLastCalledWith(
+      "session-2",
       expect.objectContaining({ id: "request-2", message: "Second" }),
     );
 
@@ -81,7 +82,11 @@ describe("McpFormElicitationCoordinator", () => {
   it("rejects stale and invalid responses without clearing the active prompt", () => {
     const { coordinator, publishCleared } = createCoordinator();
     const resolve = vi.fn();
-    coordinator.enqueue(input, { resolve, cancel: vi.fn() });
+    coordinator.enqueue(input, {
+      sessionId: "session-1",
+      resolve,
+      cancel: vi.fn(),
+    });
 
     expect(coordinator.submit({ id: "unknown", action: "cancel" })).toEqual({
       ok: false,
@@ -129,8 +134,9 @@ describe("McpFormElicitationCoordinator", () => {
     expect(firstCancel).toHaveBeenCalledOnce();
     expect(secondCancel).toHaveBeenCalledOnce();
     expect(thirdCancel).not.toHaveBeenCalled();
-    expect(publishCleared).toHaveBeenCalledWith("request-1");
+    expect(publishCleared).toHaveBeenCalledWith("session-1", "request-1");
     expect(publishRequest).toHaveBeenLastCalledWith(
+      "session-2",
       expect.objectContaining({ id: "request-3" }),
     );
   });
@@ -139,14 +145,34 @@ describe("McpFormElicitationCoordinator", () => {
     const { coordinator, publishCleared } = createCoordinator();
     const activeCancel = vi.fn();
     const queuedCancel = vi.fn();
-    coordinator.enqueue(input, { resolve: vi.fn(), cancel: activeCancel });
-    coordinator.enqueue(input, { resolve: vi.fn(), cancel: queuedCancel });
+    coordinator.enqueue(input, {
+      sessionId: "session-1",
+      resolve: vi.fn(),
+      cancel: activeCancel,
+    });
+    coordinator.enqueue(input, {
+      sessionId: "session-2",
+      resolve: vi.fn(),
+      cancel: queuedCancel,
+    });
 
     coordinator.dispose();
 
     expect(activeCancel).toHaveBeenCalledOnce();
     expect(queuedCancel).toHaveBeenCalledOnce();
-    expect(publishCleared).toHaveBeenCalledWith("request-1");
+    expect(publishCleared).toHaveBeenCalledWith("session-1", "request-1");
     expect(coordinator.getActiveRequest()).toBeUndefined();
+  });
+
+  it("rejects requests without an owning session", () => {
+    const { coordinator, publishRequest } = createCoordinator();
+
+    expect(() =>
+      coordinator.enqueue(input, {
+        resolve: vi.fn(),
+        cancel: vi.fn(),
+      }),
+    ).toThrow("MCP form elicitation requires a session ID");
+    expect(publishRequest).not.toHaveBeenCalled();
   });
 });

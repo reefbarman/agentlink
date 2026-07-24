@@ -4872,10 +4872,13 @@ describe("ChatViewProvider session state sync", () => {
     const mainRespond = vi.fn(() => true);
     provider.forwardApproval(
       {
-        kind: "command",
-        id: "main-command",
-        command: "npm test",
-        subCommands: [],
+        sessionId: "session-main",
+        request: {
+          kind: "command",
+          id: "main-command",
+          command: "npm test",
+          subCommands: [],
+        },
       },
       mainRespond,
     );
@@ -4900,6 +4903,7 @@ describe("ChatViewProvider session state sync", () => {
     });
 
     expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      "agent",
       expect.objectContaining({
         id: "worktree-launch",
         kind: "worktree",
@@ -4918,6 +4922,7 @@ describe("ChatViewProvider session state sync", () => {
     expect(ok).toBe(true);
     expect(mainRespond).not.toHaveBeenCalled();
     expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      "session-main",
       expect.objectContaining({ id: "main-command" }),
     );
   });
@@ -4933,8 +4938,8 @@ describe("ChatViewProvider session state sync", () => {
     const uiPublisher = (
       provider as unknown as {
         uiPublisher: {
-          publishApproval: (request: unknown) => void;
-          publishApprovalIdle: () => void;
+          publishApproval: (sessionId: string, request: unknown) => void;
+          publishApprovalIdle: (sessionId: string, id: string) => void;
         };
       }
     ).uiPublisher;
@@ -4944,10 +4949,13 @@ describe("ChatViewProvider session state sync", () => {
     const forwardedRespond = vi.fn(() => true);
     provider.forwardApproval(
       {
-        kind: "command",
-        id: "background-command",
-        command: "npm test",
-        subCommands: [],
+        sessionId: "session-background",
+        request: {
+          kind: "command",
+          id: "background-command",
+          command: "npm test",
+          subCommands: [],
+        },
       },
       forwardedRespond,
     );
@@ -4963,6 +4971,7 @@ describe("ChatViewProvider session state sync", () => {
     });
 
     expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      "agent",
       expect.objectContaining({ id: "foreground-write" }),
     );
 
@@ -4978,9 +4987,13 @@ describe("ChatViewProvider session state sync", () => {
     expect(ok).toBe(true);
     expect(forwardedRespond).not.toHaveBeenCalled();
     expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      "session-background",
       expect.objectContaining({ id: "background-command" }),
     );
-    expect(publishApprovalIdleSpy).not.toHaveBeenCalled();
+    expect(publishApprovalIdleSpy).toHaveBeenCalledWith(
+      "agent",
+      "foreground-write",
+    );
   });
 
   it("restores an older inline approval after resolving an overlapping newer forwarded approval", async () => {
@@ -4994,8 +5007,8 @@ describe("ChatViewProvider session state sync", () => {
     const uiPublisher = (
       provider as unknown as {
         uiPublisher: {
-          publishApproval: (request: unknown) => void;
-          publishApprovalIdle: () => void;
+          publishApproval: (sessionId: string, request: unknown) => void;
+          publishApprovalIdle: (sessionId: string, id: string) => void;
         };
       }
     ).uiPublisher;
@@ -5014,15 +5027,19 @@ describe("ChatViewProvider session state sync", () => {
     const forwardedRespond = vi.fn(() => true);
     provider.forwardApproval(
       {
-        kind: "command",
-        id: "background-command",
-        command: "npm test",
-        subCommands: [],
+        sessionId: "session-background",
+        request: {
+          kind: "command",
+          id: "background-command",
+          command: "npm test",
+          subCommands: [],
+        },
       },
       forwardedRespond,
     );
 
     expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      "session-background",
       expect.objectContaining({ id: "background-command" }),
     );
 
@@ -5037,9 +5054,13 @@ describe("ChatViewProvider session state sync", () => {
       expect.objectContaining({ id: "background-command", decision: "accept" }),
     );
     expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      "agent",
       expect.objectContaining({ id: "foreground-write" }),
     );
-    expect(publishApprovalIdleSpy).not.toHaveBeenCalled();
+    expect(publishApprovalIdleSpy).toHaveBeenCalledWith(
+      "session-background",
+      "background-command",
+    );
 
     provider.submitBrowserApprovalDecision({
       id: "foreground-write",
@@ -5068,11 +5089,14 @@ describe("ChatViewProvider session state sync", () => {
 
     provider.forwardApproval(
       {
-        kind: "command",
-        id: "native-escalation",
-        command: "dotnet build",
-        cwd: "/workspace",
-        reason: "Needs a host facility.",
+        sessionId: "session-native",
+        request: {
+          kind: "command",
+          id: "native-escalation",
+          command: "dotnet build",
+          cwd: "/workspace",
+          reason: "Needs a host facility.",
+        },
       },
       respond,
     );
@@ -5140,13 +5164,14 @@ describe("ChatViewProvider session state sync", () => {
       "publishQuestionCleared",
     );
 
-    const pendingQuestions = (
-      provider as unknown as {
-        pendingQuestions: Map<string, (raw: unknown) => void>;
-      }
-    ).pendingQuestions;
+    const questionState = provider as unknown as {
+      pendingQuestions: Map<string, (raw: unknown) => void>;
+      questionSessionById: Map<string, string>;
+    };
+    const pendingQuestions = questionState.pendingQuestions;
     const resolveSpy = vi.fn();
     pendingQuestions.set("question-1", resolveSpy);
+    questionState.questionSessionById.set("question-1", "session-1");
 
     (
       provider as unknown as {
@@ -5176,7 +5201,10 @@ describe("ChatViewProvider session state sync", () => {
       answers: { q1: "Yes" },
       notes: {},
     });
-    expect(publishQuestionClearedSpy).toHaveBeenCalledWith("question-1");
+    expect(publishQuestionClearedSpy).toHaveBeenCalledWith(
+      "session-1",
+      "question-1",
+    );
     expect(
       (
         provider as unknown as {
@@ -5198,18 +5226,21 @@ describe("ChatViewProvider session state sync", () => {
     const uiPublisher = (
       provider as unknown as {
         uiPublisher: {
-          publishQuestionProgress: (progress: unknown) => void;
+          publishQuestionProgress: (
+            sessionId: string,
+            progress: unknown,
+          ) => void;
         };
       }
     ).uiPublisher;
     const publishProgressSpy = vi.spyOn(uiPublisher, "publishQuestionProgress");
 
-    const pendingQuestions = (
-      provider as unknown as {
-        pendingQuestions: Map<string, (raw: unknown) => void>;
-      }
-    ).pendingQuestions;
-    pendingQuestions.set("question-live", vi.fn());
+    const questionState = provider as unknown as {
+      pendingQuestions: Map<string, (raw: unknown) => void>;
+      questionSessionById: Map<string, string>;
+    };
+    questionState.pendingQuestions.set("question-live", vi.fn());
+    questionState.questionSessionById.set("question-live", "session-live");
 
     const ok = provider.publishBrowserQuestionProgress({
       id: "question-live",
@@ -5220,7 +5251,7 @@ describe("ChatViewProvider session state sync", () => {
     });
 
     expect(ok).toBe(true);
-    expect(publishProgressSpy).toHaveBeenCalledWith({
+    expect(publishProgressSpy).toHaveBeenCalledWith("session-live", {
       id: "question-live",
       step: 2,
       answers: { q1: "Yes" },

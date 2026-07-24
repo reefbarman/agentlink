@@ -48,6 +48,7 @@ import { IndexerManager } from "./indexer/IndexerManager.js";
 import { registerIndexCommands } from "./indexer/indexCommands.js";
 import { ChatViewProvider } from "./agent/ChatViewProvider.js";
 import { AgentSessionManager } from "./agent/AgentSessionManager.js";
+import { ChatTabController } from "./agent/ChatTabController.js";
 import { ProjectCustomizationRegistry } from "./agent/ProjectCustomizationRegistry.js";
 import {
   getConfiguredBaseThresholdForModel,
@@ -166,6 +167,7 @@ let builtinApprovalPanel: ApprovalPanelProvider;
 let indexerManager: IndexerManager | null = null;
 let chatViewProvider: ChatViewProvider;
 let agentSessionManager: AgentSessionManager;
+let chatTabController: ChatTabController;
 let browserGatewayService: BrowserGatewayService | null = null;
 let browserGatewayServer: BrowserGatewayServer | null = null;
 let browserGatewayAuthToken: string | null = null;
@@ -1017,6 +1019,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const isDevMode =
     __DEV_BUILD__ || context.extensionMode === vscode.ExtensionMode.Development;
   const projectCustomizationRegistry = new ProjectCustomizationRegistry();
+  chatTabController = new ChatTabController(context.workspaceState, { log });
+  context.subscriptions.push(chatTabController);
+  void chatTabController.initialize().catch((error) => {
+    log(`[chat-tabs] Failed to initialize tab layout: ${String(error)}`);
+  });
   chatViewProvider = new ChatViewProvider(
     context.extensionUri,
     context.globalState,
@@ -1311,6 +1318,24 @@ export function activate(context: vscode.ExtensionContext): void {
       },
     },
   );
+  const syncForegroundChatTab = async (): Promise<void> => {
+    const foreground = agentSessionManager.getForegroundSession();
+    if (!foreground) return;
+    await chatTabController.bindFocusedSession(foreground.id);
+  };
+  context.subscriptions.push(
+    agentSessionManager.onDidChangeSessions(() => {
+      void syncForegroundChatTab().catch((error) => {
+        log(`[chat-tabs] Failed to bind foreground session: ${String(error)}`);
+      });
+    }),
+  );
+  void syncForegroundChatTab().catch((error) => {
+    log(
+      `[chat-tabs] Failed to bind initial foreground session: ${String(error)}`,
+    );
+  });
+
   browserGatewayService = new BrowserGatewayService(
     chatViewProvider.getUiEventHub(),
     agentSessionManager,
@@ -1947,12 +1972,10 @@ export function activate(context: vscode.ExtensionContext): void {
     resolveApprovalProjectContext,
   );
   context.subscriptions.push(builtinApprovalPanel);
-  builtinApprovalPanel.onForwardApproval = (req, respond) =>
-    chatViewProvider.forwardApproval(req, respond);
-  builtinApprovalPanel.onForwardApprovalIdle = () =>
-    chatViewProvider.sendApprovalIdle();
-  builtinApprovalPanel.onForwardApprovalCancelled = (id) =>
-    chatViewProvider.cancelForwardedApproval(id);
+  builtinApprovalPanel.onForwardApproval = (...args) =>
+    chatViewProvider.forwardApproval(...args);
+  builtinApprovalPanel.onForwardApprovalCancelled = (...args) =>
+    chatViewProvider.cancelForwardedApproval(...args);
   // Enabling Approve for Me while a command approval card is open re-resolves
   // the card; the command flow detects the policy drift and the retried
   // command is reviewed automatically by the guardian under the new policy.
