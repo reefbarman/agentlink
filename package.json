@@ -1077,6 +1077,7 @@
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/addon-search": "0.15.0",
+    "@xterm/addon-webgl": "0.18.0",
     "@xterm/xterm": "5.5.0",
     "bmp-js": "^0.1.0",
     "diff": "^9.0.0",

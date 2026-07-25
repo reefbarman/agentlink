@@ -843,12 +843,23 @@ export class TerminalWebviewController {
         }
       }
       entry.lastSequence = batch.sequence;
-      const replayWarnings = { ...this.state.replayWarnings };
-      delete replayWarnings[batch.terminalId];
-      this.patchState({
-        blockStates: this.projectBlockStates(),
-        replayWarnings,
-      });
+      // Output-only batches leave block state untouched, and heavy commands
+      // produce a stream of them. Re-projecting and re-rendering for each one
+      // costs more than the write itself. Sticky-block and anchor changes still
+      // publish through their own renderer callbacks.
+      const changesBlockState = batch.operations.some(
+        (operation) => operation.type !== "write",
+      );
+      const hasReplayWarning =
+        this.state.replayWarnings[batch.terminalId] !== undefined;
+      if (changesBlockState || hasReplayWarning) {
+        const replayWarnings = { ...this.state.replayWarnings };
+        delete replayWarnings[batch.terminalId];
+        this.patchState({
+          blockStates: this.projectBlockStates(),
+          replayWarnings,
+        });
+      }
     }
 
     // Ack duplicates as well as newly rendered batches so a lost host-side ack

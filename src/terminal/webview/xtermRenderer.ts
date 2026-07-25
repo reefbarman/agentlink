@@ -1,5 +1,6 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import { WebglAddon } from "@xterm/addon-webgl";
 import {
   Terminal,
   type IBufferLine,
@@ -233,6 +234,28 @@ export function detectTerminalHttpLinks(
   return links;
 }
 
+/**
+ * Attaches the GPU renderer, which parses and paints heavy output far faster
+ * than the DOM renderer and keeps the surface acknowledging batches instead of
+ * falling behind. Returns undefined when WebGL is unavailable so the terminal
+ * silently keeps the DOM renderer.
+ */
+export type AttachGpuRenderer = (terminal: Terminal) => IDisposable | undefined;
+
+export const attachWebglRenderer: AttachGpuRenderer = (terminal) => {
+  try {
+    const addon = new WebglAddon();
+    // A lost context — GPU reset, driver switch, or the compositor dropping the
+    // webview's surface — must fall back to the DOM renderer rather than leave
+    // the terminal blank.
+    addon.onContextLoss(() => addon.dispose());
+    terminal.loadAddon(addon);
+    return addon;
+  } catch {
+    return undefined;
+  }
+};
+
 export function registerTerminalOscDefenses(terminal: Terminal): IDisposable {
   const subscriptions = SUPPRESSED_TERMINAL_OSC_HANDLERS.map((command) =>
     terminal.parser.registerOscHandler(command, (data) => {
@@ -368,14 +391,18 @@ class XtermRenderer implements TerminalRenderer {
   private readonly abortController = new AbortController();
   private readonly ariaLabel: string;
   private readonly callbacks: TerminalRendererCallbacks;
+  private readonly attachGpuRenderer: AttachGpuRenderer;
+  private gpuRenderer: IDisposable | undefined;
   private lastStickyBlockId: string | undefined;
 
   constructor(
     configuration: TerminalSurfaceConfiguration,
     callbacks: TerminalRendererCallbacks,
+    attachGpuRenderer: AttachGpuRenderer = attachWebglRenderer,
   ) {
     this.ariaLabel = callbacks.ariaLabel;
     this.callbacks = callbacks;
+    this.attachGpuRenderer = attachGpuRenderer;
     this.terminal = new Terminal(
       terminalOptions(configuration, callbacks.onLink),
     );
@@ -415,6 +442,8 @@ class XtermRenderer implements TerminalRenderer {
 
   open(container: HTMLElement): void {
     this.terminal.open(container);
+    // The GPU renderer can only attach to an opened terminal.
+    this.gpuRenderer = this.attachGpuRenderer(this.terminal);
     this.terminal.textarea?.setAttribute("aria-label", this.ariaLabel);
     interceptTerminalInputTransfer(
       container,
@@ -522,6 +551,8 @@ class XtermRenderer implements TerminalRenderer {
     this.abortController.abort();
     this.disposeBlockMarkers();
     for (const subscription of this.subscriptions) subscription.dispose();
+    this.gpuRenderer?.dispose();
+    this.gpuRenderer = undefined;
     this.terminal.dispose();
   }
 
@@ -547,3 +578,13 @@ export const xtermRendererFactory: TerminalRendererFactory = {
     return new XtermRenderer(configuration, callbacks);
   },
 };
+
+/** Builds a renderer with an explicit GPU attachment, for tests and hosts that
+ * need to control acceleration. */
+export function createXtermRenderer(
+  configuration: TerminalSurfaceConfiguration,
+  callbacks: TerminalRendererCallbacks,
+  attachGpuRenderer: AttachGpuRenderer,
+): TerminalRenderer {
+  return new XtermRenderer(configuration, callbacks, attachGpuRenderer);
+}
