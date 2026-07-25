@@ -1443,6 +1443,34 @@ describe("AgentSessionManager host injection", () => {
     await expect(stop).resolves.toEqual([session.id]);
   });
 
+  it("stops a running session once and ignores repeated stops", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    session.status = "streaming";
+    session.runState = { phase: "running", startedAt: Date.now() };
+    const abortSpy = vi.fn();
+    (session as unknown as { abort: () => void }).abort = abortSpy;
+    const changes = vi.fn();
+    mgr.onSessionsChanged = changes;
+
+    mgr.stopSession(session.id);
+
+    expect(abortSpy).toHaveBeenCalledTimes(1);
+    expect(session.status).toBe("idle");
+    expect(session.runState).toBeUndefined();
+    const notifyCount = changes.mock.calls.length;
+    expect(notifyCount).toBeGreaterThan(0);
+
+    // Regression: re-stopping an already-idle session must be a no-op. The
+    // v1.17.71 freeze recursed through stop -> sessions-changed -> tab sync
+    // -> stop on the same already-stopped session.
+    mgr.stopSession(session.id);
+    mgr.interruptSession(session.id);
+
+    expect(abortSpy).toHaveBeenCalledTimes(1);
+    expect(changes.mock.calls.length).toBe(notifyCount);
+  });
+
   it("owns stable MCP leases across fresh and inherited request contexts", async () => {
     const hub = {
       getToolDefs: vi.fn(() => []),

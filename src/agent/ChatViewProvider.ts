@@ -3846,13 +3846,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async resolveForegroundSessionTransition(
-    requestedSessionId: string | undefined,
+    requestedSessionId: string | null | undefined,
   ): Promise<string | undefined> {
     const transition = this.foregroundSessionTransition;
-    if (!transition) return requestedSessionId;
+    if (!transition) return requestedSessionId ?? undefined;
 
     if (
-      requestedSessionId !== undefined &&
+      requestedSessionId != null &&
       requestedSessionId !== transition.previousSessionId
     ) {
       if (
@@ -5752,7 +5752,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const mode = hasWorkspaceProjects
           ? ((msg.mode as string) ?? "code")
           : "ask";
-        const sessionId = msg.sessionId as string | undefined;
+        // The webview posts sessionId: null for a not-yet-created chat
+        // (NEW_SESSION state); treat it like undefined so the in-flight
+        // foreground transition is awaited instead of minting a duplicate.
+        const sessionId = (msg.sessionId ?? undefined) as string | undefined;
         const reasoningEffort = resolveReasoningEffortMessage(
           msg.reasoningEffort,
           msg.thinkingEnabled,

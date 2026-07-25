@@ -1255,6 +1255,68 @@ describe("ChatViewProvider session state sync", () => {
     });
   });
 
+  it("reuses the in-flight new-session transition when the webview sends sessionId null", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const transitionSession = {
+      id: "transition-session",
+      mode: "ask",
+      model: "openrouter-moonshotai-kimi-k3",
+      status: "idle",
+      reasoningEffort: "none",
+      activeFilePath: undefined,
+      projectScope: {
+        schemaVersion: 1,
+        kind: "project",
+        projectId: "projectless",
+        workspaceFolderUri: "agentlink://projectless",
+        displayName: "No folder",
+      },
+      projectAvailability: "unavailable",
+    };
+    const createSession = vi.fn(async () => transitionSession);
+    const sendMessage = vi.fn(async () => undefined);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => undefined),
+      getSession: vi.fn((id: string) =>
+        id === transitionSession.id ? transitionSession : undefined,
+      ),
+      getWorkspaceProjects: vi.fn(() => []),
+      createSession,
+      sendMessage,
+    } as never);
+    (
+      provider as unknown as { foregroundSessionTransition?: unknown }
+    ).foregroundSessionTransition = {
+      previousSessionId: "previous-session",
+      promise: Promise.resolve(transitionSession),
+    };
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "agentSend",
+      text: "hello",
+      mode: "ask",
+      sessionId: null,
+    });
+
+    // Regression: sessionId null previously bypassed the transition wait and
+    // minted a duplicate session for the same fresh chat.
+    expect(createSession).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "transition-session",
+      "hello",
+      "ask",
+      expect.anything(),
+    );
+  });
+
   it("routes VS Code model selections through the shared selection path", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(

@@ -49,6 +49,7 @@ import { registerIndexCommands } from "./indexer/indexCommands.js";
 import { ChatViewProvider } from "./agent/ChatViewProvider.js";
 import { AgentSessionManager } from "./agent/AgentSessionManager.js";
 import { ChatTabController, type ChatTab } from "./agent/ChatTabController.js";
+import { createForegroundChatTabSync } from "./agent/chatTabForegroundSync.js";
 import { TabTerminalProviderRegistry } from "./agent/TabTerminalProviderRegistry.js";
 import { WorkspaceMutationCoordinator } from "./agent/WorkspaceMutationCoordinator.js";
 import { ProjectCustomizationRegistry } from "./agent/ProjectCustomizationRegistry.js";
@@ -1369,11 +1370,12 @@ export function activate(context: vscode.ExtensionContext): void {
       },
     },
   );
-  const syncForegroundChatTab = async (): Promise<void> => {
-    const foreground = agentSessionManager.getForegroundSession();
-    if (!foreground) return;
-    await chatTabController.bindFocusedSession(foreground.id);
-  };
+  const syncForegroundChatTab = createForegroundChatTabSync({
+    getForegroundSessionId: () =>
+      agentSessionManager.getForegroundSession()?.id,
+    bindFocusedSession: (sessionId) =>
+      chatTabController.bindFocusedSession(sessionId),
+  });
   context.subscriptions.push(
     agentSessionManager.onDidChangeSessions(() => {
       void syncForegroundChatTab().catch((error) => {

@@ -1171,11 +1171,19 @@ export class AgentSessionManager {
       });
     }
 
+    // session.abortSignal outlives its run: after abort() it stays aborted
+    // until the next createAbortController(). Passing that stale signal made
+    // every post-stop send fail acquisition instantly; treat it as "no signal"
+    // so only a live, unaborted controller can cancel a queued acquisition.
+    const abortSignal =
+      session.abortSignal && !session.abortSignal.aborted
+        ? session.abortSignal
+        : undefined;
     this.setInteractiveExecutionPhase(session.id, "queued_for_workspace_write");
     leaseHolder.acquisition = this.host.workspaceMutationCoordinator.acquire(
       session.id,
       domain,
-      session.abortSignal,
+      abortSignal,
     );
     try {
       const lease = await leaseHolder.acquisition;
@@ -3678,6 +3686,14 @@ export class AgentSessionManager {
       }
       this.materializeInterruptedRunProgress(session);
 
+      // Give the turn a live abort controller before preparation: the writer
+      // lease can queue behind another session, and Stop must be able to
+      // cancel that wait. engine.run() replaces the controller when the run
+      // actually starts; by then the lease no longer needs the early signal.
+      if (typeof session.createAbortController === "function") {
+        session.createAbortController();
+      }
+
       return this.withInteractiveEngine(session.id, async (engine) => {
         const preparedTurn =
           await this.prepareInteractiveTurnExecution(session);
@@ -4098,6 +4114,20 @@ export class AgentSessionManager {
     }
   }
 
+  /**
+   * A stopped session must not be stopped again: stopSingleSession aborts,
+   * persists, and notifies unconditionally, and its sessions-changed notify
+   * re-enters tab-binding sync paths that may stop sessions themselves.
+   */
+  private isSessionStopped(session: AgentSession): boolean {
+    return (
+      (session.status === "idle" || session.status === "error") &&
+      session.runState === undefined &&
+      !this.activeInteractiveEngines.has(session.id) &&
+      !this.bgLaunchQueue.some((queued) => queued.sessionId === session.id)
+    );
+  }
+
   async stopSessionAndWait(sessionId: string): Promise<string[]> {
     const subtreeIds = this.getSessionSubtreeIds(sessionId);
     const settled = subtreeIds.flatMap((currentId) => {
@@ -4123,6 +4153,7 @@ export class AgentSessionManager {
 
   private stopSingleSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
+    if (session && this.isSessionStopped(session)) return;
     if (session) {
       this.setInteractiveExecutionPhase(sessionId, "stopping");
       const exchangeId = session.fleetMetadata?.worktreeExchangeId;

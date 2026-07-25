@@ -157,6 +157,67 @@ describe("ChatTabController", () => {
     expect(controller.getTabForSession("session-1")?.id).toBe("tab-1");
   });
 
+  it("rebinds the focused tab before retiring so re-entrant syncs observe the new binding", async () => {
+    const workspace = createWorkspaceState();
+    const controller = new ChatTabController(workspace.state, {
+      createId: createIds("tab-1"),
+    });
+    await controller.bindFocusedSession("session-restored");
+    const layoutsSeenDuringRetirement: Array<string | null> = [];
+    const retired = vi.fn(async () => {
+      layoutsSeenDuringRetirement.push(controller.getFocusedTab().sessionId);
+      // Production wiring stops the outgoing session here, which fires
+      // sessions-changed and re-enters bindFocusedSession on the same stack.
+      await controller.bindFocusedSession("session-fresh");
+    });
+    controller.onWillRetireTerminalGeneration(retired);
+
+    const tab = await controller.bindFocusedSession("session-fresh");
+
+    expect(tab).toMatchObject({
+      id: "tab-1",
+      sessionId: "session-fresh",
+      terminalGeneration: 2,
+    });
+    expect(retired).toHaveBeenCalledTimes(1);
+    expect(retired).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-restored",
+        terminalGeneration: 1,
+      }),
+    );
+    expect(layoutsSeenDuringRetirement).toEqual(["session-fresh"]);
+  });
+
+  it("mutates layout before retirement for replaceSession and closeTab", async () => {
+    const workspace = createWorkspaceState();
+    const controller = new ChatTabController(workspace.state, {
+      createId: createIds("tab-1", "tab-2"),
+    });
+    await controller.bindFocusedSession("session-1");
+    const second = await controller.createTab("session-2");
+    const observed: Array<{ event: string; layout: string[] }> = [];
+    controller.onWillRetireTerminalGeneration((tab) => {
+      observed.push({
+        event: `retire:${tab.sessionId}`,
+        layout: controller
+          .getLayout()
+          .tabs.map((candidate) => `${candidate.id}=${candidate.sessionId}`),
+      });
+    });
+
+    await controller.replaceSession("tab-1", "session-1", "session-3");
+    await controller.closeTab(second.id);
+
+    expect(observed).toEqual([
+      {
+        event: "retire:session-1",
+        layout: ["tab-1=session-3", "tab-2=session-2"],
+      },
+      { event: "retire:session-2", layout: ["tab-1=session-3"] },
+    ]);
+  });
+
   it("creates stable monotonically numbered tabs without duplicating an open session", async () => {
     const workspace = createWorkspaceState();
     const controller = new ChatTabController(workspace.state, {

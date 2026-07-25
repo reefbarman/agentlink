@@ -151,7 +151,7 @@ export class ChatTabController {
     const focused = this.requireTab(this.focusedTabId);
     if (focused.sessionId === sessionId) return structuredClone(focused);
     const replacingSession = focused.sessionId !== null;
-    if (replacingSession) await this.retireTerminalGeneration(focused);
+    const retiring = structuredClone(focused);
     const next = {
       ...focused,
       sessionId,
@@ -159,7 +159,12 @@ export class ChatTabController {
         ? focused.terminalGeneration + 1
         : focused.terminalGeneration,
     };
+    // The layout must be rebound before the first await: retirement listeners
+    // stop the outgoing session, which fires sessions-changed and re-enters
+    // bindFocusedSession on the same stack. A stale layout here makes that
+    // re-entry retire again, recursing without bound.
     this.replaceTab(next);
+    if (replacingSession) await this.retireTerminalGeneration(retiring);
     await this.commit();
     return structuredClone(next);
   }
@@ -186,13 +191,16 @@ export class ChatTabController {
     if (sessionId === tab.sessionId) {
       return { ok: true, tab: structuredClone(tab) };
     }
-    await this.retireTerminalGeneration(tab);
+    const retiring = structuredClone(tab);
     const next = {
       ...tab,
       sessionId,
       terminalGeneration: tab.terminalGeneration + 1,
     };
+    // Mutate before the retirement await so re-entrant binds observe the new
+    // layout (see bindFocusedSession).
     this.replaceTab(next);
+    await this.retireTerminalGeneration(retiring);
     await this.commit();
     return { ok: true, tab: structuredClone(next) };
   }
@@ -245,7 +253,9 @@ export class ChatTabController {
     ) {
       return false;
     }
-    await this.retireTerminalGeneration(tab);
+    const retiring = structuredClone(tab);
+    // Mutate before the retirement await so re-entrant binds observe the new
+    // layout (see bindFocusedSession).
     this.layout = {
       ...this.layout,
       tabs: this.layout.tabs.filter((candidate) => candidate.id !== tabId),
@@ -253,6 +263,7 @@ export class ChatTabController {
     if (this.focusedTabId === tabId) {
       this.focusedTabId = this.firstDockedTab(this.layout).id;
     }
+    await this.retireTerminalGeneration(retiring);
     await this.commit();
     return true;
   }
