@@ -433,6 +433,7 @@ export interface AppState {
 }
 
 export type AppAction =
+  | { type: "RESTORE_PROJECTION"; state: AppState }
   | { type: "SET_STATE"; state: ChatState }
   | {
       type: "SET_DEBUG_INFO";
@@ -1486,6 +1487,9 @@ export function shouldDropSessionScopedEvent(
 
 export function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
+    case "RESTORE_PROJECTION":
+      return structuredClone(action.state);
+
     case "SET_STATE":
       return {
         ...state,
@@ -2766,6 +2770,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           ];
         }
       }
+      const sameSession = state.chatState.sessionId === action.sessionId;
       return {
         ...state,
         messages: restoredMessages,
@@ -2780,9 +2785,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
         pendingFinalMarker: null,
         lastInputTokens: action.lastInputTokens ?? 0,
         lastOutputTokens: action.lastOutputTokens ?? 0,
+        lastCacheReadTokens: sameSession ? state.lastCacheReadTokens : 0,
+        estimatedTotalUsed: sameSession ? state.estimatedTotalUsed : 0,
         todos: Array.isArray(action.todos) ? action.todos : [],
-        messageQueue: [],
-        questionRequest: null,
+        messageQueue: sameSession ? state.messageQueue : [],
+        questionRequest: sameSession ? state.questionRequest : null,
         detectedQuestion: null,
         dismissedDetectedQuestionIds: [],
         chatState: {

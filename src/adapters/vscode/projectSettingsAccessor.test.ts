@@ -69,7 +69,7 @@ describe("ProjectSettingsAccessor", () => {
     };
     const properties = manifest.contributes.configuration.properties;
 
-    expect(classifications).toHaveLength(57);
+    expect(classifications).toHaveLength(59);
     expect(MACHINE_SCOPED_AGENTLINK_SETTINGS).toContain(
       "terminal.environmentPolicy",
     );

@@ -24,6 +24,7 @@ function Harness({
   onInactiveSessionMessage,
   onMessage,
   replayMessageRef,
+  flushDeltasRef,
 }: {
   postMessage: (message: unknown) => void;
   sessionIdRef: TestRef<string | null>;
@@ -35,12 +36,14 @@ function Harness({
   ) => void;
   onMessage: (msg: ExtensionMessage, controls: WebviewMessageControls) => void;
   replayMessageRef?: TestRef<(message: ExtensionMessage) => void>;
+  flushDeltasRef?: TestRef<() => void>;
 }) {
   const replayMessage = useWebviewMessageConnection({
     vscodeApi: { postMessage },
     sessionIdRef,
     streamingRef,
     openSessionIdsRef,
+    flushDeltasRef,
     dispatchDelta,
     onInactiveSessionMessage,
     onMessage,
@@ -167,6 +170,38 @@ describe("useWebviewMessageConnection", () => {
         partialJson: '{"path":',
       },
     ]);
+  });
+
+  it("flushes pending deltas synchronously before a projection swap", () => {
+    const dispatchDelta = vi.fn<(action: StreamingDeltaAction) => void>();
+    const flushDeltasRef = { current: () => {} };
+    render(
+      <Harness
+        postMessage={vi.fn()}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: true }}
+        flushDeltasRef={flushDeltasRef}
+        dispatchDelta={dispatchDelta}
+        onMessage={(msg, controls) => {
+          if (msg.type === "agentTextDelta") {
+            controls.appendTextDelta(msg.text);
+          }
+        }}
+      />,
+    );
+
+    sendMessage({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "before swap",
+    });
+    flushDeltasRef.current();
+
+    expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(dispatchDelta).toHaveBeenCalledWith({
+      type: "TEXT_DELTA",
+      text: "before swap",
+    });
   });
 
   it("rejects session-mismatched events before routing them", () => {

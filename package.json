@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.17.75",
+  "version": "1.17.77",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -333,6 +333,16 @@
           "maximum": 128,
           "default": 24,
           "description": "Maximum simultaneous streaming model requests per provider for background agents, maintenance work, and native web tools. Foreground session requests are always admitted immediately and never wait on this limit. Higher values improve background parallel throughput but can increase provider rate-limit errors and usage costs."
+        },
+        "agentlink.disabledProviders": {
+          "scope": "window",
+          "type": "array",
+          "default": [],
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "description": "Provider IDs to disable without clearing credentials. Disabled providers are removed from model selection and automatic routing in this window. Built-in IDs are anthropic and codex; configured OpenAI-compatible connection IDs are also supported."
         },
         "agentlink.webAccess.searchBackend": {
           "scope": "window",
@@ -703,11 +713,18 @@
           "pattern": "^(native:auto|acp:[A-Za-z0-9_.-]+)$",
           "description": "Default backend for spawn_background_agent. Use native:auto for AgentLink's built-in background routing, or acp:<id> to launch a configured ACP stdio agent from agentlink.background.acpAgents."
         },
+        "agentlink.background.reviewAgent": {
+          "scope": "resource",
+          "type": "string",
+          "default": "native:auto",
+          "pattern": "^(native:auto|acp:[A-Za-z0-9_.-]+)$",
+          "description": "Backend preference for adversarial review task classes (review_*). Use native:auto for AgentLink's built-in cross-provider review routing, or acp:<id> to use a provider-tagged ACP agent only when it differs from the foreground provider. An explicit model or provider on the spawn request takes precedence."
+        },
         "agentlink.background.acpAgents": {
           "scope": "resource",
           "type": "array",
           "default": [],
-          "description": "ACP-compatible stdio agent subprocesses that can be used as background-agent backends for read-only/review work. Reference an entry with agentlink.background.defaultAgent = acp:<id> or spawn_background_agent provider = acp:<id>.",
+          "description": "ACP-compatible stdio agent subprocesses that can be used as background-agent backends for read-only/review work. Reference an entry with agentlink.background.defaultAgent, agentlink.background.reviewAgent, or spawn_background_agent provider = acp:<id>.",
           "examples": [
             [
               {
@@ -736,6 +753,10 @@
               "label": {
                 "type": "string",
                 "description": "Human-readable label shown in routing/debug output. Defaults to id."
+              },
+              "provider": {
+                "type": "string",
+                "description": "Optional provider family represented by this ACP agent (for example anthropic or codex). When used as background.reviewAgent, matching foreground work falls through to native cross-provider review routing."
               },
               "command": {
                 "type": "string",
@@ -907,7 +928,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Default model per chat mode, keyed by mode slug (e.g. code, architect, ask, debug, review). Manually selecting a model in a mode updates that mode's saved preference."
+          "description": "Default model per chat mode, keyed by mode slug (e.g. code, architect, ask, debug, review). The last model selected in each mode becomes that mode's startup model."
         },
         "agentlink.modeReasoningEffortPreferences": {
           "scope": "resource",

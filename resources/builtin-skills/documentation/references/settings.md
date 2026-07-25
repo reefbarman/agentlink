@@ -7,7 +7,7 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 ## Model and agent behavior
 
 - `agentModel` — legacy global fallback model; prefer `modeModelPreferences`
-- `modeModelPreferences` — default model per mode slug
+- `modeModelPreferences` — startup model per mode slug; the last model selected in each mode becomes that mode's default
 - `modeReasoningEffortPreferences` — default thinking level per mode slug
 - `agentMaxTokens` — max output tokens per response
 - `thinkingBudget`, `showThinking` — extended-thinking budget and UI visibility
@@ -42,9 +42,14 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 ## Background agents
 
 - `background.defaultAgent` — backend for `spawn_background_agent` (`native:auto` or `acp:<id>`)
+- `background.reviewAgent` — optional ACP backend for adversarial `review_*` tasks; the ACP entry's declared provider must differ from the foreground provider or native cross-provider routing is retained
 - `background.acpAgents` — ACP-compatible stdio agent definitions
 - `background.maxConcurrent` — concurrent background agent cap
 - `bgSummary.mode` — how background-agent status strings are summarized
+
+## Providers
+
+- `disabledProviders` — provider IDs temporarily removed from model selection and automatic routing without deleting credentials (`anthropic` and `codex` are the built-in IDs)
 
 ## Browser gateway (remote control)
 

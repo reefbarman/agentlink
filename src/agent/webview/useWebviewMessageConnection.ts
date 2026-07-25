@@ -37,6 +37,7 @@ export interface WebviewMessageConnectionOptions {
   sessionIdRef: ReadonlyRef<string | null>;
   streamingRef: MutableRef<boolean>;
   openSessionIdsRef?: ReadonlyRef<ReadonlySet<string>>;
+  flushDeltasRef?: MutableRef<() => void>;
   dispatchDelta(action: StreamingDeltaAction): void;
   onInactiveSessionMessage?(msg: SessionScopedExtensionMessage): void;
   onMessage(msg: ExtensionMessage, controls: WebviewMessageControls): void;
@@ -114,6 +115,9 @@ export function useWebviewMessageConnection(
       }
       drainDeltaBuffers();
     };
+    if (optionsRef.current.flushDeltasRef) {
+      optionsRef.current.flushDeltasRef.current = flushDeltasNow;
+    }
 
     const processMessage = (
       msg: ExtensionMessage,
@@ -219,6 +223,9 @@ export function useWebviewMessageConnection(
       replayMessageRef.current = () => {};
       if (deltaAnimationFrame !== null) {
         cancelAnimationFrame(deltaAnimationFrame);
+      }
+      if (optionsRef.current.flushDeltasRef) {
+        optionsRef.current.flushDeltasRef.current = () => {};
       }
     };
   }, []);

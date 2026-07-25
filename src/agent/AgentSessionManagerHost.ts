@@ -239,6 +239,7 @@ export function createDefaultAgentSessionManagerHost(args: {
         const config = configurationFor(scope);
         return {
           defaultAgent: config.get<unknown>("background.defaultAgent"),
+          reviewAgent: config.get<unknown>("background.reviewAgent"),
           acpAgents: config.get<unknown>("background.acpAgents"),
         };
       },

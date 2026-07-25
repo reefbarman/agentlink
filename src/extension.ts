@@ -114,7 +114,10 @@ import {
 } from "./util/httpDispatcher.js";
 import { resolveWorkspaceSessionLocation } from "./agent/workspaceSessionIdentity.js";
 import { createSessionProjectScope } from "./core/workspaceProjects.js";
-import { createWorkspaceProjectCatalog } from "./adapters/vscode/workspaceProjectCapabilities.js";
+import {
+  createWorkspaceProjectCatalog,
+  selectNewSessionProject,
+} from "./adapters/vscode/workspaceProjectCapabilities.js";
 import {
   createToolUsageTelemetry,
   type ToolUsageTelemetry,
@@ -258,17 +261,6 @@ function resolveApprovalProjectContext(input: {
     targetPath,
     projectResourceUri: sourceScope?.workspaceFolderUri,
   };
-}
-
-function getExplicitAgentModel(
-  config: vscode.WorkspaceConfiguration,
-): string | undefined {
-  const inspected = config.inspect<string>("agentModel");
-  return (
-    inspected?.workspaceFolderValue ??
-    inspected?.workspaceValue ??
-    inspected?.globalValue
-  );
 }
 
 async function consumeWorktreeStartupIntent(
@@ -999,20 +991,29 @@ export function activate(context: vscode.ExtensionContext): void {
       `[history] No supported workspace state anchor is available; persistence and local execution will remain unavailable until a folder is opened.`,
     );
   }
-  const explicitAgentModel = getExplicitAgentModel(agentConfiguration);
+  const browserPreferredProjectId = context.workspaceState.get<string>(
+    "browserPreferredProjectId",
+  );
+  const startupProjectSelection = selectNewSessionProject(projectCatalog, {
+    activeResourceUri: vscode.window.activeTextEditor?.document.uri.toString(),
+    browserPreferredProjectId,
+  });
+  const startupAgentConfiguration =
+    startupProjectSelection.status === "selected"
+      ? vscode.workspace.getConfiguration(
+          "agentlink",
+          vscode.Uri.parse(startupProjectSelection.scope.workspaceFolderUri),
+        )
+      : agentConfiguration;
   const configuredMode =
-    (vscode.workspace.workspaceFolders?.length ?? 0) === 0
-      ? "ask"
-      : agentConfiguration.get<string>("defaultMode")?.trim() || "code";
-  const configuredModel =
-    explicitAgentModel ??
-    resolveModelForMode(
-      agentConfiguration,
-      configuredMode,
-      FALLBACK_AGENT_MODEL,
-    );
-  const startupModel =
-    explicitAgentModel ?? sessionStore?.list()[0]?.model ?? configuredModel;
+    startupProjectSelection.status === "selected"
+      ? startupAgentConfiguration.get<string>("defaultMode")?.trim() || "code"
+      : "ask";
+  const startupModel = resolveModelForMode(
+    startupAgentConfiguration,
+    configuredMode,
+    FALLBACK_AGENT_MODEL,
+  );
   const migratedThresholds = getMigratedModelCondenseThresholdMap(
     agentConfiguration,
     startupModel,
@@ -1077,6 +1078,18 @@ export function activate(context: vscode.ExtensionContext): void {
   openAiCodexAuthManager.initialize(context);
   const codexProvider = new CodexProvider(openAiCodexAuthManager, agentLog);
   providerRegistry.register(codexProvider);
+  const readDisabledProviderIds = (): string[] => {
+    const raw = vscode.workspace
+      .getConfiguration("agentlink")
+      .get<unknown>("disabledProviders", []);
+    return Array.isArray(raw)
+      ? raw
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : [];
+  };
+  providerRegistry.setDisabledProviders(readDisabledProviderIds());
 
   const openAiCompatibleConfiguration = vscode.workspace.getConfiguration(
     "agentlink.openaiCompatible",
@@ -1131,6 +1144,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const resolvedStartupModel =
     startupModelResolution?.model ??
     providerRegistry.resolveAvailableModel(FALLBACK_AGENT_MODEL)?.model ??
+    providerRegistry.listAllModels()[0]?.id ??
     FALLBACK_AGENT_MODEL;
   if (startupModelResolution?.migratedFrom) {
     log(
@@ -1183,11 +1197,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const getPublishableBrowserGatewayModelCredentialProviderIds =
     (): string[] => [
-      "openai-codex",
-      "anthropic",
+      ...(providerRegistry.isProviderEnabled("codex") ? ["openai-codex"] : []),
+      ...(providerRegistry.isProviderEnabled("anthropic") ? ["anthropic"] : []),
       ...openAiCompatibleProviderManager
         .listProviders()
-        .filter((provider) => provider.authKey !== undefined)
+        .filter(
+          (provider) =>
+            provider.authKey !== undefined &&
+            providerRegistry.isProviderEnabled(provider.id),
+        )
         .map((provider) => provider.id),
     ];
 
@@ -1195,6 +1213,17 @@ export function activate(context: vscode.ExtensionContext): void {
     const discovery = browserGatewayHelperDiscovery;
     const client = browserGatewayHelperModelAuthLeaseClient;
     if (!discovery?.helperGenerationId || !client) return;
+    for (const providerId of readDisabledProviderIds()) {
+      const credentialProviderId =
+        providerId === "codex" ? "openai-codex" : providerId;
+      try {
+        await client.clearCredential(credentialProviderId);
+      } catch (err) {
+        log(
+          `[browser-gateway-helper] disabled ${credentialProviderId} credential clear failed: ${err}`,
+        );
+      }
+    }
     for (const providerId of getPublishableBrowserGatewayModelCredentialProviderIds()) {
       try {
         const credential = await client.grantCredential({
@@ -1221,6 +1250,37 @@ export function activate(context: vscode.ExtensionContext): void {
         );
       }
     }
+  };
+
+  const applyDisabledProviders = async (): Promise<void> => {
+    const disabledProviderIds = readDisabledProviderIds();
+    providerRegistry.setDisabledProviders(disabledProviderIds);
+
+    const foregroundModel = agentSessionManager?.getForegroundSession()?.model;
+    if (
+      foregroundModel &&
+      !providerRegistry.resolveAvailableModel(foregroundModel)
+    ) {
+      const fallbackModel =
+        providerRegistry.resolveAvailableModel(FALLBACK_AGENT_MODEL)?.model ??
+        providerRegistry.listAllModels()[0]?.id;
+      if (fallbackModel) {
+        try {
+          await agentSessionManager.setModel(fallbackModel);
+          void vscode.window.showWarningMessage(
+            `The provider for “${foregroundModel}” is disabled. AgentLink switched this session to “${fallbackModel}”.`,
+          );
+        } catch (error) {
+          log(
+            `[providers] could not move foreground session away from disabled model “${foregroundModel}”: ${error}`,
+          );
+        }
+      }
+    }
+
+    chatViewProvider.refreshModels();
+    await publishBrowserGatewayModelCatalog();
+    await grantBrowserGatewayModelCredentials();
   };
 
   let openAiCompatibleRefreshInFlight:
@@ -1308,9 +1368,6 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   const bgMaxConcurrent = normalizeBackgroundMaxConcurrent(
     getConfig<number>("background.maxConcurrent"),
-  );
-  const browserPreferredProjectId = context.workspaceState.get<string>(
-    "browserPreferredProjectId",
   );
   const terminalOwnerForTab = (tab: ChatTab, sessionId: string) => ({
     tabId: tab.id,
@@ -2197,6 +2254,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // Update agent config when settings change
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("agentlink.disabledProviders")) {
+        void applyDisabledProviders();
+      }
       if (e.affectsConfiguration("agentlink.openaiCompatible.connections")) {
         void refreshOpenAiCompatibleProviders();
       }

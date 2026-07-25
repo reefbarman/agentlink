@@ -60,6 +60,14 @@ const mocks = vi.hoisted(() => {
       getAllMessages: vi.fn(() => []),
       restoreFromStore: vi.fn(),
       rebuildSystemPrompt: vi.fn(async () => {}),
+      updateModelSelection: vi.fn(async function (
+        this: { model: string; providerId: string | undefined },
+        model: string,
+        providerId: string | undefined,
+      ) {
+        this.model = model;
+        this.providerId = providerId;
+      }),
       setMode: vi.fn(async function (this: { mode: string }, mode: string) {
         this.mode = mode;
       }),
@@ -920,6 +928,14 @@ describe("AgentSessionManager host injection", () => {
       getAllMessages: vi.fn(() => []),
       restoreFromStore: vi.fn(),
       rebuildSystemPrompt: vi.fn(async () => {}),
+      updateModelSelection: vi.fn(async function (
+        this: { model: string; providerId: string | undefined },
+        model: string,
+        providerId: string | undefined,
+      ) {
+        this.model = model;
+        this.providerId = providerId;
+      }),
       setMode: vi.fn(async function (this: { mode: string }, mode: string) {
         this.mode = mode;
       }),

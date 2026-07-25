@@ -18,10 +18,13 @@ describe("mode model preferences", () => {
 
   it("preserves an explicitly configured mode preference", () => {
     const config = {
-      get: (key: string) =>
-        key === "modeModelPreferences"
-          ? { code: "gpt-5.3-codex-spark" }
-          : undefined,
+      get: (key: string) => {
+        if (key === "modeModelPreferences") {
+          return { code: "gpt-5.3-codex-spark" };
+        }
+        if (key === "agentModel") return "stale-legacy-model";
+        return undefined;
+      },
     } as never;
 
     expect(resolveModelForMode(config, "code")).toBe("gpt-5.3-codex-spark");

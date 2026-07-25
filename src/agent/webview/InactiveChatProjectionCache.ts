@@ -8,10 +8,6 @@ export class InactiveChatProjectionCache {
   constructor(private readonly maxEventsPerSession = 500) {}
 
   append(message: SessionExtensionMessage): void {
-    if (message.type === "agentDone") {
-      this.bySession.delete(message.sessionId);
-      return;
-    }
     const events = this.bySession.get(message.sessionId) ?? [];
     if (!coalesceDelta(events, message)) {
       events.push(structuredClone(message));

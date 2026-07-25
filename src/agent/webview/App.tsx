@@ -99,6 +99,7 @@ import type {
   ChatWorkspaceViewSnapshot,
 } from "../chatTabProtocol";
 import { InactiveChatProjectionCache } from "./InactiveChatProjectionCache";
+import { ChatProjectionStateCache } from "./ChatProjectionStateCache";
 import { addressChatWebviewMessage } from "./chatTabActions";
 import { useWebviewMessageConnection } from "./useWebviewMessageConnection";
 
@@ -242,6 +243,15 @@ export {
   shouldProjectBackgroundCompletion,
 };
 
+export function selectedWorkspaceSessionId(
+  snapshot: ChatWorkspaceViewSnapshot | null,
+): string | null {
+  return (
+    snapshot?.tabs.find((tab) => tab.tabId === snapshot.focusedTabId)
+      ?.sessionId ?? null
+  );
+}
+
 export function queuedMessagesReadyToDrain(
   queue: MessageQueueItem[],
   editingQueueId: string | null,
@@ -269,8 +279,9 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
   const [workspaceSnapshot, setWorkspaceSnapshot] =
     useState<ChatWorkspaceViewSnapshot | null>(null);
   const workspaceSnapshotRef = useRef<ChatWorkspaceViewSnapshot | null>(null);
-  workspaceSnapshotRef.current = workspaceSnapshot;
   const inactiveProjectionCacheRef = useRef(new InactiveChatProjectionCache());
+  const projectionStateCacheRef = useRef(new ChatProjectionStateCache());
+  const flushConnectionDeltasRef = useRef<() => void>(() => {});
   const vscodeApi = useMemo<VsCodeApi>(
     () => ({
       postMessage: (message) =>
@@ -448,6 +459,41 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
     [],
   );
 
+  const applyWorkspaceSnapshot = useCallback(
+    (snapshot: ChatWorkspaceViewSnapshot) => {
+      const previousSessionId = selectedWorkspaceSessionId(
+        workspaceSnapshotRef.current,
+      );
+      const nextSessionId = selectedWorkspaceSessionId(snapshot);
+      const openSessionIds = new Set(
+        snapshot.tabs.flatMap((tab) => (tab.sessionId ? [tab.sessionId] : [])),
+      );
+      if (previousSessionId !== nextSessionId) {
+        flushConnectionDeltasRef.current();
+        projectionStateCacheRef.current.save(fullStateRef.current);
+        const restored = projectionStateCacheRef.current.restore(
+          nextSessionId,
+          {
+            modes: fullStateRef.current.modes,
+            availableModels: fullStateRef.current.availableModels,
+            slashCommands: fullStateRef.current.slashCommands,
+          },
+        );
+        fullStateRef.current = restored;
+        stateRef.current = restored.chatState;
+        messageQueueRef.current = restored.messageQueue;
+        streamingRef.current = restored.streaming;
+        workspaceSnapshotRef.current = snapshot;
+        dispatch({ type: "RESTORE_PROJECTION", state: restored });
+      }
+      inactiveProjectionCacheRef.current.retainSessions(openSessionIds);
+      projectionStateCacheRef.current.retainSessions(openSessionIds);
+      workspaceSnapshotRef.current = snapshot;
+      setWorkspaceSnapshot(snapshot);
+    },
+    [],
+  );
+
   const replayInactiveSessionMessage = useWebviewMessageConnection({
     vscodeApi,
     sessionIdRef: {
@@ -469,8 +515,10 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
         );
       },
     },
+    flushDeltasRef: flushConnectionDeltasRef,
     dispatchDelta: dispatch,
     onInactiveSessionMessage: (msg) => {
+      if (msg.type === "agentSessionLoaded") return;
       inactiveProjectionCacheRef.current.append(msg);
     },
     onMessage: (msg, controls) => {
@@ -478,28 +526,21 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
 
       switch (msg.type) {
         case "chatWorkspaceUpdate":
-          inactiveProjectionCacheRef.current.retainSessions(
-            new Set(
-              msg.snapshot.tabs.flatMap((tab) =>
-                tab.sessionId ? [tab.sessionId] : [],
-              ),
-            ),
-          );
-          setWorkspaceSnapshot(msg.snapshot);
+          applyWorkspaceSnapshot(msg.snapshot);
           setChatTabFailure(null);
           break;
         case "chatTabActionConfirmationRequested":
           setChatTabConfirmation(msg.request);
           break;
         case "chatTabActionRejected":
-          setWorkspaceSnapshot(msg.rejection.snapshot);
+          applyWorkspaceSnapshot(msg.rejection.snapshot);
           setChatTabConfirmation(null);
           setChatTabFailure(
             "That chat tab changed. Please try the action again.",
           );
           break;
         case "chatTabActionFailed":
-          setWorkspaceSnapshot(msg.failure.snapshot);
+          applyWorkspaceSnapshot(msg.failure.snapshot);
           setChatTabConfirmation(null);
           setChatTabFailure(
             msg.failure.reason === "close_blocked"
@@ -511,10 +552,20 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
                   : "The chat tab could not be updated.",
           );
           break;
-        case "stateUpdate":
+        case "stateUpdate": {
+          const selectedSessionId = selectedWorkspaceSessionId(
+            workspaceSnapshotRef.current,
+          );
+          if (
+            workspaceSnapshotRef.current &&
+            msg.state.sessionId !== selectedSessionId
+          ) {
+            break;
+          }
           streamingRef.current = Boolean(msg.state.streaming);
           dispatch({ type: "SET_STATE", state: msg.state });
           break;
+        }
         case "agentRestoreSessionStart":
           dispatch({ type: "SET_RESTORING_SESSION", restoring: true });
           break;
@@ -684,47 +735,46 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
             editingQueuedMessageRef.current?.id ?? null,
           );
           if (queue.length > 0) {
+            const originSessionId = msg.sessionId;
+            const originMode = stateRef.current.mode;
+            const originReasoningEffort = reasoningEffortRef.current;
             messageQueueRef.current = messageQueueRef.current.filter(
               (q) => !queue.some((item) => item.id === q.id),
             );
+            streamingRef.current = true;
             for (const item of queue) {
               dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
-            }
-            setTimeout(() => {
-              streamingRef.current = true;
-              for (const item of queue) {
-                dispatch({
-                  type: "ADD_USER_MESSAGE",
-                  text: item.text,
-                  isSlashCommand: item.isSlashCommand === true,
-                  slashCommandLabel: item.slashCommandLabel,
-                  displayMedia: item.displayMedia,
-                });
-              }
-              vscodeApi.postMessage({
-                command: "agentSend",
-                text: queue[0]?.fullText ?? queue[0]?.text ?? "",
-                displayText: queue[0]?.text,
-                isSlashCommand: queue[0]?.isSlashCommand === true,
-                slashCommandLabel: queue[0]?.slashCommandLabel,
-                attachments: queue[0]?.attachments,
-                images: queue[0]?.images,
-                documents: queue[0]?.documents,
-                messages: queue.map((item) => ({
-                  text: item.fullText ?? item.text,
-                  displayText: item.text,
-                  isSlashCommand: item.isSlashCommand === true,
-                  slashCommandLabel: item.slashCommandLabel,
-                  attachments: item.attachments,
-                  images: item.images,
-                  documents: item.documents,
-                })),
-                sessionId: stateRef.current.sessionId,
-                mode: stateRef.current.mode,
-                reasoningEffort: reasoningEffortRef.current,
-                thinkingEnabled: reasoningEffortRef.current !== "none",
+              dispatch({
+                type: "ADD_USER_MESSAGE",
+                text: item.text,
+                isSlashCommand: item.isSlashCommand === true,
+                slashCommandLabel: item.slashCommandLabel,
+                displayMedia: item.displayMedia,
               });
-            }, 0);
+            }
+            vscodeApi.postMessage({
+              command: "agentSend",
+              text: queue[0]?.fullText ?? queue[0]?.text ?? "",
+              displayText: queue[0]?.text,
+              isSlashCommand: queue[0]?.isSlashCommand === true,
+              slashCommandLabel: queue[0]?.slashCommandLabel,
+              attachments: queue[0]?.attachments,
+              images: queue[0]?.images,
+              documents: queue[0]?.documents,
+              messages: queue.map((item) => ({
+                text: item.fullText ?? item.text,
+                displayText: item.text,
+                isSlashCommand: item.isSlashCommand === true,
+                slashCommandLabel: item.slashCommandLabel,
+                attachments: item.attachments,
+                images: item.images,
+                documents: item.documents,
+              })),
+              sessionId: originSessionId,
+              mode: originMode,
+              reasoningEffort: originReasoningEffort,
+              thinkingEnabled: originReasoningEffort !== "none",
+            });
           }
           break;
         }
@@ -940,6 +990,13 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
           if (msg.restored && !startupRestorePendingRef.current) {
             break;
           }
+          if (
+            workspaceSnapshotRef.current &&
+            msg.sessionId !==
+              selectedWorkspaceSessionId(workspaceSnapshotRef.current)
+          ) {
+            break;
+          }
           const inactiveEvents = inactiveProjectionCacheRef.current.take(
             msg.sessionId,
           );
@@ -966,12 +1023,8 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
             hasMoreBefore: msg.hasMoreBefore,
           });
           setShowHistory(false);
-          if (inactiveEvents.length > 0) {
-            setTimeout(() => {
-              for (const inactiveEvent of inactiveEvents) {
-                replayInactiveSessionMessage(inactiveEvent);
-              }
-            }, 0);
+          for (const inactiveEvent of inactiveEvents) {
+            replayInactiveSessionMessage(inactiveEvent);
           }
           break;
         }

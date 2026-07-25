@@ -16,12 +16,13 @@ export type BackgroundBackendRoute =
       backend: "acp";
       reference: string;
       agent: AcpBackgroundAgentConfig;
-      reason: "explicit_provider" | "default_agent";
+      reason: "explicit_provider" | "review_agent" | "default_agent";
     };
 
 export function resolveBackgroundBackendRoute(
   settings: BackgroundAgentSettings,
-  request: Pick<SpawnBackgroundRequest, "provider">,
+  request: Pick<SpawnBackgroundRequest, "model" | "provider" | "taskClass">,
+  context: { foregroundProvider?: string } = {},
 ): BackgroundBackendRoute {
   const requestedProvider = request.provider?.trim();
   if (isAcpBackgroundAgentReference(requestedProvider)) {
@@ -30,6 +31,43 @@ export function resolveBackgroundBackendRoute(
       reference: requestedProvider,
       agent: resolveAcpBackgroundAgent(settings, requestedProvider),
       reason: "explicit_provider",
+    };
+  }
+
+  // Any explicit native provider or model is authoritative and bypasses
+  // configured ACP preferences, including the review-only preference.
+  if (requestedProvider || request.model?.trim()) {
+    return { backend: "native" };
+  }
+
+  const taskClass = request.taskClass?.trim().toLowerCase();
+  if (
+    taskClass?.startsWith("review_") &&
+    isAcpBackgroundAgentReference(settings.reviewAgent)
+  ) {
+    const reviewAgent = resolveAcpBackgroundAgent(
+      settings,
+      settings.reviewAgent,
+    );
+    if (!reviewAgent.provider) {
+      throw new Error(
+        `ACP review agent "${reviewAgent.id}" requires a provider so adversarial routing can avoid same-provider reviews.`,
+      );
+    }
+    // Preserve adversarial review routing. A provider-tagged ACP reviewer only
+    // replaces the opposite-provider lane; same-provider foreground work falls
+    // through to AgentLink's native cross-provider model router.
+    if (
+      reviewAgent.provider &&
+      context.foregroundProvider?.toLowerCase() === reviewAgent.provider
+    ) {
+      return { backend: "native" };
+    }
+    return {
+      backend: "acp",
+      reference: settings.reviewAgent,
+      agent: reviewAgent,
+      reason: "review_agent",
     };
   }
 

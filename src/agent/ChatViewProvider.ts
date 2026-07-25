@@ -1739,6 +1739,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private maybeRefreshAnthropicModels(options?: { force?: boolean }): void {
     const provider = this.anthropicProvider;
     if (!provider?.listAvailableModels) return;
+    if (!providerRegistry.isProviderEnabled("anthropic")) return;
     // Flag-off kill switch: no dynamic refresh, no registry rebuild, no bump.
     const enabled = (provider as { dynamicModelCapabilitiesEnabled?: boolean })
       .dynamicModelCapabilitiesEnabled;

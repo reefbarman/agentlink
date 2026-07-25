@@ -2549,9 +2549,24 @@ export class AgentSessionManager {
     scope?: Readonly<SessionProjectScope>,
   ): string {
     try {
-      return this.resolveAvailableModelId(
-        this.host.config.resolveModelForMode(mode, this.config.model, scope),
+      const configuredModel = this.host.config.resolveModelForMode(
+        mode,
+        this.config.model,
+        scope,
       );
+      const resolvedModel =
+        this.host.providers.resolveAvailableModel(configuredModel)?.model;
+      if (resolvedModel) return resolvedModel;
+      const fallbackModel = this.host.providers.resolveAvailableModel(
+        this.config.model,
+      )?.model;
+      if (fallbackModel) {
+        this.log?.(
+          `[model] configured ${mode} model "${configuredModel}" is unavailable; using "${fallbackModel}" for this session`,
+        );
+        return fallbackModel;
+      }
+      return configuredModel;
     } catch (err) {
       this.log?.(
         `[agent] Failed to resolve configured model for mode ${mode}: ${err instanceof Error ? err.message : String(err)}`,
@@ -2789,18 +2804,12 @@ export class AgentSessionManager {
     });
     if (!fg) return model;
 
-    fg.model = model;
-    this.applyThresholdToSession(fg);
     const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
-    if (newProviderId !== fg.providerId) {
-      fg.providerId = newProviderId;
-      if (!projectless) {
-        await fg.rebuildSystemPrompt({
-          devMode: this.devMode,
-          workspaceFolders: this.getWorkspaceFolders(),
-        });
-      }
-    }
+    await fg.updateModelSelection(model, newProviderId, {
+      devMode: this.devMode,
+      workspaceFolders: this.getWorkspaceFolders(),
+    });
+    this.applyThresholdToSession(fg);
     await this.maybeAutoCondenseForegroundSession();
     if (requestedModel !== model) {
       this.log?.(
@@ -6520,12 +6529,18 @@ export class AgentSessionManager {
         )}`
       : message;
 
+    const fg = this.getForegroundSession();
+    parentSessionId = parent?.id;
+    const foregroundModel = parent?.model ?? fg?.model ?? this.config.model;
+    const foregroundProvider =
+      parent?.providerId ??
+      fg?.providerId ??
+      this.host.providers.tryResolveProvider(foregroundModel)?.id;
     const backendRoute = resolveBackgroundBackendRoute(
       this.getBackgroundAgentSettings(inheritedScope),
       request,
+      { foregroundProvider },
     );
-    const fg = this.getForegroundSession();
-    parentSessionId = parent?.id;
 
     if (backendRoute.backend === "acp") {
       this.ensureParentWriterCanSpawnSharedChild(
@@ -6545,6 +6560,12 @@ export class AgentSessionManager {
       );
       const resolvedMode = request.mode?.trim() || "review";
       const taskClass = request.taskClass?.trim() || "review";
+      const acpRoutingReason =
+        backendRoute.reason === "explicit_provider"
+          ? `explicit ACP provider override (${backendRoute.reference})`
+          : backendRoute.reason === "review_agent"
+            ? `configured adversarial review ACP agent (${backendRoute.reference})`
+            : `configured default ACP background agent (${backendRoute.reference})`;
       const session = await this.createBoundSession({
         mode: resolvedMode,
         config: {
@@ -6575,10 +6596,7 @@ export class AgentSessionManager {
         resolvedModel: `acp:${backendRoute.agent.id}`,
         resolvedProvider: "acp",
         taskClass,
-        routingReason:
-          backendRoute.reason === "explicit_provider"
-            ? `explicit ACP provider override (${backendRoute.reference})`
-            : `configured default ACP background agent (${backendRoute.reference})`,
+        routingReason: acpRoutingReason,
         fallbackUsed: false,
         toolCalls: 0,
         tokenUsage: 0,
@@ -6597,10 +6615,7 @@ export class AgentSessionManager {
         resolvedModel: `acp:${backendRoute.agent.id}`,
         resolvedProvider: "acp",
         taskClass,
-        routingReason:
-          backendRoute.reason === "explicit_provider"
-            ? `explicit ACP provider override (${backendRoute.reference})`
-            : `configured default ACP background agent (${backendRoute.reference})`,
+        routingReason: acpRoutingReason,
         fallbackUsed: false,
         delegation: {
           ownedPaths: request.ownedPaths,
@@ -6804,16 +6819,12 @@ export class AgentSessionManager {
         resolvedModel: `acp:${backendRoute.agent.id}`,
         resolvedProvider: "acp",
         taskClass,
-        routingReason:
-          backendRoute.reason === "explicit_provider"
-            ? `explicit ACP provider override (${backendRoute.reference})`
-            : `configured default ACP background agent (${backendRoute.reference})`,
+        routingReason: acpRoutingReason,
         fallbackUsed: false,
       };
     }
 
     const foregroundMode = parent?.mode ?? fg?.mode ?? "code";
-    const foregroundModel = parent?.model ?? fg?.model ?? this.config.model;
 
     const route = await resolveBackgroundRoute(this.host.providers, request, {
       mode: foregroundMode,

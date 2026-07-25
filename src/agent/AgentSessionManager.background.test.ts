@@ -848,6 +848,67 @@ describe("AgentSessionManager background agents", () => {
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
   });
 
+  it("routes only opposite-provider review tasks through the configured ACP reviewer", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      reviewAgent: "acp:claude",
+      acpAgents: [
+        {
+          id: "claude",
+          provider: "anthropic",
+          command: "claude-agent-acp",
+        },
+      ],
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Adversarial ACP review" },
+          },
+        });
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "end_turn" },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      { ...config, model: "gpt-5.6-sol" },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    const parent = await mgr.createSession("code");
+    parent.providerId = "codex";
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "adversarial review",
+        message: "review this",
+        taskClass: "review_code",
+      },
+      parent.id,
+    );
+    const result = await mgr.waitForBackground(spawned.sessionId);
+
+    expect(result).toBe("Adversarial ACP review");
+    expect(spawned).toMatchObject({
+      resolvedProvider: "acp",
+      resolvedModel: "acp:claude",
+      taskClass: "review_code",
+      routingReason: "configured adversarial review ACP agent (acp:claude)",
+    });
+    expect(acpBackgroundRunner.run).toHaveBeenCalledOnce();
+    expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
+  });
+
   it("preserves ACP message and tool images for the caller", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       acpAgents: [{ id: "image-agent", command: "image-agent-acp" }],

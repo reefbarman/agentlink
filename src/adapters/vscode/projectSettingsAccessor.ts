@@ -12,6 +12,7 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "qdrantUrl",
   "bgSummary.mode",
   "background.defaultAgent",
+  "background.reviewAgent",
   "background.acpAgents",
   "background.maxConcurrent",
   "autoIndex",
@@ -43,6 +44,7 @@ export const MACHINE_SCOPED_AGENTLINK_SETTINGS = [
 
 export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "provider.maxConcurrentRequests",
+  "disabledProviders",
   "webAccess.searchBackend",
   "webAccess.fetchBackend",
   "webAccess.nativeSearchMode",

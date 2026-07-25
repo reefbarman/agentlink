@@ -1,12 +1,12 @@
-import { describe, expect, it } from "vitest";
-
-import type { AppState } from "./chatProjection.js";
-import type { ChatMessage } from "../agent/webview/types.js";
 import {
   agentMessagesToChatMessages,
   initialState,
   reducer,
 } from "./chatProjection.js";
+import { describe, expect, it } from "vitest";
+
+import type { AppState } from "./chatProjection.js";
+import type { ChatMessage } from "../agent/webview/types.js";
 
 describe("original prompt projection", () => {
   it("keeps the first submitted prompt stable across later user turns", () => {
@@ -49,6 +49,87 @@ describe("original prompt projection", () => {
     });
 
     expect(restored.originalPrompt).toBe("Original prompt");
+  });
+});
+
+describe("session projection isolation", () => {
+  const queuedMessage = {
+    id: "queue-1",
+    text: "queued message",
+    displayText: "queued message",
+    isSlashCommand: false,
+  };
+
+  function loadSession(state: AppState, sessionId: string): AppState {
+    return reducer(state, {
+      type: "LOAD_SESSION",
+      sessionId,
+      title: "Session",
+      mode: "code",
+      model: "model",
+      messages: [],
+      todos: [],
+    });
+  }
+
+  it("preserves live queue and usage fields during same-session hydration", () => {
+    const current: AppState = {
+      ...initialState,
+      chatState: { ...initialState.chatState, sessionId: "session-1" },
+      messageQueue: [queuedMessage],
+      questionRequest: { id: "question-1", context: "", questions: [] },
+      lastCacheReadTokens: 125_000,
+      estimatedTotalUsed: 250_000,
+    };
+
+    const loaded = loadSession(current, "session-1");
+
+    expect(loaded.messageQueue).toEqual([queuedMessage]);
+    expect(loaded.questionRequest?.id).toBe("question-1");
+    expect(loaded.lastCacheReadTokens).toBe(125_000);
+    expect(loaded.estimatedTotalUsed).toBe(250_000);
+  });
+
+  it("clears session-local queue and usage fields during cross-session hydration", () => {
+    const current: AppState = {
+      ...initialState,
+      chatState: { ...initialState.chatState, sessionId: "session-1" },
+      messageQueue: [queuedMessage],
+      questionRequest: { id: "question-1", context: "", questions: [] },
+      lastCacheReadTokens: 125_000,
+      estimatedTotalUsed: 250_000,
+    };
+
+    const loaded = loadSession(current, "session-2");
+
+    expect(loaded.messageQueue).toEqual([]);
+    expect(loaded.questionRequest).toBeNull();
+    expect(loaded.lastCacheReadTokens).toBe(0);
+    expect(loaded.estimatedTotalUsed).toBe(0);
+  });
+
+  it("restores the supplied projection without retaining fields from current state", () => {
+    const current: AppState = {
+      ...initialState,
+      chatState: { ...initialState.chatState, sessionId: "session-1" },
+      estimatedTotalUsed: 250_000,
+    };
+    const destination: AppState = {
+      ...initialState,
+      chatState: { ...initialState.chatState, sessionId: "session-2" },
+      messageQueue: [queuedMessage],
+      lastCacheReadTokens: 50_000,
+      estimatedTotalUsed: 75_000,
+    };
+
+    const restored = reducer(current, {
+      type: "RESTORE_PROJECTION",
+      state: destination,
+    });
+
+    expect(restored).toEqual(destination);
+    expect(restored).not.toBe(destination);
+    expect(restored.messageQueue).not.toBe(destination.messageQueue);
   });
 });
 
