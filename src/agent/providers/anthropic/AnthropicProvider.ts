@@ -219,6 +219,8 @@ export class AnthropicProvider implements ModelProvider {
       maxTokens,
       reasoningEffort,
       supportsAdaptiveThinking: this.supportsAdaptiveThinking(model),
+      requiresExplicitThinkingDisable:
+        this.requiresExplicitThinkingDisable(model),
       thinking,
       tools,
       hostedTools,
@@ -270,6 +272,11 @@ export class AnthropicProvider implements ModelProvider {
       const params = requestParams as unknown as Record<string, unknown>;
       params.thinking = { type: "adaptive", display: "summarized" };
       params.output_config = { effort: requestedEffort };
+    } else if (this.requiresExplicitThinkingDisable(model)) {
+      // Omitting `thinking` runs adaptive thinking on these models; the
+      // "none" effort level must disable it explicitly.
+      const params = requestParams as unknown as Record<string, unknown>;
+      params.thinking = { type: "disabled" };
     }
 
     const response = request.signal
@@ -309,6 +316,18 @@ export class AnthropicProvider implements ModelProvider {
       return this.catalog.supportsAdaptiveThinking(model);
     }
     return staticSupportsAdaptiveThinking(model);
+  }
+
+  /**
+   * Whether turning thinking off requires an explicit `{type: "disabled"}`
+   * (models that think when the field is omitted). Same sourcing rules as
+   * supportsAdaptiveThinking.
+   */
+  private requiresExplicitThinkingDisable(model: string): boolean {
+    if (this.dynamicCapabilitiesEnabled) {
+      return this.catalog.requiresExplicitThinkingDisable(model);
+    }
+    return staticRequiresExplicitThinkingDisable(model);
   }
 
   private tryInitializeClient(): void {
@@ -353,6 +372,13 @@ function copyModelCapabilities(
 /** Static fallback used when dynamic model capabilities are disabled. */
 function staticSupportsAdaptiveThinking(model: string): boolean {
   return Boolean(ANTHROPIC_MODEL_CAPABILITIES[model]?.supportsAdaptiveThinking);
+}
+
+/** Static fallback used when dynamic model capabilities are disabled. */
+function staticRequiresExplicitThinkingDisable(model: string): boolean {
+  return Boolean(
+    ANTHROPIC_MODEL_CAPABILITIES[model]?.requiresExplicitThinkingDisable,
+  );
 }
 
 export interface AnthropicReplaySanitizationResult {

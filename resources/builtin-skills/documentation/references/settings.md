@@ -13,7 +13,7 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 - `thinkingBudget`, `showThinking` — extended-thinking budget and UI visibility
 - `defaultMode` — mode for new sessions
 - `anthropic.dynamicModelCapabilities` — refresh Anthropic model metadata from the API
-- `provider.maxConcurrentRequests` — cap on simultaneous streaming model requests per provider
+- `provider.maxConcurrentRequests` — cap on simultaneous background model requests per provider (foreground turns are always admitted immediately)
 
 ## Context condensing
 
@@ -76,5 +76,5 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 
 - `terminal.enabled`, `terminal.nodePath` — sandbox-backed AgentLink terminals (macOS hosts)
 - `terminal.environmentPolicy` — sandbox command environment inheritance; the default inherits all host variables, including credential-like names, while helper-reserved variables remain host-controlled
-- `worktreeDirectorySuffix` — sibling worktree container naming for `start_worktree_agent`
+- `worktreeDirectorySuffix` — sibling worktree container naming for the manual `/worktree` flow
 - `diagnosticDelay` — ms to wait after save for diagnostics to settle

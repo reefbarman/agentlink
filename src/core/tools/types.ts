@@ -74,6 +74,12 @@ export interface AgentToolExecutionContext {
   toolProfile?: string;
   /** Exact tool names exposed in the provider request that emitted this call. */
   availableToolNames?: ReadonlySet<string>;
+  /**
+   * Tool names permitted by the session's current mode when the advertised
+   * list is the mode-independent union (cache-stable tool definitions).
+   * Dispatch rejects advertised-but-out-of-mode tools with a structured error.
+   */
+  modeAllowedToolNames?: ReadonlySet<string>;
   /** Run-scoped accounting shared by top-level and nested tool dispatch. */
   toolCallBudget?: ToolCallBudget;
   /** Current tool-call identity, used as the parent for nested activity. */

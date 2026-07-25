@@ -3,8 +3,13 @@ import * as vscode from "vscode";
 const LEGACY_THRESHOLD_KEY = "autoCondenseThreshold";
 export const MODEL_THRESHOLD_KEY = "modelCondenseThresholds";
 
-const LARGE_CONTEXT_DEFAULT_THRESHOLD = 0.7;
-const LEGACY_LARGE_MODEL_DEFAULT_THRESHOLD = 0.6;
+// Condensing is the expensive event, not carrying context: each condense costs
+// a full summarization request and invalidates the entire prompt cache, so the
+// next request reprocesses the whole rewritten history uncached. With healthy
+// caching, large contexts are cheap per-request — condense near the limit
+// (like Claude Code/Codex auto-compaction), not as routine hygiene.
+const LARGE_CONTEXT_DEFAULT_THRESHOLD = 0.85;
+const LEGACY_LARGE_MODEL_DEFAULT_THRESHOLD = 0.8;
 const OTHER_MODELS_DEFAULT_THRESHOLD = 0.9;
 const LARGE_CONTEXT_WINDOW_TOKENS = 1_000_000;
 const MIN_THRESHOLD = 0.1;
@@ -21,7 +26,10 @@ export function isAnthropicFrontierModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
   return (
     lower.startsWith("claude-") &&
-    (lower.includes("sonnet") || lower.includes("opus"))
+    (lower.includes("sonnet") ||
+      lower.includes("opus") ||
+      lower.includes("fable") ||
+      lower.includes("mythos"))
   );
 }
 

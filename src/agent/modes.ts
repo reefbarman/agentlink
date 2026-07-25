@@ -13,6 +13,28 @@ export interface AgentMode {
   customInstructions?: string;
 }
 
+/**
+ * Synthetic mode whose tool groups are the union of the given modes'. Used to
+ * advertise a mode-independent tool list so switching modes never changes the
+ * provider request's tool definitions (which would invalidate the entire
+ * prompt-cache prefix). Per-mode restrictions are enforced at dispatch time
+ * instead. "read-only-command" is subsumed when full "command" is present so
+ * the union does not downgrade execute_command's advertised schema.
+ */
+export function buildUnionAgentMode(modes: readonly AgentMode[]): AgentMode {
+  const groups = new Set<string>();
+  for (const mode of modes) {
+    for (const group of mode.toolGroups) groups.add(group);
+  }
+  if (groups.has("command")) groups.delete("read-only-command");
+  return {
+    slug: "all-modes",
+    name: "All Modes",
+    icon: "circuit-board",
+    toolGroups: [...groups].sort(),
+  };
+}
+
 export const BUILT_IN_MODES: AgentMode[] = [
   {
     slug: "code",

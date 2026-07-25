@@ -301,6 +301,57 @@ describe("resolveBackgroundRoute", () => {
     expect(route.thinkingBudget).toBe(6000);
   });
 
+  it("prefers Claude Opus 5 over Opus 4.8 for balanced Anthropic reviews when both are available", async () => {
+    const sonnet5 = makeModel("claude-sonnet-5", "anthropic");
+    const opus5 = makeModel("claude-opus-5", "anthropic");
+    const opus48 = makeModel("claude-opus-4-8", "anthropic");
+    const codexModel = makeModel("gpt-5-mini", "codex", {
+      supportsThinking: false,
+    });
+    const registry = makeRegistry([
+      makeProvider("anthropic", [opus48, sonnet5, opus5], true),
+      makeProvider("codex", [codexModel], true),
+    ]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      {
+        task: "Review patch",
+        message: "Quick review of these changes",
+        taskClass: "review_code",
+      },
+      { mode: "code", model: "gpt-5" },
+    );
+
+    expect(route.resolvedProvider).toBe("anthropic");
+    expect(route.resolvedModel).toBe("claude-opus-5");
+    expect(route.routingReason).toContain("policy=review-preference");
+  });
+
+  it("prefers Claude Opus 5 over Opus 4.8 for non-review Anthropic background work", async () => {
+    const sonnet5 = makeModel("claude-sonnet-5", "anthropic");
+    const opus5 = makeModel("claude-opus-5", "anthropic");
+    const opus48 = makeModel("claude-opus-4-8", "anthropic");
+    const registry = makeRegistry([
+      makeProvider("anthropic", [opus48, sonnet5, opus5], true),
+    ]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      {
+        task: "Research",
+        message: "Investigate the flaky test",
+        taskClass: "research",
+      },
+      // Foreground model is not registered, so routing falls through to the
+      // scored/default pick instead of the foreground fast path.
+      { mode: "ask", model: "gpt-5" },
+    );
+
+    expect(route.resolvedProvider).toBe("anthropic");
+    expect(route.resolvedModel).toBe("claude-opus-5");
+  });
+
   it("defaults explicit anthropic provider routing to opus when fable is also available", async () => {
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
     const opus = makeModel("claude-opus-4-8", "anthropic");

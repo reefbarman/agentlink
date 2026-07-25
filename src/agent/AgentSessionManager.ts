@@ -685,10 +685,7 @@ export class AgentSessionManager {
    * concurrency slot so the awaited work can be scheduled.
    */
   private bgResultWaitHolds = new Map<string, number>();
-  private readonly worktreeMonitorTimers = new Map<
-    string,
-    ReturnType<AgentSessionManagerHost["timers"]["setInterval"]>
-  >();
+
   private fleetVisibilityExpiryTimer?: ReturnType<
     AgentSessionManagerHost["timers"]["setTimeout"]
   >;
@@ -1140,13 +1137,21 @@ export class AgentSessionManager {
       );
   }
 
+  private getAgentTreeScopeId(session: AgentSession): string {
+    return session.fleetMetadata?.rootSessionId ?? session.id;
+  }
+
   private createWorkspaceMutationDomain(
+    session: AgentSession,
     roots = this.getAvailableWorkspaceProjects().map(
       (project) => project.rootPath,
     ),
   ): WorkspaceMutationDomain | undefined {
     return roots.length > 0
-      ? this.host.workspaceMutationCoordinator.createDomain(roots)
+      ? this.host.workspaceMutationCoordinator.createDomain(
+          roots,
+          this.getAgentTreeScopeId(session),
+        )
       : undefined;
   }
 
@@ -1159,7 +1164,7 @@ export class AgentSessionManager {
   ): Promise<WorkspaceMutationLease | undefined> {
     if (leaseHolder.lease) return leaseHolder.lease;
     if (leaseHolder.acquisition) return leaseHolder.acquisition;
-    const domain = this.createWorkspaceMutationDomain(roots);
+    const domain = this.createWorkspaceMutationDomain(session, roots);
     if (!domain) return undefined;
 
     const conflictingAncestorId = this.findMutationLeaseOwningAncestor(session);
@@ -1167,7 +1172,7 @@ export class AgentSessionManager {
       throw new FleetAdmissionError({
         ok: false,
         code: "workspace_conflict",
-        message: `Workspace mutation rejected: this shared-workspace descendant cannot acquire a writer lease while ancestor ${conflictingAncestorId} owns the same mutation domain. Use a read-only profile or worktree: 'isolated'.`,
+        message: `Workspace mutation rejected: this descendant cannot acquire a writer lease while ancestor ${conflictingAncestorId} owns the same agent-tree mutation domain. Use a read-only profile or delegate a disjoint scope.`,
       });
     }
 
@@ -1456,7 +1461,12 @@ export class AgentSessionManager {
   private cloneMcpToolDefinitions(
     context: Readonly<ToolDispatchContext> | undefined,
   ): import("./providers/types.js").ToolDefinition[] {
-    return context?.mcpHub ? structuredClone(context.mcpHub.getToolDefs()) : [];
+    if (!context?.mcpHub) return [];
+    const tools =
+      context.mcpToolAccess === "read-only"
+        ? context.mcpHub.getReadOnlyToolDefs()
+        : context.mcpHub.getToolDefs();
+    return structuredClone(tools);
   }
 
   private preparedTurnMayMutateWorkspace(
@@ -1494,9 +1504,14 @@ export class AgentSessionManager {
     return tools.some((tool) => {
       if (tool.name === "execute_command") return !usesReadOnlyCommand;
       if (tool.name === "call_mcp_tool") {
-        return preparedTurn.mcpToolDefinitions.length > 0;
+        return (
+          preparedTurn.context?.mcpToolAccess !== "read-only" &&
+          preparedTurn.mcpToolDefinitions.length > 0
+        );
       }
-      if (parseMcpToolName(tool.name)) return true;
+      if (parseMcpToolName(tool.name)) {
+        return preparedTurn.context?.mcpToolAccess !== "read-only";
+      }
       const metadata = getToolCapabilityMetadata(tool.name);
       if (!metadata) return true;
       if (metadata.sideEffect === "write") return true;
@@ -2402,6 +2417,7 @@ export class AgentSessionManager {
         mutation: this.host.workspaceMutationCoordinator.getSnapshot(
           project.rootPath,
           session.id,
+          this.getAgentTreeScopeId(session),
         ),
       });
       changed = true;
@@ -3186,6 +3202,13 @@ export class AgentSessionManager {
       },
       messages,
       transcriptRevision,
+      ...(session.modeInstructionAnchors?.length
+        ? {
+            modeInstructionAnchors: structuredClone(
+              session.modeInstructionAnchors,
+            ),
+          }
+        : {}),
       metadata: {
         projectScope: session.projectScope,
         activeContextResourceUri: session.activeContextResourceUri,
@@ -4924,6 +4947,7 @@ export class AgentSessionManager {
       return { ok: false, reason: "workspace_mutation_conflict" };
     }
     const domain = this.createWorkspaceMutationDomain(
+      session,
       projectSnapshots.map(({ project }) => project.rootPath),
     );
     if (!domain) return { ok: false, reason: "workspace_revert_failed" };
@@ -4939,6 +4963,7 @@ export class AgentSessionManager {
           this.host.workspaceMutationCoordinator.findConflict(
             project.rootPath,
             snapshot.mutation!,
+            snapshot.mutation!.scopeId,
           )
         ) {
           return { ok: false, reason: "workspace_mutation_conflict" };
@@ -5432,6 +5457,7 @@ export class AgentSessionManager {
       loadedSkills: metadata.loadedSkills ?? [],
       runState: interruptedRunRecovery.runState,
       messages: interruptedRunRecovery.messages,
+      modeInstructionAnchors: readResult.value.modeInstructionAnchors,
     });
 
     if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
@@ -6413,6 +6439,14 @@ export class AgentSessionManager {
       throw new Error("No tool context — cannot spawn background agent");
     }
 
+    const legacyWorktree = (
+      request as SpawnBackgroundRequest & { worktree?: unknown }
+    ).worktree;
+    if (legacyWorktree !== undefined) {
+      throw new Error(
+        "spawn_background_agent cannot create worktrees; use the explicit /worktree command instead",
+      );
+    }
     const task = request.task?.trim();
     const message = request.message?.trim();
     if (!task || !message) {
@@ -6485,18 +6519,6 @@ export class AgentSessionManager {
           },
         )}`
       : message;
-
-    if (request.worktree === "isolated") {
-      if (request.images?.length) {
-        throw new Error(
-          "Image handoff is not supported for isolated-worktree background agents; use a native shared background agent or save the images in the workspace and reference their paths.",
-        );
-      }
-      return this.spawnIsolatedWorktree(
-        { ...request, message: executionMessage },
-        parent,
-      );
-    }
 
     const backendRoute = resolveBackgroundBackendRoute(
       this.getBackgroundAgentSettings(inheritedScope),
@@ -6584,7 +6606,6 @@ export class AgentSessionManager {
           ownedPaths: request.ownedPaths,
           forbiddenPaths: request.forbiddenPaths,
           permissionProfile: request.permissionProfile,
-          worktree: request.worktree,
           expectedResult: request.expectedResult,
         },
         budget: request.budget,
@@ -6814,8 +6835,7 @@ export class AgentSessionManager {
       effectiveToolProfile === "worktree-setup";
     this.ensureParentWriterCanSpawnSharedChild(
       parent,
-      usesReadOnlyNativeProfile &&
-        this.cloneMcpToolDefinitions(parentRequestContext).length === 0,
+      usesReadOnlyNativeProfile,
     );
 
     this.log?.(
@@ -6891,7 +6911,6 @@ export class AgentSessionManager {
         ownedPaths: request.ownedPaths,
         forbiddenPaths: request.forbiddenPaths,
         permissionProfile: effectivePermissionProfile,
-        worktree: request.worktree,
         expectedResult: effectiveExpectedResult,
       },
       budget: effectiveBudget,
@@ -6916,6 +6935,9 @@ export class AgentSessionManager {
         effectiveToolProfile === "readonly-research"
           ? "read-only"
           : baseCtx.commandExecutionPolicy,
+      mcpToolAccess: usesReadOnlyNativeProfile
+        ? "read-only"
+        : baseCtx.mcpToolAccess,
       delegationPolicy: {
         ownedPaths: request.ownedPaths,
         forbiddenPaths: request.forbiddenPaths,
@@ -8640,14 +8662,14 @@ export class AgentSessionManager {
     throw new FleetAdmissionError({
       ok: false,
       code: "workspace_conflict",
-      message: `Background spawn rejected: a shared-workspace writer cannot be launched while ancestor ${conflictingAncestorId} owns the workspace mutation lease. Use a read-only profile or worktree: 'isolated'.`,
+      message: `Background spawn rejected: a writer cannot be launched while ancestor ${conflictingAncestorId} owns the agent-tree mutation lease. Use a read-only profile or delegate a disjoint scope.`,
     });
   }
 
   private ensureSharedWorkspaceScopeAvailable(
     request: SpawnBackgroundRequest,
   ): void {
-    if (request.worktree === "isolated" || !request.ownedPaths?.length) return;
+    if (!request.ownedPaths?.length) return;
     const normalize = (value: string) =>
       value.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
     const overlaps = (left: string, right: string) => {
@@ -8673,210 +8695,10 @@ export class AgentSessionManager {
         throw new FleetAdmissionError({
           ok: false,
           code: "workspace_conflict",
-          message: `Background spawn rejected: shared-workspace ownership overlaps active agent ${session.id} at ${conflicting}. Use worktree: 'isolated' or choose a disjoint scope.`,
+          message: `Background spawn rejected: ownership overlaps active agent ${session.id} at ${conflicting}. Choose a disjoint scope.`,
         });
       }
     }
-  }
-
-  private async spawnIsolatedWorktree(
-    request: SpawnBackgroundRequest,
-    parent: AgentSession | undefined,
-  ): Promise<SpawnBackgroundResult> {
-    const toolCtx = this.toolCtx;
-    const provider = toolCtx?.worktreeAgentLaunchProvider;
-    const globalStoragePath = toolCtx?.globalStorageUri?.fsPath;
-    if (!provider || !globalStoragePath) {
-      throw new Error("Isolated worktree launcher is unavailable");
-    }
-    const mode = request.mode?.trim() || parent?.mode || "code";
-    const model = request.model?.trim() || parent?.model || this.config.model;
-    const session = await this.createBoundSession({
-      mode,
-      config: { ...this.config, model },
-      projectScope: parent?.projectScope ?? this.selectProjectScope(),
-      workspaceFolders: this.getWorkspaceFolders(),
-      devMode: this.devMode,
-      background: true,
-      isBackground: true,
-      providerId: "worktree",
-    });
-    session.title = request.task.slice(0, 80);
-    session.addUserMessage(request.message);
-    session.status = "streaming";
-    this.sessions.set(session.id, session);
-    if (parent) {
-      this.inheritBackgroundApprovalMode(parent.id, session.id);
-    }
-    this.bgMeta.set(session.id, {
-      resolvedMode: mode,
-      resolvedModel: model,
-      resolvedProvider: "worktree",
-      taskClass: request.taskClass ?? "general",
-      routingReason: "isolated worktree delegation",
-      fallbackUsed: false,
-      toolCalls: 0,
-      tokenUsage: 0,
-      apiTurns: 0,
-      startedAt: Date.now(),
-      lastProgressAt: Date.now(),
-      phase: "waiting_for_provider",
-    });
-    session.fleetMetadata = this.createFleetMetadata(session, {
-      task: request.task,
-      parentSessionId: parent?.id,
-      backend: "native",
-      resolvedMode: mode,
-      resolvedModel: model,
-      resolvedProvider: "worktree",
-      taskClass: request.taskClass ?? "general",
-      routingReason: "isolated worktree delegation",
-      fallbackUsed: false,
-      delegation: {
-        ownedPaths: request.ownedPaths,
-        forbiddenPaths: request.forbiddenPaths,
-        permissionProfile: request.permissionProfile,
-        worktree: "isolated",
-        expectedResult: request.expectedResult,
-      },
-      budget: request.budget,
-      goalId: request.goalId,
-      workflowId: request.workflowId,
-    });
-    session.fleetMetadata.placement = "worktree";
-    session.fleetMetadata.lifecycle = "running";
-    const exchangeStore = new WorktreeFleetExchangeStore(globalStoragePath);
-    const sourceWorkspacePath = this.requireSessionExecution(session);
-    const exchange = await exchangeStore.create({
-      parentFleetSessionId: session.id,
-      sourceWorkspacePath,
-    });
-    session.fleetMetadata.worktreeExchangeId = exchange.id;
-    this.appendFleetEvent(session, "queued", "Worktree agent launch requested");
-    this.saveSession(session.id);
-    this.notifySessionsChanged();
-    try {
-      const approvalMode = this.getSessionApprovalMode(session.id);
-      const result = await provider.start({
-        task: request.task,
-        prompt: withFleetResultInstruction(
-          request.expectedResult,
-          request.message,
-        ),
-        sourcePath: sourceWorkspacePath,
-        mode: request.mode,
-        autoSubmit: true,
-        fleetExchangeId: exchange.id,
-        ...approvalMode,
-      });
-      const text =
-        result.content.find((item) => item.type === "text")?.text ?? "{}";
-      const payload = JSON.parse(text) as Record<string, unknown>;
-      if (payload.error || payload.status === "rejected") {
-        throw new Error(String(payload.error ?? "Worktree launch rejected"));
-      }
-      const worktreePath =
-        typeof payload.worktreePath === "string"
-          ? payload.worktreePath
-          : undefined;
-      session.fleetMetadata.worktreePath = worktreePath;
-      session.fleetMetadata.worktreeBranch =
-        typeof payload.branch === "string" ? payload.branch : undefined;
-      await exchangeStore.update(exchange.id, { worktreePath });
-      this.appendFleetEvent(session, "started", "Worktree window opened");
-      this.startWorktreeExchangeMonitor(session, exchangeStore, exchange.id);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      session.status = "error";
-      session.fleetMetadata.lifecycle = "failed";
-      session.fleetMetadata.terminalReason = "worktree_launch_failed";
-      session.fleetMetadata.finalResult = message;
-      session.fleetMetadata.completedAt = Date.now();
-      await exchangeStore.update(exchange.id, {
-        status: "failed",
-        error: message,
-      });
-      this.appendFleetEvent(session, "failed", message);
-      this.saveSession(session.id);
-      throw error;
-    }
-    return {
-      sessionId: session.id,
-      resolvedMode: mode,
-      resolvedModel: model,
-      resolvedProvider: "worktree",
-      taskClass: request.taskClass ?? "general",
-      routingReason: "isolated worktree delegation",
-      fallbackUsed: false,
-    };
-  }
-
-  private startWorktreeExchangeMonitor(
-    session: AgentSession,
-    store: WorktreeFleetExchangeStore,
-    exchangeId: string,
-  ): void {
-    const poll = async () => {
-      const record = await store.read(exchangeId);
-      if (!record || !session.fleetMetadata) return;
-      session.fleetMetadata.childSessionId = record.childSessionId;
-      session.fleetMetadata.worktreePath = record.worktreePath;
-      if (record.status === "claimed" || record.status === "running") {
-        session.status = "streaming";
-        session.fleetMetadata.lifecycle = "running";
-      } else if (
-        record.status === "completed" ||
-        record.status === "failed" ||
-        record.status === "cancelled"
-      ) {
-        const timer = this.worktreeMonitorTimers.get(session.id);
-        if (timer) this.host.timers.clearInterval(timer);
-        this.worktreeMonitorTimers.delete(session.id);
-        session.status = record.status === "failed" ? "error" : "idle";
-        session.fleetMetadata.lifecycle = record.status;
-        session.fleetMetadata.terminalReason =
-          record.status === "completed"
-            ? undefined
-            : (record.error ?? `worktree_${record.status}`);
-        if (record.status === "cancelled") {
-          this.bgCancelled.add(session.id);
-        } else if (record.status === "failed") {
-          this.setBgError(
-            session.id,
-            record.error ?? "Worktree background agent failed",
-            false,
-          );
-        }
-        const rawResult =
-          record.resultText ??
-          record.error ??
-          "Worktree agent ended without output";
-        this.bgPartialResults.set(session.id, rawResult);
-        const resolution = this.resolveBackgroundResult(session, rawResult);
-        const meta = this.bgMeta.get(session.id);
-        if (meta && record.usage) {
-          meta.tokenUsage =
-            record.usage.inputTokens + record.usage.outputTokens;
-        }
-        this.finalizeFleetMetadata(session, resolution);
-        await this.saveSessionNow(session.id);
-        this.bgFinalResults.set(session.id, resolution.resultText);
-        for (const resolve of this.bgResultWaiters.get(session.id) ?? []) {
-          resolve(resolution.resultText);
-        }
-        this.bgResultWaiters.delete(session.id);
-      } else {
-        this.saveSession(session.id);
-      }
-      this.notifySessionsChanged();
-    };
-    const timer = this.host.timers.setInterval(() => {
-      void poll().catch((error) =>
-        this.log?.(`[worktree-fleet] exchange poll failed: ${String(error)}`),
-      );
-    }, 1000);
-    this.worktreeMonitorTimers.set(session.id, timer);
-    void poll();
   }
 
   private isFleetDescendant(sessionId: string, ancestorId: string): boolean {

@@ -288,6 +288,57 @@ describe("tool usage telemetry project attribution", () => {
       },
     });
   });
+
+  it("rejects advertised tools outside the current mode's allowance", async () => {
+    const runtime = createAgentToolRuntime(mockCtx);
+
+    const result = await runtime.executeTool({
+      name: "write_file",
+      input: { path: "src/file.ts", content: "x" },
+      context: {
+        sessionId: "test-session",
+        mode: "ask",
+        // The advertised union includes write_file for cache stability, but
+        // ask mode's own allowance does not.
+        availableToolNames: new Set(["read_file", "write_file"]),
+        modeAllowedToolNames: new Set(["read_file"]),
+      },
+    });
+
+    expect(result).toMatchObject({
+      isError: true,
+      data: {
+        status: "tool_not_in_mode",
+        tool: "write_file",
+      },
+    });
+    const text = JSON.stringify(result.content);
+    expect(text).toContain("not available in ask mode");
+    expect(text).toContain("switch_mode");
+  });
+
+  it("allows mode-permitted tools through the mode gate", async () => {
+    const record = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      toolUsageTelemetry: { record } as any,
+    });
+
+    const result = await runtime.executeTool({
+      name: "read_file",
+      input: { path: "README.md" },
+      context: {
+        sessionId: "test-session",
+        mode: "ask",
+        availableToolNames: new Set(["read_file", "write_file"]),
+        modeAllowedToolNames: new Set(["read_file"]),
+      },
+    });
+
+    expect(result).not.toMatchObject({
+      data: { status: "tool_not_in_mode" },
+    });
+  });
 });
 
 const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
@@ -2646,101 +2697,6 @@ describe("dispatchToolCall", () => {
     });
   });
 
-  describe("start_worktree_agent", () => {
-    it("dispatches through worktreeAgentLaunchProvider when supplied", async () => {
-      const worktreeAgentLaunchProvider = {
-        start: vi.fn().mockResolvedValue({
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                status: "opened",
-                worktreePath: "/workspace/worktrees/task",
-              }),
-            },
-          ],
-        }),
-      };
-
-      const result = await dispatchToolCall(
-        "start_worktree_agent",
-        {
-          task: "Launch task",
-          prompt: "Do the work",
-          sourcePath: "/workspace/agentlink",
-          branch: "agentlink/task",
-          baseRef: "HEAD",
-          worktreePath: "/workspace/worktrees/task",
-          mode: "code",
-          autoSubmit: false,
-        },
-        { ...mockCtx, worktreeAgentLaunchProvider },
-      );
-
-      expect(worktreeAgentLaunchProvider.start).toHaveBeenCalledWith({
-        task: "Launch task",
-        prompt: "Do the work",
-        sourcePath: "/workspace/agentlink",
-        branch: "agentlink/task",
-        baseRef: "HEAD",
-        worktreePath: "/workspace/worktrees/task",
-        mode: "code",
-        autoSubmit: false,
-      });
-      expect(result.content[0]).toMatchObject({ type: "text" });
-      expect(
-        JSON.parse((result.content[0] as { type: "text"; text: string }).text),
-      ).toMatchObject({ status: "opened" });
-    });
-
-    it("does not require VS Code global storage when provider is supplied", async () => {
-      const worktreeAgentLaunchProvider = {
-        start: vi.fn().mockResolvedValue({
-          content: [
-            { type: "text" as const, text: JSON.stringify({ ok: true }) },
-          ],
-        }),
-      };
-
-      await dispatchToolCall(
-        "start_worktree_agent",
-        { task: "Task", prompt: "Prompt" },
-        {
-          ...mockCtx,
-          globalStorageUri: undefined,
-          worktreeAgentLaunchProvider,
-        },
-      );
-
-      expect(worktreeAgentLaunchProvider.start).toHaveBeenCalledWith({
-        task: "Task",
-        prompt: "Prompt",
-        sourcePath: undefined,
-        branch: undefined,
-        baseRef: undefined,
-        worktreePath: undefined,
-        mode: undefined,
-        autoSubmit: undefined,
-      });
-    });
-
-    it("returns unavailable error without provider or global storage fallback", async () => {
-      const result = await dispatchToolCall(
-        "start_worktree_agent",
-        { task: "Task", prompt: "Prompt" },
-        { ...mockCtx, globalStorageUri: undefined },
-      );
-
-      const parsed = JSON.parse(
-        (result.content[0] as { type: "text"; text: string }).text,
-      );
-      expect(parsed).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("not available"),
-      });
-    });
-  });
-
   it("forwards explicit read-only command execution policy", async () => {
     const { handleExecuteCommand } = await import("../tools/executeCommand.js");
     const runtime = createAgentToolRuntime(mockCtx);
@@ -3824,6 +3780,44 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("restricts read-only MCP discovery to explicitly annotated tools", async () => {
+    const readTool = {
+      name: "linear__list_issues",
+      description: "List Linear issues",
+      input_schema: { type: "object", properties: {} },
+    };
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        readTool,
+        {
+          name: "linear__create_issue",
+          description: "Create a Linear issue",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getReadOnlyToolDefs: vi.fn().mockReturnValue([readTool]),
+    };
+
+    const result = await dispatchToolCall(
+      "find_mcp_tools",
+      { query: "", limit: 10 },
+      {
+        ...mockCtx,
+        mcpHub: mcpHub as any,
+        mcpToolAccess: "read-only",
+      },
+    );
+
+    const parsed = JSON.parse(
+      (result.content[0] as { type: string; text: string }).text,
+    );
+    expect(parsed.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      "linear__list_issues",
+    ]);
+    expect(mcpHub.getReadOnlyToolDefs).toHaveBeenCalled();
+    expect(mcpHub.getToolDefs).not.toHaveBeenCalled();
+  });
+
   it("filters MCP discovery results by the active skill allowlist", async () => {
     const mcpHub = {
       getToolDefs: vi.fn().mockReturnValue([
@@ -4698,6 +4692,59 @@ describe("dispatchToolCall", () => {
       bareToolName: "list_issues",
       scopes: ["session", "project", "global"],
     });
+  });
+
+  it("blocks unannotated deferred MCP calls in read-only backgrounds", async () => {
+    const onApprovalRequest = vi.fn().mockResolvedValue("allow-once");
+    const mcpHub = {
+      getReadOnlyToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      isToolReadOnly: vi.fn(
+        (_server: string, tool: string) => tool === "list_issues",
+      ),
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+    const ctx = {
+      ...mockCtx,
+      approvalManager: {
+        isMcpApproved: vi.fn().mockReturnValue(true),
+      } as any,
+      onApprovalRequest,
+      mcpHub: mcpHub as any,
+      mcpToolAccess: "read-only" as const,
+    };
+
+    await expect(
+      dispatchToolCall(
+        "call_mcp_tool",
+        { server: "linear", tool: "list_issues", input: {} },
+        ctx,
+      ),
+    ).resolves.toMatchObject({ content: expect.any(Array) });
+    const blocked = await dispatchToolCall(
+      "call_mcp_tool",
+      { server: "linear", tool: "create_issue", input: {} },
+      ctx,
+    );
+
+    expect((blocked.content[0] as { text: string }).text).toContain(
+      "MCP tool not found: linear__create_issue",
+    );
+    expect(mcpHub.callTool).toHaveBeenCalledTimes(1);
+    expect(mcpHub.callTool).toHaveBeenCalledWith(
+      "linear__list_issues",
+      {},
+      { signal: undefined },
+    );
+    expect(onApprovalRequest).not.toHaveBeenCalled();
   });
 
   it("sends the full MCP input in the approval detail and truncates only oversized payloads", async () => {

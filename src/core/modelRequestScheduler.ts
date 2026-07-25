@@ -27,8 +27,8 @@ const PRIORITY_ORDER: Record<ModelRequestPriority, number> = {
   maintenance: 2,
 };
 
-export const DEFAULT_MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER = 6;
-export const MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER = 32;
+export const DEFAULT_MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER = 24;
+export const MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER = 128;
 
 export function normalizeMaxConcurrentModelRequests(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -42,8 +42,10 @@ export function normalizeMaxConcurrentModelRequests(value: unknown): number {
 
 /**
  * Admission control shared by all model requests using one provider registry.
- * Active requests are never preempted; queued work is admitted by priority and
- * then FIFO order so foreground turns do not sit behind background maintenance.
+ * Interactive (foreground) requests are always admitted immediately — a user
+ * turn must never wait behind fleet or maintenance work. The concurrency cap
+ * applies to background work; queued work is admitted by priority and then
+ * FIFO order. Active requests are never preempted.
  */
 export class ModelRequestScheduler {
   private readonly queues = new Map<string, ProviderQueue>();
@@ -200,6 +202,9 @@ export class ModelRequestScheduler {
     queue: ProviderQueue,
     priority: ModelRequestPriority,
   ): boolean {
+    // Foreground turns are never gated: they still count toward `active` (so
+    // background admission sees the load) but are admitted even past the cap.
+    if (priority === "interactive") return true;
     if (queue.active >= this.maxConcurrentPerProvider) return false;
     // Status summarization and other maintenance should never consume provider
     // capacity alongside user-visible work. It runs only when the provider is

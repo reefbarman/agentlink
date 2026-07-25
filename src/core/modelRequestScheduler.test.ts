@@ -18,21 +18,44 @@ describe("ModelRequestScheduler", () => {
     anthropic.release();
   });
 
-  it("admits foreground work before queued background and maintenance work", async () => {
+  it("admits interactive work immediately even when the provider is saturated", async () => {
+    const scheduler = new ModelRequestScheduler(1);
+    const active = await scheduler.acquire("codex", "background");
+    const backgroundPromise = scheduler.acquire("codex", "background");
+
+    const foreground = await scheduler.acquire("codex", "interactive");
+    expect(foreground).toMatchObject({ queued: false, waitMs: 0 });
+    expect(scheduler.hasCapacity("codex", "interactive")).toBe(true);
+
+    let backgroundStarted = false;
+    void backgroundPromise.then(() => {
+      backgroundStarted = true;
+    });
+    await Promise.resolve();
+    expect(backgroundStarted).toBe(false);
+
+    foreground.release();
+    // Interactive counted toward active, so background stays queued until the
+    // original background permit is released too.
+    await Promise.resolve();
+    expect(backgroundStarted).toBe(false);
+    active.release();
+    const background = await backgroundPromise;
+    background.release();
+  });
+
+  it("admits queued background work before queued maintenance work", async () => {
     let now = 100;
     const scheduler = new ModelRequestScheduler(1, () => now);
     const active = await scheduler.acquire("codex", "background");
     const maintenancePromise = scheduler.acquire("codex", "maintenance");
     const backgroundPromise = scheduler.acquire("codex", "background");
-    const foregroundPromise = scheduler.acquire("codex", "interactive");
 
     now = 175;
     active.release();
-    const foreground = await foregroundPromise;
-    expect(foreground).toMatchObject({ queued: true, waitMs: 75 });
-
-    foreground.release();
     const background = await backgroundPromise;
+    expect(background).toMatchObject({ queued: true, waitMs: 75 });
+
     background.release();
     const maintenance = await maintenancePromise;
     maintenance.release();
@@ -40,7 +63,7 @@ describe("ModelRequestScheduler", () => {
 
   it("removes aborted queued requests without consuming a permit", async () => {
     const scheduler = new ModelRequestScheduler(1);
-    const active = await scheduler.acquire("codex", "interactive");
+    const active = await scheduler.acquire("codex", "background");
     const controller = new AbortController();
     const queued = scheduler.acquire("codex", "background", controller.signal);
 
@@ -73,8 +96,8 @@ describe("ModelRequestScheduler", () => {
 
   it("makes permit release idempotent", async () => {
     const scheduler = new ModelRequestScheduler(1);
-    const first = await scheduler.acquire("codex", "interactive");
-    const secondPromise = scheduler.acquire("codex", "interactive");
+    const first = await scheduler.acquire("codex", "background");
+    const secondPromise = scheduler.acquire("codex", "background");
 
     first.release();
     first.release();
@@ -86,8 +109,8 @@ describe("ModelRequestScheduler", () => {
 
   it("admits queued work immediately when the live limit is raised", async () => {
     const scheduler = new ModelRequestScheduler(1);
-    const first = await scheduler.acquire("codex", "interactive");
-    const secondPromise = scheduler.acquire("codex", "interactive");
+    const first = await scheduler.acquire("codex", "background");
+    const secondPromise = scheduler.acquire("codex", "background");
     const thirdPromise = scheduler.acquire("codex", "background");
 
     scheduler.setMaxConcurrentPerProvider(3);
@@ -102,11 +125,11 @@ describe("ModelRequestScheduler", () => {
 
   it("lets active work finish when the live limit is lowered", async () => {
     const scheduler = new ModelRequestScheduler(2);
-    const first = await scheduler.acquire("codex", "interactive");
+    const first = await scheduler.acquire("codex", "background");
     const second = await scheduler.acquire("codex", "background");
 
     scheduler.setMaxConcurrentPerProvider(1);
-    const thirdPromise = scheduler.acquire("codex", "interactive");
+    const thirdPromise = scheduler.acquire("codex", "background");
     let thirdStarted = false;
     void thirdPromise.then(() => {
       thirdStarted = true;
@@ -121,11 +144,11 @@ describe("ModelRequestScheduler", () => {
   });
 
   it.each([
-    [undefined, 6],
-    [Number.NaN, 6],
+    [undefined, 24],
+    [Number.NaN, 24],
     [0, 1],
     [3.9, 3],
-    [64, 32],
+    [256, 128],
   ])("normalizes configured concurrency %s to %s", (value, expected) => {
     expect(normalizeMaxConcurrentModelRequests(value)).toBe(expected);
   });

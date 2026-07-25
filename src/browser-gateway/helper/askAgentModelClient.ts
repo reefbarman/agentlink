@@ -556,6 +556,9 @@ export class BrowserGatewayAskAgentModelClient {
         supportsAdaptiveThinking: Boolean(
           ANTHROPIC_MODEL_CAPABILITIES[model]?.supportsAdaptiveThinking,
         ),
+        requiresExplicitThinkingDisable: Boolean(
+          ANTHROPIC_MODEL_CAPABILITIES[model]?.requiresExplicitThinkingDisable,
+        ),
         tools: toMutableTools(params.tools),
         hostedTools: params.hostedTools,
         signal: params.signal,

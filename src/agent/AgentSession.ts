@@ -27,12 +27,17 @@ import type {
   PersistedSessionRunState,
 } from "./persistenceContracts.js";
 import {
+  buildModeInstructionBlock,
   buildPromptArtifacts,
   type AdvertisedRuleEntry,
   type WorkspaceFolderInfo,
 } from "./systemPrompt.js";
 import { buildSessionTitleFromUserText } from "./sessionTitle.js";
-import { estimateTokensFromChars } from "../util/tokenEstimation.js";
+import {
+  ESTIMATED_TOKENS_PER_IMAGE,
+  estimateDocumentTokens,
+  estimateTokensFromChars,
+} from "../util/tokenEstimation.js";
 import { randomUUID } from "crypto";
 import { pathToFileURL } from "url";
 import {
@@ -51,6 +56,29 @@ export type SessionProjectAvailabilityStatus =
 const PROJECTLESS_ASK_SYSTEM_PROMPT = `You are AgentLink in Ask mode without an open workspace folder.
 
 Answer the user's questions directly. No local project, files, shell, editor state, project instructions, skills, commands, MCP servers, checkpoints, or write capabilities are available in this session. Do not claim to inspect or modify local files. If the request requires a local project, explain that the user must open a folder first.`;
+
+/**
+ * A mode instruction block pinned to a fixed position in the effective
+ * conversation. `userTurnOrdinal` counts string-content user messages before
+ * the block; the engine injects `blockText` as a request-local user message at
+ * that position so the provider prompt cache prefix stays stable across mode
+ * switches. Never part of the persisted transcript messages.
+ */
+export interface ModeInstructionAnchor {
+  userTurnOrdinal: number;
+  mode: string;
+  blockText: string;
+}
+
+function countStringUserMessages(messages: readonly AgentMessage[]): number {
+  let count = 0;
+  for (const message of messages) {
+    if (message.role === "user" && typeof message.content === "string") {
+      count++;
+    }
+  }
+  return count;
+}
 
 export interface PendingInterjection {
   text: string;
@@ -146,6 +174,18 @@ export class AgentSession {
   activeFileContext: ProjectActiveFileResolution | undefined;
   /** Workspace folders to surface in the system prompt (multi-root workspaces). */
   private workspaceFolders: WorkspaceFolderInfo[] | undefined;
+
+  /**
+   * Where mode-specific instructions live. "conversation" keeps the system
+   * prompt byte-identical across modes (mode content injected via
+   * modeInstructionAnchors); "system" is the legacy inline placement, kept for
+   * background/lightweight sessions that never switch modes mid-run.
+   */
+  modeInstructionPlacement: "system" | "conversation" = "system";
+  /** Mode instruction blocks pinned to conversation positions (see type doc). */
+  modeInstructionAnchors: ModeInstructionAnchor[] = [];
+  /** Cached block text for the current mode, used to re-seed anchors after replaceMessages. */
+  private currentModeBlockText: string | undefined;
 
   /** Provider ID (e.g. "anthropic", "codex") — used for provider-specific system prompt tuning. */
   providerId: string | undefined;
@@ -284,6 +324,13 @@ export class AgentSession {
         `Project '${opts.projectScope.displayName}' is unavailable for local execution.`,
       );
     }
+    // Foreground sessions keep the system prompt byte-stable across modes so
+    // switches preserve the provider prompt cache; background/lightweight
+    // sessions never switch modes mid-run and keep the inline placement.
+    const modeInstructionPlacement: "system" | "conversation" =
+      opts.background || opts.isBackground || opts.lightweight
+        ? "system"
+        : "conversation";
     const artifacts = await buildPromptArtifacts(opts.mode, cwd, {
       devMode: opts.devMode,
       activeFilePath: opts.activeFilePath,
@@ -294,6 +341,7 @@ export class AgentSession {
       workspaceFolders: opts.workspaceFolders,
       mcpToolCatalog: opts.mcpToolDisclosure?.catalog,
       agentMode: opts.agentMode,
+      modeInstructionPlacement,
     });
     const agentMode =
       opts.agentMode ??
@@ -317,6 +365,8 @@ export class AgentSession {
     });
     session.setAdvertisedSkills(artifacts.skills);
     session.setAdvertisedRules(artifacts.advertisedRules);
+    session.modeInstructionPlacement = modeInstructionPlacement;
+    await session.refreshModeInstructionAnchor();
     return session;
   }
 
@@ -444,6 +494,7 @@ export class AgentSession {
         mcpToolCatalog: this.mcpToolDisclosure?.catalog,
         agentMode: this.agentMode,
         approveForMe: this.approveForMe,
+        modeInstructionPlacement: this.modeInstructionPlacement,
       },
     );
     this.systemPrompt = artifacts.systemPrompt;
@@ -474,6 +525,7 @@ export class AgentSession {
         mcpToolCatalog: this.mcpToolDisclosure?.catalog,
         agentMode: opts?.agentMode,
         approveForMe: this.approveForMe,
+        modeInstructionPlacement: this.modeInstructionPlacement,
       },
     );
     const agentMode =
@@ -488,6 +540,7 @@ export class AgentSession {
     this.activeFileContext = artifacts.activeFileContext;
     this.setAdvertisedSkills(artifacts.skills);
     this.setAdvertisedRules(artifacts.advertisedRules);
+    await this.refreshModeInstructionAnchor();
     this.resetProviderResponseState();
     this.lastActiveAt = Date.now();
   }
@@ -580,6 +633,21 @@ export class AgentSession {
           }
         : {}),
     } as AgentMessage);
+    // Feed the running context estimate so jump telemetry can attribute user
+    // content instead of reporting it as unattributed growth.
+    this.addEstimatedTokens(text.length, "user_message");
+    if (opts?.images?.length) {
+      this.addKnownTokens(
+        opts.images.length * ESTIMATED_TOKENS_PER_IMAGE,
+        "attachment:image",
+      );
+    }
+    for (const doc of opts?.documents ?? []) {
+      this.addKnownTokens(
+        estimateDocumentTokens(doc.base64),
+        "attachment:document",
+      );
+    }
     this.lastActiveAt = Date.now();
   }
 
@@ -661,8 +729,90 @@ export class AgentSession {
   replaceMessages(messages: AgentMessage[]): void {
     this.messagesRevision++;
     this.messages = messages;
+    // History positions are no longer valid; re-seed the current mode block at
+    // the top of the rewritten history. The cache is rebuilt after a condense
+    // or revert anyway, so position zero costs nothing extra.
+    this.modeInstructionAnchors =
+      this.modeInstructionPlacement === "conversation" &&
+      this.currentModeBlockText
+        ? [
+            {
+              userTurnOrdinal: 0,
+              mode: this.mode,
+              blockText: this.currentModeBlockText,
+            },
+          ]
+        : [];
     this.resetProviderResponseState();
     this.lastActiveAt = Date.now();
+  }
+
+  /**
+   * Rebuild the current mode's instruction block and pin it at the present
+   * end-of-history position. Replaces the previous anchor when nothing was
+   * appended since (e.g. consecutive switches), so stale blocks don't stack.
+   */
+  async refreshModeInstructionAnchor(): Promise<void> {
+    if (this.modeInstructionPlacement !== "conversation") return;
+    const blockText = await buildModeInstructionBlock(
+      this.mode,
+      this.requireProjectRoot(),
+      { agentMode: this.agentMode, approveForMe: this.approveForMe },
+    );
+    this.currentModeBlockText = blockText;
+    const ordinal = countStringUserMessages(this.getMessages());
+    const last =
+      this.modeInstructionAnchors[this.modeInstructionAnchors.length - 1];
+    if (last && last.userTurnOrdinal >= ordinal) {
+      last.userTurnOrdinal = ordinal;
+      last.mode = this.mode;
+      last.blockText = blockText;
+    } else {
+      this.modeInstructionAnchors.push({
+        userTurnOrdinal: ordinal,
+        mode: this.mode,
+        blockText,
+      });
+      this.addEstimatedTokens(blockText.length, "mode_instructions");
+    }
+    this.messagesRevision++;
+  }
+
+  /**
+   * Resolve anchors against the effective history the engine is about to
+   * send. Returns request-local user-message insertions, ordered ascending by
+   * index. Insertion points are always genuine turn boundaries (immediately
+   * before a string-content user message, or the end of history), so
+   * tool_use/tool_result adjacency can never be broken.
+   */
+  buildModeInstructionInsertions(
+    effectiveMessages: readonly AgentMessage[],
+  ): Array<{ beforeIndex: number; blockText: string }> {
+    if (
+      this.modeInstructionPlacement !== "conversation" ||
+      this.modeInstructionAnchors.length === 0
+    ) {
+      return [];
+    }
+    // Map user-turn ordinal -> effective index of that string user message.
+    const ordinalIndex: number[] = [];
+    effectiveMessages.forEach((msg, index) => {
+      if (msg.role === "user" && typeof msg.content === "string") {
+        ordinalIndex.push(index);
+      }
+    });
+    const insertions = new Map<number, string>();
+    for (const anchor of this.modeInstructionAnchors) {
+      const beforeIndex =
+        anchor.userTurnOrdinal < ordinalIndex.length
+          ? ordinalIndex[anchor.userTurnOrdinal]!
+          : effectiveMessages.length;
+      // Later anchors at the same position win (most recent mode).
+      insertions.set(beforeIndex, anchor.blockText);
+    }
+    return [...insertions.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([beforeIndex, blockText]) => ({ beforeIndex, blockText }));
   }
 
   /**
@@ -685,6 +835,7 @@ export class AgentSession {
     runState?: PersistedSessionRunState;
     fleetMetadata?: PersistedFleetMetadata;
     messages: AgentMessage[];
+    modeInstructionAnchors?: ModeInstructionAnchor[];
   }): void {
     this.id = data.id;
     this.title = data.title;
@@ -703,6 +854,13 @@ export class AgentSession {
     this.fleetMetadata = data.fleetMetadata;
     this.messagesRevision++;
     this.messages = data.messages;
+    if (data.modeInstructionAnchors?.length) {
+      this.modeInstructionAnchors = data.modeInstructionAnchors;
+      this.currentModeBlockText =
+        data.modeInstructionAnchors[
+          data.modeInstructionAnchors.length - 1
+        ]!.blockText;
+    }
     this.resetProviderResponseState();
     this.loadedSkills.clear();
     for (const skill of data.loadedSkills ?? []) {
@@ -777,7 +935,12 @@ export class AgentSession {
    * heuristic as Codex CLI. `source` labels the contribution for jump telemetry.
    */
   addEstimatedTokens(chars: number, source = "other"): void {
-    const tokens = estimateTokensFromChars(chars);
+    this.addKnownTokens(estimateTokensFromChars(chars), source);
+  }
+
+  /** Add an already-token-denominated contribution to the running accumulator. */
+  addKnownTokens(tokens: number, source = "other"): void {
+    if (tokens <= 0) return;
     this.estimatedAccumulatedTokens += tokens;
     this.estimatedAccumulationBySource[source] =
       (this.estimatedAccumulationBySource[source] ?? 0) + tokens;

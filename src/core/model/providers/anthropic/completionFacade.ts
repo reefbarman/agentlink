@@ -37,7 +37,8 @@ export interface AnthropicStreamRequest {
   tools?: AnthropicJsonObject[];
   thinking?:
     | { type: "adaptive"; display: "summarized" }
-    | { type: "enabled"; budget_tokens: number; display: "summarized" };
+    | { type: "enabled"; budget_tokens: number; display: "summarized" }
+    | { type: "disabled" };
   output_config?: { effort: CoreReasoningEffort };
 }
 
@@ -61,6 +62,11 @@ export function buildAnthropicStreamRequest(args: {
   maxTokens: number;
   reasoningEffort?: CoreReasoningEffort;
   supportsAdaptiveThinking: boolean;
+  /**
+   * True for models that think when `thinking` is omitted (Claude Opus 5 /
+   * Sonnet 5). For those, turning thinking off must be explicit.
+   */
+  requiresExplicitThinkingDisable?: boolean;
   thinking?: { budgetTokens: number };
   tools?: readonly CoreModelToolDefinition[];
   hostedTools?: readonly CoreHostedToolDefinition[];
@@ -96,6 +102,12 @@ export function buildAnthropicStreamRequest(args: {
         display: "summarized",
       };
     }
+  } else if (args.requiresExplicitThinkingDisable) {
+    // Omitting `thinking` runs adaptive thinking on these models, so the
+    // "none" effort level (and the stripped-thinking replay path) must
+    // disable it explicitly. No `output_config.effort` is sent here — an
+    // explicit disable is rejected at xhigh/max on Claude Opus 5.
+    request.thinking = { type: "disabled" };
   }
   return request;
 }
@@ -108,6 +120,7 @@ export async function executeAnthropicResolvedCompletion(args: {
   maxTokens: number;
   reasoningEffort?: CoreReasoningEffort;
   supportsAdaptiveThinking: boolean;
+  requiresExplicitThinkingDisable?: boolean;
   thinking?: { budgetTokens: number };
   tools?: readonly CoreModelToolDefinition[];
   hostedTools?: readonly CoreHostedToolDefinition[];

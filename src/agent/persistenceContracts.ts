@@ -259,6 +259,17 @@ export interface PersistedSessionRecord {
    * back to content comparison.
    */
   transcriptRevision?: number;
+  /**
+   * Mode instruction blocks pinned to conversation positions when the session
+   * uses conversation placement for mode content (foreground sessions). Kept
+   * beside — never inside — `messages` so transcript-derived counting (turns,
+   * titles, checkpoints) is unaffected.
+   */
+  modeInstructionAnchors?: Array<{
+    userTurnOrdinal: number;
+    mode: string;
+    blockText: string;
+  }>;
   metadata: PersistedSessionMetadata;
 }
 

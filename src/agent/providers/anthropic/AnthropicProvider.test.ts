@@ -15,6 +15,9 @@ describe("AnthropicProvider capabilities", () => {
     expect(provider.getCapabilities("claude-sonnet-4-6").contextWindow).toBe(
       1_000_000,
     );
+    expect(provider.getCapabilities("claude-opus-5").contextWindow).toBe(
+      1_000_000,
+    );
     expect(provider.getCapabilities("claude-opus-4-8").contextWindow).toBe(
       1_000_000,
     );
@@ -72,6 +75,29 @@ describe("AnthropicProvider capabilities", () => {
     expect(
       provider.getCapabilities("claude-opus-4-8").reasoningEfforts,
     ).toEqual(["none", "low", "medium", "high", "max"]);
+  });
+
+  it("exposes Claude Opus 5 with the full effort ladder including xhigh", () => {
+    expect(provider.listModels()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "claude-opus-5",
+          displayName: "Claude Opus 5",
+          provider: "anthropic",
+        }),
+      ]),
+    );
+    const capabilities = provider.getCapabilities("claude-opus-5");
+    expect(capabilities.reasoningEfforts).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(capabilities.supportsThinking).toBe(true);
+    expect(capabilities.maxOutputTokens).toBe(128_000);
   });
 
   it("does not emit or persist empty thinking stream blocks", async () => {
@@ -226,6 +252,80 @@ describe("AnthropicProvider capabilities", () => {
       }),
       expect.objectContaining({ maxRetries: 0 }),
     );
+  });
+
+  it("sends an explicit thinking disable for the none effort on Claude Opus 5", async () => {
+    const stream = vi.fn(async function* (
+      _request: Record<string, unknown>,
+      _options?: Record<string, unknown>,
+    ) {
+      yield {
+        type: "message_start",
+        message: { usage: { input_tokens: 1 } },
+      };
+      yield {
+        type: "message_delta",
+        usage: { output_tokens: 1 },
+      };
+    });
+    const testProvider = new AnthropicProvider();
+    (testProvider as unknown as { client: unknown }).client = {
+      messages: { stream },
+    };
+
+    for await (const _event of testProvider.stream({
+      model: "claude-opus-5",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hello" }],
+      maxTokens: 64,
+      reasoningEffort: "none",
+    })) {
+      // Drain stream.
+    }
+
+    expect(stream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-opus-5",
+        thinking: { type: "disabled" },
+      }),
+      expect.objectContaining({ maxRetries: 0 }),
+    );
+    const request = stream.mock.calls[0][0] as Record<string, unknown>;
+    expect(request.output_config).toBeUndefined();
+  });
+
+  it("omits thinking entirely for the none effort on models that default to off", async () => {
+    const stream = vi.fn(async function* (
+      _request: Record<string, unknown>,
+      _options?: Record<string, unknown>,
+    ) {
+      yield {
+        type: "message_start",
+        message: { usage: { input_tokens: 1 } },
+      };
+      yield {
+        type: "message_delta",
+        usage: { output_tokens: 1 },
+      };
+    });
+    const testProvider = new AnthropicProvider();
+    (testProvider as unknown as { client: unknown }).client = {
+      messages: { stream },
+    };
+
+    for await (const _event of testProvider.stream({
+      model: "claude-opus-4-8",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hello" }],
+      maxTokens: 64,
+      reasoningEffort: "none",
+    })) {
+      // Drain stream.
+    }
+
+    const request = stream.mock.calls[0][0] as Record<string, unknown>;
+    expect(request.thinking).toBeUndefined();
+    expect(request.output_config).toBeUndefined();
   });
 
   it("emits thinking only after receiving non-empty thinking deltas", async () => {
@@ -397,6 +497,7 @@ describe("AnthropicProvider dynamic model capabilities", () => {
     expect(provider.listModels().map((m) => m.id)).toEqual([
       "claude-sonnet-5",
       "claude-sonnet-4-6",
+      "claude-opus-5",
       "claude-opus-4-8",
       "claude-haiku-4-5-20251001",
     ]);
@@ -468,6 +569,7 @@ describe("AnthropicProvider dynamic model capabilities", () => {
     expect(models.map((m) => m.id)).toEqual([
       "claude-sonnet-5",
       "claude-sonnet-4-6",
+      "claude-opus-5",
       "claude-opus-4-8",
       "claude-haiku-4-5-20251001",
     ]);

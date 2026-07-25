@@ -7,23 +7,25 @@ import {
 import { describe, expect, it } from "vitest";
 
 describe("modelCondenseThresholds", () => {
-  it("defaults models with 1m+ context windows to 0.7", () => {
+  it("defaults models with 1m+ context windows to 0.85", () => {
     expect(
       getDefaultAutoCondenseThreshold("claude-sonnet-4-6", {
         contextWindow: 1_000_000,
       }),
-    ).toBe(0.7);
+    ).toBe(0.85);
     expect(
       getDefaultAutoCondenseThreshold("gpt-5.5", { contextWindow: 1_050_000 }),
-    ).toBe(0.7);
+    ).toBe(0.85);
   });
 
-  it("keeps legacy large-model fallback at 0.6 when capabilities are unavailable", () => {
-    expect(getDefaultAutoCondenseThreshold("claude-sonnet-4-6")).toBe(0.6);
-    expect(getDefaultAutoCondenseThreshold("claude-opus-4-8")).toBe(0.6);
-    expect(getDefaultAutoCondenseThreshold("gpt-5.5")).toBe(0.6);
-    expect(getDefaultAutoCondenseThreshold("gpt-5.4")).toBe(0.6);
-    expect(getDefaultAutoCondenseThreshold("gpt-5.4-pro")).toBe(0.6);
+  it("keeps legacy large-model fallback at 0.8 when capabilities are unavailable", () => {
+    expect(getDefaultAutoCondenseThreshold("claude-sonnet-4-6")).toBe(0.8);
+    expect(getDefaultAutoCondenseThreshold("claude-opus-4-8")).toBe(0.8);
+    expect(getDefaultAutoCondenseThreshold("claude-opus-5")).toBe(0.8);
+    expect(getDefaultAutoCondenseThreshold("claude-fable-5")).toBe(0.8);
+    expect(getDefaultAutoCondenseThreshold("gpt-5.5")).toBe(0.8);
+    expect(getDefaultAutoCondenseThreshold("gpt-5.4")).toBe(0.8);
+    expect(getDefaultAutoCondenseThreshold("gpt-5.4-pro")).toBe(0.8);
   });
 
   it("defaults other models to 0.9", () => {

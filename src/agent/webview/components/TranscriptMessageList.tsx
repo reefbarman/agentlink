@@ -1,4 +1,5 @@
 import type { ChatMessage, ContentBlock, ReasoningEffort } from "../types";
+import type { CommandApprovalPolicy } from "../../../approvals/commandApprovalPolicy";
 
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import { CheckpointRow } from "./CheckpointRow";
@@ -71,6 +72,14 @@ interface TranscriptRow {
   reasoningChange?: {
     previousReasoningEffort: ReasoningEffort;
     reasoningEffort: ReasoningEffort;
+  };
+  modeChange?: {
+    previousMode: string;
+    mode: string;
+  };
+  approvalChange?: {
+    previousCommandApprovalPolicy: CommandApprovalPolicy;
+    commandApprovalPolicy: CommandApprovalPolicy;
   };
 }
 
@@ -281,6 +290,8 @@ function buildTranscriptRows(
   const rows: TranscriptRow[] = [];
   let previousModel: string | undefined;
   let previousReasoningEffort: ReasoningEffort | undefined;
+  let previousMode: string | undefined;
+  let previousCommandApprovalPolicy: CommandApprovalPolicy | undefined;
 
   for (const message of messages) {
     if (message.role === "warning") {
@@ -311,7 +322,13 @@ function buildTranscriptRows(
       message.role === "assistant"
         ? message.apiRequest?.reasoningEffort
         : undefined;
-    if (model || reasoningEffort) {
+    const mode =
+      message.role === "assistant" ? message.apiRequest?.mode : undefined;
+    const commandApprovalPolicy =
+      message.role === "assistant"
+        ? message.apiRequest?.commandApprovalPolicy
+        : undefined;
+    if (model || reasoningEffort || mode || commandApprovalPolicy) {
       const modelChange =
         model && previousModel && previousModel !== model
           ? { previousModel, model }
@@ -322,15 +339,36 @@ function buildTranscriptRows(
         previousReasoningEffort !== reasoningEffort
           ? { previousReasoningEffort, reasoningEffort }
           : undefined;
-      if ((modelChange || reasoningChange) && messageRows.length > 0) {
+      const modeChange =
+        mode && previousMode && previousMode !== mode
+          ? { previousMode, mode }
+          : undefined;
+      const approvalChange =
+        commandApprovalPolicy &&
+        previousCommandApprovalPolicy &&
+        previousCommandApprovalPolicy !== commandApprovalPolicy
+          ? {
+              previousCommandApprovalPolicy,
+              commandApprovalPolicy,
+            }
+          : undefined;
+      if (
+        (modelChange || reasoningChange || modeChange || approvalChange) &&
+        messageRows.length > 0
+      ) {
         messageRows[0] = {
           ...messageRows[0],
           modelChange,
           reasoningChange,
+          modeChange,
+          approvalChange,
         };
       }
       if (model) previousModel = model;
       if (reasoningEffort) previousReasoningEffort = reasoningEffort;
+      if (mode) previousMode = mode;
+      if (commandApprovalPolicy)
+        previousCommandApprovalPolicy = commandApprovalPolicy;
     }
     rows.push(...messageRows);
   }
@@ -543,10 +581,15 @@ function renderTranscriptRow({
 
   return (
     <Fragment>
-      {(row.modelChange || row.reasoningChange) && (
+      {(row.modelChange ||
+        row.reasoningChange ||
+        row.modeChange ||
+        row.approvalChange) && (
         <ModelChangeDivider
           modelChange={row.modelChange}
           reasoningChange={row.reasoningChange}
+          modeChange={row.modeChange}
+          approvalChange={row.approvalChange}
         />
       )}
       {metrics && metricsSurface ? (
@@ -698,6 +741,8 @@ function createRowRevision(params: {
   const scalars = JSON.stringify({
     modelChange: row.modelChange,
     reasoningChange: row.reasoningChange,
+    modeChange: row.modeChange,
+    approvalChange: row.approvalChange,
     active: params.active,
     isLatest:
       row.message.role === "warning" || row.message.error

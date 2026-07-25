@@ -211,11 +211,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     description:
       "Close managed terminals to clean up clutter. With no arguments, closes all terminals created by agentlink. Pass specific names to close only those (e.g. ['Server'] to close a background dev server terminal). Recently closed output and final status remain retrievable by terminal ID.",
   },
-  start_worktree_agent: {
-    label: "Start worktree agent",
-    description:
-      "Create or reuse a Git worktree, open it in a new VS Code window, and bootstrap AgentLink there with a supplied prompt. Use only for user-requested or explicitly user-approved isolated parallel workstreams. This tool always requires an explicit approval prompt before creating/opening anything, even when write or command approvals are permissive.",
-  },
+
   open_file: {
     label: "Open in editor",
     description:

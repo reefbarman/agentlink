@@ -19,11 +19,235 @@ body {
   height: 100%;
 }
 
+.chat-workspace,
+.chat-session-pane,
 .chat-container {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+}
+
+.chat-workspace,
+.chat-session-pane {
   height: 100%;
+}
+
+.chat-container {
+  flex: 1;
   position: relative;
+}
+
+.chat-tab-strip {
+  display: flex;
+  align-items: stretch;
+  min-height: 34px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-sideBar-background);
+}
+
+.chat-tab-strip-scroll {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.chat-tab {
+  display: flex;
+  align-items: stretch;
+  min-width: 96px;
+  max-width: 190px;
+  border-right: 1px solid var(--vscode-panel-border);
+  border-top: 2px solid transparent;
+  color: var(--vscode-tab-inactiveForeground, var(--vscode-foreground));
+  background: var(--vscode-tab-inactiveBackground, transparent);
+}
+
+.chat-tab.selected {
+  border-top-color: #4ec9b0;
+  color: var(--vscode-tab-activeForeground, var(--vscode-foreground));
+  background: var(
+    --vscode-tab-activeBackground,
+    var(--vscode-editor-background)
+  );
+}
+
+.chat-tab-select {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+  padding: 5px 4px 5px 8px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-tab-status {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--vscode-descriptionForeground);
+  opacity: 0.6;
+}
+
+.chat-tab-status.status-streaming {
+  background: #4ec9b0;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #4ec9b0 20%, transparent);
+}
+
+.chat-tab-status.status-queued_for_provider,
+.chat-tab-status.status-queued_for_workspace_write {
+  background: var(--vscode-charts-yellow, #cca700);
+}
+
+.chat-tab-status.status-needs_input {
+  background: var(--vscode-charts-orange, #d18616);
+}
+
+.chat-tab-status.status-failed {
+  background: var(--vscode-errorForeground, #f14c4c);
+}
+
+.chat-tab-status.status-completed {
+  background: var(--vscode-charts-green, #89d185);
+}
+
+.chat-tab-label {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.chat-tab-title {
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-tab-close,
+.chat-tab-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  border: 0;
+  color: var(--vscode-foreground);
+  background: transparent;
+  opacity: 0.65;
+  cursor: pointer;
+}
+
+.chat-tab-close:hover:not(:disabled),
+.chat-tab-new:hover:not(:disabled) {
+  background: var(--vscode-toolbar-hoverBackground);
+  opacity: 1;
+}
+
+.chat-tab-close:disabled,
+.chat-tab-new:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.chat-tab-new {
+  flex-shrink: 0;
+  border-left: 1px solid var(--vscode-panel-border);
+}
+
+.chat-tab-failure {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  color: var(--vscode-errorForeground);
+  background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent);
+  font-size: 11px;
+}
+
+.chat-tab-failure span {
+  flex: 1;
+}
+
+.chat-tab-confirmation-backdrop {
+  position: fixed;
+  z-index: 300;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: color-mix(
+    in srgb,
+    var(--vscode-editor-background) 75%,
+    transparent
+  );
+}
+
+.chat-tab-confirmation {
+  display: flex;
+  gap: 10px;
+  width: min(400px, 100%);
+  padding: 14px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  background: var(
+    --vscode-editorWidget-background,
+    var(--vscode-editor-background)
+  );
+  box-shadow: 0 8px 28px var(--vscode-widget-shadow);
+}
+
+.chat-tab-confirmation-icon {
+  color: var(--vscode-charts-yellow, #cca700);
+  font-size: 18px;
+}
+
+.chat-tab-confirmation-content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-tab-confirmation-content span {
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.chat-tab-confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.chat-tab-confirmation-actions button {
+  padding: 4px 10px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 3px;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  cursor: pointer;
+}
+
+.chat-tab-confirmation-actions button.secondary {
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
 }
 
 /* ── Drop Overlay ── */

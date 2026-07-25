@@ -73,6 +73,35 @@ describe("createForegroundChatTabSync", () => {
     expect(bindFocusedSession).not.toHaveBeenCalled();
   });
 
+  // Regression: activation runs the sync once before any session exists, so it
+  // takes no await path and finishes inline. That pass used to latch the sync
+  // on its own already-settled promise, after which no notification ever bound
+  // a session to a tab and `getTabForSession` never resolved one — leaving
+  // execute_command with no tab-owned TerminalProvider for the whole window.
+  it("binds once a foreground session appears after an empty activation pass", async () => {
+    const controller = new ChatTabController(createWorkspaceState(), {
+      createId: () => "tab-1",
+    });
+    let foregroundSessionId: string | undefined;
+    const sync = createForegroundChatTabSync({
+      getForegroundSessionId: () => foregroundSessionId,
+      bindFocusedSession: (sessionId) =>
+        controller.bindFocusedSession(sessionId),
+    });
+
+    // Activation: no session exists yet.
+    await sync();
+    expect(controller.getFocusedTab().sessionId).toBeNull();
+
+    // First session created; sessions-changed fires the sync again.
+    foregroundSessionId = "session-1";
+    await sync();
+    expect(controller.getTabForSession("session-1")).toMatchObject({
+      id: "tab-1",
+      terminalGeneration: 1,
+    });
+  });
+
   // Regression: v1.17.71 froze the extension host when a fresh foreground
   // session replaced a restored tab binding. Retiring the old binding stopped
   // its session, which fired sessions-changed and re-entered the sync while

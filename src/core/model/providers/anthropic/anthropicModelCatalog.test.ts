@@ -157,6 +157,36 @@ describe("mapSdkModelToCapabilities", () => {
     ]);
   });
 
+  it("carries requiresExplicitThinkingDisable from the static base", () => {
+    const sdk: SdkModelInfo = {
+      id: "claude-opus-5",
+      display_name: "Claude Opus 5",
+      max_input_tokens: 1_000_000,
+      max_tokens: 128_000,
+      capabilities: {
+        thinking: { supported: true, types: { adaptive: support(true) } },
+        effort: { supported: true, high: support(true) },
+      },
+    };
+    const staticBase = {
+      ...SONNET_STATIC,
+      requiresExplicitThinkingDisable: true,
+    };
+    expect(
+      mapSdkModelToCapabilities(sdk, staticBase)
+        .requiresExplicitThinkingDisable,
+    ).toBe(true);
+    // Absent from the static base (or no base at all) stays absent — the SDK
+    // does not express this flag.
+    expect(
+      mapSdkModelToCapabilities(sdk, SONNET_STATIC)
+        .requiresExplicitThinkingDisable,
+    ).toBeUndefined();
+    expect(
+      mapSdkModelToCapabilities(sdk, undefined).requiresExplicitThinkingDisable,
+    ).toBeUndefined();
+  });
+
   it("overlays SDK token envelopes directly (Q4, no max guard)", () => {
     const sdk: SdkModelInfo = {
       id: "claude-sonnet-4-6",

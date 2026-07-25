@@ -30,9 +30,15 @@ vi.mock("./systemPrompt.js", () => {
   const buildPromptArtifactsMock = vi
     .fn()
     .mockResolvedValue(makePromptArtifacts("mock system prompt"));
+  const buildModeInstructionBlockMock = vi
+    .fn()
+    .mockImplementation((mode: string) =>
+      Promise.resolve(`<current_mode mode="${mode}">mock block</current_mode>`),
+    );
   return {
     buildSystemPrompt: buildSystemPromptMock,
     buildPromptArtifacts: buildPromptArtifactsMock,
+    buildModeInstructionBlock: buildModeInstructionBlockMock,
   };
 });
 
@@ -310,43 +316,44 @@ describe("AgentSession", () => {
 
     it("bumps transcriptRevision on every transcript mutation and holds it steady on reads", async () => {
       const session = await makeSession();
-      expect(session.transcriptRevision).toBe(0);
+      // Creation seeds the mode instruction anchor, which counts as revision 1.
+      const base = session.transcriptRevision;
 
       session.addUserMessage("hello");
-      expect(session.transcriptRevision).toBe(1);
+      expect(session.transcriptRevision).toBe(base + 1);
 
       session.appendAssistantTurn([{ type: "text", text: "hi" }]);
-      expect(session.transcriptRevision).toBe(2);
+      expect(session.transcriptRevision).toBe(base + 2);
 
       session.appendToolResults([
         { type: "tool_result", tool_use_id: "t1", content: "ok" },
       ]);
-      expect(session.transcriptRevision).toBe(3);
+      expect(session.transcriptRevision).toBe(base + 3);
 
       expect(
         session.applyFinalMarker({ status: "completed", source: "engine" }),
       ).toBe(true);
-      expect(session.transcriptRevision).toBe(4);
+      expect(session.transcriptRevision).toBe(base + 4);
 
       session.appendRuntimeError({ message: "boom", retryable: false });
-      expect(session.transcriptRevision).toBe(5);
+      expect(session.transcriptRevision).toBe(base + 5);
       // In-place update of the matching runtime error still counts as a mutation.
       session.appendRuntimeError({ message: "boom", retryable: true });
-      expect(session.transcriptRevision).toBe(6);
+      expect(session.transcriptRevision).toBe(base + 6);
 
       expect(session.popLastMessage("assistant")).toBeDefined();
-      expect(session.transcriptRevision).toBe(7);
+      expect(session.transcriptRevision).toBe(base + 7);
       // A non-matching pop leaves the transcript (and revision) untouched.
       expect(session.popLastMessage("assistant")).toBeUndefined();
-      expect(session.transcriptRevision).toBe(7);
+      expect(session.transcriptRevision).toBe(base + 7);
 
       session.replaceMessages([{ role: "user", content: "condensed" }]);
-      expect(session.transcriptRevision).toBe(8);
+      expect(session.transcriptRevision).toBe(base + 8);
 
       // Reads never bump the revision.
       session.getAllMessages();
       session.getMessages();
-      expect(session.transcriptRevision).toBe(8);
+      expect(session.transcriptRevision).toBe(base + 8);
     });
 
     it("persists user-message origin metadata in uiHint", async () => {
@@ -656,6 +663,9 @@ describe("AgentSession", () => {
 
     it("attributes estimated accumulation per source and resets on fresh usage", async () => {
       const session = await makeSession();
+      // Clear the creation-time mode block estimate so the assertions below
+      // cover only this test's contributions.
+      session.addUsage(0, 0);
       session.addEstimatedTokens(400, "tool:read_file");
       session.addEstimatedTokens(800, "tool:read_file");
       session.addEstimatedTokens(400);
@@ -670,6 +680,106 @@ describe("AgentSession", () => {
       session.addUsage(1000, 500);
       expect(session.estimatedAccumulatedTokens).toBe(0);
       expect(session.estimatedAccumulationBySource).toEqual({});
+    });
+
+    it("attributes user messages and attachments to the accumulator", async () => {
+      const session = await makeSession();
+      session.addUserMessage("x".repeat(400), {
+        images: [{ name: "a.png", mimeType: "image/png", base64: "aaaa" }],
+        documents: [
+          {
+            name: "d.pdf",
+            mimeType: "application/pdf",
+            base64: "b".repeat(4000),
+          },
+        ],
+      });
+
+      expect(session.estimatedAccumulationBySource["user_message"]).toBe(100);
+      expect(session.estimatedAccumulationBySource["attachment:image"]).toBe(
+        1_500,
+      );
+      // 4000 base64 chars → 3000 decoded bytes → 750 estimated tokens
+      expect(session.estimatedAccumulationBySource["attachment:document"]).toBe(
+        750,
+      );
+    });
+
+    it("seeds a mode instruction anchor at creation and repins it on setMode", async () => {
+      const session = await makeSession();
+      expect(session.modeInstructionPlacement).toBe("conversation");
+      expect(session.modeInstructionAnchors).toEqual([
+        {
+          userTurnOrdinal: 0,
+          mode: "code",
+          blockText: '<current_mode mode="code">mock block</current_mode>',
+        },
+      ]);
+
+      // Switching with no new turns replaces the anchor instead of stacking.
+      await session.setMode("architect");
+      expect(session.modeInstructionAnchors).toEqual([
+        {
+          userTurnOrdinal: 0,
+          mode: "architect",
+          blockText: '<current_mode mode="architect">mock block</current_mode>',
+        },
+      ]);
+
+      // After a turn, a switch pins a new anchor at the current boundary.
+      session.addUserMessage("hello");
+      session.appendAssistantTurn([{ type: "text", text: "hi" }]);
+      await session.setMode("code");
+      expect(session.modeInstructionAnchors).toHaveLength(2);
+      expect(session.modeInstructionAnchors[1]).toMatchObject({
+        userTurnOrdinal: 1,
+        mode: "code",
+      });
+    });
+
+    it("keeps background sessions on inline mode placement without anchors", async () => {
+      const session = await makeSession({ background: true });
+      expect(session.modeInstructionPlacement).toBe("system");
+      expect(session.modeInstructionAnchors).toEqual([]);
+      expect(session.buildModeInstructionInsertions([])).toEqual([]);
+    });
+
+    it("maps anchors to effective-history insertion points at turn boundaries", async () => {
+      const session = await makeSession();
+      session.addUserMessage("first");
+      session.appendAssistantTurn([{ type: "text", text: "a" }]);
+      await session.setMode("architect");
+      session.addUserMessage("second");
+
+      const effective = session.getMessages();
+      expect(session.buildModeInstructionInsertions(effective)).toEqual([
+        {
+          beforeIndex: 0,
+          blockText: '<current_mode mode="code">mock block</current_mode>',
+        },
+        {
+          // Before the "second" user turn (index 2: first, assistant, second).
+          beforeIndex: 2,
+          blockText: '<current_mode mode="architect">mock block</current_mode>',
+        },
+      ]);
+    });
+
+    it("re-seeds a single top anchor when history is replaced", async () => {
+      const session = await makeSession();
+      session.addUserMessage("first");
+      await session.setMode("architect");
+      session.addUserMessage("second");
+      expect(session.modeInstructionAnchors).toHaveLength(2);
+
+      session.replaceMessages([{ role: "user", content: "condensed" }]);
+      expect(session.modeInstructionAnchors).toEqual([
+        {
+          userTurnOrdinal: 0,
+          mode: "architect",
+          blockText: '<current_mode mode="architect">mock block</current_mode>',
+        },
+      ]);
     });
 
     it("restoreFromStore restores cache totals and last token snapshot", async () => {

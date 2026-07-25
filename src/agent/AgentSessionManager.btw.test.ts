@@ -56,6 +56,11 @@ vi.mock("vscode", async () => {
 
 vi.mock("./systemPrompt.js", () => ({
   buildPromptArtifacts: mocks.mockBuildPromptArtifacts,
+  buildModeInstructionBlock: vi
+    .fn()
+    .mockResolvedValue(
+      '<current_mode mode="mock">mock mode block</current_mode>',
+    ),
 }));
 
 const TEST_MODEL = "btw-test-model";
@@ -482,6 +487,11 @@ describe("AgentSessionManager /btw side questions", () => {
 
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0]?.messages).toEqual([
+      // Injected mode instruction block always precedes the first user turn.
+      expect.objectContaining({
+        role: "user",
+        content: '<current_mode mode="mock">mock mode block</current_mode>',
+      }),
       expect.objectContaining({ role: "user", content: "first queued" }),
       expect.objectContaining({ role: "user", content: "second queued" }),
     ]);

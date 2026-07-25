@@ -14,6 +14,9 @@ export interface ContextJumpApiRequestInfo {
   model: string;
   /** Total input tokens for this request: uncached + cache reads + cache writes. */
   inputTokens: number;
+  /** Output tokens of this response — becomes input on the next request, so the
+   *  tracker uses it to attribute the next jump exactly. */
+  outputTokens?: number;
   cacheCreationTokens?: number;
   contextWindow?: number;
   /** Engine-side running estimate of content appended since the previous response. */
@@ -35,6 +38,8 @@ export interface ContextJumpCondenseInfo {
 
 interface SessionContextState {
   lastInputTokens: number | null;
+  lastOutputTokens?: number;
+  lastModel?: string;
   lastSystemPromptTokens?: number;
   lastToolDefinitionTokens?: number;
   pendingCondenseEstimateTokens: number | null;
@@ -127,6 +132,12 @@ export class ContextJumpTracker {
           state.lastToolDefinitionTokens !== undefined
             ? info.toolDefinitionTokens - state.lastToolDefinitionTokens
             : undefined;
+        // The previous response's output (text + thinking + tool_use blocks)
+        // re-enters the context as input on this request. It is known exactly,
+        // so attribute it rather than letting it inflate "unattributed".
+        const prevAssistantOutputTokens = state.lastOutputTokens;
+        const modelChanged =
+          state.lastModel !== undefined && state.lastModel !== info.model;
         this.emit({
           kind: "context_jump",
           sessionId,
@@ -144,16 +155,21 @@ export class ContextJumpTracker {
           accumulatedBySource: topAccumulationSources(info.accumulatedBySource),
           systemPromptDeltaTokens,
           toolDefinitionDeltaTokens,
+          prevAssistantOutputTokens,
+          ...(modelChanged ? { modelChanged } : {}),
           unattributedTokens:
             delta -
             (info.accumulatedEstimatedTokens ?? 0) -
             (systemPromptDeltaTokens ?? 0) -
-            (toolDefinitionDeltaTokens ?? 0),
+            (toolDefinitionDeltaTokens ?? 0) -
+            (prevAssistantOutputTokens ?? 0),
         });
       }
     }
 
     state.lastInputTokens = info.inputTokens;
+    state.lastOutputTokens = info.outputTokens ?? state.lastOutputTokens;
+    state.lastModel = info.model;
     state.lastSystemPromptTokens =
       info.systemPromptTokens ?? state.lastSystemPromptTokens;
     state.lastToolDefinitionTokens =

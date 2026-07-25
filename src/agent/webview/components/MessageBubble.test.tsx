@@ -324,6 +324,78 @@ describe("MessageBubble slash-command rendering", () => {
     expect(screen.queryByRole("dialog", { name: "screenshot.png" })).toBeNull();
   });
 
+  it("renders generated images immediately after the tool group that produced them", () => {
+    const message: ChatMessage = {
+      id: "assistant-generated-images",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        { type: "text", text: "I will refine the texture." },
+        {
+          type: "tool_call",
+          id: "inspect-reference",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "reference.png" }),
+          result: "inspected",
+          complete: true,
+        },
+        {
+          type: "thinking",
+          id: "thinking-1",
+          text: "Preparing the revised prompt.",
+          complete: true,
+        },
+        {
+          type: "tool_call",
+          id: "generate-texture",
+          name: "generate_image",
+          inputJson: JSON.stringify({ prompt: "warm-white sheeting" }),
+          result: JSON.stringify({ status: "accepted", generated_count: 2 }),
+          resultImages: [
+            { mimeType: "image/png", data: "Zmlyc3Q=" },
+            { mimeType: "image/webp", data: "c2Vjb25k" },
+          ],
+          complete: true,
+        },
+      ],
+      displayMedia: {
+        images: [
+          {
+            name: "generated-image-1.png",
+            mimeType: "image/png",
+            src: "data:image/png;base64,Zmlyc3Q=",
+          },
+          {
+            name: "generated-image-2.webp",
+            mimeType: "image/webp",
+            src: "data:image/webp;base64,c2Vjb25k",
+          },
+        ],
+        documents: [],
+      },
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+
+    const blocks = container.querySelector(".assistant-blocks");
+    const imagePreviews = blocks?.querySelector(".user-image-previews");
+    expect(imagePreviews).toBeTruthy();
+    expect(imagePreviews?.querySelectorAll(".user-image-preview")).toHaveLength(
+      2,
+    );
+    expect(
+      imagePreviews?.previousElementSibling?.classList.contains(
+        "tool-group-block",
+      ),
+    ).toBe(true);
+    expect(
+      blocks?.firstElementChild?.classList.contains("assistant-content"),
+    ).toBe(true);
+  });
+
   it("renders inline code and fenced code blocks in user text", () => {
     const message: ChatMessage = {
       id: "user-code-markdown",

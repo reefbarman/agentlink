@@ -21,6 +21,7 @@ import type {
   AgentToolExecutionContext,
 } from "../core/tools/types.js";
 import { ToolCallBudget } from "../core/tools/toolCallBudget.js";
+import { BUILT_IN_MODES, buildUnionAgentMode } from "./modes.js";
 import { buildToolContextBreakdown } from "./contextBreakdown.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import { partitionMcpToolsForDisclosure } from "./mcpToolDisclosure.js";
@@ -741,27 +742,59 @@ export class AgentEngine {
         const backgroundExpectedResult = opts?.isBackground
           ? session.fleetMetadata?.delegation?.expectedResult
           : undefined;
+        const narrowedExpectedResult:
+          | "text"
+          | "review_findings"
+          | "patch"
+          | "verification"
+          | undefined =
+          backgroundExpectedResult === "text" ||
+          backgroundExpectedResult === "review_findings" ||
+          backgroundExpectedResult === "patch" ||
+          backgroundExpectedResult === "verification"
+            ? backgroundExpectedResult
+            : undefined;
+        const listToolsRequestBase = {
+          mcpToolDefs: providerMcpToolDefs,
+          nativeWebToolKinds: opts?.webAccessPolicy?.enabledKinds,
+          isBackground: opts?.isBackground,
+          toolProfile: opts?.toolProfile,
+          skillAllowedTools: session.getActiveSkillAllowedTools(),
+          allMcpToolDefsForSkillAllowlist: connectedMcpToolDefs,
+          backgroundExpectedResult: narrowedExpectedResult,
+        };
+        // Sessions with a cache-stable system prompt also advertise a
+        // mode-independent tool union, so switching modes never invalidates
+        // the prompt-cache prefix. The current mode's real allowance is
+        // enforced at dispatch via modeAllowedToolNames.
+        const useUnionToolAdvertisement =
+          session.modeInstructionPlacement === "conversation" &&
+          !opts?.isBackground &&
+          !opts?.toolProfile;
+        const advertisedMode = useUnionToolAdvertisement
+          ? buildUnionAgentMode([...BUILT_IN_MODES, session.agentMode])
+          : session.agentMode;
         const rawTools = this.toolRuntime
           ? [
               ...this.toolRuntime.listTools({
-                mode: session.agentMode,
-                mcpToolDefs: providerMcpToolDefs,
-                nativeWebToolKinds: opts?.webAccessPolicy?.enabledKinds,
-                isBackground: opts?.isBackground,
-                toolProfile: opts?.toolProfile,
-                skillAllowedTools: session.getActiveSkillAllowedTools(),
-                allMcpToolDefsForSkillAllowlist: connectedMcpToolDefs,
-                backgroundExpectedResult:
-                  backgroundExpectedResult === "text" ||
-                  backgroundExpectedResult === "review_findings" ||
-                  backgroundExpectedResult === "patch" ||
-                  backgroundExpectedResult === "verification"
-                    ? backgroundExpectedResult
-                    : undefined,
+                ...listToolsRequestBase,
+                mode: advertisedMode,
               }),
               todoTool,
             ]
           : undefined;
+        const modeAllowedToolNames =
+          useUnionToolAdvertisement && this.toolRuntime
+            ? new Set([
+                ...this.toolRuntime
+                  .listTools({
+                    ...listToolsRequestBase,
+                    mode: session.agentMode,
+                  })
+                  .map((tool) => tool.name),
+                todoTool.name,
+              ])
+            : undefined;
         const preservedContext = {
           toolNames: rawTools?.map((t) => t.name) ?? [],
           mcpServerNames: [
@@ -1056,6 +1089,20 @@ export class AgentEngine {
               };
             },
           );
+          // Mode instruction blocks are request-local user messages pinned to
+          // fixed conversation positions (see AgentSession.modeInstructionAnchors)
+          // so the system prompt and prompt-cache prefix stay stable across
+          // mode switches. Splice descending so earlier indices stay valid.
+          const modeInsertions =
+            session.buildModeInstructionInsertions?.(effectiveMessages) ?? [];
+          for (let i = modeInsertions.length - 1; i >= 0; i--) {
+            const insertion = modeInsertions[i]!;
+            apiMessages.splice(insertion.beforeIndex, 0, {
+              role: "user",
+              content: insertion.blockText,
+            });
+          }
+
           // Empty-response recovery input is request-local. It must reach the
           // provider without becoming a persisted/user-visible chat message.
           if (pendingEmptyResponseNudge) {
@@ -1114,6 +1161,7 @@ export class AgentEngine {
           );
           const schedulerQueued = !this.registry.requestScheduler.hasCapacity(
             provider.id,
+            opts?.isBackground ? "background" : "interactive",
           );
           const requestPermitPromise = this.registry.requestScheduler.acquire(
             provider.id,
@@ -1567,6 +1615,38 @@ export class AgentEngine {
           break;
         }
 
+        // Safety-classifier refusal (Claude Opus 5 / Fable 5): the response is
+        // empty or partial and retrying the identical request would trip the
+        // classifier again, so surface it instead of entering the
+        // empty-response retry loop below.
+        if (modelStopReason === "refusal") {
+          if (hasVisibleOrActionableOutput(contentBlocks)) {
+            appendCommittedAssistantMessage();
+            // Close out any tool calls in the partial output so the history
+            // does not carry dangling tool_use blocks into the next request.
+            const refusedToolUseBlocks = contentBlocks.filter(
+              (b): b is ToolUseBlock => b.type === "tool_use",
+            );
+            if (refusedToolUseBlocks.length > 0) {
+              session.appendToolResults(
+                refusedToolUseBlocks.map((b) => ({
+                  type: "tool_result" as const,
+                  tool_use_id: b.id,
+                  content:
+                    "[Not executed — the provider declined the request before tool execution.]",
+                })),
+              );
+            }
+            opts?.onAssistantTurnCommitted?.();
+          }
+          yield {
+            type: "warning",
+            message:
+              "The provider declined this request (safety refusal). Any partial response was preserved. Rephrase the request or retry on a different model (e.g. Claude Opus 4.8).",
+          };
+          break;
+        }
+
         // Enforce maxApiTurns: when the limit is reached and the model wants
         // more tool calls, inject a "wrap up" message to force a final response.
         if (maxApiTurns > 0 && apiTurnCount >= maxApiTurns) {
@@ -1793,6 +1873,7 @@ export class AgentEngine {
           mode: session.agentMode.slug,
           toolProfile: opts?.toolProfile,
           availableToolNames: new Set(rawTools?.map((tool) => tool.name) ?? []),
+          modeAllowedToolNames,
           toolCallBudget,
           commandExecutionPolicy:
             session.agentMode.toolGroups.includes("read-only-command") ||

@@ -1,6 +1,3 @@
-import * as os from "os";
-import * as path from "path";
-
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AgentSessionManager } from "./AgentSessionManager.js";
@@ -10,8 +7,6 @@ import {
   type ToolDispatchContext,
 } from "./toolAdapter.js";
 import { WorkspaceMutationCoordinator } from "./WorkspaceMutationCoordinator.js";
-import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeStore.js";
-import { mkdtemp } from "fs/promises";
 
 const mocks = vi.hoisted(() => {
   let seq = 0;
@@ -485,131 +480,18 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
-  it("launches isolated delegation through the worktree provider and records it", async () => {
-    const globalStoragePath = await mkdtemp(
-      path.join(os.tmpdir(), "fleet-worktree-test-"),
-    );
-    const start = vi.fn().mockResolvedValue({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            status: "opened",
-            worktreePath: "/tmp/repo-worktrees/task",
-            intentId: "intent-1",
-          }),
-        },
-      ],
-    });
+  it("rejects legacy background worktree placement with /worktree guidance", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
-    const parent = await mgr.createSession("code");
-    mgr.setSessionApprovalMode(parent.id, {
-      commandApprovalPolicy: "sensitive",
-      approvalPolicy: "on-request",
-      approvalReviewer: "auto-review",
-      executionPreset: "native-manual",
-    });
-    mgr.setToolContext({
-      ...toolCtx,
-      globalStorageUri: { fsPath: globalStoragePath } as any,
-      getCommandApprovalPolicy: (sessionId) =>
-        mgr.getCommandApprovalPolicy(sessionId),
-      worktreeAgentLaunchProvider: { start },
-    });
-    const result = await mgr.spawnBackground({
-      task: "isolated",
-      message: "edit safely",
-      worktree: "isolated",
-    });
-    expect(start).toHaveBeenCalledWith(
-      expect.objectContaining({
+    mgr.setToolContext(toolCtx);
+
+    await expect(
+      mgr.spawnBackground({
         task: "isolated",
-        autoSubmit: true,
-        commandApprovalPolicy: "sensitive",
-        approvalPolicy: "on-request",
-        approvalReviewer: "auto-review",
-        executionPreset: "native-manual",
-      }),
-    );
-    const fleet = (mgr as any).sessions.get(result.sessionId).fleetMetadata;
-    expect(fleet).toEqual(
-      expect.objectContaining({
-        placement: "worktree",
-        lifecycle: "running",
-        worktreeExchangeId: expect.any(String),
-        worktreePath: "/tmp/repo-worktrees/task",
-      }),
-    );
-    await new WorktreeFleetExchangeStore(globalStoragePath).update(
-      fleet.worktreeExchangeId,
-      {
-        status: "completed",
-        childSessionId: "child-window-session",
-        resultText: "worktree result",
-        usage: { inputTokens: 12, outputTokens: 3 },
-      },
-    );
-    await new Promise((resolve) => setTimeout(resolve, 1100));
-    expect((mgr as any).sessions.get(result.sessionId).fleetMetadata).toEqual(
-      expect.objectContaining({
-        lifecycle: "completed",
-        childSessionId: "child-window-session",
-        finalResult: "worktree result",
-      }),
-    );
-  });
-
-  it("returns structured failure when a worktree omits its expected envelope", async () => {
-    const globalStoragePath = await mkdtemp(
-      path.join(os.tmpdir(), "fleet-worktree-incomplete-test-"),
-    );
-    const start = vi.fn().mockResolvedValue({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            status: "opened",
-            worktreePath: "/tmp/repo-worktrees/review",
-          }),
-        },
-      ],
-    });
-    const mgr = new AgentSessionManager(config, "/tmp");
-    mgr.setToolContext({
-      ...toolCtx,
-      globalStorageUri: { fsPath: globalStoragePath } as any,
-      worktreeAgentLaunchProvider: { start },
-    });
-    const spawned = await mgr.spawnBackground({
-      task: "isolated review",
-      message: "review safely",
-      worktree: "isolated",
-      expectedResult: "review_findings",
-    });
-    const fleet = (mgr as any).sessions.get(spawned.sessionId).fleetMetadata;
-    const resultPromise = mgr.waitForBackground(spawned.sessionId);
-
-    await new WorktreeFleetExchangeStore(globalStoragePath).update(
-      fleet.worktreeExchangeId,
-      {
-        status: "completed",
-        resultText: "I reviewed the change but did not finalize the envelope.",
-      },
-    );
-
-    const result = JSON.parse(await resultPromise);
-    expect(result).toEqual({
-      status: "incomplete_expected_result",
-      terminalReason: "incomplete_expected_result",
-      retrySafe: true,
-      agentRetryable: false,
-      partialOutput: "I reviewed the change but did not finalize the envelope.",
-    });
-    expect((mgr as any).sessions.get(spawned.sessionId).fleetMetadata).toEqual(
-      expect.objectContaining({
-        lifecycle: "failed",
-        resultState: "incomplete_expected_result",
-      }),
+        message: "edit safely",
+        worktree: "isolated",
+      } as any),
+    ).rejects.toThrow(
+      "spawn_background_agent cannot create worktrees; use the explicit /worktree command instead",
     );
   });
 
@@ -1415,19 +1297,26 @@ describe("AgentSessionManager background agents", () => {
       },
     );
     mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
 
-    const first = await mgr.spawnBackground({
-      task: "first",
-      message: "write",
-    });
+    const first = await mgr.spawnBackground(
+      {
+        task: "first",
+        message: "write",
+      },
+      foreground.id,
+    );
     await waitFor(
       () => started.length,
       (value) => value === 1,
     );
-    const second = await mgr.spawnBackground({
-      task: "second",
-      message: "write",
-    });
+    const second = await mgr.spawnBackground(
+      {
+        task: "second",
+        message: "write",
+      },
+      foreground.id,
+    );
     await Promise.resolve();
     expect(started).toEqual([1]);
 
@@ -1452,6 +1341,7 @@ describe("AgentSessionManager background agents", () => {
       createEpoch: () => "test-epoch",
     });
     let generationAtPermissionReturn = -1;
+    let rootSessionId = "";
     const acpBackgroundRunner = {
       run: vi.fn(async (request: any) => {
         const outcome = await request.onRequestPermission({
@@ -1472,6 +1362,7 @@ describe("AgentSessionManager background agents", () => {
         generationAtPermissionReturn = coordinator.getSnapshot(
           "/tmp",
           "observer",
+          rootSessionId,
         ).generation;
       }),
     };
@@ -1495,11 +1386,16 @@ describe("AgentSessionManager background agents", () => {
       ...toolCtx,
       onApprovalRequest: vi.fn(async () => "allow"),
     });
+    const foreground = await mgr.createSession("code");
+    rootSessionId = foreground.id;
 
-    const spawned = await mgr.spawnBackground({
-      task: "edit",
-      message: "edit",
-    });
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "edit",
+        message: "edit",
+      },
+      foreground.id,
+    );
     await mgr.waitForBackground(spawned.sessionId);
 
     expect(generationAtPermissionReturn).toBe(1);
@@ -1514,7 +1410,7 @@ describe("AgentSessionManager background agents", () => {
       false,
       undefined,
       undefined,
-      { maxConcurrent: 0 },
+      { maxConcurrent: 3 },
       {
         host: {
           config: configHost,
@@ -1523,7 +1419,29 @@ describe("AgentSessionManager background agents", () => {
       },
     );
     const parent = await mgr.createSession("code");
+    const readOnlyTool = {
+      name: "linear__list_issues",
+      description: "List issues",
+      input_schema: { type: "object", properties: {} },
+    };
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        readOnlyTool,
+        {
+          name: "linear__create_issue",
+          description: "Create issue",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getReadOnlyToolDefs: vi.fn().mockReturnValue([readOnlyTool]),
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+    };
     mgr.setToolContext(toolCtx);
+    (mgr as any).activeRequestToolContexts.set(parent.id, {
+      ...toolCtx,
+      sessionId: parent.id,
+      mcpHub,
+    });
     const leaseHolder = { sessionId: parent.id };
     await (mgr as any).ensureWorkspaceMutationLease(parent, leaseHolder);
 
@@ -1549,6 +1467,15 @@ describe("AgentSessionManager background agents", () => {
         parent.id,
       ),
     ).resolves.toMatchObject({ resolvedProvider: "anthropic" });
+    await waitFor(
+      () => mocks.runArgs.mock.calls.length,
+      (calls) => calls === 1,
+    );
+    expect(mocks.runArgs.mock.calls[0]?.[1]).toMatchObject({
+      toolProfile: "review",
+      mcpToolDefinitions: [readOnlyTool],
+    });
+    expect(mcpHub.getReadOnlyToolDefs).toHaveBeenCalled();
 
     const readerChild = Array.from((mgr as any).sessions.values()).find(
       (session: any) => session.fleetMetadata?.parentSessionId === parent.id,

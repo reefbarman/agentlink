@@ -233,9 +233,13 @@ describe("AgentSessionManager host injection", () => {
       leaseHolder,
     );
 
-    expect(coordinator.getSnapshot("/tmp", "observer").generation).toBe(0);
+    expect(
+      coordinator.getSnapshot("/tmp", "observer", session.id).generation,
+    ).toBe(0);
     await context.prepareWorkspaceMutation();
-    expect(coordinator.getSnapshot("/tmp", "observer").generation).toBe(1);
+    expect(
+      coordinator.getSnapshot("/tmp", "observer", session.id).generation,
+    ).toBe(1);
     expect(leaseHolder.lease).toBeDefined();
 
     (mgr as any).releaseWorkspaceMutationLease(leaseHolder);
@@ -244,6 +248,36 @@ describe("AgentSessionManager host injection", () => {
       coordinator.createDomain(["/tmp"]),
     );
     nextLease.release();
+  });
+
+  it("keeps mutation leases independent across foreground agent trees", async () => {
+    const coordinator = new WorkspaceMutationCoordinator();
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      { host: { workspaceMutationCoordinator: coordinator } },
+    );
+    mgr.setToolContext({
+      approvalManager: { bindSessionProject: vi.fn() } as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+    });
+    const first = await mgr.createSession("code");
+    first.addUserMessage("first tab work");
+    const second = await mgr.createSession("code");
+    second.addUserMessage("second tab work");
+    const firstDomain = (mgr as any).createWorkspaceMutationDomain(first);
+    const secondDomain = (mgr as any).createWorkspaceMutationDomain(second);
+
+    expect(firstDomain.scopeId).toBe(first.id);
+    expect(secondDomain.scopeId).toBe(second.id);
+    expect(firstDomain.roots).toEqual(secondDomain.roots);
   });
 
   it("creates only a tool-free Ask session when no workspace project exists", async () => {
@@ -1940,7 +1974,7 @@ describe("AgentSessionManager condense thresholds", () => {
       expect.objectContaining({
         config: expect.objectContaining({
           model: "claude-sonnet-4-6",
-          autoCondenseThreshold: 0.6,
+          autoCondenseThreshold: 0.8,
         }),
       }),
     );
@@ -1966,7 +2000,7 @@ describe("AgentSessionManager condense thresholds", () => {
       expect.objectContaining({
         config: expect.objectContaining({
           model: "claude-sonnet-4-6",
-          autoCondenseThreshold: 0.6,
+          autoCondenseThreshold: 0.8,
         }),
       }),
     );
@@ -4015,7 +4049,7 @@ describe("AgentSessionManager checkpoints", () => {
         .workspaceMutationCoordinator as WorkspaceMutationCoordinator;
       const externalLease = await coordinator.acquire(
         "other-session",
-        coordinator.createDomain([rootB]),
+        coordinator.createDomain([rootB], session.id),
       );
       await externalLease.markMutation();
       externalLease.release();

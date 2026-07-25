@@ -65,6 +65,46 @@ describe("WorkspaceMutationCoordinator", () => {
     disjoint.release();
   });
 
+  it("coordinates overlapping roots within one agent tree but isolates different trees", async () => {
+    const coordinator = new WorkspaceMutationCoordinator();
+    const firstTree = coordinator.createDomain(["/tmp/project"], "root-1");
+    const sameTree = coordinator.createDomain(["/tmp/project"], "root-1");
+    const otherTree = coordinator.createDomain(["/tmp/project"], "root-2");
+
+    const first = await coordinator.acquire("session-1", firstTree);
+    let sameTreeResolved = false;
+    const queued = coordinator.acquire("session-2", sameTree).then((lease) => {
+      sameTreeResolved = true;
+      return lease;
+    });
+    const independent = await coordinator.acquire("session-3", otherTree);
+
+    await Promise.resolve();
+    expect(sameTreeResolved).toBe(false);
+    await first.markMutation();
+    await independent.markMutation();
+    expect(first.snapshot("/tmp/project")).toMatchObject({
+      generation: 1,
+      scopeId: "root-1",
+    });
+    expect(independent.snapshot("/tmp/project")).toMatchObject({
+      generation: 1,
+      scopeId: "root-2",
+    });
+    expect(
+      coordinator.findConflict(
+        "/tmp/project",
+        first.snapshot("/tmp/project"),
+        "root-1",
+      ),
+    ).toBeUndefined();
+
+    first.release();
+    const sameTreeLease = await queued;
+    sameTreeLease.release();
+    independent.release();
+  });
+
   it("removes an aborted waiter without blocking the next request", async () => {
     const coordinator = new WorkspaceMutationCoordinator();
     const domain = coordinator.createDomain(["/tmp/project"]);

@@ -1,6 +1,6 @@
 # AgentLink: an agent harness built into VS Code
 
-_Last updated: 2026-07-24._
+_Last updated: 2026-07-25._
 
 Coding agents have gotten remarkably good, and most of the tooling race has been about giving them more autonomy: more parallelism, more cloud, more hands-off execution. Autonomy is necessary — but it's not what makes an agent produce good work.
 
@@ -26,7 +26,7 @@ Supervision in most tools is a three-way switch: allow, ask, deny. AgentLink tre
 
 **When you want your hands on the wheel:** every approval card carries a follow-up field — accept with added context, or reject with a reason the agent actually receives — so redirecting the agent doesn't mean restarting it. Commands are editable before approval, and scoped command-regex suggestions use a fast model from your selected provider plus bounded project/session context to propose useful variants without hiding the pattern you are granting. Structured questions let the agent ask you for a decision with real options instead of guessing; background-agent questions first go to the foreground coordinator, which answers from shared task context and only escalates when human judgment is actually needed. Side conversations (`/btw`) let _you_ ask a quick question without derailing the main task, while `/worktree` can configure an isolated alternative and confirm its launch directly in the activity shelf without interrupting the agent already running.
 
-**Either way, you can always see what's happening:** background agents, worktree agents, and scheduled automations all report into a fleet panel where you can steer, pause, or kill any agent; active shared-process children track later parent approval-mode changes and stored session grants without borrowing another session's one-shot decisions; every approval decision carries an audit badge (human, rule, tier, or Guardian — with outcome, authorization, and risk); budgets for tokens, tool calls, turns, and cost enforce warn/wrap-up/hard-stop behavior; and shadow-git checkpoints (`/checkpoint`, `/revert`) capture _everything_ — including changes made by shell commands and external tools — so any amount of autonomy is reversible without touching your real git history.
+**Either way, you can always see what's happening:** background agents, manually launched `/worktree` agents, and scheduled automations all report into a fleet panel where you can steer, pause, or kill any agent; active shared-process children track later parent approval-mode changes and stored session grants without borrowing another session's one-shot decisions; every approval decision carries an audit badge (human, rule, tier, or Guardian — with outcome, authorization, and risk); budgets for tokens, tool calls, turns, and cost enforce warn/wrap-up/hard-stop behavior; and shadow-git checkpoints (`/checkpoint`, `/revert`) capture _everything_ — including changes made by shell commands and external tools — so any amount of autonomy is reversible without touching your real git history.
 
 The result: full automation where you've earned confidence, precise steering where it matters, and observability everywhere.
 

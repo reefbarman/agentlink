@@ -26,8 +26,28 @@ export interface ChatTabWorkspaceState {
 
 export interface ChatTabControllerOptions {
   createId?: () => string;
+  createControllerEpoch?: () => string;
   log?: (message: string) => void;
 }
+
+export interface ChatTabActionAddress {
+  controllerEpoch: string;
+  tabId: string;
+  sessionId: string | null;
+}
+
+export interface ChatTabWorkspaceSnapshot {
+  controllerEpoch: string;
+  focusedTabId: string;
+  layout: ChatTabLayout;
+}
+
+export type ChatTabActionValidationResult =
+  | { ok: true; tab: ChatTab }
+  | {
+      ok: false;
+      reason: "stale_controller" | "not_found" | "stale_session";
+    };
 
 export type ReplaceChatTabSessionResult =
   | { ok: true; tab: ChatTab }
@@ -37,11 +57,15 @@ export class ChatTabController {
   private layout: ChatTabLayout;
   private focusedTabId: string;
   private readonly listeners = new Set<(layout: ChatTabLayout) => void>();
+  private readonly workspaceListeners = new Set<
+    (snapshot: ChatTabWorkspaceSnapshot) => void
+  >();
   private readonly terminalRetirementListeners = new Set<
     (tab: ChatTab) => void | Promise<void>
   >();
   private saveQueue: Promise<void> = Promise.resolve();
   private readonly createId: () => string;
+  private readonly controllerEpoch: string;
   private readonly log?: (message: string) => void;
   private needsInitialPersist: boolean;
 
@@ -50,6 +74,7 @@ export class ChatTabController {
     options: ChatTabControllerOptions = {},
   ) {
     this.createId = options.createId ?? randomUUID;
+    this.controllerEpoch = (options.createControllerEpoch ?? randomUUID)();
     this.log = options.log;
     const restored = this.restoreLayout(
       workspaceState.get<unknown>(CHAT_TAB_LAYOUT_WORKSPACE_KEY),
@@ -67,12 +92,20 @@ export class ChatTabController {
 
   dispose(): void {
     this.listeners.clear();
+    this.workspaceListeners.clear();
     this.terminalRetirementListeners.clear();
   }
 
   onDidChange(listener: (layout: ChatTabLayout) => void): { dispose(): void } {
     this.listeners.add(listener);
     return { dispose: () => this.listeners.delete(listener) };
+  }
+
+  onDidChangeWorkspace(
+    listener: (snapshot: ChatTabWorkspaceSnapshot) => void,
+  ): { dispose(): void } {
+    this.workspaceListeners.add(listener);
+    return { dispose: () => this.workspaceListeners.delete(listener) };
   }
 
   onWillRetireTerminalGeneration(
@@ -86,6 +119,28 @@ export class ChatTabController {
 
   getLayout(): ChatTabLayout {
     return structuredClone(this.layout);
+  }
+
+  getWorkspaceSnapshot(): ChatTabWorkspaceSnapshot {
+    return {
+      controllerEpoch: this.controllerEpoch,
+      focusedTabId: this.focusedTabId,
+      layout: this.getLayout(),
+    };
+  }
+
+  validateAction(address: ChatTabActionAddress): ChatTabActionValidationResult {
+    if (address.controllerEpoch !== this.controllerEpoch) {
+      return { ok: false, reason: "stale_controller" };
+    }
+    const tab = this.layout.tabs.find(
+      (candidate) => candidate.id === address.tabId,
+    );
+    if (!tab) return { ok: false, reason: "not_found" };
+    if (tab.sessionId !== address.sessionId) {
+      return { ok: false, reason: "stale_session" };
+    }
+    return { ok: true, tab: structuredClone(tab) };
   }
 
   getFocusedTabId(): string {
@@ -111,7 +166,10 @@ export class ChatTabController {
   async focusTab(tabId: string): Promise<boolean> {
     const tab = this.layout.tabs.find((candidate) => candidate.id === tabId);
     if (!tab || tab.placement !== "docked") return false;
-    this.focusedTabId = tabId;
+    if (this.focusedTabId !== tabId) {
+      this.focusedTabId = tabId;
+      this.publishWorkspaceSnapshot();
+    }
     return true;
   }
 
@@ -119,7 +177,13 @@ export class ChatTabController {
     if (sessionId) {
       const existing = this.getTabForSession(sessionId);
       if (existing) {
-        if (existing.placement === "docked") this.focusedTabId = existing.id;
+        if (
+          existing.placement === "docked" &&
+          this.focusedTabId !== existing.id
+        ) {
+          this.focusedTabId = existing.id;
+          this.publishWorkspaceSnapshot();
+        }
         return existing;
       }
     }
@@ -145,7 +209,13 @@ export class ChatTabController {
       (candidate) => candidate.sessionId === sessionId,
     );
     if (existing) {
-      if (existing.placement === "docked") this.focusedTabId = existing.id;
+      if (
+        existing.placement === "docked" &&
+        this.focusedTabId !== existing.id
+      ) {
+        this.focusedTabId = existing.id;
+        this.publishWorkspaceSnapshot();
+      }
       return structuredClone(existing);
     }
     const focused = this.requireTab(this.focusedTabId);
@@ -288,6 +358,14 @@ export class ChatTabController {
     const snapshot = this.getLayout();
     await this.persist(snapshot);
     for (const listener of this.listeners) listener(structuredClone(snapshot));
+    this.publishWorkspaceSnapshot();
+  }
+
+  private publishWorkspaceSnapshot(): void {
+    const snapshot = this.getWorkspaceSnapshot();
+    for (const listener of this.workspaceListeners) {
+      listener(structuredClone(snapshot));
+    }
   }
 
   private persist(snapshot = this.getLayout()): Promise<void> {

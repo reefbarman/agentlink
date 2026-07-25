@@ -20,8 +20,8 @@ export function ChatHeader({
         onClick={onNewSession}
         title={
           restoringSession
-            ? "Start a new session without waiting for restore"
-            : "New Session"
+            ? "Start a new chat without waiting for restore"
+            : "New Chat"
         }
       >
         <i class="codicon codicon-add" />

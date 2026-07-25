@@ -278,3 +278,22 @@ export async function loadSkills(
 
   return loadSkillsFromSources(sources, modeSlug);
 }
+
+/**
+ * Union of skills visible across the given modes, deduplicated by name (first
+ * mode in the list wins on collision). Used when the system prompt must stay
+ * byte-identical across mode switches: the advertised TOC is the same union
+ * whichever mode is active, and mode restrictions are enforced at load time.
+ */
+export async function loadSkillsForModes(
+  cwd: string,
+  modeSlugs: readonly string[],
+): Promise<SkillEntry[]> {
+  const merged = new Map<string, SkillEntry>();
+  for (const slug of modeSlugs) {
+    for (const skill of await loadSkills(cwd, slug)) {
+      if (!merged.has(skill.name)) merged.set(skill.name, skill);
+    }
+  }
+  return [...merged.values()];
+}

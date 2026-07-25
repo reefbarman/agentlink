@@ -97,7 +97,6 @@ export function planFleetWorkflow(
         mode: "code",
         model: candidate.model,
         provider: candidate.provider,
-        worktree: "isolated",
         expectedResult: "patch",
       })),
     };

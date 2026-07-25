@@ -513,7 +513,12 @@ function readServerToolUsage(
 }
 
 function normalizeStopReason(value: unknown): CoreModelStopReason {
-  return value === "tool_use" || value === "pause_turn" ? value : "end_turn";
+  // "refusal" (Claude Opus 5 / Fable 5 safety classifiers) must survive
+  // normalization: the response may be empty and the engine needs to surface
+  // it instead of treating it as an ordinary end-of-turn / empty response.
+  return value === "tool_use" || value === "pause_turn" || value === "refusal"
+    ? value
+    : "end_turn";
 }
 
 function isAnthropicServerReplayBlock(block: AnthropicJsonObject): boolean {
