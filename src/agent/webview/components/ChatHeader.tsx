@@ -17,7 +17,7 @@ export function ChatHeader({
     <div class="chat-header">
       <button
         class="icon-button"
-        onClick={onNewSession}
+        onClick={() => onNewSession()}
         title={
           restoringSession
             ? "Start a new chat without waiting for restore"
@@ -35,7 +35,7 @@ export function ChatHeader({
       {extraActions}
       <button
         class={`icon-button${showHistory ? " active" : ""}`}
-        onClick={onShowHistory}
+        onClick={() => onShowHistory()}
         title="Session History"
       >
         <i class="codicon codicon-history" />

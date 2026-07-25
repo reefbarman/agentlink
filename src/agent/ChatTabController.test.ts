@@ -218,7 +218,7 @@ describe("ChatTabController", () => {
     ]);
   });
 
-  it("creates stable monotonically numbered tabs without duplicating an open session", async () => {
+  it("creates stable numbered tabs without duplicating an open session", async () => {
     const workspace = createWorkspaceState();
     const controller = new ChatTabController(workspace.state, {
       createId: createIds("tab-1", "tab-2", "unused"),
@@ -236,6 +236,25 @@ describe("ChatTabController", () => {
     expect(existing.id).toBe("tab-1");
     expect(controller.getLayout().tabs).toHaveLength(2);
     expect(controller.getFocusedTabId()).toBe("tab-1");
+  });
+
+  it("reuses the lowest display number after a tab closes", async () => {
+    const workspace = createWorkspaceState();
+    const controller = new ChatTabController(workspace.state, {
+      createId: createIds("tab-1", "tab-2", "tab-3"),
+    });
+    await controller.bindFocusedSession("session-1");
+    const second = await controller.createTab("session-2");
+
+    await expect(controller.closeTab(second.id)).resolves.toBe(true);
+    const replacement = await controller.createTab("session-3");
+
+    expect(replacement).toMatchObject({
+      id: "tab-3",
+      displayNumber: 2,
+      sessionId: "session-3",
+    });
+    expect(controller.getLayout().nextDisplayNumber).toBe(3);
   });
 
   it("replaces a tab session with conflict guards and increments terminal generation", async () => {

@@ -2735,6 +2735,52 @@ describe("AgentSessionManager background agents", () => {
     ).rejects.toThrow(/maximum fleet depth reached/);
   });
 
+  it("keeps each foreground root authorized for only its own descendants after focus changes", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const firstForeground = await mgr.createSession("code");
+    const firstChild = await mgr.spawnBackground(
+      { task: "first child", message: "work" },
+      firstForeground.id,
+    );
+    const secondForeground = await mgr.createSession("code");
+    const secondChild = await mgr.spawnBackground(
+      { task: "second child", message: "work" },
+      secondForeground.id,
+    );
+
+    expect(
+      mgr.getAuthorizedBackgroundStatus(
+        firstForeground.id,
+        firstChild.sessionId,
+      ),
+    ).not.toEqual(
+      expect.objectContaining({ resultState: "authorization_lost" }),
+    );
+    expect(
+      mgr.getAuthorizedBackgroundStatus(
+        secondForeground.id,
+        firstChild.sessionId,
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        status: "error",
+        resultState: "authorization_lost",
+      }),
+    );
+    expect(
+      mgr.getAuthorizedBackgroundStatus(
+        firstForeground.id,
+        secondChild.sessionId,
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        status: "error",
+        resultState: "authorization_lost",
+      }),
+    );
+  });
+
   it("prevents background agents from managing sibling subtrees", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);

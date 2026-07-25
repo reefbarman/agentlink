@@ -187,9 +187,10 @@ export class ChatTabController {
         return existing;
       }
     }
+    const displayNumber = this.lowestAvailableDisplayNumber();
     const tab: ChatTab = {
       id: this.createUniqueId(),
-      displayNumber: this.layout.nextDisplayNumber,
+      displayNumber,
       sessionId,
       placement: "docked",
       terminalGeneration: 1,
@@ -197,7 +198,10 @@ export class ChatTabController {
     this.layout = {
       ...this.layout,
       tabs: [...this.layout.tabs, tab],
-      nextDisplayNumber: tab.displayNumber + 1,
+      nextDisplayNumber: Math.max(
+        this.layout.nextDisplayNumber,
+        displayNumber + 1,
+      ),
     };
     this.focusedTabId = tab.id;
     await this.commit();
@@ -505,6 +509,13 @@ export class ChatTabController {
       ],
       nextDisplayNumber: 2,
     };
+  }
+
+  private lowestAvailableDisplayNumber(): number {
+    const used = new Set(this.layout.tabs.map((tab) => tab.displayNumber));
+    let displayNumber = 1;
+    while (used.has(displayNumber)) displayNumber += 1;
+    return displayNumber;
   }
 
   private createUniqueId(): string {

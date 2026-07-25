@@ -7835,13 +7835,7 @@ export class AgentSessionManager {
     const caller = this.sessions.get(callerSessionId);
     const target = this.sessions.get(targetSessionId);
     if (!caller || !target?.background) return false;
-    if (!caller.background) return caller.id === this.foregroundId;
-    let parentId = target.fleetMetadata?.parentSessionId;
-    while (parentId) {
-      if (parentId === callerSessionId) return true;
-      parentId = this.sessions.get(parentId)?.fleetMetadata?.parentSessionId;
-    }
-    return false;
+    return this.isFleetDescendant(targetSessionId, callerSessionId);
   }
 
   getAuthorizedBackgroundStatus(

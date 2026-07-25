@@ -425,10 +425,12 @@ export type ExtensionMessage =
     }
   | ({
       type: "agentQuestionRequest";
+      sessionId?: string;
     } & QuestionRequest)
-  | { type: "agentQuestionCleared"; id: string }
+  | { type: "agentQuestionCleared"; sessionId?: string; id: string }
   | {
       type: "agentQuestionProgress";
+      sessionId?: string;
       id: string;
       step: number;
       answers: Record<string, string | string[] | number | boolean | undefined>;

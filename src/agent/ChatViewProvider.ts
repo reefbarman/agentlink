@@ -547,14 +547,16 @@ export type ExtensionToWebview =
     }
   | {
       type: "agentQuestionRequest";
+      sessionId?: string;
       id: string;
       context: string;
       questions: import("./webview/types.js").Question[];
       backgroundTask?: string;
     }
-  | { type: "agentQuestionCleared"; id: string }
+  | { type: "agentQuestionCleared"; sessionId?: string; id: string }
   | {
       type: "agentQuestionProgress";
+      sessionId?: string;
       id: string;
       step: number;
       answers: Record<string, string | string[] | number | boolean | undefined>;

@@ -31,6 +31,21 @@ export type AgentUiEvent =
   | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
   | { type: "agentUrlElicitationCleared"; id: string };
 
+type QuestionAgentUiEvent = Extract<
+  AgentUiEvent,
+  {
+    type:
+      | "agentQuestionRequest"
+      | "agentQuestionCleared"
+      | "agentQuestionProgress";
+  }
+>;
+
+type WebviewAgentUiMessage =
+  | Exclude<AgentUiEvent, QuestionAgentUiEvent>
+  | (QuestionAgentUiEvent & { sessionId?: string })
+  | { type: "idle" };
+
 export interface SessionUiEvent {
   sessionId: string;
   event: AgentUiEvent;
@@ -161,11 +176,10 @@ export class FanoutAgentUiPublisher implements AgentUiPublisher {
 
 export class WebviewAgentUiPublisher implements AgentUiPublisher {
   private visibleApprovalId: string | undefined;
+  private readonly globalQuestionIds = new Set<string>();
 
   constructor(
-    private readonly publishMessage: (
-      message: AgentUiEvent | { type: "idle" },
-    ) => void,
+    private readonly publishMessage: (message: WebviewAgentUiMessage) => void,
   ) {}
 
   publishApproval(_sessionId: string, request: ApprovalRequest): void {
@@ -180,14 +194,17 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
   }
 
   publishQuestionRequest(
-    _sessionId: string,
+    sessionId: string,
     id: string,
     context: string,
     questions: Question[],
     backgroundTask?: string,
   ): void {
+    if (backgroundTask) this.globalQuestionIds.add(id);
+    else this.globalQuestionIds.delete(id);
     this.publishMessage({
       type: "agentQuestionRequest",
+      ...this.questionSessionAddress(sessionId, id),
       id,
       context,
       questions,
@@ -195,15 +212,31 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
     });
   }
 
-  publishQuestionCleared(_sessionId: string, id: string): void {
-    this.publishMessage({ type: "agentQuestionCleared", id });
+  publishQuestionCleared(sessionId: string, id: string): void {
+    this.publishMessage({
+      type: "agentQuestionCleared",
+      ...this.questionSessionAddress(sessionId, id),
+      id,
+    });
+    this.globalQuestionIds.delete(id);
   }
 
   publishQuestionProgress(
-    _sessionId: string,
+    sessionId: string,
     progress: Parameters<AgentUiPublisher["publishQuestionProgress"]>[1],
   ): void {
-    this.publishMessage({ type: "agentQuestionProgress", ...progress });
+    this.publishMessage({
+      type: "agentQuestionProgress",
+      ...this.questionSessionAddress(sessionId, progress.id),
+      ...progress,
+    });
+  }
+
+  private questionSessionAddress(
+    sessionId: string,
+    questionId: string,
+  ): { sessionId?: string } {
+    return this.globalQuestionIds.has(questionId) ? {} : { sessionId };
   }
 
   publishFormElicitationRequest(

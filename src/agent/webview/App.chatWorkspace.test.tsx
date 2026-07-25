@@ -122,6 +122,74 @@ describe("App chat workspace integration", () => {
         sessionId: "session-1",
       },
     ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+    expect(postedCommands(vscodeApi.postMessage, "chatTabNewChat")).toEqual([
+      {
+        command: "chatTabNewChat",
+        mode: "code",
+        projectId: undefined,
+        controllerEpoch: "epoch-1",
+        tabId: "tab-1",
+        sessionId: "session-1",
+      },
+    ]);
+  });
+
+  it("routes question cards to their owning tab", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+
+    deliver({
+      type: "agentQuestionRequest",
+      sessionId: "session-2",
+      id: "question-b",
+      context: "Only T2 should show this question.",
+      questions: [
+        {
+          id: "choice",
+          type: "multiple_choice",
+          question: "Choose for T2",
+          options: ["one", "two"],
+          recommended: "one",
+        },
+      ],
+    });
+
+    expect(screen.queryByText("Choose for T2")).toBeNull();
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Choose for T2")).toBeTruthy();
+    });
+  });
+
+  it("keeps coordinator-less background questions globally visible", () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+
+    deliver({
+      type: "agentQuestionRequest",
+      id: "question-bg",
+      context: "A detached background agent needs input.",
+      questions: [
+        {
+          id: "continue",
+          type: "yes_no",
+          question: "Continue background work?",
+        },
+      ],
+      backgroundTask: "Detached review",
+    });
+
+    expect(screen.getByText("Continue background work?")).toBeTruthy();
+    expect(screen.getByText("Detached review")).toBeTruthy();
   });
 
   it("isolates context usage and queued messages across tab switches", () => {

@@ -34,7 +34,7 @@ beforeEach(() => {
 });
 
 describe("WebviewAgentUiPublisher", () => {
-  it("preserves existing webview message shapes", () => {
+  it("session-addresses question messages without changing approval shapes", () => {
     const publishMessage = vi.fn();
     const publisher = new WebviewAgentUiPublisher(publishMessage);
 
@@ -59,6 +59,14 @@ describe("WebviewAgentUiPublisher", () => {
         },
       ],
     );
+    publisher.publishQuestionProgress("session-1", {
+      id: "question-1",
+      step: 1,
+      answers: { q1: "a" },
+      notes: {},
+      origin: "browser",
+    });
+    publisher.publishQuestionCleared("session-1", "question-1");
 
     expect(publishMessage.mock.calls).toEqual([
       [
@@ -76,6 +84,7 @@ describe("WebviewAgentUiPublisher", () => {
       [
         {
           type: "agentQuestionRequest",
+          sessionId: "session-1",
           id: "question-1",
           context: "Pick the best option.",
           questions: [
@@ -87,6 +96,24 @@ describe("WebviewAgentUiPublisher", () => {
               recommended: "a",
             },
           ],
+        },
+      ],
+      [
+        {
+          type: "agentQuestionProgress",
+          sessionId: "session-1",
+          id: "question-1",
+          step: 1,
+          answers: { q1: "a" },
+          notes: {},
+          origin: "browser",
+        },
+      ],
+      [
+        {
+          type: "agentQuestionCleared",
+          sessionId: "session-1",
+          id: "question-1",
         },
       ],
     ]);
@@ -108,7 +135,7 @@ describe("WebviewAgentUiPublisher", () => {
     expect(publishMessage).not.toHaveBeenCalledWith({ type: "idle" });
   });
 
-  it("includes background task attribution when set", () => {
+  it("keeps background fallback questions globally visible", () => {
     const publishMessage = vi.fn();
     const publisher = new WebviewAgentUiPublisher(publishMessage);
 
@@ -119,14 +146,37 @@ describe("WebviewAgentUiPublisher", () => {
       [],
       "review_pr",
     );
-
-    expect(publishMessage).toHaveBeenCalledWith({
-      type: "agentQuestionRequest",
+    publisher.publishQuestionProgress("session-bg", {
       id: "question-bg",
-      context: "Review needs input.",
-      questions: [],
-      backgroundTask: "review_pr",
+      step: 1,
+      answers: {},
+      notes: {},
+      origin: "browser",
     });
+    publisher.publishQuestionCleared("session-bg", "question-bg");
+
+    expect(publishMessage.mock.calls).toEqual([
+      [
+        {
+          type: "agentQuestionRequest",
+          id: "question-bg",
+          context: "Review needs input.",
+          questions: [],
+          backgroundTask: "review_pr",
+        },
+      ],
+      [
+        {
+          type: "agentQuestionProgress",
+          id: "question-bg",
+          step: 1,
+          answers: {},
+          notes: {},
+          origin: "browser",
+        },
+      ],
+      [{ type: "agentQuestionCleared", id: "question-bg" }],
+    ]);
   });
 });
 
