@@ -372,6 +372,49 @@ describe("BrowserGatewayService", () => {
     hub.dispose();
   });
 
+  it("mirrors instance-global approvals without allowing cross-session clears", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const initialForeground = sessionManager.getForegroundSession();
+    let foregroundSessionId = "session-1";
+    sessionManager.getForegroundSession.mockImplementation(() => ({
+      ...initialForeground,
+      id: foregroundSessionId,
+      title: foregroundSessionId,
+    }));
+    const service = makeService(hub, sessionManager);
+    let sessionListener: (() => void) | undefined;
+    service.subscribeToSessionChanges((listener) => {
+      sessionListener = listener;
+      return { dispose: vi.fn() } as never;
+    });
+
+    hub.publishApproval("session-2", {
+      kind: "write",
+      id: "global-approval",
+      filePath: "src/global.ts",
+      writeOperation: "modify",
+    });
+
+    expect(service.getSerializableState().approval?.id).toBe("global-approval");
+    expect(
+      service.getOwnerProjectionSources().capture().interaction?.requestId,
+    ).toBe("global-approval");
+
+    foregroundSessionId = "session-3";
+    sessionListener?.();
+    expect(service.getSerializableState().approval?.id).toBe("global-approval");
+
+    hub.publishApprovalIdle("session-1", "global-approval");
+    expect(service.getSerializableState().approval?.id).toBe("global-approval");
+
+    hub.publishApprovalIdle("session-2", "global-approval");
+    expect(service.getSerializableState().approval).toBeNull();
+
+    service.dispose();
+    hub.dispose();
+  });
+
   it("notifies owner projection demand while legacy publication is client-gated", () => {
     const hub = new InMemoryAgentUiEventHub();
     const service = makeService(hub);
@@ -1429,7 +1472,7 @@ describe("BrowserGatewayService", () => {
       filePath: "src/late.ts",
       writeOperation: "modify",
     });
-    expect(service.getUiState().approval?.id).toBe("approval-2");
+    expect(service.getUiState().approval?.id).toBe("approval-1-late");
 
     service.dispose();
     hub.dispose();

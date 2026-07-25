@@ -5954,8 +5954,67 @@ describe("chat tab host routing", () => {
           handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
         }
       ).handleWebviewMessage(message);
-    return { coordinator, handle, postMessage, snapshot };
+    return { coordinator, handle, postMessage, provider, snapshot };
   }
+
+  it("publishes a new tab binding before its session-scoped hydration", async () => {
+    const { coordinator, handle, provider } = await makeTabRoutingProvider();
+    const publicationOrder: string[] = [];
+    const session = { id: "session-2" };
+    coordinator.newTab.mockResolvedValueOnce({
+      ok: true,
+      session,
+    });
+    (
+      provider as unknown as {
+        sendChatWorkspaceUpdate(): void;
+        postSessionLoaded(session: unknown, options: unknown): void;
+        sendInitialState(): void;
+        sendModesUpdate(): Promise<void>;
+        sendSlashCommands(): Promise<void>;
+      }
+    ).sendChatWorkspaceUpdate = vi.fn(() => publicationOrder.push("workspace"));
+    (
+      provider as unknown as {
+        postSessionLoaded(session: unknown, options: unknown): void;
+      }
+    ).postSessionLoaded = vi.fn(() => publicationOrder.push("session"));
+    (
+      provider as unknown as {
+        sendInitialState(): void;
+      }
+    ).sendInitialState = vi.fn(() => publicationOrder.push("state"));
+    (
+      provider as unknown as {
+        sendModesUpdate(): Promise<void>;
+      }
+    ).sendModesUpdate = vi.fn(async () => {
+      publicationOrder.push("modes");
+    });
+    (
+      provider as unknown as {
+        sendSlashCommands(): Promise<void>;
+      }
+    ).sendSlashCommands = vi.fn(async () => {
+      publicationOrder.push("commands");
+    });
+
+    await handle({
+      command: "chatTabNew",
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: "session-1",
+      mode: "code",
+    });
+
+    expect(publicationOrder).toEqual([
+      "workspace",
+      "session",
+      "state",
+      "modes",
+      "commands",
+    ]);
+  });
 
   it("rejects omitted or stale tab identity with the latest snapshot", async () => {
     const { coordinator, handle, postMessage, snapshot } =

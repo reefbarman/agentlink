@@ -254,6 +254,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   private hasActiveClientsProbe: (() => boolean) | undefined;
   private approval: ApprovalRequest | undefined;
   private approvalSessionId: string | undefined;
+  private approvalFromLiveEvent = false;
   private question:
     | {
         id: string;
@@ -1075,9 +1076,19 @@ export class BrowserGatewayService implements vscode.Disposable {
     const sessionId = this.sessionManager.getForegroundSession()?.id;
     if (sessionId === this.seededForegroundSessionId) return;
     this.seededForegroundSessionId = sessionId;
+    const visibleApproval = this.approvalFromLiveEvent
+      ? this.approval
+      : undefined;
+    const visibleApprovalSessionId = this.approvalFromLiveEvent
+      ? this.approvalSessionId
+      : undefined;
     this.clearInteractionState();
+    this.approval = visibleApproval;
+    this.approvalSessionId = visibleApprovalSessionId;
+    this.approvalFromLiveEvent = Boolean(visibleApproval);
     if (!sessionId) return;
     for (const event of this.uiEventHub.getSnapshot(sessionId)) {
+      if (visibleApproval && event.event.type === "showApproval") continue;
       this.applyEvent(event, false);
     }
   }
@@ -1085,6 +1096,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   private clearInteractionState(): void {
     this.approval = undefined;
     this.approvalSessionId = undefined;
+    this.approvalFromLiveEvent = false;
     this.question = undefined;
     this.questionSessionId = undefined;
     this.questionProgress = undefined;
@@ -1098,6 +1110,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     const { sessionId, event } = envelope;
     const selectedSessionId = this.sessionManager.getForegroundSession()?.id;
     const isSelectedSession = sessionId === selectedSessionId;
+    const isInstanceGlobalApproval = event.type === "showApproval";
     const isAttributedBackgroundRequest =
       (event.type === "showApproval" &&
         Boolean(event.request.backgroundTask)) ||
@@ -1113,6 +1126,7 @@ export class BrowserGatewayService implements vscode.Disposable {
         Boolean(this.question?.backgroundTask));
     if (
       !isSelectedSession &&
+      !isInstanceGlobalApproval &&
       !isAttributedBackgroundRequest &&
       !matchesVisibleBackgroundInteraction
     ) {
@@ -1123,6 +1137,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       case "showApproval":
         this.approval = event.request;
         this.approvalSessionId = sessionId;
+        this.approvalFromLiveEvent = recordRecent;
         break;
       case "idle":
         if (
@@ -1131,6 +1146,7 @@ export class BrowserGatewayService implements vscode.Disposable {
         ) {
           this.approval = undefined;
           this.approvalSessionId = undefined;
+          this.approvalFromLiveEvent = false;
         }
         break;
       case "agentQuestionRequest":

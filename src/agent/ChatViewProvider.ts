@@ -5756,6 +5756,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.foregroundSessionTransition = undefined;
     const selectedSession =
       result.session ?? this.sessionManager?.getForegroundSession();
+    // Publish the final tab-to-session binding before any session-scoped state.
+    // Otherwise the webview cannot attribute hydration for a newly created tab.
+    this.sendChatWorkspaceUpdate();
     if (selectedSession) {
       this.postSessionLoaded(selectedSession, {
         checkpoints: this.getSessionCheckpoints(selectedSession.id),
@@ -5766,7 +5769,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
     }
     this.sendInitialState();
-    this.sendChatWorkspaceUpdate();
     if (selectedSession) {
       await this.sendModesUpdate();
       await this.sendSlashCommands();
