@@ -18,8 +18,10 @@ export function createForegroundChatTabSync(
 ): () => Promise<void> {
   let inFlight: Promise<void> | undefined;
   let dirty = false;
+  let draining = false;
 
   const run = async (): Promise<void> => {
+    draining = true;
     try {
       while (dirty) {
         dirty = false;
@@ -28,13 +30,21 @@ export function createForegroundChatTabSync(
         await host.bindFocusedSession(sessionId);
       }
     } finally {
+      draining = false;
       inFlight = undefined;
     }
   };
 
   return () => {
     dirty = true;
-    inFlight ??= run();
-    return inFlight;
+    if (draining) return inFlight ?? Promise.resolve();
+    const pending = run();
+    // A run that never awaited — activation fires one before any session
+    // exists — has already cleared its own bookkeeping by the time it returns.
+    // Latching `inFlight` onto that settled promise short-circuited every later
+    // notification, so no session was bound to a chat tab for the rest of the
+    // window and tab-owned terminals stayed permanently unavailable.
+    if (draining) inFlight = pending;
+    return pending;
   };
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "preact/hooks";
+import { useCallback, useEffect, useRef } from "preact/hooks";
 
 import type { ExtensionMessage } from "./types";
 import { shouldDropSessionScopedEvent } from "../../shared/chatProjection.js";
@@ -10,6 +10,10 @@ export interface WebviewMessageApi {
 interface ReadonlyRef<T> {
   readonly current: T;
 }
+
+export type SessionScopedExtensionMessage = ExtensionMessage & {
+  sessionId: string;
+};
 
 interface MutableRef<T> {
   current: T;
@@ -32,7 +36,9 @@ export interface WebviewMessageConnectionOptions {
   vscodeApi: WebviewMessageApi;
   sessionIdRef: ReadonlyRef<string | null>;
   streamingRef: MutableRef<boolean>;
+  openSessionIdsRef?: ReadonlyRef<ReadonlySet<string>>;
   dispatchDelta(action: StreamingDeltaAction): void;
+  onInactiveSessionMessage?(msg: SessionScopedExtensionMessage): void;
   onMessage(msg: ExtensionMessage, controls: WebviewMessageControls): void;
 }
 
@@ -60,9 +66,12 @@ const BACKGROUND_EVENT_TYPES = new Set<ExtensionMessage["type"]>([
 
 export function useWebviewMessageConnection(
   options: WebviewMessageConnectionOptions,
-): void {
+): (message: ExtensionMessage) => void {
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  const replayMessageRef = useRef<(message: ExtensionMessage) => void>(
+    () => {},
+  );
 
   useEffect(() => {
     let textDeltaBuffer = "";
@@ -106,10 +115,18 @@ export function useWebviewMessageConnection(
       drainDeltaBuffers();
     };
 
-    const handler = (event: MessageEvent) => {
-      const msg = event.data as ExtensionMessage;
-      const { vscodeApi, sessionIdRef, streamingRef, onMessage } =
-        optionsRef.current;
+    const processMessage = (
+      msg: ExtensionMessage,
+      bypassSessionRouting = false,
+    ) => {
+      const {
+        vscodeApi,
+        sessionIdRef,
+        streamingRef,
+        openSessionIdsRef,
+        onInactiveSessionMessage,
+        onMessage,
+      } = optionsRef.current;
       const eventSessionId =
         "sessionId" in msg
           ? (msg as { sessionId: string }).sessionId
@@ -128,12 +145,25 @@ export function useWebviewMessageConnection(
         });
       };
 
+      const isBackgroundEvent = BACKGROUND_EVENT_TYPES.has(msg.type);
       if (
+        !bypassSessionRouting &&
+        eventSessionId !== undefined &&
+        eventSessionId !== sessionIdRef.current &&
+        !isBackgroundEvent &&
+        openSessionIdsRef?.current.has(eventSessionId)
+      ) {
+        onInactiveSessionMessage?.(msg as SessionScopedExtensionMessage);
+        return;
+      }
+
+      if (
+        !bypassSessionRouting &&
         shouldDropSessionScopedEvent(
           msg.type,
           eventSessionId,
           sessionIdRef.current,
-          BACKGROUND_EVENT_TYPES.has(msg.type),
+          isBackgroundEvent,
         )
       ) {
         console.debug(
@@ -176,14 +206,24 @@ export function useWebviewMessageConnection(
       onMessage(msg, controls);
     };
 
+    const handler = (event: MessageEvent) => {
+      processMessage(event.data as ExtensionMessage);
+    };
+    replayMessageRef.current = (message) => processMessage(message, true);
+
     window.addEventListener("message", handler);
     optionsRef.current.vscodeApi.postMessage({ command: "webviewReady" });
 
     return () => {
       window.removeEventListener("message", handler);
+      replayMessageRef.current = () => {};
       if (deltaAnimationFrame !== null) {
         cancelAnimationFrame(deltaAnimationFrame);
       }
     };
+  }, []);
+
+  return useCallback((message: ExtensionMessage) => {
+    replayMessageRef.current(message);
   }, []);
 }

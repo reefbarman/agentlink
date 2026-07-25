@@ -116,7 +116,6 @@ import {
   createVscodeWorkspaceFileProvider,
 } from "../adapters/vscode/readSearchCapabilities.js";
 
-import { createVscodeWorktreeAgentLaunchProvider } from "../adapters/vscode/worktreeAgentLaunchCapabilities.js";
 import { getConfiguredDiagnosticDelay } from "../adapters/vscode/agentLinkConfig.js";
 import { handleLoadRule } from "../tools/loadRule.js";
 import { handleLoadSkill } from "../tools/loadSkill.js";
@@ -158,6 +157,7 @@ import type {
 import type { SemanticSearchProvider } from "../core/capabilities/readSearch.js";
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import type { WorktreeAgentLaunchProvider } from "../core/capabilities/worktree.js";
+
 import type {
   BackgroundAgentProvider,
   BackgroundAgentResultContent,
@@ -275,7 +275,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   execute_command: schemas.executeCommandSchema,
   get_terminal_output: schemas.getTerminalOutputSchema,
   close_terminals: schemas.closeTerminalsSchema,
-  start_worktree_agent: schemas.startWorktreeAgentSchema,
+
   go_to_definition: schemas.positionSchema,
   go_to_implementation: schemas.positionSchema,
   go_to_type_definition: schemas.positionSchema,
@@ -802,12 +802,12 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           type: "string",
           enum: ["review-only", "workspace-safe", "interactive"],
         },
-        worktree: { type: "string", enum: ["shared", "isolated"] },
+
         imageIds: {
           type: "array",
           items: { type: "string" },
           description:
-            "Specific image IDs from the current foreground session to copy into the background agent's first message. IDs follow image_1, image_2 attachment/session order. Native in-process backgrounds only; not supported for ACP or isolated-worktree agents.",
+            "Specific image IDs from the current foreground session to copy into the background agent's first message. IDs follow image_1, image_2 attachment/session order. Native in-process backgrounds only; not supported for ACP agents.",
         },
         useRecentImages: {
           oneOf: [{ type: "boolean" }, { type: "number" }],
@@ -1552,9 +1552,19 @@ function scoreMcpToolDiscovery(
   return score;
 }
 
+function getMcpToolDefs(
+  mcpHub: McpClientHub,
+  access: ToolDispatchContext["mcpToolAccess"],
+): ToolDefinition[] {
+  return access === "read-only"
+    ? mcpHub.getReadOnlyToolDefs()
+    : mcpHub.getToolDefs();
+}
+
 function discoverMcpTools(
   mcpHub: McpClientHub,
   params: McpToolDiscoveryRequest,
+  access?: ToolDispatchContext["mcpToolAccess"],
 ): ReturnType<McpToolDiscoveryProvider["discoverTools"]> {
   const queryTokens = discoveryTokens(String(params.query ?? ""));
   const serverFilter = String(params.server ?? "").trim();
@@ -1563,8 +1573,7 @@ function discoverMcpTools(
   const schemaLimit = includeSchemas ? clampSchemaLimit(params.schemaLimit) : 0;
   const limit = clampToolLimit(params.limit);
 
-  const rankedTools = mcpHub
-    .getToolDefs()
+  const rankedTools = getMcpToolDefs(mcpHub, access)
     .map((tool) => {
       const parsed = parseMcpToolName(tool.name);
       if (!parsed) return null;
@@ -1616,10 +1625,11 @@ function mcpDiscoveryResultToToolResult(
 
 function createMcpToolDiscoveryProvider(
   mcpHub: McpClientHub,
+  access?: ToolDispatchContext["mcpToolAccess"],
 ): McpToolDiscoveryProvider {
   return {
     discoverTools(request) {
-      return discoverMcpTools(mcpHub, request);
+      return discoverMcpTools(mcpHub, request, access);
     },
   };
 }
@@ -1645,15 +1655,26 @@ function createMcpResourcePromptProvider(
 
 function createMcpToolInvocationProvider(
   mcpHub: McpClientHub,
+  access?: ToolDispatchContext["mcpToolAccess"],
 ): McpToolInvocationProvider {
   return {
     getToolDefs() {
-      return mcpHub.getToolDefs();
+      return getMcpToolDefs(mcpHub, access);
     },
     getServerConfig(serverName) {
       return mcpHub.getServerConfig(serverName);
     },
     callTool(request) {
+      const parsed = parseMcpToolName(request.toolName);
+      if (
+        access === "read-only" &&
+        (!parsed ||
+          !mcpHub.isToolReadOnly(parsed.serverName, parsed.bareToolName))
+      ) {
+        throw new Error(
+          `MCP tool is unavailable in this read-only background session: ${request.toolName}`,
+        );
+      }
       return mcpHub.callTool(request.toolName, request.input, {
         signal: request.signal,
       });
@@ -1775,6 +1796,8 @@ export interface ToolDispatchContext {
   trackerCtx?: import("./AgentToolCallTracker.js").TrackerContext;
   toolCallTracker?: import("./AgentToolCallTracker.js").AgentToolCallTracker;
   mcpHub?: McpClientHub;
+  /** Restricts MCP discovery and invocation to explicitly annotated read-only tools. */
+  mcpToolAccess?: "all" | "read-only";
   /** Owned stable MCP generation reference for this request. Internal lifecycle metadata. */
   mcpHubLease?: import("./ProjectMcpHubRegistry.js").ProjectMcpHubLease;
   /** Acquires the current MCP generation for one deferred MCP operation. */
@@ -1931,10 +1954,11 @@ export interface ToolDispatchContext {
   codeActionsProvider?: LanguageCodeActionsProvider;
   /** Terminal/process implementation for runtimes with managed terminal support. */
   terminalProvider?: TerminalProvider;
-  /** Worktree/agent-launch implementation for runtimes that can create/open worktree agent sessions. */
-  worktreeAgentLaunchProvider?: WorktreeAgentLaunchProvider;
+
   /** Background-agent lifecycle implementation for runtimes that can spawn/manage agent sessions. */
   backgroundAgentProvider?: BackgroundAgentProvider;
+  /** Extension-owned launcher used only by the explicit /worktree shelf flow. */
+  worktreeAgentLaunchProvider?: WorktreeAgentLaunchProvider;
   /** Provider-hosted implementation for request-scoped AgentLink native web tools. */
   nativeWebToolProvider?: NativeWebToolExecutionProvider;
   /** Native web tool kinds exposed by the immutable request policy snapshot. */
@@ -1978,6 +2002,21 @@ export function createAgentToolRuntime(
             `Tool '${request.name}' was not available in the provider request that emitted this call`,
             {
               status: "tool_not_available",
+              tool: request.name,
+            },
+          );
+        }
+        // Advertised-but-out-of-mode tools (the advertised list is the
+        // mode-independent union for cache stability) are rejected here with
+        // the same semantics the per-mode advertisement used to enforce.
+        if (
+          request.context.modeAllowedToolNames &&
+          !request.context.modeAllowedToolNames.has(request.name)
+        ) {
+          return errorResult(
+            `Tool '${request.name}' is not available in ${request.context.mode ?? "the current"} mode. If this capability is genuinely needed, use switch_mode to change to a mode that allows it.`,
+            {
+              status: "tool_not_in_mode",
               tool: request.name,
             },
           );
@@ -2143,7 +2182,7 @@ export function createAgentToolRuntime(
       return ctx.toolCallTracker;
     },
     getConnectedMcpToolDefs() {
-      return ctx.mcpHub?.getToolDefs() ?? [];
+      return ctx.mcpHub ? getMcpToolDefs(ctx.mcpHub, ctx.mcpToolAccess) : [];
     },
     getMcpToolDisclosureMode(serverName: string) {
       return ctx.mcpHub?.getServerConfig(serverName)?.toolDisclosure;
@@ -2524,7 +2563,9 @@ export async function dispatchToolCall(
     }
     const mcpToolInvocationProvider =
       ctx.mcpToolInvocationProvider ??
-      (mcpHub ? createMcpToolInvocationProvider(mcpHub) : undefined);
+      (mcpHub
+        ? createMcpToolInvocationProvider(mcpHub, ctx.mcpToolAccess)
+        : undefined);
     if (!mcpToolInvocationProvider) {
       return {
         content: [
@@ -2551,6 +2592,16 @@ export async function dispatchToolCall(
       };
     }
     const { serverName, bareToolName } = parsedToolName;
+    if (
+      ctx.mcpToolAccess === "read-only" &&
+      !mcpToolInvocationProvider
+        .getToolDefs()
+        .some((tool) => tool.name === toolName)
+    ) {
+      return errorResult(
+        `MCP tool is unavailable in this read-only background session: ${toolName}`,
+      );
+    }
     const serverConfig = mcpToolInvocationProvider.getServerConfig(serverName);
     const sourceConfig = serverConfig as
       | (typeof serverConfig & {
@@ -3270,59 +3321,6 @@ export async function dispatchToolCall(
       return handleCloseTerminals(params, {
         terminalProvider: ctx.terminalProvider,
       });
-    case "start_worktree_agent": {
-      const worktreeAgentLaunchProvider =
-        ctx.worktreeAgentLaunchProvider ??
-        (ctx.globalStorageUri
-          ? createVscodeWorktreeAgentLaunchProvider({
-              globalStorageUri: ctx.globalStorageUri,
-              onApprovalRequest,
-              sessionId,
-            })
-          : undefined);
-      if (!worktreeAgentLaunchProvider) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "error",
-                error:
-                  "Worktree agent startup is not available in this context.",
-              }),
-            },
-          ],
-        };
-      }
-      return worktreeAgentLaunchProvider.start({
-        task: String(params.task ?? ""),
-        prompt: String(params.prompt ?? ""),
-        sourcePath:
-          params.sourcePath !== undefined && params.sourcePath !== null
-            ? String(params.sourcePath)
-            : undefined,
-        branch:
-          params.branch !== undefined && params.branch !== null
-            ? String(params.branch)
-            : undefined,
-        baseRef:
-          params.baseRef !== undefined && params.baseRef !== null
-            ? String(params.baseRef)
-            : undefined,
-        worktreePath:
-          params.worktreePath !== undefined && params.worktreePath !== null
-            ? String(params.worktreePath)
-            : undefined,
-        mode:
-          params.mode !== undefined && params.mode !== null
-            ? String(params.mode)
-            : undefined,
-        autoSubmit:
-          typeof params.autoSubmit === "boolean"
-            ? params.autoSubmit
-            : undefined,
-      });
-    }
 
     // --- Editor ---
     case "open_file":
@@ -3452,7 +3450,9 @@ export async function dispatchToolCall(
         const currentHub = currentLease?.hub ?? mcpHub;
         const mcpToolDiscoveryProvider =
           ctx.mcpToolDiscoveryProvider ??
-          (currentHub ? createMcpToolDiscoveryProvider(currentHub) : undefined);
+          (currentHub
+            ? createMcpToolDiscoveryProvider(currentHub, ctx.mcpToolAccess)
+            : undefined);
         if (!mcpToolDiscoveryProvider)
           return errorResult("MCP hub not available");
         return mcpDiscoveryResultToToolResult(
@@ -3491,7 +3491,9 @@ export async function dispatchToolCall(
       const currentHub = currentLease?.hub ?? mcpHub;
       const mcpToolInvocationProvider =
         ctx.mcpToolInvocationProvider ??
-        (currentHub ? createMcpToolInvocationProvider(currentHub) : undefined);
+        (currentHub
+          ? createMcpToolInvocationProvider(currentHub, ctx.mcpToolAccess)
+          : undefined);
       try {
         if (!mcpToolInvocationProvider)
           return errorResult("MCP hub not available");
@@ -3911,10 +3913,7 @@ export async function dispatchToolCall(
           params.permissionProfile === "interactive"
             ? params.permissionProfile
             : undefined,
-        worktree:
-          params.worktree === "shared" || params.worktree === "isolated"
-            ? params.worktree
-            : undefined,
+
         ...(images.length ? { images } : {}),
         reviewScope:
           params.reviewScope && typeof params.reviewScope === "object"

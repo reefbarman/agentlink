@@ -884,53 +884,6 @@ export const closeTerminalsSchema = {
     ),
 };
 
-// ─── Worktree tools ──────────────────────────────────────────────────────────
-
-export const startWorktreeAgentSchema = {
-  task: z.string().describe("Short label for the parallel workstream"),
-  prompt: z
-    .string()
-    .describe(
-      "Initial prompt to autosubmit or prefill in AgentLink in the new worktree window",
-    ),
-  sourcePath: z
-    .string()
-    .optional()
-    .describe(
-      "Source workspace/repository path to spawn from; required in multi-root workspaces if the current root is ambiguous",
-    ),
-  branch: z
-    .string()
-    .optional()
-    .describe(
-      "Branch name to create/use for the worktree; defaults to an agentlink-generated branch name",
-    ),
-  baseRef: z
-    .string()
-    .optional()
-    .describe(
-      "Git ref to base the worktree branch on; defaults to current HEAD",
-    ),
-  worktreePath: z
-    .string()
-    .optional()
-    .describe(
-      "Absolute or workspace-relative destination path; defaults under a sibling worktree container directory",
-    ),
-  mode: z
-    .string()
-    .optional()
-    .describe(
-      "Optional AgentLink mode for the new session, e.g. code, architect, ask, debug, review",
-    ),
-  autoSubmit: z
-    .boolean()
-    .optional()
-    .describe(
-      "Whether to autosubmit the prompt in the new worktree window; defaults to true. The user can override this in the required approval prompt.",
-    ),
-};
-
 // ─── Language tools ──────────────────────────────────────────────────────────
 
 /** Common schema for go_to_definition, go_to_implementation, go_to_type_definition, get_hover */

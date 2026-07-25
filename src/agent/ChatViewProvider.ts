@@ -33,6 +33,16 @@ import type {
   SessionApprovalMode,
 } from "./AgentSessionManager.js";
 import type { AgentSession } from "./AgentSession.js";
+import type { ChatTabController } from "./ChatTabController.js";
+import { ChatTabHostCoordinator } from "./ChatTabHostCoordinator.js";
+import {
+  createChatWorkspaceViewSnapshot,
+  parseChatTabActionAddress,
+  type ChatTabActionConfirmationRequest,
+  type ChatTabActionFailure,
+  type ChatTabActionRejection,
+  type ChatWorkspaceViewSnapshot,
+} from "./chatTabProtocol.js";
 import {
   SessionApprovalPolicyCoordinator,
   type AgentWriteApprovalSelection,
@@ -322,6 +332,13 @@ function formatInstructionDebugInfo(
  */
 export type ExtensionToWebview =
   | { type: "stateUpdate"; state: ChatState }
+  | { type: "chatWorkspaceUpdate"; snapshot: ChatWorkspaceViewSnapshot }
+  | {
+      type: "chatTabActionConfirmationRequested";
+      request: ChatTabActionConfirmationRequest;
+    }
+  | { type: "chatTabActionRejected"; rejection: ChatTabActionRejection }
+  | { type: "chatTabActionFailed"; failure: ChatTabActionFailure }
   | { type: "agentFleetEvent"; sessionId: string; event: unknown }
   | { type: "agentThinkingStart"; sessionId: string; thinkingId: string }
   | {
@@ -386,6 +403,8 @@ export type ExtensionToWebview =
       requestId: string;
       model: string;
       reasoningEffort: import("./providers/types.js").ReasoningEffort;
+      mode?: string;
+      commandApprovalPolicy?: CommandApprovalPolicy;
       inputTokens: number;
       uncachedInputTokens: number;
       outputTokens: number;
@@ -1043,6 +1062,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private view: vscode.WebviewView | undefined;
   private sessionManager: AgentSessionManager | undefined;
+  private chatTabController: ChatTabController | undefined;
+  private chatTabHostCoordinator: ChatTabHostCoordinator | undefined;
+  private chatTabControllerListener: { dispose(): void } | undefined;
   private foregroundSessionTransition:
     | {
         previousSessionId: string | undefined;
@@ -1351,6 +1373,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     for (const w of this.fileWatchers) w.dispose();
     this.fileWatchers = [];
     this.approvalManagerListener?.dispose();
+    this.chatTabControllerListener?.dispose();
+    this.chatTabControllerListener = undefined;
     void this.projectMcpHubRegistry.dispose();
     this.mcpHub?.disconnectAll().catch(() => undefined);
     this.askAgentMcpHub?.disconnectAll().catch(() => undefined);
@@ -5542,8 +5566,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.outputChannel.appendLine(`[${timestamp}] ${message}`);
   }
 
+  setChatTabController(controller: ChatTabController): void {
+    this.chatTabControllerListener?.dispose();
+    this.chatTabController = controller;
+    this.refreshChatTabHostCoordinator();
+    this.chatTabControllerListener = controller.onDidChangeWorkspace(() => {
+      this.sendChatWorkspaceUpdate();
+    });
+    this.sendChatWorkspaceUpdate();
+  }
+
   setSessionManager(manager: AgentSessionManager): void {
     this.sessionManager = manager;
+    this.refreshChatTabHostCoordinator();
     const projects =
       typeof manager.getWorkspaceProjects === "function"
         ? manager.getWorkspaceProjects()
@@ -5575,11 +5610,155 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         void this.sendSlashCommands();
       }
       this.sendInitialState();
+      this.sendChatWorkspaceUpdate();
       this.sendBgSessionsUpdate();
     };
     manager.onFleetEvent = (sessionId, event) => {
       this.postMessage({ type: "agentFleetEvent", sessionId, event });
     };
+  }
+
+  private refreshChatTabHostCoordinator(): void {
+    this.chatTabHostCoordinator =
+      this.chatTabController && this.sessionManager
+        ? new ChatTabHostCoordinator(
+            this.chatTabController,
+            this.sessionManager,
+          )
+        : undefined;
+  }
+
+  private getChatWorkspaceViewSnapshot():
+    | ChatWorkspaceViewSnapshot
+    | undefined {
+    if (!this.chatTabController || !this.sessionManager) return undefined;
+    return createChatWorkspaceViewSnapshot(
+      this.chatTabController.getWorkspaceSnapshot(),
+      this.sessionManager.getSessionInfos(),
+    );
+  }
+
+  private sendChatWorkspaceUpdate(): void {
+    const snapshot = this.getChatWorkspaceViewSnapshot();
+    if (!snapshot) return;
+    this.postMessage({
+      type: "chatWorkspaceUpdate",
+      snapshot,
+    });
+  }
+
+  private rejectChatTabAction(
+    command: string,
+    reason: ChatTabActionRejection["reason"],
+  ): void {
+    const snapshot = this.getChatWorkspaceViewSnapshot();
+    if (!snapshot) return;
+    this.log(`[chat-tabs] rejected command=${command} reason=${reason}`);
+    this.postMessage({
+      type: "chatTabActionRejected",
+      rejection: { command, reason, snapshot },
+    });
+  }
+
+  private async handleChatTabAction(
+    command: string,
+    msg: Record<string, unknown>,
+  ): Promise<void> {
+    const address = parseChatTabActionAddress(msg);
+    const coordinator = this.chatTabHostCoordinator;
+    if (!address || !coordinator) {
+      this.rejectChatTabAction(command, "invalid_address");
+      return;
+    }
+
+    const mode = typeof msg.mode === "string" ? msg.mode : "code";
+    const projectId =
+      typeof msg.projectId === "string" ? msg.projectId : undefined;
+    const stopRunning = msg.stopRunning === true;
+    const targetSessionId =
+      typeof msg.targetSessionId === "string" ? msg.targetSessionId : undefined;
+    const tabIds = Array.isArray(msg.tabIds)
+      ? msg.tabIds.filter((value): value is string => typeof value === "string")
+      : [];
+
+    const result =
+      command === "chatTabFocus"
+        ? await coordinator.focus(address)
+        : command === "chatTabNew"
+          ? await coordinator.newTab(address, mode, projectId)
+          : command === "chatTabNewChat"
+            ? await coordinator.newChat(address, mode, {
+                projectId,
+                stopRunning,
+              })
+            : command === "chatTabClose"
+              ? await coordinator.close(address, stopRunning)
+              : command === "chatTabLoadSession" && targetSessionId
+                ? await coordinator.loadSession(
+                    address,
+                    targetSessionId,
+                    stopRunning,
+                  )
+                : command === "chatTabReorder" && Array.isArray(msg.tabIds)
+                  ? await coordinator.reorder(address, tabIds)
+                  : null;
+
+    if (!result) {
+      this.rejectChatTabAction(command, "invalid_address");
+      return;
+    }
+    if (!result.ok) {
+      if (result.reason === "confirmation_required") {
+        this.postMessage({
+          type: "chatTabActionConfirmationRequested",
+          request: {
+            command,
+            action: result.action,
+            address,
+            mode,
+            projectId,
+            targetSessionId: result.targetSessionId,
+          },
+        });
+        return;
+      }
+      if (
+        result.reason === "stale_controller" ||
+        result.reason === "not_found" ||
+        result.reason === "stale_session" ||
+        result.reason === "invalid_address"
+      ) {
+        this.rejectChatTabAction(command, result.reason);
+        return;
+      }
+      const snapshot = this.getChatWorkspaceViewSnapshot();
+      if (!snapshot) return;
+      this.log(`[chat-tabs] failed command=${command} reason=${result.reason}`);
+      this.postMessage({
+        type: "chatTabActionFailed",
+        failure: { command, reason: result.reason, snapshot },
+      });
+      return;
+    }
+
+    this.foregroundSessionTransition = undefined;
+    const selectedSession =
+      result.session ?? this.sessionManager?.getForegroundSession();
+    if (selectedSession) {
+      this.postSessionLoaded(selectedSession, {
+        checkpoints: this.getSessionCheckpoints(selectedSession.id),
+        tailTurns:
+          command === "chatTabNew" || command === "chatTabNewChat"
+            ? 0
+            : undefined,
+      });
+    }
+    this.sendInitialState();
+    this.sendChatWorkspaceUpdate();
+    if (selectedSession) {
+      await this.sendModesUpdate();
+      await this.sendSlashCommands();
+    }
   }
 
   private sendBgSessionsUpdate(): void {
@@ -5699,6 +5878,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         void this.sendModelsUpdate();
         void this.sendSlashCommands();
         this.sendSessionList();
+        this.sendChatWorkspaceUpdate();
         // Flush any messages queued before the webview was ready. Use the same
         // guarded send path as live messages so a reload/crash during replay does
         // not silently drop transcript events.
@@ -5734,6 +5914,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.sendInitialState();
           void this.sendDebugInfo();
         }
+        break;
+
+      case "chatTabFocus":
+      case "chatTabNew":
+      case "chatTabNewChat":
+      case "chatTabClose":
+      case "chatTabLoadSession":
+      case "chatTabReorder":
+        await this.handleChatTabAction(String(msg.command), msg);
         break;
 
       case "themeSnapshot": {
@@ -7515,6 +7704,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           requestId: extMsg.requestId,
           model: extMsg.model,
           reasoningEffort: extMsg.reasoningEffort,
+          mode: extMsg.mode,
+          commandApprovalPolicy: extMsg.commandApprovalPolicy,
           inputTokens: extMsg.inputTokens,
           uncachedInputTokens: extMsg.uncachedInputTokens,
           outputTokens: extMsg.outputTokens,
@@ -8045,6 +8236,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           requestId: event.requestId,
           model: event.model,
           reasoningEffort: event.reasoningEffort,
+          mode: this.sessionManager?.getSession(sessionId)?.mode,
+          commandApprovalPolicy: this.sessionManager?.getCommandApprovalPolicy(
+            sessionId,
+            this.getConfiguredCommandApprovalPolicy(),
+          ),
           inputTokens: event.inputTokens,
           uncachedInputTokens: event.uncachedInputTokens,
           outputTokens: event.outputTokens,
@@ -8064,6 +8260,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.contextJumpTracker?.onApiRequest(sessionId, {
           model: event.model,
           inputTokens: event.inputTokens,
+          outputTokens: event.outputTokens,
           cacheCreationTokens: event.cacheCreationTokens,
           contextWindow: providerRegistry
             .tryResolveProvider(event.model)

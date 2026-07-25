@@ -19,7 +19,6 @@ const PROGRESS_TOOL_NAMES = new Set([
   "propose_memory",
   "rename_symbol",
   "spawn_background_agent",
-  "start_worktree_agent",
   "todo_write",
   "write_file",
 ]);

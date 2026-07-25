@@ -5,6 +5,12 @@ import type {
   RevertRecoveryNotice,
 } from "../../shared/types.js";
 import type {
+  ChatTabActionConfirmationRequest,
+  ChatTabActionFailure,
+  ChatTabActionRejection,
+  ChatWorkspaceViewSnapshot,
+} from "../chatTabProtocol.js";
+import type {
   McpConfigMutationResult,
   McpConfigSnapshot,
   McpManagerView,
@@ -188,6 +194,13 @@ export interface WorktreeSetupState {
 /** Messages from extension to webview */
 export type ExtensionMessage =
   | { type: "stateUpdate"; state: ChatState }
+  | { type: "chatWorkspaceUpdate"; snapshot: ChatWorkspaceViewSnapshot }
+  | {
+      type: "chatTabActionConfirmationRequested";
+      request: ChatTabActionConfirmationRequest;
+    }
+  | { type: "chatTabActionRejected"; rejection: ChatTabActionRejection }
+  | { type: "chatTabActionFailed"; failure: ChatTabActionFailure }
   | { type: "agentThinkingStart"; sessionId: string; thinkingId: string }
   | {
       type: "agentThinkingDelta";
@@ -241,6 +254,8 @@ export type ExtensionMessage =
       requestId: string;
       model: string;
       reasoningEffort: ReasoningEffort;
+      mode?: string;
+      commandApprovalPolicy?: CommandApprovalPolicy;
       inputTokens: number;
       uncachedInputTokens: number;
       outputTokens: number;
@@ -998,6 +1013,10 @@ export interface ChatMessage {
     requestId: string;
     model: string;
     reasoningEffort?: ReasoningEffort;
+    /** Session mode slug active for this request; drives mode-change dividers. */
+    mode?: string;
+    /** Command approval policy active for this request; drives Approve for Me dividers. */
+    commandApprovalPolicy?: CommandApprovalPolicy;
     inputTokens: number;
     uncachedInputTokens?: number;
     cacheReadTokens?: number;

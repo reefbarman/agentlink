@@ -57,7 +57,14 @@ export type ContextUsageRecord =
       accumulatedBySource?: Record<string, number>;
       systemPromptDeltaTokens?: number;
       toolDefinitionDeltaTokens?: number;
-      /** delta - accumulated - prompt/tool deltas; negative means overestimated. */
+      /** Exact output tokens of the previous response (text + thinking +
+       *  tool_use), which re-enter the context as input on this request. */
+      prevAssistantOutputTokens?: number;
+      /** Set when this request ran on a different model than the previous one,
+       *  so the delta partly reflects cross-model token accounting. */
+      modelChanged?: boolean;
+      /** delta - accumulated - prompt/tool deltas - prev assistant output;
+       *  negative means overestimated. */
       unattributedTokens?: number;
     };
 

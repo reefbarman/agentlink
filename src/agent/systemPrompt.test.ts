@@ -4,6 +4,7 @@ import * as path from "path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  buildModeInstructionBlock,
   buildPromptArtifacts,
   buildSystemPrompt,
   loadCustomInstructions,
@@ -97,6 +98,48 @@ describe("loadCustomInstructions", () => {
     expect(result).toContain("trimmed");
     // The file content is trimmed before inclusion
     expect(result).not.toMatch(/^  trimmed  $/m);
+  });
+});
+
+describe("conversation mode placement", () => {
+  it("produces a byte-identical system prompt across modes", async () => {
+    const build = (mode: string) =>
+      buildPromptArtifacts(mode, tmpDir, {
+        modeInstructionPlacement: "conversation",
+      });
+    const [code, architect, ask, debug, review] = await Promise.all([
+      build("code"),
+      build("architect"),
+      build("ask"),
+      build("debug"),
+      build("review"),
+    ]);
+
+    expect(architect!.systemPrompt).toBe(code!.systemPrompt);
+    expect(ask!.systemPrompt).toBe(code!.systemPrompt);
+    expect(debug!.systemPrompt).toBe(code!.systemPrompt);
+    expect(review!.systemPrompt).toBe(code!.systemPrompt);
+    expect(code!.systemPrompt).toContain("## Modes");
+    expect(code!.systemPrompt).toContain("<current_mode>");
+    expect(code!.systemPrompt).not.toContain("You are in **Code mode**");
+  });
+
+  it("keeps mode content inline with the default system placement", async () => {
+    const artifacts = await buildPromptArtifacts("code", tmpDir);
+    expect(artifacts.systemPrompt).toContain("You are in **Code mode**");
+    expect(artifacts.systemPrompt).not.toContain("## Modes\n");
+  });
+
+  it("builds mode instruction blocks carrying the mode prompt", async () => {
+    const block = await buildModeInstructionBlock("architect", tmpDir);
+    expect(block).toContain('<current_mode mode="architect">');
+    expect(block).toContain("You are in **Architect mode**");
+    expect(block).toContain("Plans folder");
+    expect(block).toContain("</current_mode>");
+
+    const codeBlock = await buildModeInstructionBlock("code", tmpDir);
+    expect(codeBlock).toContain("You are in **Code mode**");
+    expect(codeBlock).not.toContain("Plans folder");
   });
 });
 

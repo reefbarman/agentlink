@@ -1363,6 +1363,30 @@ export class McpClientHub {
     return tools;
   }
 
+  /** Tools explicitly annotated read-only by their MCP servers. */
+  getReadOnlyToolDefs(): ToolDefinition[] {
+    const tools: ToolDefinition[] = [];
+    for (const server of this.servers.values()) {
+      if (server.status !== "connected") continue;
+      tools.push(
+        ...server.tools.filter((tool) => {
+          const parsed = parseMcpToolName(tool.name);
+          return Boolean(
+            parsed && server.parallelSafeToolNames.has(parsed.bareToolName),
+          );
+        }),
+      );
+    }
+    return tools;
+  }
+
+  /** Whether a tool is explicitly annotated read-only by its MCP server. */
+  isToolReadOnly(serverName: string, toolName: string): boolean {
+    return (
+      this.servers.get(serverName)?.parallelSafeToolNames.has(toolName) ?? false
+    );
+  }
+
   /** Get tool names only (for mode filtering). */
   getToolNames(): string[] {
     return this.getToolDefs().map((t) => t.name);

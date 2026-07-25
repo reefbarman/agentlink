@@ -4065,6 +4065,92 @@ describe("ChatViewProvider session state sync", () => {
     ).toBe(true);
   });
 
+  it("stamps session mode and command approval policy through api_request into the projected transcript", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+
+    const session = {
+      id: "session-1",
+      title: "Session",
+      mode: "architect",
+      model: "claude-sonnet-4-6",
+      status: "streaming",
+      background: false,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      estimatedTotalUsed: 0,
+      getAllMessages: () => [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Prior response" }],
+        },
+      ],
+    };
+    const manager = {
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+      getCommandApprovalPolicy: vi.fn(() => "approve-for-me"),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+
+    const handleAgentEvent = (
+      provider as unknown as {
+        handleAgentEvent: (
+          sessionId: string,
+          event: Record<string, unknown>,
+        ) => void;
+      }
+    ).handleAgentEvent;
+    handleAgentEvent.call(provider, "session-1", {
+      type: "api_request",
+      requestId: "request-1",
+      model: "claude-sonnet-4-6",
+      reasoningEffort: "high",
+      inputTokens: 100,
+      uncachedInputTokens: 80,
+      outputTokens: 20,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      durationMs: 500,
+      timeToFirstToken: 100,
+    });
+
+    const posted = mockPostMessage.mock.calls
+      .map(([message]) => message)
+      .find((message) => message.type === "agentApiRequest");
+    expect(posted).toMatchObject({
+      mode: "architect",
+      commandApprovalPolicy: "approve-for-me",
+    });
+    expect(manager.getCommandApprovalPolicy).toHaveBeenCalledWith(
+      "session-1",
+      expect.anything(),
+    );
+
+    const projected = (
+      provider as unknown as {
+        projectedForegroundState: {
+          messages: Array<Record<string, unknown>>;
+        };
+      }
+    ).projectedForegroundState;
+    const lastMessage = projected.messages.at(-1);
+    expect(lastMessage?.apiRequest).toMatchObject({
+      mode: "architect",
+      commandApprovalPolicy: "approve-for-me",
+    });
+  });
+
   it("refreshes the context budget snapshot when the foreground session condenses", async () => {
     const { providerRegistry } = await import("./providers/index.js");
     providerRegistry.register({
@@ -5772,6 +5858,201 @@ describe("handleModeSwitch resume queueing", () => {
           message.type === "agentModeSwitchRequest" && message.mode === "code",
       ),
     ).toBe(true);
+  });
+});
+
+describe("chat tab host routing", () => {
+  async function makeTabRoutingProvider() {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const postMessage = vi.fn();
+    const snapshot = {
+      controllerEpoch: "epoch-1",
+      focusedTabId: "tab-1",
+      tabs: [
+        {
+          tabId: "tab-1",
+          displayNumber: 1,
+          label: "T1",
+          sessionId: "session-1",
+          placement: "docked",
+          title: "First session",
+          status: "streaming",
+          busy: true,
+        },
+      ],
+    };
+    const coordinator = {
+      focus: vi.fn(),
+      newTab: vi.fn(),
+      newChat: vi.fn(),
+      close: vi.fn(),
+      loadSession: vi.fn(),
+      reorder: vi.fn(),
+    };
+    (
+      provider as unknown as {
+        postMessage: typeof postMessage;
+        chatTabHostCoordinator: unknown;
+        getChatWorkspaceViewSnapshot: () => typeof snapshot;
+      }
+    ).postMessage = postMessage;
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: vi.fn(() => undefined),
+    };
+    (
+      provider as unknown as {
+        chatTabHostCoordinator: unknown;
+      }
+    ).chatTabHostCoordinator = coordinator;
+    (
+      provider as unknown as {
+        getChatWorkspaceViewSnapshot: () => typeof snapshot;
+      }
+    ).getChatWorkspaceViewSnapshot = () => snapshot;
+    const handle = (message: Record<string, unknown>) =>
+      (
+        provider as unknown as {
+          handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+        }
+      ).handleWebviewMessage(message);
+    return { coordinator, handle, postMessage, snapshot };
+  }
+
+  it("rejects omitted or stale tab identity with the latest snapshot", async () => {
+    const { coordinator, handle, postMessage, snapshot } =
+      await makeTabRoutingProvider();
+
+    await handle({
+      command: "chatTabFocus",
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+    });
+    expect(coordinator.focus).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenLastCalledWith({
+      type: "chatTabActionRejected",
+      rejection: {
+        command: "chatTabFocus",
+        reason: "invalid_address",
+        snapshot,
+      },
+    });
+
+    coordinator.focus.mockResolvedValueOnce({
+      ok: false,
+      reason: "stale_session",
+    });
+    await handle({
+      command: "chatTabFocus",
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: "stale-session",
+    });
+    expect(coordinator.focus).toHaveBeenCalledWith({
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: "stale-session",
+    });
+    expect(postMessage).toHaveBeenLastCalledWith({
+      type: "chatTabActionRejected",
+      rejection: {
+        command: "chatTabFocus",
+        reason: "stale_session",
+        snapshot,
+      },
+    });
+  });
+
+  it("forwards a busy New Chat confirmation with its exact replay identity", async () => {
+    const { coordinator, handle, postMessage } = await makeTabRoutingProvider();
+    coordinator.newChat.mockResolvedValueOnce({
+      ok: false,
+      reason: "confirmation_required",
+      action: "new_chat",
+      tab: {
+        id: "tab-1",
+        displayNumber: 1,
+        sessionId: "session-1",
+        placement: "docked",
+        terminalGeneration: 1,
+      },
+    });
+
+    await handle({
+      command: "chatTabNewChat",
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: "session-1",
+      mode: "debug",
+      projectId: "project-1",
+    });
+
+    expect(coordinator.newChat).toHaveBeenCalledWith(
+      {
+        controllerEpoch: "epoch-1",
+        tabId: "tab-1",
+        sessionId: "session-1",
+      },
+      "debug",
+      { projectId: "project-1", stopRunning: false },
+    );
+    expect(postMessage).toHaveBeenLastCalledWith({
+      type: "chatTabActionConfirmationRequested",
+      request: {
+        command: "chatTabNewChat",
+        action: "new_chat",
+        address: {
+          controllerEpoch: "epoch-1",
+          tabId: "tab-1",
+          sessionId: "session-1",
+        },
+        mode: "debug",
+        projectId: "project-1",
+        targetSessionId: undefined,
+      },
+    });
+  });
+
+  it("forwards confirmed history replacement and exact reorder identity", async () => {
+    const { coordinator, handle } = await makeTabRoutingProvider();
+    coordinator.loadSession.mockResolvedValueOnce({
+      ok: false,
+      reason: "session_not_found",
+    });
+    coordinator.reorder.mockResolvedValueOnce({
+      ok: false,
+      reason: "invalid_order",
+    });
+    const address = {
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: "session-1",
+    };
+
+    await handle({
+      command: "chatTabLoadSession",
+      ...address,
+      targetSessionId: "session-2",
+      stopRunning: true,
+    });
+    await handle({
+      command: "chatTabReorder",
+      ...address,
+      tabIds: ["tab-2", "tab-1"],
+    });
+
+    expect(coordinator.loadSession).toHaveBeenCalledWith(
+      address,
+      "session-2",
+      true,
+    );
+    expect(coordinator.reorder).toHaveBeenCalledWith(address, [
+      "tab-2",
+      "tab-1",
+    ]);
   });
 });
 

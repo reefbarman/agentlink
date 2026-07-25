@@ -27,12 +27,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "generate_image",
     "propose_memory",
   ],
-  command: [
-    "execute_command",
-    "get_terminal_output",
-    "close_terminals",
-    "start_worktree_agent",
-  ],
+  command: ["execute_command", "get_terminal_output", "close_terminals"],
   language: [
     "get_diagnostics",
     "get_hover",

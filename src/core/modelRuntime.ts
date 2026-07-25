@@ -249,7 +249,8 @@ export type CoreModelStopReason =
   | "end_turn"
   | "tool_use"
   | "pause_turn"
-  | "max_tokens";
+  | "max_tokens"
+  | "refusal";
 
 export type CoreModelStreamEvent =
   | {

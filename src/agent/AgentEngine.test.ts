@@ -68,6 +68,11 @@ vi.mock("fs/promises", async (importOriginal) => {
 vi.mock("./systemPrompt.js", () => ({
   buildSystemPrompt: mocks.mockBuildSystemPrompt,
   buildPromptArtifacts: mocks.mockBuildPromptArtifacts,
+  buildModeInstructionBlock: vi
+    .fn()
+    .mockResolvedValue(
+      '<current_mode mode="mock">mock mode block</current_mode>',
+    ),
 }));
 
 vi.mock("./condense.js", () => ({
@@ -2246,7 +2251,9 @@ describe("AgentEngine", () => {
 
       await collectEvents(engine.run(session));
 
-      expect(listCalls).toBe(2);
+      // Two API turns × two listTools calls each (union advertisement plus
+      // the current-mode dispatch gate set).
+      expect(listCalls).toBe(4);
       expect(streamCalls).toHaveLength(2);
       const firstAlpha = streamCalls[0].tools?.find(
         (tool) => tool.name === "alpha",
@@ -2256,6 +2263,79 @@ describe("AgentEngine", () => {
       );
       expect(firstAlpha).toBeDefined();
       expect(secondAlpha).toBe(firstAlpha);
+    });
+
+    it("advertises the mode union while gating dispatch to the current mode", async () => {
+      const streamCalls: StreamRequest[] = [];
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        streamCalls.push(request);
+        streamCount += 1;
+        if (streamCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              { type: "tool_use", id: "call-1", name: "read_file", input: {} },
+            ],
+          };
+          yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const session = await AgentSession.createForLegacyCwd({
+        mode: "ask",
+        config: testConfig,
+        cwd: "/test",
+      });
+      session.addUserMessage("look something up");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const capturedGateSets: Array<ReadonlySet<string> | undefined> = [];
+      engine.setToolRuntime({
+        listTools: (request: { mode?: { slug: string } }) =>
+          request.mode?.slug === "all-modes"
+            ? [
+                {
+                  name: "read_file",
+                  description: "read",
+                  input_schema: { type: "object" },
+                },
+                {
+                  name: "write_file",
+                  description: "write",
+                  input_schema: { type: "object" },
+                },
+              ]
+            : [
+                {
+                  name: "read_file",
+                  description: "read",
+                  input_schema: { type: "object" },
+                },
+              ],
+        isParallelSafe: () => true,
+        executeTool: async (request: {
+          context: { modeAllowedToolNames?: ReadonlySet<string> };
+        }) => {
+          capturedGateSets.push(request.context.modeAllowedToolNames);
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+      } as any);
+
+      await collectEvents(engine.run(session));
+
+      // The provider request advertises the union (cache-stable tool list)…
+      const advertisedNames = streamCalls[0]?.tools?.map((t) => t.name) ?? [];
+      expect(advertisedNames).toContain("write_file");
+      // …while the dispatch seam receives the current mode's real allowance.
+      expect(capturedGateSets).toHaveLength(1);
+      expect(capturedGateSets[0]).toBeDefined();
+      expect(capturedGateSets[0]!.has("read_file")).toBe(true);
+      expect(capturedGateSets[0]!.has("write_file")).toBe(false);
+      expect(capturedGateSets[0]!.has("todo_write")).toBe(true);
     });
 
     it("recomputes MCP disclosure at request time when tools connect after session creation", async () => {
@@ -2436,7 +2516,7 @@ describe("AgentEngine", () => {
           expect.stringMatching(/^\[perf\] tool setup \d+ms tools=0 mcp=0$/),
           expect.stringMatching(/^\[perf\] getMessages \d+ms messages=1$/),
           expect.stringMatching(
-            /^\[perf\] message assembly \d+ms apiMessages=1$/,
+            /^\[perf\] message assembly \d+ms apiMessages=2$/,
           ),
         ]),
       );
@@ -2713,6 +2793,10 @@ describe("AgentEngine", () => {
       expect(streamCalls).toHaveLength(2);
       expect(committedTurns).toHaveBeenCalledTimes(2);
       expect(streamCalls[1].messages).toEqual([
+        {
+          role: "user",
+          content: '<current_mode mode="mock">mock mode block</current_mode>',
+        },
         { role: "user", content: "search" },
         pausedMessage,
       ]);
@@ -2784,6 +2868,83 @@ describe("AgentEngine", () => {
         }),
       );
       expect(events.some((event) => event.type === "done")).toBe(false);
+    });
+
+    it("surfaces a safety refusal instead of retrying it as an empty response", async () => {
+      let streamCalls = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCalls += 1;
+        yield { type: "content_blocks", blocks: [] };
+        yield {
+          type: "model_stop",
+          reason: "refusal",
+          assistantMessage: { role: "assistant", content: [] },
+        };
+        yield { type: "usage", inputTokens: 10, outputTokens: 0 };
+        yield { type: "done" };
+      };
+      const session = await makeSession();
+      session.addUserMessage("review this patch");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+
+      expect(streamCalls).toBe(1);
+      expect(
+        session
+          .getAllMessages()
+          .filter((message) => message.role === "assistant"),
+      ).toHaveLength(0);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "warning",
+          message: expect.stringContaining("declined this request"),
+        }),
+      );
+    });
+
+    it("closes dangling tool calls when a refusal interrupts mid-turn", async () => {
+      const refusedMessage: AgentMessage = {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Starting the review" },
+          { type: "tool_use", id: "tool_1", name: "read_file", input: {} },
+        ],
+      };
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        yield {
+          type: "content_blocks",
+          blocks: refusedMessage.content as Exclude<
+            AgentMessage["content"],
+            string
+          >,
+        };
+        yield {
+          type: "model_stop",
+          reason: "refusal",
+          assistantMessage: refusedMessage,
+        };
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        yield { type: "done" };
+      };
+      const session = await makeSession();
+      session.addUserMessage("review this patch");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+
+      const serialized = JSON.stringify(session.getAllMessages());
+      expect(serialized).toContain("Starting the review");
+      expect(serialized).toContain('"tool_use_id":"tool_1"');
+      expect(serialized).toContain("Not executed");
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "warning",
+          message: expect.stringContaining("declined this request"),
+        }),
+      );
     });
 
     it("keeps a running turn on the model resolved at its boundary", async () => {
@@ -3047,6 +3208,10 @@ describe("AgentEngine", () => {
       expect(streamCalls[0]?.messages).toEqual([
         {
           role: "user",
+          content: '<current_mode mode="mock">mock mode block</current_mode>',
+        },
+        {
+          role: "user",
           content: [
             { type: "text", text: "what's in this image?" },
             {
@@ -3240,10 +3405,11 @@ describe("AgentEngine", () => {
         ],
       };
       expect(streamCalls).toHaveLength(2);
-      expect(streamCalls[0]?.messages[0]).toEqual(expectedImageMessage);
+      // messages[0] is the injected mode instruction block.
+      expect(streamCalls[0]?.messages[1]).toEqual(expectedImageMessage);
       // Regression: the API is stateless, so the image must be re-sent after
       // the tool round-trip or the model loses access to it mid-conversation.
-      expect(streamCalls[1]?.messages[0]).toEqual(expectedImageMessage);
+      expect(streamCalls[1]?.messages[1]).toEqual(expectedImageMessage);
     });
 
     it("does not count tool-result image base64 as raw text for auto-condense estimates", async () => {
@@ -4139,7 +4305,7 @@ describe("AgentEngine", () => {
       expect(session.estimatedInputUsed).toBe(12_000);
     });
 
-    it("queues condense through provider admission and releases its permit", async () => {
+    it("admits foreground condense immediately on a saturated provider and releases its permit", async () => {
       mocks.mockSummarizeConversation.mockResolvedValue({
         messages: [{ role: "user", content: "summary", isSummary: true }],
         summary: "summary",
@@ -4157,7 +4323,9 @@ describe("AgentEngine", () => {
       const phases: Array<"queued_for_provider" | "running"> = [];
       const engine = new AgentEngine(registry);
 
-      const condense = collectEvents(
+      // Foreground condense is interactive-priority work: it bypasses the
+      // provider cap instead of waiting behind the background permit.
+      await collectEvents(
         engine.condenseSession(
           session,
           true,
@@ -4170,19 +4338,13 @@ describe("AgentEngine", () => {
           },
         ),
       );
-      await vi.waitFor(() => {
-        expect(phases).toEqual(["queued_for_provider"]);
-      });
-      expect(mocks.mockSummarizeConversation).not.toHaveBeenCalled();
-
-      blocker.release();
-      await condense;
-      expect(phases).toEqual(["queued_for_provider", "running"]);
+      expect(phases).toEqual(["running", "running"]);
       expect(mocks.mockSummarizeConversation).toHaveBeenCalledTimes(1);
 
+      blocker.release();
       const nextPermit = await registry.requestScheduler.acquire(
         "mock",
-        "interactive",
+        "background",
       );
       expect(nextPermit.queued).toBe(false);
       nextPermit.release();

@@ -526,6 +526,33 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     });
   });
 
+  it("projects apiRequest mode and command approval policy for browser change dividers", () => {
+    const sources = new ProjectionSources(readSet());
+    const adapter = makeAdapter(sources);
+    sources.readSet.foreground!.messages = [
+      message("message-assistant", "assistant", "Done", 950),
+    ];
+    sources.readSet.foreground!.messages[0].apiRequest = {
+      requestId: "request-1",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      mode: "architect",
+      commandApprovalPolicy: "approve-for-me",
+      inputTokens: 100,
+      outputTokens: 20,
+      durationMs: 500,
+      timeToFirstToken: 100,
+    };
+    expect(adapter.getCheckpoint().transcript.messages[0]).toMatchObject({
+      role: "assistant",
+      apiRequest: {
+        model: "gpt-5.6-sol",
+        mode: "architect",
+        commandApprovalPolicy: "approve-for-me",
+      },
+    });
+  });
+
   it("keeps empty safe theme values and excludes unsafe theme functions before protocol parsing", () => {
     const state = readSet();
     state.theme.cssVariables = {

@@ -358,4 +358,69 @@ describe("ChatTabController", () => {
     expect(controller.getLayout().tabs[0]?.sessionId).toBeNull();
     expect(workspace.update).toHaveBeenCalledOnce();
   });
+
+  it("validates tab actions against controller epoch and exact session binding", async () => {
+    const workspace = createWorkspaceState();
+    const controller = new ChatTabController(workspace.state, {
+      createId: createIds("tab-1"),
+      createControllerEpoch: () => "epoch-1",
+    });
+    await controller.bindFocusedSession("session-1");
+
+    expect(
+      controller.validateAction({
+        controllerEpoch: "epoch-1",
+        tabId: "tab-1",
+        sessionId: "session-1",
+      }),
+    ).toEqual({
+      ok: true,
+      tab: expect.objectContaining({ id: "tab-1", sessionId: "session-1" }),
+    });
+    expect(
+      controller.validateAction({
+        controllerEpoch: "stale",
+        tabId: "tab-1",
+        sessionId: "session-1",
+      }),
+    ).toEqual({ ok: false, reason: "stale_controller" });
+    expect(
+      controller.validateAction({
+        controllerEpoch: "epoch-1",
+        tabId: "missing",
+        sessionId: "session-1",
+      }),
+    ).toEqual({ ok: false, reason: "not_found" });
+    expect(
+      controller.validateAction({
+        controllerEpoch: "epoch-1",
+        tabId: "tab-1",
+        sessionId: "session-old",
+      }),
+    ).toEqual({ ok: false, reason: "stale_session" });
+  });
+
+  it("publishes focus-only workspace snapshots without persisting layout", async () => {
+    const workspace = createWorkspaceState();
+    const controller = new ChatTabController(workspace.state, {
+      createId: createIds("tab-1", "tab-2"),
+      createControllerEpoch: () => "epoch-1",
+    });
+    const second = await controller.createTab("session-2");
+    workspace.update.mockClear();
+    const snapshots: ReturnType<typeof controller.getWorkspaceSnapshot>[] = [];
+    controller.onDidChangeWorkspace((snapshot) => snapshots.push(snapshot));
+
+    await controller.focusTab("tab-1");
+    snapshots[0]!.layout.tabs[0]!.sessionId = "mutated-listener-copy";
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toMatchObject({
+      controllerEpoch: "epoch-1",
+      focusedTabId: "tab-1",
+    });
+    expect(controller.getTab(second.id)?.sessionId).toBe("session-2");
+    expect(controller.getTab("tab-1")?.sessionId).toBeNull();
+    expect(workspace.update).not.toHaveBeenCalled();
+  });
 });

@@ -1,4 +1,5 @@
 import { ToolCallGroup, segmentBlocks } from "./ToolCallGroup";
+import { Fragment } from "preact";
 import {
   useCallback,
   useEffect,
@@ -11,7 +12,7 @@ import { ApiRequestBlock } from "./ApiRequestBlock";
 import { BgAgentBlock } from "./BgAgentBlock";
 import { BgAgentResultBlock } from "./BgAgentResultBlock";
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
-import type { ChatMessage } from "../types";
+import type { ChatMessage, ContentBlock } from "../types";
 import type { DetectedQuestion } from "../questionDetection";
 import { ErrorBlock } from "./ErrorBlock";
 import type { FinalMarkerToolCall } from "../../../shared/finalStatus";
@@ -25,11 +26,89 @@ import { ThinkingContent } from "./ThinkingContent";
 import { ToolCallBlock } from "./ToolCallBlock";
 import { getStreamingActivity } from "./activityPresentation";
 import { getFinalMessageContinueAction } from "../../../shared/finalStatus";
+import { normalizeProjectedToolName } from "../../../shared/chatProjection";
 
 const TOOL_GROUP_SETTLE_MS = 350;
 
 function getToolSettleKey(messageId: string, toolCallId: string): string {
   return `${messageId}:${toolCallId}`;
+}
+
+type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
+
+interface AssistantMediaPlacement {
+  promotedByToolCallId: Map<string, DisplayMedia>;
+  unplaced?: DisplayMedia;
+}
+
+function imageExtensionForMimeType(mimeType: string): string {
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/webp") return "webp";
+  if (mimeType === "image/gif") return "gif";
+  return "png";
+}
+
+function placeAssistantDisplayMedia(
+  displayMedia: ChatMessage["displayMedia"],
+  blocks: ContentBlock[],
+): AssistantMediaPlacement {
+  const availableImages = (displayMedia?.images ?? []).map((image) => ({
+    image,
+    used: false,
+  }));
+  const promotedByToolCallId = new Map<string, DisplayMedia>();
+  let fallbackImageIndex = 0;
+
+  for (const block of blocks) {
+    if (block.type !== "tool_call" || !block.resultImages?.length) continue;
+    const toolName = normalizeProjectedToolName(block.name);
+    if (toolName !== "generate_image" && toolName !== "present_images") {
+      continue;
+    }
+
+    const images = block.resultImages.map((image) => {
+      const src = `data:${image.mimeType};base64,${image.data}`;
+      const matchingImage = availableImages.find(
+        (candidate) =>
+          !candidate.used &&
+          candidate.image.mimeType === image.mimeType &&
+          candidate.image.src === src,
+      );
+      if (matchingImage) {
+        matchingImage.used = true;
+        return matchingImage.image;
+      }
+
+      fallbackImageIndex += 1;
+      return {
+        name: `${toolName === "present_images" ? "presented-image" : "generated-image"}-${fallbackImageIndex}.${imageExtensionForMimeType(image.mimeType)}`,
+        mimeType: image.mimeType,
+        src,
+      };
+    });
+    promotedByToolCallId.set(block.id, { images, documents: [] });
+  }
+
+  const unplacedImages = availableImages
+    .filter((candidate) => !candidate.used)
+    .map((candidate) => candidate.image);
+  const unplacedDocuments = displayMedia?.documents ?? [];
+  const unplaced =
+    unplacedImages.length > 0 || unplacedDocuments.length > 0
+      ? { images: unplacedImages, documents: unplacedDocuments }
+      : undefined;
+
+  return { promotedByToolCallId, unplaced };
+}
+
+function combineDisplayMedia(
+  media: Array<DisplayMedia | undefined>,
+): DisplayMedia | undefined {
+  const images = media.flatMap((item) => item?.images ?? []);
+  const documents = media.flatMap((item) => item?.documents ?? []);
+  return images.length > 0 || documents.length > 0
+    ? { images, documents }
+    : undefined;
 }
 
 interface MessageBubbleProps {
@@ -141,6 +220,10 @@ export function MessageBubble({
           settledToolIds.has(getToolSettleKey(message.id, block.id)),
       }),
     [blocks, streaming, settledToolIds, message.id],
+  );
+  const assistantMediaPlacement = useMemo(
+    () => placeAssistantDisplayMedia(message.displayMedia, blocks),
+    [message.displayMedia, blocks],
   );
 
   const parsedAttachments = useMemo(
@@ -306,11 +389,11 @@ export function MessageBubble({
   return (
     <div class="message assistant-message">
       <div class="assistant-blocks">
-        {message.displayMedia && (
+        {assistantMediaPlacement.unplaced && (
           <UserAttachments
             files={[]}
             mediaLabel={null}
-            displayMedia={message.displayMedia}
+            displayMedia={assistantMediaPlacement.unplaced}
             imageLabel="generated image"
             imageAlt="Generated image"
             onOpenFile={onOpenFile}
@@ -318,30 +401,15 @@ export function MessageBubble({
         )}
         {blockSegments.map((segment) => {
           if (segment.kind === "tool_group") {
-            return (
-              <ToolCallGroup
-                key={`group-${segment.blocks[0].id}`}
-                blocks={segment.blocks}
-                onOpenFile={onOpenFile}
-                onRevealToolCallTerminal={onRevealToolCallTerminal}
-                onContinueToolCallInBackground={onContinueToolCallInBackground}
-                onCompleteToolCall={onCompleteToolCall}
-                onCancelToolCall={onCancelToolCall}
-                onPromoteMcpToolApproval={onPromoteMcpToolApproval}
-              />
+            const promotedMedia = combineDisplayMedia(
+              segment.blocks.map((block) =>
+                assistantMediaPlacement.promotedByToolCallId.get(block.id),
+              ),
             );
-          }
-
-          const block = segment.block;
-          const blockIndex = segment.index;
-          switch (block.type) {
-            case "thinking":
-              return <ThinkingBlock key={block.id} block={block} />;
-            case "tool_call":
-              return (
-                <ToolCallBlock
-                  key={block.id}
-                  toolCall={block}
+            return (
+              <Fragment key={`group-${segment.blocks[0].id}`}>
+                <ToolCallGroup
+                  blocks={segment.blocks}
                   onOpenFile={onOpenFile}
                   onRevealToolCallTerminal={onRevealToolCallTerminal}
                   onContinueToolCallInBackground={
@@ -351,7 +419,54 @@ export function MessageBubble({
                   onCancelToolCall={onCancelToolCall}
                   onPromoteMcpToolApproval={onPromoteMcpToolApproval}
                 />
+                {promotedMedia && (
+                  <UserAttachments
+                    files={[]}
+                    mediaLabel={null}
+                    displayMedia={promotedMedia}
+                    imageLabel="generated image"
+                    imageAlt="Generated image"
+                    onOpenFile={onOpenFile}
+                  />
+                )}
+              </Fragment>
+            );
+          }
+
+          const block = segment.block;
+          const blockIndex = segment.index;
+          switch (block.type) {
+            case "thinking":
+              return <ThinkingBlock key={block.id} block={block} />;
+            case "tool_call": {
+              const promotedMedia =
+                assistantMediaPlacement.promotedByToolCallId.get(block.id);
+              return (
+                <Fragment key={block.id}>
+                  <ToolCallBlock
+                    toolCall={block}
+                    onOpenFile={onOpenFile}
+                    onRevealToolCallTerminal={onRevealToolCallTerminal}
+                    onContinueToolCallInBackground={
+                      onContinueToolCallInBackground
+                    }
+                    onCompleteToolCall={onCompleteToolCall}
+                    onCancelToolCall={onCancelToolCall}
+                    onPromoteMcpToolApproval={onPromoteMcpToolApproval}
+                  />
+                  {promotedMedia && (
+                    <UserAttachments
+                      files={[]}
+                      mediaLabel={null}
+                      displayMedia={promotedMedia}
+                      imageLabel="generated image"
+                      imageAlt="Generated image"
+                      onOpenFile={onOpenFile}
+                    />
+                  )}
+                </Fragment>
               );
+            }
             case "skill_load":
               return <SkillLoadBlock key={block.id} block={block} />;
             case "text": {

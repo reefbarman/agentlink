@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  parseFleetResultEnvelope,
   formatFleetResultEnvelope,
+  parseFleetResultEnvelope,
   planFleetWorkflow,
   scoreFleetCandidate,
   withFleetResultInstruction,
@@ -44,7 +44,7 @@ describe("fleet workflows", () => {
     );
   });
 
-  it("isolates every best-of-N candidate", () => {
+  it("runs best-of-N candidates as ordinary background agents", () => {
     const plan = planFleetWorkflow({
       kind: "best_of_n",
       task: "Implement",
@@ -52,8 +52,12 @@ describe("fleet workflows", () => {
       candidates: [{ model: "one" }, { model: "two" }, { model: "three" }],
     });
     expect(plan.delegations).toHaveLength(3);
-    expect(plan.delegations.every((item) => item.worktree === "isolated")).toBe(
-      true,
+    expect(plan.delegations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ model: "one", expectedResult: "patch" }),
+        expect.objectContaining({ model: "two", expectedResult: "patch" }),
+        expect.objectContaining({ model: "three", expectedResult: "patch" }),
+      ]),
     );
   });
 

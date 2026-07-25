@@ -91,6 +91,43 @@ describe("ContextJumpTracker", () => {
     });
   });
 
+  it("attributes the previous response's output tokens exactly", () => {
+    const { tracker, records } = createTracker();
+    tracker.onApiRequest("s1", {
+      model: "m",
+      inputTokens: 50_000,
+      outputTokens: 30_000,
+    });
+    tracker.onApiRequest("s1", {
+      model: "m",
+      inputTokens: 90_000,
+      outputTokens: 500,
+      accumulatedEstimatedTokens: 6_000,
+      accumulatedBySource: { "tool:read_file": 6_000 },
+    });
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      kind: "context_jump",
+      deltaTokens: 40_000,
+      prevAssistantOutputTokens: 30_000,
+      unattributedTokens: 40_000 - 6_000 - 30_000,
+    });
+    expect(records[0]).not.toHaveProperty("modelChanged");
+  });
+
+  it("flags jumps where the model changed since the previous request", () => {
+    const { tracker, records } = createTracker();
+    tracker.onApiRequest("s1", { model: "m1", inputTokens: 50_000 });
+    tracker.onApiRequest("s1", { model: "m2", inputTokens: 90_000 });
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      kind: "context_jump",
+      modelChanged: true,
+    });
+  });
+
   it("stays quiet for growth below the threshold", () => {
     const { tracker, records } = createTracker();
     tracker.onApiRequest("s1", { model: "m", inputTokens: 50_000 });

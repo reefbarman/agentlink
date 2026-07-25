@@ -1,3 +1,4 @@
+import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
 import type { CoreWebActivity, CoreWebCitation } from "../core/webAccess.js";
 import type {
   ChatMessage,
@@ -465,6 +466,8 @@ export type AppAction =
       requestId: string;
       model: string;
       reasoningEffort: ReasoningEffort;
+      mode?: string;
+      commandApprovalPolicy?: CommandApprovalPolicy;
       inputTokens: number;
       uncachedInputTokens: number;
       outputTokens: number;
@@ -2024,6 +2027,8 @@ export function reducer(state: AppState, action: AppAction): AppState {
         requestId: action.requestId,
         model: action.model,
         reasoningEffort: action.reasoningEffort,
+        mode: action.mode,
+        commandApprovalPolicy: action.commandApprovalPolicy,
         inputTokens: action.inputTokens,
         uncachedInputTokens: action.uncachedInputTokens,
         cacheReadTokens: action.cacheReadTokens,

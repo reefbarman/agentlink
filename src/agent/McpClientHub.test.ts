@@ -218,6 +218,11 @@ describe("McpClientHub protocol correctness", () => {
 
     expect(hub.isToolParallelSafe("fixture", "read")).toBe(true);
     expect(hub.isToolParallelSafe("fixture", "write")).toBe(false);
+    expect(hub.isToolReadOnly("fixture", "read")).toBe(true);
+    expect(hub.isToolReadOnly("fixture", "write")).toBe(false);
+    expect(hub.getReadOnlyToolDefs().map((tool) => tool.name)).toEqual([
+      "fixture__read",
+    ]);
   });
 
   it("lets a server-wide opt-in make every MCP tool parallel-safe", async () => {
@@ -228,6 +233,8 @@ describe("McpClientHub protocol correctness", () => {
     await hub.connect([{ ...config, supportsParallelToolCalls: true }]);
 
     expect(hub.isToolParallelSafe("fixture", "write")).toBe(true);
+    expect(hub.isToolReadOnly("fixture", "write")).toBe(false);
+    expect(hub.getReadOnlyToolDefs()).toEqual([]);
   });
 
   it("validates output schemas from every paginated tool page", async () => {

@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.17.72",
+  "version": "1.17.75",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -330,9 +330,9 @@
           "scope": "window",
           "type": "number",
           "minimum": 1,
-          "maximum": 32,
-          "default": 6,
-          "description": "Maximum simultaneous streaming model requests per provider, shared by foreground sessions, background agents, maintenance work, and native web tools. Higher values improve parallel throughput but can increase provider rate-limit errors and usage costs."
+          "maximum": 128,
+          "default": 24,
+          "description": "Maximum simultaneous streaming model requests per provider for background agents, maintenance work, and native web tools. Foreground session requests are always admitted immediately and never wait on this limit. Higher values improve background parallel throughput but can increase provider rate-limit errors and usage costs."
         },
         "agentlink.webAccess.searchBackend": {
           "scope": "window",

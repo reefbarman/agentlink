@@ -1049,6 +1049,7 @@ export function activate(context: vscode.ExtensionContext): void {
     projectCustomizationRegistry,
     extVersion,
   );
+  chatViewProvider.setChatTabController(chatTabController);
 
   // Register providers after chatViewProvider is created so all auth logs
   // (including initial client construction) go to the agent output channel.

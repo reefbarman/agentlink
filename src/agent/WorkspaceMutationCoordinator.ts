@@ -13,12 +13,15 @@ export interface WorkspaceMutationStateStore {
 
 export interface WorkspaceMutationDomain {
   readonly roots: readonly string[];
+  /** Optional foreground agent-tree identity. Different trees coordinate independently. */
+  readonly scopeId?: string;
 }
 
 export interface WorkspaceMutationSnapshot {
   epoch: string;
   generation: number;
   ownerSessionId: string;
+  scopeId?: string;
 }
 
 export interface WorkspaceMutationConflict {
@@ -100,7 +103,10 @@ export class WorkspaceMutationCoordinator {
     }
   }
 
-  createDomain(roots: readonly string[]): WorkspaceMutationDomain {
+  createDomain(
+    roots: readonly string[],
+    scopeId?: string,
+  ): WorkspaceMutationDomain {
     const canonicalRoots = [
       ...new Set(
         roots.map((root) => pathToFileURL(canonicalizePath(root)).toString()),
@@ -109,7 +115,10 @@ export class WorkspaceMutationCoordinator {
     if (canonicalRoots.length === 0) {
       throw new Error("Workspace mutation domains require at least one root.");
     }
-    return Object.freeze({ roots: Object.freeze(canonicalRoots) });
+    return Object.freeze({
+      roots: Object.freeze(canonicalRoots),
+      ...(scopeId ? { scopeId } : {}),
+    });
   }
 
   acquire(
@@ -145,23 +154,29 @@ export class WorkspaceMutationCoordinator {
     });
   }
 
-  getSnapshot(root: string, ownerSessionId: string): WorkspaceMutationSnapshot {
+  getSnapshot(
+    root: string,
+    ownerSessionId: string,
+    scopeId?: string,
+  ): WorkspaceMutationSnapshot {
     const rootKey = this.toRootKey(root);
-    const state = this.rootState.get(rootKey);
+    const state = this.rootState.get(this.toStateKey(rootKey, scopeId));
     return {
       epoch: this.epoch,
       generation: state?.generation ?? 0,
       ownerSessionId,
+      ...(scopeId ? { scopeId } : {}),
     };
   }
 
   findConflict(
     root: string,
     checkpoint: WorkspaceMutationSnapshot,
+    scopeId = checkpoint.scopeId,
   ): WorkspaceMutationConflict | undefined {
     const rootKey = this.toRootKey(root);
-    const state = this.rootState.get(rootKey);
-    if (checkpoint.epoch !== this.epoch) {
+    const state = this.rootState.get(this.toStateKey(rootKey, scopeId));
+    if (checkpoint.epoch !== this.epoch || checkpoint.scopeId !== scopeId) {
       return {
         root: rootKey,
         checkpoint,
@@ -252,17 +267,19 @@ export class WorkspaceMutationCoordinator {
 
     const snapshots = new Map<string, WorkspaceMutationSnapshot>();
     for (const root of lease.domain.roots) {
-      const state = this.rootState.get(root) ?? {
+      const stateKey = this.toStateKey(root, lease.domain.scopeId);
+      const state = this.rootState.get(stateKey) ?? {
         generation: 0,
         latestGenerationBySession: new Map<string, number>(),
       };
       state.generation++;
       state.latestGenerationBySession.set(lease.sessionId, state.generation);
-      this.rootState.set(root, state);
+      this.rootState.set(stateKey, state);
       snapshots.set(root, {
         epoch: this.epoch,
         generation: state.generation,
         ownerSessionId: lease.sessionId,
+        ...(lease.domain.scopeId ? { scopeId: lease.domain.scopeId } : {}),
       });
     }
     lease.mutationSnapshots = snapshots;
@@ -279,6 +296,10 @@ export class WorkspaceMutationCoordinator {
     return root.startsWith("file:")
       ? root
       : pathToFileURL(canonicalizePath(root)).toString();
+  }
+
+  private toStateKey(root: string, scopeId?: string): string {
+    return scopeId ? `${scopeId}\u0000${root}` : root;
   }
 
   private persist(): Promise<void> {
@@ -369,7 +390,11 @@ class WorkspaceMutationLeaseImpl implements WorkspaceMutationLease {
   }
 
   snapshot(root: string): WorkspaceMutationSnapshot {
-    return this.coordinator.getSnapshot(root, this.sessionId);
+    return this.coordinator.getSnapshot(
+      root,
+      this.sessionId,
+      this.domain.scopeId,
+    );
   }
 
   release(): void {
@@ -383,6 +408,7 @@ function domainsIntersect(
   left: WorkspaceMutationDomain,
   right: WorkspaceMutationDomain,
 ): boolean {
+  if (left.scopeId !== right.scopeId) return false;
   const rightRoots = new Set(right.roots);
   return left.roots.some((root) => rightRoots.has(root));
 }

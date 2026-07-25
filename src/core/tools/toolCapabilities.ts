@@ -226,14 +226,6 @@ const toolCapabilities = [
     "policy",
     false,
   ),
-  metadata(
-    "start_worktree_agent",
-    "background",
-    ["worktree.manage", "agent.launch"],
-    "execute",
-    "always",
-    false,
-  ),
 
   // Language intelligence
   metadata(

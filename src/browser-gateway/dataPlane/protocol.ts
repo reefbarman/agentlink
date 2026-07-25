@@ -286,6 +286,8 @@ export interface BrowserGatewayTranscriptMessage {
       | "high"
       | "xhigh"
       | "max";
+    mode?: string;
+    commandApprovalPolicy?: "manual" | "safe" | "approve-for-me" | "sensitive";
     inputTokens: number;
     uncachedInputTokens?: number;
     cacheReadTokens?: number;
@@ -2258,6 +2260,8 @@ function parseApiRequest(
     "requestId",
     "model",
     "reasoningEffort",
+    "mode",
+    "commandApprovalPolicy",
     "inputTokens",
     "uncachedInputTokens",
     "cacheReadTokens",
@@ -2274,6 +2278,15 @@ function parseApiRequest(
   ) as NonNullable<
     BrowserGatewayTranscriptMessage["apiRequest"]
   >["reasoningEffort"];
+  const mode = optionalString(object, "mode", path, 256);
+  const commandApprovalPolicy = optionalEnum(
+    object,
+    "commandApprovalPolicy",
+    path,
+    new Set(["manual", "safe", "approve-for-me", "sensitive"]),
+  ) as NonNullable<
+    BrowserGatewayTranscriptMessage["apiRequest"]
+  >["commandApprovalPolicy"];
   const uncachedInputTokens = optionalNonNegativeInteger(
     object,
     "uncachedInputTokens",
@@ -2293,6 +2306,8 @@ function parseApiRequest(
     requestId: nonEmptyString(object.requestId, `${path}.requestId`, 256),
     model: nonEmptyString(object.model, `${path}.model`, 256),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(mode ? { mode } : {}),
+    ...(commandApprovalPolicy ? { commandApprovalPolicy } : {}),
     inputTokens: nonNegativeSafeInteger(
       object.inputTokens,
       `${path}.inputTokens`,

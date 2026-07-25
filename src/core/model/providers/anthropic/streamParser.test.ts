@@ -350,6 +350,24 @@ describe("parseAnthropicStreamEvents", () => {
     ).toContain("raw fetched content");
   });
 
+  it("passes the refusal stop reason through", async () => {
+    const events = await collect([
+      {
+        type: "message_start",
+        message: { usage: { input_tokens: 1 } },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "refusal" },
+        usage: { output_tokens: 0 },
+      },
+    ]);
+
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "model_stop", reason: "refusal" }),
+    );
+  });
+
   it("maps fetched-document citations by Anthropic document index", async () => {
     const events = await collect([
       {

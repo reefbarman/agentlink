@@ -100,6 +100,13 @@ function summarize(events, top) {
           jump.toolDefinitionDeltaTokens,
       );
     }
+    if (jump.prevAssistantOutputTokens > 0) {
+      sourceTotals.set(
+        "assistant_output",
+        (sourceTotals.get("assistant_output") ?? 0) +
+          jump.prevAssistantOutputTokens,
+      );
+    }
     if (jump.unattributedTokens > 0) {
       sourceTotals.set(
         "unattributed",
@@ -165,9 +172,13 @@ function printReport(summary) {
       `  ${jump.recordedAt ?? "?"}  +${fmt(jump.deltaTokens).padStart(9)} tokens ` +
         `(${fmt(jump.prevInputTokens)} -> ${fmt(jump.inputTokens)}, ${jump.model})` +
         (topSource ? `  top-source=${topSource[0]}:${fmt(topSource[1])}` : "") +
+        (Number.isFinite(jump.prevAssistantOutputTokens)
+          ? `  prev-output=${fmt(jump.prevAssistantOutputTokens)}`
+          : "") +
         (Number.isFinite(jump.unattributedTokens)
           ? `  unattributed=${fmt(jump.unattributedTokens)}`
-          : ""),
+          : "") +
+        (jump.modelChanged ? "  model-changed" : ""),
     );
   }
 

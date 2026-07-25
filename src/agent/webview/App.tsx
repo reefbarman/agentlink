@@ -36,6 +36,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -52,6 +53,8 @@ import { BtwPanel } from "./components/BtwPanel";
 import type { BtwState } from "./components/BtwPanel";
 import { WorktreeSetupPanel } from "./components/WorktreeSetupPanel";
 import { ChatHeader } from "./components/ChatHeader";
+import { ChatTabConfirmation } from "./components/ChatTabConfirmation";
+import { ChatSessionPane, ChatWorkspace } from "./components/ChatWorkspace";
 import { ChatView } from "./components/ChatView";
 import { ContextUsageRow } from "./components/ContextUsageRow";
 import { DebugInfo } from "./components/DebugInfo";
@@ -91,6 +94,12 @@ import {
   type WriteApprovalSelection,
 } from "../../shared/selectionCommands";
 import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy";
+import type {
+  ChatTabActionConfirmationRequest,
+  ChatWorkspaceViewSnapshot,
+} from "../chatTabProtocol";
+import { InactiveChatProjectionCache } from "./InactiveChatProjectionCache";
+import { addressChatWebviewMessage } from "./chatTabActions";
 import { useWebviewMessageConnection } from "./useWebviewMessageConnection";
 
 const DEFAULT_MAX_TOKENS = 200_000;
@@ -255,8 +264,24 @@ const streamingBaselineMetrics = __DEV_BUILD__
   ? getDevelopmentStreamingBaselineMetrics("vscode-webview", true)
   : undefined;
 
-export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
+export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [workspaceSnapshot, setWorkspaceSnapshot] =
+    useState<ChatWorkspaceViewSnapshot | null>(null);
+  const workspaceSnapshotRef = useRef<ChatWorkspaceViewSnapshot | null>(null);
+  workspaceSnapshotRef.current = workspaceSnapshot;
+  const inactiveProjectionCacheRef = useRef(new InactiveChatProjectionCache());
+  const vscodeApi = useMemo<VsCodeApi>(
+    () => ({
+      postMessage: (message) =>
+        hostVscodeApi.postMessage(
+          addressChatWebviewMessage(message, workspaceSnapshotRef.current),
+        ),
+      getState: () => hostVscodeApi.getState(),
+      setState: (nextState) => hostVscodeApi.setState(nextState),
+    }),
+    [hostVscodeApi],
+  );
   const stateRef = useRef(state.chatState);
   stateRef.current = state.chatState;
   const fullStateRef = useRef(state);
@@ -322,6 +347,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     useState<McpUrlElicitationRequest | null>(null);
   const [sessionHistory, setSessionHistory] = useState<SessionSummary[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [chatTabConfirmation, setChatTabConfirmation] =
+    useState<ChatTabActionConfirmationRequest | null>(null);
+  const [chatTabFailure, setChatTabFailure] = useState<string | null>(null);
   const [forwardedApproval, setForwardedApproval] =
     useState<ApprovalRequest | null>(null);
   const forwardedApprovalRef = useRef<ApprovalRequest | null>(null);
@@ -420,19 +448,69 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [],
   );
 
-  useWebviewMessageConnection({
+  const replayInactiveSessionMessage = useWebviewMessageConnection({
     vscodeApi,
     sessionIdRef: {
       get current() {
-        return stateRef.current.sessionId;
+        const snapshot = workspaceSnapshotRef.current;
+        const selected = snapshot?.tabs.find(
+          (tab) => tab.tabId === snapshot.focusedTabId,
+        );
+        return selected?.sessionId ?? stateRef.current.sessionId;
       },
     },
     streamingRef,
+    openSessionIdsRef: {
+      get current() {
+        return new Set(
+          workspaceSnapshotRef.current?.tabs.flatMap((tab) =>
+            tab.sessionId ? [tab.sessionId] : [],
+          ) ?? [],
+        );
+      },
+    },
     dispatchDelta: dispatch,
+    onInactiveSessionMessage: (msg) => {
+      inactiveProjectionCacheRef.current.append(msg);
+    },
     onMessage: (msg, controls) => {
       const { dropIfNotStreaming, flushDeltasNow } = controls;
 
       switch (msg.type) {
+        case "chatWorkspaceUpdate":
+          inactiveProjectionCacheRef.current.retainSessions(
+            new Set(
+              msg.snapshot.tabs.flatMap((tab) =>
+                tab.sessionId ? [tab.sessionId] : [],
+              ),
+            ),
+          );
+          setWorkspaceSnapshot(msg.snapshot);
+          setChatTabFailure(null);
+          break;
+        case "chatTabActionConfirmationRequested":
+          setChatTabConfirmation(msg.request);
+          break;
+        case "chatTabActionRejected":
+          setWorkspaceSnapshot(msg.rejection.snapshot);
+          setChatTabConfirmation(null);
+          setChatTabFailure(
+            "That chat tab changed. Please try the action again.",
+          );
+          break;
+        case "chatTabActionFailed":
+          setWorkspaceSnapshot(msg.failure.snapshot);
+          setChatTabConfirmation(null);
+          setChatTabFailure(
+            msg.failure.reason === "close_blocked"
+              ? "At least one chat tab must remain open."
+              : msg.failure.reason === "session_not_found"
+                ? "That saved chat is no longer available."
+                : msg.failure.reason === "invalid_order"
+                  ? "The tab order changed before it could be saved."
+                  : "The chat tab could not be updated.",
+          );
+          break;
         case "stateUpdate":
           streamingRef.current = Boolean(msg.state.streaming);
           dispatch({ type: "SET_STATE", state: msg.state });
@@ -540,6 +618,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             requestId: msg.requestId,
             model: msg.model,
             reasoningEffort: msg.reasoningEffort,
+            mode: msg.mode,
+            commandApprovalPolicy: msg.commandApprovalPolicy,
             inputTokens: msg.inputTokens,
             uncachedInputTokens: msg.uncachedInputTokens,
             outputTokens: msg.outputTokens,
@@ -685,10 +765,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
         }
         case "agentModeSwitchRequest":
-          // Agent requested a mode switch — create a new session in the new mode
-          // but do NOT clear the current chat history (it stays visible while the
-          // new session is being created; the next stateUpdate will set the new sessionId)
-          vscodeApi.postMessage({ command: "agentNewSession", mode: msg.mode });
+          vscodeApi.postMessage({ command: "chatTabNewChat", mode: msg.mode });
           break;
         case "agentFormElicitationRequest":
           setElicitation(msg.request);
@@ -863,6 +940,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           if (msg.restored && !startupRestorePendingRef.current) {
             break;
           }
+          const inactiveEvents = inactiveProjectionCacheRef.current.take(
+            msg.sessionId,
+          );
           startupRestorePendingRef.current = false;
           historyLoadPendingRef.current = false;
           loadingSessionIdRef.current = msg.sessionId;
@@ -886,6 +966,13 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             hasMoreBefore: msg.hasMoreBefore,
           });
           setShowHistory(false);
+          if (inactiveEvents.length > 0) {
+            setTimeout(() => {
+              for (const inactiveEvent of inactiveEvents) {
+                replayInactiveSessionMessage(inactiveEvent);
+              }
+            }, 0);
+          }
           break;
         }
 
@@ -1979,11 +2066,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     (projectId?: string) => {
       startupRestorePendingRef.current = false;
       dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
-      dispatch({ type: "NEW_SESSION" });
-      setBgSessions([]);
       setTranscriptView(null);
       vscodeApi.postMessage({
-        command: "agentNewSession",
+        command: "chatTabNewChat",
         mode: stateRef.current.mode,
         projectId,
       });
@@ -2004,10 +2089,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
       } else {
         startupRestorePendingRef.current = false;
         dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
-        dispatch({ type: "NEW_SESSION" });
-        setBgSessions([]);
         setTranscriptView(null);
-        vscodeApi.postMessage({ command: "agentNewSession", mode: slug });
+        vscodeApi.postMessage({ command: "chatTabNewChat", mode: slug });
       }
     },
     [vscodeApi],
@@ -2075,11 +2158,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         case "new":
           startupRestorePendingRef.current = false;
           dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
-          dispatch({ type: "NEW_SESSION" });
-          setBgSessions([]);
           setTranscriptView(null);
           vscodeApi.postMessage({
-            command: "agentNewSession",
+            command: "chatTabNewChat",
             mode: stateRef.current.mode,
           });
           break;
@@ -2456,10 +2537,81 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
 
   const handleLoadSession = useCallback(
     (sessionId: string) => {
-      vscodeApi.postMessage({ command: "agentLoadSession", sessionId });
+      vscodeApi.postMessage({
+        command: "chatTabLoadSession",
+        targetSessionId: sessionId,
+      });
     },
     [vscodeApi],
   );
+
+  const findWorkspaceTab = useCallback(
+    (tabId: string) =>
+      workspaceSnapshotRef.current?.tabs.find((tab) => tab.tabId === tabId),
+    [],
+  );
+  const handleFocusChatTab = useCallback(
+    (tabId: string) => {
+      const tab = findWorkspaceTab(tabId);
+      if (!tab) return;
+      setTranscriptView(null);
+      setShowHistory(false);
+      setChatTabFailure(null);
+      vscodeApi.postMessage({
+        command: "chatTabFocus",
+        tabId: tab.tabId,
+        sessionId: tab.sessionId,
+      });
+    },
+    [findWorkspaceTab, vscodeApi],
+  );
+  const handleNewChatTab = useCallback(() => {
+    setTranscriptView(null);
+    setShowHistory(false);
+    setChatTabFailure(null);
+    vscodeApi.postMessage({
+      command: "chatTabNew",
+      mode: stateRef.current.mode,
+    });
+  }, [vscodeApi]);
+  const handleCloseChatTab = useCallback(
+    (tabId: string) => {
+      const tab = findWorkspaceTab(tabId);
+      if (!tab) return;
+      setChatTabFailure(null);
+      vscodeApi.postMessage({
+        command: "chatTabClose",
+        tabId: tab.tabId,
+        sessionId: tab.sessionId,
+      });
+    },
+    [findWorkspaceTab, vscodeApi],
+  );
+  const handleReorderChatTabs = useCallback(
+    (tabIds: string[]) => {
+      vscodeApi.postMessage({ command: "chatTabReorder", tabIds });
+    },
+    [vscodeApi],
+  );
+  const handleConfirmChatTabAction = useCallback(() => {
+    const request = chatTabConfirmation;
+    if (!request) return;
+    setChatTabConfirmation(null);
+    vscodeApi.postMessage({
+      command: request.command,
+      ...request.address,
+      mode: request.mode,
+      projectId: request.projectId,
+      targetSessionId: request.targetSessionId,
+      stopRunning: true,
+    });
+  }, [chatTabConfirmation, vscodeApi]);
+  const selectedWorkspaceTab = workspaceSnapshot?.tabs.find(
+    (tab) => tab.tabId === workspaceSnapshot.focusedTabId,
+  );
+  const selectedTabKey = selectedWorkspaceTab
+    ? `${selectedWorkspaceTab.tabId}:${selectedWorkspaceTab.sessionId ?? "new"}`
+    : "legacy";
 
   const handleDeleteSession = useCallback(
     (sessionId: string) => {
@@ -2611,651 +2763,705 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onCancel={handleUrlElicitCancel}
         />
       )}
-      <div
-        class="chat-container"
-        onDragEnter={handleContainerDragEnter}
-        onDragOver={handleContainerDragOver}
-        onDragLeave={handleContainerDragLeave}
-        onDrop={handleContainerDrop}
+      {chatTabConfirmation && (
+        <ChatTabConfirmation
+          request={chatTabConfirmation}
+          onConfirm={handleConfirmChatTabAction}
+          onCancel={() => setChatTabConfirmation(null)}
+        />
+      )}
+      <ChatWorkspace
+        snapshot={workspaceSnapshot}
+        onFocus={handleFocusChatTab}
+        onNewTab={handleNewChatTab}
+        onClose={handleCloseChatTab}
+        onReorder={handleReorderChatTabs}
       >
-        {transcriptView && (
-          <TranscriptView
-            task={transcriptView.task}
-            sessionId={transcriptView.sessionId}
-            messages={transcriptView.messages}
-            streaming={transcriptView.streaming}
-            statusOverride={transcriptView.statusOverride}
-            runtimeStatus={bgSessions.find(
-              (session) => session.id === transcriptView.sessionId,
+        <ChatSessionPane tabKey={selectedTabKey}>
+          <div
+            class="chat-container"
+            onDragEnter={handleContainerDragEnter}
+            onDragOver={handleContainerDragOver}
+            onDragLeave={handleContainerDragLeave}
+            onDrop={handleContainerDrop}
+          >
+            {chatTabFailure && (
+              <div class="chat-tab-failure" role="alert">
+                <i class="codicon codicon-warning" />
+                <span>{chatTabFailure}</span>
+                <button
+                  type="button"
+                  class="icon-button"
+                  onClick={() => setChatTabFailure(null)}
+                  title="Dismiss"
+                  aria-label="Dismiss tab message"
+                >
+                  <i class="codicon codicon-close" />
+                </button>
+              </div>
             )}
-            todos={transcriptView.todos}
-            onOpenFile={handleOpenFile}
-            onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}
-            onRetry={() => handleRetryBackground(transcriptView.sessionId)}
-            onSignIn={handleErrorSignIn}
-            onSignInAnotherAccount={handleErrorSignInAnotherAccount}
-            bgSessions={bgSessions}
-            onStopBackground={handleStopBackground}
-            onOpenTranscript={handleOpenBgTranscript}
-            onClose={() => setTranscriptView(null)}
-          />
-        )}
-        {shiftDragOver && (
-          <div class="drop-overlay">
-            <div class="drop-overlay-content">
-              <i class="codicon codicon-attach" />
-              <span>Drop to attach files</span>
-            </div>
-          </div>
-        )}
-        <ChatHeader
-          restoringSession={state.restoringSession}
-          showHistory={showHistory}
-          onNewSession={handleNewSession}
-          onShowHistory={handleShowHistory}
-        />
-        {showHistory && (
-          <SessionHistory
-            sessions={sessionHistory}
-            currentSessionId={state.chatState.sessionId}
-            onLoad={handleLoadSession}
-            onDelete={handleDeleteSession}
-            onRename={handleRenameSession}
-            onCopyFirstPrompt={handleCopyFirstPrompt}
-            onNewInProject={(projectId) => {
-              handleNewSession(projectId);
-              setShowHistory(false);
-            }}
-            onClose={() => setShowHistory(false)}
-          />
-        )}
-        {state.revertRecoveryNotice && (
-          <div class="revert-recovery-notice" role="alert">
-            <i class="codicon codicon-warning" />
-            <div>
-              <strong>{state.revertRecoveryNotice.title}</strong>
-              <span>{state.revertRecoveryNotice.message}</span>
-            </div>
-          </div>
-        )}
-        {state.debugInfo && (
-          <DebugInfo
-            info={state.debugInfo}
-            systemPrompt={state.systemPrompt}
-            loadedInstructions={state.loadedInstructions ?? undefined}
-          />
-        )}
-        <ChatView
-          messages={state.messages}
-          streaming={state.streaming}
-          sessionId={state.chatState.sessionId}
-          originalPrompt={state.originalPrompt}
-          earlierUserTurnCount={state.loadedUserTurnOffset}
-          onLoadEarlierMessages={handleLoadEarlierSessionMessages}
-          detectedQuestion={state.detectedQuestion}
-          onDetectedQuestionAnswer={handleDetectedQuestionAnswer}
-          onDismissDetectedQuestion={handleDismissDetectedQuestion}
-          onOpenFile={handleOpenFile}
-          onRevealToolCallTerminal={handleRevealToolCallTerminal}
-          onContinueToolCallInBackground={handleContinueToolCallInBackground}
-          onCompleteToolCall={handleCompleteToolCall}
-          onCancelToolCall={handleCancelToolCall}
-          onPromoteMcpToolApproval={handlePromoteMcpToolApproval}
-          onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}
-          onRevertCheckpoint={handleRevertCheckpoint}
-          onViewCheckpointDiff={handleViewCheckpointDiff}
-          onRetry={handleRetry}
-          onSignIn={handleErrorSignIn}
-          onSignInAnotherAccount={handleErrorSignInAnotherAccount}
-          onCondense={handleErrorCondense}
-          bgSessions={bgSessions}
-          onStopBackground={handleStopBackground}
-          onOpenTranscript={handleOpenBgTranscript}
-          onFinalMarkerContinue={handleFinalMarkerContinue}
-          streamingMetrics={streamingBaselineMetrics}
-          streamingMetricsSurface="vscode-webview"
-          streamingMetricsScope={state.chatState.sessionId ?? "foreground"}
-        />
-        <ChatActivityShelf
-          revealKey={forwardedApproval?.id ?? null}
-          revealMinHeight={approvalPanelHeight + 10}
-        >
-          <MessageQueuePanel
-            queue={state.messageQueue}
-            onSteer={(item) => {
-              const nextQueue = messageQueueRef.current.filter(
-                (q) => q.id !== item.id,
-              );
-              messageQueueRef.current = nextQueue;
-              dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
-              vscodeApi.postMessage({
-                command: "agentSteerQueuedMessage",
-                sessionId: stateRef.current.sessionId,
-                queueId: item.id,
-                text: item.fullText ?? item.text,
-                displayText: item.text,
-                isSlashCommand: item.isSlashCommand === true,
-                slashCommandLabel: item.slashCommandLabel,
-                attachments: item.attachments,
-                images: item.images,
-                documents: item.documents,
-              });
-            }}
-            onInterject={(item) => {
-              vscodeApi.postMessage({
-                command: "agentInterjectQueuedMessage",
-                sessionId: stateRef.current.sessionId,
-                queueId: item.id,
-                text: item.fullText ?? item.text,
-                displayText: item.text,
-                isSlashCommand: item.isSlashCommand === true,
-                slashCommandLabel: item.slashCommandLabel,
-                attachments: item.attachments,
-                images: item.images,
-                documents: item.documents,
-              });
-            }}
-            onEdit={(item, text) => {
-              messageQueueRef.current = messageQueueRef.current.map((queued) =>
-                queued.id === item.id
-                  ? {
-                      ...queued,
-                      text,
-                      fullText: text,
-                      isSlashCommand: false,
-                      slashCommandLabel: undefined,
-                    }
-                  : queued,
-              );
-              dispatch({
-                type: "EDIT_QUEUE_MESSAGE",
-                id: item.id,
-                text,
-              });
-              vscodeApi.postMessage({
-                command: "agentUpdateQueuedMessage",
-                sessionId: stateRef.current.sessionId,
-                queueId: item.id,
-                text,
-                displayText: text,
-                isSlashCommand: false,
-                attachments: item.attachments,
-                images: item.images,
-                documents: item.documents,
-              });
-            }}
-            onEditingChange={(item, editing) => {
-              if (editing) {
-                editingQueuedMessageRef.current = {
-                  id: item.id,
-                  resumeInterjection: item.interjectionReady === true,
-                };
-                if (item.interjectionReady) {
+            {transcriptView && (
+              <TranscriptView
+                task={transcriptView.task}
+                sessionId={transcriptView.sessionId}
+                messages={transcriptView.messages}
+                streaming={transcriptView.streaming}
+                statusOverride={transcriptView.statusOverride}
+                runtimeStatus={bgSessions.find(
+                  (session) => session.id === transcriptView.sessionId,
+                )}
+                todos={transcriptView.todos}
+                onOpenFile={handleOpenFile}
+                onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}
+                onRetry={() => handleRetryBackground(transcriptView.sessionId)}
+                onSignIn={handleErrorSignIn}
+                onSignInAnotherAccount={handleErrorSignInAnotherAccount}
+                bgSessions={bgSessions}
+                onStopBackground={handleStopBackground}
+                onOpenTranscript={handleOpenBgTranscript}
+                onClose={() => setTranscriptView(null)}
+              />
+            )}
+            {shiftDragOver && (
+              <div class="drop-overlay">
+                <div class="drop-overlay-content">
+                  <i class="codicon codicon-attach" />
+                  <span>Drop to attach files</span>
+                </div>
+              </div>
+            )}
+            <ChatHeader
+              restoringSession={state.restoringSession}
+              showHistory={showHistory}
+              onNewSession={handleNewSession}
+              onShowHistory={handleShowHistory}
+            />
+            {showHistory && (
+              <SessionHistory
+                sessions={sessionHistory}
+                currentSessionId={state.chatState.sessionId}
+                onLoad={handleLoadSession}
+                onDelete={handleDeleteSession}
+                onRename={handleRenameSession}
+                onCopyFirstPrompt={handleCopyFirstPrompt}
+                onNewInProject={(projectId) => {
+                  handleNewSession(projectId);
+                  setShowHistory(false);
+                }}
+                onClose={() => setShowHistory(false)}
+              />
+            )}
+            {state.revertRecoveryNotice && (
+              <div class="revert-recovery-notice" role="alert">
+                <i class="codicon codicon-warning" />
+                <div>
+                  <strong>{state.revertRecoveryNotice.title}</strong>
+                  <span>{state.revertRecoveryNotice.message}</span>
+                </div>
+              </div>
+            )}
+            {state.debugInfo && (
+              <DebugInfo
+                info={state.debugInfo}
+                systemPrompt={state.systemPrompt}
+                loadedInstructions={state.loadedInstructions ?? undefined}
+              />
+            )}
+            <ChatView
+              messages={state.messages}
+              streaming={state.streaming}
+              sessionId={state.chatState.sessionId}
+              originalPrompt={state.originalPrompt}
+              earlierUserTurnCount={state.loadedUserTurnOffset}
+              onLoadEarlierMessages={handleLoadEarlierSessionMessages}
+              detectedQuestion={state.detectedQuestion}
+              onDetectedQuestionAnswer={handleDetectedQuestionAnswer}
+              onDismissDetectedQuestion={handleDismissDetectedQuestion}
+              onOpenFile={handleOpenFile}
+              onRevealToolCallTerminal={handleRevealToolCallTerminal}
+              onContinueToolCallInBackground={
+                handleContinueToolCallInBackground
+              }
+              onCompleteToolCall={handleCompleteToolCall}
+              onCancelToolCall={handleCancelToolCall}
+              onPromoteMcpToolApproval={handlePromoteMcpToolApproval}
+              onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}
+              onRevertCheckpoint={handleRevertCheckpoint}
+              onViewCheckpointDiff={handleViewCheckpointDiff}
+              onRetry={handleRetry}
+              onSignIn={handleErrorSignIn}
+              onSignInAnotherAccount={handleErrorSignInAnotherAccount}
+              onCondense={handleErrorCondense}
+              bgSessions={bgSessions}
+              onStopBackground={handleStopBackground}
+              onOpenTranscript={handleOpenBgTranscript}
+              onFinalMarkerContinue={handleFinalMarkerContinue}
+              streamingMetrics={streamingBaselineMetrics}
+              streamingMetricsSurface="vscode-webview"
+              streamingMetricsScope={state.chatState.sessionId ?? "foreground"}
+            />
+            <ChatActivityShelf
+              revealKey={forwardedApproval?.id ?? null}
+              revealMinHeight={approvalPanelHeight + 10}
+            >
+              <MessageQueuePanel
+                queue={state.messageQueue}
+                onSteer={(item) => {
+                  const nextQueue = messageQueueRef.current.filter(
+                    (q) => q.id !== item.id,
+                  );
+                  messageQueueRef.current = nextQueue;
+                  dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
                   vscodeApi.postMessage({
-                    command: "agentPauseQueuedMessageInterjection",
+                    command: "agentSteerQueuedMessage",
+                    sessionId: stateRef.current.sessionId,
+                    queueId: item.id,
+                    text: item.fullText ?? item.text,
+                    displayText: item.text,
+                    isSlashCommand: item.isSlashCommand === true,
+                    slashCommandLabel: item.slashCommandLabel,
+                    attachments: item.attachments,
+                    images: item.images,
+                    documents: item.documents,
+                  });
+                }}
+                onInterject={(item) => {
+                  vscodeApi.postMessage({
+                    command: "agentInterjectQueuedMessage",
+                    sessionId: stateRef.current.sessionId,
+                    queueId: item.id,
+                    text: item.fullText ?? item.text,
+                    displayText: item.text,
+                    isSlashCommand: item.isSlashCommand === true,
+                    slashCommandLabel: item.slashCommandLabel,
+                    attachments: item.attachments,
+                    images: item.images,
+                    documents: item.documents,
+                  });
+                }}
+                onEdit={(item, text) => {
+                  messageQueueRef.current = messageQueueRef.current.map(
+                    (queued) =>
+                      queued.id === item.id
+                        ? {
+                            ...queued,
+                            text,
+                            fullText: text,
+                            isSlashCommand: false,
+                            slashCommandLabel: undefined,
+                          }
+                        : queued,
+                  );
+                  dispatch({
+                    type: "EDIT_QUEUE_MESSAGE",
+                    id: item.id,
+                    text,
+                  });
+                  vscodeApi.postMessage({
+                    command: "agentUpdateQueuedMessage",
+                    sessionId: stateRef.current.sessionId,
+                    queueId: item.id,
+                    text,
+                    displayText: text,
+                    isSlashCommand: false,
+                    attachments: item.attachments,
+                    images: item.images,
+                    documents: item.documents,
+                  });
+                }}
+                onEditingChange={(item, editing) => {
+                  if (editing) {
+                    editingQueuedMessageRef.current = {
+                      id: item.id,
+                      resumeInterjection: item.interjectionReady === true,
+                    };
+                    if (item.interjectionReady) {
+                      vscodeApi.postMessage({
+                        command: "agentPauseQueuedMessageInterjection",
+                        sessionId: stateRef.current.sessionId,
+                        queueId: item.id,
+                      });
+                    }
+                    return;
+                  }
+
+                  const edit = editingQueuedMessageRef.current;
+                  editingQueuedMessageRef.current = null;
+                  if (
+                    edit?.id !== item.id ||
+                    !edit.resumeInterjection ||
+                    !streamingRef.current
+                  ) {
+                    return;
+                  }
+                  const updatedItem = messageQueueRef.current.find(
+                    (queued) => queued.id === item.id,
+                  );
+                  if (!updatedItem) return;
+                  vscodeApi.postMessage({
+                    command: "agentInterjectQueuedMessage",
+                    sessionId: stateRef.current.sessionId,
+                    queueId: updatedItem.id,
+                    text: updatedItem.fullText ?? updatedItem.text,
+                    displayText: updatedItem.text,
+                    isSlashCommand: updatedItem.isSlashCommand === true,
+                    slashCommandLabel: updatedItem.slashCommandLabel,
+                    attachments: updatedItem.attachments,
+                    images: updatedItem.images,
+                    documents: updatedItem.documents,
+                  });
+                }}
+                onRemove={(item) => {
+                  const nextQueue = messageQueueRef.current.filter(
+                    (q) => q.id !== item.id,
+                  );
+                  messageQueueRef.current = nextQueue;
+                  dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
+                  // Always notify the extension: a VS Code-sourced message may be
+                  // registered as a pending interjection, and without this the
+                  // deleted message would still be injected at the next tool break.
+                  vscodeApi.postMessage({
+                    command: "agentRemoveQueuedMessage",
                     sessionId: stateRef.current.sessionId,
                     queueId: item.id,
                   });
-                }
-                return;
-              }
-
-              const edit = editingQueuedMessageRef.current;
-              editingQueuedMessageRef.current = null;
-              if (
-                edit?.id !== item.id ||
-                !edit.resumeInterjection ||
-                !streamingRef.current
-              ) {
-                return;
-              }
-              const updatedItem = messageQueueRef.current.find(
-                (queued) => queued.id === item.id,
-              );
-              if (!updatedItem) return;
-              vscodeApi.postMessage({
-                command: "agentInterjectQueuedMessage",
-                sessionId: stateRef.current.sessionId,
-                queueId: updatedItem.id,
-                text: updatedItem.fullText ?? updatedItem.text,
-                displayText: updatedItem.text,
-                isSlashCommand: updatedItem.isSlashCommand === true,
-                slashCommandLabel: updatedItem.slashCommandLabel,
-                attachments: updatedItem.attachments,
-                images: updatedItem.images,
-                documents: updatedItem.documents,
-              });
-            }}
-            onRemove={(item) => {
-              const nextQueue = messageQueueRef.current.filter(
-                (q) => q.id !== item.id,
-              );
-              messageQueueRef.current = nextQueue;
-              dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
-              // Always notify the extension: a VS Code-sourced message may be
-              // registered as a pending interjection, and without this the
-              // deleted message would still be injected at the next tool break.
-              vscodeApi.postMessage({
-                command: "agentRemoveQueuedMessage",
-                sessionId: stateRef.current.sessionId,
-                queueId: item.id,
-              });
-            }}
-          />
-          <ContextUsageRow
-            inputTokens={state.lastInputTokens}
-            outputTokens={state.lastOutputTokens}
-            cacheReadTokens={state.lastCacheReadTokens}
-            estimatedTotalUsed={state.estimatedTotalUsed}
-            models={state.availableModels}
-            modelId={state.chatState.model}
-            contextBudget={state.chatState.contextBudget}
-            condenseThreshold={state.chatState.condenseThreshold}
-            defaultMaxTokens={DEFAULT_MAX_TOKENS}
-          />
-          {mcpManagerSnapshot && (
-            <McpManagerPanel
-              snapshot={mcpManagerSnapshot}
-              initialView={mcpManagerView}
-              onClose={() => setMcpManagerSnapshot(null)}
-              onRefresh={() =>
-                vscodeApi.postMessage({
-                  command: "agentMcpSelectProject",
-                  projectId: mcpManagerSnapshot.project?.projectId,
-                  refresh: true,
-                })
-              }
-              onSelectProject={(projectId) =>
-                vscodeApi.postMessage({
-                  command: "agentMcpSelectProject",
-                  projectId,
-                })
-              }
-              onServerAction={(serverName, action) =>
-                vscodeApi.postMessage({
-                  command: "agentMcpAction",
-                  serverName,
-                  action,
-                  projectId: mcpManagerSnapshot.project?.projectId,
-                })
-              }
-              onOpenRawConfig={(scope: McpManagerScope) =>
-                vscodeApi.postMessage({
-                  command: "agentMcpConfigOpenRaw",
-                  profile: mcpManagerSnapshot.profile,
-                  scope,
-                  projectId: mcpManagerSnapshot.project?.projectId,
-                })
-              }
-              onMutateConfig={(mutation: McpConfigBatchMutation) =>
-                new Promise<McpConfigMutationResult>((resolve, reject) => {
-                  const timer = setTimeout(() => {
-                    mcpMutationResolversRef.current.delete(
-                      mutation.operationId,
-                    );
-                    reject(
-                      new Error(
-                        "The MCP configuration save timed out. Refresh the manager before retrying.",
+                }}
+              />
+              <ContextUsageRow
+                inputTokens={state.lastInputTokens}
+                outputTokens={state.lastOutputTokens}
+                cacheReadTokens={state.lastCacheReadTokens}
+                estimatedTotalUsed={state.estimatedTotalUsed}
+                models={state.availableModels}
+                modelId={state.chatState.model}
+                contextBudget={state.chatState.contextBudget}
+                condenseThreshold={state.chatState.condenseThreshold}
+                defaultMaxTokens={DEFAULT_MAX_TOKENS}
+              />
+              {mcpManagerSnapshot && (
+                <McpManagerPanel
+                  snapshot={mcpManagerSnapshot}
+                  initialView={mcpManagerView}
+                  onClose={() => setMcpManagerSnapshot(null)}
+                  onRefresh={() =>
+                    vscodeApi.postMessage({
+                      command: "agentMcpSelectProject",
+                      projectId: mcpManagerSnapshot.project?.projectId,
+                      refresh: true,
+                    })
+                  }
+                  onSelectProject={(projectId) =>
+                    vscodeApi.postMessage({
+                      command: "agentMcpSelectProject",
+                      projectId,
+                    })
+                  }
+                  onServerAction={(serverName, action) =>
+                    vscodeApi.postMessage({
+                      command: "agentMcpAction",
+                      serverName,
+                      action,
+                      projectId: mcpManagerSnapshot.project?.projectId,
+                    })
+                  }
+                  onOpenRawConfig={(scope: McpManagerScope) =>
+                    vscodeApi.postMessage({
+                      command: "agentMcpConfigOpenRaw",
+                      profile: mcpManagerSnapshot.profile,
+                      scope,
+                      projectId: mcpManagerSnapshot.project?.projectId,
+                    })
+                  }
+                  onMutateConfig={(mutation: McpConfigBatchMutation) =>
+                    new Promise<McpConfigMutationResult>((resolve, reject) => {
+                      const timer = setTimeout(() => {
+                        mcpMutationResolversRef.current.delete(
+                          mutation.operationId,
+                        );
+                        reject(
+                          new Error(
+                            "The MCP configuration save timed out. Refresh the manager before retrying.",
+                          ),
+                        );
+                      }, MCP_CONFIG_MUTATION_TIMEOUT_MS);
+                      mcpMutationResolversRef.current.set(
+                        mutation.operationId,
+                        {
+                          resolve,
+                          reject,
+                          timer,
+                        },
+                      );
+                      vscodeApi.postMessage({
+                        command: "agentMcpConfigMutate",
+                        mutation,
+                      });
+                    })
+                  }
+                  onSaveServer={(scope, server) =>
+                    vscodeApi.postMessage({
+                      command: "agentMcpConfigSave",
+                      profile: mcpManagerSnapshot.profile,
+                      scope,
+                      projectId: mcpManagerSnapshot.project?.projectId,
+                      server,
+                    })
+                  }
+                  onRemoveServer={(scope, serverName) =>
+                    vscodeApi.postMessage({
+                      command: "agentMcpConfigRemove",
+                      profile: mcpManagerSnapshot.profile,
+                      scope,
+                      projectId: mcpManagerSnapshot.project?.projectId,
+                      serverName,
+                    })
+                  }
+                />
+              )}
+              {providerUsage && (
+                <ProviderUsagePanel
+                  data={providerUsage}
+                  onClose={() => setProviderUsage(null)}
+                  onRefresh={() =>
+                    vscodeApi.postMessage({
+                      command: "agentSlashCommand",
+                      name: "usage",
+                      args: "",
+                    })
+                  }
+                />
+              )}
+              {state.todos.length > 0 && <TodoPanel todos={state.todos} />}
+              {state.questionRequest && (
+                <QuestionCard
+                  id={state.questionRequest.id}
+                  context={state.questionRequest.context}
+                  questions={state.questionRequest.questions}
+                  backgroundTask={state.questionRequest.backgroundTask}
+                  modes={state.modes}
+                  attachmentCounts={Object.fromEntries(
+                    Object.entries(questionAttachments).map(
+                      ([questionId, value]) => [
+                        questionId,
+                        value.paths.length + value.media.length,
+                      ],
+                    ),
+                  )}
+                  onEditOtherContext={setQuestionContextMode}
+                  remoteProgress={
+                    remoteQuestionProgress &&
+                    remoteQuestionProgress.id === state.questionRequest.id
+                      ? {
+                          step: remoteQuestionProgress.step,
+                          answers: remoteQuestionProgress.answers,
+                          notes: remoteQuestionProgress.notes,
+                        }
+                      : null
+                  }
+                  onProgressChange={(progress) => {
+                    if (!state.questionRequest) return;
+                    vscodeApi.postMessage({
+                      command: "agentQuestionProgress",
+                      id: state.questionRequest.id,
+                      step: progress.step,
+                      answers: progress.answers,
+                      notes: progress.notes,
+                      origin: questionProgressOriginRef.current,
+                    });
+                  }}
+                  onSubmit={(
+                    id: string,
+                    answers: Record<
+                      string,
+                      string | string[] | number | boolean | undefined
+                    >,
+                    notes: Record<string, string>,
+                  ) => {
+                    const attachments = Object.fromEntries(
+                      Object.entries(questionAttachments).flatMap(
+                        ([questionId, value]) => {
+                          const items = [
+                            ...value.paths.map((path) => ({
+                              kind: "file" as const,
+                              name: path.split(/[\\/]/).pop() || path,
+                              path,
+                            })),
+                            ...value.media.map((media) => ({
+                              kind: media.kind,
+                              name: media.name,
+                              mimeType: media.mimeType,
+                              base64: media.base64,
+                            })),
+                          ];
+                          return items.length > 0 ? [[questionId, items]] : [];
+                        },
                       ),
                     );
-                  }, MCP_CONFIG_MUTATION_TIMEOUT_MS);
-                  mcpMutationResolversRef.current.set(mutation.operationId, {
-                    resolve,
-                    reject,
-                    timer,
-                  });
-                  vscodeApi.postMessage({
-                    command: "agentMcpConfigMutate",
-                    mutation,
-                  });
-                })
-              }
-              onSaveServer={(scope, server) =>
-                vscodeApi.postMessage({
-                  command: "agentMcpConfigSave",
-                  profile: mcpManagerSnapshot.profile,
-                  scope,
-                  projectId: mcpManagerSnapshot.project?.projectId,
-                  server,
-                })
-              }
-              onRemoveServer={(scope, serverName) =>
-                vscodeApi.postMessage({
-                  command: "agentMcpConfigRemove",
-                  profile: mcpManagerSnapshot.profile,
-                  scope,
-                  projectId: mcpManagerSnapshot.project?.projectId,
-                  serverName,
-                })
-              }
-            />
-          )}
-          {providerUsage && (
-            <ProviderUsagePanel
-              data={providerUsage}
-              onClose={() => setProviderUsage(null)}
-              onRefresh={() =>
-                vscodeApi.postMessage({
-                  command: "agentSlashCommand",
-                  name: "usage",
-                  args: "",
-                })
-              }
-            />
-          )}
-          {state.todos.length > 0 && <TodoPanel todos={state.todos} />}
-          {state.questionRequest && (
-            <QuestionCard
-              id={state.questionRequest.id}
-              context={state.questionRequest.context}
-              questions={state.questionRequest.questions}
-              backgroundTask={state.questionRequest.backgroundTask}
-              modes={state.modes}
-              attachmentCounts={Object.fromEntries(
-                Object.entries(questionAttachments).map(
-                  ([questionId, value]) => [
-                    questionId,
-                    value.paths.length + value.media.length,
-                  ],
-                ),
+                    dispatch({ type: "CLEAR_QUESTION" });
+                    setRemoteQuestionProgress(null);
+                    setQuestionContextMode(null);
+                    setQuestionAttachments({});
+                    vscodeApi.postMessage({
+                      command: "agentQuestionResponse",
+                      id,
+                      answers,
+                      notes,
+                      attachments,
+                    });
+                  }}
+                />
               )}
-              onEditOtherContext={setQuestionContextMode}
-              remoteProgress={
-                remoteQuestionProgress &&
-                remoteQuestionProgress.id === state.questionRequest.id
-                  ? {
-                      step: remoteQuestionProgress.step,
-                      answers: remoteQuestionProgress.answers,
-                      notes: remoteQuestionProgress.notes,
+              {forwardedApproval && (
+                <ApprovalPanelEmbed
+                  request={forwardedApproval}
+                  height={approvalPanelHeight}
+                  resizing={approvalResizing}
+                  followUpRef={forwardedFollowUpRef}
+                  submit={handleForwardedApprovalSubmit}
+                  onResizeStart={handleApprovalResizeStart}
+                  onSuggestRegex={handleSuggestRegex}
+                />
+              )}
+              {btwState && (
+                <BtwPanel
+                  state={btwState}
+                  onDismiss={() => {
+                    if (btwState && !btwState.done && !btwState.error) {
+                      vscodeApi.postMessage({
+                        command: "agentBtwCancel",
+                        requestId: btwState.requestId,
+                      });
                     }
+                    setBtwState(null);
+                  }}
+                  onCancel={(requestId) =>
+                    vscodeApi.postMessage({
+                      command: "agentBtwCancel",
+                      requestId,
+                    })
+                  }
+                  onPromote={(question, answer) => {
+                    vscodeApi.postMessage({
+                      command: "agentBtwPromote",
+                      question,
+                      answer,
+                    });
+                    setBtwState(null);
+                  }}
+                />
+              )}
+              {worktreeSetupState && (
+                <WorktreeSetupPanel
+                  key={worktreeSetupState.requestId}
+                  state={worktreeSetupState}
+                  onCancel={(requestId) => {
+                    vscodeApi.postMessage({
+                      command: "agentWorktreeSetupCancel",
+                      requestId,
+                    });
+                  }}
+                  onDismiss={() => {
+                    if (
+                      worktreeSetupState.phase === "configuring" ||
+                      worktreeSetupState.phase === "awaiting_input"
+                    ) {
+                      vscodeApi.postMessage({
+                        command: "agentWorktreeSetupCancel",
+                        requestId: worktreeSetupState.requestId,
+                      });
+                    }
+                    setWorktreeSetupState(null);
+                  }}
+                  onLaunch={(requestId, autoSubmit) => {
+                    setWorktreeSetupState((previous) =>
+                      previous?.requestId === requestId
+                        ? { ...previous, phase: "launching" }
+                        : previous,
+                    );
+                    vscodeApi.postMessage({
+                      command: "agentWorktreeSetupLaunch",
+                      requestId,
+                      autoSubmit,
+                    });
+                  }}
+                  onReply={(requestId, text) => {
+                    setWorktreeSetupState((previous) =>
+                      previous?.requestId === requestId
+                        ? {
+                            ...previous,
+                            phase: "configuring",
+                            answer: "",
+                            conversation: [
+                              ...(previous.conversation ?? []),
+                              { role: "user" as const, text },
+                            ],
+                          }
+                        : previous,
+                    );
+                    vscodeApi.postMessage({
+                      command: "agentWorktreeSetupReply",
+                      requestId,
+                      text,
+                    });
+                  }}
+                />
+              )}
+              {state.chatState.interrupted && !state.streaming && (
+                <div class="interrupted-session-banner">
+                  <i class="codicon codicon-debug-restart" />
+                  <div>
+                    <strong>Session interrupted</strong>
+                    <span>
+                      The previous agent turn stopped before it finished. Resume
+                      to let the agent inspect current state and continue
+                      safely.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    class="interrupted-session-resume"
+                    onClick={handleResumeInterruptedSession}
+                    title="Resume interrupted session"
+                  >
+                    Resume
+                  </button>
+                </div>
+              )}
+              {state.streaming && (
+                <StreamingStatusBar
+                  messages={state.messages}
+                  statusOverride={state.statusOverride}
+                />
+              )}
+              <BackgroundSessionStrip
+                key={state.chatState.sessionId ?? "no-session"}
+                sessions={bgSessions}
+                openToActiveRequest={openFleetToActiveRequest}
+                showFleetRequest={showFleetRequest}
+                onStop={handleStopBackground}
+                onOpenTranscript={handleOpenBgTranscript}
+                onSteer={handleSteerBackground}
+                onDetach={handleDetachBackground}
+                onRetry={handleRetryBackground}
+                onArchive={handleArchiveBackground}
+                onPause={handlePauseBackground}
+                onResume={handleResumeBackground}
+              />
+            </ChatActivityShelf>
+            <InputArea
+              onSend={handleSend}
+              contextMode={
+                questionContextMode
+                  ? ({
+                      key: `${state.questionRequest?.id ?? "question"}:${questionContextMode.questionId}`,
+                      title: "Adding context to agent question",
+                      placeholder:
+                        "Add details, paste a screenshot, or attach supporting files…",
+                      initialText: questionContextMode.initialText,
+                      initialAttachments:
+                        questionAttachments[questionContextMode.questionId]
+                          ?.paths,
+                      initialMedia:
+                        questionAttachments[questionContextMode.questionId]
+                          ?.media,
+                      onSubmit: (
+                        text,
+                        paths,
+                        _displayText,
+                        _slashLabel,
+                        media,
+                      ) => {
+                        questionContextMode.onCommit(text);
+                        setQuestionAttachments((current) => ({
+                          ...current,
+                          [questionContextMode.questionId]: {
+                            paths,
+                            media: media ?? [],
+                          },
+                        }));
+                        setQuestionContextMode(null);
+                      },
+                      onCancel: () => setQuestionContextMode(null),
+                    } satisfies ComposerContextMode)
                   : null
               }
-              onProgressChange={(progress) => {
-                if (!state.questionRequest) return;
-                vscodeApi.postMessage({
-                  command: "agentQuestionProgress",
-                  id: state.questionRequest.id,
-                  step: progress.step,
-                  answers: progress.answers,
-                  notes: progress.notes,
-                  origin: questionProgressOriginRef.current,
-                });
-              }}
-              onSubmit={(
-                id: string,
-                answers: Record<
-                  string,
-                  string | string[] | number | boolean | undefined
-                >,
-                notes: Record<string, string>,
-              ) => {
-                const attachments = Object.fromEntries(
-                  Object.entries(questionAttachments).flatMap(
-                    ([questionId, value]) => {
-                      const items = [
-                        ...value.paths.map((path) => ({
-                          kind: "file" as const,
-                          name: path.split(/[\\/]/).pop() || path,
-                          path,
-                        })),
-                        ...value.media.map((media) => ({
-                          kind: media.kind,
-                          name: media.name,
-                          mimeType: media.mimeType,
-                          base64: media.base64,
-                        })),
-                      ];
-                      return items.length > 0 ? [[questionId, items]] : [];
-                    },
-                  ),
-                );
-                dispatch({ type: "CLEAR_QUESTION" });
-                setRemoteQuestionProgress(null);
-                setQuestionContextMode(null);
-                setQuestionAttachments({});
-                vscodeApi.postMessage({
-                  command: "agentQuestionResponse",
-                  id,
-                  answers,
-                  notes,
-                  attachments,
-                });
-              }}
-            />
-          )}
-          {forwardedApproval && (
-            <ApprovalPanelEmbed
-              request={forwardedApproval}
-              height={approvalPanelHeight}
-              resizing={approvalResizing}
-              followUpRef={forwardedFollowUpRef}
-              submit={handleForwardedApprovalSubmit}
-              onResizeStart={handleApprovalResizeStart}
-              onSuggestRegex={handleSuggestRegex}
-            />
-          )}
-          {btwState && (
-            <BtwPanel
-              state={btwState}
-              onDismiss={() => {
-                if (btwState && !btwState.done && !btwState.error) {
-                  vscodeApi.postMessage({
-                    command: "agentBtwCancel",
-                    requestId: btwState.requestId,
-                  });
-                }
-                setBtwState(null);
-              }}
-              onCancel={(requestId) =>
-                vscodeApi.postMessage({ command: "agentBtwCancel", requestId })
+              onInterject={handleInterject}
+              onStop={handleStop}
+              onPolishPrompt={handlePolishPrompt}
+              streaming={state.streaming}
+              reasoningEffort={
+                state.chatState.reasoningEffort ??
+                (state.thinkingEnabled ? "high" : "none")
               }
-              onPromote={(question, answer) => {
-                vscodeApi.postMessage({
-                  command: "agentBtwPromote",
-                  question,
-                  answer,
-                });
-                setBtwState(null);
-              }}
+              onSetReasoningEffort={handleSetReasoningEffort}
+              onExportTranscript={handleExportTranscript}
+              hasMessages={state.messages.length > 0}
+              vscodeApi={vscodeApi}
+              injection={injection}
+              onInjectionConsumed={() => setInjection(null)}
+              slashCommands={state.slashCommands}
+              onExecuteBuiltinCommand={handleExecuteBuiltinCommand}
+              modes={state.modes}
+              currentMode={state.chatState.mode}
+              currentModel={state.chatState.model}
+              currentCondenseThreshold={state.chatState.condenseThreshold}
+              availableModels={state.availableModels}
+              onSelectModel={handleSelectModel}
+              onSetCondenseThreshold={handleSetCondenseThreshold}
+              onSignIn={handleSignIn}
+              onSwitchMode={
+                state.chatState.projects?.length === 0
+                  ? undefined
+                  : handleSwitchMode
+              }
+              agentWriteApproval={
+                state.chatState.agentWriteApproval ?? "prompt"
+              }
+              onSetAgentWriteApproval={
+                state.chatState.projects?.length === 0
+                  ? undefined
+                  : handleSetAgentWriteApproval
+              }
+              commandApprovalPolicy={
+                state.chatState.commandApprovalPolicy ?? "safe"
+              }
+              configuredCommandApprovalPolicy={
+                state.chatState.configuredCommandApprovalPolicy ?? "safe"
+              }
+              onSetCommandApprovalPolicy={
+                state.chatState.projects?.length === 0
+                  ? undefined
+                  : handleSetCommandApprovalPolicy
+              }
+              autoContinueEnabled={
+                state.chatState.projects?.length === 0
+                  ? false
+                  : autoContinueEnabled
+              }
+              onToggleAutoContinue={
+                state.chatState.projects?.length === 0
+                  ? undefined
+                  : handleToggleAutoContinue
+              }
+              autoContinueStatus={
+                state.chatState.projects?.length === 0 ? "" : autoContinueStatus
+              }
+              allowAttachments={state.chatState.projects?.length !== 0}
+              allowFileMentions={state.chatState.projects?.length !== 0}
+              disabled={
+                state.chatState.projects?.length !== 0 &&
+                state.chatState.project?.availability === "unavailable"
+              }
+              disabledReason={
+                state.chatState.projects?.length !== 0 &&
+                state.chatState.project?.availability === "unavailable"
+                  ? `Project unavailable: ${state.chatState.project.displayName}`
+                  : undefined
+              }
             />
-          )}
-          {worktreeSetupState && (
-            <WorktreeSetupPanel
-              key={worktreeSetupState.requestId}
-              state={worktreeSetupState}
-              onCancel={(requestId) => {
-                vscodeApi.postMessage({
-                  command: "agentWorktreeSetupCancel",
-                  requestId,
-                });
-              }}
-              onDismiss={() => {
-                if (
-                  worktreeSetupState.phase === "configuring" ||
-                  worktreeSetupState.phase === "awaiting_input"
-                ) {
-                  vscodeApi.postMessage({
-                    command: "agentWorktreeSetupCancel",
-                    requestId: worktreeSetupState.requestId,
-                  });
-                }
-                setWorktreeSetupState(null);
-              }}
-              onLaunch={(requestId, autoSubmit) => {
-                setWorktreeSetupState((previous) =>
-                  previous?.requestId === requestId
-                    ? { ...previous, phase: "launching" }
-                    : previous,
-                );
-                vscodeApi.postMessage({
-                  command: "agentWorktreeSetupLaunch",
-                  requestId,
-                  autoSubmit,
-                });
-              }}
-              onReply={(requestId, text) => {
-                setWorktreeSetupState((previous) =>
-                  previous?.requestId === requestId
-                    ? {
-                        ...previous,
-                        phase: "configuring",
-                        answer: "",
-                        conversation: [
-                          ...(previous.conversation ?? []),
-                          { role: "user" as const, text },
-                        ],
-                      }
-                    : previous,
-                );
-                vscodeApi.postMessage({
-                  command: "agentWorktreeSetupReply",
-                  requestId,
-                  text,
-                });
-              }}
-            />
-          )}
-          {state.chatState.interrupted && !state.streaming && (
-            <div class="interrupted-session-banner">
-              <i class="codicon codicon-debug-restart" />
-              <div>
-                <strong>Session interrupted</strong>
-                <span>
-                  The previous agent turn stopped before it finished. Resume to
-                  let the agent inspect current state and continue safely.
-                </span>
-              </div>
-              <button
-                type="button"
-                class="interrupted-session-resume"
-                onClick={handleResumeInterruptedSession}
-                title="Resume interrupted session"
-              >
-                Resume
-              </button>
-            </div>
-          )}
-          {state.streaming && (
-            <StreamingStatusBar
-              messages={state.messages}
-              statusOverride={state.statusOverride}
-            />
-          )}
-          <BackgroundSessionStrip
-            key={state.chatState.sessionId ?? "no-session"}
-            sessions={bgSessions}
-            openToActiveRequest={openFleetToActiveRequest}
-            showFleetRequest={showFleetRequest}
-            onStop={handleStopBackground}
-            onOpenTranscript={handleOpenBgTranscript}
-            onSteer={handleSteerBackground}
-            onDetach={handleDetachBackground}
-            onRetry={handleRetryBackground}
-            onArchive={handleArchiveBackground}
-            onPause={handlePauseBackground}
-            onResume={handleResumeBackground}
-          />
-        </ChatActivityShelf>
-        <InputArea
-          onSend={handleSend}
-          contextMode={
-            questionContextMode
-              ? ({
-                  key: `${state.questionRequest?.id ?? "question"}:${questionContextMode.questionId}`,
-                  title: "Adding context to agent question",
-                  placeholder:
-                    "Add details, paste a screenshot, or attach supporting files…",
-                  initialText: questionContextMode.initialText,
-                  initialAttachments:
-                    questionAttachments[questionContextMode.questionId]?.paths,
-                  initialMedia:
-                    questionAttachments[questionContextMode.questionId]?.media,
-                  onSubmit: (text, paths, _displayText, _slashLabel, media) => {
-                    questionContextMode.onCommit(text);
-                    setQuestionAttachments((current) => ({
-                      ...current,
-                      [questionContextMode.questionId]: {
-                        paths,
-                        media: media ?? [],
-                      },
-                    }));
-                    setQuestionContextMode(null);
-                  },
-                  onCancel: () => setQuestionContextMode(null),
-                } satisfies ComposerContextMode)
-              : null
-          }
-          onInterject={handleInterject}
-          onStop={handleStop}
-          onPolishPrompt={handlePolishPrompt}
-          streaming={state.streaming}
-          reasoningEffort={
-            state.chatState.reasoningEffort ??
-            (state.thinkingEnabled ? "high" : "none")
-          }
-          onSetReasoningEffort={handleSetReasoningEffort}
-          onExportTranscript={handleExportTranscript}
-          hasMessages={state.messages.length > 0}
-          vscodeApi={vscodeApi}
-          injection={injection}
-          onInjectionConsumed={() => setInjection(null)}
-          slashCommands={state.slashCommands}
-          onExecuteBuiltinCommand={handleExecuteBuiltinCommand}
-          modes={state.modes}
-          currentMode={state.chatState.mode}
-          currentModel={state.chatState.model}
-          currentCondenseThreshold={state.chatState.condenseThreshold}
-          availableModels={state.availableModels}
-          onSelectModel={handleSelectModel}
-          onSetCondenseThreshold={handleSetCondenseThreshold}
-          onSignIn={handleSignIn}
-          onSwitchMode={
-            state.chatState.projects?.length === 0
-              ? undefined
-              : handleSwitchMode
-          }
-          agentWriteApproval={state.chatState.agentWriteApproval ?? "prompt"}
-          onSetAgentWriteApproval={
-            state.chatState.projects?.length === 0
-              ? undefined
-              : handleSetAgentWriteApproval
-          }
-          commandApprovalPolicy={
-            state.chatState.commandApprovalPolicy ?? "safe"
-          }
-          configuredCommandApprovalPolicy={
-            state.chatState.configuredCommandApprovalPolicy ?? "safe"
-          }
-          onSetCommandApprovalPolicy={
-            state.chatState.projects?.length === 0
-              ? undefined
-              : handleSetCommandApprovalPolicy
-          }
-          autoContinueEnabled={
-            state.chatState.projects?.length === 0 ? false : autoContinueEnabled
-          }
-          onToggleAutoContinue={
-            state.chatState.projects?.length === 0
-              ? undefined
-              : handleToggleAutoContinue
-          }
-          autoContinueStatus={
-            state.chatState.projects?.length === 0 ? "" : autoContinueStatus
-          }
-          allowAttachments={state.chatState.projects?.length !== 0}
-          allowFileMentions={state.chatState.projects?.length !== 0}
-          disabled={
-            state.chatState.projects?.length !== 0 &&
-            state.chatState.project?.availability === "unavailable"
-          }
-          disabledReason={
-            state.chatState.projects?.length !== 0 &&
-            state.chatState.project?.availability === "unavailable"
-              ? `Project unavailable: ${state.chatState.project.displayName}`
-              : undefined
-          }
-        />
-      </div>
+          </div>
+        </ChatSessionPane>
+      </ChatWorkspace>
     </>
   );
 }

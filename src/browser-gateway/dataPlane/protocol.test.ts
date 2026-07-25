@@ -644,6 +644,8 @@ describe("browser gateway owner protocol", () => {
         requestId: "request-1",
         model: "gpt-5.6-sol",
         reasoningEffort: "high",
+        mode: "code",
+        commandApprovalPolicy: "approve-for-me",
         inputTokens: 100,
         uncachedInputTokens: 80,
         cacheReadTokens: 20,

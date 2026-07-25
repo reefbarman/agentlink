@@ -20,21 +20,32 @@ function Harness({
   sessionIdRef,
   streamingRef,
   dispatchDelta,
+  openSessionIdsRef,
+  onInactiveSessionMessage,
   onMessage,
+  replayMessageRef,
 }: {
   postMessage: (message: unknown) => void;
   sessionIdRef: TestRef<string | null>;
   streamingRef: TestRef<boolean>;
+  openSessionIdsRef?: TestRef<ReadonlySet<string>>;
   dispatchDelta: (action: StreamingDeltaAction) => void;
+  onInactiveSessionMessage?: (
+    msg: ExtensionMessage & { sessionId: string },
+  ) => void;
   onMessage: (msg: ExtensionMessage, controls: WebviewMessageControls) => void;
+  replayMessageRef?: TestRef<(message: ExtensionMessage) => void>;
 }) {
-  useWebviewMessageConnection({
+  const replayMessage = useWebviewMessageConnection({
     vscodeApi: { postMessage },
     sessionIdRef,
     streamingRef,
+    openSessionIdsRef,
     dispatchDelta,
+    onInactiveSessionMessage,
     onMessage,
   });
+  if (replayMessageRef) replayMessageRef.current = replayMessage;
   return null;
 }
 
@@ -185,6 +196,111 @@ describe("useWebviewMessageConnection", () => {
       eventSessionId: "session-2",
       currentSessionId: "session-1",
       streaming: true,
+    });
+  });
+
+  it("routes open inactive-tab events to the keyed projection cache", () => {
+    const postMessage = vi.fn();
+    const onMessage = vi.fn();
+    const onInactiveSessionMessage = vi.fn();
+    render(
+      <Harness
+        postMessage={postMessage}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: true }}
+        openSessionIdsRef={{ current: new Set(["session-1", "session-2"]) }}
+        dispatchDelta={vi.fn()}
+        onInactiveSessionMessage={onInactiveSessionMessage}
+        onMessage={onMessage}
+      />,
+    );
+
+    const message = {
+      type: "agentTextDelta" as const,
+      sessionId: "session-2",
+      text: "live in T2",
+    };
+    sendMessage(message);
+
+    expect(onInactiveSessionMessage).toHaveBeenCalledWith(message);
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(postMessage.mock.calls).toEqual([[{ command: "webviewReady" }]]);
+  });
+
+  it("replays cached events through the live processor without session rerouting", () => {
+    const postMessage = vi.fn();
+    const dispatchDelta = vi.fn<(action: StreamingDeltaAction) => void>();
+    const onInactiveSessionMessage = vi.fn();
+    const replayMessageRef = {
+      current: (_message: ExtensionMessage) => {},
+    };
+    render(
+      <Harness
+        postMessage={postMessage}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: true }}
+        openSessionIdsRef={{ current: new Set(["session-1", "session-2"]) }}
+        dispatchDelta={dispatchDelta}
+        onInactiveSessionMessage={onInactiveSessionMessage}
+        onMessage={(msg, controls) => {
+          if (msg.type === "agentTextDelta" && !controls.dropIfNotStreaming()) {
+            controls.appendTextDelta(msg.text);
+          }
+        }}
+        replayMessageRef={replayMessageRef}
+      />,
+    );
+
+    replayMessageRef.current({
+      type: "agentTextDelta",
+      sessionId: "session-2",
+      text: "replayed",
+    });
+    animationFrames.shift()?.(0);
+
+    expect(onInactiveSessionMessage).not.toHaveBeenCalled();
+    expect(dispatchDelta).toHaveBeenCalledWith({
+      type: "TEXT_DELTA",
+      text: "replayed",
+    });
+    expect(postMessage.mock.calls).toEqual([[{ command: "webviewReady" }]]);
+  });
+
+  it("keeps streaming guards when replaying cached events", () => {
+    const postMessage = vi.fn();
+    const dispatchDelta = vi.fn();
+    const replayMessageRef = {
+      current: (_message: ExtensionMessage) => {},
+    };
+    render(
+      <Harness
+        postMessage={postMessage}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: false }}
+        dispatchDelta={dispatchDelta}
+        onMessage={(msg, controls) => {
+          if (msg.type === "agentTextDelta" && !controls.dropIfNotStreaming()) {
+            controls.appendTextDelta(msg.text);
+          }
+        }}
+        replayMessageRef={replayMessageRef}
+      />,
+    );
+
+    replayMessageRef.current({
+      type: "agentTextDelta",
+      sessionId: "session-2",
+      text: "stale",
+    });
+
+    expect(dispatchDelta).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenLastCalledWith({
+      command: "agentStreamDrop",
+      reason: "streaming_false",
+      eventType: "agentTextDelta",
+      eventSessionId: "session-2",
+      currentSessionId: "session-1",
+      streaming: false,
     });
   });
 

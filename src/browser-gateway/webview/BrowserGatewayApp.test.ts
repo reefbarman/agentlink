@@ -2681,7 +2681,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       ),
     ).toBe(false);
 
-    fireEvent.click(screen.getByTitle("New Session"));
+    fireEvent.click(screen.getByTitle("New Chat"));
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([input]) =>
@@ -5154,10 +5154,10 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
     await selectWorkspaceTab();
     await waitFor(() => {
-      expect(screen.getByTitle("New Session")).toBeTruthy();
+      expect(screen.getByTitle("New Chat")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByTitle("New Session"));
+    fireEvent.click(screen.getByTitle("New Chat"));
 
     await waitFor(() => {
       expect(

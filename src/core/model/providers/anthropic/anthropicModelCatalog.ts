@@ -23,6 +23,14 @@ export interface AnthropicModelInfo {
 export interface AnthropicModelCapabilities extends CoreModelCapabilities {
   /** Whether the model supports the "adaptive" thinking request shape. */
   supportsAdaptiveThinking?: boolean;
+  /**
+   * True for models that run adaptive thinking when the `thinking` field is
+   * omitted (Claude Opus 5, Claude Sonnet 5). Turning thinking off on these
+   * models requires an explicit `thinking: {type: "disabled"}` — merely
+   * omitting the field no longer disables it. Do NOT set for Claude Fable 5 /
+   * Mythos 5, where an explicit disable is rejected with a 400.
+   */
+  requiresExplicitThinkingDisable?: boolean;
 }
 
 /** A static model entry (id + display name + capabilities) used as merge base + fallback. */
@@ -94,8 +102,9 @@ export interface AnthropicModelsApi {
   list(): Promise<{ data: SdkModelInfo[] }> | AsyncIterable<SdkModelInfo>;
 }
 
-// Version 3 invalidates snapshots persisted before claude-sonnet-5 was added.
-export const ANTHROPIC_MODEL_CATALOG_SCHEMA_VERSION = 3;
+// Version 4 invalidates snapshots persisted before claude-opus-5 was added, so
+// dynamic entries re-merge against its static base (default effort, ladder).
+export const ANTHROPIC_MODEL_CATALOG_SCHEMA_VERSION = 4;
 
 /** Default auto-refresh TTL (Q2: 6h). Stale only gates refresh, never read. */
 export const ANTHROPIC_MODEL_CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
@@ -205,6 +214,12 @@ export function mapSdkModelToCapabilities(
   return {
     supportsThinking,
     supportsAdaptiveThinking,
+    // Not expressed by the Models API — always sourced from the static base.
+    ...(base.requiresExplicitThinkingDisable !== undefined
+      ? {
+          requiresExplicitThinkingDisable: base.requiresExplicitThinkingDisable,
+        }
+      : {}),
     supportsCaching: base.supportsCaching,
     supportsImages,
     supportsToolUse: base.supportsToolUse,
@@ -365,6 +380,19 @@ export class AnthropicModelCatalog {
     }
     const staticEntry = this.staticEntries.get(model);
     return Boolean(staticEntry?.capabilities.supportsAdaptiveThinking);
+  }
+
+  /** Whether disabling thinking requires an explicit request field (dynamic, static fallback). */
+  requiresExplicitThinkingDisable(model: string): boolean {
+    const dynamic = this.dynamic.get(model);
+    if (
+      dynamic &&
+      dynamic.capabilities.requiresExplicitThinkingDisable !== undefined
+    ) {
+      return Boolean(dynamic.capabilities.requiresExplicitThinkingDisable);
+    }
+    const staticEntry = this.staticEntries.get(model);
+    return Boolean(staticEntry?.capabilities.requiresExplicitThinkingDisable);
   }
 
   /**

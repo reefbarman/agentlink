@@ -1068,6 +1068,15 @@ function projectMessage(
             ...(message.apiRequest.reasoningEffort
               ? { reasoningEffort: message.apiRequest.reasoningEffort }
               : {}),
+            ...(message.apiRequest.mode
+              ? { mode: bounded(message.apiRequest.mode, 256) }
+              : {}),
+            ...(message.apiRequest.commandApprovalPolicy
+              ? {
+                  commandApprovalPolicy:
+                    message.apiRequest.commandApprovalPolicy,
+                }
+              : {}),
             inputTokens: safeInteger(message.apiRequest.inputTokens),
             ...(message.apiRequest.uncachedInputTokens !== undefined
               ? {

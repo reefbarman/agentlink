@@ -11,6 +11,7 @@ import { h } from "preact";
 function apiRequest(
   model: string,
   reasoningEffort?: ReasoningEffort,
+  extras?: Partial<NonNullable<ChatMessage["apiRequest"]>>,
 ): NonNullable<ChatMessage["apiRequest"]> {
   return {
     requestId: `request-${model}`,
@@ -20,6 +21,7 @@ function apiRequest(
     outputTokens: 20,
     durationMs: 500,
     timeToFirstToken: 100,
+    ...extras,
   };
 }
 
@@ -282,6 +284,189 @@ describe("TranscriptMessageList model change rendering", () => {
     expect(dividers).toHaveLength(1);
     expect(dividers[0]?.textContent).toContain("Model changed to");
     expect(dividers[0]?.textContent).toContain("Thinking level changed to");
+  });
+
+  it("collapses model, thinking, mode, and approval changes into one divider", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "First response" }],
+        apiRequest: apiRequest("claude-sonnet-4-6", "high", {
+          mode: "ask",
+          commandApprovalPolicy: "safe",
+        }),
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [{ type: "text", text: "Second response" }],
+        apiRequest: apiRequest("gpt-5.4", "low", {
+          mode: "code",
+          commandApprovalPolicy: "approve-for-me",
+        }),
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    const dividers = container.querySelectorAll(".model-change-divider");
+    expect(dividers).toHaveLength(1);
+    const text = dividers[0]?.textContent ?? "";
+    expect(text).toContain("Model changed to");
+    expect(text).toContain("Thinking level changed to");
+    expect(text).toContain("Mode changed to");
+    expect(text).toContain("Approve for Me turned on");
+  });
+
+  it("shows a divider when the mode changes", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "First response" }],
+        apiRequest: apiRequest("gpt-5.4", "high", { mode: "ask" }),
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [{ type: "text", text: "Second response" }],
+        apiRequest: apiRequest("gpt-5.4", "high", { mode: "code" }),
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    const divider = container.querySelector(".model-change-divider");
+    expect(divider?.textContent).toContain("Mode changed to");
+    expect(divider?.textContent).toContain("Code");
+    expect(divider?.textContent).not.toContain("Model changed to");
+    expect(divider?.getAttribute("aria-label")).toBe(
+      "Mode changed from Ask to Code",
+    );
+  });
+
+  it("shows a divider when Approve for Me is turned on and off", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "First response" }],
+        apiRequest: apiRequest("gpt-5.4", "high", {
+          commandApprovalPolicy: "safe",
+        }),
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [{ type: "text", text: "Second response" }],
+        apiRequest: apiRequest("gpt-5.4", "high", {
+          commandApprovalPolicy: "approve-for-me",
+        }),
+      },
+      {
+        id: "a3",
+        role: "assistant",
+        content: "",
+        timestamp: 3,
+        blocks: [{ type: "text", text: "Third response" }],
+        apiRequest: apiRequest("gpt-5.4", "high", {
+          commandApprovalPolicy: "safe",
+        }),
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    const dividers = container.querySelectorAll(".model-change-divider");
+    expect(dividers).toHaveLength(2);
+    expect(dividers[0]?.textContent).toContain("Approve for Me turned on");
+    expect(dividers[1]?.textContent).toContain("Approve for Me turned off");
+    expect(dividers[0]?.textContent).not.toContain("Model changed to");
+  });
+
+  it("does not show a divider for repeated mode and approval values", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "First response" }],
+        apiRequest: apiRequest("gpt-5.4", "high", {
+          mode: "code",
+          commandApprovalPolicy: "safe",
+        }),
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [{ type: "text", text: "Second response" }],
+        apiRequest: apiRequest("gpt-5.4", "high", {
+          mode: "code",
+          commandApprovalPolicy: "safe",
+        }),
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    expect(container.querySelector(".model-change-divider")).toBeNull();
+  });
+
+  it("shows a generic command approval divider for non Approve for Me policy changes", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "First response" }],
+        apiRequest: apiRequest("gpt-5.4", "high", {
+          commandApprovalPolicy: "safe",
+        }),
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [{ type: "text", text: "Second response" }],
+        apiRequest: apiRequest("gpt-5.4", "high", {
+          commandApprovalPolicy: "manual",
+        }),
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    const divider = container.querySelector(".model-change-divider");
+    expect(divider?.textContent).toContain("Command approval changed to");
+    expect(divider?.textContent).toContain("Manual");
   });
 
   it("renders one divider before a split response instead of each segment", () => {

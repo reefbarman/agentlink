@@ -15,8 +15,12 @@ import {
   type InstructionBlock,
   type ProjectActiveFileResolution,
 } from "./configLoader.js";
-import { loadSkills, type SkillEntry } from "./skillLoader.js";
-import type { AgentMode } from "./modes.js";
+import {
+  loadSkills,
+  loadSkillsForModes,
+  type SkillEntry,
+} from "./skillLoader.js";
+import { BUILT_IN_MODES, type AgentMode } from "./modes.js";
 import {
   buildMcpToolCatalogSection,
   type McpToolDisclosureCatalogEntry,
@@ -898,6 +902,52 @@ function buildPromptBreakdown(sections: ContextBreakdownItem[]): {
   };
 }
 
+/**
+ * Static replacement for the inline mode prompt when mode instructions are
+ * delivered through the conversation. Deliberately mode-independent so the
+ * system prompt stays byte-identical across mode switches and the provider
+ * prompt cache (tools + system + history) survives them.
+ */
+const BUILT_IN_MODE_SLUGS = BUILT_IN_MODES.map((m) => m.slug);
+
+const MODES_OVERVIEW_SECTION = `
+## Modes
+
+You operate in one of several modes (built-in: code, architect, ask, debug, review — plus any project-defined custom modes). Your current mode and its full instructions are provided in the conversation inside \`<current_mode>\` blocks; the most recent block is authoritative and applies until the next one. Follow it with the same authority as this system prompt.
+
+The current mode also determines which tools you may use. Tools outside the current mode's allowance are rejected at invocation with an explanation; use \`switch_mode\` when the task genuinely needs a different mode's capabilities.`;
+
+/**
+ * Build the mode instruction block injected into the conversation when the
+ * system prompt uses conversation placement for mode content. Carries
+ * everything mode-specific that would otherwise live in the system prompt.
+ */
+export async function buildModeInstructionBlock(
+  mode: string,
+  cwd: string,
+  options?: {
+    agentMode?: AgentMode;
+    approveForMe?: boolean;
+  },
+): Promise<string> {
+  const modePrompt = buildModePrompt(mode, options?.agentMode).trim();
+  const modeRules = await loadModeRules(cwd, mode);
+  const rulesSection = modeRules ? `\n\n### Mode Rules\n\n${modeRules}` : "";
+  const plansSection =
+    mode === "architect"
+      ? `\n\nPlans folder (\`./plans\`): ${fs.existsSync(path.join(cwd, "plans")) ? "exists" : "does not exist yet"}`
+      : "";
+  const approveForMeSection =
+    mode === "architect" && options?.approveForMe
+      ? `\n\nApprove for Me is enabled: the architect review loop is autonomous — self-review the plan (including the background review agent where warranted), resolve genuine open questions with \`ask_user\` if any remain, then summarize the plan in your response and call \`switch_mode\` to \`code\` to begin implementation. Do not wait for the user to approve the plan.`
+      : "";
+  return `<current_mode mode="${mode}">
+The session is now in **${mode}** mode. These instructions are authoritative until the next \`<current_mode>\` block.
+
+${modePrompt}${rulesSection}${plansSection}${approveForMeSection}
+</current_mode>`;
+}
+
 function buildModePrompt(mode: string, agentMode?: AgentMode): string {
   const builtInPrompt = MODE_PROMPTS[mode];
   const roleDefinition = agentMode?.roleDefinition?.trim();
@@ -990,6 +1040,14 @@ export async function buildPromptArtifacts(
     agentMode?: AgentMode;
     /** Approve for Me is active: mode switches are reviewed automatically, not by the user. */
     approveForMe?: boolean;
+    /**
+     * Where mode-specific instructions live. "system" (default) inlines them
+     * in the system prompt; "conversation" keeps the system prompt
+     * byte-identical across modes — mode content is delivered via
+     * `buildModeInstructionBlock` messages so mode switches preserve the
+     * provider prompt cache.
+     */
+    modeInstructionPlacement?: "system" | "conversation";
   },
 ): Promise<PromptArtifacts> {
   // Lightweight path: minimal prompt for background review agents
@@ -1015,7 +1073,11 @@ export async function buildPromptArtifacts(
       ? activeFileContext.activeFilePath
       : undefined;
   const base = getBasePrompt(cwd);
-  const modePrompt = buildModePrompt(mode, options?.agentMode);
+  const conversationModePlacement =
+    options?.modeInstructionPlacement === "conversation";
+  const modePrompt = conversationModePlacement
+    ? MODES_OVERVIEW_SECTION
+    : buildModePrompt(mode, options?.agentMode);
   const providerPrompt = options?.providerId
     ? (PROVIDER_PROMPTS[options.providerId] ?? "")
     : "";
@@ -1033,8 +1095,17 @@ export async function buildPromptArtifacts(
       options?.activeFilePath,
     ),
     loadMemory(cwd),
-    loadModeRules(cwd, mode),
-    loadSkills(cwd, mode),
+    // With conversation placement, mode rules travel in the mode block so the
+    // system prompt stays identical across modes.
+    conversationModePlacement ? Promise.resolve("") : loadModeRules(cwd, mode),
+    // Likewise the skills TOC must not vary by mode: advertise the union
+    // across modes (mode-restricted skills are still labeled by their dirs).
+    conversationModePlacement
+      ? loadSkillsForModes(cwd, [
+          ...BUILT_IN_MODE_SLUGS,
+          ...(BUILT_IN_MODE_SLUGS.includes(mode) ? [] : [mode]),
+        ])
+      : loadSkills(cwd, mode),
   ]);
   const instructionSections = buildInstructionSections(instructionBlocks, cwd, {
     activeFilePath,
@@ -1054,13 +1125,15 @@ export async function buildPromptArtifacts(
     options?.mcpToolCatalog,
   );
 
+  // With conversation placement these travel in the mode block instead, so
+  // architect-specific content cannot leak mode-dependence into the prompt.
   const plansSection =
-    mode === "architect"
+    mode === "architect" && !conversationModePlacement
       ? `\n- Plans folder (\`./plans\`): ${fs.existsSync(path.join(cwd, "plans")) ? "exists" : "does not exist yet"}`
       : "";
 
   const architectApproveForMeBullet =
-    mode === "architect"
+    mode === "architect" && !conversationModePlacement
       ? `\n- The architect review loop is autonomous: self-review the plan (including the background review agent where warranted), resolve genuine open questions with \`ask_user\` if any remain, then summarize the plan in your response and call \`switch_mode\` to \`code\` to begin implementation. Do not wait for the user to approve the plan.`
       : "";
   const approveForMeSection = options?.approveForMe
@@ -1083,7 +1156,10 @@ Approve for Me is enabled for this session: mode switches are reviewed automatic
 
   const sections = [
     measureContextItem("base", base),
-    measureContextItem(`mode:${mode}`, modePrompt),
+    measureContextItem(
+      conversationModePlacement ? "modes overview" : `mode:${mode}`,
+      modePrompt,
+    ),
     measureContextItem("approve for me", approveForMeSection),
     measureContextItem(
       options?.providerId ? `provider:${options.providerId}` : "provider",

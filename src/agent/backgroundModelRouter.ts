@@ -11,7 +11,10 @@ import type { ModelInfo } from "./providers/types.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import routingConfigRaw from "./backgroundModelRouting.config.json";
 
-const ANTHROPIC_BACKGROUND_DEFAULT_MODEL = "claude-opus-4-8";
+const ANTHROPIC_BACKGROUND_DEFAULT_MODELS = [
+  "claude-opus-5",
+  "claude-opus-4-8",
+];
 const FOREGROUND_ONLY_MODEL_PATTERNS = [/^claude-fable-5(?:-|$)/i];
 
 function isForegroundOnlyModel(modelId: string): boolean {
@@ -377,10 +380,13 @@ export async function resolveBackgroundRoute(
 
       // Non-review Anthropic work retains the stronger Opus default. Review
       // model order is controlled by reviewModelPreferences above.
-      const anthropicDefault = candidates.find(
-        (m) => m.id === ANTHROPIC_BACKGROUND_DEFAULT_MODEL,
-      );
-      if (anthropicDefault) picked = anthropicDefault;
+      for (const defaultId of ANTHROPIC_BACKGROUND_DEFAULT_MODELS) {
+        const anthropicDefault = candidates.find((m) => m.id === defaultId);
+        if (anthropicDefault) {
+          picked = anthropicDefault;
+          break;
+        }
+      }
     }
 
     const preferredHit = preferredAuthenticated.includes(picked.provider);
