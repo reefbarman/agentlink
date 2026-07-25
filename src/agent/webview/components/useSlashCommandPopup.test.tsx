@@ -68,6 +68,7 @@ function Harness({ matchedName }: { matchedName?: string }) {
         backtrack
       </button>
       <button onClick={() => popup.enterView("mode")}>mode</button>
+      <button onClick={() => popup.enterView("model")}>model</button>
       <button onClick={popup.back}>back</button>
       <button onClick={() => popup.selectNext(popup.filteredCommands.length)}>
         next
@@ -142,6 +143,18 @@ describe("useSlashCommandPopup", () => {
     expect(state(container).selectedIndex).toBe(0);
     fireEvent.click(getByText("back"));
     expect(state(container)).toMatchObject({ view: "main", selectedIndex: 0 });
+  });
+
+  it("does not fabricate a model choice before the catalog is hydrated", () => {
+    const { container, getByText } = render(<Harness />);
+
+    fireEvent.click(getByText("model"));
+
+    expect(state(container)).toMatchObject({
+      view: "model",
+      commands: [],
+      visible: false,
+    });
   });
 
   it("keeps exact prefix alternatives visible and dismisses from the document", () => {

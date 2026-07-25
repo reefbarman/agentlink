@@ -1182,6 +1182,7 @@ export function BrowserGatewayApp({
     task: string;
     messages: ChatMessage[];
     streaming: boolean;
+    visible: boolean;
   } | null>(null);
   const [localDismissedApprovalId, setLocalDismissedApprovalId] = useState<
     string | null
@@ -1439,7 +1440,7 @@ export function BrowserGatewayApp({
     [background, transcriptView],
   );
   useEffect(() => {
-    if (!transcriptView || !openTranscriptBackground) return;
+    if (!transcriptView?.visible || !openTranscriptBackground) return;
     let cancelled = false;
     const sessionId = transcriptView.sessionId;
     void (async () => {
@@ -1465,15 +1466,21 @@ export function BrowserGatewayApp({
         };
         if (cancelled || !body.ok || !body.transcript) return;
         const converted = agentMessagesToChatMessages(body.transcript.messages);
-        setTranscriptView((current) =>
-          current?.sessionId === sessionId
-            ? {
-                ...current,
-                task: body.transcript!.task,
-                messages: converted,
-              }
-            : current,
-        );
+        setTranscriptView((current) => {
+          if (current?.sessionId !== sessionId) return current;
+          const stillRunning =
+            openTranscriptBackground.status === "streaming" ||
+            openTranscriptBackground.status === "tool_executing" ||
+            openTranscriptBackground.status === "awaiting_approval";
+          return {
+            ...current,
+            task: body.transcript!.task,
+            messages:
+              stillRunning && converted.length < current.messages.length
+                ? current.messages
+                : converted,
+          };
+        });
       } catch {
         // Keep the last transcript snapshot; a later background update can retry.
       }
@@ -1491,6 +1498,7 @@ export function BrowserGatewayApp({
     openTranscriptBackground?.status,
     openTranscriptBackground?.streamingText,
     transcriptView?.sessionId,
+    transcriptView?.visible,
   ]);
   useEffect(() => {
     const currentIds = new Set(
@@ -1555,7 +1563,6 @@ export function BrowserGatewayApp({
     visibleQuestion ||
     pendingFormElicitation ||
     pendingUrlElicitation ||
-    foreground?.status === "awaiting_approval" ||
     instanceOptions.some(
       (instance) => instance.status?.kind === "awaiting_approval",
     ),
@@ -1714,8 +1721,7 @@ export function BrowserGatewayApp({
       pendingApproval ||
       pendingQuestion ||
       pendingFormElicitation ||
-      pendingUrlElicitation ||
-      foreground?.status === "awaiting_approval"
+      pendingUrlElicitation
     ) {
       return {
         kind: "awaiting_approval",
@@ -1734,13 +1740,22 @@ export function BrowserGatewayApp({
     if (
       foreground?.streaming ||
       foreground?.status === "streaming" ||
-      foreground?.status === "tool_executing"
+      foreground?.status === "tool_executing" ||
+      foreground?.status === "awaiting_approval"
     ) {
       return {
         kind: "working",
         label:
-          foreground.status === "tool_executing" ? "Tool running" : "Working",
-        detail: foreground.statusOverride ?? foreground.status,
+          foreground.status === "tool_executing"
+            ? "Tool running"
+            : foreground.status === "awaiting_approval"
+              ? "Waiting"
+              : "Working",
+        detail:
+          foreground.statusOverride ??
+          (foreground.status === "awaiting_approval"
+            ? "Awaiting interaction details"
+            : foreground.status),
         sessionTitle: foreground.title,
       };
     }
@@ -4043,6 +4058,19 @@ export function BrowserGatewayApp({
   };
 
   const handleOpenBgTranscript = (sessionId: string): void => {
+    if (transcriptView?.sessionId === sessionId) {
+      setTranscriptView((current) =>
+        current ? { ...current, visible: true } : current,
+      );
+      const bgInfo = background.find((session) => session.id === sessionId);
+      if (
+        bgInfo?.status === "streaming" ||
+        bgInfo?.status === "tool_executing" ||
+        bgInfo?.status === "awaiting_approval"
+      ) {
+        return;
+      }
+    }
     void (async () => {
       try {
         const response = await fetch(
@@ -4078,6 +4106,7 @@ export function BrowserGatewayApp({
           task: body.transcript.task,
           messages: converted,
           streaming: true,
+          visible: true,
         });
         const assistantBlocks = converted
           .filter((message) => message.role === "assistant")
@@ -4905,7 +4934,7 @@ export function BrowserGatewayApp({
         <section class="browser-main">
           <PaneCard fill className="chat-pane-card">
             <div class="pane-body browser-chat-pane chat-container">
-              {transcriptView && (
+              {transcriptView?.visible && (
                 <TranscriptView
                   task={transcriptView.task}
                   sessionId={transcriptView.sessionId}
@@ -4920,7 +4949,11 @@ export function BrowserGatewayApp({
                   runtimeStatus={background.find(
                     (session) => session.id === transcriptView.sessionId,
                   )}
-                  onClose={() => setTranscriptView(null)}
+                  onClose={() =>
+                    setTranscriptView((current) =>
+                      current ? { ...current, visible: false } : current,
+                    )
+                  }
                 />
               )}
               <ChatHeader

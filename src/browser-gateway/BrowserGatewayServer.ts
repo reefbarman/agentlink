@@ -2270,8 +2270,10 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const result = this.chatViewProvider.submitBrowserResume(body.sessionId);
-    this.writeJson(res, result.ok ? 202 : 404, result);
+    const result = await this.chatViewProvider.submitBrowserResume(
+      body.sessionId,
+    );
+    this.writeJson(res, result.ok ? 202 : 409, result);
   }
 
   private async handleBackgroundStopAction(

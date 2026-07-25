@@ -288,6 +288,94 @@ describe("AgentSessionManager host injection", () => {
     expect(firstDomain.roots).toEqual(secondDomain.roots);
   });
 
+  it("falls back to an enabled model when saved selections use a disabled provider", async () => {
+    const capabilities = {
+      supportsThinking: true,
+      supportsCaching: false,
+      supportsImages: true,
+      supportsToolUse: true,
+      contextWindow: 200_000,
+      maxOutputTokens: 8_192,
+    };
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: "anthropic",
+      displayName: "Anthropic",
+      condenseModel: "claude-sonnet-4-6",
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => capabilities),
+      listModels: vi.fn(() => [
+        {
+          id: "claude-sonnet-4-6",
+          displayName: "Claude Sonnet 4.6",
+          provider: "anthropic",
+          capabilities,
+        },
+      ]),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as any);
+    providers.register({
+      id: "codex",
+      displayName: "Codex",
+      condenseModel: "gpt-5.6-sol",
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => capabilities),
+      listModels: vi.fn(() => [
+        {
+          id: "gpt-5.6-sol",
+          displayName: "GPT-5.6 Sol",
+          provider: "codex",
+          capabilities,
+        },
+      ]),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as any);
+    providers.setDisabledProviders(["anthropic"]);
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          providers,
+          config: {
+            resolveModelForMode: () => "claude-sonnet-4-6",
+            getCondenseThresholdForModel: () => 0.9,
+            getBgSummaryMode: () => "heuristic",
+            getBackgroundAgentSettings: () => ({}),
+          },
+        },
+      },
+    );
+
+    const session = await mgr.createSession("code");
+
+    expect(session.model).toBe("gpt-5.6-sol");
+    expect(session.providerId).toBe("codex");
+    expect(mgr.getConfig().model).toBe("gpt-5.6-sol");
+
+    await expect(mgr.setModel("claude-sonnet-4-6")).rejects.toThrow(
+      'Model "claude-sonnet-4-6" is not available.',
+    );
+    expect(session.model).toBe("gpt-5.6-sol");
+    expect(mgr.getConfig().model).toBe("gpt-5.6-sol");
+  });
+
+  it("accepts an explicit model before providers finish registering", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+
+    await expect(mgr.setModel("startup-model")).resolves.toBe("startup-model");
+    expect(session.model).toBe("startup-model");
+    expect(mgr.getConfig().model).toBe("startup-model");
+  });
+
   it("creates only a tool-free Ask session when no workspace project exists", async () => {
     const createCheckpointManager = vi.fn();
     const loadCustomModes = vi.fn(async () => []);
@@ -3207,6 +3295,7 @@ describe("AgentSessionManager in-flight persistence", () => {
       ]),
     ).resolves.toEqual([true, false]);
 
+    await vi.waitFor(() => expect(loaded?.runState).toBeUndefined());
     const flattened = savedMessages.flat().map((message) => message.content);
     expect(flattened).toEqual(
       expect.arrayContaining([

@@ -759,7 +759,15 @@ describe("TranscriptMessageList background result rendering", () => {
     expect(rows[1].textContent).not.toContain("No blocking issues found.");
     expect(rows[1].querySelector(".bg-result-preview")).toBeNull();
     expect(rows[2].textContent).toContain("I will incorporate that result.");
-    expect(container.querySelector(".tool-group-block")).toBeNull();
+    fireEvent.click(rows[0].querySelector(".tool-group-header")!);
+    const toolCall = rows[0].querySelector(".tool-call-block");
+    const resultCard = rows[1].querySelector(".bg-agent-result-block");
+    expect(toolCall).toBeTruthy();
+    expect(resultCard).toBeTruthy();
+    expect(
+      toolCall!.compareDocumentPosition(resultCard!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("keeps the streaming indicator below a trailing background result card", () => {

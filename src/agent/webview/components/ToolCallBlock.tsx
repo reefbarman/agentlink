@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useState } from "preact/hooks";
 
 import type { ContentBlock } from "../types";
-import { JsonHighlight } from "../../../shared/ui/JsonHighlight";
 import { InlineDiff } from "./InlineDiff";
+import { JsonHighlight } from "../../../shared/ui/JsonHighlight";
 import { matchFilePaths } from "./filePathLinks";
 
 export type ToolCallData = ContentBlock & { type: "tool_call" };
@@ -141,6 +141,31 @@ function stripMediaPlaceholderLines(result: string): string {
     .filter((line) => !/^\[(?:image|document)\]$/i.test(line.trim()))
     .join("\n")
     .trim();
+}
+
+function getGenericInputSummary(
+  input: Record<string, unknown> | null,
+): SummaryPart[] {
+  if (!input) return [];
+  const description = String(input.description ?? "").trim();
+  if (description) {
+    return [{ type: "text", text: description.slice(0, 100) }];
+  }
+  const command = String(input.command ?? "").trim();
+  if (command) {
+    return [
+      {
+        type: "text",
+        text: command.length > 80 ? command.slice(0, 77) + "..." : command,
+      },
+    ];
+  }
+  const path = String(input.path ?? input.file_path ?? "").trim();
+  if (path) return [filePart(path)];
+  const query = String(input.query ?? "").trim();
+  if (query) return [{ type: "text", text: query.slice(0, 100) }];
+  const url = String(input.url ?? "").trim();
+  return url ? [{ type: "text", text: url.slice(0, 140) }] : [];
 }
 
 /** Generate a smart one-liner summary for known tools. */
@@ -294,6 +319,8 @@ function getToolSummary(
     case "todo_write":
       return [{ type: "text", text: result || "updated" }];
     default: {
+      const inputSummary = getGenericInputSummary(input);
+      if (inputSummary.length > 0) return inputSummary;
       const t =
         displayResult.length > 60
           ? displayResult.slice(0, 57) + "..."
@@ -348,7 +375,7 @@ function getStreamingSummary(
         },
       ];
     default:
-      return path ? [filePart(path)] : [];
+      return getGenericInputSummary(input);
   }
 }
 

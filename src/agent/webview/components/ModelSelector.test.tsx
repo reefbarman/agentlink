@@ -31,6 +31,15 @@ afterEach(() => {
 });
 
 describe("ModelSelector", () => {
+  it("shows a neutral label before the selected model is hydrated", () => {
+    render(
+      <ModelSelector currentModel="" models={models} onSelect={vi.fn()} />,
+    );
+
+    expect(screen.getByText("Loading model…")).toBeTruthy();
+    expect(screen.queryByText("Claude Sonnet 4.6")).toBeNull();
+  });
+
   it("selects an authenticated model from the portaled dropdown", () => {
     const onSelect = vi.fn();
     render(

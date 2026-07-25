@@ -670,16 +670,6 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
       .replace(/<system-reminder>[\s\S]*?<\/system-reminder>\n*/gi, "")
       .trim();
 
-  const getSummaryText = (content: unknown): string => {
-    if (typeof content === "string") return stripSystemReminderBlocks(content);
-    if (!Array.isArray(content)) return "";
-    const joined = (content as Array<{ type: string; text?: string }>)
-      .filter((b) => b.type === "text")
-      .map((b) => b.text ?? "")
-      .join("");
-    return stripSystemReminderBlocks(joined);
-  };
-
   // First pass: collect tool results keyed by tool_use_id
   const toolResults = new Map<string, string>();
   const toolResultImages = new Map<
@@ -798,7 +788,6 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
       };
     };
     if (m.isSummary) {
-      const summaryText = getSummaryText(m.content);
       const hint = m.uiHint?.condense;
       result.push({
         id: randomId(),
@@ -815,15 +804,6 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           condensing: hint?.condensing,
         },
       });
-      if (summaryText) {
-        result.push({
-          id: randomId(),
-          role: "assistant",
-          content: "",
-          timestamp: Date.now(),
-          blocks: [{ type: "text", text: summaryText }],
-        });
-      }
       continue;
     }
 
@@ -1254,6 +1234,26 @@ function isActiveTailBlock(block: ContentBlock, streaming: boolean): boolean {
     return true;
   }
   return streaming && block.type === "text";
+}
+
+function isEmptyAssistantShell(message: ChatMessage): boolean {
+  if (
+    message.role !== "assistant" ||
+    message.blocks.length > 0 ||
+    message.content.length > 0
+  ) {
+    return false;
+  }
+  const structuralKeys = new Set([
+    "id",
+    "role",
+    "content",
+    "timestamp",
+    "blocks",
+  ]);
+  return Object.entries(message).every(
+    ([key, value]) => structuralKeys.has(key) || value === undefined,
+  );
 }
 
 function attachFinalMarkerToolCall(
@@ -1815,6 +1815,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         ) {
           const nextBase = {
             ...b,
+            ...(action.toolName.trim() ? { name: action.toolName } : {}),
             inputJson:
               b.inputJson !== "" || action.input === undefined
                 ? b.inputJson
@@ -1898,36 +1899,65 @@ export function reducer(state: AppState, action: AppAction): AppState {
         );
 
         if (sessionId) {
-          const alreadyAdded = target.blocks.some(
-            (b) => b.type === "bg_agent_result" && b.sessionId === sessionId,
-          );
-          if (!alreadyAdded) {
-            const bgResultBlock: ContentBlock = {
-              type: "bg_agent_result",
-              sessionId,
-              task: findBgTaskForSession(msgs, target.blocks, sessionId),
-              status: inferBgResultStatus(action.result),
-              resultText: action.result || undefined,
-              summary: undefined,
-            };
-            // On the live last message, insert before any still-active tail
-            // blocks so the running end of the transcript stays last.
-            let insertAt = target.blocks.length;
-            if (targetIdx === msgs.length - 1) {
-              while (
-                insertAt > 0 &&
-                isActiveTailBlock(target.blocks[insertAt - 1], state.streaming)
-              ) {
-                insertAt -= 1;
+          const existingResult = msgs
+            .flatMap((message) => message.blocks)
+            .find(
+              (
+                block,
+              ): block is Extract<ContentBlock, { type: "bg_agent_result" }> =>
+                block.type === "bg_agent_result" &&
+                block.sessionId === sessionId,
+            );
+          const bgResultBlock: ContentBlock = existingResult
+            ? {
+                ...existingResult,
+                resultText: action.result || existingResult.resultText,
               }
-            }
-            target.blocks = [
-              ...target.blocks.slice(0, insertAt),
-              bgResultBlock,
-              ...target.blocks.slice(insertAt),
-            ];
-            msgs[targetIdx] = target;
-          }
+            : {
+                type: "bg_agent_result",
+                sessionId,
+                task: findBgTaskForSession(msgs, target.blocks, sessionId),
+                status: inferBgResultStatus(action.result),
+                resultText: action.result || undefined,
+                summary: undefined,
+              };
+          const reconciledMessages = msgs
+            .map((message) => ({
+              ...message,
+              blocks: message.blocks.filter(
+                (block) =>
+                  !(
+                    block.type === "bg_agent_result" &&
+                    block.sessionId === sessionId
+                  ),
+              ),
+            }))
+            .filter(
+              (message, index, messages) =>
+                message.id === target.id ||
+                !isEmptyAssistantShell(message) ||
+                (state.streaming &&
+                  index === messages.length - 1 &&
+                  isEmptyAssistantShell(msgs[index])),
+            );
+          const reconciledTargetIndex = reconciledMessages.findIndex(
+            (message) => message.id === target.id,
+          );
+          const reconciledTarget = {
+            ...reconciledMessages[reconciledTargetIndex],
+            blocks: [...reconciledMessages[reconciledTargetIndex].blocks],
+          };
+          const toolIndex = reconciledTarget.blocks.findIndex(
+            (block) =>
+              block.type === "tool_call" && block.id === action.toolCallId,
+          );
+          reconciledTarget.blocks.splice(
+            toolIndex >= 0 ? toolIndex + 1 : reconciledTarget.blocks.length,
+            0,
+            bgResultBlock,
+          );
+          reconciledMessages[reconciledTargetIndex] = reconciledTarget;
+          return { ...state, messages: reconciledMessages };
         }
       }
 
@@ -2832,22 +2862,74 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "BG_AGENT_DONE": {
-      // Insert a bg_agent_result notification at the current position in chat.
-      // If the last message is an assistant message, insert the block before
-      // any still-active tail blocks (running tools, open thinking, streaming
-      // text) so the live end of the transcript stays last.
-      // Otherwise, create a new assistant message for the notification.
+      // If get_background_result already completed for this session, keep the
+      // result directly after that tool call. Otherwise, insert before any
+      // still-active tail blocks so the live end of the transcript stays last.
+      const existingResult = state.messages
+        .flatMap((message) => message.blocks)
+        .find(
+          (
+            block,
+          ): block is Extract<ContentBlock, { type: "bg_agent_result" }> =>
+            block.type === "bg_agent_result" &&
+            block.sessionId === action.sessionId,
+        );
       const resultBlock: ContentBlock = {
         type: "bg_agent_result",
         sessionId: action.sessionId,
         task: action.task,
         status: action.status,
-        resultText: action.resultText,
-        summary: action.summary,
+        resultText: action.resultText ?? existingResult?.resultText,
+        summary: action.summary ?? existingResult?.summary,
       };
-      const lastMsg = state.messages[state.messages.length - 1];
+      const messagesWithoutPriorResult = state.messages
+        .map((message) => ({
+          ...message,
+          blocks: message.blocks.filter(
+            (block) =>
+              !(
+                block.type === "bg_agent_result" &&
+                block.sessionId === action.sessionId
+              ),
+          ),
+        }))
+        .filter(
+          (message, index, messages) =>
+            !isEmptyAssistantShell(message) ||
+            (state.streaming &&
+              index === messages.length - 1 &&
+              isEmptyAssistantShell(state.messages[index])),
+        );
+      for (
+        let messageIndex = messagesWithoutPriorResult.length - 1;
+        messageIndex >= 0;
+        messageIndex -= 1
+      ) {
+        const message = messagesWithoutPriorResult[messageIndex];
+        const toolIndex = message.blocks.findIndex(
+          (block) =>
+            block.type === "tool_call" &&
+            block.name === "get_background_result" &&
+            block.complete &&
+            getBgSessionIdFromToolInput(undefined, block.inputJson) ===
+              action.sessionId,
+        );
+        if (toolIndex < 0) continue;
+        const messages = [...messagesWithoutPriorResult];
+        messages[messageIndex] = {
+          ...message,
+          blocks: [
+            ...message.blocks.slice(0, toolIndex + 1),
+            resultBlock,
+            ...message.blocks.slice(toolIndex + 1),
+          ],
+        };
+        return { ...state, messages };
+      }
+      const lastMsg =
+        messagesWithoutPriorResult[messagesWithoutPriorResult.length - 1];
       if (lastMsg?.role === "assistant") {
-        const { msgs, last } = cloneLast(state.messages);
+        const { msgs, last } = cloneLast(messagesWithoutPriorResult);
         let insertAt = last.blocks.length;
         while (
           insertAt > 0 &&
@@ -2865,7 +2947,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         messages: [
-          ...state.messages,
+          ...messagesWithoutPriorResult,
           {
             id: randomId(),
             role: "assistant" as const,
@@ -2918,7 +3000,7 @@ export const initialState: AppState = {
   chatState: {
     sessionId: null,
     mode: "code",
-    model: "claude-sonnet-4-6",
+    model: "",
     streaming: false,
     reasoningEffort: "high",
     thinkingEnabled: true,

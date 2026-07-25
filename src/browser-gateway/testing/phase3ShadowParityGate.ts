@@ -155,6 +155,24 @@ export function runPhase3ShadowParityGate(): Phase3ShadowParityGateReport {
     backgroundTask: "Review parity",
     step: 1,
     totalSteps: 1,
+    payload: {
+      approval: null,
+      question: {
+        id: "question-1",
+        context: "Continue?",
+        questions: [{ id: "continue", type: "yes_no", question: "Continue?" }],
+        backgroundTask: "Review parity",
+      },
+      questionProgress: {
+        id: "question-1",
+        step: 0,
+        answers: {},
+        notes: {},
+        origin: "browser",
+      },
+      formElicitation: null,
+      urlElicitation: null,
+    },
   };
   legacy.ui.question = {
     id: "question-1",

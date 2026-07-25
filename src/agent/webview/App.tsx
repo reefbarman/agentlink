@@ -94,6 +94,10 @@ import {
   type WriteApprovalSelection,
 } from "../../shared/selectionCommands";
 import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy";
+import {
+  addressChatPaneMessage,
+  type ChatWebviewBootstrap,
+} from "../chatPaneProtocol";
 import type {
   ChatTabActionConfirmationRequest,
   ChatWorkspaceViewSnapshot,
@@ -115,6 +119,7 @@ interface OpenTranscriptState {
   streaming: boolean;
   todos: TodoItem[];
   statusOverride: string | null;
+  visible: boolean;
 }
 
 function reduceOpenTranscript(
@@ -152,6 +157,13 @@ function reduceOpenTranscript(
  * may be a long time away. Terminal events turn it off; anything else leaves
  * the flag untouched.
  */
+export function shouldReuseBackgroundTranscript(
+  currentSessionId: string | undefined,
+  requestedSessionId: string,
+): boolean {
+  return currentSessionId === requestedSessionId;
+}
+
 export function bgTranscriptStreamingOverride(
   msgType: string,
 ): { streaming: boolean } | undefined {
@@ -245,10 +257,11 @@ export {
 
 export function selectedWorkspaceSessionId(
   snapshot: ChatWorkspaceViewSnapshot | null,
+  pinnedTabId?: string,
 ): string | null {
+  const selectedTabId = pinnedTabId ?? snapshot?.focusedTabId;
   return (
-    snapshot?.tabs.find((tab) => tab.tabId === snapshot.focusedTabId)
-      ?.sessionId ?? null
+    snapshot?.tabs.find((tab) => tab.tabId === selectedTabId)?.sessionId ?? null
   );
 }
 
@@ -274,7 +287,15 @@ const streamingBaselineMetrics = __DEV_BUILD__
   ? getDevelopmentStreamingBaselineMetrics("vscode-webview", true)
   : undefined;
 
-export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
+export function App({
+  vscodeApi: hostVscodeApi,
+  pane = { surface: "sidebar" },
+}: {
+  vscodeApi: VsCodeApi;
+  pane?: ChatWebviewBootstrap;
+}) {
+  const pinnedPane = pane.surface === "editor" ? pane.address : undefined;
+  const pinnedTabId = pinnedPane?.tabId;
   const [state, dispatch] = useReducer(reducer, initialState);
   const [workspaceSnapshot, setWorkspaceSnapshot] =
     useState<ChatWorkspaceViewSnapshot | null>(null);
@@ -284,14 +305,22 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
   const flushConnectionDeltasRef = useRef<() => void>(() => {});
   const vscodeApi = useMemo<VsCodeApi>(
     () => ({
-      postMessage: (message) =>
+      postMessage: (message) => {
+        const addressed = addressChatWebviewMessage(
+          message,
+          workspaceSnapshotRef.current,
+          pinnedPane,
+        );
         hostVscodeApi.postMessage(
-          addressChatWebviewMessage(message, workspaceSnapshotRef.current),
-        ),
+          pinnedPane
+            ? addressChatPaneMessage(addressed, pinnedPane)
+            : addressed,
+        );
+      },
       getState: () => hostVscodeApi.getState(),
       setState: (nextState) => hostVscodeApi.setState(nextState),
     }),
-    [hostVscodeApi],
+    [hostVscodeApi, pinnedPane],
   );
   const stateRef = useRef(state.chatState);
   stateRef.current = state.chatState;
@@ -463,8 +492,9 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
     (snapshot: ChatWorkspaceViewSnapshot) => {
       const previousSessionId = selectedWorkspaceSessionId(
         workspaceSnapshotRef.current,
+        pinnedTabId,
       );
-      const nextSessionId = selectedWorkspaceSessionId(snapshot);
+      const nextSessionId = selectedWorkspaceSessionId(snapshot, pinnedTabId);
       const openSessionIds = new Set(
         snapshot.tabs.flatMap((tab) => (tab.sessionId ? [tab.sessionId] : [])),
       );
@@ -491,7 +521,7 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
       workspaceSnapshotRef.current = snapshot;
       setWorkspaceSnapshot(snapshot);
     },
-    [],
+    [pinnedTabId],
   );
 
   const replayInactiveSessionMessage = useWebviewMessageConnection({
@@ -500,7 +530,7 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
       get current() {
         const snapshot = workspaceSnapshotRef.current;
         const selected = snapshot?.tabs.find(
-          (tab) => tab.tabId === snapshot.focusedTabId,
+          (tab) => tab.tabId === (pinnedTabId ?? snapshot.focusedTabId),
         );
         return selected?.sessionId ?? stateRef.current.sessionId;
       },
@@ -555,6 +585,7 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
         case "stateUpdate": {
           const selectedSessionId = selectedWorkspaceSessionId(
             workspaceSnapshotRef.current,
+            pinnedTabId,
           );
           if (
             workspaceSnapshotRef.current &&
@@ -993,7 +1024,10 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
           if (
             workspaceSnapshotRef.current &&
             msg.sessionId !==
-              selectedWorkspaceSessionId(workspaceSnapshotRef.current)
+              selectedWorkspaceSessionId(
+                workspaceSnapshotRef.current,
+                pinnedTabId,
+              )
           ) {
             break;
           }
@@ -1593,6 +1627,7 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
             streaming:
               bgInfo?.status === "streaming" ||
               bgInfo?.status === "tool_executing",
+            visible: true,
           });
           break;
         }
@@ -2057,9 +2092,26 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
 
   const handleOpenBgTranscript = useCallback(
     (sessionId: string) => {
+      if (
+        shouldReuseBackgroundTranscript(transcriptView?.sessionId, sessionId)
+      ) {
+        setTranscriptView((current) =>
+          current ? { ...current, visible: true } : current,
+        );
+        const bgInfo = bgSessionsRef.current.find(
+          (session) => session.id === sessionId,
+        );
+        if (
+          bgInfo?.status === "streaming" ||
+          bgInfo?.status === "tool_executing" ||
+          bgInfo?.status === "awaiting_approval"
+        ) {
+          return;
+        }
+      }
       vscodeApi.postMessage({ command: "openBgTranscript", sessionId });
     },
-    [vscodeApi],
+    [transcriptView?.sessionId, vscodeApi],
   );
 
   const handleLoadEarlierSessionMessages = useCallback(() => {
@@ -2660,7 +2712,7 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
     });
   }, [chatTabConfirmation, vscodeApi]);
   const selectedWorkspaceTab = workspaceSnapshot?.tabs.find(
-    (tab) => tab.tabId === workspaceSnapshot.focusedTabId,
+    (tab) => tab.tabId === (pinnedTabId ?? workspaceSnapshot.focusedTabId),
   );
   const selectedTabKey = selectedWorkspaceTab
     ? `${selectedWorkspaceTab.tabId}:${selectedWorkspaceTab.sessionId ?? "new"}`
@@ -2825,6 +2877,7 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
       )}
       <ChatWorkspace
         snapshot={workspaceSnapshot}
+        showTabStrip={pane.surface === "sidebar"}
         onFocus={handleFocusChatTab}
         onNewTab={handleNewChatTab}
         onClose={handleCloseChatTab}
@@ -2853,7 +2906,7 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
                 </button>
               </div>
             )}
-            {transcriptView && (
+            {transcriptView?.visible && (
               <TranscriptView
                 task={transcriptView.task}
                 sessionId={transcriptView.sessionId}
@@ -2872,7 +2925,11 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
                 bgSessions={bgSessions}
                 onStopBackground={handleStopBackground}
                 onOpenTranscript={handleOpenBgTranscript}
-                onClose={() => setTranscriptView(null)}
+                onClose={() =>
+                  setTranscriptView((current) =>
+                    current ? { ...current, visible: false } : current,
+                  )
+                }
               />
             )}
             {shiftDragOver && (

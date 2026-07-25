@@ -786,8 +786,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       ui.question ||
       ui.formElicitation ||
       ui.urlElicitation ||
-      session?.questionRequest ||
-      session?.status === "awaiting_approval"
+      session?.questionRequest
     ) {
       return {
         kind: "awaiting_approval",
@@ -806,12 +805,22 @@ export class BrowserGatewayService implements vscode.Disposable {
     if (
       session?.streaming ||
       session?.status === "streaming" ||
-      session?.status === "tool_executing"
+      session?.status === "tool_executing" ||
+      session?.status === "awaiting_approval"
     ) {
       return {
         kind: "working",
-        label: session.status === "tool_executing" ? "Tool running" : "Working",
-        detail: session.statusOverride ?? session.status,
+        label:
+          session.status === "tool_executing"
+            ? "Tool running"
+            : session.status === "awaiting_approval"
+              ? "Waiting"
+              : "Working",
+        detail:
+          session.statusOverride ??
+          (session.status === "awaiting_approval"
+            ? "Awaiting interaction details"
+            : session.status),
         sessionTitle: session.title,
       };
     }

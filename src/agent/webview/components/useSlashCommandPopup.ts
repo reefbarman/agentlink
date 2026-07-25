@@ -47,12 +47,10 @@ export function useSlashCommandPopup({
   const displayCommands = commands;
   const modelList = useMemo(
     () =>
-      availableModels.length > 0
-        ? availableModels.map((model) => ({
-            id: model.id,
-            label: model.displayName,
-          }))
-        : [{ id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" }],
+      availableModels.map((model) => ({
+        id: model.id,
+        label: model.displayName,
+      })),
     [availableModels],
   );
 

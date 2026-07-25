@@ -62,6 +62,7 @@ import type { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
 import {
   getProviderAuxiliaryModel,
   type ContentBlock,
+  type DocumentBlock,
   type ImageBlock,
   type ReasoningEffort,
 } from "./providers/types.js";
@@ -87,6 +88,9 @@ import type {
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionUpdate,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallStatus,
   ToolKind,
 } from "@agentclientprotocol/sdk" with { "resolution-mode": "import" };
 import { normalizeBackgroundAgentSettings } from "./background/acpAgentConfig.js";
@@ -102,6 +106,7 @@ import {
   type McpToolDisclosurePartition,
 } from "./mcpToolDisclosure.js";
 import { CODEX_CONDENSE_MODEL_FALLBACKS } from "../core/model/providers/codex/models.js";
+import { FALLBACK_AGENT_MODEL } from "./modeModelPreferences.js";
 import { getEffectiveAutoCondenseThreshold } from "./modelCondenseThresholds.js";
 import {
   callOpenAiCompatibleChat,
@@ -180,11 +185,25 @@ const MAX_BACKGROUND_HANDOFF_IMAGES = 8;
 const MAX_BACKGROUND_PARTIAL_RESULT_CHARS = 40 * 1024;
 const MAX_ACP_OUTPUT_IMAGES = 8;
 
+interface AcpToolCallState {
+  toolCallId: string;
+  title: string;
+  status?: ToolCallStatus;
+  content?: ToolCallContent[];
+  locations?: ToolCallLocation[];
+  rawInput?: unknown;
+  rawOutput?: unknown;
+  startedAt: number;
+  startEmitted: boolean;
+  lastTerminalSignature?: string;
+}
+
 interface AcpOutputState {
   assistantTextParts: string[];
   directImages: ImageBlock[];
-  toolImages: Map<string, ImageBlock[]>;
+  toolCalls: Map<string, AcpToolCallState>;
   warnings: Set<string>;
+  transcriptCommitted: boolean;
 }
 
 interface PendingBackgroundQuestion {
@@ -624,6 +643,8 @@ export class AgentSessionManager {
   private bgBudgetWrapUps = new Map<string, { kind: string }>();
   /** Accumulated streaming text for background sessions (for UI preview). */
   private bgStreamingText = new Map<string, string>();
+  /** In-flight ACP output used to rebuild transcripts before the final turn is committed. */
+  private activeAcpOutputs = new Map<string, AcpOutputState>();
   /** Bounded substantive output retained for terminal failure and reload recovery. */
   private bgPartialResults = new Map<string, string>();
   /** Provider/engine retryability for terminal background failures. */
@@ -1775,43 +1796,180 @@ export class AgentSessionManager {
       .filter((folderPath) => folderPath && folderPath !== projectRoot);
   }
 
-  private acpOutputImageCount(
-    state: AcpOutputState,
-    excludingToolCallId?: string,
-  ): number {
-    let count = state.directImages.length;
-    for (const [toolCallId, images] of state.toolImages) {
-      if (toolCallId !== excludingToolCallId) count += images.length;
-    }
-    return count;
+  private acpOutputImageCount(state: AcpOutputState): number {
+    return state.directImages.length;
   }
 
-  private setAcpToolImages(
-    state: AcpOutputState,
-    update: Extract<SessionUpdate, { sessionUpdate: "tool_call_update" }>,
-  ): void {
-    if (!update.content) return;
-    const images: ImageBlock[] = [];
-    const available = Math.max(
-      0,
-      MAX_ACP_OUTPUT_IMAGES -
-        this.acpOutputImageCount(state, update.toolCallId),
-    );
-    let validImageCount = 0;
-    for (const item of update.content) {
-      if (item.type !== "content" || item.content.type !== "image") continue;
-      const converted = convertAcpContentBlock(item.content);
-      if (converted.warning) state.warnings.add(converted.warning);
-      if (converted.content?.type !== "image") continue;
-      validImageCount += 1;
-      if (images.length < available) images.push(converted.content);
+  private stringifyAcpValue(value: unknown): string {
+    if (typeof value === "string") return value;
+    if (value === undefined) return "";
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
     }
-    if (validImageCount > images.length) {
-      state.warnings.add(
+  }
+
+  private normalizeAcpToolResult(
+    output: AcpOutputState,
+    toolCall: AcpToolCallState,
+  ): ToolResult["content"] {
+    const content: ToolResult["content"] = [];
+    const rawOutput = this.stringifyAcpValue(toolCall.rawOutput);
+    if (rawOutput) content.push({ type: "text", text: rawOutput });
+
+    let imageCount = 0;
+    for (const item of toolCall.content ?? []) {
+      if (item.type === "content") {
+        const converted = convertAcpContentBlock(item.content);
+        if (converted.warning) output.warnings.add(converted.warning);
+        if (converted.content?.type === "image") {
+          imageCount += 1;
+          if (imageCount <= MAX_ACP_OUTPUT_IMAGES) {
+            content.push({
+              type: "image",
+              data: converted.content.source.data,
+              mimeType: converted.content.source.media_type,
+            });
+          }
+        } else if (!rawOutput && converted.content?.type === "text") {
+          content.push({ type: "text", text: converted.content.text });
+        } else if (!rawOutput && !converted.content) {
+          content.push({ type: "text", text: this.stringifyAcpValue(item) });
+        }
+        continue;
+      }
+      if (!rawOutput) {
+        content.push({ type: "text", text: this.stringifyAcpValue(item) });
+      }
+    }
+    if (imageCount > MAX_ACP_OUTPUT_IMAGES) {
+      output.warnings.add(
         `[ACP images truncated: showing at most ${MAX_ACP_OUTPUT_IMAGES} images]`,
       );
     }
-    state.toolImages.set(update.toolCallId, images);
+
+    if (toolCall.status === "failed") {
+      const outputText = content
+        .filter(
+          (item): item is { type: "text"; text: string } =>
+            item.type === "text",
+        )
+        .map((item) => item.text)
+        .join("\n")
+        .trim();
+      const media = content.filter((item) => item.type !== "text");
+      return [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "failed",
+            output: outputText || "ACP tool call failed without output.",
+          }),
+        },
+        ...media,
+      ];
+    }
+
+    return content.length > 0
+      ? content
+      : [{ type: "text", text: "ACP tool call completed without output." }];
+  }
+
+  private acpToolInputForHistory(input: unknown): Record<string, unknown> {
+    if (input && typeof input === "object" && !Array.isArray(input)) {
+      return input as Record<string, unknown>;
+    }
+    return input === undefined ? {} : { value: input };
+  }
+
+  private acpToolResultForHistory(
+    output: AcpOutputState,
+    toolCall: AcpToolCallState,
+  ): PersistedPendingToolResult {
+    const result = this.normalizeAcpToolResult(output, toolCall);
+    const historyContent: ContentBlock[] = result.map((item) => {
+      if (item.type === "image") {
+        return {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: item.mimeType as ImageBlock["source"]["media_type"],
+            data: item.data,
+          },
+        };
+      }
+      if (item.type === "document") {
+        return {
+          type: "document",
+          source: {
+            type: "base64",
+            media_type: item.mimeType as DocumentBlock["source"]["media_type"],
+            data: item.data,
+          },
+          title: item.name,
+        };
+      }
+      return item;
+    });
+    return {
+      type: "tool_result",
+      tool_use_id: toolCall.toolCallId,
+      content: historyContent,
+      ...(toolCall.status === "failed" ? { is_error: true } : {}),
+    };
+  }
+
+  private buildAcpTranscriptMessages(
+    output: AcpOutputState,
+    extraText?: string,
+  ): AgentMessage[] {
+    const toolCalls = Array.from(output.toolCalls.values());
+    const messages: AgentMessage[] = [];
+    if (toolCalls.length > 0) {
+      messages.push({
+        role: "assistant",
+        content: toolCalls.map((toolCall) => ({
+          type: "tool_use" as const,
+          id: toolCall.toolCallId,
+          name: toolCall.title,
+          input: this.acpToolInputForHistory(toolCall.rawInput),
+        })),
+      });
+      const results = toolCalls
+        .filter(
+          (toolCall) =>
+            toolCall.status === "completed" || toolCall.status === "failed",
+        )
+        .map((toolCall) => this.acpToolResultForHistory(output, toolCall));
+      if (results.length > 0) messages.push({ role: "user", content: results });
+    }
+
+    const assistantContent = this.buildAcpAssistantContent(output, extraText);
+    if (assistantContent.length > 0) {
+      messages.push({ role: "assistant", content: assistantContent });
+    }
+    return messages;
+  }
+
+  private commitAcpTranscript(
+    session: AgentSession,
+    output: AcpOutputState,
+    extraText?: string,
+  ): void {
+    for (const message of this.buildAcpTranscriptMessages(output, extraText)) {
+      if (message.role === "assistant" && Array.isArray(message.content)) {
+        session.appendAssistantTurn(message.content);
+      } else if (
+        Array.isArray(message.content) &&
+        message.content.every((block) => block.type === "tool_result")
+      ) {
+        session.appendToolResults(
+          message.content as PersistedPendingToolResult[],
+        );
+      }
+    }
+    output.transcriptCommitted = true;
   }
 
   private buildAcpAssistantContent(
@@ -1820,8 +1978,7 @@ export class AgentSessionManager {
   ): ContentBlock[] {
     const responseText = state.assistantTextParts.join("").trim();
     const warningText = Array.from(state.warnings).join("\n").trim();
-    const toolImages = Array.from(state.toolImages.values()).flat();
-    const imageCount = state.directImages.length + toolImages.length;
+    const imageCount = state.directImages.length;
     const text = [
       responseText ||
         (imageCount > 0
@@ -1835,7 +1992,6 @@ export class AgentSessionManager {
     return [
       ...(text ? ([{ type: "text", text }] as ContentBlock[]) : []),
       ...state.directImages,
-      ...toolImages,
     ];
   }
 
@@ -2059,6 +2215,80 @@ export class AgentSessionManager {
     return { outcome: { outcome: "selected", optionId: selected } };
   }
 
+  private emitAcpToolStart(
+    session: AgentSession,
+    toolCall: AcpToolCallState,
+  ): void {
+    if (toolCall.startEmitted) return;
+    toolCall.startEmitted = true;
+    this.recordAndEmitEvent(session.id, {
+      type: "tool_start",
+      toolCallId: toolCall.toolCallId,
+      toolName: toolCall.title,
+      input: toolCall.rawInput,
+    });
+  }
+
+  private emitAcpToolResult(
+    session: AgentSession,
+    output: AcpOutputState,
+    toolCall: AcpToolCallState,
+  ): void {
+    if (toolCall.status !== "completed" && toolCall.status !== "failed") return;
+    this.emitAcpToolStart(session, toolCall);
+    const result = this.normalizeAcpToolResult(output, toolCall);
+    const signature = this.stringifyAcpValue({
+      status: toolCall.status,
+      title: toolCall.title,
+      input: this.stringifyAcpValue(toolCall.rawInput),
+      result,
+    });
+    if (toolCall.lastTerminalSignature === signature) return;
+    toolCall.lastTerminalSignature = signature;
+    this.recordAndEmitEvent(session.id, {
+      type: "tool_result",
+      toolCallId: toolCall.toolCallId,
+      toolName: toolCall.title,
+      result,
+      durationMs: Math.max(0, Date.now() - toolCall.startedAt),
+      input: toolCall.rawInput,
+    });
+  }
+
+  private mergeAcpToolCallUpdate(
+    current: AcpToolCallState,
+    update: Extract<SessionUpdate, { sessionUpdate: "tool_call_update" }>,
+  ): AcpToolCallState {
+    const has = (key: keyof typeof update): boolean =>
+      Object.prototype.hasOwnProperty.call(update, key);
+    return {
+      ...current,
+      ...(has("title")
+        ? { title: update.title?.trim() || current.title || "ACP tool" }
+        : {}),
+      ...(has("status") ? { status: update.status ?? undefined } : {}),
+      ...(has("content") ? { content: update.content ?? undefined } : {}),
+      ...(has("locations") ? { locations: update.locations ?? undefined } : {}),
+      ...(has("rawInput") ? { rawInput: update.rawInput } : {}),
+      ...(has("rawOutput") ? { rawOutput: update.rawOutput } : {}),
+    };
+  }
+
+  private finalizeUnresolvedAcpTools(
+    session: AgentSession,
+    output: AcpOutputState,
+    reason: string,
+  ): void {
+    for (const toolCall of output.toolCalls.values()) {
+      if (toolCall.status === "completed" || toolCall.status === "failed")
+        continue;
+      toolCall.status = "failed";
+      if (toolCall.rawOutput === undefined) toolCall.rawOutput = reason;
+      this.emitAcpToolResult(session, output, toolCall);
+    }
+    session.currentTool = undefined;
+  }
+
   private applyAcpSessionUpdate(args: {
     session: AgentSession;
     output: AcpOutputState;
@@ -2093,31 +2323,75 @@ export class AgentSessionManager {
       session.currentTool = update.title;
       session.status = "tool_executing";
       this.bgStatusDetail.set(session.id, update.title);
-      const meta = this.bgMeta.get(session.id);
-      if (meta) meta.toolCalls += 1;
-      this.recordAndEmitEvent(session.id, {
-        type: "tool_start",
+      const existing = args.output.toolCalls.get(update.toolCallId);
+      const toolCall: AcpToolCallState = {
         toolCallId: update.toolCallId,
-        toolName: update.title,
-      });
+        title: update.title,
+        status: update.status,
+        content: update.content,
+        locations: update.locations,
+        rawInput: update.rawInput,
+        rawOutput: update.rawOutput,
+        startedAt: existing?.startedAt ?? Date.now(),
+        startEmitted: existing?.startEmitted ?? false,
+        lastTerminalSignature: existing?.lastTerminalSignature,
+      };
+      args.output.toolCalls.set(update.toolCallId, toolCall);
+      if (!existing) {
+        const meta = this.bgMeta.get(session.id);
+        if (meta) meta.toolCalls += 1;
+      }
+      this.emitAcpToolStart(session, toolCall);
+      this.emitAcpToolResult(session, args.output, toolCall);
+      if (toolCall.status === "completed" || toolCall.status === "failed") {
+        session.currentTool = undefined;
+        this.noteBackgroundProgress(session.id, "waiting_for_provider");
+      }
       this.enforceBackgroundBudget(session);
       return;
     }
 
     if (update.sessionUpdate === "tool_call_update") {
-      this.setAcpToolImages(args.output, update);
+      const existing = args.output.toolCalls.get(update.toolCallId);
+      const current: AcpToolCallState =
+        existing ??
+        ({
+          toolCallId: update.toolCallId,
+          title: update.title?.trim() || "ACP tool",
+          startedAt: Date.now(),
+          startEmitted: false,
+        } satisfies AcpToolCallState);
+      const toolCall = this.mergeAcpToolCallUpdate(current, update);
+      args.output.toolCalls.set(update.toolCallId, toolCall);
+      if (!existing) {
+        const meta = this.bgMeta.get(session.id);
+        if (meta) meta.toolCalls += 1;
+      }
+      this.emitAcpToolStart(session, toolCall);
+      this.emitAcpToolResult(session, args.output, toolCall);
+      const terminal =
+        toolCall.status === "completed" || toolCall.status === "failed";
       this.noteBackgroundProgress(
         session.id,
-        update.status === "completed" || update.status === "failed"
-          ? "waiting_for_provider"
-          : "executing_tool",
+        terminal ? "waiting_for_provider" : "executing_tool",
       );
-      if (update.title) {
-        session.currentTool = update.title;
-        this.bgStatusDetail.set(session.id, update.title);
-      }
-      if (update.status === "completed" || update.status === "failed") {
-        session.currentTool = undefined;
+      if (terminal) {
+        const toolCalls = Array.from(args.output.toolCalls.values());
+        let activeTool: AcpToolCallState | undefined;
+        for (let index = toolCalls.length - 1; index >= 0; index--) {
+          const candidate = toolCalls[index];
+          if (
+            candidate.status !== "completed" &&
+            candidate.status !== "failed"
+          ) {
+            activeTool = candidate;
+            break;
+          }
+        }
+        session.currentTool = activeTool?.title;
+      } else {
+        session.currentTool = toolCall.title;
+        this.bgStatusDetail.set(session.id, toolCall.title);
       }
       return;
     }
@@ -2554,17 +2828,25 @@ export class AgentSessionManager {
         this.config.model,
         scope,
       );
-      const resolvedModel =
-        this.host.providers.resolveAvailableModel(configuredModel)?.model;
-      if (resolvedModel) return resolvedModel;
-      const fallbackModel = this.host.providers.resolveAvailableModel(
+      const candidates = [
+        configuredModel,
         this.config.model,
-      )?.model;
-      if (fallbackModel) {
-        this.log?.(
-          `[model] configured ${mode} model "${configuredModel}" is unavailable; using "${fallbackModel}" for this session`,
-        );
-        return fallbackModel;
+        FALLBACK_AGENT_MODEL,
+        ...this.host.providers.listAllModels().map((model) => model.id),
+      ];
+      for (const candidate of new Set(candidates)) {
+        const resolution = this.host.providers.resolveAvailableModel(candidate);
+        if (!resolution) continue;
+        if (resolution.migratedFrom === configuredModel) {
+          this.log?.(
+            `[model] migrated configured ${mode} model "${configuredModel}" to "${resolution.model}" for this session`,
+          );
+        } else if (resolution.model !== configuredModel) {
+          this.log?.(
+            `[model] configured ${mode} model "${configuredModel}" is unavailable; using "${resolution.model}" for this session`,
+          );
+        }
+        return resolution.model;
       }
       return configuredModel;
     } catch (err) {
@@ -2794,7 +3076,11 @@ export class AgentSessionManager {
     const projectless = fg ? isProjectlessSessionScope(fg.projectScope) : false;
     if (fg && !projectless) this.requireSessionExecution(fg);
     const requestedModel = model;
-    model = this.resolveAvailableModelId(model);
+    const resolution = this.host.providers.resolveAvailableModel(model);
+    if (!resolution && this.host.providers.listProviders().length > 0) {
+      throw new Error(`Model "${model}" is not available.`);
+    }
+    model = resolution?.model ?? model;
     this.updateConfig({
       model,
       autoCondenseThreshold: this.getCondenseThresholdForModel(
@@ -2821,6 +3107,17 @@ export class AgentSessionManager {
 
   getSession(id: string): AgentSession | undefined {
     return this.sessions.get(id);
+  }
+
+  getBackgroundTranscriptMessages(id: string): AgentMessage[] | undefined {
+    const session = this.sessions.get(id);
+    if (!session?.background) return undefined;
+
+    const messages = [...session.getAllMessages()];
+    const activeAcpOutput = this.activeAcpOutputs.get(id);
+    return activeAcpOutput && !activeAcpOutput.transcriptCommitted
+      ? [...messages, ...this.buildAcpTranscriptMessages(activeAcpOutput)]
+      : messages;
   }
 
   getCommandApprovalPolicy(
@@ -4421,16 +4718,20 @@ export class AgentSessionManager {
     ].join("\n");
 
     this.resumingInterruptedSessions.add(sessionId);
-    try {
-      await this.sendMessage(session.id, prompt, session.mode, {
-        displayText: "Resume interrupted session",
-        isSlashCommand: true,
-        slashCommandLabel: "/resume interrupted session",
+    void this.sendMessage(session.id, prompt, session.mode, {
+      displayText: "Resume interrupted session",
+      isSlashCommand: true,
+      slashCommandLabel: "/resume interrupted session",
+    })
+      .catch((error) => {
+        this.log?.(
+          `[session] interrupted resume failed for ${session.id}: ${String(error)}`,
+        );
+      })
+      .finally(() => {
+        this.resumingInterruptedSessions.delete(sessionId);
       });
-      return true;
-    } finally {
-      this.resumingInterruptedSessions.delete(sessionId);
-    }
+    return true;
   }
 
   /**
@@ -6642,15 +6943,18 @@ export class AgentSessionManager {
       const acpOutput: AcpOutputState = {
         assistantTextParts: [],
         directImages: [],
-        toolImages: new Map(),
+        toolCalls: new Map(),
         warnings: new Set(),
+        transcriptCommitted: false,
       };
       const mutationLeaseHolder = backendRoute.agent.readonlyOnly
         ? undefined
         : ({ sessionId: session.id } satisfies WorkspaceMutationLeaseHolder);
       let promptResponse: PromptResponse | undefined;
       const runAcpBackground = async () => {
+        this.activeAcpOutputs.set(session.id, acpOutput);
         let lastPersistedPartialResult = session.fleetMetadata?.partialResult;
+        let transcriptCommitted = false;
         const persistPartialResult = (
           durability: PersistDurability = "durable",
         ) => {
@@ -6725,13 +7029,14 @@ export class AgentSessionManager {
             const stopReasonMessage = promptResponse
               ? this.acpStopReasonMessage(promptResponse)
               : undefined;
-            const assistantContent = this.buildAcpAssistantContent(
+            this.finalizeUnresolvedAcpTools(
+              session,
               acpOutput,
-              stopReasonMessage,
+              stopReasonMessage ??
+                "ACP prompt ended before the tool reported a result.",
             );
-            if (assistantContent.length > 0) {
-              session.appendAssistantTurn(assistantContent);
-            }
+            this.commitAcpTranscript(session, acpOutput, stopReasonMessage);
+            transcriptCommitted = true;
             if (stopReasonMessage) {
               session.status = "error";
               this.setBgError(session.id, stopReasonMessage, false);
@@ -6753,13 +7058,18 @@ export class AgentSessionManager {
           }
         } catch (err: unknown) {
           const error = err instanceof Error ? err.message : String(err);
-          if (this.bgCancelled.has(session.id) || session.isAborted) {
+          const cancelled =
+            this.bgCancelled.has(session.id) || session.isAborted;
+          this.finalizeUnresolvedAcpTools(
+            session,
+            acpOutput,
+            cancelled ? "ACP background agent cancelled." : error,
+          );
+          this.commitAcpTranscript(session, acpOutput);
+          transcriptCommitted = true;
+          if (cancelled) {
             this.bgCancelled.add(session.id);
           } else {
-            const partialContent = this.buildAcpAssistantContent(acpOutput);
-            if (partialContent.length > 0) {
-              session.appendAssistantTurn(partialContent);
-            }
             session.status = "error";
             this.setBgError(session.id, error, false);
             this.recordAndEmitEvent(session.id, {
@@ -6769,6 +7079,15 @@ export class AgentSessionManager {
             });
           }
         } finally {
+          if (!transcriptCommitted) {
+            this.finalizeUnresolvedAcpTools(
+              session,
+              acpOutput,
+              "ACP background agent cancelled.",
+            );
+            this.commitAcpTranscript(session, acpOutput);
+          }
+          this.activeAcpOutputs.delete(session.id);
           if (mutationLeaseHolder) {
             this.releaseWorkspaceMutationLease(mutationLeaseHolder);
           }
@@ -7935,19 +8254,34 @@ export class AgentSessionManager {
     ) {
       return text;
     }
-    const images = session
-      .getAllMessages()
-      .flatMap((message) =>
-        message.role === "assistant" && Array.isArray(message.content)
-          ? message.content
-              .filter((block): block is ImageBlock => block.type === "image")
-              .map((block) => ({
-                data: block.source.data,
-                mimeType: block.source.media_type,
-              }))
-          : [],
-      )
-      .slice(0, MAX_ACP_OUTPUT_IMAGES);
+    const messages = session.getAllMessages();
+    const collectImages = (content: ContentBlock[]) =>
+      content
+        .filter((block): block is ImageBlock => block.type === "image")
+        .map((block) => ({
+          data: block.source.data,
+          mimeType: block.source.media_type,
+        }));
+    const directImages = messages.flatMap((message) =>
+      message.role === "assistant" && Array.isArray(message.content)
+        ? collectImages(message.content)
+        : [],
+    );
+    const toolImages = messages.flatMap((message) =>
+      message.role === "user" && Array.isArray(message.content)
+        ? collectImages(
+            message.content.flatMap((block) =>
+              block.type === "tool_result" && Array.isArray(block.content)
+                ? block.content
+                : [],
+            ),
+          )
+        : [],
+    );
+    const images = [...directImages, ...toolImages].slice(
+      0,
+      MAX_ACP_OUTPUT_IMAGES,
+    );
     return images.length > 0 ? { text, images } : text;
   }
 

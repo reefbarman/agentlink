@@ -420,6 +420,38 @@ describe("BrowserGatewayService", () => {
     hub.dispose();
   });
 
+  it("does not advertise a missing approval card from runtime status alone", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const foreground = sessionManager.getForegroundSession();
+    if (!foreground) throw new Error("missing foreground session");
+    foreground.status = "awaiting_approval";
+    sessionManager.getForegroundSession.mockReturnValue(foreground);
+    const service = makeService(hub, sessionManager);
+
+    expect(service.getSerializableState().approval).toBeNull();
+    expect(service.getInstanceStatusSummary()).toEqual({
+      kind: "working",
+      label: "Waiting",
+      detail: "Awaiting interaction details",
+      sessionTitle: "Test Session",
+    });
+
+    hub.publishApproval("session-1", {
+      kind: "write",
+      id: "approval-1",
+      filePath: "src/file.ts",
+      writeOperation: "modify",
+    });
+    expect(service.getInstanceStatusSummary()).toMatchObject({
+      kind: "awaiting_approval",
+      label: "Approval",
+    });
+
+    service.dispose();
+    hub.dispose();
+  });
+
   it("projects form elicitation request and clear events into browser state", () => {
     const hub = new InMemoryAgentUiEventHub();
     const service = makeService(hub);

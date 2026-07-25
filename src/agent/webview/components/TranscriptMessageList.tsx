@@ -134,21 +134,6 @@ function cloneAssistantSegment(
   return segment;
 }
 
-function isBackgroundResultToolCall(
-  block: ContentBlock,
-  sessionId: string,
-): boolean {
-  if (block.type !== "tool_call" || block.name !== "get_background_result") {
-    return false;
-  }
-  try {
-    const input = JSON.parse(block.inputJson) as { sessionId?: unknown };
-    return input.sessionId === sessionId;
-  } catch {
-    return false;
-  }
-}
-
 function TranscriptMetricRow({
   active,
   children,
@@ -243,10 +228,6 @@ function splitTopLevelChatBlocks(message: ChatMessage): TranscriptRow[] {
       return;
     }
 
-    pendingBlocks = pendingBlocks.filter(
-      (pendingBlock) =>
-        !isBackgroundResultToolCall(pendingBlock, block.sessionId),
-    );
     pushPending(index);
     const id = `${message.id}:bg-agent-result:${block.sessionId}:${index}`;
     rows.push({

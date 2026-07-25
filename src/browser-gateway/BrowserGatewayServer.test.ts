@@ -260,7 +260,9 @@ function makeChatViewProviderStub() {
     submitBrowserSteerQueuedMessage: vi.fn(async () => ({ ok: true })),
     submitBrowserInterjectQueuedMessage: vi.fn(() => ({ ok: true })),
     submitBrowserStop: vi.fn(() => ({ ok: true })),
-    submitBrowserResume: vi.fn(() => ({ ok: true })),
+    submitBrowserResume: vi.fn<
+      () => Promise<{ ok: true } | { ok: false; error: string }>
+    >(async () => ({ ok: true })),
     submitBrowserStopBackground: vi.fn(() => ({ ok: true })),
     submitBrowserAskAgentWebPolicy: vi.fn(() => ({
       ok: true,
@@ -2365,6 +2367,24 @@ describe("BrowserGatewayServer", () => {
     expect(chatViewProvider.submitBrowserResume).toHaveBeenCalledWith(
       "session-1",
     );
+
+    chatViewProvider.submitBrowserResume.mockResolvedValueOnce({
+      ok: false,
+      error: "resume_not_started",
+    });
+    const rejectedResume = await fetch(`${baseUrl}/api/resume`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ sessionId: "session-1" }),
+    });
+    expect(rejectedResume.status).toBe(409);
+    expect(await rejectedResume.json()).toEqual({
+      ok: false,
+      error: "resume_not_started",
+    });
 
     const invalidResume = await fetch(`${baseUrl}/api/resume`, {
       method: "POST",

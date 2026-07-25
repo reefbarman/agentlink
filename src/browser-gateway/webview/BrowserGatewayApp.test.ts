@@ -668,6 +668,43 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     document.documentElement.removeAttribute("style");
   });
 
+  it("keeps an interrupted workspace session visible when resume is rejected", async () => {
+    const interruptedSnapshot = createSnapshot();
+    interruptedSnapshot.session.foreground.interrupted = true;
+    const fallbackFetch = globalThis.fetch;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/ui-state")) {
+          return jsonResponse(interruptedSnapshot);
+        }
+        if (url.includes("/api/resume")) {
+          return jsonResponse({ ok: false, error: "resume_not_started" }, 409);
+        }
+        return fallbackFetch(input, init);
+      },
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    expect(await screen.findByText("Session interrupted")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+
+    expect(
+      await screen.findByText("Resume failed: resume_not_started"),
+    ).toBeTruthy();
+    expect(screen.getByText("Session interrupted")).toBeTruthy();
+  });
+
   it("renders and safely resumes an interrupted workspace session", async () => {
     const interruptedSnapshot = createSnapshot();
     interruptedSnapshot.session.foreground.interrupted = true;
@@ -4856,6 +4893,23 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       await screen.findByTitle("Open this agent's full transcript"),
     );
     await screen.findByText("web_search");
+
+    const transcriptRequestsBeforeClose = fetchMock.mock.calls.filter(
+      ([input]) => String(input).includes("/api/background/open-transcript"),
+    ).length;
+    fireEvent.click(screen.getByTitle("Close"));
+    fireEvent.click(
+      await screen.findByTitle("Open this agent's full transcript"),
+    );
+    expect(await screen.findByText("web_search")).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.filter(([input]) =>
+          String(input).includes("/api/background/open-transcript"),
+        ).length,
+      ).toBeGreaterThan(transcriptRequestsBeforeClose);
+    });
+    expect(screen.getByText("web_search")).toBeTruthy();
 
     const unrelatedSnapshot = createSnapshot();
     unrelatedSnapshot.session.foreground.statusOverride = "Unrelated update";

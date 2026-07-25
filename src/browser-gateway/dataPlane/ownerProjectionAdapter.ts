@@ -608,7 +608,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       ? projectBrowserGatewayOwnerInteractionPayload(source.payload)
       : null;
     if (!payload || !interactionPayloadMatches(source, payload)) {
-      return { interaction: projectInteraction(source), details: [] };
+      return { interaction: null, details: [] };
     }
     const serialized = JSON.stringify(payload);
     const locator = `interaction:${source.requestId}`;

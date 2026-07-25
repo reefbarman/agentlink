@@ -6,6 +6,7 @@ import {
   shouldAcceptSessionChunk,
   shouldDropSessionScopedEvent,
   shouldProjectBackgroundCompletion,
+  shouldReuseBackgroundTranscript,
 } from "./App";
 import { describe, expect, it } from "vitest";
 
@@ -1263,7 +1264,7 @@ describe("webview App reducer background agent launch blocks", () => {
     });
   });
 
-  it("restores persisted condense summaries even when they are stored as user messages", async () => {
+  it("restores persisted condense summaries as compact rows without exposing their content", async () => {
     const { agentMessagesToChatMessages } = await import("./App");
 
     const restored = agentMessagesToChatMessages([
@@ -1281,43 +1282,21 @@ describe("webview App reducer background agent launch blocks", () => {
       },
     ] as unknown[]);
 
-    expect(restored).toHaveLength(3);
+    expect(restored).toHaveLength(2);
     expect(restored[0]?.role).toBe("user");
     expect(restored[1]?.role).toBe("condense");
-    expect(restored[2]?.role).toBe("assistant");
-    expect(restored[2]?.blocks).toEqual([
-      {
-        type: "text",
-        text: '## Resume Anchor (deterministic)\n- Continue from this task: "Investigate condense"## Conversation Summary\n\nSummary body',
-      },
-    ]);
-  });
-
-  it("strips system-reminder blocks from restored condense summary assistant text", async () => {
-    const { agentMessagesToChatMessages } = await import("./App");
-
-    const restored = agentMessagesToChatMessages([
-      { role: "user", content: "Investigate condense" },
-      {
-        role: "user",
-        isSummary: true,
-        content: [
-          {
-            type: "text",
-            text: '<system-reminder>\n## Resume Anchor\n- Continue from this task: "Investigate condense"\n</system-reminder>\n\n## Conversation Summary\n\nSummary body',
-          },
-        ],
-      },
-    ] as unknown[]);
-
-    expect(restored).toHaveLength(3);
-    expect(restored[1]?.role).toBe("condense");
-    expect(restored[2]?.role).toBe("assistant");
-    const textBlock = restored[2]?.blocks[0];
-    expect(textBlock).toEqual({
-      type: "text",
-      text: "## Conversation Summary\n\nSummary body",
-    });
+    expect(restored).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          blocks: expect.arrayContaining([
+            expect.objectContaining({
+              type: "text",
+              text: expect.stringContaining("Resume Anchor"),
+            }),
+          ]),
+        }),
+      ]),
+    );
   });
 
   it("clears interrupted state when a new user message starts streaming", () => {
@@ -1356,7 +1335,7 @@ describe("webview App reducer background agent launch blocks", () => {
     expect(state.chatState.thinkingEnabled).toBe(false);
   });
 
-  it("restores condense row metadata from persisted uiHint", async () => {
+  it("restores condense row metadata without exposing an assistant-role summary", async () => {
     const { agentMessagesToChatMessages } = await import("./App");
 
     const restored = agentMessagesToChatMessages([
@@ -1376,8 +1355,16 @@ describe("webview App reducer background agent launch blocks", () => {
       },
     ] as unknown[]);
 
-    expect(restored).toHaveLength(3);
+    expect(restored).toHaveLength(2);
     expect(restored[1]?.role).toBe("condense");
+    expect(restored.flatMap((message) => message.blocks)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("Summary body"),
+        }),
+      ]),
+    );
     expect(restored[1]?.condenseInfo).toEqual({
       prevInputTokens: 12000,
       newInputTokens: 4200,
@@ -2880,6 +2867,14 @@ describe("webview App reducer background agent launch blocks", () => {
 
     expect(state.chatState.sessionId).toBe("session-normal");
     expect(state.chatState.interrupted).toBe(false);
+  });
+});
+
+describe("background transcript retention", () => {
+  it("reuses only the cached transcript for the requested background session", () => {
+    expect(shouldReuseBackgroundTranscript("bg-1", "bg-1")).toBe(true);
+    expect(shouldReuseBackgroundTranscript("bg-1", "bg-2")).toBe(false);
+    expect(shouldReuseBackgroundTranscript(undefined, "bg-1")).toBe(false);
   });
 });
 

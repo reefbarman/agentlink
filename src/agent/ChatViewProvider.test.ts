@@ -2299,15 +2299,50 @@ describe("ChatViewProvider session state sync", () => {
       onSessionsChanged: undefined,
     } as never);
 
-    expect(provider.submitBrowserResume("session-1")).toEqual({ ok: true });
-    await Promise.resolve();
+    await expect(provider.submitBrowserResume("session-1")).resolves.toEqual({
+      ok: true,
+    });
     expect(resumeInterruptedSession).toHaveBeenCalledWith("session-1");
 
     session.runState = {
       phase: "awaiting_question",
       startedAt: 124,
     } as never;
-    expect(provider.submitBrowserResume("session-1")).toEqual({ ok: false });
+    await expect(provider.submitBrowserResume("session-1")).resolves.toEqual({
+      ok: false,
+      error: "session_not_interrupted",
+    });
+  });
+
+  it("reports when interrupted-session resume admission is rejected", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    provider.setSessionManager({
+      getSession: vi.fn(() => ({
+        id: "session-1",
+        background: false,
+        status: "idle",
+        runState: { phase: "running", startedAt: 123 },
+      })),
+      getForegroundSession: vi.fn(() => undefined),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      resumeInterruptedSession: vi.fn(async () => false),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    } as never);
+
+    await expect(provider.submitBrowserResume("session-1")).resolves.toEqual({
+      ok: false,
+      error: "resume_not_started",
+    });
   });
 
   it("does not mark a restored ask_user question as an interrupted session", async () => {

@@ -233,7 +233,7 @@ export function InputArea({
   modes = [],
   currentMode = "code",
   onSwitchMode,
-  currentModel = "claude-sonnet-4-6",
+  currentModel = "",
   currentCondenseThreshold,
   availableModels = [],
   onSelectModel,

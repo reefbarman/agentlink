@@ -168,6 +168,17 @@ function readSet(): BrowserGatewayOwnerProjectionReadSet {
       requestId: "approval-1",
       kind: "approval",
       backgroundTask: "Review relay",
+      payload: {
+        approval: {
+          id: "approval-1",
+          kind: "command",
+          command: "npm test",
+        },
+        question: null,
+        questionProgress: null,
+        formElicitation: null,
+        urlElicitation: null,
+      },
     },
     background: [
       {
@@ -323,7 +334,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     adapter.dispose();
   });
 
-  it("degrades mismatched interaction payloads to summary-only projection", () => {
+  it("suppresses mismatched interaction payloads that cannot be hydrated", () => {
     const value = readSet();
     value.interaction = {
       requestId: "approval-1",
@@ -343,12 +354,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     const adapter = makeAdapter(new ProjectionSources(value));
     const publication = adapter.getCheckpointPublication();
 
-    expect(publication.checkpoint.ui.interaction).toEqual({
-      requestId: "approval-1",
-      kind: "approval",
-      state: "pending",
-      summary: "Approval required",
-    });
+    expect(publication.checkpoint.ui.interaction).toBeNull();
     expect(publication.details).toBeUndefined();
     adapter.dispose();
   });
@@ -664,6 +670,25 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
       kind: "question",
       step: 1,
       totalSteps: 2,
+      payload: {
+        approval: null,
+        question: {
+          id: "question-1",
+          context: "Continue?",
+          questions: [
+            { id: "continue", type: "yes_no", question: "Continue?" },
+          ],
+        },
+        questionProgress: {
+          id: "question-1",
+          step: 1,
+          answers: {},
+          notes: {},
+          origin: "browser",
+        },
+        formElicitation: null,
+        urlElicitation: null,
+      },
     };
     sources.fire("ui");
     state.background = [
@@ -923,6 +948,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
 
   it("uses generation-bound detail attachments for oversized transcript text", () => {
     const state = readSet();
+    state.interaction = null;
     const largeText = "é".repeat(
       BROWSER_GATEWAY_DATA_PLANE_LIMITS.ownerInlineTranscriptTextBytes / 2 + 1,
     );
@@ -954,6 +980,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
   it("refreshes cached detail handles before their expiry safety margin", () => {
     let now = 1_000;
     const state = readSet();
+    state.interaction = null;
     const largeText = "x".repeat(
       BROWSER_GATEWAY_DATA_PLANE_LIMITS.ownerInlineTranscriptTextBytes + 1,
     );

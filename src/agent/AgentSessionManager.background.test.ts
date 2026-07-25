@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => {
         followUp?: string;
       } | null = null;
       let assistantText = "background result";
+      const messages: any[] = [];
       let pendingInterjectionCount = 0;
       const interjectionListeners = new Set<() => void>();
       const mockSession = {
@@ -84,10 +85,15 @@ const mocks = vi.hoisted(() => {
           mockSession.mode = mode;
         }),
         appendAssistantTurn: vi.fn((content: any[]) => {
-          assistantText = content
+          messages.push({ role: "assistant", content });
+          const text = content
             .filter((block) => block?.type === "text")
             .map((block) => block.text)
             .join("");
+          if (text) assistantText = text;
+        }),
+        appendToolResults: vi.fn((content: any[]) => {
+          messages.push({ role: "user", content });
         }),
         appendRuntimeError: vi.fn(),
         consumePendingInterjection: vi.fn(() => {
@@ -107,7 +113,7 @@ const mocks = vi.hoisted(() => {
           return pending;
         }),
         autoTitle: vi.fn(),
-        getAllMessages: vi.fn(() => []),
+        getAllMessages: vi.fn(() => messages),
         createAbortController: vi.fn(() => new AbortController()),
         abort: vi.fn(),
         get isAborted() {
@@ -771,6 +777,320 @@ describe("AgentSessionManager background agents", () => {
     releaseParent?.();
   });
 
+  it("exposes in-flight ACP output in background transcript snapshots", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    let releaseRunner!: () => void;
+    const runnerBlocked = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    let outputEmitted!: () => void;
+    const emitted = new Promise<void>((resolve) => {
+      outputEmitted = resolve;
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Partial ACP output" },
+          },
+        });
+        outputEmitted();
+        await runnerBlocked;
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "end_turn" },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    const parent = await mgr.createSession("code");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "external review",
+        message: "review this",
+        provider: "acp:claude",
+      },
+      parent.id,
+    );
+    await emitted;
+
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Partial ACP output" }],
+      },
+    ]);
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    expect(session.appendAssistantTurn).not.toHaveBeenCalled();
+
+    releaseRunner();
+    await mgr.waitForBackground(spawned.sessionId);
+    expect(session.appendAssistantTurn).toHaveBeenCalledOnce();
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Partial ACP output" }],
+      },
+    ]);
+  });
+
+  it("projects and persists ACP tool lifecycle updates without renaming tools", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    let releaseRunner!: () => void;
+    const runnerBlocked = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    let startEmitted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      startEmitted = resolve;
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "bash-1",
+            title: "Bash",
+            status: "in_progress",
+            rawInput: { command: "npm test" },
+          },
+        });
+        startEmitted();
+        await runnerBlocked;
+        const completed = {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "bash-1",
+          status: "completed",
+          rawOutput: "initial output",
+        };
+        request.onEvent({ type: "update", update: completed });
+        request.onEvent({ type: "update", update: completed });
+        request.onEvent({
+          type: "update",
+          update: {
+            ...completed,
+            rawOutput: "initial output\nlate output",
+          },
+        });
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "end_turn" },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.setToolContext(toolCtx);
+    const events: any[] = [];
+    mgr.onEvent = (sessionId, event) => {
+      events.push({ sessionId, ...event });
+    };
+
+    const spawned = await mgr.spawnBackground({
+      task: "run tests",
+      message: "run tests",
+      provider: "acp:claude",
+    });
+    await started;
+
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-1",
+            name: "Bash",
+            input: { command: "npm test" },
+          },
+        ],
+      },
+    ]);
+    expect(
+      events.filter(
+        (event) =>
+          event.sessionId === spawned.sessionId && event.type === "tool_start",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        toolCallId: "bash-1",
+        toolName: "Bash",
+        input: { command: "npm test" },
+      }),
+    ]);
+
+    releaseRunner();
+    await mgr.waitForBackground(spawned.sessionId);
+
+    const resultEvents = events.filter(
+      (event) =>
+        event.sessionId === spawned.sessionId && event.type === "tool_result",
+    );
+    expect(resultEvents).toHaveLength(2);
+    expect(resultEvents[0]).toMatchObject({
+      toolCallId: "bash-1",
+      toolName: "Bash",
+      input: { command: "npm test" },
+      result: [{ type: "text", text: "initial output" }],
+    });
+    expect(resultEvents[1]).toMatchObject({
+      toolCallId: "bash-1",
+      toolName: "Bash",
+      result: [{ type: "text", text: "initial output\nlate output" }],
+    });
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-1",
+            name: "Bash",
+            input: { command: "npm test" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "bash-1",
+            content: [{ type: "text", text: "initial output\nlate output" }],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("finalizes ACP tools when cancellation resolves the runner normally", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    let releaseRunner!: () => void;
+    const runnerBlocked = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    let startEmitted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      startEmitted = resolve;
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "bash-cancelled",
+            title: "Bash",
+            status: "in_progress",
+            rawInput: { command: "sleep 60" },
+          },
+        });
+        startEmitted();
+        await runnerBlocked;
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.setToolContext(toolCtx);
+    const events: any[] = [];
+    mgr.onEvent = (sessionId, event) => {
+      events.push({ sessionId, ...event });
+    };
+
+    const spawned = await mgr.spawnBackground({
+      task: "cancel command",
+      message: "run command",
+      provider: "acp:claude",
+    });
+    await started;
+    expect(mgr.killBackground(spawned.sessionId, "stop").killed).toBe(true);
+    releaseRunner();
+    const resultEvents = await waitFor(
+      () =>
+        events.filter(
+          (event) =>
+            event.sessionId === spawned.sessionId &&
+            event.type === "tool_result",
+        ),
+      (matching) => matching.length > 0,
+    );
+
+    expect(resultEvents).toEqual([
+      expect.objectContaining({
+        toolCallId: "bash-cancelled",
+        toolName: "Bash",
+        result: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "failed",
+              output: "ACP background agent cancelled.",
+            }),
+          },
+        ],
+      }),
+    ]);
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-cancelled",
+            name: "Bash",
+            input: { command: "sleep 60" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          expect.objectContaining({
+            type: "tool_result",
+            tool_use_id: "bash-cancelled",
+            is_error: true,
+          }),
+        ],
+      },
+    ]);
+  });
+
   it("runs explicit ACP provider without native route resolution", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
@@ -981,28 +1301,51 @@ describe("AgentSessionManager background agents", () => {
     await mgr.waitForBackground(spawned.sessionId);
 
     const session = (mgr as any).sessions.get(spawned.sessionId);
-    const assistantContent = session.appendAssistantTurn.mock.calls[0]?.[0];
-    expect(assistantContent).toEqual([
-      { type: "text", text: "Here are the images." },
+    expect(session.getAllMessages()).toEqual([
       {
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: "image/png",
-          data: "YWJjZA==",
-        },
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "generate-1",
+            name: "ACP tool",
+            input: {},
+          },
+        ],
       },
       {
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: "image/webp",
-          data: "RUZH",
-        },
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "generate-1",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/webp",
+                  data: "RUZH",
+                },
+              },
+            ],
+          },
+        ],
       },
-    ]);
-    session.getAllMessages.mockReturnValue([
-      { role: "assistant", content: assistantContent },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Here are the images." },
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: "YWJjZA==",
+            },
+          },
+        ],
+      },
     ]);
     await expect(
       mgr.waitForAuthorizedBackgroundContent(parent.id, spawned.sessionId),

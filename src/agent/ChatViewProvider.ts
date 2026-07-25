@@ -4996,29 +4996,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return { ok: true };
   }
 
-  /** Resume an interrupted foreground session through the manager's safe path. */
-  public submitBrowserResume(sessionId: string): { ok: boolean } {
-    if (!sessionId || !this.sessionManager) return { ok: false };
-    const session = this.sessionManager.getSession(sessionId);
-    if (
-      !session ||
-      session.background ||
-      !session.runState ||
-      session.runState.phase === "awaiting_question" ||
-      (session.status !== "idle" && session.status !== "error")
-    ) {
-      return { ok: false };
+  /** Resume an interrupted interactive session through the manager's safe path. */
+  public async submitBrowserResume(
+    sessionId: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (!sessionId || !this.sessionManager) {
+      return { ok: false, error: "session_unavailable" };
     }
-    void this.sessionManager
-      .resumeInterruptedSession(sessionId)
-      .then((resumed) => {
-        if (!resumed) this.sendInitialState();
-      })
-      .catch((error) => {
-        this.log(`[error] browser resume failed: ${String(error)}`);
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session || session.background) {
+      return { ok: false, error: "session_not_found" };
+    }
+    if (!session.runState || session.runState.phase === "awaiting_question") {
+      return { ok: false, error: "session_not_interrupted" };
+    }
+    if (session.status !== "idle" && session.status !== "error") {
+      return { ok: false, error: "session_busy" };
+    }
+    try {
+      const resumed =
+        await this.sessionManager.resumeInterruptedSession(sessionId);
+      if (!resumed) {
         this.sendInitialState();
-      });
-    return { ok: true };
+        return { ok: false, error: "resume_not_started" };
+      }
+      return { ok: true };
+    } catch (error) {
+      this.log(`[error] browser resume failed: ${String(error)}`);
+      this.sendInitialState();
+      return { ok: false, error: "resume_failed" };
+    }
   }
 
   public submitBrowserStopBackground(sessionId: string): { ok: boolean } {
@@ -5107,13 +5114,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   } {
     if (!sessionId || !this.sessionManager) return { ok: false };
     const session = this.sessionManager.getSession(sessionId);
-    if (!session || !session.background) return { ok: false };
+    const messages =
+      this.sessionManager.getBackgroundTranscriptMessages(sessionId);
+    if (!session || !messages) return { ok: false };
     return {
       ok: true,
       transcript: {
         sessionId,
         task: session.title ?? "Background Agent",
-        messages: stripMediaForTransport(session.getAllMessages()),
+        messages: stripMediaForTransport(messages),
       },
     };
   }
@@ -6947,13 +6956,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const sessionId = msg.sessionId as string;
         if (sessionId) {
           const session = this.sessionManager?.getSession(sessionId);
-          if (session) {
+          const messages =
+            this.sessionManager?.getBackgroundTranscriptMessages(sessionId);
+          if (session && messages) {
             this.postMessage({
               type: "showBgTranscript",
               sessionId,
               task: session.title ?? "Background Agent",
-              messages: stripMediaForTransport(session.getAllMessages()),
-              todos: getLatestTodoState(session.getAllMessages()),
+              messages: stripMediaForTransport(messages),
+              todos: getLatestTodoState(messages),
             });
           } else {
             vscode.window.showWarningMessage(

@@ -36,6 +36,53 @@ describe("ToolCallBlock", () => {
     expect(screen.getAllByText(/src\/agent\/AgentEngine\.ts/)).toHaveLength(2);
   });
 
+  it("renders completed ACP-native tools with generic input and result details", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "acp-bash",
+          name: "Bash",
+          inputJson: JSON.stringify({ command: "npm test" }),
+          result: "102 tests passed",
+          complete: true,
+        },
+      }),
+    );
+
+    const header = screen.getByRole("button", { name: /Bash.*npm test/i });
+    expect(header.querySelector(".codicon-check")).toBeTruthy();
+    expect(header.querySelector(".codicon-modifier-spin")).toBeNull();
+
+    fireEvent.click(header);
+
+    expect(screen.getByText("Input")).toBeTruthy();
+    expect(screen.getByText("Result")).toBeTruthy();
+    expect(screen.getAllByText(/npm test/)).toHaveLength(2);
+    expect(screen.getByText("102 tests passed")).toBeTruthy();
+  });
+
+  it("renders failed ACP-native tools as errors instead of running", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "acp-read",
+          name: "Read",
+          inputJson: JSON.stringify({ file_path: "src/index.ts" }),
+          result: JSON.stringify({ status: "failed", output: "not found" }),
+          complete: true,
+        },
+      }),
+    );
+
+    const header = screen.getByRole("button", {
+      name: /Read.*src\/index\.ts/i,
+    });
+    expect(header.querySelector(".codicon-error")).toBeTruthy();
+    expect(header.querySelector(".codicon-modifier-spin")).toBeNull();
+  });
+
   it("opens file paths from expanded JSON input and results", () => {
     const onOpenFile = vi.fn();
     render(

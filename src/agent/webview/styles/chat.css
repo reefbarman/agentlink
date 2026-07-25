@@ -7671,6 +7671,13 @@ body.approval-resizing {
   font-weight: 500;
 }
 
+.bg-agent-result-model {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--vscode-descriptionForeground);
+  font-weight: 400;
+}
+
 .bg-result-content {
   padding: 6px 10px 8px;
   max-height: 400px;

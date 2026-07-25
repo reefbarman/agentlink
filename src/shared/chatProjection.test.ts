@@ -8,6 +8,12 @@ import { describe, expect, it } from "vitest";
 import type { AppState } from "./chatProjection.js";
 import type { ChatMessage } from "../agent/webview/types.js";
 
+describe("initial chat projection", () => {
+  it("does not claim a model before host state is hydrated", () => {
+    expect(initialState.chatState.model).toBe("");
+  });
+});
+
 describe("original prompt projection", () => {
   it("keeps the first submitted prompt stable across later user turns", () => {
     const afterFirst = reducer(initialState, {
@@ -318,6 +324,56 @@ describe("assistant image chat projection", () => {
   });
 });
 
+describe("tool lifecycle projection", () => {
+  it("refreshes a tool card with a non-empty completion title", () => {
+    let state = reducer(initialState, {
+      type: "TOOL_START",
+      toolCallId: "acp-read",
+      toolName: "Read",
+      input: { file_path: "src/index.ts" },
+    });
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "acp-read",
+      toolName: "Read: src/index.ts",
+      result: "contents",
+      durationMs: 12,
+      input: { file_path: "src/index.ts" },
+    });
+
+    expect(state.messages[0]?.blocks).toContainEqual(
+      expect.objectContaining({
+        type: "tool_call",
+        id: "acp-read",
+        name: "Read: src/index.ts",
+        complete: true,
+        result: "contents",
+      }),
+    );
+  });
+
+  it("does not blank a tool card when completion has an empty title", () => {
+    let state = reducer(initialState, {
+      type: "TOOL_START",
+      toolCallId: "acp-read",
+      toolName: "Read",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "acp-read",
+      toolName: "",
+      result: "contents",
+      durationMs: 12,
+    });
+
+    expect(state.messages[0]?.blocks).toContainEqual(
+      expect.objectContaining({ name: "Read", complete: true }),
+    );
+  });
+});
+
 describe("BG_AGENT_DONE result placement", () => {
   const bgDone = {
     type: "BG_AGENT_DONE" as const,
@@ -369,6 +425,279 @@ describe("BG_AGENT_DONE result placement", () => {
       "bg_agent_result",
       "tool_call",
     ]);
+  });
+
+  it("moves an early result after get_background_result when the tool completes", () => {
+    let state = stateWith(
+      [
+        {
+          type: "tool_call",
+          id: "tool-result",
+          name: "get_background_result",
+          inputJson: JSON.stringify({ sessionId: "bg-1" }),
+          result: "",
+          complete: false,
+        },
+      ],
+      true,
+    );
+
+    state = reducer(state, bgDone);
+    expect(state.messages[0].blocks.map((block) => block.type)).toEqual([
+      "bg_agent_result",
+      "tool_call",
+    ]);
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-result",
+      toolName: "get_background_result",
+      result: "Looks good.",
+      durationMs: 1,
+      input: { sessionId: "bg-1" },
+    });
+
+    expect(state.messages[0].blocks.map((block) => block.type)).toEqual([
+      "tool_call",
+      "bg_agent_result",
+    ]);
+    expect(
+      state.messages[0].blocks.filter(
+        (block) => block.type === "bg_agent_result",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("moves a standalone early result into the earlier completed tool message", () => {
+    let state: AppState = {
+      ...initialState,
+      streaming: true,
+      messages: [
+        {
+          id: "assistant-tool",
+          role: "assistant",
+          content: "",
+          timestamp: 1,
+          blocks: [
+            {
+              type: "tool_call",
+              id: "tool-result",
+              name: "get_background_result",
+              inputJson: JSON.stringify({ sessionId: "bg-1" }),
+              result: "",
+              complete: false,
+            },
+          ],
+        },
+        {
+          id: "user-later",
+          role: "user",
+          content: "Unrelated interjection",
+          timestamp: 2,
+          blocks: [],
+        },
+      ],
+    };
+
+    state = reducer(state, bgDone);
+    expect(state.messages).toHaveLength(3);
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-result",
+      toolName: "get_background_result",
+      result: "Looks good.",
+      durationMs: 1,
+      input: { sessionId: "bg-1" },
+    });
+
+    expect(state.messages).toHaveLength(2);
+    expect(state.messages[0].blocks.map((block) => block.type)).toEqual([
+      "tool_call",
+      "bg_agent_result",
+    ]);
+    expect(
+      state.messages
+        .flatMap((message) => message.blocks)
+        .filter((block) => block.type === "bg_agent_result"),
+    ).toHaveLength(1);
+  });
+
+  it("does not leave an empty assistant row when a pushed result repeats", () => {
+    let state: AppState = {
+      ...initialState,
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "Start review",
+          timestamp: 1,
+          blocks: [],
+        },
+      ],
+    };
+
+    state = reducer(state, bgDone);
+    state = {
+      ...state,
+      messages: [
+        ...state.messages,
+        {
+          id: "user-2",
+          role: "user",
+          content: "Meanwhile",
+          timestamp: 2,
+          blocks: [],
+        },
+      ],
+    };
+    state = reducer(state, { ...bgDone, summary: "Still complete." });
+
+    expect(
+      state.messages.filter(
+        (message) =>
+          message.role === "assistant" &&
+          message.blocks.length === 0 &&
+          message.content.length === 0,
+      ),
+    ).toEqual([]);
+    expect(
+      state.messages
+        .flatMap((message) => message.blocks)
+        .filter((block) => block.type === "bg_agent_result"),
+    ).toHaveLength(1);
+  });
+
+  it("preserves the live streaming shell when a background result is pushed", () => {
+    const state: AppState = {
+      ...initialState,
+      streaming: true,
+      messages: [
+        {
+          id: "assistant-complete",
+          role: "assistant",
+          content: "",
+          timestamp: 1,
+          blocks: [
+            {
+              type: "bg_agent_result",
+              sessionId: "bg-1",
+              task: "Review implementation",
+              status: "completed",
+              resultText: "Earlier result.",
+            },
+          ],
+        },
+        {
+          id: "assistant-streaming",
+          role: "assistant",
+          content: "",
+          timestamp: 2,
+          blocks: [],
+        },
+      ],
+    };
+
+    const next = reducer(state, bgDone);
+
+    expect(next.messages.map((message) => message.id)).toEqual([
+      "assistant-streaming",
+    ]);
+    expect(next.messages[0].blocks).toEqual([
+      expect.objectContaining({ type: "bg_agent_result", sessionId: "bg-1" }),
+    ]);
+  });
+
+  it("preserves the live streaming shell when get_background_result completes", () => {
+    const state: AppState = {
+      ...initialState,
+      streaming: true,
+      messages: [
+        {
+          id: "assistant-tool",
+          role: "assistant",
+          content: "",
+          timestamp: 1,
+          blocks: [
+            {
+              type: "tool_call",
+              id: "tool-result",
+              name: "get_background_result",
+              inputJson: JSON.stringify({ sessionId: "bg-1" }),
+              result: "",
+              complete: false,
+            },
+          ],
+        },
+        {
+          id: "assistant-streaming",
+          role: "assistant",
+          content: "",
+          timestamp: 2,
+          blocks: [],
+        },
+      ],
+    };
+
+    const next = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-result",
+      toolName: "get_background_result",
+      result: "Looks good.",
+      durationMs: 1,
+      input: { sessionId: "bg-1" },
+    });
+
+    expect(next.messages.map((message) => message.id)).toEqual([
+      "assistant-tool",
+      "assistant-streaming",
+    ]);
+    expect(next.messages[0].blocks.map((block) => block.type)).toEqual([
+      "tool_call",
+      "bg_agent_result",
+    ]);
+    expect(next.messages[1].blocks).toEqual([]);
+  });
+
+  it("updates one result after a completed get_background_result tool call", () => {
+    let state = stateWith(
+      [
+        {
+          type: "tool_call",
+          id: "tool-result",
+          name: "get_background_result",
+          inputJson: JSON.stringify({ sessionId: "bg-1" }),
+          result: "",
+          complete: false,
+        },
+      ],
+      true,
+    );
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-result",
+      toolName: "get_background_result",
+      result: "Looks good.",
+      durationMs: 1,
+      input: { sessionId: "bg-1" },
+    });
+    state = reducer(state, {
+      ...bgDone,
+      resultText: undefined,
+      summary: "No blocking issues.",
+    });
+
+    expect(state.messages[0].blocks.map((block) => block.type)).toEqual([
+      "tool_call",
+      "bg_agent_result",
+    ]);
+    expect(state.messages[0].blocks[1]).toMatchObject({
+      type: "bg_agent_result",
+      sessionId: "bg-1",
+      resultText: "Looks good.",
+      summary: "No blocking issues.",
+    });
   });
 
   it("appends the result after completed blocks during a streaming gap", () => {
