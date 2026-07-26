@@ -1129,6 +1129,9 @@ export function BrowserGatewayApp({
   const [modes, setModes] = useState<ModeInfo[]>([]);
   const [models, setModels] = useState<WebviewModelInfo[]>([]);
   const pendingModelSelectionRef = useRef<Promise<boolean> | null>(null);
+  const pendingNewSessionRef = useRef<Promise<GatewaySnapshot | null> | null>(
+    null,
+  );
   const [askAgentCapabilities, setAskAgentCapabilities] = useState<
     AskAgentCapabilityStatus[]
   >([]);
@@ -2638,7 +2641,22 @@ export function BrowserGatewayApp({
     targetForeground?: GatewaySnapshot["session"]["foreground"],
     interject = false,
   ): Promise<boolean> {
+    let pendingNewSessionForeground:
+      | GatewaySnapshot["session"]["foreground"]
+      | null = null;
     if (isAskAgentSelected) {
+      const pendingNewSession = pendingNewSessionRef.current;
+      if (pendingNewSession) {
+        setSendStatus("Waiting for new session…");
+        pendingNewSessionForeground =
+          (await pendingNewSession)?.session.foreground ?? null;
+        if (!pendingNewSessionForeground) {
+          setSendStatus(
+            "Message not sent because the new session failed to start.",
+          );
+          return false;
+        }
+      }
       const pendingModelSelection = pendingModelSelectionRef.current;
       if (pendingModelSelection) {
         setSendStatus("Waiting for model switch…");
@@ -2649,7 +2667,9 @@ export function BrowserGatewayApp({
       }
     }
     const activeForeground =
-      targetForeground ?? (await ensureAskAgentForeground());
+      targetForeground ??
+      pendingNewSessionForeground ??
+      (await ensureAskAgentForeground());
     if (!activeForeground) {
       logAskAgentBrowserEvent("send.ignored", {
         reason: "missing_foreground",
@@ -3159,7 +3179,14 @@ export function BrowserGatewayApp({
   }
 
   const handleNewSession = (): void => {
-    void createNewSession();
+    if (pendingNewSessionRef.current) return;
+    const pending = createNewSession();
+    pendingNewSessionRef.current = pending;
+    void pending.finally(() => {
+      if (pendingNewSessionRef.current === pending) {
+        pendingNewSessionRef.current = null;
+      }
+    });
   };
 
   const handleShowHistory = (): void => {

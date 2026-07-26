@@ -5966,16 +5966,34 @@ export class BrowserGatewayHelper {
       }
       const requestedSessionId =
         typeof body.sessionId === "string" ? body.sessionId.trim() : "";
-      if (requestedSessionId) {
-        if (!this.askAgentSessionStore.loadSession(requestedSessionId)) {
-          this.logAskAgentEvent("ask-agent.send", {
-            sessionId: requestedSessionId,
-            ok: false,
-            error: "ask_agent_session_not_found",
-          });
-          writeJson(res, 404, { error: "ask_agent_session_not_found" });
-          return;
-        }
+      if (
+        requestedSessionId &&
+        !this.askAgentSessionStore.hasSession(requestedSessionId)
+      ) {
+        this.logAskAgentEvent("ask-agent.send", {
+          sessionId: requestedSessionId,
+          ok: false,
+          error: "ask_agent_session_not_found",
+        });
+        writeJson(res, 404, { error: "ask_agent_session_not_found" });
+        return;
+      }
+      if (
+        requestedSessionId &&
+        requestedSessionId !== this.askAgentSessionStore.getActiveSessionId()
+      ) {
+        const activeSessionId = this.askAgentSessionStore.getActiveSessionId();
+        this.logAskAgentEvent("ask-agent.send", {
+          sessionId: requestedSessionId,
+          activeSessionId,
+          ok: false,
+          error: "ask_agent_session_mismatch",
+        });
+        writeJson(res, 409, {
+          error: "ask_agent_session_mismatch",
+          activeSessionId,
+        });
+        return;
       }
       if (Array.isArray(body.attachments) && body.attachments.length > 0) {
         this.logAskAgentEvent("ask-agent.send", {
@@ -5992,6 +6010,23 @@ export class BrowserGatewayHelper {
 
       const now = Date.now();
       const theme = await this.resolveInitialTheme(null);
+      if (
+        requestedSessionId &&
+        requestedSessionId !== this.askAgentSessionStore.getActiveSessionId()
+      ) {
+        const activeSessionId = this.askAgentSessionStore.getActiveSessionId();
+        this.logAskAgentEvent("ask-agent.send", {
+          sessionId: requestedSessionId,
+          activeSessionId,
+          ok: false,
+          error: "ask_agent_session_mismatch",
+        });
+        writeJson(res, 409, {
+          error: "ask_agent_session_mismatch",
+          activeSessionId,
+        });
+        return;
+      }
       const activeSessionId = this.askAgentSessionStore.getActiveSessionId();
       const priorUserTexts =
         this.askAgentSessionStore.getActiveUserMessageTexts();
@@ -6050,6 +6085,24 @@ export class BrowserGatewayHelper {
       }
       if (!duplicateUserMessage && modelContext) {
         await this.pinAskAgentModelOwner(modelContext);
+        if (
+          requestedSessionId &&
+          requestedSessionId !== this.askAgentSessionStore.getActiveSessionId()
+        ) {
+          const currentSessionId =
+            this.askAgentSessionStore.getActiveSessionId();
+          this.logAskAgentEvent("ask-agent.send", {
+            sessionId: requestedSessionId,
+            activeSessionId: currentSessionId,
+            ok: false,
+            error: "ask_agent_session_mismatch",
+          });
+          writeJson(res, 409, {
+            error: "ask_agent_session_mismatch",
+            activeSessionId: currentSessionId,
+          });
+          return;
+        }
         this.askAgentSessionStore.appendUserMessage({
           id: typeof body.id === "string" ? body.id : undefined,
           text: body.text,

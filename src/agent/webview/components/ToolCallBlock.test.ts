@@ -50,7 +50,7 @@ describe("ToolCallBlock", () => {
       }),
     );
 
-    const header = screen.getByRole("button", { name: /Bash.*npm test/i });
+    const header = screen.getByRole("button", { name: "Bash" });
     expect(header.querySelector(".codicon-check")).toBeTruthy();
     expect(header.querySelector(".codicon-modifier-spin")).toBeNull();
 
@@ -76,11 +76,34 @@ describe("ToolCallBlock", () => {
       }),
     );
 
-    const header = screen.getByRole("button", {
-      name: /Read.*src\/index\.ts/i,
-    });
+    const header = screen.getByRole("button", { name: "Read" });
     expect(header.querySelector(".codicon-error")).toBeTruthy();
     expect(header.querySelector(".codicon-modifier-spin")).toBeNull();
+  });
+
+  it("opens a collapsed summary file link without toggling the tool details", () => {
+    const onOpenFile = vi.fn();
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "summary-path",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "/tmp/tool-result.txt" }),
+          result: JSON.stringify({ total_lines: 12 }),
+          complete: true,
+        },
+        onOpenFile,
+      }),
+    );
+
+    const fileLink = screen.getByRole("link", { name: "/tmp/tool-result.txt" });
+    expect(fileLink.closest("button")).toBeNull();
+
+    fireEvent.click(fileLink);
+
+    expect(onOpenFile).toHaveBeenCalledWith("/tmp/tool-result.txt", undefined);
+    expect(screen.queryByText("Input")).toBeNull();
   });
 
   it("opens file paths from expanded JSON input and results", () => {
@@ -102,9 +125,7 @@ describe("ToolCallBlock", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /custom_tool/i }));
-    fireEvent.click(
-      screen.getByRole("link", { name: "src/agent/AgentEngine.ts" }),
-    );
+    fireEvent.click(screen.getByTitle("Open src/agent/AgentEngine.ts"));
     fireEvent.click(
       screen.getByRole("link", {
         name: "src/agent/ChatViewProvider.ts:42",

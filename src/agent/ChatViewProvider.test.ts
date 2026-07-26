@@ -432,6 +432,114 @@ vi.mock("vscode", () => ({
   },
 }));
 
+describe("tool-block file links", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it("opens absolute files outside the workspace without requiring a project root", async () => {
+    const externalFile = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-open-file-")),
+      "tool-result.txt",
+    );
+    fs.writeFileSync(externalFile, "tool output", "utf8");
+
+    try {
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      (provider as unknown as { sessionManager: unknown }).sessionManager = {
+        getForegroundSession: () => undefined,
+        getDefaultProjectScope: () => undefined,
+      };
+
+      await (
+        provider as unknown as {
+          handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+        }
+      ).handleWebviewMessage({ command: "agentOpenFile", path: externalFile });
+
+      expect(mockShowTextDocument).toHaveBeenCalledWith(
+        { fsPath: externalFile },
+        expect.any(Object),
+      );
+    } finally {
+      fs.rmSync(path.dirname(externalFile), { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve relative tool-result paths without a project root", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: () => undefined,
+      getDefaultProjectScope: () => undefined,
+    };
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "agentOpenFile",
+      path: "relative/tool-result.txt",
+    });
+
+    expect(mockShowTextDocument).not.toHaveBeenCalled();
+  });
+
+  it("resolves relative tool-result paths against the active project", async () => {
+    const projectRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-open-project-file-"),
+    );
+    const relativePath = path.join("src", "tool-result.ts");
+    const projectFile = path.join(projectRoot, relativePath);
+    fs.mkdirSync(path.dirname(projectFile), { recursive: true });
+    fs.writeFileSync(projectFile, "export {};", "utf8");
+
+    try {
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      (provider as unknown as { sessionManager: unknown }).sessionManager = {
+        getForegroundSession: () => ({
+          mode: "code",
+          projectAvailability: "available",
+          projectScope: {
+            schemaVersion: 1,
+            kind: "project",
+            projectId: "project-a",
+            workspaceFolderUri: `file://${projectRoot}`,
+            displayName: "Project A",
+            rootPath: projectRoot,
+          },
+        }),
+      };
+
+      await (
+        provider as unknown as {
+          handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+        }
+      ).handleWebviewMessage({ command: "agentOpenFile", path: relativePath });
+
+      expect(mockShowTextDocument).toHaveBeenCalledWith(
+        { fsPath: projectFile },
+        expect.any(Object),
+      );
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("browser project discovery", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -1906,6 +2014,116 @@ describe("ChatViewProvider session state sync", () => {
     await expect(writeCard).resolves.toEqual({ decision: "accept" });
     await Promise.resolve();
     expect(outsideResolved).toBe(false);
+  });
+
+  it("auto-accepts queued approvals covered by an MCP server grant", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const approvedServers = new Set<string>();
+    let onApprovalChange: (() => void) | undefined;
+    provider.setApprovalManager({
+      isMcpServerApproved: vi.fn((sessionId: string, serverName: string) =>
+        approvedServers.has(`${sessionId}:${serverName}`),
+      ),
+      onDidChange: vi.fn((listener: () => void) => {
+        onApprovalChange = listener;
+        return { dispose: vi.fn() };
+      }),
+    } as never);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => undefined),
+      getSession: vi.fn(() => undefined),
+      getWorkspaceProjects: vi.fn(() => []),
+    } as never);
+    (provider as unknown as { sendInitialState: () => void }).sendInitialState =
+      vi.fn();
+
+    const approvedRequests = [
+      provider.requestApproval(
+        {
+          id: "linear-create",
+          kind: "mcp",
+          title: "Allow linear create_issue?",
+          mcpServerName: "linear",
+          mcpToolName: "create_issue",
+          choices: [],
+        },
+        "session-a",
+      ),
+      provider.requestApproval(
+        {
+          id: "linear-list",
+          kind: "mcp",
+          title: "Allow linear list_issues?",
+          mcpServerName: "linear",
+          mcpToolName: "list_issues",
+          choices: [],
+        },
+        "session-a",
+      ),
+    ];
+    let differentServerResolved = false;
+    void provider
+      .requestApproval(
+        {
+          id: "github-create",
+          kind: "mcp",
+          title: "Allow github create_issue?",
+          mcpServerName: "github",
+          mcpToolName: "create_issue",
+          choices: [],
+        },
+        "session-a",
+      )
+      .then(() => {
+        differentServerResolved = true;
+      });
+    let differentSessionResolved = false;
+    void provider
+      .requestApproval(
+        {
+          id: "linear-other-session",
+          kind: "mcp",
+          title: "Allow linear list_issues?",
+          mcpServerName: "linear",
+          mcpToolName: "list_issues",
+          choices: [],
+        },
+        "session-b",
+      )
+      .then(() => {
+        differentSessionResolved = true;
+      });
+
+    approvedServers.add("session-a:linear");
+    onApprovalChange?.();
+
+    await expect(Promise.all(approvedRequests)).resolves.toEqual([
+      { decision: "allow-once" },
+      { decision: "allow-once" },
+    ]);
+    const internals = provider as unknown as {
+      pendingApprovals: Map<string, unknown>;
+      activeApprovalRequests: Map<string, unknown>;
+      approvalSessionById: Map<string, string>;
+      approvalSessionIndex: Map<string, Set<string>>;
+    };
+    for (const id of ["linear-create", "linear-list"]) {
+      expect(internals.pendingApprovals.has(id)).toBe(false);
+      expect(internals.activeApprovalRequests.has(id)).toBe(false);
+      expect(internals.approvalSessionById.has(id)).toBe(false);
+      expect(internals.approvalSessionIndex.get("session-a")?.has(id)).toBe(
+        false,
+      );
+    }
+
+    expect(() => onApprovalChange?.()).not.toThrow();
+    await Promise.resolve();
+    expect(differentServerResolved).toBe(false);
+    expect(differentSessionResolved).toBe(false);
   });
 
   it("updates browser write approval without resetting unrelated sessions", async () => {

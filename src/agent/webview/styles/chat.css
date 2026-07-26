@@ -1648,6 +1648,20 @@ body.chat-activity-shelf-resizing * {
   opacity: 1;
 }
 
+.tool-call-header-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
 .tool-call-chevron {
   font-size: 10px;
   opacity: 0.5;

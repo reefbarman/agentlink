@@ -3056,6 +3056,70 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     }
   });
 
+  it("waits for a new Ask Agent session before routing its first message", async () => {
+    const fallbackFetch = globalThis.fetch;
+    let resolveNewSession: ((response: Response) => void) | undefined;
+    const sendBodies: Array<{ sessionId?: string; text?: string }> = [];
+    const fetchMock = vi.fn(
+      async (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        const pathname = String(input).split("?")[0];
+        if (pathname === "/api/ask-agent/session/new") {
+          return new Promise<Response>((resolve) => {
+            resolveNewSession = resolve;
+          });
+        }
+        if (pathname === "/api/ask-agent/send") {
+          sendBodies.push(
+            JSON.parse(String(init?.body ?? "{}")) as {
+              sessionId?: string;
+              text?: string;
+            },
+          );
+          const response = createAskAgentSessionResponse();
+          response.snapshot.session.foreground.sessionId =
+            "browser-gateway:ask-agent:next";
+          return jsonResponse({ ok: true, snapshot: response.snapshot });
+        }
+        return fallbackFetch(input, init);
+      },
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    fireEvent.click(await screen.findByTitle("New Chat"));
+    await waitFor(() => expect(resolveNewSession).toBeTypeOf("function"));
+
+    fireEvent.click(screen.getByTestId("trigger-send"));
+    await screen.findByText("Waiting for new session…");
+    expect(sendBodies).toEqual([]);
+
+    const next = createAskAgentSessionResponse();
+    next.snapshot.session.foreground.sessionId =
+      "browser-gateway:ask-agent:next";
+    await act(async () => {
+      resolveNewSession?.(jsonResponse({ ok: true, snapshot: next.snapshot }));
+    });
+
+    await waitFor(() => {
+      expect(sendBodies).toHaveLength(1);
+      expect(sendBodies[0]).toMatchObject({
+        sessionId: "browser-gateway:ask-agent:next",
+        text: "Ship it",
+      });
+    });
+  });
+
   it("renders Ask Agent question and todo snapshots and routes question responses locally", async () => {
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     const askSnapshot = createAskAgentSessionResponse().snapshot;

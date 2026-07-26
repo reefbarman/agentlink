@@ -669,6 +669,7 @@ export function ToolCallBlock({
 
   const handleFileClick = useCallback(
     (e: MouseEvent, path: string, line?: number) => {
+      e.preventDefault();
       e.stopPropagation();
       onOpenFile?.(path, line);
     },
@@ -711,31 +712,37 @@ export function ToolCallBlock({
     !complete &&
     toolCall.name === "execute_command" &&
     !!onRevealToolCallTerminal;
+  const handleHeaderClick = useCallback(() => {
+    if (revealsRunningTerminal) {
+      onRevealToolCallTerminal?.(toolCall.id);
+      return;
+    }
+    setExpanded((current) => !current);
+  }, [onRevealToolCallTerminal, revealsRunningTerminal, toolCall.id]);
 
   return (
     <div class={`tool-call-block ${statusClass}`}>
       <div
         class={`tool-call-row${showRunningActions ? " tool-call-row-with-actions" : ""}`}
       >
-        <button
-          class="tool-call-header"
-          onClick={() => {
-            if (revealsRunningTerminal) {
-              onRevealToolCallTerminal(toolCall.id);
-              return;
+        <div class="tool-call-header" onClick={handleHeaderClick}>
+          <button
+            class="tool-call-header-toggle"
+            type="button"
+            onClick={(event: MouseEvent) => {
+              event.stopPropagation();
+              handleHeaderClick();
+            }}
+            title={
+              revealsRunningTerminal ? "Show the running terminal" : undefined
             }
-            setExpanded(!expanded);
-          }}
-          title={
-            revealsRunningTerminal ? "Show the running terminal" : undefined
-          }
-          type="button"
-        >
-          <i
-            class={`codicon codicon-chevron-${expanded ? "down" : "right"} tool-call-chevron`}
-          />
-          <i class={`codicon tool-call-status-icon ${statusIconClass}`} />
-          <span class="tool-call-name">{toolCall.name}</span>
+          >
+            <i
+              class={`codicon codicon-chevron-${expanded ? "down" : "right"} tool-call-chevron`}
+            />
+            <i class={`codicon tool-call-status-icon ${statusIconClass}`} />
+            <span class="tool-call-name">{toolCall.name}</span>
+          </button>
           {cmdExitBadge !== null && (
             <span class="tool-exit-badge">exit {cmdExitBadge}</span>
           )}
@@ -750,6 +757,7 @@ export function ToolCallBlock({
                     <a
                       key={i}
                       class="tool-file-link"
+                      href="#"
                       title={part.path + (part.line ? `:${part.line}` : "")}
                       onClick={(e: MouseEvent) =>
                         handleFileClick(e, part.path, part.line)
@@ -790,7 +798,7 @@ export function ToolCallBlock({
               {fmtDuration(toolCall.durationMs)}
             </span>
           )}
-        </button>
+        </div>
         {showRunningActions && (
           <div
             class="tool-call-inline-actions"

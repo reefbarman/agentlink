@@ -1,4 +1,5 @@
 import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import type { ApprovalRequest } from "../approvals/webview/types.js";
 import type { CoreWebActivity, CoreWebCitation } from "../core/webAccess.js";
 import type {
   ChatMessage,
@@ -410,6 +411,7 @@ export interface AppState {
     source?: "vscode" | "browser";
     interjectionReady?: boolean;
   }>;
+  approvalRequest: ApprovalRequest | null;
   questionRequest: {
     id: string;
     /** Visible explanation shown above structured questions. */
@@ -558,6 +560,8 @@ export type AppAction =
       slashCommandLabel?: string;
       displayMedia?: DisplayMedia;
     }
+  | { type: "SET_APPROVAL"; request: ApprovalRequest }
+  | { type: "CLEAR_APPROVAL"; id: string }
   | {
       type: "SET_QUESTION";
       id: string;
@@ -2160,6 +2164,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
     case "CLEAR_INTERACTION_PROMPTS":
       return {
         ...state,
+        approvalRequest: null,
         questionRequest: null,
         detectedQuestion: null,
         messages: clearFinalMarkerContinueActions(state.messages),
@@ -2249,6 +2254,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         estimatedTotalUsed: 0,
         todos: [],
         messageQueue: [],
+        approvalRequest: null,
         questionRequest: null,
         detectedQuestion: null,
         dismissedDetectedQuestionIds: [],
@@ -2490,6 +2496,14 @@ export function reducer(state: AppState, action: AppAction): AppState {
         pendingCheckpoints: appliedPending.pending,
       };
     }
+
+    case "SET_APPROVAL":
+      return { ...state, approvalRequest: action.request };
+
+    case "CLEAR_APPROVAL":
+      return state.approvalRequest?.id === action.id
+        ? { ...state, approvalRequest: null }
+        : state;
 
     case "SET_QUESTION": {
       const messages = addQuestionContextMessage(
@@ -2819,6 +2833,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         estimatedTotalUsed: sameSession ? state.estimatedTotalUsed : 0,
         todos: Array.isArray(action.todos) ? action.todos : [],
         messageQueue: sameSession ? state.messageQueue : [],
+        approvalRequest: sameSession ? state.approvalRequest : null,
         questionRequest: sameSession ? state.questionRequest : null,
         detectedQuestion: null,
         dismissedDetectedQuestionIds: [],
@@ -3025,6 +3040,7 @@ export const initialState: AppState = {
   availableModels: [],
   slashCommands: [],
   messageQueue: [],
+  approvalRequest: null,
   questionRequest: null,
   detectedQuestion: null,
   dismissedDetectedQuestionIds: [],

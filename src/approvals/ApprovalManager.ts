@@ -177,6 +177,11 @@ export class ApprovalManager {
     );
   }
 
+  /** True if every tool from this server has been approved for this session. */
+  isMcpServerApproved(sessionId: string, serverName: string): boolean {
+    return this.getSession(sessionId).mcpServerApprovals.includes(serverName);
+  }
+
   /** Approve a single tool for the rest of this session. */
   approveMcpTool(sessionId: string, toolName: string): void {
     this.touchSession(sessionId);

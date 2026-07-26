@@ -408,9 +408,10 @@ export type ExtensionMessage =
   | { type: "agentMcpConfigMutationResult"; result: McpConfigMutationResult }
   | {
       type: "showApproval";
+      sessionId?: string;
       request: import("../../approvals/webview/types").ApprovalRequest;
     }
-  | { type: "idle" }
+  | { type: "idle"; sessionId?: string; id: string }
   | {
       type: "regexSuggestion";
       requestId: string;

@@ -78,11 +78,17 @@ describe("session projection isolation", () => {
     });
   }
 
-  it("preserves live queue and usage fields during same-session hydration", () => {
+  it("preserves live queue, approval, and usage fields during same-session hydration", () => {
     const current: AppState = {
       ...initialState,
       chatState: { ...initialState.chatState, sessionId: "session-1" },
       messageQueue: [queuedMessage],
+      approvalRequest: {
+        kind: "write",
+        id: "approval-1",
+        filePath: "src/one.ts",
+        writeOperation: "modify",
+      },
       questionRequest: { id: "question-1", context: "", questions: [] },
       lastCacheReadTokens: 125_000,
       estimatedTotalUsed: 250_000,
@@ -91,16 +97,23 @@ describe("session projection isolation", () => {
     const loaded = loadSession(current, "session-1");
 
     expect(loaded.messageQueue).toEqual([queuedMessage]);
+    expect(loaded.approvalRequest?.id).toBe("approval-1");
     expect(loaded.questionRequest?.id).toBe("question-1");
     expect(loaded.lastCacheReadTokens).toBe(125_000);
     expect(loaded.estimatedTotalUsed).toBe(250_000);
   });
 
-  it("clears session-local queue and usage fields during cross-session hydration", () => {
+  it("clears session-local queue, approval, and usage fields during cross-session hydration", () => {
     const current: AppState = {
       ...initialState,
       chatState: { ...initialState.chatState, sessionId: "session-1" },
       messageQueue: [queuedMessage],
+      approvalRequest: {
+        kind: "write",
+        id: "approval-1",
+        filePath: "src/one.ts",
+        writeOperation: "modify",
+      },
       questionRequest: { id: "question-1", context: "", questions: [] },
       lastCacheReadTokens: 125_000,
       estimatedTotalUsed: 250_000,
@@ -109,9 +122,39 @@ describe("session projection isolation", () => {
     const loaded = loadSession(current, "session-2");
 
     expect(loaded.messageQueue).toEqual([]);
+    expect(loaded.approvalRequest).toBeNull();
     expect(loaded.questionRequest).toBeNull();
     expect(loaded.lastCacheReadTokens).toBe(0);
     expect(loaded.estimatedTotalUsed).toBe(0);
+  });
+
+  it("clears approvals only when the request identity matches", () => {
+    const approval = {
+      kind: "write" as const,
+      id: "approval-1",
+      filePath: "src/one.ts",
+      writeOperation: "modify" as const,
+    };
+    const withApproval = reducer(initialState, {
+      type: "SET_APPROVAL",
+      request: approval,
+    });
+
+    expect(
+      reducer(withApproval, { type: "CLEAR_APPROVAL", id: "approval-other" })
+        .approvalRequest,
+    ).toEqual(approval);
+    expect(
+      reducer(withApproval, { type: "CLEAR_APPROVAL", id: approval.id })
+        .approvalRequest,
+    ).toBeNull();
+    expect(
+      reducer(withApproval, { type: "CLEAR_INTERACTION_PROMPTS" })
+        .approvalRequest,
+    ).toBeNull();
+    expect(
+      reducer(withApproval, { type: "NEW_SESSION" }).approvalRequest,
+    ).toBeNull();
   });
 
   it("restores the supplied projection without retaining fields from current state", () => {

@@ -41,10 +41,15 @@ type QuestionAgentUiEvent = Extract<
   }
 >;
 
+type ApprovalAgentUiEvent = Extract<
+  AgentUiEvent,
+  { type: "showApproval" | "idle" }
+>;
+type AddressedAgentUiEvent = QuestionAgentUiEvent | ApprovalAgentUiEvent;
+
 type WebviewAgentUiMessage =
-  | Exclude<AgentUiEvent, QuestionAgentUiEvent>
-  | (QuestionAgentUiEvent & { sessionId?: string })
-  | { type: "idle" };
+  | Exclude<AgentUiEvent, AddressedAgentUiEvent>
+  | (AddressedAgentUiEvent & { sessionId?: string });
 
 export interface SessionUiEvent {
   sessionId: string;
@@ -175,22 +180,30 @@ export class FanoutAgentUiPublisher implements AgentUiPublisher {
 }
 
 export class WebviewAgentUiPublisher implements AgentUiPublisher {
-  private visibleApprovalId: string | undefined;
+  private readonly globalApprovalIds = new Set<string>();
   private readonly globalQuestionIds = new Set<string>();
 
   constructor(
     private readonly publishMessage: (message: WebviewAgentUiMessage) => void,
   ) {}
 
-  publishApproval(_sessionId: string, request: ApprovalRequest): void {
-    this.visibleApprovalId = request.id;
-    this.publishMessage({ type: "showApproval", request });
+  publishApproval(sessionId: string, request: ApprovalRequest): void {
+    if (request.backgroundTask) this.globalApprovalIds.add(request.id);
+    else this.globalApprovalIds.delete(request.id);
+    this.publishMessage({
+      type: "showApproval",
+      ...this.approvalSessionAddress(sessionId, request.id),
+      request,
+    });
   }
 
-  publishApprovalIdle(_sessionId: string, id: string): void {
-    if (this.visibleApprovalId !== id) return;
-    this.visibleApprovalId = undefined;
-    this.publishMessage({ type: "idle" });
+  publishApprovalIdle(sessionId: string, id: string): void {
+    this.publishMessage({
+      type: "idle",
+      ...this.approvalSessionAddress(sessionId, id),
+      id,
+    });
+    this.globalApprovalIds.delete(id);
   }
 
   publishQuestionRequest(
@@ -230,6 +243,13 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
       ...this.questionSessionAddress(sessionId, progress.id),
       ...progress,
     });
+  }
+
+  private approvalSessionAddress(
+    sessionId: string,
+    approvalId: string,
+  ): { sessionId?: string } {
+    return this.globalApprovalIds.has(approvalId) ? {} : { sessionId };
   }
 
   private questionSessionAddress(

@@ -390,9 +390,11 @@ export function App({
   const [chatTabConfirmation, setChatTabConfirmation] =
     useState<ChatTabActionConfirmationRequest | null>(null);
   const [chatTabFailure, setChatTabFailure] = useState<string | null>(null);
-  const [forwardedApproval, setForwardedApproval] =
-    useState<ApprovalRequest | null>(null);
-  const forwardedApprovalRef = useRef<ApprovalRequest | null>(null);
+  const [globalApproval, setGlobalApproval] = useState<ApprovalRequest | null>(
+    null,
+  );
+  const globalApprovalRef = useRef<ApprovalRequest | null>(null);
+  globalApprovalRef.current = globalApproval;
   const [approvalPanelHeight, setApprovalPanelHeight] = useState(
     DEFAULT_APPROVAL_PANEL_HEIGHT,
   );
@@ -889,12 +891,22 @@ export function App({
           }
           break;
         case "showApproval":
-          forwardedApprovalRef.current = msg.request as ApprovalRequest;
-          setForwardedApproval(msg.request as ApprovalRequest);
+          if (msg.sessionId === undefined) {
+            globalApprovalRef.current = msg.request;
+            setGlobalApproval(msg.request);
+          } else {
+            dispatch({ type: "SET_APPROVAL", request: msg.request });
+          }
           break;
         case "idle":
-          forwardedApprovalRef.current = null;
-          setForwardedApproval(null);
+          if (msg.sessionId === undefined) {
+            if (globalApprovalRef.current?.id === msg.id) {
+              globalApprovalRef.current = null;
+              setGlobalApproval(null);
+            }
+          } else {
+            dispatch({ type: "CLEAR_APPROVAL", id: msg.id });
+          }
           break;
 
         case "agentCondense":
@@ -995,8 +1007,6 @@ export function App({
         case "agentInteractionPromptsCleared":
           activeDetectRequestRef.current = null;
           dispatch({ type: "CLEAR_INTERACTION_PROMPTS" });
-          forwardedApprovalRef.current = null;
-          setForwardedApproval(null);
           setElicitation(null);
           setRemoteQuestionProgress(null);
           break;
@@ -1851,8 +1861,6 @@ export function App({
     if (stateRef.current.sessionId) {
       activeDetectRequestRef.current = null;
       dispatch({ type: "CLEAR_INTERACTION_PROMPTS" });
-      forwardedApprovalRef.current = null;
-      setForwardedApproval(null);
       setElicitation(null);
       setRemoteQuestionProgress(null);
       vscodeApi.postMessage({
@@ -2009,7 +2017,8 @@ export function App({
   useEffect(() => {
     if (!autoContinueEnabled || state.streaming) return;
     if (!state.chatState.sessionId) return;
-    if (state.questionRequest || forwardedApproval) return;
+    if (state.questionRequest || globalApproval || state.approvalRequest)
+      return;
 
     const lastMessage = state.messages[state.messages.length - 1];
     if (lastMessage?.error) {
@@ -2082,8 +2091,9 @@ export function App({
     );
   }, [
     autoContinueEnabled,
-    forwardedApproval,
+    globalApproval,
     handleSend,
+    state.approvalRequest,
     state.chatState.sessionId,
     state.messages,
     state.questionRequest,
@@ -2364,13 +2374,14 @@ export function App({
   const handleForwardedApprovalSubmit = useCallback(
     (data: Omit<DecisionMessage, "type">) => {
       const submittedApprovalId = data.id;
-      const approvalKind = forwardedApprovalRef.current?.kind;
-      setForwardedApproval((current) => {
-        if (!current || current.id === submittedApprovalId) return null;
-        return current;
-      });
-      if (forwardedApprovalRef.current?.id === submittedApprovalId) {
-        forwardedApprovalRef.current = null;
+      const approvalKind =
+        globalApprovalRef.current?.kind ??
+        fullStateRef.current.approvalRequest?.kind;
+      if (globalApprovalRef.current?.id === submittedApprovalId) {
+        globalApprovalRef.current = null;
+        setGlobalApproval(null);
+      } else {
+        dispatch({ type: "CLEAR_APPROVAL", id: submittedApprovalId });
       }
       forwardedFollowUpRef.current = "";
       vscodeApi.postMessage({
@@ -3011,7 +3022,9 @@ export function App({
               streamingMetricsScope={state.chatState.sessionId ?? "foreground"}
             />
             <ChatActivityShelf
-              revealKey={forwardedApproval?.id ?? null}
+              revealKey={
+                globalApproval?.id ?? state.approvalRequest?.id ?? null
+              }
               revealMinHeight={approvalPanelHeight + 10}
             >
               <MessageQueuePanel
@@ -3321,9 +3334,9 @@ export function App({
                   }}
                 />
               )}
-              {forwardedApproval && (
+              {(globalApproval ?? state.approvalRequest) && (
                 <ApprovalPanelEmbed
-                  request={forwardedApproval}
+                  request={(globalApproval ?? state.approvalRequest)!}
                   height={approvalPanelHeight}
                   resizing={approvalResizing}
                   followUpRef={forwardedFollowUpRef}

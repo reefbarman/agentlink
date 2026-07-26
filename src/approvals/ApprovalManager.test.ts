@@ -193,11 +193,20 @@ describe("ApprovalManager session approval persistence", () => {
     expect(
       approvalManager.isMcpApproved("session-a", "github__list_issues"),
     ).toBe(false);
+    expect(approvalManager.isMcpServerApproved("session-a", "linear")).toBe(
+      true,
+    );
+    expect(approvalManager.isMcpServerApproved("session-b", "linear")).toBe(
+      false,
+    );
 
     approvalManager.clearSession("session-a");
     expect(
       approvalManager.isMcpApproved("session-a", "linear__list_issues"),
     ).toBe(false);
+    expect(approvalManager.isMcpServerApproved("session-a", "linear")).toBe(
+      false,
+    );
   });
 
   it.each([

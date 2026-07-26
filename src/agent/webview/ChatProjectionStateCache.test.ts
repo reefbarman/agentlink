@@ -5,7 +5,11 @@ import { ChatProjectionStateCache } from "./ChatProjectionStateCache.js";
 
 function stateFor(
   sessionId: string,
-  options: { estimatedTotalUsed: number; queueText?: string },
+  options: {
+    estimatedTotalUsed: number;
+    queueText?: string;
+    approvalId?: string;
+  },
 ): AppState {
   return {
     ...structuredClone(initialState),
@@ -18,6 +22,14 @@ function stateFor(
     messageQueue: options.queueText
       ? [{ id: `queue-${sessionId}`, text: options.queueText }]
       : [],
+    approvalRequest: options.approvalId
+      ? {
+          kind: "write",
+          id: options.approvalId,
+          filePath: `src/${sessionId}.ts`,
+          writeOperation: "modify",
+        }
+      : null,
     modes: [{ slug: "code", name: "Code", icon: "code" }],
     availableModels: [],
     slashCommands: [],
@@ -52,6 +64,21 @@ describe("ChatProjectionStateCache", () => {
       { id: "queue-session-1", text: "queued for session one" },
     ]);
     expect(restored.modes).toEqual(shared.modes);
+  });
+
+  it("restores approval cards only for the owning session", () => {
+    const cache = new ChatProjectionStateCache();
+    cache.save(
+      stateFor("session-2", {
+        estimatedTotalUsed: 0,
+        approvalId: "approval-2",
+      }),
+    );
+
+    expect(cache.restore("session-1", shared).approvalRequest).toBeNull();
+    expect(cache.restore("session-2", shared).approvalRequest?.id).toBe(
+      "approval-2",
+    );
   });
 
   it("drops closed sessions without affecting retained projections", () => {

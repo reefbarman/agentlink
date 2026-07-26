@@ -168,6 +168,80 @@ describe("App chat workspace integration", () => {
     });
   });
 
+  it("routes approval cards and clears to their owning tab and request", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+
+    deliver({
+      type: "showApproval",
+      sessionId: "session-2",
+      request: {
+        kind: "write",
+        id: "approval-b",
+        filePath: "src/only-t2.ts",
+        writeOperation: "modify",
+      },
+    });
+
+    expect(screen.queryByText("src/only-t2.ts")).toBeNull();
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B"));
+
+    await waitFor(() => {
+      expect(screen.getByText("src/only-t2.ts")).toBeTruthy();
+    });
+
+    deliver({ type: "idle", sessionId: "session-1", id: "approval-b" });
+    deliver({ type: "idle", sessionId: "session-2", id: "approval-other" });
+    expect(screen.getByText("src/only-t2.ts")).toBeTruthy();
+
+    deliver({ type: "idle", sessionId: "session-2", id: "approval-b" });
+    await waitFor(() => {
+      expect(screen.queryByText("src/only-t2.ts")).toBeNull();
+    });
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+    expect(screen.queryByText("src/only-t2.ts")).toBeNull();
+  });
+
+  it("keeps background approvals globally visible and clears them across tab switches", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+
+    deliver({
+      type: "showApproval",
+      request: {
+        kind: "write",
+        id: "approval-bg",
+        filePath: "src/background-global.ts",
+        writeOperation: "modify",
+        backgroundTask: "Detached review",
+      },
+    });
+
+    expect(screen.getByText("src/background-global.ts")).toBeTruthy();
+    expect(screen.getByText("Detached review")).toBeTruthy();
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B"));
+    expect(screen.getByText("src/background-global.ts")).toBeTruthy();
+
+    deliver({ type: "idle", id: "approval-bg" });
+    await waitFor(() => {
+      expect(screen.queryByText("src/background-global.ts")).toBeNull();
+    });
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+    expect(screen.queryByText("src/background-global.ts")).toBeNull();
+  });
+
   it("keeps coordinator-less background questions globally visible", () => {
     const vscodeApi = createVsCodeApi();
     render(<App vscodeApi={vscodeApi} />);

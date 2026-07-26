@@ -531,8 +531,8 @@ export type ExtensionToWebview =
       configSnapshot?: McpConfigSnapshot;
     }
   | { type: "agentMcpConfigMutationResult"; result: McpConfigMutationResult }
-  | { type: "showApproval"; request: ApprovalRequest }
-  | { type: "idle" }
+  | { type: "showApproval"; sessionId?: string; request: ApprovalRequest }
+  | { type: "idle"; sessionId?: string; id: string }
   | {
       type: "regexSuggestion";
       requestId: string;
@@ -1474,6 +1474,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.approvalManager = manager;
     this.approvalManagerListener?.dispose();
     this.approvalManagerListener = manager.onDidChange(() => {
+      const acceptedMcpRequests =
+        this.resolveMcpApprovalsCoveredByServerAuthority();
+      if (acceptedMcpRequests > 0) {
+        this.log(
+          `[approval] auto-accepted ${acceptedMcpRequests} pending MCP approval(s) covered by server approval`,
+        );
+      }
       this.sendInitialState();
     });
   }
@@ -1663,6 +1670,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (!resolve) continue;
       this.pendingApprovals.delete(id);
       resolve({ decision: "accept" });
+      accepted += 1;
+    }
+    return accepted;
+  }
+
+  private resolveMcpApprovalsCoveredByServerAuthority(): number {
+    if (!this.approvalManager) return 0;
+    let accepted = 0;
+    for (const [id, request] of this.activeApprovalRequests) {
+      if (request.kind !== "mcp" || !request.mcpServerName) continue;
+      const sessionId = this.approvalSessionById.get(id);
+      if (
+        !sessionId ||
+        !this.approvalManager.isMcpServerApproved(
+          sessionId,
+          request.mcpServerName,
+        )
+      ) {
+        continue;
+      }
+      const resolve = this.pendingApprovals.get(id);
+      if (!resolve) continue;
+      this.pendingApprovals.delete(id);
+      resolve({ decision: "allow-once" });
       accepted += 1;
     }
     return accepted;
@@ -6940,17 +6971,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentOpenFile": {
-        const filePath = msg.path as string;
-        const line = msg.line as number | undefined;
+        const filePath = typeof msg.path === "string" ? msg.path.trim() : "";
+        const line = typeof msg.line === "number" ? msg.line : undefined;
         if (!filePath) break;
-        const workspaceRoot = this.getCustomizationSelection()?.scope.rootPath;
-        if (!workspaceRoot) break;
-        const absPath = path.isAbsolute(filePath)
+        const projectRoot = this.getCustomizationSelection()?.scope.rootPath;
+        const absolutePath = path.isAbsolute(filePath)
           ? filePath
-          : path.join(workspaceRoot, filePath);
-        this.revealPathInEditor(absPath, line).then(undefined, (err) => {
-          this.log(`[error] Failed to open path: ${err}`);
-        });
+          : projectRoot
+            ? path.resolve(projectRoot, filePath)
+            : undefined;
+        if (!absolutePath) break;
+        await this.revealPathInEditor(absolutePath, line);
         break;
       }
 

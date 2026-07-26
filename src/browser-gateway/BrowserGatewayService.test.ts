@@ -372,7 +372,7 @@ describe("BrowserGatewayService", () => {
     hub.dispose();
   });
 
-  it("mirrors instance-global approvals without allowing cross-session clears", () => {
+  it("mirrors background approvals globally without allowing cross-session clears", () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();
     const initialForeground = sessionManager.getForegroundSession();
@@ -394,6 +394,7 @@ describe("BrowserGatewayService", () => {
       id: "global-approval",
       filePath: "src/global.ts",
       writeOperation: "modify",
+      backgroundTask: "Detached review",
     });
 
     expect(service.getSerializableState().approval?.id).toBe("global-approval");
@@ -1472,6 +1473,17 @@ describe("BrowserGatewayService", () => {
       filePath: "src/late.ts",
       writeOperation: "modify",
     });
+    expect(service.getUiState().approval?.id).toBe("approval-2");
+
+    hub.publishApprovalIdle("session-2", "approval-other");
+    expect(service.getUiState().approval?.id).toBe("approval-2");
+    hub.publishApprovalIdle("session-1", "approval-2");
+    expect(service.getUiState().approval?.id).toBe("approval-2");
+    hub.publishApprovalIdle("session-2", "approval-2");
+    expect(service.getUiState().approval).toBeUndefined();
+
+    foregroundSessionId = "session-1";
+    sessionListener?.();
     expect(service.getUiState().approval?.id).toBe("approval-1-late");
 
     service.dispose();
