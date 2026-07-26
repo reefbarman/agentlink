@@ -25,6 +25,7 @@ import {
   buildMcpToolCatalogSection,
   type McpToolDisclosureCatalogEntry,
 } from "./mcpToolDisclosure.js";
+import { TODO_COMPACTION_GUIDANCE } from "./todoTool.js";
 
 export interface PromptArtifacts {
   systemPrompt: string;
@@ -132,6 +133,7 @@ Use \`todo_write\` for multi-step work when a visible task list will help. Once 
 - Keep exactly one item \`in_progress\` while actively working. Before moving to another item, update the list in the same transition: mark the finished item \`completed\` and the next item \`in_progress\`.
 - Mark completion promptly after the outcome is achieved and verified. Do not leave finished work pending/in-progress until the end, and do not mark future work complete prematurely.
 - Never silently drop an unfinished item. Remove it only if it is no longer part of the user's ask or has been explicitly superseded; otherwise keep it visible and accurate.
+- ${TODO_COMPACTION_GUIDANCE}
 - Treat stale status as bookkeeping to repair, not evidence that work must be repeated. After condensing, resuming, receiving new evidence, or noticing mismatch with the workspace, call \`todo_write\` to reconcile the complete list before continuing.
 - Before any final \`set_task_status\`, verify the TODO list matches the claimed outcome. Use \`completeTodos: true\` only when every remaining listed item was actually completed; for waiting, blocked, or cancelled outcomes, leave the exact unfinished work visible.
 

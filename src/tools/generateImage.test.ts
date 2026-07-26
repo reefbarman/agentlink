@@ -57,7 +57,9 @@ describe("requestImageGenerationApprovalForTest", () => {
     }));
 
     const result = await requestImageGenerationApprovalForTest({
-      approvalManager: {} as never,
+      approvalManager: {
+        isBuiltInToolApproved: vi.fn().mockReturnValue(false),
+      } as never,
       sessionId: "session-1",
       onApprovalRequest,
       prompt: "Create a colorful Gemini icon with no text.",
@@ -98,7 +100,83 @@ describe("requestImageGenerationApprovalForTest", () => {
     expect(approvalRequest?.detail).toContain(
       "Reference images (1):\n- image_1 (hexaza.png)",
     );
+    expect(approvalRequest?.detail).toContain(
+      "Generate for Session also authorizes later generate_image calls in this chat, including creation of new workspace PNG outputs.",
+    );
     expect(onApprovalRequest.mock.calls[0]?.[1]).toBe("session-1");
+  });
+
+  it("promotes generate_image approval for the rest of the session", async () => {
+    const approvalManager = {
+      isBuiltInToolApproved: vi.fn().mockReturnValue(false),
+      approveBuiltInTool: vi.fn(),
+    };
+    const onApprovalRequest = vi.fn<OnApprovalRequest>(async () => ({
+      decision: "accept-session",
+    }));
+
+    const result = await requestImageGenerationApprovalForTest({
+      approvalManager: approvalManager as never,
+      sessionId: "session-1",
+      onApprovalRequest,
+      prompt: "Create an icon.",
+      count: 1,
+      billing: "OpenAI API key billing",
+    });
+
+    expect(result.approved).toBe(true);
+    expect(approvalManager.approveBuiltInTool).toHaveBeenCalledWith(
+      "session-1",
+      "generate_image",
+    );
+    expect(onApprovalRequest.mock.calls[0]?.[0].choices).toEqual([
+      { label: "Generate", value: "accept", isPrimary: true },
+      { label: "Generate for Session", value: "accept-session" },
+      { label: "Deny", value: "reject", isDanger: true },
+    ]);
+  });
+
+  it("skips the prompt when generate_image is approved for the session", async () => {
+    const approvalManager = {
+      isBuiltInToolApproved: vi.fn().mockReturnValue(true),
+      approveBuiltInTool: vi.fn(),
+    };
+    const onApprovalRequest = vi.fn<OnApprovalRequest>();
+
+    const result = await requestImageGenerationApprovalForTest({
+      approvalManager: approvalManager as never,
+      sessionId: "session-1",
+      onApprovalRequest,
+      prompt: "Create an icon.",
+      count: 1,
+      billing: "OpenAI API key billing",
+    });
+
+    expect(result).toEqual({ approved: true });
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+    expect(approvalManager.approveBuiltInTool).not.toHaveBeenCalled();
+  });
+
+  it("rejects unadvertised accept-prefixed decisions", async () => {
+    const approvalManager = {
+      isBuiltInToolApproved: vi.fn().mockReturnValue(false),
+      approveBuiltInTool: vi.fn(),
+    };
+    const onApprovalRequest = vi.fn<OnApprovalRequest>(async () => ({
+      decision: "accept-always",
+    }));
+
+    const result = await requestImageGenerationApprovalForTest({
+      approvalManager: approvalManager as never,
+      sessionId: "session-1",
+      onApprovalRequest,
+      prompt: "Create an icon.",
+      count: 1,
+      billing: "OpenAI API key billing",
+    });
+
+    expect(result.approved).toBe(false);
+    expect(approvalManager.approveBuiltInTool).not.toHaveBeenCalled();
   });
 
   it("preserves rejection reasons from approval cards", async () => {
@@ -108,7 +186,9 @@ describe("requestImageGenerationApprovalForTest", () => {
     }));
 
     const result = await requestImageGenerationApprovalForTest({
-      approvalManager: {} as never,
+      approvalManager: {
+        isBuiltInToolApproved: vi.fn().mockReturnValue(false),
+      } as never,
       sessionId: "session-1",
       onApprovalRequest,
       prompt: "Create an icon.",
@@ -171,7 +251,9 @@ describe("handleGenerateImage", () => {
 
     const result = await handleGenerateImage(
       { prompt: "Create a test image", count: 1 },
-      {} as never,
+      {
+        isBuiltInToolApproved: vi.fn().mockReturnValue(false),
+      } as never,
       "session-1",
       onApprovalRequest,
     );

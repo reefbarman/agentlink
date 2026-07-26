@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.17.82",
+  "version": "1.17.84",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -208,6 +208,14 @@
       {
         "command": "agentlink.setupSemanticSearch",
         "title": "AgentLink: Set Up Semantic Search"
+      },
+      {
+        "command": "agentlink.popChatTab",
+        "title": "AgentLink: Pop Out Chat Tab"
+      },
+      {
+        "command": "agentlink.dockChatTab",
+        "title": "AgentLink: Dock Chat Tab"
       }
     ],
     "menus": {
@@ -800,41 +808,6 @@
           "default": 8,
           "description": "Maximum number of background agents running at once. Launches beyond the limit are queued and start as slots free up. Also caps concurrency per root session and per provider."
         },
-        "agentlink.questionDetection.llmEnabled": {
-          "scope": "window",
-          "type": "boolean",
-          "default": false,
-          "description": "Deprecated: use agentlink.questionDetection.mode instead. When true, mapped to mode=\"openai\".",
-          "deprecationMessage": "Use agentlink.questionDetection.mode instead."
-        },
-        "agentlink.questionDetection.baseUrl": {
-          "scope": "window",
-          "type": "string",
-          "default": "",
-          "description": "Deprecated: use agentlink.openaiCompatible.baseUrl instead.",
-          "deprecationMessage": "Use agentlink.openaiCompatible.baseUrl instead."
-        },
-        "agentlink.questionDetection.model": {
-          "scope": "window",
-          "type": "string",
-          "default": "",
-          "description": "Deprecated: use agentlink.openaiCompatible.model instead.",
-          "deprecationMessage": "Use agentlink.openaiCompatible.model instead."
-        },
-        "agentlink.questionDetection.apiKey": {
-          "scope": "window",
-          "type": "string",
-          "default": "",
-          "description": "Deprecated: use agentlink.openaiCompatible.apiKey instead.",
-          "deprecationMessage": "Use agentlink.openaiCompatible.apiKey instead."
-        },
-        "agentlink.questionDetection.timeoutMs": {
-          "scope": "window",
-          "type": "number",
-          "default": 0,
-          "description": "Deprecated: use agentlink.openaiCompatible.timeoutMs instead.",
-          "deprecationMessage": "Use agentlink.openaiCompatible.timeoutMs instead."
-        },
         "agentlink.autoIndex": {
           "scope": "resource",
           "type": "boolean",
@@ -910,12 +883,6 @@
           "default": "-worktrees",
           "description": "Suffix for the sibling worktree container used by start_worktree_agent when no worktreePath is provided. Default paths are <repo-parent>/<repo-name><suffix>/<sanitized-workstream-name>."
         },
-        "agentlink.agentModel": {
-          "scope": "resource",
-          "type": "string",
-          "default": "gpt-5.6-sol",
-          "description": "Legacy global fallback model for the built-in agent chat. Use agentlink.modeModelPreferences for mode-specific defaults."
-        },
         "agentlink.modeModelPreferences": {
           "scope": "resource",
           "type": "object",
@@ -979,15 +946,6 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically condense the conversation context when the context window fills up."
-        },
-        "agentlink.autoCondenseThreshold": {
-          "scope": "window",
-          "type": "number",
-          "default": 0.9,
-          "minimum": 0.1,
-          "maximum": 1,
-          "deprecationMessage": "Use agentlink.modelCondenseThresholds instead.",
-          "description": "Legacy global auto-condense threshold used for migration. New per-model thresholds are stored in agentlink.modelCondenseThresholds."
         },
         "agentlink.modelCondenseThresholds": {
           "scope": "resource",

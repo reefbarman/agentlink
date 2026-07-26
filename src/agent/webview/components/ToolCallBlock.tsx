@@ -149,16 +149,11 @@ function getGenericInputSummary(
   if (!input) return [];
   const description = String(input.description ?? "").trim();
   if (description) {
-    return [{ type: "text", text: description.slice(0, 100) }];
+    return [{ type: "text", text: truncateSummaryText(description, 100) }];
   }
   const command = String(input.command ?? "").trim();
   if (command) {
-    return [
-      {
-        type: "text",
-        text: command.length > 80 ? command.slice(0, 77) + "..." : command,
-      },
-    ];
+    return [{ type: "text", text: truncateSummaryText(command, 80) }];
   }
   const path = String(input.path ?? input.file_path ?? "").trim();
   if (path) return [filePart(path)];
@@ -255,8 +250,7 @@ function getToolSummary(
       // Reserve space for exit/approval badges; truncate command to fit
       const maxLen =
         exitCode !== null && exitCode !== "0" ? 48 : approvalBadge ? 50 : 60;
-      const cmdText =
-        cmd.length > maxLen ? cmd.slice(0, maxLen - 3) + "..." : cmd;
+      const cmdText = truncateSummaryText(cmd, maxLen);
       const parts: SummaryPart[] = [];
       if (exitCode !== null && exitCode !== "0") {
         parts.push({ type: "text", text: `\x00exit:${exitCode}` }); // sentinel for exit badge — rendered before command
@@ -321,13 +315,23 @@ function getToolSummary(
     default: {
       const inputSummary = getGenericInputSummary(input);
       if (inputSummary.length > 0) return inputSummary;
-      const t =
-        displayResult.length > 60
-          ? displayResult.slice(0, 57) + "..."
-          : displayResult || "";
+      const t = truncateSummaryText(displayResult, 60);
       return [{ type: "text", text: t }];
     }
   }
+}
+
+function truncateSummaryText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  const crossingPath = matchFilePaths(text).find(
+    (match) =>
+      match.index < maxLength &&
+      match.index + match.fullMatch.length > maxLength,
+  );
+  if (crossingPath) {
+    return `${text.slice(0, crossingPath.index)}${crossingPath.fullMatch}...`;
+  }
+  return `${text.slice(0, maxLength - 3)}...`;
 }
 
 /** Create a file link summary part. */
@@ -774,7 +778,12 @@ export function ToolCallBlock({
                       {part.text}
                     </span>
                   ) : (
-                    <span key={i}>{part.text}</span>
+                    <span key={i}>
+                      <FilePathLinkedText
+                        text={part.text}
+                        onOpenFile={onOpenFile}
+                      />
+                    </span>
                   ),
                 )}
             </span>

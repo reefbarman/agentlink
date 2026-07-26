@@ -19,6 +19,10 @@ export interface TodoItem {
 // ── Tool definition for Claude SDK ──
 
 export const TODO_TOOL_NAME = "todo_write";
+export const TODO_COMPACTION_THRESHOLD = 10;
+export const TODO_RECENT_COMPLETED_LIMIT = 3;
+export const TODO_COMPLETED_HISTORY_ID = "completed-history";
+export const TODO_COMPACTION_GUIDANCE = `When the top-level list exceeds ${TODO_COMPACTION_THRESHOLD} items, compact older completed work: keep every unfinished item and the ${TODO_RECENT_COMPLETED_LIMIT} most recent ordinary completed items (excluding the history summary), then replace earlier completed items with one concise completed summary item whose id is "${TODO_COMPLETED_HISTORY_ID}". Reuse and update that summary on later calls. It must state how many tasks it represents and briefly describe their outcomes; do not retain the replaced items as children. Count only top-level items for this limit.`;
 
 export const todoTool: ToolDefinition = {
   name: TODO_TOOL_NAME,
@@ -37,6 +41,7 @@ Task rules:
 - Mark an item completed immediately after its outcome is achieved and verified; do not batch status updates until the end
 - After new evidence, user direction, or scope changes, promptly add, revise, reorder, or remove items so descriptions and statuses remain true
 - Never silently drop unfinished items. Remove one only when it is no longer part of the user's ask or is explicitly superseded, and preserve completed items as progress history
+- ${TODO_COMPACTION_GUIDANCE}
 - If the list looks stale after condensing or resuming, reconcile it against the conversation and current workspace before continuing. Update stale statuses; do not redo completed work merely because an item still says pending
 - When finishing the turn and all visible todos are complete, use set_task_status with status="completed" and completeTodos=true instead of a final todo_write only to mark todos complete
 - Use nested children to break complex tasks into sub-steps
@@ -106,15 +111,48 @@ export function handleTodoWrite(input: TodoToolInput): {
 
   const counts = countTodos(todos);
   const summary = `Updated: ${counts.completed}/${counts.total} complete, ${counts.inProgress} in progress, ${counts.pending} pending`;
-  const guidance =
-    counts.inProgress > 1
-      ? ` Warning: ${counts.inProgress} items are in_progress; reconcile the complete list so exactly one actual current item is in_progress before continuing.`
-      : "";
+  const guidance: string[] = [];
+  if (counts.inProgress > 1) {
+    guidance.push(
+      `Warning: ${counts.inProgress} items are in_progress; reconcile the complete list so exactly one actual current item is in_progress before continuing.`,
+    );
+  }
+
+  const olderCompletedCount = countOlderCompletedItems(todos);
+  if (olderCompletedCount > 0) {
+    guidance.push(
+      `Cleanup required: this list has ${todos.length} top-level items. Fold the ${olderCompletedCount} older completed ${olderCompletedCount === 1 ? "item" : "items"} into the completed summary with id "${TODO_COMPLETED_HISTORY_ID}" before continuing; reuse and update that item if it already exists, otherwise create it. Keep every unfinished item and the ${TODO_RECENT_COMPLETED_LIMIT} most recent ordinary completed items, excluding the history summary. Do not keep the replaced items as children.`,
+    );
+  }
 
   return {
-    content: summary + guidance,
+    content: [summary, ...guidance].join(" "),
     todos,
   };
+}
+
+function countOlderCompletedItems(todos: TodoItem[]): number {
+  if (todos.length <= TODO_COMPACTION_THRESHOLD) return 0;
+
+  const hasCompletedHistory = todos.some(
+    (todo) =>
+      todo.id === TODO_COMPLETED_HISTORY_ID && todo.status === "completed",
+  );
+  const completedCount = todos.reduce(
+    (count, todo) =>
+      count +
+      (todo.status === "completed" && todo.id !== TODO_COMPLETED_HISTORY_ID
+        ? 1
+        : 0),
+    0,
+  );
+  const olderCompletedCount = Math.max(
+    0,
+    completedCount - TODO_RECENT_COMPLETED_LIMIT,
+  );
+  return hasCompletedHistory || olderCompletedCount >= 2
+    ? olderCompletedCount
+    : 0;
 }
 
 export function hasPendingTodos(todos: TodoItem[]): boolean {

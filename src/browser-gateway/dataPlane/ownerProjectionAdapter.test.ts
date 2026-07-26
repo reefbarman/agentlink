@@ -83,6 +83,37 @@ function readSet(): BrowserGatewayOwnerProjectionReadSet {
       ],
       defaultProjectId: "project-1",
       foregroundSessionId: "session-1",
+      chatWorkspace: {
+        controllerEpoch: "controller-1",
+        focusedTabId: "tab-1",
+        tabs: [
+          {
+            tabId: "tab-1",
+            displayNumber: 1,
+            label: "T1",
+            sessionId: "session-1",
+            placement: "popped",
+            title: "Relay work",
+            status: "queued_for_provider",
+            busy: true,
+            needsAttention: true,
+            mode: "code",
+            model: "gpt-5.6-sol",
+            interactiveExecutionPhase: "queued_for_provider",
+            estimatedTokens: 1_000,
+            maximumTokens: 200_000,
+          },
+          {
+            tabId: "tab-2",
+            displayNumber: 2,
+            label: "T2",
+            sessionId: null,
+            placement: "docked",
+            status: "idle",
+            busy: false,
+          },
+        ],
+      },
     },
     foreground: {
       sessionId: "session-1",
@@ -429,6 +460,34 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     expect(checkpoint.catalog).toMatchObject({
       defaultProjectId: "project-1",
       foregroundSessionId: "session-1",
+      chatWorkspace: {
+        controllerEpoch: "controller-1",
+        focusedTabId: "tab-1",
+        tabs: [
+          {
+            tabId: "tab-1",
+            displayNumber: 1,
+            label: "T1",
+            sessionId: "session-1",
+            placement: "popped",
+            status: "queued_for_provider",
+            busy: true,
+            needsAttention: true,
+            mode: "code",
+            model: "gpt-5.6-sol",
+            interactiveExecutionPhase: "queued_for_provider",
+            estimatedTokens: 1_000,
+            maximumTokens: 200_000,
+          },
+          {
+            tabId: "tab-2",
+            sessionId: null,
+            placement: "docked",
+            status: "idle",
+            busy: false,
+          },
+        ],
+      },
     });
     expect(checkpoint.transcript.messages).toEqual([
       expect.objectContaining({

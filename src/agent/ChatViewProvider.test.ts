@@ -1180,19 +1180,70 @@ describe("ChatViewProvider session state sync", () => {
     ).resolves.toEqual({ ok: true });
 
     expect(setModel).toHaveBeenCalledWith("openrouter-moonshotai-kimi-k3");
-    expect(mockConfigUpdate).toHaveBeenNthCalledWith(
-      1,
-      "agentModel",
-      "openrouter-moonshotai-kimi-k3",
-      1,
-    );
-    expect(mockConfigUpdate).toHaveBeenNthCalledWith(
-      2,
+    expect(mockConfigUpdate).toHaveBeenCalledOnce();
+    expect(mockConfigUpdate).toHaveBeenCalledWith(
       "modeModelPreferences",
       { ask: "openrouter-moonshotai-kimi-k3" },
       1,
     );
     expect(sendInitialState).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the legacy foreground mode-switch path without an explicit session", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const projectScope = {
+      schemaVersion: 1 as const,
+      kind: "project" as const,
+      projectId: "project-1",
+      workspaceFolderUri: "file:///workspace/project",
+      displayName: "Project",
+      rootPath: "/workspace/project",
+    };
+    const session = {
+      id: "session-1",
+      mode: "code",
+      projectScope,
+    };
+    const updated = { ...session, mode: "debug" };
+    const switchForegroundMode = vi.fn(async () => updated);
+    const switchSessionMode = vi.fn(async () => updated);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getWorkspaceProjects: vi.fn(() => [
+        {
+          id: projectScope.projectId,
+          name: projectScope.displayName,
+          uri: projectScope.workspaceFolderUri,
+          rootPath: projectScope.rootPath,
+          availability: { status: "available" },
+        },
+      ]),
+      switchForegroundMode,
+      switchSessionMode,
+    } as never);
+    (
+      provider as unknown as {
+        reconcileSessionApprovalAfterModeSwitch(sessionId: string): void;
+        sendInitialState(): void;
+      }
+    ).reconcileSessionApprovalAfterModeSwitch = vi.fn();
+    (
+      provider as unknown as {
+        reconcileSessionApprovalAfterModeSwitch(sessionId: string): void;
+        sendInitialState(): void;
+      }
+    ).sendInitialState = vi.fn();
+
+    await expect(
+      provider.submitBrowserModeSwitch("debug", projectScope.projectId),
+    ).resolves.toEqual({ approved: true, mode: "debug" });
+
+    expect(switchForegroundMode).toHaveBeenCalledWith("debug");
+    expect(switchSessionMode).not.toHaveBeenCalled();
   });
 
   it("persists model selection for the active session mode and publishes state", async () => {
@@ -1230,14 +1281,8 @@ describe("ChatViewProvider session state sync", () => {
       provider.submitBrowserSetModel("openrouter-moonshotai-kimi-k3"),
     ).resolves.toEqual({ ok: true });
 
-    expect(mockConfigUpdate).toHaveBeenNthCalledWith(
-      1,
-      "agentModel",
-      "openrouter-moonshotai-kimi-k3",
-      3,
-    );
-    expect(mockConfigUpdate).toHaveBeenNthCalledWith(
-      2,
+    expect(mockConfigUpdate).toHaveBeenCalledOnce();
+    expect(mockConfigUpdate).toHaveBeenCalledWith(
       "modeModelPreferences",
       { debug: "openrouter-moonshotai-kimi-k3" },
       3,
@@ -1650,6 +1695,62 @@ describe("ChatViewProvider session state sync", () => {
     provider.dispose();
   });
 
+  it("ignores non-foreground state updates in the browser projection", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const foreground = {
+      id: "foreground-1",
+      title: "Foreground",
+      mode: "code",
+      model: "gpt-5.6-sol",
+      status: "idle",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      getAllMessages: () => [],
+    };
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => foreground),
+      getConfig: vi.fn(() => ({})),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+    } as never);
+    const projectExtensionMessage = (
+      provider as unknown as {
+        projectExtensionMessage: (message: Record<string, unknown>) => void;
+      }
+    ).projectExtensionMessage.bind(provider);
+
+    projectExtensionMessage({
+      type: "stateUpdate",
+      state: {
+        sessionId: foreground.id,
+        mode: foreground.mode,
+        model: foreground.model,
+        streaming: false,
+      },
+    });
+    projectExtensionMessage({
+      type: "stateUpdate",
+      state: {
+        sessionId: "popped-session",
+        mode: "debug",
+        model: "other-model",
+        streaming: true,
+      },
+    });
+
+    expect(provider.getBrowserProjectedForegroundState()).toMatchObject({
+      sessionId: foreground.id,
+      mode: foreground.mode,
+      model: foreground.model,
+      streaming: false,
+    });
+  });
+
   it("keeps nested background results out of the browser foreground transcript", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(
@@ -1741,13 +1842,17 @@ describe("ChatViewProvider session state sync", () => {
       },
       getAllMessages: () => [],
     };
-    const setForegroundReasoningEffort = vi.fn((effort: string) => {
-      session.reasoningEffort = effort;
-      return true;
-    });
+    const setSessionReasoningEffort = vi.fn(
+      (sessionId: string, effort: string) => {
+        expect(sessionId).toBe(session.id);
+        session.reasoningEffort = effort;
+        return true;
+      },
+    );
     provider.setSessionManager({
       getForegroundSession: vi.fn(() => session),
-      setForegroundReasoningEffort,
+      getSession: vi.fn(() => session),
+      setSessionReasoningEffort,
       getConfig: vi.fn(() => ({ thinkingBudget: 1024 })),
       getSessionInfos: vi.fn(() => []),
       getBgSessionInfos: vi.fn(() => []),
@@ -1758,7 +1863,7 @@ describe("ChatViewProvider session state sync", () => {
     ).resolves.toEqual({
       ok: true,
     });
-    expect(setForegroundReasoningEffort).toHaveBeenCalledWith("max");
+    expect(setSessionReasoningEffort).toHaveBeenCalledWith(session.id, "max");
     expect(session.reasoningEffort).toBe("max");
     expect(provider.getBrowserProjectedForegroundState()?.reasoningEffort).toBe(
       "max",
@@ -5105,6 +5210,47 @@ describe("ChatViewProvider session state sync", () => {
     });
   });
 
+  it("maps only explicit non-file write choices to the shared write card", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const buildApprovalRequest = (
+      provider as unknown as {
+        buildApprovalRequest: (
+          id: string,
+          request: {
+            kind: string;
+            title: string;
+            choices: Array<{ label: string; value: string }>;
+            writeChoices?: Array<{ label: string; value: string }>;
+          },
+        ) => { writeChoices?: Array<{ label: string; value: string }> };
+      }
+    ).buildApprovalRequest.bind(provider);
+    const choices = [
+      { label: "Generate", value: "accept" },
+      { label: "Generate for Session", value: "accept-session" },
+    ];
+
+    expect(
+      buildApprovalRequest("image-approval", {
+        kind: "write",
+        title: "Generate 1 image?",
+        choices,
+        writeChoices: choices,
+      }).writeChoices,
+    ).toEqual(choices);
+    expect(
+      buildApprovalRequest("file-approval", {
+        kind: "write",
+        title: "Modify `file.ts`?",
+        choices: [{ label: "Accept", value: "accept" }],
+      }).writeChoices,
+    ).toBeUndefined();
+  });
+
   it("maps inline rename approvals to rename card payload", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
@@ -6146,6 +6292,24 @@ describe("chat tab host routing", () => {
       loadSession: vi.fn(),
       reorder: vi.fn(),
     };
+    const chatTabController = {
+      validateAction: vi.fn(() => ({
+        ok: true,
+        tab: {
+          id: "tab-1",
+          displayNumber: 1,
+          sessionId: "session-1",
+          placement: "docked",
+          terminalGeneration: 1,
+        },
+      })),
+    };
+    const panelHost = {
+      popOut: vi.fn(async () => true),
+      dock: vi.fn(async () => true),
+      releaseTab: vi.fn(),
+      isAuthoritativeAddress: vi.fn(() => false),
+    };
     (
       provider as unknown as {
         postMessage: typeof postMessage;
@@ -6159,8 +6323,18 @@ describe("chat tab host routing", () => {
     (
       provider as unknown as {
         chatTabHostCoordinator: unknown;
+        chatTabController: unknown;
+        chatTabPanelHost: unknown;
       }
     ).chatTabHostCoordinator = coordinator;
+    (
+      provider as unknown as {
+        chatTabController: unknown;
+        chatTabPanelHost: unknown;
+      }
+    ).chatTabController = chatTabController;
+    (provider as unknown as { chatTabPanelHost: unknown }).chatTabPanelHost =
+      panelHost;
     (
       provider as unknown as {
         getChatWorkspaceViewSnapshot: () => typeof snapshot;
@@ -6172,8 +6346,326 @@ describe("chat tab host routing", () => {
           handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
         }
       ).handleWebviewMessage(message);
-    return { coordinator, handle, postMessage, provider, snapshot };
+    return {
+      chatTabController,
+      coordinator,
+      handle,
+      panelHost,
+      postMessage,
+      provider,
+      snapshot,
+    };
   }
+
+  async function makeEditorRoutingProvider() {
+    const fixture = await makeTabRoutingProvider();
+    const address = {
+      controllerEpoch: "epoch-1",
+      tabId: "tab-source",
+      sessionId: "source-session",
+      surface: "editor" as const,
+      paneEpoch: 3,
+    };
+    fixture.panelHost.isAuthoritativeAddress = vi.fn(() => true);
+    const connection = {
+      getAddress: vi.fn(() => address),
+      postMessage: vi.fn(),
+    };
+    const handleEditor = (message: Record<string, unknown>) =>
+      fixture.provider.handleEditorPaneMessage(message, connection as never);
+    return { ...fixture, address, connection, handleEditor };
+  }
+
+  it("hydrates the exact persisted session for a registered editor pane", async () => {
+    const { provider } = await makeTabRoutingProvider();
+    const address = {
+      controllerEpoch: "epoch-1",
+      tabId: "tab-source",
+      sessionId: "source-session",
+      surface: "editor" as const,
+      paneEpoch: 3,
+    };
+    const session = { id: address.sessionId };
+    const hydratePersistedSession = vi.fn(async () => session);
+    const connection = {
+      getAddress: vi.fn(() => address),
+      postMessage: vi.fn(),
+    };
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getSession: vi.fn(() => undefined),
+      hydratePersistedSession,
+    };
+    (provider as unknown as { chatTabController: unknown }).chatTabController =
+      {
+        getTab: vi.fn(() => ({
+          id: address.tabId,
+          sessionId: address.sessionId,
+        })),
+      };
+    (provider as unknown as { chatTabPanelHost: unknown }).chatTabPanelHost = {
+      isRegisteredConnection: vi.fn(() => true),
+    };
+    (
+      provider as unknown as {
+        getChatWorkspaceViewSnapshot(): undefined;
+        getModesForSession(): Promise<unknown[]>;
+        getBrowserModels(): Promise<unknown[]>;
+        getSlashCommandsForSession(): Promise<unknown[]>;
+        getWebviewSessionSummaries(): unknown[];
+        buildSessionLoadedMessage(): Record<string, unknown>;
+        buildChatState(): Record<string, unknown>;
+      }
+    ).getChatWorkspaceViewSnapshot = vi.fn(() => undefined);
+    (
+      provider as unknown as { getModesForSession(): Promise<unknown[]> }
+    ).getModesForSession = vi.fn(async () => []);
+    (
+      provider as unknown as { getBrowserModels(): Promise<unknown[]> }
+    ).getBrowserModels = vi.fn(async () => []);
+    (
+      provider as unknown as {
+        getSlashCommandsForSession(): Promise<unknown[]>;
+      }
+    ).getSlashCommandsForSession = vi.fn(async () => []);
+    (
+      provider as unknown as { getWebviewSessionSummaries(): unknown[] }
+    ).getWebviewSessionSummaries = vi.fn(() => []);
+    (
+      provider as unknown as {
+        buildSessionLoadedMessage(): Record<string, unknown>;
+      }
+    ).buildSessionLoadedMessage = vi.fn(() => ({
+      type: "agentSessionLoaded",
+      sessionId: session.id,
+    }));
+    (
+      provider as unknown as { buildChatState(): Record<string, unknown> }
+    ).buildChatState = vi.fn(() => ({ sessionId: session.id }));
+
+    await provider.hydrateEditorPane(address.tabId, connection as never);
+
+    expect(hydratePersistedSession).toHaveBeenCalledWith(address.sessionId);
+    expect(connection.postMessage).toHaveBeenCalledWith({
+      type: "agentSessionLoaded",
+      sessionId: session.id,
+    });
+  });
+
+  it("rejects an editor pane whose address changes during persisted hydration", async () => {
+    const { provider } = await makeTabRoutingProvider();
+    let address = {
+      controllerEpoch: "epoch-1",
+      tabId: "tab-source",
+      sessionId: "source-session",
+      surface: "editor" as const,
+      paneEpoch: 3,
+    };
+    let resolveHydration!: (session: { id: string }) => void;
+    const hydratePersistedSession = vi.fn(
+      () =>
+        new Promise<{ id: string }>((resolve) => {
+          resolveHydration = resolve;
+        }),
+    );
+    const connection = {
+      getAddress: vi.fn(() => address),
+      postMessage: vi.fn(),
+    };
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getSession: vi.fn(() => undefined),
+      hydratePersistedSession,
+    };
+    (provider as unknown as { chatTabController: unknown }).chatTabController =
+      {
+        getTab: vi.fn(() => ({
+          id: address.tabId,
+          sessionId: "source-session",
+        })),
+      };
+    (provider as unknown as { chatTabPanelHost: unknown }).chatTabPanelHost = {
+      isRegisteredConnection: vi.fn(() => true),
+    };
+
+    const hydration = provider.hydrateEditorPane(
+      address.tabId,
+      connection as never,
+    );
+    await vi.waitFor(() =>
+      expect(hydratePersistedSession).toHaveBeenCalledOnce(),
+    );
+    address = { ...address, paneEpoch: 4 };
+    resolveHydration({ id: "source-session" });
+
+    await expect(hydration).rejects.toThrow(
+      "editor pane no longer owns the selected chat tab",
+    );
+    expect(connection.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("builds addressed chat state with the session project approval default", async () => {
+    const { provider } = await makeTabRoutingProvider();
+    const foregroundScope = {
+      projectId: "project-foreground",
+      workspaceFolderUri: "file:///workspace/foreground",
+      displayName: "Foreground",
+      rootPath: "/workspace/foreground",
+    };
+    const sourceScope = {
+      projectId: "project-source",
+      workspaceFolderUri: "file:///workspace/source",
+      displayName: "Source",
+      rootPath: "/workspace/source",
+    };
+    const source = {
+      id: "source-session",
+      mode: "code",
+      model: "gpt-5.6-sol",
+      status: "idle",
+      reasoningEffort: "high",
+      projectScope: sourceScope,
+      projectAvailability: "unavailable",
+    };
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: vi.fn(() => ({
+        id: "foreground-session",
+        projectScope: foregroundScope,
+      })),
+      getConfig: vi.fn(() => ({ model: source.model })),
+      getWorkspaceProjects: vi.fn(() => []),
+      getSessionApprovalMode: vi.fn(
+        (_sessionId: string, configured: string) => ({
+          commandApprovalPolicy: configured,
+          approvalPolicy: "on-request",
+          approvalReviewer: "user",
+          executionPreset: "native-manual",
+        }),
+      ),
+    };
+    const getProjectConfiguration = vi.fn((scope: typeof sourceScope) => ({
+      get: vi.fn((_key: string, fallback: string) =>
+        scope.projectId === sourceScope.projectId ? "off" : fallback,
+      ),
+    }));
+    (
+      provider as unknown as {
+        getProjectConfiguration: typeof getProjectConfiguration;
+      }
+    ).getProjectConfiguration = getProjectConfiguration;
+
+    const state = (
+      provider as unknown as {
+        buildChatState(session: typeof source): {
+          commandApprovalPolicy: string;
+          configuredCommandApprovalPolicy: string;
+        };
+      }
+    ).buildChatState(source);
+
+    expect(state.commandApprovalPolicy).toBe("manual");
+    expect(state.configuredCommandApprovalPolicy).toBe("manual");
+    expect(getProjectConfiguration).toHaveBeenCalledWith(sourceScope);
+  });
+
+  it("routes editor-owned commands from the authoritative pane session", async () => {
+    const { provider, handleEditor } = await makeEditorRoutingProvider();
+    const source = {
+      id: "source-session",
+      mode: "code",
+      projectScope: {
+        projectId: "project-source",
+        workspaceFolderUri: "file:///workspace/source",
+        rootPath: "/workspace/source",
+      },
+    };
+    const foreground = {
+      id: "foreground-session",
+      mode: "ask",
+      projectScope: {
+        projectId: "project-foreground",
+        workspaceFolderUri: "file:///workspace/foreground",
+        rootPath: "/workspace/foreground",
+      },
+    };
+    const submitSessionSetModel = vi.fn(async () => ({ ok: true }));
+    (
+      provider as unknown as {
+        submitSessionSetModel: typeof submitSessionSetModel;
+      }
+    ).submitSessionSetModel = submitSessionSetModel;
+    const steerAuthorizedBackground = vi.fn();
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getSession: vi.fn((sessionId: string) =>
+        sessionId === source.id ? source : undefined,
+      ),
+      getForegroundSession: vi.fn(() => foreground),
+      steerAuthorizedBackground,
+    };
+
+    await handleEditor({
+      command: "agentSetModel",
+      sessionId: "child-target",
+      model: "model-next",
+    });
+    await handleEditor({
+      command: "steerBgAgent",
+      sessionId: "child-target",
+      message: "change direction",
+    });
+
+    expect(submitSessionSetModel).toHaveBeenCalledWith(source.id, "model-next");
+    expect(steerAuthorizedBackground).toHaveBeenCalledWith(
+      source.id,
+      "child-target",
+      "change direction",
+    );
+  });
+
+  it("loads editor history from the pane session instead of a payload target", async () => {
+    const { provider, handleEditor, postMessage } =
+      await makeEditorRoutingProvider();
+    const sourceMessages: AgentMessage[] = [
+      { role: "user", content: "source one" },
+      { role: "assistant", content: "answer one" },
+      { role: "user", content: "source two" },
+      { role: "assistant", content: "answer two" },
+      { role: "user", content: "source three" },
+    ];
+    const source = {
+      id: "source-session",
+      getAllMessages: vi.fn(() => sourceMessages),
+    };
+    const foreground = {
+      id: "foreground-session",
+      getAllMessages: vi.fn(() => [
+        { role: "user", content: "wrong foreground" },
+      ]),
+    };
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getSession: vi.fn((sessionId: string) =>
+        sessionId === source.id ? source : undefined,
+      ),
+      getForegroundSession: vi.fn(() => foreground),
+      getCheckpoints: vi.fn(() => []),
+    };
+
+    await handleEditor({
+      command: "agentLoadEarlierSessionMessages",
+      sessionId: "payload-target",
+      beforeUserTurnOffset: 2,
+    });
+
+    expect(source.getAllMessages).toHaveBeenCalledOnce();
+    expect(foreground.getAllMessages).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentSessionChunk",
+        sessionId: source.id,
+        messages: expect.arrayContaining([
+          expect.objectContaining({ content: "source one" }),
+        ]),
+      }),
+    );
+  });
 
   it("publishes a new tab binding before its session-scoped hydration", async () => {
     const { coordinator, handle, provider } = await makeTabRoutingProvider();
@@ -6328,6 +6820,89 @@ describe("chat tab host routing", () => {
     });
   });
 
+  it("routes validated pop-out and dock actions to the panel host", async () => {
+    const { handle, panelHost } = await makeTabRoutingProvider();
+    const address = {
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: "session-1",
+    };
+
+    await handle({ command: "chatTabPopOut", ...address });
+    await handle({ command: "chatTabDock", ...address });
+
+    expect(panelHost.popOut).toHaveBeenCalledWith("tab-1");
+    expect(panelHost.dock).toHaveBeenCalledWith("tab-1");
+  });
+
+  it("rejects stale placement actions and reports failed handoffs", async () => {
+    const { chatTabController, handle, panelHost, postMessage, snapshot } =
+      await makeTabRoutingProvider();
+    chatTabController.validateAction.mockReturnValueOnce({
+      ok: false,
+      reason: "stale_session",
+    } as never);
+    const address = {
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: "session-1",
+    };
+
+    await handle({ command: "chatTabPopOut", ...address });
+    expect(panelHost.popOut).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenLastCalledWith({
+      type: "chatTabActionRejected",
+      rejection: {
+        command: "chatTabPopOut",
+        reason: "stale_session",
+        snapshot,
+      },
+    });
+
+    panelHost.dock.mockResolvedValueOnce(false);
+    await handle({ command: "chatTabDock", ...address });
+    expect(postMessage).toHaveBeenLastCalledWith({
+      type: "chatTabActionFailed",
+      failure: {
+        command: "chatTabDock",
+        reason: "placement_failed",
+        snapshot,
+      },
+    });
+  });
+
+  it("releases the editor panel after a logical tab close", async () => {
+    const { coordinator, handle, panelHost, provider } =
+      await makeTabRoutingProvider();
+    coordinator.close.mockResolvedValueOnce({
+      ok: true,
+      tab: {
+        id: "tab-1",
+        displayNumber: 1,
+        sessionId: "session-1",
+        placement: "popped",
+        terminalGeneration: 1,
+      },
+    });
+    (
+      provider as unknown as {
+        sendChatWorkspaceUpdate(): void;
+        sendInitialState(): void;
+      }
+    ).sendChatWorkspaceUpdate = vi.fn();
+    (provider as unknown as { sendInitialState(): void }).sendInitialState =
+      vi.fn();
+
+    await handle({
+      command: "chatTabClose",
+      controllerEpoch: "epoch-1",
+      tabId: "tab-1",
+      sessionId: "session-1",
+    });
+
+    expect(panelHost.releaseTab).toHaveBeenCalledWith("tab-1");
+  });
+
   it("forwards confirmed history replacement and exact reorder identity", async () => {
     const { coordinator, handle } = await makeTabRoutingProvider();
     coordinator.loadSession.mockResolvedValueOnce({
@@ -6356,11 +6931,9 @@ describe("chat tab host routing", () => {
       tabIds: ["tab-2", "tab-1"],
     });
 
-    expect(coordinator.loadSession).toHaveBeenCalledWith(
-      address,
-      "session-2",
-      true,
-    );
+    expect(coordinator.loadSession).toHaveBeenCalledWith(address, "session-2", {
+      stopRunning: true,
+    });
     expect(coordinator.reorder).toHaveBeenCalledWith(address, [
       "tab-2",
       "tab-1",

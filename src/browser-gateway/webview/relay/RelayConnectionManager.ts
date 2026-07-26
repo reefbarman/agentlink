@@ -5,11 +5,13 @@ import {
   parseBrowserGatewayOwnerEvent,
   type BrowserGatewayCommandDeadlineClass,
   type BrowserGatewayCommandIdempotency,
+  type BrowserGatewayDetailHandle,
   type BrowserGatewayOperationState,
   type BrowserGatewayOwnerCommandBody,
   type BrowserGatewayOwnerEvent,
 } from "../../dataPlane/protocol";
 import { randomId } from "../../../shared/randomId";
+import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "../../dataPlane/limits";
 import {
   type RelayCatalogOwner,
   type RelayCheckpointRecord,
@@ -73,6 +75,19 @@ export interface RelayCommandRequest {
   command: BrowserGatewayOwnerCommandBody;
 }
 
+export interface RelaySessionDetailRequest {
+  instanceId: string;
+  controllerEpoch: string;
+  tabId: string;
+  sessionId: string;
+}
+
+export interface RelaySessionDetailResult {
+  operationId: string;
+  handle: BrowserGatewayDetailHandle;
+  content: Uint8Array;
+}
+
 type ConnectionIdentity = {
   helperGenerationId: string;
   browserConnectionId: string;
@@ -90,6 +105,13 @@ type PendingOperation = {
   idempotency: BrowserGatewayCommandIdempotency;
   ownerId: string;
   ownerGenerationId: string;
+};
+
+type OperationWaiter = {
+  ownerId: string;
+  ownerGenerationId: string;
+  kind: BrowserGatewayOperationState["kind"];
+  resolve: (operation: BrowserGatewayOperationState) => void;
 };
 
 type BufferedOwnerFrame =
@@ -136,6 +158,11 @@ export class RelayConnectionManager {
   private readonly minimumReconnectMs: number;
   private readonly maximumReconnectMs: number;
   private readonly pendingOperations = new Map<string, PendingOperation>();
+  private readonly operationWaiters = new Map<string, OperationWaiter>();
+  private readonly earlyTerminalOperations = new Map<
+    string,
+    BrowserGatewayOperationState
+  >();
   private readonly bufferedOwnerFrames: BufferedOwnerFrame[] = [];
   private source: RelayEventSource | null = null;
   private connection: ConnectionIdentity | null = null;
@@ -196,6 +223,7 @@ export class RelayConnectionManager {
     if (this.closed) return;
     this.closed = true;
     this.started = false;
+    this.resolveOperationWaiters("relay_client_closed");
     this.eventTarget?.removeEventListener("online", this.handleOnline);
     this.eventTarget?.removeEventListener("offline", this.handleOffline);
     this.document?.removeEventListener(
@@ -228,6 +256,11 @@ export class RelayConnectionManager {
         previousOwner.ownerGenerationId,
         "owner_generation_changed",
       );
+      this.resolveOwnerOperationWaiters(
+        previousOwner.ownerId,
+        previousOwner.ownerGenerationId,
+        "owner_generation_changed",
+      );
     }
     this.subscription = null;
     this.bufferedOwnerFrames.length = 0;
@@ -247,6 +280,77 @@ export class RelayConnectionManager {
 
   isSubscribedTo(owner: RelayOwnerSelection): boolean {
     return Boolean(this.subscription && sameOwner(this.subscription, owner));
+  }
+
+  async requestSessionDetail(
+    request: RelaySessionDetailRequest,
+  ): Promise<RelaySessionDetailResult> {
+    const subscription = this.subscription;
+    if (!subscription) throw new Error("relay_subscription_required");
+    const operationId = randomId();
+    const terminal = new Promise<BrowserGatewayOperationState>((resolve) => {
+      this.operationWaiters.set(operationId, {
+        ownerId: subscription.ownerId,
+        ownerGenerationId: subscription.ownerGenerationId,
+        kind: "session.detail",
+        resolve,
+      });
+    });
+
+    try {
+      const initial = await this.sendCommand({
+        operationId,
+        command: { kind: "session.detail", ...request },
+      });
+      const operation = initial.state === "accepted" ? await terminal : initial;
+      if (
+        operation.state !== "completed" ||
+        operation.kind !== "session.detail" ||
+        !operation.detailHandle
+      ) {
+        throw new Error(
+          operation.message ?? `relay_session_detail_${operation.state}`,
+        );
+      }
+      if (subscription !== this.subscription) {
+        throw new Error("relay_session_detail_subscription_changed");
+      }
+      const handle = operation.detailHandle;
+      if (
+        handle.helperGenerationId !== subscription.helperGenerationId ||
+        handle.ownerId !== subscription.ownerId ||
+        handle.ownerGenerationId !== subscription.ownerGenerationId ||
+        handle.kind !== "session" ||
+        handle.mediaType !== "application/json; charset=utf-8" ||
+        handle.expiresAt <= this.now() ||
+        handle.byteLength >
+          BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes
+      ) {
+        throw new Error("relay_session_detail_handle_invalid");
+      }
+      const query = new URLSearchParams({
+        handleId: handle.handleId,
+        ownerId: handle.ownerId,
+        ownerGenerationId: handle.ownerGenerationId,
+      });
+      const response = await this.fetch(`/api/relay/details?${query}`, {
+        credentials: "same-origin",
+      });
+      if (!response.ok) {
+        throw new Error(`relay_session_detail_failed_${response.status}`);
+      }
+      const content = new Uint8Array(await response.arrayBuffer());
+      if (subscription !== this.subscription) {
+        throw new Error("relay_session_detail_subscription_changed");
+      }
+      if (content.byteLength !== handle.byteLength) {
+        throw new Error("relay_session_detail_size_mismatch");
+      }
+      return { operationId, handle, content };
+    } finally {
+      this.operationWaiters.delete(operationId);
+      this.earlyTerminalOperations.delete(operationId);
+    }
   }
 
   async sendCommand(
@@ -288,6 +392,8 @@ export class RelayConnectionManager {
     ) {
       throw new Error(body.error ?? `relay_command_failed_${response.status}`);
     }
+    const earlyTerminal = this.earlyTerminalOperations.get(operationId);
+    if (earlyTerminal) return earlyTerminal;
     const pending: PendingOperation = {
       operation: body.operation,
       idempotency,
@@ -297,7 +403,11 @@ export class RelayConnectionManager {
     if (body.operation.state === "accepted") {
       this.pendingOperations.set(operationId, pending);
     }
-    this.options.onOperation?.(body.operation);
+    this.recordOperation(
+      body.operation,
+      subscription.ownerId,
+      subscription.ownerGenerationId,
+    );
     return body.operation;
   }
 
@@ -373,6 +483,7 @@ export class RelayConnectionManager {
     if (helperChanged) {
       this.subscription = null;
       this.resolvePendingOperations("helper_generation_changed");
+      this.resolveOperationWaiters("helper_generation_changed");
     }
     this.connection = {
       helperGenerationId: value.helperGenerationId,
@@ -499,6 +610,8 @@ export class RelayConnectionManager {
       !operation ||
       typeof operation.operationId !== "string" ||
       typeof operation.state !== "string" ||
+      typeof value.helperGenerationId !== "string" ||
+      value.helperGenerationId !== this.subscription?.helperGenerationId ||
       typeof value.subscriptionId !== "string" ||
       value.subscriptionId !== this.subscription?.subscriptionId ||
       typeof value.ownerId !== "string" ||
@@ -509,10 +622,7 @@ export class RelayConnectionManager {
     ) {
       return;
     }
-    if (operation.state !== "accepted") {
-      this.pendingOperations.delete(operation.operationId);
-    }
-    this.options.onOperation?.(operation);
+    this.recordOperation(operation, value.ownerId, value.ownerGenerationId);
   }
 
   private async subscribeCurrentOwner(): Promise<void> {
@@ -624,10 +734,11 @@ export class RelayConnectionManager {
             return;
           }
           pending.operation = body.operation;
-          if (body.operation.state !== "accepted") {
-            this.pendingOperations.delete(body.operation.operationId);
-          }
-          this.options.onOperation?.(body.operation);
+          this.recordOperation(
+            body.operation,
+            subscription.ownerId,
+            subscription.ownerGenerationId,
+          );
         } catch {
           if (
             connection === this.connection &&
@@ -656,6 +767,31 @@ export class RelayConnectionManager {
     }
   }
 
+  private resolveOwnerOperationWaiters(
+    ownerId: string,
+    ownerGenerationId: string,
+    message: string,
+  ): void {
+    for (const [operationId, waiter] of this.operationWaiters) {
+      if (
+        waiter.ownerId !== ownerId ||
+        waiter.ownerGenerationId !== ownerGenerationId
+      ) {
+        continue;
+      }
+      this.recordOperation(
+        {
+          operationId,
+          kind: waiter.kind,
+          state: "failed",
+          message,
+        },
+        ownerId,
+        ownerGenerationId,
+      );
+    }
+  }
+
   private resolvePendingOperations(message: string): void {
     for (const pending of this.pendingOperations.values()) {
       this.resolveOperation(pending, message);
@@ -669,8 +805,7 @@ export class RelayConnectionManager {
       state: pending.idempotency === "idempotent" ? "failed" : "uncertain",
       message,
     };
-    this.pendingOperations.delete(operation.operationId);
-    this.options.onOperation?.(operation);
+    this.recordOperation(operation, pending.ownerId, pending.ownerGenerationId);
   }
 
   private resolveMissingOperation(pending: PendingOperation): void {
@@ -683,8 +818,44 @@ export class RelayConnectionManager {
           ? "operation_status_unavailable_retry_required"
           : "operation_status_unavailable_do_not_retry",
     };
-    this.pendingOperations.delete(operation.operationId);
+    this.recordOperation(operation, pending.ownerId, pending.ownerGenerationId);
+  }
+
+  private recordOperation(
+    operation: BrowserGatewayOperationState,
+    ownerId: string,
+    ownerGenerationId: string,
+  ): void {
+    if (operation.state !== "accepted") {
+      this.pendingOperations.delete(operation.operationId);
+      const waiter = this.operationWaiters.get(operation.operationId);
+      if (
+        waiter &&
+        waiter.ownerId === ownerId &&
+        waiter.ownerGenerationId === ownerGenerationId &&
+        waiter.kind === operation.kind
+      ) {
+        this.earlyTerminalOperations.set(operation.operationId, operation);
+        waiter.resolve(operation);
+      }
+    }
     this.options.onOperation?.(operation);
+  }
+
+  private resolveOperationWaiters(message: string): void {
+    for (const [operationId, waiter] of this.operationWaiters) {
+      if (this.pendingOperations.has(operationId)) continue;
+      this.recordOperation(
+        {
+          operationId,
+          kind: waiter.kind,
+          state: "failed",
+          message,
+        },
+        waiter.ownerId,
+        waiter.ownerGenerationId,
+      );
+    }
   }
 
   private acceptEvent(source: RelayEventSource): boolean {

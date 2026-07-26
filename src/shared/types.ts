@@ -20,6 +20,8 @@ export interface InlineApprovalRequest {
   title: string;
   detail?: string;
   choices: InlineApprovalChoice[];
+  /** Explicit actions for a non-file write approval such as image-generation billing. */
+  writeChoices?: InlineApprovalChoice[];
   /** Structured MCP identity used by approval surfaces. */
   mcpServerName?: string;
   mcpToolName?: string;

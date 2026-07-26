@@ -28,6 +28,7 @@ export type BrowserGatewayOwnerEventKind =
 
 export const BROWSER_GATEWAY_OWNER_COMMAND_KINDS = [
   "session.select",
+  "session.detail",
   "session.send",
   "session.stop",
   "approval.respond",
@@ -44,6 +45,7 @@ export type BrowserGatewayCommandDeadlineClass = "default" | "long";
 
 export const BROWSER_GATEWAY_COMMAND_IDEMPOTENCY = Object.freeze({
   "session.select": "idempotent",
+  "session.detail": "idempotent",
   "session.send": "non_idempotent",
   "session.stop": "idempotent",
   "approval.respond": "non_idempotent",
@@ -81,7 +83,7 @@ export interface BrowserGatewayDataPlaneIdentity {
 
 export interface BrowserGatewayDetailHandle extends BrowserGatewayDataPlaneIdentity {
   handleId: string;
-  kind: "message" | "diff" | "media" | "interaction";
+  kind: "message" | "diff" | "media" | "interaction" | "session";
   byteLength: number;
   expiresAt: number;
   mediaType?: string;
@@ -167,11 +169,50 @@ export interface BrowserGatewaySessionSummary {
   updatedAt: number;
 }
 
+export type BrowserGatewayChatTabStatus =
+  | "idle"
+  | "streaming"
+  | "queued_for_provider"
+  | "queued_for_workspace_write"
+  | "needs_input"
+  | "failed"
+  | "completed";
+
+export interface BrowserGatewayChatTabSummary {
+  tabId: string;
+  displayNumber: number;
+  label: string;
+  sessionId: string | null;
+  placement: "docked" | "popped";
+  title?: string;
+  status: BrowserGatewayChatTabStatus;
+  busy: boolean;
+  needsAttention?: boolean;
+  mode?: string;
+  model?: string;
+  interactiveExecutionPhase?: import("../../agent/types.js").InteractiveExecutionPhase;
+  estimatedTokens?: number;
+  maximumTokens?: number;
+}
+
+export interface BrowserGatewayChatWorkspaceSummary {
+  controllerEpoch: string;
+  focusedTabId: string;
+  tabs: BrowserGatewayChatTabSummary[];
+}
+
 export interface BrowserGatewaySessionCatalog {
   projects: BrowserGatewayProjectSummary[];
   sessions: BrowserGatewaySessionSummary[];
   defaultProjectId: string | null;
   foregroundSessionId: string | null;
+  chatWorkspace?: BrowserGatewayChatWorkspaceSummary | null;
+}
+
+export interface BrowserGatewayChatTabSelection {
+  instanceId: string;
+  tabId: string;
+  sessionId: string | null;
 }
 
 export type BrowserGatewayTranscriptText =
@@ -452,6 +493,13 @@ export interface BrowserGatewayOwnerPublicationBatch extends BrowserGatewayDataP
 export type BrowserGatewayOwnerCommandBody =
   | { kind: "session.select"; sessionId: string }
   | {
+      kind: "session.detail";
+      instanceId: string;
+      controllerEpoch: string;
+      tabId: string;
+      sessionId: string;
+    }
+  | {
       kind: "session.send";
       sessionId: string;
       text: string;
@@ -594,6 +642,20 @@ export function parseBrowserGatewayDetailHandle(
   value: unknown,
 ): BrowserGatewayDetailHandle {
   return parseDetailHandle(value, "$");
+}
+
+export function parseBrowserGatewayChatTabSelection(
+  value: unknown,
+): BrowserGatewayChatTabSelection {
+  const object = strictRecord(value, "$", ["instanceId", "tabId", "sessionId"]);
+  return {
+    instanceId: nonEmptyString(object.instanceId, "$.instanceId", 256),
+    tabId: nonEmptyString(object.tabId, "$.tabId", 256),
+    sessionId:
+      object.sessionId === null
+        ? null
+        : nonEmptyString(object.sessionId, "$.sessionId", 256),
+  };
 }
 
 export function parseBrowserGatewayOwnerPublicationBatch(
@@ -1284,7 +1346,7 @@ function parseDetailHandle(
     kind: enumValue(
       object.kind,
       `${path}.kind`,
-      new Set(["message", "diff", "media", "interaction"]),
+      new Set(["message", "diff", "media", "interaction", "session"]),
     ) as BrowserGatewayDetailHandle["kind"],
     byteLength,
     expiresAt: nonNegativeFiniteNumber(object.expiresAt, `${path}.expiresAt`),
@@ -1693,6 +1755,7 @@ function parseSessionCatalog(
     "sessions",
     "defaultProjectId",
     "foregroundSessionId",
+    "chatWorkspace",
   ]);
   const projects = arrayValue(object.projects, `${path}.projects`).map(
     (item, index): BrowserGatewayProjectSummary => {
@@ -1781,6 +1844,139 @@ function parseSessionCatalog(
             `${path}.foregroundSessionId`,
             256,
           ),
+    chatWorkspace:
+      object.chatWorkspace === undefined || object.chatWorkspace === null
+        ? null
+        : parseChatWorkspace(object.chatWorkspace, `${path}.chatWorkspace`),
+  };
+}
+
+function parseChatWorkspace(
+  value: unknown,
+  path: string,
+): BrowserGatewayChatWorkspaceSummary {
+  const object = strictRecord(value, path, [
+    "controllerEpoch",
+    "focusedTabId",
+    "tabs",
+  ]);
+  return {
+    controllerEpoch: nonEmptyString(
+      object.controllerEpoch,
+      `${path}.controllerEpoch`,
+      256,
+    ),
+    focusedTabId: nonEmptyString(
+      object.focusedTabId,
+      `${path}.focusedTabId`,
+      256,
+    ),
+    tabs: arrayValue(object.tabs, `${path}.tabs`).map((item, index) =>
+      parseChatTabSummary(item, `${path}.tabs[${index}]`),
+    ),
+  };
+}
+
+function parseChatTabSummary(
+  value: unknown,
+  path: string,
+): BrowserGatewayChatTabSummary {
+  const object = strictRecord(value, path, [
+    "tabId",
+    "displayNumber",
+    "label",
+    "sessionId",
+    "placement",
+    "title",
+    "status",
+    "busy",
+    "needsAttention",
+    "mode",
+    "model",
+    "interactiveExecutionPhase",
+    "estimatedTokens",
+    "maximumTokens",
+  ]);
+  return {
+    tabId: nonEmptyString(object.tabId, `${path}.tabId`, 256),
+    displayNumber: positiveSafeInteger(
+      object.displayNumber,
+      `${path}.displayNumber`,
+    ),
+    label: nonEmptyString(object.label, `${path}.label`, 64),
+    sessionId:
+      object.sessionId === null
+        ? null
+        : nonEmptyString(object.sessionId, `${path}.sessionId`, 256),
+    placement: enumValue(
+      object.placement,
+      `${path}.placement`,
+      new Set(["docked", "popped"]),
+    ) as BrowserGatewayChatTabSummary["placement"],
+    ...(object.title === undefined
+      ? {}
+      : { title: boundedString(object.title, `${path}.title`, 1_000) }),
+    status: enumValue(
+      object.status,
+      `${path}.status`,
+      new Set([
+        "idle",
+        "streaming",
+        "queued_for_provider",
+        "queued_for_workspace_write",
+        "needs_input",
+        "failed",
+        "completed",
+      ]),
+    ) as BrowserGatewayChatTabStatus,
+    busy: booleanValue(object.busy, `${path}.busy`),
+    ...(object.needsAttention === undefined
+      ? {}
+      : {
+          needsAttention: booleanValue(
+            object.needsAttention,
+            `${path}.needsAttention`,
+          ),
+        }),
+    ...(object.mode === undefined
+      ? {}
+      : { mode: nonEmptyString(object.mode, `${path}.mode`, 256) }),
+    ...(object.model === undefined
+      ? {}
+      : { model: nonEmptyString(object.model, `${path}.model`, 256) }),
+    ...(object.interactiveExecutionPhase === undefined
+      ? {}
+      : {
+          interactiveExecutionPhase: enumValue(
+            object.interactiveExecutionPhase,
+            `${path}.interactiveExecutionPhase`,
+            new Set([
+              "queued_for_provider",
+              "queued_for_workspace_write",
+              "running",
+              "awaiting_input",
+              "stopping",
+            ]),
+          ) as NonNullable<
+            BrowserGatewayChatTabSummary["interactiveExecutionPhase"]
+          >,
+        }),
+    ...(object.estimatedTokens === undefined
+      ? {}
+      : {
+          estimatedTokens: nonNegativeSafeInteger(
+            object.estimatedTokens,
+            `${path}.estimatedTokens`,
+          ),
+        }),
+    ...(object.maximumTokens === undefined
+      ? {}
+      : {
+          maximumTokens: nonNegativeSafeInteger(
+            object.maximumTokens,
+            `${path}.maximumTokens`,
+          ),
+        }),
   };
 }
 
@@ -2708,6 +2904,30 @@ function parseCommandBody(
       const object = strictRecord(value, path, ["kind", "sessionId"]);
       return {
         kind,
+        sessionId: nonEmptyString(object.sessionId, `${path}.sessionId`, 256),
+      };
+    }
+    case "session.detail": {
+      const object = strictRecord(value, path, [
+        "kind",
+        "instanceId",
+        "controllerEpoch",
+        "tabId",
+        "sessionId",
+      ]);
+      return {
+        kind,
+        instanceId: nonEmptyString(
+          object.instanceId,
+          `${path}.instanceId`,
+          256,
+        ),
+        controllerEpoch: nonEmptyString(
+          object.controllerEpoch,
+          `${path}.controllerEpoch`,
+          256,
+        ),
+        tabId: nonEmptyString(object.tabId, `${path}.tabId`, 256),
         sessionId: nonEmptyString(object.sessionId, `${path}.sessionId`, 256),
       };
     }

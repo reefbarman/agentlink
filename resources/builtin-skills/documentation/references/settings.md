@@ -6,7 +6,6 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 
 ## Model and agent behavior
 
-- `agentModel` — legacy global fallback model; prefer `modeModelPreferences`
 - `modeModelPreferences` — startup model per mode slug; the last model selected in each mode becomes that mode's default
 - `modeReasoningEffortPreferences` — default thinking level per mode slug
 - `agentMaxTokens` — max output tokens per response
@@ -19,7 +18,6 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 
 - `autoCondense` — condense automatically when context fills
 - `modelCondenseThresholds` — per-model thresholds (1M+ context models default 0.7, others 0.9)
-- `autoCondenseThreshold` — legacy global threshold, kept for migration
 
 ## Approvals and safety
 
@@ -68,8 +66,8 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 - `openaiCompatible.connections` — machine-scoped named Chat Completions-compatible connections with nested models. Connections own endpoint/auth/profile behavior; models own stable local IDs, opaque wire IDs, context/output limits, and declared tool/thinking/image capabilities.
 - The wizard can select or create a named SecretStorage credential; maintain credentials separately with **AgentLink: Set OpenAI-compatible API Key** and **AgentLink: Clear OpenAI-compatible API Key**. Settings hold only non-secret `authKey` names; values remain in VS Code SecretStorage.
 - Authenticated endpoints must use HTTPS or loopback HTTP unless `allowInsecureHttp` is explicitly enabled. AgentLink rejects redirects and unsafe static headers.
-- The legacy `openaiCompatible.baseUrl`, `.model`, `.apiKey`, and `.timeoutMs` settings remain separate, window-scoped helper configuration for question detection/background summaries (for example LM Studio). The plaintext `.apiKey` is not used by configured chat connections.
-- `questionDetection.mode` — heuristic vs LLM question detection (`questionDetection.llmEnabled`/`baseUrl`/`model`/`apiKey`/`timeoutMs` are deprecated aliases)
+- `openaiCompatible.baseUrl`, `.model`, `.apiKey`, and `.timeoutMs` are separate, window-scoped helper configuration for question detection/background summaries (for example LM Studio). The plaintext `.apiKey` is not used by configured chat connections.
+- `questionDetection.mode` — heuristic vs LLM question detection
 
 ## Codex / OpenAI provider
 

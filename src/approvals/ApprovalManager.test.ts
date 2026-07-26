@@ -176,6 +176,36 @@ describe("ApprovalManager session approval persistence", () => {
     return resource;
   }
 
+  it("persists built-in tool approval for only the selected session", async () => {
+    const memento = new MockMemento();
+    const first = await createManagers(memento);
+
+    first.approvalManager.approveBuiltInTool("session-a", "generate_image");
+    await memento.flush();
+
+    expect(
+      first.approvalManager.isBuiltInToolApproved(
+        "session-a",
+        "generate_image",
+      ),
+    ).toBe(true);
+    expect(
+      first.approvalManager.isBuiltInToolApproved(
+        "session-b",
+        "generate_image",
+      ),
+    ).toBe(false);
+
+    disposeManagers(first);
+    const second = await createManagers(memento);
+    expect(
+      second.approvalManager.isBuiltInToolApproved(
+        "session-a",
+        "generate_image",
+      ),
+    ).toBe(true);
+  });
+
   it("approves an entire MCP server for only the selected session", async () => {
     const { approvalManager } = await createManagers(new MockMemento());
 

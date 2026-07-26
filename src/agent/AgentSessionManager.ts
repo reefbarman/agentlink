@@ -240,6 +240,8 @@ export type BtwProgressEvent =
     };
 
 export interface BtwQuestionOptions {
+  /** Session whose context should seed the side question. Defaults to foreground. */
+  sessionId?: string;
   /** Streamed incremental progress (text, tool activity, warnings, budget). */
   onProgress?: (event: BtwProgressEvent) => void;
   /** External cancellation (e.g. a Cancel button). Aborts the side session. */
@@ -273,6 +275,8 @@ const BTW_DEFAULT_TIMEOUT_MS = 120_000;
 export type WorktreeSetupProgressEvent = BtwProgressEvent;
 
 export interface WorktreeSetupOptions {
+  /** Session whose project/model should seed setup. Defaults to foreground. */
+  sessionId?: string;
   onProgress?: (event: WorktreeSetupProgressEvent) => void;
   onSessionStarted?: (sessionId: string) => void;
   signal?: AbortSignal;
@@ -586,6 +590,10 @@ export class AgentSessionManager {
   >();
   private devMode: boolean;
   private persistence?: SessionStore;
+  private readonly sessionHydrations = new Map<
+    string,
+    Promise<AgentSession | null>
+  >();
   private sessionRevisions = new Map<string, PersistenceRevision>();
   private sessionRevertPending = new Map<string, RevertRecoveryState>();
   private sessionSaveQueues = new Map<string, Promise<void>>();
@@ -2988,7 +2996,11 @@ export class AgentSessionManager {
 
   async createSession(
     mode: string,
-    opts?: { activeFilePath?: string; projectId?: string },
+    opts?: {
+      activeFilePath?: string;
+      projectId?: string;
+      foreground?: boolean;
+    },
   ): Promise<AgentSession> {
     const projectScope =
       mode === "ask" &&
@@ -3005,10 +3017,12 @@ export class AgentSessionManager {
     const model = this.getModelForMode(mode, settingsScope);
     const config = this.buildConfigForModel(model, settingsScope);
     const providerId = this.host.providers.tryResolveProvider(config.model)?.id;
-    this.updateConfig({
-      model,
-      autoCondenseThreshold: config.autoCondenseThreshold,
-    });
+    if (opts?.foreground !== false) {
+      this.updateConfig({
+        model,
+        autoCondenseThreshold: config.autoCondenseThreshold,
+      });
+    }
     const projectMcpGeneration = isProjectlessSessionScope(projectScope)
       ? undefined
       : this.projectMcpHubRegistry?.getCurrent(projectScope);
@@ -3039,13 +3053,15 @@ export class AgentSessionManager {
     if (!isProjectlessSessionScope(projectScope)) {
       this.getCheckpointManagerForSession(session);
     }
-    const pendingApprovalMode = this.sessionApprovalModes.get("agent");
-    if (pendingApprovalMode) {
-      this.sessionApprovalModes.set(session.id, pendingApprovalMode);
-      this.sessionApprovalModes.delete("agent");
-      this.syncSessionApproveForMe(session);
+    if (opts?.foreground !== false) {
+      const pendingApprovalMode = this.sessionApprovalModes.get("agent");
+      if (pendingApprovalMode) {
+        this.sessionApprovalModes.set(session.id, pendingApprovalMode);
+        this.sessionApprovalModes.delete("agent");
+        this.syncSessionApproveForMe(session);
+      }
+      this.foregroundId = session.id;
     }
-    this.foregroundId = session.id;
     this.notifySessionsChanged();
     return session;
   }
@@ -3065,16 +3081,50 @@ export class AgentSessionManager {
     });
   }
 
-  /**
-   * Update the model on the active foreground session.
-   * If the model crosses a provider boundary (e.g. Anthropic → Codex),
-   * updates the session's providerId and rebuilds the system prompt so
-   * provider-specific behavioral tuning takes effect.
-   */
+  /** Update one session's model without changing foreground ownership. */
+  async setSessionModel(sessionId: string, model: string): Promise<string> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`Session ${sessionId} not found.`);
+    const projectless = isProjectlessSessionScope(session.projectScope);
+    if (!projectless) this.requireSessionExecution(session);
+    const requestedModel = model;
+    const resolution = this.host.providers.resolveAvailableModel(model);
+    if (!resolution && this.host.providers.listProviders().length > 0) {
+      throw new Error(`Model "${model}" is not available.`);
+    }
+    model = resolution?.model ?? model;
+    if (this.foregroundId === session.id) {
+      this.updateConfig({
+        model,
+        autoCondenseThreshold: this.getCondenseThresholdForModel(
+          model,
+          projectless ? undefined : session.projectScope,
+        ),
+      });
+    }
+
+    const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
+    await session.updateModelSelection(model, newProviderId, {
+      devMode: this.devMode,
+      workspaceFolders: this.getWorkspaceFolders(),
+    });
+    this.applyThresholdToSession(session);
+    await this.maybeAutoCondenseSession(session.id);
+    this.saveSession(session.id);
+    this.notifySessionsChanged();
+    if (requestedModel !== model) {
+      this.log?.(
+        `[model] migrated retired model "${requestedModel}" to "${model}"`,
+      );
+    }
+    return model;
+  }
+
+  /** Update the active foreground session's model. */
   async setModel(model: string): Promise<string> {
-    const fg = this.getForegroundSession();
-    const projectless = fg ? isProjectlessSessionScope(fg.projectScope) : false;
-    if (fg && !projectless) this.requireSessionExecution(fg);
+    const foreground = this.getForegroundSession();
+    if (foreground) return this.setSessionModel(foreground.id, model);
+
     const requestedModel = model;
     const resolution = this.host.providers.resolveAvailableModel(model);
     if (!resolution && this.host.providers.listProviders().length > 0) {
@@ -3083,20 +3133,8 @@ export class AgentSessionManager {
     model = resolution?.model ?? model;
     this.updateConfig({
       model,
-      autoCondenseThreshold: this.getCondenseThresholdForModel(
-        model,
-        projectless ? undefined : fg?.projectScope,
-      ),
+      autoCondenseThreshold: this.getCondenseThresholdForModel(model),
     });
-    if (!fg) return model;
-
-    const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
-    await fg.updateModelSelection(model, newProviderId, {
-      devMode: this.devMode,
-      workspaceFolders: this.getWorkspaceFolders(),
-    });
-    this.applyThresholdToSession(fg);
-    await this.maybeAutoCondenseForegroundSession();
     if (requestedModel !== model) {
       this.log?.(
         `[model] migrated retired model "${requestedModel}" to "${model}"`,
@@ -3249,14 +3287,22 @@ export class AgentSessionManager {
     this.notifySessionsChanged();
   }
 
-  setForegroundReasoningEffort(effort: ReasoningEffort): boolean {
-    const session = this.getForegroundSession();
+  setSessionReasoningEffort(
+    sessionId: string,
+    effort: ReasoningEffort,
+  ): boolean {
+    const session = this.sessions.get(sessionId);
     if (!session) return false;
 
     this.applyReasoningEffortToSession(session, effort);
     this.saveSession(session.id);
     this.notifySessionsChanged();
     return true;
+  }
+
+  setForegroundReasoningEffort(effort: ReasoningEffort): boolean {
+    const session = this.getForegroundSession();
+    return session ? this.setSessionReasoningEffort(session.id, effort) : false;
   }
 
   saveAllSessions(): void {
@@ -3610,7 +3656,13 @@ export class AgentSessionManager {
       };
     }
 
-    const fg = this.getForegroundSession();
+    const fg =
+      opts?.sessionId === undefined
+        ? this.getForegroundSession()
+        : this.sessions.get(opts.sessionId);
+    if (opts?.sessionId !== undefined && !fg) {
+      throw new Error(`Session ${opts.sessionId} not found.`);
+    }
     if (fg) this.requireSessionExecution(fg);
 
     const mode = fg?.mode ?? "code";
@@ -3790,7 +3842,13 @@ export class AgentSessionManager {
       throw new Error("Worktree agent startup is unavailable in this window");
     }
 
-    const fg = this.getForegroundSession();
+    const fg =
+      opts.sessionId === undefined
+        ? this.getForegroundSession()
+        : this.sessions.get(opts.sessionId);
+    if (opts.sessionId !== undefined && !fg) {
+      throw new Error(`Session ${opts.sessionId} not found.`);
+    }
     if (fg) this.requireSessionExecution(fg);
     const mode = "ask";
     const model = fg?.model ?? this.config.model;
@@ -5097,12 +5155,11 @@ export class AgentSessionManager {
     return this.checkpoints.get(sessionId) ?? [];
   }
 
-  /**
-   * Create a checkpoint for the current workspace/session state on demand.
-   * Returns null when no foreground session exists or checkpoint creation fails.
-   */
-  async createManualCheckpoint(): Promise<Checkpoint | null> {
-    const session = this.getForegroundSession();
+  /** Create a checkpoint for one session without changing foreground ownership. */
+  async createManualCheckpointForSession(
+    sessionId: string,
+  ): Promise<Checkpoint | null> {
+    const session = this.sessions.get(sessionId);
     if (!session) return null;
     this.requireSessionExecution(session);
 
@@ -5114,6 +5171,12 @@ export class AgentSessionManager {
     return this.ensureCheckpointForTurn(session, turnIndex, {
       refreshExisting: true,
     });
+  }
+
+  /** Create a checkpoint for the current foreground session on demand. */
+  async createManualCheckpoint(): Promise<Checkpoint | null> {
+    const session = this.getForegroundSession();
+    return session ? this.createManualCheckpointForSession(session.id) : null;
   }
 
   private getCheckpointProjectSnapshots(checkpoint: Checkpoint): Array<{
@@ -5692,6 +5755,54 @@ export class AgentSessionManager {
   }
 
   /**
+   * Materialize a persisted session in memory without changing foreground
+   * ownership. Used when startup layout restoration needs multiple tab-bound
+   * sessions available before choosing which tab is focused.
+   */
+  async hydratePersistedSession(
+    sessionId: string,
+  ): Promise<AgentSession | null> {
+    const existing = this.sessions.get(sessionId);
+    if (existing) return existing;
+    const inFlight = this.sessionHydrations.get(sessionId);
+    if (inFlight) return inFlight;
+    if (!this.persistence) return null;
+
+    const hydration = this.hydratePersistedSessionOnce(sessionId);
+    this.sessionHydrations.set(sessionId, hydration);
+    try {
+      return await hydration;
+    } finally {
+      if (this.sessionHydrations.get(sessionId) === hydration) {
+        this.sessionHydrations.delete(sessionId);
+      }
+    }
+  }
+
+  private async hydratePersistedSessionOnce(
+    sessionId: string,
+  ): Promise<AgentSession | null> {
+    const readResult = await this.persistence!.readSession(sessionId);
+    if (!readResult.ok) return null;
+
+    const raced = this.sessions.get(sessionId);
+    if (raced) {
+      if (!this.sessionRevisions.has(sessionId)) {
+        this.sessionRevisions.set(sessionId, readResult.revision);
+      }
+      return raced;
+    }
+
+    const session = await this.restorePersistedSessionRecord(
+      sessionId,
+      readResult,
+    );
+    if (!session) return null;
+    this.notifySessionsChanged();
+    return session;
+  }
+
+  /**
    * Load a persisted session's message history into memory and make it the
    * foreground session. Returns the loaded session or null if not found.
    */
@@ -5703,12 +5814,11 @@ export class AgentSessionManager {
 
     const readResult = await this.persistence.readSession(sessionId);
     if (!readResult.ok) return null;
-    const { summary, messages, metadata } = readResult.value;
 
     if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
 
-    // Reuse in-memory session if already loaded
-    if (this.sessions.has(sessionId)) {
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
       if (!this.sessionRevisions.has(sessionId)) {
         this.sessionRevisions.set(sessionId, readResult.revision);
       }
@@ -5716,9 +5826,34 @@ export class AgentSessionManager {
       this.foregroundId = sessionId;
       await this.restorePersistedBackgroundSessions(sessionId);
       this.notifySessionsChanged();
-      return this.sessions.get(sessionId)!;
+      return existing;
     }
 
+    const session = await this.restorePersistedSessionRecord(
+      sessionId,
+      readResult,
+      () => !opts?.onlyIfForegroundUnset || !this.foregroundId,
+    );
+    if (!session) return null;
+    if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
+    this.foregroundId = sessionId;
+    await this.restorePersistedBackgroundSessions(sessionId);
+    this.notifySessionsChanged();
+    return session;
+  }
+
+  private async restorePersistedSessionRecord(
+    sessionId: string,
+    readResult: Extract<
+      Awaited<ReturnType<SessionStore["readSession"]>>,
+      { ok: true }
+    >,
+    canCommit: () => boolean = () => true,
+  ): Promise<AgentSession | null> {
+    const existing = this.sessions.get(sessionId);
+    if (existing) return existing;
+
+    const { summary, messages, metadata } = readResult.value;
     this.sessionRevisions.set(sessionId, readResult.revision);
     const session = await this.createRestoredSession({ summary, metadata });
     this.sessionApprovalModes.set(sessionId, restoredApprovalMode(metadata));
@@ -5746,7 +5881,6 @@ export class AgentSessionManager {
       this.sessionRevertPending.delete(sessionId);
     }
 
-    // Restore persisted state
     const interruptedRunRecovery = recoverInterruptedRunMessages(
       messages,
       metadata.runState,
@@ -5770,15 +5904,14 @@ export class AgentSessionManager {
       modeInstructionAnchors: readResult.value.modeInstructionAnchors,
     });
 
-    if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
+    if (!canCommit()) return null;
+    const raced = this.sessions.get(sessionId);
+    if (raced) return raced;
     this.sessions.set(sessionId, session);
     this.syncSessionApproveForMe(session);
-    this.foregroundId = sessionId;
     if (interruptedRunRecovery.changed) {
       await this.saveSessionNow(session.id);
     }
-    await this.restorePersistedBackgroundSessions(sessionId);
-    this.notifySessionsChanged();
     return session;
   }
 
@@ -5805,9 +5938,11 @@ export class AgentSessionManager {
     return session;
   }
 
-  /** Remove inactive restored trees before loading another foreground's children. */
-  private pruneRestoredBackgroundSessions(rootSessionId?: string): void {
-    if (!rootSessionId) return;
+  /** Remove inactive restored trees outside the selected foreground/tab roots. */
+  private pruneRestoredBackgroundSessions(
+    rootSessionIds?: ReadonlySet<string>,
+  ): void {
+    if (!rootSessionIds) return;
     for (const sessionId of this.restoredBackgroundSessionIds) {
       const session = this.sessions.get(sessionId);
       if (!session) {
@@ -5816,8 +5951,8 @@ export class AgentSessionManager {
       }
       const fleet = session.fleetMetadata;
       if (
-        fleet?.rootSessionId === rootSessionId ||
-        fleet?.parentSessionId === rootSessionId ||
+        (fleet?.rootSessionId && rootSessionIds.has(fleet.rootSessionId)) ||
+        (fleet?.parentSessionId && rootSessionIds.has(fleet.parentSessionId)) ||
         !this.getProjectedBgStatus(session).done
       ) {
         continue;
@@ -5844,14 +5979,18 @@ export class AgentSessionManager {
     }
   }
 
-  /** Restore durable background records belonging to one foreground session. */
+  /** Restore durable background records belonging to selected foreground/tab roots. */
   async restorePersistedBackgroundSessions(
-    rootSessionId?: string,
+    rootSessionId?: string | ReadonlySet<string>,
   ): Promise<AgentSession[]> {
     if (!this.persistence || typeof this.persistence.listAll !== "function") {
       return [];
     }
-    this.pruneRestoredBackgroundSessions(rootSessionId);
+    const rootSessionIds =
+      typeof rootSessionId === "string"
+        ? new Set([rootSessionId])
+        : rootSessionId;
+    this.pruneRestoredBackgroundSessions(rootSessionIds);
     const restored: AgentSession[] = [];
     for (const summary of this.persistence
       .listAll()
@@ -5861,9 +6000,13 @@ export class AgentSessionManager {
       if (!readResult.ok) continue;
       const { messages, metadata } = readResult.value;
       if (
-        rootSessionId &&
-        metadata.fleet?.rootSessionId !== rootSessionId &&
-        metadata.fleet?.parentSessionId !== rootSessionId
+        rootSessionIds &&
+        !(
+          (metadata.fleet?.rootSessionId &&
+            rootSessionIds.has(metadata.fleet.rootSessionId)) ||
+          (metadata.fleet?.parentSessionId &&
+            rootSessionIds.has(metadata.fleet.parentSessionId))
+        )
       ) {
         continue;
       }

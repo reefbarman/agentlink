@@ -43,6 +43,9 @@ export interface WebviewMessageConnectionOptions {
   onMessage(msg: ExtensionMessage, controls: WebviewMessageControls): void;
 }
 
+const DELTA_FLUSH_MAX_DELAY_MS = 100;
+const MAX_BUFFERED_DELTA_CHARS = 256 * 1024;
+
 const BACKGROUND_EVENT_TYPES = new Set<ExtensionMessage["type"]>([
   "agentFleetEvent",
   "agentBgThinkingStart",
@@ -78,7 +81,9 @@ export function useWebviewMessageConnection(
     let textDeltaBuffer = "";
     const thinkingDeltaBuffer = new Map<string, string>();
     const toolInputDeltaBuffer = new Map<string, string>();
+    let bufferedDeltaChars = 0;
     let deltaAnimationFrame: number | null = null;
+    let deltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
     const drainDeltaBuffers = () => {
       const { dispatchDelta } = optionsRef.current;
@@ -98,22 +103,50 @@ export function useWebviewMessageConnection(
         });
       }
       toolInputDeltaBuffer.clear();
+      bufferedDeltaChars = 0;
     };
 
-    const scheduleDeltaFlush = () => {
-      if (deltaAnimationFrame !== null) return;
-      deltaAnimationFrame = requestAnimationFrame(() => {
-        deltaAnimationFrame = null;
-        drainDeltaBuffers();
-      });
-    };
-
-    const flushDeltasNow = () => {
+    const clearScheduledDeltaFlush = () => {
       if (deltaAnimationFrame !== null) {
         cancelAnimationFrame(deltaAnimationFrame);
         deltaAnimationFrame = null;
       }
+      if (deltaFlushTimer !== null) {
+        clearTimeout(deltaFlushTimer);
+        deltaFlushTimer = null;
+      }
+    };
+
+    const flushDeltasNow = () => {
+      clearScheduledDeltaFlush();
       drainDeltaBuffers();
+    };
+
+    const scheduleDeltaFlush = () => {
+      if (bufferedDeltaChars >= MAX_BUFFERED_DELTA_CHARS) {
+        flushDeltasNow();
+        return;
+      }
+      if (deltaAnimationFrame === null) {
+        deltaAnimationFrame = requestAnimationFrame(() => {
+          deltaAnimationFrame = null;
+          if (deltaFlushTimer !== null) {
+            clearTimeout(deltaFlushTimer);
+            deltaFlushTimer = null;
+          }
+          drainDeltaBuffers();
+        });
+      }
+      if (deltaFlushTimer === null) {
+        deltaFlushTimer = setTimeout(() => {
+          deltaFlushTimer = null;
+          if (deltaAnimationFrame !== null) {
+            cancelAnimationFrame(deltaAnimationFrame);
+            deltaAnimationFrame = null;
+          }
+          drainDeltaBuffers();
+        }, DELTA_FLUSH_MAX_DELAY_MS);
+      }
     };
     if (optionsRef.current.flushDeltasRef) {
       optionsRef.current.flushDeltasRef.current = flushDeltasNow;
@@ -188,6 +221,7 @@ export function useWebviewMessageConnection(
         },
         appendTextDelta: (text) => {
           textDeltaBuffer += text;
+          bufferedDeltaChars += text.length;
           scheduleDeltaFlush();
         },
         appendThinkingDelta: (thinkingId, text) => {
@@ -195,6 +229,7 @@ export function useWebviewMessageConnection(
             thinkingId,
             (thinkingDeltaBuffer.get(thinkingId) ?? "") + text,
           );
+          bufferedDeltaChars += text.length;
           scheduleDeltaFlush();
         },
         appendToolInputDelta: (toolCallId, partialJson) => {
@@ -202,6 +237,7 @@ export function useWebviewMessageConnection(
             toolCallId,
             (toolInputDeltaBuffer.get(toolCallId) ?? "") + partialJson,
           );
+          bufferedDeltaChars += partialJson.length;
           scheduleDeltaFlush();
         },
         flushDeltasNow,
@@ -215,15 +251,17 @@ export function useWebviewMessageConnection(
     };
     replayMessageRef.current = (message) => processMessage(message, true);
 
+    const handleVisibilityChange = () => flushDeltasNow();
+
     window.addEventListener("message", handler);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     optionsRef.current.vscodeApi.postMessage({ command: "webviewReady" });
 
     return () => {
       window.removeEventListener("message", handler);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       replayMessageRef.current = () => {};
-      if (deltaAnimationFrame !== null) {
-        cancelAnimationFrame(deltaAnimationFrame);
-      }
+      clearScheduledDeltaFlush();
       if (optionsRef.current.flushDeltasRef) {
         optionsRef.current.flushDeltasRef.current = () => {};
       }

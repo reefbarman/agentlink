@@ -63,6 +63,34 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(userMessage).not.toHaveProperty("origin");
   });
 
+  it("persists generate_image approval per Ask Agent session", () => {
+    const store = createStore();
+    store.sendMessage({
+      now: 100,
+      theme,
+      modelCredentialStatus: { state: "not_required", providerId: "test" },
+      text: "Create an image",
+    });
+
+    expect(store.isGenerateImageApproved()).toBe(false);
+    store.approveGenerateImageForSession(110);
+    expect(store.isGenerateImageApproved()).toBe(true);
+
+    const history = store.getHistorySnapshot();
+    const reloaded = createStore();
+    reloaded.loadHistory(history);
+    expect(reloaded.isGenerateImageApproved()).toBe(true);
+
+    reloaded.createSession(200);
+    reloaded.sendMessage({
+      now: 200,
+      theme,
+      modelCredentialStatus: { state: "not_required", providerId: "test" },
+      text: "A different session",
+    });
+    expect(reloaded.isGenerateImageApproved()).toBe(false);
+  });
+
   it("does not accumulate empty sessions when creating new sessions repeatedly", () => {
     const store = createStore();
 

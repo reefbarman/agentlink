@@ -22,6 +22,7 @@ export function ChatWorkspace({
   onFocus,
   onNewTab,
   onClose,
+  onPopOut,
   onReorder,
   children,
 }: {
@@ -30,6 +31,7 @@ export function ChatWorkspace({
   onFocus(tabId: string): void;
   onNewTab(): void;
   onClose(tabId: string): void;
+  onPopOut?(tabId: string): void;
   onReorder(tabIds: string[]): void;
   children: ComponentChildren;
 }) {
@@ -89,6 +91,22 @@ export function ChatWorkspace({
                       {tab.title ?? "New Chat"}
                     </span>
                   </button>
+                  {onPopOut && (
+                    <button
+                      type="button"
+                      class="chat-tab-pop-out"
+                      onClick={() => onPopOut(tab.tabId)}
+                      disabled={dockedTabs.length === 1}
+                      title={
+                        dockedTabs.length === 1
+                          ? "At least one chat tab must remain docked"
+                          : `Pop out ${tab.label}`
+                      }
+                      aria-label={`Pop out ${tab.label}`}
+                    >
+                      <i class="codicon codicon-open-preview" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     class="chat-tab-close"

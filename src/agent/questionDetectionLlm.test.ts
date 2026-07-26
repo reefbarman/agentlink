@@ -8,10 +8,6 @@ vi.mock("vscode", () => ({
       get: <T>(key: string, fallback: T): T => {
         return (workspaceConfig[key] as T | undefined) ?? fallback;
       },
-      inspect: (key: string) => {
-        const value = workspaceConfig[key];
-        return value === undefined ? undefined : { globalValue: value };
-      },
     }),
   },
 }));
@@ -55,9 +51,9 @@ describe("getQuestionDetectionMode", () => {
     expect(getQuestionDetectionMode()).toBe("agent");
   });
 
-  it("maps legacy llmEnabled=true to openai mode", () => {
-    workspaceConfig["questionDetection.llmEnabled"] = true;
-    expect(getQuestionDetectionMode()).toBe("openai");
+  it("falls back to heuristic for an invalid mode", () => {
+    workspaceConfig["questionDetection.mode"] = "invalid";
+    expect(getQuestionDetectionMode()).toBe("heuristic");
   });
 });
 

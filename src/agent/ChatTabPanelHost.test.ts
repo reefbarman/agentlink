@@ -73,6 +73,7 @@ class FakePanel {
 function createController(
   initial?: ChatTabLayout,
   shouldFailUpdate: () => boolean = () => false,
+  beforeUpdate: () => void | Promise<void> = () => {},
 ): ChatTabController {
   const stored = new Map<string, unknown>();
   if (initial) stored.set(CHAT_TAB_LAYOUT_WORKSPACE_KEY, initial);
@@ -80,6 +81,7 @@ function createController(
     get: <T>(key: string) => stored.get(key) as T | undefined,
     update: async (key, value) => {
       if (shouldFailUpdate()) throw new Error("workspace persistence failed");
+      await beforeUpdate();
       stored.set(key, structuredClone(value));
     },
   };
@@ -88,6 +90,14 @@ function createController(
     createId: () => `tab-${nextId++}`,
     createControllerEpoch: () => "controller-1",
   });
+}
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
 }
 
 function createHost(tabs: ChatTabController) {
@@ -174,6 +184,27 @@ describe("ChatTabPanelHost", () => {
     expect(onLayoutChanged).toHaveBeenCalledOnce();
   });
 
+  it("keeps the tab docked when its panel closes during editor hydration", async () => {
+    const tabs = createController();
+    await tabs.bindFocusedSession("session-1");
+    const second = await tabs.createTab("session-2");
+    const panel = new FakePanel();
+    createWebviewPanel.mockReturnValue(panel);
+    const hydration = deferred();
+    const { host, hydrateEditor } = createHost(tabs);
+    hydrateEditor.mockReturnValueOnce(hydration.promise);
+    await host.popOut(second.id);
+    sendReady(panel);
+    await vi.waitFor(() => expect(hydrateEditor).toHaveBeenCalledOnce());
+    panel.dispose();
+    hydration.resolve();
+    await settle();
+
+    expect(tabs.getTab(second.id)?.placement).toBe("docked");
+    expect(host.getEditorConnection(second.id)).toBeUndefined();
+    expect(host.getSidebarAddress(second.id)?.surface).toBe("sidebar");
+  });
+
   it("treats user panel close as docking but shutdown as intentional disposal", async () => {
     const tabs = createController();
     await tabs.bindFocusedSession("session-1");
@@ -204,6 +235,70 @@ describe("ChatTabPanelHost", () => {
 
     expect(secondPanel.disposed).toBe(true);
     expect(tabs.getTab(second.id)?.placement).toBe("popped");
+  });
+
+  it("lets a newer close-to-dock transition win during pop persistence", async () => {
+    let blockUpdates = false;
+    const updateStarted = deferred();
+    const updateGate = deferred();
+    const tabs = createController(
+      undefined,
+      () => false,
+      async () => {
+        if (!blockUpdates) return;
+        updateStarted.resolve();
+        await updateGate.promise;
+      },
+    );
+    await tabs.bindFocusedSession("session-1");
+    const second = await tabs.createTab("session-2");
+    const panel = new FakePanel();
+    createWebviewPanel.mockReturnValue(panel);
+    const { host } = createHost(tabs);
+    blockUpdates = true;
+
+    await host.popOut(second.id);
+    sendReady(panel);
+    await updateStarted.promise;
+    expect(tabs.getTab(second.id)?.placement).toBe("popped");
+
+    panel.dispose();
+    updateGate.resolve();
+    await vi.waitFor(() =>
+      expect(tabs.getTab(second.id)?.placement).toBe("docked"),
+    );
+
+    expect(host.getEditorConnection(second.id)).toBeUndefined();
+    expect(host.getSidebarAddress(second.id)?.surface).toBe("sidebar");
+  });
+
+  it("allows only the latest concurrent dock transition to commit", async () => {
+    const tabs = createController();
+    await tabs.bindFocusedSession("session-1");
+    const second = await tabs.createTab("session-2");
+    const panel = new FakePanel();
+    createWebviewPanel.mockReturnValue(panel);
+    const firstHydration = deferred();
+    const secondHydration = deferred();
+    const { host, hydrateSidebar, onLayoutChanged } = createHost(tabs);
+    await host.popOut(second.id);
+    sendReady(panel);
+    await vi.waitFor(() =>
+      expect(tabs.getTab(second.id)?.placement).toBe("popped"),
+    );
+    hydrateSidebar
+      .mockReturnValueOnce(firstHydration.promise)
+      .mockReturnValueOnce(secondHydration.promise);
+
+    const firstDock = host.dock(second.id);
+    const secondDock = host.dock(second.id);
+    firstHydration.resolve();
+    await expect(firstDock).resolves.toBe(false);
+    secondHydration.resolve();
+    await expect(secondDock).resolves.toBe(true);
+
+    expect(tabs.getTab(second.id)?.placement).toBe("docked");
+    expect(onLayoutChanged).toHaveBeenCalledTimes(2);
   });
 
   it("restores editor authority when explicit docking cannot be persisted", async () => {
@@ -306,6 +401,44 @@ describe("ChatTabPanelHost", () => {
     await settle();
     expect(tabs.getTab("tab-2")?.placement).toBe("popped");
     expect(host.getEditorConnection("tab-2")).toBeDefined();
+  });
+
+  it("replaces a fallback panel when VS Code restores its serialized panel late", async () => {
+    const tabs = createController({
+      version: CHAT_TAB_LAYOUT_VERSION,
+      tabs: [
+        {
+          id: "tab-1",
+          displayNumber: 1,
+          sessionId: "session-1",
+          placement: "docked",
+          terminalGeneration: 1,
+        },
+        {
+          id: "tab-2",
+          displayNumber: 2,
+          sessionId: "session-2",
+          placement: "popped",
+          terminalGeneration: 1,
+        },
+      ],
+      nextDisplayNumber: 3,
+    });
+    const fallback = new FakePanel();
+    const serialized = new FakePanel();
+    createWebviewPanel.mockReturnValue(fallback);
+    const { host } = createHost(tabs);
+    host.markRuntimeReady();
+
+    await host.restoreMissingPanels();
+    await host.deserializeWebviewPanel(serialized as never, {
+      version: 1,
+      tabId: "tab-2",
+    });
+
+    expect(fallback.disposed).toBe(true);
+    expect(serialized.disposed).toBe(false);
+    expect(serialized.webview.html).toContain('"surface":"editor"');
   });
 
   it("deduplicates restored panels and rejects stale serialized state", async () => {

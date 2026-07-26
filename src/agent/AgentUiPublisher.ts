@@ -31,25 +31,7 @@ export type AgentUiEvent =
   | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
   | { type: "agentUrlElicitationCleared"; id: string };
 
-type QuestionAgentUiEvent = Extract<
-  AgentUiEvent,
-  {
-    type:
-      | "agentQuestionRequest"
-      | "agentQuestionCleared"
-      | "agentQuestionProgress";
-  }
->;
-
-type ApprovalAgentUiEvent = Extract<
-  AgentUiEvent,
-  { type: "showApproval" | "idle" }
->;
-type AddressedAgentUiEvent = QuestionAgentUiEvent | ApprovalAgentUiEvent;
-
-type WebviewAgentUiMessage =
-  | Exclude<AgentUiEvent, AddressedAgentUiEvent>
-  | (AddressedAgentUiEvent & { sessionId?: string });
+type WebviewAgentUiMessage = AgentUiEvent & { sessionId?: string };
 
 export interface SessionUiEvent {
   sessionId: string;
@@ -260,25 +242,33 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
   }
 
   publishFormElicitationRequest(
-    _sessionId: string,
+    sessionId: string,
     request: McpFormElicitationRequest,
   ): void {
-    this.publishMessage({ type: "agentFormElicitationRequest", request });
+    this.publishMessage({
+      type: "agentFormElicitationRequest",
+      sessionId,
+      request,
+    });
   }
 
-  publishFormElicitationCleared(_sessionId: string, id: string): void {
-    this.publishMessage({ type: "agentFormElicitationCleared", id });
+  publishFormElicitationCleared(sessionId: string, id: string): void {
+    this.publishMessage({ type: "agentFormElicitationCleared", sessionId, id });
   }
 
   publishUrlElicitationRequest(
-    _sessionId: string,
+    sessionId: string,
     request: McpUrlElicitationRequest,
   ): void {
-    this.publishMessage({ type: "agentUrlElicitationRequest", request });
+    this.publishMessage({
+      type: "agentUrlElicitationRequest",
+      sessionId,
+      request,
+    });
   }
 
-  publishUrlElicitationCleared(_sessionId: string, id: string): void {
-    this.publishMessage({ type: "agentUrlElicitationCleared", id });
+  publishUrlElicitationCleared(sessionId: string, id: string): void {
+    this.publishMessage({ type: "agentUrlElicitationCleared", sessionId, id });
   }
 }
 

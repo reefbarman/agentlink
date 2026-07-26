@@ -4,6 +4,7 @@ import type { BrowserGatewayCoreOwnerLeaseRegistration } from "../protocol.js";
 import {
   BROWSER_GATEWAY_COMMAND_IDEMPOTENCY,
   BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
+  type BrowserGatewayDetailHandle,
   type BrowserGatewayOwnerCommand,
   type BrowserGatewayOwnerCommandAck,
   type BrowserGatewayOwnerControl,
@@ -80,6 +81,11 @@ class ProjectionSources implements BrowserGatewayOwnerProjectionSources {
 class FakeTransport implements BrowserGatewayOwnerRuntimeTransport {
   readonly publications: BrowserGatewayOwnerProjectionPublication[] = [];
   readonly acknowledgements: BrowserGatewayOwnerCommandAck[] = [];
+  readonly detailUploads: Array<{
+    handle: BrowserGatewayDetailHandle;
+    content: Uint8Array;
+  }> = [];
+  readonly lifecycle: string[] = [];
   acknowledgementError: Error | undefined;
   readonly eventsDuringRegister: Array<
     | { kind: "command"; value: BrowserGatewayOwnerCommand }
@@ -125,10 +131,17 @@ class FakeTransport implements BrowserGatewayOwnerRuntimeTransport {
     };
   }
 
-  async uploadDetail(): Promise<void> {}
+  async uploadDetail(
+    handle: BrowserGatewayDetailHandle,
+    content: Uint8Array,
+  ): Promise<void> {
+    this.detailUploads.push({ handle, content: Uint8Array.from(content) });
+    this.lifecycle.push("detail_uploaded");
+  }
 
   async acknowledge(acknowledgement: BrowserGatewayOwnerCommandAck) {
     this.acknowledgements.push(acknowledgement);
+    this.lifecycle.push(`ack:${acknowledgement.operation.state}`);
     if (this.acknowledgementError) throw this.acknowledgementError;
   }
 
@@ -292,6 +305,63 @@ describe("BrowserGatewayOwnerRuntime", () => {
     expect(
       transport.acknowledgements.map((ack) => ack.operation.state),
     ).toEqual(["accepted", "completed"]);
+    await runtime.close();
+  });
+
+  it("uploads command detail before acknowledging its generation-bound handle", async () => {
+    const transport = new FakeTransport();
+    const body = {
+      kind: "session.detail" as const,
+      instanceId: "instance-1",
+      controllerEpoch: "controller-1",
+      tabId: "tab-2",
+      sessionId: "session-2",
+    };
+    transport.eventsDuringRegister.push({
+      kind: "command",
+      value: command("operation-detail", body),
+    });
+    const content = new TextEncoder().encode('{"sessionId":"session-2"}');
+    const { runtime } = makeRuntime(
+      transport,
+      new ProjectionSources(),
+      vi.fn(async () => ({
+        detail: {
+          content,
+          kind: "session" as const,
+          mediaType: "application/json; charset=utf-8",
+        },
+      })),
+    );
+
+    await runtime.start();
+    await vi.waitFor(() => {
+      expect(transport.acknowledgements).toHaveLength(2);
+    });
+
+    expect(transport.lifecycle).toEqual([
+      "ack:accepted",
+      "detail_uploaded",
+      "ack:completed",
+    ]);
+    expect(transport.detailUploads).toHaveLength(1);
+    expect(transport.detailUploads[0]?.handle).toMatchObject({
+      helperGenerationId,
+      ownerId: effectiveOwnerId,
+      ownerGenerationId,
+      kind: "session",
+      byteLength: content.byteLength,
+      mediaType: "application/json; charset=utf-8",
+    });
+    expect(transport.detailUploads[0]?.handle.handleId).toBeTruthy();
+    expect(transport.detailUploads[0]?.content).toEqual(content);
+    expect(transport.acknowledgements[1]?.operation).toMatchObject({
+      operationId: "operation-detail",
+      kind: "session.detail",
+      state: "completed",
+      detailHandle: transport.detailUploads[0]?.handle,
+    });
+    expect(transport.publications).toHaveLength(0);
     await runtime.close();
   });
 

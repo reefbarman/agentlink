@@ -86,6 +86,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   retainedHttp(
     "vscode_gateway",
     "GET",
+    "/api/session-detail",
+    "Client-local logical-tab detail remains an authenticated HTTP read for direct connections.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "GET",
     "/api/instances",
     "Legacy instance catalog remains during coexistence.",
   ),
@@ -454,6 +460,13 @@ const commandAdoption = {
     routes: ["POST /api/session/load", "POST /api/ask-agent/session/load"],
     notes:
       "Inventory mapping exists; helper command route and production executor are not implemented.",
+  },
+  "session.detail": {
+    commandKind: "session.detail",
+    status: "routed",
+    routes: ["GET /api/session-detail", "POST /api/relay/commands"],
+    notes:
+      "Direct clients use the authenticated read route; relay clients use an idempotent owner operation with an uploaded detail handle.",
   },
   "session.send": {
     commandKind: "session.send",

@@ -106,6 +106,84 @@ describe("ToolCallBlock", () => {
     expect(screen.queryByText("Input")).toBeNull();
   });
 
+  it("linkifies file paths embedded in ACP-native summary text", () => {
+    const onOpenFile = vi.fn();
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "acp-summary-path",
+          name: "Read:",
+          inputJson: JSON.stringify({
+            description:
+              "Inspect /Users/tristan/workspace/agentlink/src/agent/ChatViewProvider.ts:42",
+          }),
+          result: "file contents",
+          complete: true,
+        },
+        onOpenFile,
+      }),
+    );
+
+    const fileLink = screen.getByRole("link", {
+      name: "/Users/tristan/workspace/agentlink/src/agent/ChatViewProvider.ts:42",
+    });
+    expect(fileLink.closest(".tool-call-summary")).toBeTruthy();
+
+    fireEvent.click(fileLink);
+
+    expect(onOpenFile).toHaveBeenCalledWith(
+      "/Users/tristan/workspace/agentlink/src/agent/ChatViewProvider.ts",
+      42,
+    );
+    expect(screen.queryByText("Input")).toBeNull();
+  });
+
+  it("leaves ACP-native summary paths as plain text without file navigation", () => {
+    const path =
+      "/Users/tristan/workspace/agentlink/src/agent/ChatViewProvider.ts";
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "acp-summary-without-navigation",
+          name: "Read:",
+          inputJson: JSON.stringify({ description: path }),
+          result: "file contents",
+          complete: true,
+        },
+      }),
+    );
+
+    expect(screen.getByText(path)).toBeTruthy();
+    expect(screen.queryByRole("link", { name: path })).toBeNull();
+  });
+
+  it("keeps a summary path whole when it crosses the truncation boundary", () => {
+    const onOpenFile = vi.fn();
+    const path =
+      "/Users/tristan/workspace/agentlink/src/agent/ChatViewProvider.ts";
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "acp-long-summary-path",
+          name: "Read:",
+          inputJson: JSON.stringify({
+            description: `${"Inspect approval handling carefully ".repeat(2)}${path} before editing`,
+          }),
+          result: "file contents",
+          complete: true,
+        },
+        onOpenFile,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: path }));
+
+    expect(onOpenFile).toHaveBeenCalledWith(path, undefined);
+  });
+
   it("opens file paths from expanded JSON input and results", () => {
     const onOpenFile = vi.fn();
     render(
@@ -161,11 +239,12 @@ describe("ToolCallBlock", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /custom_tool/i }));
-    fireEvent.click(
-      screen.getByRole("link", {
-        name: "src/agent/webview/App.tsx:2337",
-      }),
-    );
+    const expandedResult = screen.getByText("Result").parentElement;
+    const fileLink =
+      expandedResult?.querySelector<HTMLAnchorElement>(".tool-file-link");
+    expect(fileLink?.textContent).toBe("src/agent/webview/App.tsx:2337");
+
+    fireEvent.click(fileLink as HTMLAnchorElement);
 
     expect(onOpenFile).toHaveBeenCalledWith("src/agent/webview/App.tsx", 2337);
   });

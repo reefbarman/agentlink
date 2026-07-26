@@ -89,15 +89,52 @@ type BgAgentResultContentBlock = Extract<
 >;
 
 const messageRevisionCache = new WeakMap<ChatMessage, string>();
+const objectRevisionCache = new WeakMap<object, number>();
 const assistantSegmentCache = new WeakMap<
   ChatMessage,
   Map<string, ChatMessage>
 >();
+let nextObjectRevision = 0;
+
+function objectRevision(value: object | null | undefined): number {
+  if (!value) return 0;
+  const cached = objectRevisionCache.get(value);
+  if (cached !== undefined) return cached;
+  nextObjectRevision += 1;
+  objectRevisionCache.set(value, nextObjectRevision);
+  return nextObjectRevision;
+}
 
 function messageRevision(message: ChatMessage): string {
   const cached = messageRevisionCache.get(message);
   if (cached !== undefined) return cached;
-  const revision = JSON.stringify(message);
+  // Projection updates replace changed blocks and nested metadata instead of
+  // mutating them. Track those object identities so revisions stay bounded and
+  // never traverse potentially multi-megabyte tool inputs or results. Blocks
+  // are tracked individually because split transcript rows recreate their
+  // small array wrappers while retaining unchanged block objects.
+  const blockRevisions = message.blocks.map(objectRevision).join(",");
+  const revision = [
+    message.id,
+    message.role,
+    message.content,
+    message.timestamp,
+    message.badge ?? "",
+    message.isSlashCommand ? 1 : 0,
+    message.slashCommandLabel ?? "",
+    message.origin ?? "",
+    message.checkpointId ?? "",
+    message.warningMessage ?? "",
+    blockRevisions,
+    objectRevision(message.displayMedia),
+    objectRevision(message.media),
+    objectRevision(message.finalMarker),
+    objectRevision(message.error),
+    objectRevision(message.memoryDisclosure),
+    objectRevision(message.apiRequest),
+    objectRevision(message.condenseInfo),
+    objectRevision(message.warningRetry),
+  ].join("\u0000");
   messageRevisionCache.set(message, revision);
   return revision;
 }
@@ -716,9 +753,9 @@ function createRowRevision(params: {
   sessionId?: string | null;
 }): string {
   const { actions, row } = params;
-  // The message revisions are already JSON strings (cached per message object).
-  // Concatenate them instead of nesting them in another JSON.stringify, which
-  // would re-walk and re-escape every message body on each render.
+  // Message revisions compare primitive presentation fields plus stable IDs for
+  // nested immutable structures. This preserves semantic equality across shallow
+  // clones without serializing potentially multi-megabyte tool results.
   const scalars = JSON.stringify({
     modelChange: row.modelChange,
     reasoningChange: row.reasoningChange,

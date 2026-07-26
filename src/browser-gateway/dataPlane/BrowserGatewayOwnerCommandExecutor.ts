@@ -1,4 +1,8 @@
 import type { ChatViewProvider } from "../../agent/ChatViewProvider.js";
+import type {
+  BrowserGatewayDetachedSessionDetail,
+  BrowserGatewayDetachedSessionSelection,
+} from "../BrowserGatewayService.js";
 import type { BrowserGatewayOwnerCommandExecutor } from "./BrowserGatewayOwnerRuntime.js";
 import type {
   BrowserGatewayOwnerCommandBody,
@@ -7,6 +11,7 @@ import type {
 
 export const BROWSER_GATEWAY_PRODUCTION_OWNER_COMMAND_CAPABILITIES = [
   "session.select",
+  "session.detail",
   "session.send",
   "session.stop",
 ] as const satisfies readonly BrowserGatewayOwnerCommandKind[];
@@ -17,12 +22,18 @@ export type BrowserGatewayOwnerCommandTarget = Pick<
 >;
 
 export class ProductionBrowserGatewayOwnerCommandExecutor implements BrowserGatewayOwnerCommandExecutor {
-  constructor(private readonly target: BrowserGatewayOwnerCommandTarget) {}
+  constructor(
+    private readonly target: BrowserGatewayOwnerCommandTarget,
+    private readonly instanceId: string,
+    private readonly getSessionDetail: (
+      selection: BrowserGatewayDetachedSessionSelection,
+    ) => BrowserGatewayDetachedSessionDetail | null,
+  ) {}
 
   async execute(
     command: BrowserGatewayOwnerCommandBody,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): ReturnType<BrowserGatewayOwnerCommandExecutor["execute"]> {
     assertNotAborted(signal);
     switch (command.kind) {
       case "session.select": {
@@ -33,6 +44,27 @@ export class ProductionBrowserGatewayOwnerCommandExecutor implements BrowserGate
         if (!result.ok)
           throw new Error("browser_gateway_session_select_failed");
         return;
+      }
+      case "session.detail": {
+        if (command.instanceId !== this.instanceId) {
+          throw new Error("browser_gateway_session_detail_instance_mismatch");
+        }
+        const detail = this.getSessionDetail({
+          controllerEpoch: command.controllerEpoch,
+          tabId: command.tabId,
+          sessionId: command.sessionId,
+        });
+        assertNotAborted(signal);
+        if (!detail) {
+          throw new Error("browser_gateway_session_detail_unavailable");
+        }
+        return {
+          detail: {
+            content: new TextEncoder().encode(JSON.stringify(detail)),
+            mediaType: "application/json; charset=utf-8",
+            kind: "session",
+          },
+        };
       }
       case "session.send": {
         if (command.detailHandles.length > 0) {

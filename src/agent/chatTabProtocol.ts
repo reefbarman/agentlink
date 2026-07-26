@@ -61,7 +61,8 @@ export interface ChatTabActionFailure {
     | "close_blocked"
     | "session_not_found"
     | "binding_conflict"
-    | "invalid_order";
+    | "invalid_order"
+    | "placement_failed";
   snapshot: ChatWorkspaceViewSnapshot;
 }
 

@@ -581,7 +581,9 @@ export function App({
                 ? "That saved chat is no longer available."
                 : msg.failure.reason === "invalid_order"
                   ? "The tab order changed before it could be saved."
-                  : "The chat tab could not be updated.",
+                  : msg.failure.reason === "placement_failed"
+                    ? "The chat tab could not be moved. Please try again."
+                    : "The chat tab could not be updated.",
           );
           break;
         case "stateUpdate": {
@@ -2703,6 +2705,24 @@ export function App({
     },
     [findWorkspaceTab, vscodeApi],
   );
+  const handlePopOutChatTab = useCallback(
+    (tabId: string) => {
+      const tab = findWorkspaceTab(tabId);
+      if (!tab) return;
+      setChatTabFailure(null);
+      vscodeApi.postMessage({
+        command: "chatTabPopOut",
+        tabId: tab.tabId,
+        sessionId: tab.sessionId,
+      });
+    },
+    [findWorkspaceTab, vscodeApi],
+  );
+  const handleDockChatTab = useCallback(() => {
+    if (!pinnedPane) return;
+    setChatTabFailure(null);
+    vscodeApi.postMessage({ command: "chatTabDock" });
+  }, [pinnedPane, vscodeApi]);
   const handleReorderChatTabs = useCallback(
     (tabIds: string[]) => {
       vscodeApi.postMessage({ command: "chatTabReorder", tabIds });
@@ -2886,12 +2906,39 @@ export function App({
           onCancel={() => setChatTabConfirmation(null)}
         />
       )}
+      {pane.surface === "editor" && selectedWorkspaceTab && (
+        <div class="chat-editor-actions">
+          <span>
+            {selectedWorkspaceTab.label} ·{" "}
+            {selectedWorkspaceTab.title ?? "New Chat"}
+          </span>
+          <button
+            type="button"
+            class="chat-editor-action"
+            onClick={handleDockChatTab}
+            title="Dock in AgentLink sidebar"
+          >
+            <i class="codicon codicon-layout-sidebar-left" />
+            Dock
+          </button>
+          <button
+            type="button"
+            class="chat-editor-action"
+            onClick={() => handleCloseChatTab(selectedWorkspaceTab.tabId)}
+            title={`Close ${selectedWorkspaceTab.label}`}
+          >
+            <i class="codicon codicon-close" />
+            Close Tab
+          </button>
+        </div>
+      )}
       <ChatWorkspace
         snapshot={workspaceSnapshot}
         showTabStrip={pane.surface === "sidebar"}
         onFocus={handleFocusChatTab}
         onNewTab={handleNewChatTab}
         onClose={handleCloseChatTab}
+        onPopOut={pane.surface === "sidebar" ? handlePopOutChatTab : undefined}
         onReorder={handleReorderChatTabs}
       >
         <ChatSessionPane tabKey={selectedTabKey}>

@@ -414,6 +414,7 @@ function createLegacySnapshot(
     session: {
       projects: [{ ...project }],
       defaultProjectId: checkpoint.catalog.defaultProjectId,
+      chatWorkspace: null,
       repository: {
         projectId: project.projectId,
         branch: checkpoint.repository?.branch ?? undefined,

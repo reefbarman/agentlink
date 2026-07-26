@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 
-const LEGACY_THRESHOLD_KEY = "autoCondenseThreshold";
 export const MODEL_THRESHOLD_KEY = "modelCondenseThresholds";
 
 // Condensing is the expensive event, not carrying context: each condense costs
@@ -86,7 +85,7 @@ export function getConfiguredBaseThresholdForModel(
   modelId: string,
   capabilities?: { contextWindow?: number },
 ): number {
-  const overrides = getMigratedModelCondenseThresholdMap(config, modelId);
+  const overrides = getModelCondenseThresholdMap(config);
   return getEffectiveAutoCondenseThreshold(modelId, overrides, capabilities);
 }
 
@@ -94,21 +93,4 @@ export function getModelCondenseThresholdMap(
   config: vscode.WorkspaceConfiguration,
 ): ModelCondenseThresholdMap {
   return normalizeModelThresholdMap(config.get(MODEL_THRESHOLD_KEY));
-}
-
-export function getMigratedModelCondenseThresholdMap(
-  config: vscode.WorkspaceConfiguration,
-  selectedModel: string,
-): ModelCondenseThresholdMap {
-  const explicit = getModelCondenseThresholdMap(config);
-  if (Object.keys(explicit).length > 0) return explicit;
-
-  const inspected = config.inspect<number>(LEGACY_THRESHOLD_KEY);
-  const legacy =
-    inspected?.globalValue ??
-    inspected?.workspaceValue ??
-    inspected?.workspaceFolderValue;
-  if (typeof legacy !== "number") return explicit;
-
-  return { [selectedModel]: clampCondenseThreshold(legacy) };
 }

@@ -21,7 +21,6 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "recentApprovalTtl",
   "commandAutoApproveTier",
   "worktreeDirectorySuffix",
-  "agentModel",
   "modeModelPreferences",
   "modeReasoningEffortPreferences",
   "agentMaxTokens",
@@ -65,15 +64,6 @@ export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "questionDetection.mode",
   "showThinking",
   "anthropic.dynamicModelCapabilities",
-] as const;
-
-export const COMPATIBILITY_AGENTLINK_SETTINGS = [
-  "questionDetection.llmEnabled",
-  "questionDetection.baseUrl",
-  "questionDetection.model",
-  "questionDetection.apiKey",
-  "questionDetection.timeoutMs",
-  "autoCondenseThreshold",
 ] as const;
 
 export type ProjectScopedAgentLinkSetting =

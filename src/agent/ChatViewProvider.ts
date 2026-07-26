@@ -33,8 +33,14 @@ import type {
   SessionApprovalMode,
 } from "./AgentSessionManager.js";
 import type { AgentSession } from "./AgentSession.js";
-import type { ChatTabController } from "./ChatTabController.js";
+import type {
+  ChatTabActionAddress,
+  ChatTabController,
+} from "./ChatTabController.js";
 import { ChatTabHostCoordinator } from "./ChatTabHostCoordinator.js";
+import type { ChatPaneConnection } from "./ChatPaneConnection.js";
+import type { ChatPaneLease } from "./ChatPaneAuthorityController.js";
+import type { ChatTabPanelHost } from "./ChatTabPanelHost.js";
 import {
   createChatWorkspaceViewSnapshot,
   parseChatTabActionAddress,
@@ -850,9 +856,15 @@ export type ExtensionToWebview =
       messages: unknown[];
       todos: TodoItem[];
     }
-  | { type: "agentBtwLoading"; requestId: string; question: string }
+  | {
+      type: "agentBtwLoading";
+      sessionId: string;
+      requestId: string;
+      question: string;
+    }
   | {
       type: "agentBtwProgress";
+      sessionId: string;
       requestId: string;
       answer: string;
       tools: string[];
@@ -861,6 +873,7 @@ export type ExtensionToWebview =
     }
   | {
       type: "agentBtwResponse";
+      sessionId: string;
       requestId: string;
       question: string;
       answer: string;
@@ -872,11 +885,13 @@ export type ExtensionToWebview =
     }
   | {
       type: "agentWorktreeSetupStarted";
+      sessionId: string;
       requestId: string;
       input: string;
     }
   | {
       type: "agentWorktreeSetupProgress";
+      sessionId: string;
       requestId: string;
       answer: string;
       tools: string[];
@@ -885,6 +900,7 @@ export type ExtensionToWebview =
     }
   | {
       type: "agentWorktreeSetupAwaitingInput";
+      sessionId: string;
       requestId: string;
       answer: string;
       conversation: Array<{ role: "user" | "assistant"; text: string }>;
@@ -894,6 +910,7 @@ export type ExtensionToWebview =
     }
   | {
       type: "agentWorktreeSetupReady";
+      sessionId: string;
       requestId: string;
       answer: string;
       config: WorktreeSetupConfig;
@@ -903,11 +920,13 @@ export type ExtensionToWebview =
     }
   | {
       type: "agentWorktreeSetupLaunching";
+      sessionId: string;
       requestId: string;
       config: WorktreeSetupConfig;
     }
   | {
       type: "agentWorktreeSetupResult";
+      sessionId: string;
       requestId: string;
       phase: "opened" | "rejected" | "cancelled" | "error";
       message: string;
@@ -1066,6 +1085,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private sessionManager: AgentSessionManager | undefined;
   private chatTabController: ChatTabController | undefined;
   private chatTabHostCoordinator: ChatTabHostCoordinator | undefined;
+  private chatTabPanelHost: ChatTabPanelHost | undefined;
   private chatTabControllerListener: { dispose(): void } | undefined;
   private foregroundSessionTransition:
     | {
@@ -1132,11 +1152,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   private pendingFileWriteApprovalIds = new Set<string>();
   /** In-flight /btw side questions, keyed by requestId, for cancellation. */
-  private pendingBtwRequests = new Map<string, AbortController>();
+  private pendingBtwRequests = new Map<
+    string,
+    { controller: AbortController; sessionId: string }
+  >();
   private pendingWorktreeSetups = new Map<
     string,
     {
       controller: AbortController;
+      sessionId: string;
       config?: WorktreeSetupConfig;
       draft?: WorktreeSlashDraft;
       sourcePath?: string;
@@ -1329,8 +1353,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.pendingQuestions.clear();
     this.questionSessionIndex.clear();
     this.questionSessionById.clear();
-    for (const controller of this.pendingBtwRequests.values()) {
-      controller.abort();
+    for (const request of this.pendingBtwRequests.values()) {
+      request.controller.abort();
     }
     this.pendingBtwRequests.clear();
     for (const setup of this.pendingWorktreeSetups.values()) {
@@ -1427,11 +1451,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  getConfiguredCommandApprovalPolicy(): Exclude<
-    CommandApprovalPolicy,
-    "approve-for-me"
-  > {
-    const tier = this.getCurrentProjectConfiguration()?.get<
+  getConfiguredCommandApprovalPolicy(
+    projectScope?: SessionProjectScope,
+  ): Exclude<CommandApprovalPolicy, "approve-for-me"> {
+    const tier = this.getProjectConfiguration(projectScope)?.get<
       "off" | "safe" | "sensitive"
     >("commandAutoApproveTier", "safe");
     return commandApprovalPolicyFromLegacyTier(tier ?? "safe");
@@ -1441,13 +1464,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this.getBrowserSessionApprovalMode().commandApprovalPolicy;
   }
 
-  getBrowserSessionApprovalMode(): SessionApprovalMode {
-    const fgSessionId =
-      this.sessionManager?.getForegroundSession()?.id ?? "agent";
-    const configured = this.getConfiguredCommandApprovalPolicy();
+  getBrowserSessionApprovalMode(
+    sessionId?: string,
+    projectScope?: SessionProjectScope,
+  ): SessionApprovalMode {
+    const effectiveSessionId =
+      sessionId ?? this.sessionManager?.getForegroundSession()?.id ?? "agent";
+    const configured = this.getConfiguredCommandApprovalPolicy(projectScope);
     return (
       this.sessionManager?.getSessionApprovalMode?.(
-        fgSessionId,
+        effectiveSessionId,
         configured,
       ) ?? {
         commandApprovalPolicy: configured,
@@ -1458,15 +1484,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
   }
 
-  getBrowserAgentWriteApprovalState():
-    | "prompt"
-    | "session"
-    | "project"
-    | "global" {
-    const fgSessionId =
-      this.sessionManager?.getForegroundSession()?.id ?? "agent";
+  getBrowserAgentWriteApprovalState(
+    sessionId?: string,
+  ): "prompt" | "session" | "project" | "global" {
+    const effectiveSessionId =
+      sessionId ?? this.sessionManager?.getForegroundSession()?.id ?? "agent";
     return (
-      this.approvalManager?.getAgentWriteApprovalState(fgSessionId) ?? "prompt"
+      this.approvalManager?.getAgentWriteApprovalState(effectiveSessionId) ??
+      "prompt"
     );
   }
 
@@ -1560,7 +1585,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): SessionApprovalPolicyTransitionResult | undefined {
     const coordinator = this.getSessionApprovalPolicyCoordinator();
     if (!coordinator) return undefined;
-    const configured = this.getConfiguredCommandApprovalPolicy();
+    const session = this.sessionManager!.getSession?.(sessionId);
+    const configured = this.getConfiguredCommandApprovalPolicy(
+      session?.projectScope,
+    );
     const previousPolicy = this.sessionManager!.getCommandApprovalPolicy(
       sessionId,
       configured,
@@ -1607,7 +1635,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const result = coordinator.setWriteApproval(
         sessionId,
         selection,
-        this.getConfiguredCommandApprovalPolicy(),
+        this.getConfiguredCommandApprovalPolicy(
+          this.sessionManager?.getSession?.(sessionId)?.projectScope,
+        ),
         targetPath,
       );
       if (result.ok && selection !== "prompt") {
@@ -2264,10 +2294,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       : this.getCurrentProjectScope();
   }
 
-  private getCurrentProjectConfiguration():
-    | vscode.WorkspaceConfiguration
-    | undefined {
-    const scope = this.getCurrentProjectScope();
+  private getProjectConfiguration(
+    scope = this.getCurrentProjectScope(),
+  ): vscode.WorkspaceConfiguration | undefined {
     if (scope) {
       return vscode.workspace.getConfiguration(
         "agentlink",
@@ -2279,6 +2308,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this.sessionManager?.getForegroundSession()
       ? vscode.workspace.getConfiguration("agentlink")
       : undefined;
+  }
+
+  private getCurrentProjectConfiguration():
+    | vscode.WorkspaceConfiguration
+    | undefined {
+    return this.getProjectConfiguration();
   }
 
   private getCurrentProjectMcpHub(
@@ -2801,8 +2836,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public async suggestRegexForCommand(args: {
     subCommand: string;
     fullCommand: string;
+    sessionId?: string;
   }): Promise<string> {
-    const fg = this.sessionManager?.getForegroundSession();
+    const fg = args.sessionId
+      ? this.sessionManager?.getSession(args.sessionId)
+      : this.sessionManager?.getForegroundSession();
     const foregroundModel =
       fg?.model ??
       this.sessionManager?.getConfig().model ??
@@ -2847,13 +2885,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     requestId: string;
     subCommand: string;
     fullCommand: string;
+    sessionId?: string;
+    connection?: ChatPaneConnection;
   }): Promise<void> {
+    const reply = (message: ExtensionToWebview) =>
+      args.connection
+        ? args.connection.postMessage(message)
+        : this.postMessage(message);
     try {
       const pattern = await this.suggestRegexForCommand({
         subCommand: args.subCommand,
         fullCommand: args.fullCommand,
+        sessionId: args.sessionId,
       });
-      this.postMessage({
+      reply({
         type: "regexSuggestion",
         requestId: args.requestId,
         pattern,
@@ -2861,7 +2906,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log(`[suggest-regex] failed: ${message}`);
-      this.postMessage({
+      reply({
         type: "regexSuggestion",
         requestId: args.requestId,
         error: message,
@@ -2873,8 +2918,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Polish a composer draft (spelling, grammar, wording) with the selected
    * provider's fast model, preserving the draft's meaning and structure.
    */
-  public async polishPrompt(args: { draft: string }): Promise<string> {
-    const fg = this.sessionManager?.getForegroundSession();
+  public async polishPrompt(args: {
+    draft: string;
+    sessionId?: string;
+  }): Promise<string> {
+    const fg = args.sessionId
+      ? this.sessionManager?.getSession(args.sessionId)
+      : this.sessionManager?.getForegroundSession();
     const foregroundModel =
       fg?.model ??
       this.sessionManager?.getConfig().model ??
@@ -2916,10 +2966,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async handlePolishPrompt(args: {
     requestId: string;
     draft: string;
+    sessionId?: string;
+    connection?: ChatPaneConnection;
   }): Promise<void> {
+    const reply = (message: ExtensionToWebview) =>
+      args.connection
+        ? args.connection.postMessage(message)
+        : this.postMessage(message);
     try {
-      const polished = await this.polishPrompt({ draft: args.draft });
-      this.postMessage({
+      const polished = await this.polishPrompt({
+        draft: args.draft,
+        sessionId: args.sessionId,
+      });
+      reply({
         type: "promptPolishResult",
         requestId: args.requestId,
         polished,
@@ -2927,7 +2986,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log(`[polish-prompt] failed: ${message}`);
-      this.postMessage({
+      reply({
         type: "promptPolishResult",
         requestId: args.requestId,
         error: message,
@@ -3032,6 +3091,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         isPrimary?: boolean;
         isDanger?: boolean;
       }>;
+      writeChoices?: Array<{
+        label: string;
+        value: string;
+        isPrimary?: boolean;
+        isDanger?: boolean;
+      }>;
       targetPath?: string;
     },
     sessionId?: string,
@@ -3098,6 +3163,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           filePath,
           writeOperation: isCreate ? "create" : "modify",
           detail: request.detail,
+          writeChoices: request.writeChoices,
         };
       }
       case "rename": {
@@ -3363,6 +3429,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     answers: Record<string, string | string[] | number | boolean | undefined>;
     notes?: Record<string, string>;
     attachments?: import("../core/capabilities/sessionControl.js").UserQuestionResponse["attachments"];
+    sessionId?: string;
   }): Promise<boolean> {
     const normalizedAttachments = normalizeUserQuestionAttachments(
       msg.attachments,
@@ -3373,14 +3440,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         : undefined;
     const resolve = this.pendingQuestions.get(msg.id);
     if (!resolve) {
-      const foregroundSession = this.sessionManager?.getForegroundSession();
-      const pendingQuestion = foregroundSession
-        ? this.sessionManager?.getPendingQuestionRecovery(foregroundSession.id)
+      const recoverySession = msg.sessionId
+        ? this.sessionManager?.getSession(msg.sessionId)
+        : this.sessionManager?.getForegroundSession();
+      const pendingQuestion = recoverySession
+        ? this.sessionManager?.getPendingQuestionRecovery(recoverySession.id)
         : null;
-      if (foregroundSession && pendingQuestion?.questionRequestId === msg.id) {
+      if (recoverySession && pendingQuestion?.questionRequestId === msg.id) {
         const accepted =
           (await this.sessionManager?.answerRecoveredQuestion(
-            foregroundSession.id,
+            recoverySession.id,
             msg.id,
             {
               answers: msg.answers,
@@ -3393,21 +3462,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                   request.mode,
                   request.reason,
                   request.silent,
+                  recoverySession.id,
                 ),
             },
           )) === true;
         if (!accepted) return false;
-        this.applyProjectedAction({ type: "CLEAR_QUESTION" });
-        this.uiPublisher.publishQuestionCleared(foregroundSession.id, msg.id);
+        if (
+          this.sessionManager?.getForegroundSession()?.id === recoverySession.id
+        ) {
+          this.applyProjectedAction({ type: "CLEAR_QUESTION" });
+        }
+        this.uiPublisher.publishQuestionCleared(recoverySession.id, msg.id);
         // The recovered answer was committed straight into session history
         // (assistant ask_user tool_use + tool_result) without flowing through
         // live agent events, so neither surface has the turn in its
         // transcript. Resync both from session history.
         if (
-          this.sessionManager?.getForegroundSession()?.id ===
-          foregroundSession.id
+          this.sessionManager?.getForegroundSession()?.id === recoverySession.id
         ) {
-          this.postSessionLoaded(foregroundSession);
+          this.postSessionLoaded(recoverySession);
+        } else {
+          this.postMessage(this.buildSessionLoadedMessage(recoverySession));
         }
         return true;
       }
@@ -3674,33 +3749,46 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public async submitBrowserModeSwitch(
     mode: string,
     projectId?: string,
+    sessionId?: string,
   ): Promise<{
     approved: boolean;
     mode: string;
   }> {
-    const fg = this.sessionManager?.getForegroundSession();
+    const session = sessionId
+      ? this.sessionManager?.getSession(sessionId)
+      : this.sessionManager?.getForegroundSession();
     if (
-      !fg ||
+      !session ||
       !projectId ||
-      fg.projectScope.projectId !== projectId ||
+      session.projectScope.projectId !== projectId ||
       !this.getAvailableBrowserProjectScope(projectId)
     ) {
       return { approved: false, mode };
     }
-    if (fg && fg.mode !== mode) {
+    if (session.mode !== mode) {
       try {
-        const session = await this.withAsyncApprovalStateTransition(
+        const switched = await this.withAsyncApprovalStateTransition(
           async () => {
-            const switched =
-              await this.sessionManager?.switchForegroundMode(mode);
-            if (!switched) return null;
-            this.reconcileSessionApprovalAfterModeSwitch(switched.id);
-            this.sendInitialState();
-            return switched;
+            const updated = sessionId
+              ? await this.sessionManager?.switchSessionMode(session.id, mode)
+              : await this.sessionManager?.switchForegroundMode(mode);
+            if (!updated) return null;
+            this.reconcileSessionApprovalAfterModeSwitch(updated.id);
+            if (
+              this.sessionManager?.getForegroundSession()?.id === updated.id
+            ) {
+              this.sendInitialState();
+            } else {
+              this.postMessage({
+                type: "stateUpdate",
+                state: this.buildChatState(updated),
+              });
+            }
+            return updated;
           },
         );
-        if (!session) return { approved: false, mode };
-        this.log(`[mode] browser switched mode to ${mode}`);
+        if (!switched) return { approved: false, mode };
+        this.log(`[mode] browser switched session ${session.id} to ${mode}`);
         return { approved: true, mode };
       } catch (err) {
         this.log(`[mode] browser failed to switch mode: ${err}`);
@@ -3711,12 +3799,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return { approved: true, mode };
   }
 
-  private getPreferenceConfigurationTarget(): {
+  private getPreferenceConfigurationTarget(
+    projectScope = this.getCurrentProjectScope(),
+  ): {
     config: vscode.WorkspaceConfiguration;
     target: vscode.ConfigurationTarget;
     scopeLabel: "workspace folder" | "user";
   } {
-    const projectScope = this.getCurrentProjectScope();
     const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
     const workspaceFolder =
       workspaceFolders.find(
@@ -3736,34 +3825,71 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
-  public async submitBrowserSetModel(model: string): Promise<{ ok: boolean }> {
+  public async submitBrowserSetModel(
+    model: string,
+    sessionId?: string,
+  ): Promise<{ ok: boolean }> {
+    if (sessionId) return this.submitSessionSetModel(sessionId, model);
     if (!model || !this.sessionManager) return { ok: false };
     const selectedModel = await this.sessionManager.setModel(model);
-    const fgMode =
-      this.sessionManager.getForegroundSession()?.mode ??
-      (this.hasWorkspaceProjects() ? "code" : "ask");
+    const foreground = this.sessionManager.getForegroundSession();
+    const foregroundMode =
+      foreground?.mode ?? (this.hasWorkspaceProjects() ? "code" : "ask");
     const { config, target, scopeLabel } =
-      this.getPreferenceConfigurationTarget();
-    await config.update("agentModel", selectedModel, target);
-
-    const modePrefs = getModeModelPreferences(config);
+      this.getPreferenceConfigurationTarget(foreground?.projectScope);
+    const modePreferences = getModeModelPreferences(config);
     await config.update(
       "modeModelPreferences",
       {
-        ...modePrefs,
-        [fgMode]: selectedModel,
+        ...modePreferences,
+        [foregroundMode]: selectedModel,
       },
       target,
     );
 
     this.sendInitialState();
     this.log(
-      `Model changed to: ${selectedModel} (saved for mode: ${fgMode}, scope: ${scopeLabel})`,
+      `Model changed to: ${selectedModel} (saved for mode: ${foregroundMode}, scope: ${scopeLabel})`,
     );
     return { ok: true };
   }
 
-  public submitBrowserSetCommandApprovalPolicy(policy: unknown): {
+  private async submitSessionSetModel(
+    sessionId: string,
+    model: string,
+  ): Promise<{ ok: boolean }> {
+    const session = this.sessionManager?.getSession(sessionId);
+    if (!model || !session || !this.sessionManager) return { ok: false };
+    const selectedModel = await this.sessionManager.setSessionModel(
+      sessionId,
+      model,
+    );
+    const { config, target, scopeLabel } =
+      this.getPreferenceConfigurationTarget(session.projectScope);
+    const modePrefs = getModeModelPreferences(config);
+    await config.update(
+      "modeModelPreferences",
+      {
+        ...modePrefs,
+        [session.mode]: selectedModel,
+      },
+      target,
+    );
+
+    this.postMessage({
+      type: "stateUpdate",
+      state: this.buildChatState(session),
+    });
+    this.log(
+      `Model changed to: ${selectedModel} (saved for mode: ${session.mode}, scope: ${scopeLabel})`,
+    );
+    return { ok: true };
+  }
+
+  public submitBrowserSetCommandApprovalPolicy(
+    policy: unknown,
+    requestedSessionId?: string,
+  ): {
     ok: boolean;
   } {
     if (!isCommandApprovalPolicy(policy) || !this.sessionManager) {
@@ -3771,11 +3897,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     const foreground = this.sessionManager.getForegroundSession();
-    const sessionId = foreground?.id ?? "agent";
+    const session = requestedSessionId
+      ? this.sessionManager.getSession(requestedSessionId)
+      : foreground;
+    if (requestedSessionId && !session) return { ok: false };
+    const sessionId = session?.id ?? "agent";
     const result = this.setSessionCommandApprovalPolicy(
       sessionId,
       policy,
-      foreground?.projectScope.rootPath,
+      session?.projectScope.rootPath,
     );
     this.log(
       result?.ok
@@ -3785,7 +3915,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return { ok: result?.ok ?? false };
   }
 
-  public submitBrowserSetWriteApproval(mode: string): { ok: boolean } {
+  public submitBrowserSetWriteApproval(
+    mode: string,
+    requestedSessionId?: string,
+  ): { ok: boolean } {
     if (
       !this.approvalManager ||
       (mode !== "prompt" &&
@@ -3797,11 +3930,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     const fgSession = this.sessionManager?.getForegroundSession();
-    const fgSessionId = fgSession?.id ?? "agent";
+    const session = requestedSessionId
+      ? this.sessionManager?.getSession(requestedSessionId)
+      : fgSession;
+    if (requestedSessionId && !session) return { ok: false };
+    const sessionId = session?.id ?? "agent";
     const result = this.setSessionWriteApproval(
-      fgSessionId,
+      sessionId,
       mode,
-      fgSession?.projectScope.rootPath,
+      session?.projectScope.rootPath,
     );
 
     this.log(
@@ -3825,39 +3962,112 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public async submitBrowserSetThinkingEnabled(
     enabled: boolean,
+    sessionId?: string,
   ): Promise<{ ok: boolean }> {
-    return this.submitBrowserSetReasoningEffort(enabled ? "high" : "none");
+    return this.submitBrowserSetReasoningEffort(
+      enabled ? "high" : "none",
+      sessionId,
+    );
   }
 
   public async submitBrowserSetReasoningEffort(
     effort: import("./providers/types.js").ReasoningEffort,
+    sessionId?: string,
   ): Promise<{ ok: boolean }> {
-    const fg = this.sessionManager?.getForegroundSession();
-    if (!fg || !this.sessionManager) return { ok: false };
-    this.ensureProjectedForegroundSession(fg);
-    if (!this.sessionManager.setForegroundReasoningEffort(effort)) {
-      return { ok: false };
-    }
-    const { config, target } = this.getPreferenceConfigurationTarget();
-    const mode = fg.mode ?? "code";
+    if (sessionId)
+      return this.submitSessionSetReasoningEffort(sessionId, effort);
+    const foreground = this.sessionManager?.getForegroundSession();
+    if (!foreground || !this.sessionManager) return { ok: false };
+    this.ensureProjectedForegroundSession(foreground);
+    const updated =
+      this.sessionManager.setSessionReasoningEffort?.(foreground.id, effort) ??
+      this.sessionManager.setForegroundReasoningEffort?.(effort) ??
+      false;
+    if (!updated) return { ok: false };
+    const { config, target } = this.getPreferenceConfigurationTarget(
+      foreground.projectScope,
+    );
     const preferences = getModeReasoningEffortPreferences(config);
     await config.update(
       "modeReasoningEffortPreferences",
-      { ...preferences, [mode]: effort },
+      { ...preferences, [foreground.mode]: effort },
       target,
     );
     this.applyProjectedAction({ type: "SET_REASONING_EFFORT", effort });
     this.sendInitialState();
-    this.log(`Reasoning effort changed: ${effort} (saved for mode: ${mode})`);
+    this.log(
+      `Reasoning effort changed: ${effort} (saved for mode: ${foreground.mode})`,
+    );
+    return { ok: true };
+  }
+
+  private async submitSessionSetReasoningEffort(
+    sessionId: string,
+    effort: import("./providers/types.js").ReasoningEffort,
+  ): Promise<{ ok: boolean }> {
+    const session = this.sessionManager?.getSession(sessionId);
+    if (!session || !this.sessionManager) return { ok: false };
+    if (!this.sessionManager.setSessionReasoningEffort(sessionId, effort)) {
+      return { ok: false };
+    }
+    const { config, target } = this.getPreferenceConfigurationTarget(
+      session.projectScope,
+    );
+    const preferences = getModeReasoningEffortPreferences(config);
+    await config.update(
+      "modeReasoningEffortPreferences",
+      { ...preferences, [session.mode]: effort },
+      target,
+    );
+    if (this.sessionManager.getForegroundSession()?.id === sessionId) {
+      this.ensureProjectedForegroundSession(session);
+      this.applyProjectedAction({ type: "SET_REASONING_EFFORT", effort });
+    }
+    this.postMessage({
+      type: "stateUpdate",
+      state: this.buildChatState(session),
+    });
+    this.log(
+      `Reasoning effort changed: ${effort} (saved for mode: ${session.mode})`,
+    );
     return { ok: true };
   }
 
   public async submitBrowserNewSession(
     mode?: string,
     projectId?: string,
-  ): Promise<{ ok: boolean; sessionId?: string; projectId?: string }> {
+    address?: ChatTabActionAddress,
+    stopRunning = false,
+  ): Promise<{
+    ok: boolean;
+    sessionId?: string;
+    projectId?: string;
+    tabId?: string;
+    controllerEpoch?: string;
+    reason?: string;
+  }> {
     if (!this.sessionManager) return { ok: false };
     const nextMode = mode?.trim() || "code";
+    if (address) {
+      const result = await this.chatTabHostCoordinator?.newChat(
+        address,
+        nextMode,
+        { projectId, focus: false, stopRunning },
+      );
+      if (!result) return { ok: false, reason: "tab_host_unavailable" };
+      if (!result.ok) return { ok: false, reason: result.reason };
+      if (!result.session) return { ok: false, reason: "session_not_found" };
+      this.log(
+        `New session created from browser for tab ${address.tabId} (${nextMode}, model: ${result.session.model})`,
+      );
+      return {
+        ok: true,
+        sessionId: result.session.id,
+        projectId: result.session.projectScope.projectId,
+        tabId: result.tab.id,
+        controllerEpoch: address.controllerEpoch,
+      };
+    }
     const transition = this.beginForegroundSessionTransition(nextMode, {
       projectId,
     });
@@ -3938,8 +4148,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public async submitBrowserLoadSession(
     sessionId: string,
-  ): Promise<{ ok: boolean }> {
+    address?: ChatTabActionAddress,
+    stopRunning = false,
+  ): Promise<{
+    ok: boolean;
+    reason?: string;
+    sessionId?: string;
+    tabId?: string;
+    controllerEpoch?: string;
+  }> {
     if (!sessionId || !this.sessionManager) return { ok: false };
+    if (address) {
+      const result = await this.chatTabHostCoordinator?.loadSession(
+        address,
+        sessionId,
+        { focus: false, stopRunning },
+      );
+      if (!result) return { ok: false, reason: "tab_host_unavailable" };
+      if (!result.ok) return { ok: false, reason: result.reason };
+      return {
+        ok: true,
+        sessionId: result.tab.sessionId ?? undefined,
+        tabId: result.tab.id,
+        controllerEpoch: address.controllerEpoch,
+      };
+    }
     const session = await this.sessionManager.loadPersistedSession(sessionId);
     if (!session) {
       this.log(`[history] session not found: ${sessionId}`);
@@ -5460,17 +5693,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } as ExtensionToWebview);
   }
 
-  private getCustomizationSelection():
-    | { scope: SessionProjectScope; mode: string }
-    | undefined {
-    const foreground = this.sessionManager?.getForegroundSession();
-    if (foreground) {
-      const scope = foreground.projectScope;
+  private getCustomizationSelection(
+    session = this.sessionManager?.getForegroundSession(),
+  ): { scope: SessionProjectScope; mode: string } | undefined {
+    if (session) {
+      const scope = session.projectScope;
       if (!scope) return undefined;
-      if (foreground.projectAvailability !== "available" || !scope.rootPath) {
+      if (session.projectAvailability !== "available" || !scope.rootPath) {
         return undefined;
       }
-      return { scope, mode: foreground.mode };
+      return { scope, mode: session.mode };
     }
 
     const managerDefaultScope =
@@ -5498,6 +5730,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           selection.mode,
         )
       : [];
+  }
+
+  private async getModesForSession(
+    session: AgentSession,
+  ): Promise<Array<{ slug: string; name: string; icon: string }>> {
+    const selection = this.getCustomizationSelection(session);
+    const allModes = selection
+      ? await this.projectCustomizationRegistry.getModes(selection.scope)
+      : this.hasWorkspaceProjects()
+        ? BUILT_IN_MODES
+        : BUILT_IN_MODES.filter((mode) => mode.slug === "ask");
+    return allModes.map((mode) => ({
+      slug: mode.slug,
+      name: mode.name,
+      icon: mode.icon,
+    }));
+  }
+
+  private getSlashCommandsForSession(
+    session: AgentSession,
+  ): Promise<SlashCommandInfo[]> {
+    return this.getCurrentSlashCommands(
+      this.getCustomizationSelection(session),
+    );
   }
 
   private getWorkspaceProjects(): ReturnType<
@@ -5562,9 +5818,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private getConfiguredCondenseThreshold(modelId: string): number {
+  private getConfiguredCondenseThreshold(
+    modelId: string,
+    projectScope?: SessionProjectScope,
+  ): number {
     return getConfiguredBaseThresholdForModel(
-      this.getCurrentProjectConfiguration() ??
+      this.getProjectConfiguration(projectScope) ??
         vscode.workspace.getConfiguration("agentlink"),
       modelId,
       providerRegistry.tryResolveProvider(modelId)?.getCapabilities(modelId),
@@ -5580,7 +5839,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const caps = provider?.getCapabilities(modelId);
     if (!caps) return undefined;
 
-    const config = this.sessionManager?.getConfig();
+    const config = this.sessionManager?.getConfig?.();
     const maxInputTokens =
       caps.maxInputTokens ??
       Math.max(0, caps.contextWindow - caps.maxOutputTokens);
@@ -5617,6 +5876,114 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.sendChatWorkspaceUpdate();
     });
     this.sendChatWorkspaceUpdate();
+  }
+
+  setChatTabPanelHost(host: ChatTabPanelHost): void {
+    this.chatTabPanelHost = host;
+  }
+
+  refreshChatWorkspace(): void {
+    this.sendChatWorkspaceUpdate();
+  }
+
+  async hydrateEditorPane(
+    tabId: string,
+    connection: ChatPaneConnection,
+  ): Promise<void> {
+    const initialAddress = connection.getAddress();
+    const initialTab = this.chatTabController?.getTab(tabId);
+    const sessionId = initialAddress.sessionId;
+    if (
+      !initialTab ||
+      initialAddress.surface !== "editor" ||
+      initialAddress.tabId !== tabId ||
+      typeof sessionId !== "string" ||
+      sessionId !== initialTab.sessionId ||
+      !this.chatTabPanelHost?.isRegisteredConnection(tabId, connection)
+    ) {
+      throw new Error("editor pane no longer owns the selected chat tab");
+    }
+
+    const session =
+      this.sessionManager?.getSession(sessionId) ??
+      (await this.sessionManager?.hydratePersistedSession(sessionId));
+    const currentAddress = connection.getAddress();
+    const currentTab = this.chatTabController?.getTab(tabId);
+    if (
+      !session ||
+      !currentTab ||
+      currentAddress.controllerEpoch !== initialAddress.controllerEpoch ||
+      currentAddress.tabId !== initialAddress.tabId ||
+      currentAddress.sessionId !== sessionId ||
+      currentAddress.surface !== initialAddress.surface ||
+      currentAddress.paneEpoch !== initialAddress.paneEpoch ||
+      currentTab.sessionId !== sessionId ||
+      !this.chatTabPanelHost?.isRegisteredConnection(tabId, connection)
+    ) {
+      throw new Error("editor pane no longer owns the selected chat tab");
+    }
+
+    const snapshot = this.getChatWorkspaceViewSnapshot();
+    if (snapshot) {
+      connection.postMessage({ type: "chatWorkspaceUpdate", snapshot });
+    }
+    connection.postMessage({
+      type: "agentModesUpdate",
+      modes: await this.getModesForSession(session),
+    });
+    connection.postMessage({
+      type: "agentModelsUpdate",
+      models: await this.getBrowserModels(),
+    });
+    connection.postMessage({
+      type: "agentSlashCommandsUpdate",
+      commands: await this.getSlashCommandsForSession(session),
+    });
+    connection.postMessage({
+      type: "agentSessionList",
+      sessions: this.getWebviewSessionSummaries(),
+    });
+    connection.postMessage(this.buildSessionLoadedMessage(session));
+    connection.postMessage({
+      type: "stateUpdate",
+      state: this.buildChatState(session),
+    });
+    for (const envelope of this.uiEventHub.getSnapshot(session.id)) {
+      connection.postMessage({ ...envelope.event, sessionId: session.id });
+    }
+  }
+
+  async hydrateSidebarPane(tabId: string, lease: ChatPaneLease): Promise<void> {
+    if (
+      lease.tabId !== tabId ||
+      lease.surface !== "sidebar" ||
+      !this.chatTabController?.getTab(tabId)
+    ) {
+      throw new Error("sidebar pane no longer owns the selected chat tab");
+    }
+  }
+
+  async handleEditorPaneMessage(
+    message: Record<string, unknown>,
+    connection: ChatPaneConnection,
+  ): Promise<void> {
+    const address = connection.getAddress();
+    if (!this.chatTabPanelHost?.isAuthoritativeAddress(address)) {
+      this.log(
+        `[chat-pane] Rejected non-authoritative editor command for ${address.tabId}:${address.paneEpoch}`,
+      );
+      return;
+    }
+    if (typeof address.sessionId !== "string") {
+      this.log(
+        `[chat-pane] Rejected editor command without a bound session for ${address.tabId}:${address.paneEpoch}`,
+      );
+      return;
+    }
+    await this.handleWebviewMessage(message, {
+      sourceSessionId: address.sessionId,
+      connection,
+    });
   }
 
   setSessionManager(manager: AgentSessionManager): void {
@@ -5703,6 +6070,38 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  private async handleChatTabPlacementAction(
+    command: "chatTabPopOut" | "chatTabDock",
+    msg: Record<string, unknown>,
+  ): Promise<void> {
+    const address = parseChatTabActionAddress(msg);
+    const controller = this.chatTabController;
+    const host = this.chatTabPanelHost;
+    if (!address || !controller || !host) {
+      this.rejectChatTabAction(command, "invalid_address");
+      return;
+    }
+    const validation = controller.validateAction(address);
+    if (!validation.ok) {
+      this.rejectChatTabAction(command, validation.reason);
+      return;
+    }
+
+    const changed =
+      command === "chatTabPopOut"
+        ? await host.popOut(address.tabId)
+        : await host.dock(address.tabId);
+    if (changed) return;
+
+    const snapshot = this.getChatWorkspaceViewSnapshot();
+    if (!snapshot) return;
+    this.log(`[chat-tabs] failed command=${command} reason=placement_failed`);
+    this.postMessage({
+      type: "chatTabActionFailed",
+      failure: { command, reason: "placement_failed", snapshot },
+    });
+  }
+
   private async handleChatTabAction(
     command: string,
     msg: Record<string, unknown>,
@@ -5737,11 +6136,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             : command === "chatTabClose"
               ? await coordinator.close(address, stopRunning)
               : command === "chatTabLoadSession" && targetSessionId
-                ? await coordinator.loadSession(
-                    address,
-                    targetSessionId,
+                ? await coordinator.loadSession(address, targetSessionId, {
                     stopRunning,
-                  )
+                  })
                 : command === "chatTabReorder" && Array.isArray(msg.tabIds)
                   ? await coordinator.reorder(address, tabIds)
                   : null;
@@ -5784,6 +6181,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (command === "chatTabClose") {
+      this.chatTabPanelHost?.releaseTab(address.tabId);
+    }
     this.foregroundSessionTransition = undefined;
     const selectedSession =
       result.session ?? this.sessionManager?.getForegroundSession();
@@ -5877,8 +6277,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async handleWebviewMessage(
     msg: Record<string, unknown>,
+    context?: {
+      sourceSessionId?: string;
+      connection?: ChatPaneConnection;
+    },
   ): Promise<void> {
     if (!this.sessionManager) return;
+    const explicitSourceSessionId = context?.sourceSessionId;
+    const foregroundSession = this.sessionManager.getForegroundSession();
+    const sourceSession = explicitSourceSessionId
+      ? this.sessionManager.getSession?.(explicitSourceSessionId)
+      : foregroundSession;
+    const sourceSessionId = explicitSourceSessionId ?? sourceSession?.id;
 
     switch (msg.command) {
       case "agentStreamDrop": {
@@ -5969,6 +6379,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "chatTabReorder":
         await this.handleChatTabAction(String(msg.command), msg);
         break;
+      case "chatTabPopOut":
+      case "chatTabDock":
+        await this.handleChatTabPlacementAction(msg.command, msg);
+        break;
 
       case "themeSnapshot": {
         const parsed = this.parseThemeSnapshot(msg);
@@ -5989,7 +6403,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // The webview posts sessionId: null for a not-yet-created chat
         // (NEW_SESSION state); treat it like undefined so the in-flight
         // foreground transition is awaited instead of minting a duplicate.
-        const sessionId = (msg.sessionId ?? undefined) as string | undefined;
+        const sessionId =
+          context?.sourceSessionId ??
+          ((msg.sessionId ?? undefined) as string | undefined);
         const reasoningEffort = resolveReasoningEffortMessage(
           msg.reasoningEffort,
           msg.thinkingEnabled,
@@ -6130,30 +6546,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this.log(`[error] send failed: ${err}`);
           });
 
-        const fg = mgr.getForegroundSession();
-        if (fg) {
-          const condenseThreshold = this.getConfiguredCondenseThreshold(
-            fg.model,
-          );
+        const sentSession = mgr.getSession(effectiveSessionId);
+        if (sentSession) {
           this.postMessage({
             type: "stateUpdate",
             state: {
-              sessionId: fg.id,
-              mode: fg.mode,
-              model: fg.model,
+              ...this.buildChatState(sentSession),
               streaming: true,
               interrupted: false,
-              condenseThreshold,
-              contextBudget: this.buildContextBudget(
-                fg,
-                fg.model,
-                condenseThreshold,
-              ),
-              agentWriteApproval:
-                this.approvalManager?.getAgentWriteApprovalState(fg.id),
-              ...this.getBrowserSessionApprovalMode(),
-              configuredCommandApprovalPolicy:
-                this.getConfiguredCommandApprovalPolicy(),
             },
           });
         }
@@ -6162,7 +6562,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "agentSetReasoningEffort": {
         const effort = msg.effort;
-        if (isCoreReasoningEffort(effort)) {
+        if (!isCoreReasoningEffort(effort)) break;
+        if (explicitSourceSessionId) {
+          await this.submitSessionSetReasoningEffort(
+            explicitSourceSessionId,
+            effort,
+          );
+        } else {
           await this.submitBrowserSetReasoningEffort(effort);
         }
         break;
@@ -6294,37 +6700,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentRetry": {
-        const sessionId = msg.sessionId as string;
+        const sessionId = context?.sourceSessionId ?? (msg.sessionId as string);
         if (sessionId) {
           this.log(`[retry] retrying session ${sessionId}`);
-          this.applyProjectedAction({ type: "CLEAR_ERROR" });
+          if (this.sessionManager.getForegroundSession()?.id === sessionId) {
+            this.applyProjectedAction({ type: "CLEAR_ERROR" });
+          }
           this.sessionManager.retrySession(sessionId).catch((err) => {
             this.log(`[error] retry failed: ${err}`);
           });
-          // Update state to show streaming
-          const fg = this.sessionManager.getForegroundSession();
-          if (fg) {
-            const condenseThreshold = this.getConfiguredCondenseThreshold(
-              fg.model,
-            );
+          const retrySession = this.sessionManager.getSession(sessionId);
+          if (retrySession) {
             this.postMessage({
               type: "stateUpdate",
               state: {
-                sessionId: fg.id,
-                mode: fg.mode,
-                model: fg.model,
+                ...this.buildChatState(retrySession),
                 streaming: true,
-                condenseThreshold,
-                contextBudget: this.buildContextBudget(
-                  fg,
-                  fg.model,
-                  condenseThreshold,
-                ),
-                agentWriteApproval:
-                  this.approvalManager?.getAgentWriteApprovalState(fg.id),
-                ...this.getBrowserSessionApprovalMode(),
-                configuredCommandApprovalPolicy:
-                  this.getConfiguredCommandApprovalPolicy(),
               },
             });
           }
@@ -6362,25 +6753,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "agentSwitchMode": {
         const mode = (msg.mode as string) ?? "code";
-        const fg = this.sessionManager.getForegroundSession();
-        if (fg && fg.mode !== mode) {
+        if (sourceSession && sourceSession.mode !== mode) {
           this.withAsyncApprovalStateTransition(async () => {
-            const switched =
-              await this.sessionManager!.switchForegroundMode(mode);
-            const session =
-              switched ?? (await this.sessionManager!.createSession(mode));
-            if (switched) {
-              this.reconcileSessionApprovalAfterModeSwitch(session.id);
+            const switched = await this.sessionManager!.switchSessionMode(
+              sourceSession.id,
+              mode,
+            );
+            if (!switched) return;
+            this.reconcileSessionApprovalAfterModeSwitch(switched.id);
+            this.postMessage({
+              type: "stateUpdate",
+              state: this.buildChatState(switched),
+            });
+            if (context?.connection) {
+              context.connection.postMessage({
+                type: "agentModesUpdate",
+                modes: await this.getModesForSession(switched),
+              });
+              context.connection.postMessage({
+                type: "agentSlashCommandsUpdate",
+                commands: await this.getSlashCommandsForSession(switched),
+              });
+            } else {
+              await this.sendModesUpdate();
+              await this.sendSlashCommands();
             }
-            this.sendInitialState();
-            await this.sendModesUpdate();
-            await this.sendSlashCommands();
-            this.log(`[mode] user switched mode to ${mode}`);
+            this.log(`[mode] user switched session ${switched.id} to ${mode}`);
           }).catch((err) => {
             this.log(`[mode] failed to switch mode: ${err}`);
           });
-        } else if (!fg) {
-          // No session yet — create one in the target mode
+        } else if (!sourceSession && !context?.sourceSessionId) {
+          // No session yet — preserve the legacy sidebar creation path.
           this.sessionManager.createSession(mode).then(async () => {
             this.sendInitialState();
             await this.sendModesUpdate();
@@ -6409,17 +6812,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentSetModel": {
         const model = msg.model as string;
         if (!model) break;
-        await this.submitBrowserSetModel(model);
+        if (explicitSourceSessionId) {
+          await this.submitSessionSetModel(explicitSourceSessionId, model);
+        } else {
+          await this.submitBrowserSetModel(model);
+        }
         break;
       }
 
       case "agentSetCondenseThreshold": {
         const threshold = Number(msg.threshold);
-        if (!Number.isFinite(threshold)) break;
-        const { config, target } = this.getPreferenceConfigurationTarget();
-        const currentModel =
-          this.sessionManager.getForegroundSession()?.model ??
-          this.sessionManager.getConfig().model;
+        if (!Number.isFinite(threshold) || !sourceSession) break;
+        const { config, target } = this.getPreferenceConfigurationTarget(
+          sourceSession.projectScope,
+        );
+        const currentModel = sourceSession.model;
         const thresholds = {
           ...(config.get("modelCondenseThresholds") as
             | Record<string, number>
@@ -6427,15 +6834,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           [currentModel]: Math.min(1, Math.max(0.1, threshold)),
         };
         await config.update("modelCondenseThresholds", thresholds, target);
-        this.sessionManager.updateConfig({
-          autoCondenseThreshold: thresholds[currentModel],
-        });
-        const fg = this.sessionManager.getForegroundSession();
-        if (fg && fg.model === currentModel) {
-          fg.autoCondenseThreshold = thresholds[currentModel];
-          await this.sessionManager.maybeAutoCondenseForegroundSession();
+        sourceSession.autoCondenseThreshold = thresholds[currentModel];
+        if (
+          this.sessionManager.getForegroundSession()?.id === sourceSession.id
+        ) {
+          this.sessionManager.updateConfig({
+            autoCondenseThreshold: thresholds[currentModel],
+          });
         }
-        this.sendInitialState();
+        await this.sessionManager.maybeAutoCondenseSession(sourceSession.id);
+        this.sessionManager.saveSession(sourceSession.id);
+        this.postMessage({
+          type: "stateUpdate",
+          state: this.buildChatState(sourceSession),
+        });
         this.log(
           `Auto-condense threshold set to ${Math.round(thresholds[currentModel] * 100)}% for ${currentModel}`,
         );
@@ -6443,7 +6855,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentSetCommandApprovalPolicy": {
-        this.submitBrowserSetCommandApprovalPolicy(msg.policy);
+        if (!sourceSession || !isCommandApprovalPolicy(msg.policy)) break;
+        this.setSessionCommandApprovalPolicy(
+          sourceSession.id,
+          msg.policy,
+          sourceSession.projectScope.rootPath,
+        );
+        this.postMessage({
+          type: "stateUpdate",
+          state: this.buildChatState(sourceSession),
+        });
         break;
       }
 
@@ -6458,16 +6879,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         ) {
           break;
         }
-        // Use the foreground session's actual ID so session-level approvals are
-        // scoped per chat session (not shared across all foreground sessions).
-        const fgSession = this.sessionManager?.getForegroundSession();
-        const fgSessionId = fgSession?.id ?? "agent";
+        if (!sourceSession) break;
         const result = this.setSessionWriteApproval(
-          fgSessionId,
+          sourceSession.id,
           mode,
-          fgSession?.projectScope.rootPath,
+          sourceSession.projectScope.rootPath,
         );
         if (result?.ok) {
+          this.postMessage({
+            type: "stateUpdate",
+            state: this.buildChatState(sourceSession),
+          });
           this.log(`Agent write approval changed to: ${mode}`);
         } else {
           this.log(`Agent write approval change failed for: ${mode}`);
@@ -6744,6 +7166,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           requestId,
           subCommand,
           fullCommand,
+          sessionId: sourceSessionId,
+          connection: context?.connection,
         });
         break;
       }
@@ -6752,7 +7176,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const requestId = String(msg.requestId ?? "");
         const draft = String(msg.draft ?? "");
         if (!requestId || !draft.trim()) break;
-        void this.handlePolishPrompt({ requestId, draft });
+        void this.handlePolishPrompt({
+          requestId,
+          draft,
+          sessionId: sourceSessionId,
+          connection: context?.connection,
+        });
         break;
       }
 
@@ -6766,6 +7195,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           notes: (msg.notes as Record<string, string>) ?? {},
           attachments:
             msg.attachments as import("../core/capabilities/sessionControl.js").UserQuestionResponse["attachments"],
+          sessionId: sourceSessionId,
         });
         break;
       }
@@ -6786,14 +7216,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentRefreshSlashCommands": {
-        const selection = this.getCustomizationSelection();
+        const selection = this.getCustomizationSelection(sourceSession);
         if (selection) {
           this.projectCustomizationRegistry.invalidate(
             selection.scope.projectId,
           );
         }
         const commands = await this.getCurrentSlashCommands(selection);
-        await this.sendSlashCommands();
+        if (context?.connection) {
+          context.connection.postMessage({
+            type: "agentSlashCommandsUpdate",
+            commands,
+          });
+        } else {
+          await this.sendSlashCommands();
+        }
         this.log(`[slash] refreshed: ${commands.length} commands`);
         break;
       }
@@ -6801,24 +7238,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentSlashCommand": {
         const name = msg.name as string;
         if (name === "condense") {
-          const fg = this.sessionManager?.getForegroundSession();
-          await this.sessionManager?.condenseCurrentSession();
+          if (!sourceSession) break;
+          await this.sessionManager.condenseSessionById(sourceSession.id);
           // Manual condense doesn't go through run() — emit agentDone so the
           // webview drains any messages queued during the condense operation.
-          if (fg) {
-            this.postMessage({
-              type: "agentDone",
-              sessionId: fg.id,
-              totalInputTokens: fg.totalInputTokens,
-              totalOutputTokens: fg.totalOutputTokens,
-              totalCacheReadTokens: fg.totalCacheReadTokens,
-              totalCacheCreationTokens: fg.totalCacheCreationTokens,
-            });
-            this.drainBrowserQueuedMessage(fg.id);
-          }
+          this.postMessage({
+            type: "agentDone",
+            sessionId: sourceSession.id,
+            totalInputTokens: sourceSession.totalInputTokens,
+            totalOutputTokens: sourceSession.totalOutputTokens,
+            totalCacheReadTokens: sourceSession.totalCacheReadTokens,
+            totalCacheCreationTokens: sourceSession.totalCacheCreationTokens,
+          });
+          this.drainBrowserQueuedMessage(sourceSession.id);
         } else if (name === "checkpoint") {
+          if (!sourceSession) break;
           const checkpoint =
-            await this.sessionManager?.createManualCheckpoint();
+            await this.sessionManager.createManualCheckpointForSession(
+              sourceSession.id,
+            );
           if (!checkpoint) {
             vscode.window.showInformationMessage(
               "No active session state is available to checkpoint yet.",
@@ -6829,9 +7267,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             `Checkpoint created: ${checkpoint.id.slice(0, 8)}`,
           );
         } else if (name === "revert") {
-          const fg = this.sessionManager?.getForegroundSession();
-          if (!fg || !this.sessionManager) break;
-          const checkpoints = this.sessionManager.getCheckpoints(fg.id);
+          if (!sourceSession) break;
+          const checkpoints = this.sessionManager.getCheckpoints(
+            sourceSession.id,
+          );
           if (checkpoints.length === 0) {
             vscode.window.showInformationMessage("No checkpoints available.");
             break;
@@ -6852,9 +7291,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             break;
           }
 
-          await this.revertCheckpointWithConfirmation(fg.id, checkpoint.id);
+          await this.revertCheckpointWithConfirmation(
+            sourceSession.id,
+            checkpoint.id,
+          );
         } else if (name === "skills") {
-          const selection = this.getCustomizationSelection();
+          const selection = this.getCustomizationSelection(sourceSession);
           const skills = selection
             ? await this.projectCustomizationRegistry.getSkillCommands(
                 selection.scope,
@@ -6862,7 +7304,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               )
             : [];
           const lines = [
-            `Detected skills for mode "${this.sessionManager.getForegroundSession()?.mode ?? "code"}": ${skills.length}`,
+            `Detected skills for mode "${sourceSession?.mode ?? "code"}": ${skills.length}`,
             "",
             ...skills.map((skill) =>
               [
@@ -6875,15 +7317,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.outputChannel.appendLine(lines.join("\n"));
           this.outputChannel.show(true);
         } else if (name === "mcp") {
-          await this.postMcpManagerSnapshot({ profile: "main", open: true });
+          const projectScope = sourceSession?.projectScope;
+          await this.postMcpManagerSnapshot({
+            profile: "main",
+            open: true,
+            projectScope,
+            mainHub: this.getCurrentProjectMcpHub(projectScope),
+          });
         } else if (name === "mcp-config") {
           const args = String(msg.args ?? "")
             .trim()
             .toLowerCase();
           if (args === "global" || args === "raw global") {
-            await this.openMcpConfig("global");
+            await this.openMcpConfig("global", sourceSession?.projectScope);
           } else if (args === "project" || args === "raw project") {
-            await this.openMcpConfig("project");
+            await this.openMcpConfig("project", sourceSession?.projectScope);
           } else if (args === "ask-agent" || args === "raw ask-agent") {
             await this.openRawMcpConfig("ask-agent", "ask-agent-global");
           } else {
@@ -6891,10 +7339,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               profile: "main",
               open: true,
               view: "config",
+              projectScope: sourceSession?.projectScope,
+              mainHub: this.getCurrentProjectMcpHub(
+                sourceSession?.projectScope,
+              ),
             });
           }
         } else if (name === "mcp-refresh") {
-          const projectScope = this.getCurrentProjectScope();
+          const projectScope = sourceSession?.projectScope;
           await this.refreshAllWorkspaceMcpConnections();
           await this.postMcpManagerSnapshot({
             profile: "main",
@@ -6904,11 +7356,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           vscode.window.showInformationMessage("MCP servers reconnected.");
         } else if (name === "btw") {
           const question = String(msg.args ?? "").trim();
-          if (question) {
-            void this.handleBtwQuestion(question);
+          if (question && sourceSessionId) {
+            void this.handleBtwQuestion(question, sourceSessionId);
           }
         } else if (name === "worktree") {
-          void this.handleWorktreeSlashCommand(String(msg.args ?? ""));
+          if (sourceSessionId) {
+            void this.handleWorktreeSlashCommand(
+              String(msg.args ?? ""),
+              sourceSessionId,
+            );
+          }
         } else if (name === "pair") {
           const sub = String(msg.args ?? "")
             .trim()
@@ -6932,13 +7389,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "agentBtwCancel": {
         const requestId = String(msg.requestId ?? "");
-        if (requestId) this.cancelBtwQuestion(requestId);
+        if (requestId && sourceSessionId) {
+          this.cancelBtwQuestion(requestId, sourceSessionId);
+        }
         break;
       }
 
       case "agentWorktreeSetupCancel": {
         const requestId = String(msg.requestId ?? "");
-        if (requestId) this.cancelWorktreeSetup(requestId);
+        const setup = this.pendingWorktreeSetups.get(requestId);
+        if (setup?.sessionId === sourceSessionId) {
+          this.cancelWorktreeSetup(requestId);
+        }
         break;
       }
 
@@ -6946,7 +7408,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const requestId = String(msg.requestId ?? "");
         const setup = this.pendingWorktreeSetups.get(requestId);
         const text = String(msg.text ?? "").trim();
-        if (!setup || setup.running || !text) break;
+        if (
+          !setup ||
+          setup.sessionId !== sourceSessionId ||
+          setup.running ||
+          !text
+        )
+          break;
         setup.conversation.push({ role: "user", text });
         setup.controller = new AbortController();
         void this.runWorktreeSetupTurn(requestId);
@@ -6956,8 +7424,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentWorktreeSetupLaunch": {
         const requestId = String(msg.requestId ?? "");
         const autoSubmit = msg.autoSubmit !== false;
-        if (requestId)
+        const setup = this.pendingWorktreeSetups.get(requestId);
+        if (setup?.sessionId === sourceSessionId) {
           void this.launchConfiguredWorktree(requestId, autoSubmit);
+        }
         break;
       }
 
@@ -6965,7 +7435,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const question = String(msg.question ?? "");
         const answer = String(msg.answer ?? "");
         if (question && answer) {
-          await this.promoteBtwAnswer(question, answer);
+          await this.promoteBtwAnswer(question, answer, sourceSessionId);
         }
         break;
       }
@@ -6974,7 +7444,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const filePath = typeof msg.path === "string" ? msg.path.trim() : "";
         const line = typeof msg.line === "number" ? msg.line : undefined;
         if (!filePath) break;
-        const projectRoot = this.getCustomizationSelection()?.scope.rootPath;
+        const projectRoot =
+          sourceSession?.projectScope.rootPath ??
+          (sourceSessionId
+            ? this.getSessionProjectRoot(sourceSessionId)
+            : this.getCurrentProjectScope()?.rootPath);
         const absolutePath = path.isAbsolute(filePath)
           ? filePath
           : projectRoot
@@ -7009,10 +7483,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "steerBgAgent": {
-        const foregroundId = this.sessionManager?.getForegroundSession()?.id;
-        if (foregroundId && typeof msg.sessionId === "string") {
+        if (sourceSessionId && typeof msg.sessionId === "string") {
           this.sessionManager?.steerAuthorizedBackground(
-            foregroundId,
+            sourceSessionId,
             msg.sessionId,
             String(msg.message ?? ""),
           );
@@ -7021,10 +7494,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "detachBgAgent": {
-        const foregroundId = this.sessionManager?.getForegroundSession()?.id;
-        if (foregroundId && typeof msg.sessionId === "string") {
+        if (sourceSessionId && typeof msg.sessionId === "string") {
           this.sessionManager?.detachAuthorizedBackground(
-            foregroundId,
+            sourceSessionId,
             msg.sessionId,
           );
         }
@@ -7175,7 +7647,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentLoadEarlierSessionMessages": {
-        const sessionId = msg.sessionId as string;
+        const sessionId = context?.sourceSessionId ?? (msg.sessionId as string);
         const beforeUserTurnOffset = Number(msg.beforeUserTurnOffset);
         if (
           !sessionId ||
@@ -7184,8 +7656,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         ) {
           break;
         }
-        const session = this.sessionManager.getForegroundSession();
-        if (!session || session.id !== sessionId) break;
+        const session = this.sessionManager.getSession(sessionId);
+        if (!session) break;
         const chunk = getPreviousChunkByUserTurns(
           session.getAllMessages(),
           beforeUserTurnOffset,
@@ -7585,6 +8057,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const extMsg = msg as unknown as ExtensionMessage;
 
     if (extMsg.type === "stateUpdate") {
+      if (extMsg.state.sessionId && extMsg.state.sessionId !== fg?.id) return;
       this.projectedForegroundStore.setSessionId(extMsg.state.sessionId);
       if (!extMsg.state.sessionId) {
         this.resetProjectedForegroundState();
@@ -8913,13 +9386,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Handle /btw side question: make a one-shot completion using the current
    * session's context, without modifying conversation history.
    */
-  private async handleBtwQuestion(question: string): Promise<void> {
+  private async handleBtwQuestion(
+    question: string,
+    sessionId: string,
+  ): Promise<void> {
     const requestId = randomUUID();
     const controller = new AbortController();
-    this.pendingBtwRequests.set(requestId, controller);
+    this.pendingBtwRequests.set(requestId, { controller, sessionId });
 
     this.postMessage({
       type: "agentBtwLoading",
+      sessionId,
       requestId,
       question,
     } as ExtensionToWebview);
@@ -8936,6 +9413,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     try {
       const result = await this.sessionManager?.runBtwQuestion(question, {
+        sessionId,
         signal: controller.signal,
         onProgress: (event) => {
           switch (event.type) {
@@ -8959,6 +9437,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
           this.postMessage({
             type: "agentBtwProgress",
+            sessionId,
             requestId,
             answer,
             tools: [...tools],
@@ -8973,6 +9452,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       this.postMessage({
         type: "agentBtwResponse",
+        sessionId,
         requestId,
         question,
         answer: result.answer,
@@ -8999,6 +9479,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.log(`[btw] error: ${errorMsg}`);
       this.postMessage({
         type: "agentBtwResponse",
+        sessionId,
         requestId,
         question,
         answer: errorMsg,
@@ -9010,11 +9491,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /** Cancel an in-flight /btw side question, aborting its side session. */
-  private cancelBtwQuestion(requestId: string): void {
-    this.pendingBtwRequests.get(requestId)?.abort();
+  private cancelBtwQuestion(requestId: string, sessionId: string): void {
+    const request = this.pendingBtwRequests.get(requestId);
+    if (request?.sessionId === sessionId) request.controller.abort();
   }
 
-  private async handleWorktreeSlashCommand(rawArgs: string): Promise<void> {
+  private async handleWorktreeSlashCommand(
+    rawArgs: string,
+    sessionId: string,
+  ): Promise<void> {
     for (const requestId of this.pendingWorktreeSetups.keys()) {
       this.cancelWorktreeSetup(requestId);
     }
@@ -9023,10 +9508,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const controller = new AbortController();
     this.pendingWorktreeSetups.set(requestId, {
       controller,
+      sessionId,
       conversation: [],
     });
     this.postMessage({
       type: "agentWorktreeSetupStarted",
+      sessionId,
       requestId,
       input: rawArgs.trim(),
     } as ExtensionToWebview);
@@ -9039,10 +9526,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const foregroundScope =
-      this.sessionManager?.getForegroundSession()?.projectScope ??
-      this.sessionManager?.getDefaultProjectScope();
-    const sourcePath = foregroundScope?.rootPath;
+    const sourcePath = this.getSessionProjectRoot(sessionId);
     if (!sourcePath) {
       this.finishWorktreeSetup(
         requestId,
@@ -9060,6 +9544,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       setup.config = config;
       this.postMessage({
         type: "agentWorktreeSetupReady",
+        sessionId,
         requestId,
         answer: "Configuration ready.",
         config,
@@ -9103,6 +9588,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     try {
       const result = await this.sessionManager.runWorktreeSetup(setup.draft, {
+        sessionId: setup.sessionId,
         signal: controller.signal,
         conversation: setup.conversation,
         onProgress: (event) => {
@@ -9127,6 +9613,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
           this.postMessage({
             type: "agentWorktreeSetupProgress",
+            sessionId: setup.sessionId,
             requestId,
             answer: answer.replace(/<worktree-config>[\s\S]*$/i, "").trim(),
             tools: [...tools],
@@ -9152,6 +9639,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         setup.conversation.push({ role: "assistant", text: question });
         this.postMessage({
           type: "agentWorktreeSetupAwaitingInput",
+          sessionId: setup.sessionId,
           requestId,
           answer: question,
           conversation: [...setup.conversation],
@@ -9174,6 +9662,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       setup.config = config;
       this.postMessage({
         type: "agentWorktreeSetupReady",
+        sessionId: setup.sessionId,
         requestId,
         answer: extracted.displayText || "Configuration ready.",
         config,
@@ -9211,6 +9700,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     setup.config = { ...setup.config, autoSubmit };
     this.postMessage({
       type: "agentWorktreeSetupLaunching",
+      sessionId: setup.sessionId,
       requestId,
       config: setup.config,
     } as ExtensionToWebview);
@@ -9265,10 +9755,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     message: string,
     config?: WorktreeSetupConfig,
   ): void {
-    if (!this.pendingWorktreeSetups.has(requestId)) return;
+    const setup = this.pendingWorktreeSetups.get(requestId);
+    if (!setup) return;
     this.pendingWorktreeSetups.delete(requestId);
     this.postMessage({
       type: "agentWorktreeSetupResult",
+      sessionId: setup.sessionId,
       requestId,
       phase,
       message,
@@ -9283,20 +9775,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async promoteBtwAnswer(
     question: string,
     answer: string,
+    sessionId?: string,
   ): Promise<void> {
-    const fg = this.sessionManager?.getForegroundSession();
-    if (!fg) return;
-    fg.addUserMessage(`/btw ${question}`, {
+    const session = sessionId
+      ? this.sessionManager?.getSession(sessionId)
+      : this.sessionManager?.getForegroundSession();
+    if (!session) return;
+    session.addUserMessage(`/btw ${question}`, {
       displayText: `/btw ${question}`,
       isSlashCommand: true,
       slashCommandLabel: "/btw",
     });
-    fg.appendAssistantTurn([{ type: "text", text: answer }]);
-    this.sessionManager?.saveSession(fg.id);
-    this.postSessionLoaded(fg, {
-      checkpoints: this.getSessionCheckpoints(fg.id),
-      tailTurns: 0,
-    });
+    session.appendAssistantTurn([{ type: "text", text: answer }]);
+    this.sessionManager?.saveSession(session.id);
+    this.postMessage(
+      this.buildSessionLoadedMessage(session, {
+        checkpoints: this.getSessionCheckpoints(session.id),
+        tailTurns: 0,
+      }),
+    );
   }
 
   private async revertCheckpointWithConfirmation(
@@ -9609,71 +10106,84 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     if (!this.sessionManager) return;
 
-    const fg = this.sessionManager.getForegroundSession();
-    const config = this.sessionManager.getConfig();
-    const modelId = fg?.model ?? config.model;
-    const condenseThreshold = this.getConfiguredCondenseThreshold(modelId);
+    this.postMessage({
+      type: "stateUpdate",
+      state: this.buildChatState(this.sessionManager.getForegroundSession()),
+    });
+    this.postMessage({
+      type: "agentSessionUpdate",
+      sessions: this.sessionManager.getSessionInfos(),
+    });
+  }
+
+  private buildChatState(session: AgentSession | undefined): ChatState {
+    if (!this.sessionManager) {
+      throw new Error("Agent session manager is unavailable");
+    }
+    const modelId =
+      session?.model ?? this.sessionManager.getConfig?.().model ?? "";
+    const condenseThreshold = this.getConfiguredCondenseThreshold(
+      modelId,
+      session?.projectScope,
+    );
     const contextBudget = this.buildContextBudget(
-      fg,
+      session,
       modelId,
       condenseThreshold,
     );
     const projects = this.getProjectInfos();
     const defaultProjectId =
       this.sessionManager.getDefaultProjectScope?.()?.projectId ?? null;
-    const approvalMode = this.getBrowserSessionApprovalMode();
-    const state: ChatState = {
-      sessionId: fg?.id ?? null,
+    const approvalMode = this.getBrowserSessionApprovalMode(
+      session?.id,
+      session?.projectScope,
+    );
+    return {
+      sessionId: session?.id ?? null,
       projects,
       defaultProjectId,
-      project: fg?.projectScope
+      project: session?.projectScope
         ? {
-            projectId: fg.projectScope.projectId,
-            displayName: fg.projectScope.displayName,
+            projectId: session.projectScope.projectId,
+            displayName: session.projectScope.displayName,
             availability:
-              fg.projectAvailability === "available" &&
+              session.projectAvailability === "available" &&
               projects.find(
-                (project) => project.projectId === fg.projectScope.projectId,
+                (project) =>
+                  project.projectId === session.projectScope!.projectId,
               )?.availability === "available"
                 ? "available"
                 : "unavailable",
           }
         : (projects.find((project) => project.projectId === defaultProjectId) ??
           null),
-      mode: fg?.mode ?? (this.hasWorkspaceProjects() ? "code" : "ask"),
+      mode: session?.mode ?? (this.hasWorkspaceProjects() ? "code" : "ask"),
       model: modelId,
       streaming:
-        fg?.status === "streaming" ||
-        fg?.status === "tool_executing" ||
-        fg?.status === "awaiting_approval",
+        session?.status === "streaming" ||
+        session?.status === "tool_executing" ||
+        session?.status === "awaiting_approval",
       interrupted:
-        Boolean(fg?.runState) &&
-        fg?.runState?.phase !== "awaiting_question" &&
-        fg?.status !== "streaming" &&
-        fg?.status !== "tool_executing" &&
-        fg?.status !== "awaiting_approval",
+        Boolean(session?.runState) &&
+        session?.runState?.phase !== "awaiting_question" &&
+        session?.status !== "streaming" &&
+        session?.status !== "tool_executing" &&
+        session?.status !== "awaiting_approval",
       condenseThreshold,
       contextBudget,
-      reasoningEffort: fg?.reasoningEffort ?? "high",
-      thinkingEnabled: (fg?.reasoningEffort ?? "high") !== "none",
-      // Use the foreground session's ID so the write approval state reflects the
-      // current session's trust level rather than a shared synthetic "agent" ID.
+      reasoningEffort: session?.reasoningEffort ?? "high",
+      thinkingEnabled: (session?.reasoningEffort ?? "high") !== "none",
       agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
-        fg?.id ?? "agent",
+        session?.id ?? "agent",
       ),
       ...approvalMode,
-      configuredCommandApprovalPolicy:
-        this.getConfiguredCommandApprovalPolicy(),
-      revertRecoveryNotice: fg
-        ? this.formatRevertRecoveryNoticeForSession(fg.id)
+      configuredCommandApprovalPolicy: this.getConfiguredCommandApprovalPolicy(
+        session?.projectScope,
+      ),
+      revertRecoveryNotice: session
+        ? this.formatRevertRecoveryNoticeForSession(session.id)
         : null,
     };
-
-    this.postMessage({ type: "stateUpdate", state });
-    this.postMessage({
-      type: "agentSessionUpdate",
-      sessions: this.sessionManager.getSessionInfos(),
-    });
   }
 
   /**
@@ -9927,6 +10437,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private postMessage(msg: ExtensionToWebview): void {
     this.projectExtensionMessage(msg);
     this.sendOrQueueWebviewMessage(msg);
+    this.postMessageToEditorPanes(msg);
+  }
+
+  private postMessageToEditorPanes(msg: ExtensionToWebview): void {
+    const host = this.chatTabPanelHost;
+    if (!host) return;
+    const sessionId =
+      msg.type === "stateUpdate"
+        ? msg.state.sessionId
+        : "sessionId" in msg
+          ? msg.sessionId
+          : undefined;
+    if (typeof sessionId === "string") {
+      host.postMessage(msg, (address) => address.sessionId === sessionId);
+      return;
+    }
+    if (
+      msg.type === "chatWorkspaceUpdate" ||
+      msg.type === "agentModelsUpdate" ||
+      msg.type === "agentSessionList" ||
+      msg.type === "agentSessionUpdate" ||
+      msg.type === "agentBgSessionsUpdate"
+    ) {
+      host.postMessage(msg);
+    }
   }
 
   private sendOrQueueWebviewMessage(msg: ExtensionToWebview): void {
@@ -9985,55 +10520,63 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): void {
     this.withApprovalStateTransition(() => {
       this.reconcileRestoredSessionApproval(session);
-      const all = session.getAllMessages();
-      const projectedAll = agentMessagesToChatMessages(all as unknown[]);
-      const tail = getTailChunkByUserTurns(
-        all,
-        opts?.tailTurns ?? RESTORE_TAIL_TURNS,
-      );
-      const persistedResultSessionIds = new Set(
-        projectedAll.flatMap((message) =>
-          message.blocks.flatMap((block) =>
-            block.type === "bg_agent_result" ? [block.sessionId] : [],
-          ),
-        ),
-      );
-      const backgroundResults = (
-        this.sessionManager?.getBackgroundCompletionsForParent?.(session.id) ??
-        []
-      ).filter((result) => !persistedResultSessionIds.has(result.sessionId));
-      if (backgroundResults.length > 0) {
+      const message = this.buildSessionLoadedMessage(session, opts);
+      if (message.backgroundResults?.length) {
         this.sessionManager?.markBackgroundResultsAnnounced?.(
-          backgroundResults.map((result) => result.sessionId),
+          message.backgroundResults.map((result) => result.sessionId),
         );
       }
-      this.postMessage({
-        type: "agentSessionLoaded",
-        sessionId: session.id,
-        title: session.title,
-        originalPrompt: projectedAll.find((message) => message.role === "user")
-          ?.content,
-        mode: session.mode,
-        model: session.model,
-        messages: tail.chunk,
-        todos: getLatestTodoState(all),
-        lastInputTokens: session.lastInputTokens,
-        // lastOutputTokens is the per-last-request output count used for
-        // context bar display. We don't persist this value, so send 0 for
-        // loaded sessions to avoid displaying stale cumulative totals.
-        lastOutputTokens: 0,
-        backgroundResults:
-          backgroundResults.length > 0 ? backgroundResults : undefined,
-        restored: opts?.restored,
-        checkpoints: opts?.checkpoints,
-        userTurnOffset: tail.userTurnOffset,
-        hasMoreBefore: tail.hasMoreBefore,
-      });
+      this.postMessage(message);
 
       if (session.runState?.phase === "awaiting_question") {
         this.restorePendingQuestionRecovery(session, session.runState.question);
       }
     });
+  }
+
+  private buildSessionLoadedMessage(
+    session: AgentSession,
+    opts?: {
+      restored?: boolean;
+      tailTurns?: number;
+      checkpoints?: Array<{ turnIndex: number; checkpointId: string }>;
+    },
+  ): Extract<ExtensionToWebview, { type: "agentSessionLoaded" }> {
+    const all = session.getAllMessages();
+    const projectedAll = agentMessagesToChatMessages(all as unknown[]);
+    const tail = getTailChunkByUserTurns(
+      all,
+      opts?.tailTurns ?? RESTORE_TAIL_TURNS,
+    );
+    const persistedResultSessionIds = new Set(
+      projectedAll.flatMap((message) =>
+        message.blocks.flatMap((block) =>
+          block.type === "bg_agent_result" ? [block.sessionId] : [],
+        ),
+      ),
+    );
+    const backgroundResults = (
+      this.sessionManager?.getBackgroundCompletionsForParent?.(session.id) ?? []
+    ).filter((result) => !persistedResultSessionIds.has(result.sessionId));
+    return {
+      type: "agentSessionLoaded",
+      sessionId: session.id,
+      title: session.title,
+      originalPrompt: projectedAll.find((message) => message.role === "user")
+        ?.content,
+      mode: session.mode,
+      model: session.model,
+      messages: tail.chunk,
+      todos: getLatestTodoState(all),
+      lastInputTokens: session.lastInputTokens,
+      lastOutputTokens: 0,
+      backgroundResults:
+        backgroundResults.length > 0 ? backgroundResults : undefined,
+      restored: opts?.restored,
+      checkpoints: opts?.checkpoints,
+      userTurnOffset: tail.userTurnOffset,
+      hasMoreBefore: tail.hasMoreBefore,
+    };
   }
 
   private getBrowserGatewayTerminalSettingsCssVariables(): Record<

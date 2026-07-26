@@ -34,10 +34,14 @@ export interface ChatTabPanelHostOptions {
   log?: (message: string) => void;
 }
 
+type EditorPaneSource = "pop" | "fallback" | "serialized";
+
 interface EditorPaneRegistration {
   panel: vscode.WebviewPanel;
   connection: ChatPaneConnection;
   lease: ChatPaneLease;
+  transition: number;
+  source: EditorPaneSource;
 }
 
 export class ChatTabPanelHost
@@ -48,6 +52,7 @@ export class ChatTabPanelHost
   private readonly authority: ChatPaneAuthorityController;
   private readonly registry: ChatTabPanelRegistry;
   private readonly editorPanes = new Map<string, EditorPaneRegistration>();
+  private readonly transitions = new Map<string, number>();
   private runtimeReady = false;
   private resolveRuntimeReady!: () => void;
   private readonly runtimeReadyPromise: Promise<void>;
@@ -62,7 +67,8 @@ export class ChatTabPanelHost
     });
     this.registry = new ChatTabPanelRegistry({
       authority: this.authority,
-      onPanelUserClose: (tabId) => this.handlePanelUserClose(tabId),
+      onPanelUserClose: (tabId, lease) =>
+        this.handlePanelUserClose(tabId, lease),
       log: options.log,
     });
     this.reconcileSidebarAuthority();
@@ -90,6 +96,24 @@ export class ChatTabPanelHost
     return registration && this.authority.isAuthoritative(registration.lease)
       ? registration.connection
       : undefined;
+  }
+
+  isRegisteredConnection(
+    tabId: string,
+    connection: ChatPaneConnection,
+  ): boolean {
+    return this.editorPanes.get(tabId)?.connection === connection;
+  }
+
+  postMessage(
+    message: unknown,
+    accepts: (address: ChatPaneAddress) => boolean = () => true,
+  ): void {
+    for (const registration of this.editorPanes.values()) {
+      if (!this.authority.isAuthoritative(registration.lease)) continue;
+      if (!accepts(registration.connection.getAddress())) continue;
+      registration.connection.postMessage(message);
+    }
   }
 
   isAuthoritativeAddress(address: ChatPaneAddress): boolean {
@@ -138,7 +162,7 @@ export class ChatTabPanelHost
       "media",
       "agentlink-terminal.svg",
     );
-    return this.attachPanel(tabId, panel, "docked");
+    return this.attachPanel(tabId, panel, "docked", "pop");
   }
 
   async dock(tabId: string): Promise<boolean> {
@@ -149,9 +173,17 @@ export class ChatTabPanelHost
 
     const prepared = this.authority.prepare(tabId, "sidebar");
     if (!prepared.ok) return false;
+    const transition = this.beginTransition(tabId);
     let previousAuthority: ChatPaneLease | null | undefined;
     try {
       await this.options.hydrateSidebar(tabId, prepared.lease);
+      if (
+        !this.isCurrentTransition(tabId, transition) ||
+        this.editorPanes.get(tabId) !== registration ||
+        this.options.tabs.getTab(tabId)?.placement !== "popped"
+      ) {
+        throw new Error("docking handoff was superseded");
+      }
       const activated = this.authority.activate(prepared.lease);
       if (!activated.ok)
         throw new Error("sidebar pane activation was rejected");
@@ -164,14 +196,23 @@ export class ChatTabPanelHost
       if (!placement.ok) {
         throw new Error(`docking placement failed: ${placement.reason}`);
       }
+      if (
+        !this.isCurrentTransition(tabId, transition) ||
+        this.editorPanes.get(tabId) !== registration ||
+        this.options.tabs.getTab(tabId)?.placement !== "docked"
+      ) {
+        throw new Error("docking handoff was superseded");
+      }
       this.registry.disposePanel(tabId);
       this.options.onLayoutChanged();
       return true;
     } catch (error) {
-      if (previousAuthority === undefined) {
-        this.authority.cancel(prepared.lease);
-      } else {
-        this.authority.rollbackActivation(prepared.lease, previousAuthority);
+      if (this.isCurrentTransition(tabId, transition)) {
+        if (previousAuthority === undefined) {
+          this.authority.cancel(prepared.lease);
+        } else {
+          this.authority.rollbackActivation(prepared.lease, previousAuthority);
+        }
       }
       this.options.log?.(
         `[chat-tabs] Failed to dock editor panel ${tabId}: ${String(error)}`,
@@ -199,7 +240,7 @@ export class ChatTabPanelHost
       webviewPanel.dispose();
       return;
     }
-    this.attachPanel(serialized.tabId, webviewPanel, "popped");
+    this.attachPanel(serialized.tabId, webviewPanel, "popped", "serialized");
   }
 
   async restoreMissingPanels(): Promise<void> {
@@ -225,11 +266,12 @@ export class ChatTabPanelHost
         "media",
         "agentlink-terminal.svg",
       );
-      this.attachPanel(tab.id, panel, "popped");
+      this.attachPanel(tab.id, panel, "popped", "fallback");
     }
   }
 
   releaseTab(tabId: string): void {
+    this.beginTransition(tabId);
     this.editorPanes.get(tabId)?.connection.dispose();
     this.editorPanes.delete(tabId);
     this.registry.releaseTab(tabId);
@@ -251,7 +293,14 @@ export class ChatTabPanelHost
     tabId: string,
     panel: vscode.WebviewPanel,
     expectedPlacement: "docked" | "popped",
+    source: EditorPaneSource,
   ): boolean {
+    const existing = this.editorPanes.get(tabId);
+    if (source === "serialized" && existing?.source === "fallback") {
+      existing.connection.dispose();
+      this.editorPanes.delete(tabId);
+      this.registry.disposePanel(tabId);
+    }
     const result = this.registry.registerPanel(
       tabId,
       this.asPanelHandle(panel),
@@ -284,12 +333,20 @@ export class ChatTabPanelHost
           result.lease,
           expectedPlacement,
           readyConnection,
+          transition,
         ),
       onMessage: (...args) => this.options.onEditorMessage(...args),
       log: this.options.log,
     });
     connection.freeze();
-    const registration = { panel, connection, lease: result.lease };
+    const transition = this.beginTransition(tabId);
+    const registration = {
+      panel,
+      connection,
+      lease: result.lease,
+      transition,
+      source,
+    };
     this.editorPanes.set(tabId, registration);
     panel.onDidDispose(() => {
       if (this.editorPanes.get(tabId) !== registration) return;
@@ -309,15 +366,26 @@ export class ChatTabPanelHost
     lease: ChatPaneLease,
     expectedPlacement: "docked" | "popped",
     connection: ChatPaneConnection,
+    transition: number,
   ): Promise<void> {
-    if (
-      this.disposed ||
-      this.editorPanes.get(tabId)?.connection !== connection
-    ) {
+    if (!this.isLiveEditorTransition(tabId, connection, transition)) {
       return;
     }
     try {
       await this.options.hydrateEditor(tabId, connection);
+      if (!this.isLiveEditorTransition(tabId, connection, transition)) {
+        throw new Error("editor pane handoff was superseded during hydration");
+      }
+      const tab = this.options.tabs.getTab(tabId);
+      const address = connection.getAddress();
+      if (
+        !tab ||
+        address.controllerEpoch !==
+          this.options.tabs.getWorkspaceSnapshot().controllerEpoch ||
+        address.sessionId !== tab.sessionId
+      ) {
+        throw new Error("editor pane binding changed during hydration");
+      }
       const activated = this.registry.activatePanel(tabId, lease);
       if (!activated.ok) throw new Error("editor pane activation was rejected");
       const placement = await this.options.tabs.setPlacement(
@@ -328,12 +396,21 @@ export class ChatTabPanelHost
       if (!placement.ok) {
         throw new Error(`pop-out placement failed: ${placement.reason}`);
       }
+      if (
+        !this.isLiveEditorTransition(tabId, connection, transition) ||
+        this.options.tabs.getTab(tabId)?.placement !== "popped"
+      ) {
+        throw new Error(
+          "editor pane handoff was superseded during persistence",
+        );
+      }
       connection.resume();
       this.options.onLayoutChanged();
     } catch (error) {
       this.options.log?.(
         `[chat-tabs] Failed to activate editor panel ${tabId}: ${String(error)}`,
       );
+      if (!this.isCurrentTransition(tabId, transition)) return;
       if (!this.registry.cancelPanelHandoff(tabId, lease)) {
         this.registry.disposePanel(tabId);
         const adopted = this.authority.adoptSidebar(tabId);
@@ -346,16 +423,40 @@ export class ChatTabPanelHost
     }
   }
 
-  private async handlePanelUserClose(tabId: string): Promise<void> {
-    this.editorPanes.get(tabId)?.connection.dispose();
-    this.editorPanes.delete(tabId);
+  private async handlePanelUserClose(
+    tabId: string,
+    closedLease: ChatPaneLease,
+  ): Promise<void> {
+    const transition = this.beginTransition(tabId);
+    const registration = this.editorPanes.get(tabId);
+    if (
+      registration &&
+      registration.lease.epoch === closedLease.epoch &&
+      registration.lease.surface === closedLease.surface
+    ) {
+      registration.connection.dispose();
+      this.editorPanes.delete(tabId);
+    }
     const tab = this.options.tabs.getTab(tabId);
-    if (!tab || tab.placement !== "popped") return;
+    if (!tab) return;
+    if (tab.placement !== "popped") {
+      const adopted = this.authority.adoptSidebar(tabId);
+      if (adopted.ok) {
+        await this.options.hydrateSidebar(tabId, adopted.lease);
+      }
+      return;
+    }
 
     const prepared = this.authority.prepare(tabId, "sidebar");
     if (!prepared.ok) return;
     try {
       await this.options.hydrateSidebar(tabId, prepared.lease);
+      if (
+        !this.isCurrentTransition(tabId, transition) ||
+        this.options.tabs.getTab(tabId)?.placement !== "popped"
+      ) {
+        throw new Error("close-to-dock handoff was superseded");
+      }
       const activated = this.authority.activate(prepared.lease);
       if (!activated.ok)
         throw new Error("sidebar pane activation was rejected");
@@ -367,8 +468,15 @@ export class ChatTabPanelHost
       if (!placement.ok) {
         throw new Error(`close-to-dock placement failed: ${placement.reason}`);
       }
+      if (
+        !this.isCurrentTransition(tabId, transition) ||
+        this.options.tabs.getTab(tabId)?.placement !== "docked"
+      ) {
+        throw new Error("close-to-dock handoff was superseded");
+      }
       this.options.onLayoutChanged();
     } catch (error) {
+      if (!this.isCurrentTransition(tabId, transition)) return;
       if (!this.authority.isAuthoritative(prepared.lease)) {
         this.authority.cancel(prepared.lease);
       } else if (!this.registry.getPanel(tabId)) {
@@ -389,12 +497,36 @@ export class ChatTabPanelHost
           "media",
           "agentlink-terminal.svg",
         );
-        this.attachPanel(tabId, panel, "popped");
+        this.attachPanel(tabId, panel, "popped", "fallback");
       }
       this.options.log?.(
         `[chat-tabs] Failed to dock closed panel ${tabId}: ${String(error)}`,
       );
     }
+  }
+
+  private beginTransition(tabId: string): number {
+    const transition = (this.transitions.get(tabId) ?? 0) + 1;
+    this.transitions.set(tabId, transition);
+    return transition;
+  }
+
+  private isCurrentTransition(tabId: string, transition: number): boolean {
+    return !this.disposed && this.transitions.get(tabId) === transition;
+  }
+
+  private isLiveEditorTransition(
+    tabId: string,
+    connection: ChatPaneConnection,
+    transition: number,
+  ): boolean {
+    const registration = this.editorPanes.get(tabId);
+    return (
+      this.isCurrentTransition(tabId, transition) &&
+      registration?.connection === connection &&
+      registration.transition === transition &&
+      this.registry.getPanel(tabId) !== undefined
+    );
   }
 
   private reconcileSidebarAuthority(): void {

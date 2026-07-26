@@ -31,10 +31,5 @@ export function resolveModelForMode(
 ): string {
   const prefs = getModeModelPreferences(config);
   const preferredModel = prefs[mode]?.trim();
-  if (preferredModel) return preferredModel;
-
-  const legacyModel = config.get<string>("agentModel")?.trim();
-  if (legacyModel) return legacyModel;
-
-  return fallbackModel;
+  return preferredModel || fallbackModel;
 }

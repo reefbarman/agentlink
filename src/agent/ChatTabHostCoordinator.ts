@@ -37,8 +37,13 @@ interface ChatTabHostSessionManager {
   getSessionInfos(): SessionInfo[];
   createSession(
     mode: string,
-    opts?: { activeFilePath?: string; projectId?: string },
+    opts?: {
+      activeFilePath?: string;
+      projectId?: string;
+      foreground?: boolean;
+    },
   ): Promise<AgentSession>;
+  hydratePersistedSession(sessionId: string): Promise<AgentSession | null>;
   loadPersistedSession(sessionId: string): Promise<AgentSession | null>;
   stopSessionAndWait(sessionId: string): Promise<string[]>;
   switchTo(sessionId: string): void;
@@ -81,7 +86,11 @@ export class ChatTabHostCoordinator {
   async newChat(
     address: ChatTabActionAddress,
     mode: string,
-    options: { projectId?: string; stopRunning?: boolean } = {},
+    options: {
+      projectId?: string;
+      stopRunning?: boolean;
+      focus?: boolean;
+    } = {},
   ): Promise<ChatTabHostActionResult> {
     const validated = this.tabs.validateAction(address);
     if (!validated.ok) return validated;
@@ -94,12 +103,15 @@ export class ChatTabHostCoordinator {
       };
     }
 
-    const focused = await this.focus(address);
-    if (!focused.ok) return focused;
+    if (options.focus !== false) {
+      const focused = await this.focus(address);
+      if (!focused.ok) return focused;
+    }
     await this.stopForReplacement(validated.tab, options.stopRunning === true);
 
     const session = await this.sessions.createSession(mode, {
       projectId: options.projectId,
+      foreground: options.focus !== false,
     });
     const bound = await this.ensureBinding(
       validated.tab.id,
@@ -152,13 +164,19 @@ export class ChatTabHostCoordinator {
   async loadSession(
     address: ChatTabActionAddress,
     targetSessionId: string,
-    stopRunning = false,
+    options: { stopRunning?: boolean; focus?: boolean } = {},
   ): Promise<ChatTabHostActionResult> {
     const validated = this.tabs.validateAction(address);
     if (!validated.ok) return validated;
 
     const existing = this.tabs.getTabForSession(targetSessionId);
     if (existing) {
+      if (options.focus === false) {
+        const session = this.sessions.getSession(targetSessionId);
+        return session
+          ? { ok: true, tab: existing, session }
+          : { ok: false, reason: "session_not_found" };
+      }
       const focused = await this.focus({
         controllerEpoch: address.controllerEpoch,
         tabId: existing.id,
@@ -167,7 +185,7 @@ export class ChatTabHostCoordinator {
       return focused;
     }
 
-    if (this.isBusy(validated.tab) && !stopRunning) {
+    if (this.isBusy(validated.tab) && options.stopRunning !== true) {
       return {
         ok: false,
         reason: "confirmation_required",
@@ -177,10 +195,15 @@ export class ChatTabHostCoordinator {
       };
     }
 
-    const focused = await this.focus(address);
-    if (!focused.ok) return focused;
-    await this.stopForReplacement(validated.tab, stopRunning);
-    const session = await this.sessions.loadPersistedSession(targetSessionId);
+    if (options.focus !== false) {
+      const focused = await this.focus(address);
+      if (!focused.ok) return focused;
+    }
+    await this.stopForReplacement(validated.tab, options.stopRunning === true);
+    const session =
+      options.focus === false
+        ? await this.sessions.hydratePersistedSession(targetSessionId)
+        : await this.sessions.loadPersistedSession(targetSessionId);
     if (!session) return { ok: false, reason: "session_not_found" };
     const bound = await this.ensureBinding(
       validated.tab.id,

@@ -311,6 +311,15 @@ export async function requestImageGenerationApprovalForTest(params: {
   referenceImages?: GenerateImageReferenceImage[];
   billing: string;
 }): Promise<ImageGenerationApprovalResult> {
+  if (
+    params.approvalManager.isBuiltInToolApproved(
+      params.sessionId,
+      "generate_image",
+    )
+  ) {
+    return { approved: true };
+  }
+
   const referenceImages = params.referenceImages ?? [];
   const targets = params.targets ?? [];
   const detail = [
@@ -330,6 +339,7 @@ export async function requestImageGenerationApprovalForTest(params: {
     targets.length > 0
       ? "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before files are written."
       : "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before images are returned to chat.",
+    "Generate for Session also authorizes later generate_image calls in this chat, including creation of new workspace PNG outputs.",
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
@@ -345,14 +355,26 @@ export async function requestImageGenerationApprovalForTest(params: {
           (targets.length === 1 ? targets[0]?.relPath : undefined),
         choices: [
           { label: "Generate", value: "accept", isPrimary: true },
+          { label: "Generate for Session", value: "accept-session" },
+          { label: "Deny", value: "reject", isDanger: true },
+        ],
+        writeChoices: [
+          { label: "Generate", value: "accept", isPrimary: true },
+          { label: "Generate for Session", value: "accept-session" },
           { label: "Deny", value: "reject", isDanger: true },
         ],
       },
       params.sessionId,
     );
     const decision = typeof raw === "string" ? raw : raw.decision;
+    if (decision === "accept-session") {
+      params.approvalManager.approveBuiltInTool(
+        params.sessionId,
+        "generate_image",
+      );
+    }
     return {
-      approved: decision === "accept" || decision.startsWith("accept-"),
+      approved: decision === "accept" || decision === "accept-session",
       followUp: typeof raw === "string" ? undefined : raw.followUp,
       rejectionReason:
         typeof raw === "string" ? undefined : raw.rejectionReason,

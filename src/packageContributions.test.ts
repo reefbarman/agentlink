@@ -53,6 +53,16 @@ const removedServerSettings = [
   "agentlink.requireAuth",
 ];
 
+const removedCompatibilitySettings = [
+  "agentlink.agentModel",
+  "agentlink.autoCondenseThreshold",
+  "agentlink.questionDetection.llmEnabled",
+  "agentlink.questionDetection.baseUrl",
+  "agentlink.questionDetection.model",
+  "agentlink.questionDetection.apiKey",
+  "agentlink.questionDetection.timeoutMs",
+];
+
 describe("extension package contributions", () => {
   it("describes the retained built-in agent product", () => {
     expect(extensionPackage.description).toBe(
@@ -89,6 +99,15 @@ describe("extension package contributions", () => {
     }
   });
 
+  it("does not expose pre-release compatibility settings", () => {
+    const settings =
+      extensionPackage.contributes?.configuration?.properties ?? {};
+
+    for (const setting of removedCompatibilitySettings) {
+      expect(Object.hasOwn(settings, setting), setting).toBe(false);
+    }
+  });
+
   it("labels the retained sidebar view as Activity", () => {
     const activityView = extensionPackage.contributes?.views?.agentLink?.find(
       ({ id }) => id === "agentLink.statusView",
@@ -118,7 +137,6 @@ describe("extension package contributions", () => {
       | Record<string, ConfigurationProperty>
       | undefined;
 
-    expect(settings?.["agentlink.agentModel"]?.default).toBe("gpt-5.6-sol");
     expect(settings?.["agentlink.modeModelPreferences"]?.default).toEqual({
       code: "gpt-5.6-sol",
       architect: "gpt-5.6-sol",

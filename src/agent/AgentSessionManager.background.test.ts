@@ -4125,21 +4125,23 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
-  it("only restores background sessions from the current foreground tree", async () => {
+  it("restores background trees for all open tabs while preserving single-root pruning", async () => {
     const now = Date.now();
-    const summaries = ["current-bg", "historical-bg"].map((id) => ({
-      schemaVersion: 1,
-      id,
-      mode: "agent",
-      model: "gpt-5.4-pro",
-      title: id,
-      messageCount: 1,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      createdAt: now,
-      lastActiveAt: now,
-      background: true,
-    }));
+    const summaries = ["current-bg", "second-tab-bg", "historical-bg"].map(
+      (id) => ({
+        schemaVersion: 1,
+        id,
+        mode: "agent",
+        model: "gpt-5.4-pro",
+        title: id,
+        messageCount: 1,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        createdAt: now,
+        lastActiveAt: now,
+        background: true,
+      }),
+    );
     const store = {
       list: vi.fn(() => []),
       listAll: vi.fn(() => summaries),
@@ -4161,9 +4163,17 @@ describe("AgentSessionManager background agents", () => {
                 placement: "background",
                 task: summary.title,
                 rootSessionId:
-                  id === "current-bg" ? "foreground-1" : "foreground-old",
+                  id === "current-bg"
+                    ? "foreground-1"
+                    : id === "second-tab-bg"
+                      ? "foreground-2"
+                      : "foreground-old",
                 parentSessionId:
-                  id === "current-bg" ? "foreground-1" : "foreground-old",
+                  id === "current-bg"
+                    ? "foreground-1"
+                    : id === "second-tab-bg"
+                      ? "foreground-2"
+                      : "foreground-old",
                 depth: 1,
                 lifecycle: "completed",
               },
@@ -4180,17 +4190,28 @@ describe("AgentSessionManager background agents", () => {
       store,
     );
 
-    const restored =
-      await mgr.restorePersistedBackgroundSessions("foreground-1");
+    const restored = await mgr.restorePersistedBackgroundSessions(
+      new Set(["foreground-1", "foreground-2"]),
+    );
 
-    expect(restored.map((session) => session.id)).toEqual(["current-bg"]);
+    expect(restored.map((session) => session.id)).toEqual([
+      "current-bg",
+      "second-tab-bg",
+    ]);
     expect(mgr.getBgSessionInfos().map((session) => session.id)).toEqual([
       "current-bg",
+      "second-tab-bg",
     ]);
 
     await mgr.restorePersistedBackgroundSessions("foreground-old");
 
     expect(mgr.getBackgroundStatus("current-bg")).toEqual(
+      expect.objectContaining({
+        status: "error",
+        partialOutput: "Session not found",
+      }),
+    );
+    expect(mgr.getBackgroundStatus("second-tab-bg")).toEqual(
       expect.objectContaining({
         status: "error",
         partialOutput: "Session not found",

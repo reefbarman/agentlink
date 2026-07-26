@@ -105,6 +105,7 @@ function normalizeHistorySnapshot(
             lastActiveAt?: unknown;
             messages?: unknown;
             nextMessageSequence?: unknown;
+            generateImageApproved?: unknown;
             privateModelHistory?: unknown;
           };
           const id = typeof item.id === "string" ? item.id.trim() : "";
@@ -140,6 +141,9 @@ function normalizeHistorySnapshot(
             lastActiveAt,
             messages,
             nextMessageSequence,
+            ...(item.generateImageApproved === true
+              ? { generateImageApproved: true }
+              : {}),
             ...(privateModelHistory ? { privateModelHistory } : {}),
           };
         })

@@ -288,6 +288,79 @@ describe("AgentSessionManager host injection", () => {
     expect(firstDomain.roots).toEqual(secondDomain.roots);
   });
 
+  it("creates an addressed session without changing foreground ownership", async () => {
+    const defaultCreateSession = mocks.createSession.getMockImplementation();
+    if (!defaultCreateSession)
+      throw new Error("Missing session fixture factory");
+    mocks.createSession
+      .mockImplementationOnce(async (opts: any) => ({
+        ...(await defaultCreateSession(opts)),
+        id: "session-foreground",
+      }))
+      .mockImplementationOnce(async (opts: any) => ({
+        ...(await defaultCreateSession(opts)),
+        id: "session-addressed",
+      }));
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const foreground = await mgr.createSession("code");
+    const configBefore = mgr.getConfig();
+
+    const addressed = await mgr.createSession("architect", {
+      foreground: false,
+    });
+
+    expect(addressed.id).not.toBe(foreground.id);
+    expect(addressed.mode).toBe("architect");
+    expect(mgr.getSession(addressed.id)).toBe(addressed);
+    expect(mgr.getForegroundSession()).toBe(foreground);
+    expect(mgr.getConfig()).toEqual(configBefore);
+  });
+
+  it("updates model and reasoning for an addressed non-foreground session", async () => {
+    const defaultCreateSession = mocks.createSession.getMockImplementation();
+    if (!defaultCreateSession)
+      throw new Error("Missing session fixture factory");
+    const config = { ...makeConfig(), thinkingBudget: 1024 };
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const foreground = await mgr.createSession("code");
+    mgr.switchTo(foreground.id);
+    const originalConfigModel = mgr.getConfig().model;
+    const target = {
+      ...(await defaultCreateSession({
+        mode: "code",
+        config,
+        projectScope: foreground.projectScope,
+      })),
+      id: "session-target",
+      model: "target-old-model",
+      reasoningEffort: "none" as const,
+      thinkingBudget: 0,
+    };
+    (mgr as any).sessions.set(target.id, target);
+    const maybeAutoCondenseSession = vi
+      .spyOn(mgr, "maybeAutoCondenseSession")
+      .mockResolvedValue();
+
+    await expect(
+      mgr.setSessionModel(target.id, "target-new-model"),
+    ).resolves.toBe("target-new-model");
+    expect(mgr.setSessionReasoningEffort(target.id, "max")).toBe(true);
+
+    expect(target.updateModelSelection).toHaveBeenCalledWith(
+      "target-new-model",
+      undefined,
+      expect.objectContaining({ workspaceFolders: expect.any(Array) }),
+    );
+    expect(target.model).toBe("target-new-model");
+    expect(target.reasoningEffort).toBe("max");
+    expect(target.thinkingBudget).toBe(config.thinkingBudget);
+    expect(maybeAutoCondenseSession).toHaveBeenCalledWith(target.id);
+    expect(mgr.getForegroundSession()).toBe(foreground);
+    expect(foreground.updateModelSelection).not.toHaveBeenCalled();
+    expect(foreground.reasoningEffort).toBe("high");
+    expect(mgr.getConfig().model).toBe(originalConfigModel);
+  });
+
   it("falls back to an enabled model when saved selections use a disabled provider", async () => {
     const capabilities = {
       supportsThinking: true,
@@ -849,6 +922,137 @@ describe("AgentSessionManager host injection", () => {
       approvalReviewer: "auto-review",
       executionPreset: "workspace-write",
     });
+  });
+
+  it("hydrates a persisted session without changing foreground ownership", async () => {
+    const summary = {
+      schemaVersion: 1,
+      id: "session-2",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Persisted",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 1,
+      lastActiveAt: 2,
+    };
+    const readSession = vi.fn(async () => ({
+      ok: true as const,
+      revision: "revision-1",
+      value: {
+        summary,
+        messages: [{ role: "user" as const, content: "hello" }],
+        metadata: {
+          mode: summary.mode,
+          model: summary.model,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          checkpointState: { baseCommit: null, checkpoints: [] },
+        },
+      },
+    }));
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      {
+        readSession,
+        list: vi.fn(() => [summary]),
+        listAll: vi.fn(() => [summary]),
+      } as any,
+    );
+    const foreground = await mgr.createSession("code");
+    const changes = vi.fn();
+    mgr.onSessionsChanged = changes;
+
+    const hydrated = await mgr.hydratePersistedSession(summary.id);
+
+    expect(hydrated).toBeDefined();
+    expect(mgr.getSession(summary.id)).toBe(hydrated);
+    expect(mgr.getForegroundSession()).toBe(foreground);
+    expect(changes).toHaveBeenCalledOnce();
+  });
+
+  it("deduplicates concurrent hydration and does not notify for cached reuse", async () => {
+    const summary = {
+      schemaVersion: 1,
+      id: "session-2",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Persisted",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 1,
+      lastActiveAt: 2,
+    };
+    const readSession = vi.fn(async () => ({
+      ok: true as const,
+      revision: "revision-1",
+      value: {
+        summary,
+        messages: [{ role: "user" as const, content: "hello" }],
+        metadata: {
+          mode: summary.mode,
+          model: summary.model,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          checkpointState: { baseCommit: null, checkpoints: [] },
+        },
+      },
+    }));
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      {
+        readSession,
+        list: vi.fn(() => [summary]),
+        listAll: vi.fn(() => [summary]),
+      } as any,
+    );
+
+    const changes = vi.fn();
+    mgr.onSessionsChanged = changes;
+    const [first, concurrent] = await Promise.all([
+      mgr.hydratePersistedSession(summary.id),
+      mgr.hydratePersistedSession(summary.id),
+    ]);
+    const cached = await mgr.hydratePersistedSession(summary.id);
+
+    expect(concurrent).toBe(first);
+    expect(cached).toBe(first);
+    expect(readSession).toHaveBeenCalledTimes(1);
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+    expect(changes).toHaveBeenCalledOnce();
+  });
+
+  it("returns null when a persisted session cannot be hydrated", async () => {
+    const readSession = vi.fn(async () => ({
+      ok: false as const,
+      reason: "not_found" as const,
+    }));
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      {
+        readSession,
+        list: vi.fn(() => []),
+        listAll: vi.fn(() => []),
+      } as any,
+    );
+
+    const changes = vi.fn();
+    mgr.onSessionsChanged = changes;
+    await expect(mgr.hydratePersistedSession("missing")).resolves.toBeNull();
+    expect(mgr.getForegroundSession()).toBeUndefined();
+    expect(mocks.createSession).not.toHaveBeenCalled();
+    expect(changes).not.toHaveBeenCalled();
   });
 
   it("restores independent approval dimensions and derives missing dimensions from legacy policy", async () => {

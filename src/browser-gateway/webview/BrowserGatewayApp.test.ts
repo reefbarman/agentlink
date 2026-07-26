@@ -1,5 +1,10 @@
 /** @vitest-environment jsdom */
 
+import {
+  BrowserGatewayApp,
+  cacheDetachedSessionDetail,
+  pruneDetachedSessionDetailCache,
+} from "./BrowserGatewayApp";
 import type {
   ChatMessage,
   ProjectInfo,
@@ -19,7 +24,7 @@ import type { AppState } from "../../shared/chatProjection";
 import type { ApprovalRequest } from "../../approvals/webview/types";
 import { BROWSER_GATEWAY_ASK_AGENT_OWNER_ID } from "../browserGatewayAskAgentIdentity";
 import type { BgSessionInfo } from "../../shared/types";
-import { BrowserGatewayApp } from "./BrowserGatewayApp";
+import type { BrowserGatewayChatWorkspaceSummary } from "../dataPlane/protocol";
 import { h } from "preact";
 import { within } from "@testing-library/preact";
 
@@ -285,6 +290,7 @@ type TestSnapshot = {
       availability: "available" | "unavailable";
     }>;
     defaultProjectId: string | null;
+    chatWorkspace?: BrowserGatewayChatWorkspaceSummary | null;
     repository: { projectId: string; branch?: string; dirty?: boolean } | null;
     sessions: never[];
     foreground: {
@@ -455,6 +461,88 @@ function createSnapshot(): TestSnapshot {
   };
 }
 
+function createGroupedSnapshot(): TestSnapshot {
+  const snapshot = createSnapshot();
+  snapshot.session.foreground.projectedMessages = [
+    {
+      id: "session-1-message",
+      role: "assistant",
+      content: "Foreground T1 transcript",
+      timestamp: 1,
+      blocks: [{ type: "text", text: "Foreground T1 transcript" }],
+    },
+  ];
+  snapshot.session.chatWorkspace = {
+    controllerEpoch: "controller-1",
+    focusedTabId: "tab-1",
+    tabs: [
+      {
+        tabId: "tab-1",
+        displayNumber: 1,
+        label: "T1",
+        sessionId: "session-1",
+        placement: "docked",
+        title: "Foreground chat",
+        status: "completed",
+        busy: false,
+      },
+      {
+        tabId: "tab-2",
+        displayNumber: 2,
+        label: "T2",
+        sessionId: "session-2",
+        placement: "popped",
+        title: "Detached chat",
+        status: "needs_input",
+        busy: true,
+      },
+    ],
+  };
+  return snapshot;
+}
+
+function directSessionDetailResponse(
+  ownerSnapshot: TestSnapshot,
+  text: string,
+): Response {
+  const foreground = {
+    ...ownerSnapshot.session.foreground,
+    sessionId: "session-2",
+    title: "Detached chat",
+    projectedMessages: [
+      {
+        id: "session-2-message",
+        role: "assistant" as const,
+        content: text,
+        timestamp: 2,
+        blocks: [{ type: "text" as const, text }],
+      },
+    ],
+  };
+  return new Response(
+    JSON.stringify({
+      selection: {
+        controllerEpoch: "controller-1",
+        tabId: "tab-2",
+        sessionId: "session-2",
+      },
+      session: foreground,
+      ui: {
+        approval: null,
+        question: null,
+        questionProgress: null,
+        formElicitation: null,
+        urlElicitation: null,
+      },
+      revertRecoveryState: null,
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+    },
+  );
+}
+
 function installMatchMediaMock(
   matches: boolean | ((query: string) => boolean) = false,
 ): void {
@@ -511,6 +599,64 @@ async function selectWorkspaceTab(): Promise<HTMLElement> {
   });
   return workspaceTab;
 }
+
+describe("detached session detail cache", () => {
+  it("caps retained transcripts and evicts the oldest entry", () => {
+    const cache = new Map();
+    for (let index = 1; index <= 3; index += 1) {
+      cacheDetachedSessionDetail(
+        cache,
+        `instance-1\u0000controller-1\u0000tab-${index}\u0000session-${index}`,
+        { selection: { sessionId: `session-${index}` } } as never,
+        2,
+      );
+    }
+
+    expect([...cache.keys()]).toEqual([
+      "instance-1\u0000controller-1\u0000tab-2\u0000session-2",
+      "instance-1\u0000controller-1\u0000tab-3\u0000session-3",
+    ]);
+  });
+
+  it("prunes stale controller and session identities for one owner only", () => {
+    const cache = new Map([
+      [
+        "instance-1\u0000controller-old\u0000tab-1\u0000session-old",
+        {} as never,
+      ],
+      [
+        "instance-1\u0000controller-new\u0000tab-1\u0000session-new",
+        {} as never,
+      ],
+      [
+        "instance-2\u0000controller-old\u0000tab-1\u0000session-other",
+        {} as never,
+      ],
+    ]);
+    const workspace: BrowserGatewayChatWorkspaceSummary = {
+      controllerEpoch: "controller-new",
+      focusedTabId: "tab-1",
+      tabs: [
+        {
+          tabId: "tab-1",
+          displayNumber: 1,
+          label: "T1",
+          sessionId: "session-new",
+          placement: "docked",
+          status: "completed",
+          busy: false,
+        },
+      ],
+    };
+
+    pruneDetachedSessionDetailCache(cache, "instance-1", workspace);
+
+    expect([...cache.keys()]).toEqual([
+      "instance-1\u0000controller-new\u0000tab-1\u0000session-new",
+      "instance-2\u0000controller-old\u0000tab-1\u0000session-other",
+    ]);
+  });
+});
 
 function installLocalStorageMock(): Map<string, string> {
   const entries = new Map<string, string>();
@@ -2054,6 +2200,91 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
+  it("ignores a queue response after the browser selection changes", async () => {
+    const queuedSnapshot = createSnapshot();
+    queuedSnapshot.session.foreground.status = "streaming";
+    queuedSnapshot.session.foreground.streaming = true;
+    queuedSnapshot.session.foreground.messageQueue = [
+      {
+        id: "queue-1",
+        text: "Origin queue item",
+        fullText: "Origin queue item",
+        source: "browser",
+      },
+    ];
+    let resolveInterjection: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/ask-agent/session")) {
+        return jsonResponse(createAskAgentSessionResponse());
+      }
+      if (url.includes("/api/ui-state")) return jsonResponse(queuedSnapshot);
+      if (url.includes("/api/queue/interject")) {
+        return new Promise<Response>((resolve) => {
+          resolveInterjection = resolve;
+        });
+      }
+      if (url.includes("/api/slash-commands"))
+        return jsonResponse({ commands: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    fireEvent.click(await screen.findByTitle("Interject at next break"));
+    await waitFor(() => expect(resolveInterjection).toBeTypeOf("function"));
+    const askAgentTab = screen.getByRole("tab", { name: /Ask Agent/ });
+    fireEvent.click(askAgentTab);
+    await waitFor(() =>
+      expect(askAgentTab.getAttribute("aria-selected")).toBe("true"),
+    );
+
+    const lateSnapshot = createSnapshot();
+    lateSnapshot.session.foreground.projectedMessages = [
+      {
+        id: "late-origin-message",
+        role: "assistant",
+        content: "Late origin response",
+        timestamp: 3,
+        blocks: [{ type: "text", text: "Late origin response" }],
+      },
+    ];
+    await act(async () => {
+      resolveInterjection?.(jsonResponse({ ok: true, snapshot: lateSnapshot }));
+      await Promise.resolve();
+    });
+
+    expect(askAgentTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByText("Late origin response")).toBeNull();
+  });
+
   it("sends project final-marker Continue prompts through the selected project instance", async () => {
     const snapshot = createSnapshot();
     snapshot.session.foreground.projectedMessages = [
@@ -2321,6 +2552,180 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(tabs[0]?.textContent).toContain("Ask Agent");
     expect(tabs[1]?.textContent).toContain("Worker");
     expect(tabs[2]?.textContent).toContain("Workspace");
+  });
+
+  it("renders grouped logical tabs and hydrates detached detail without selecting the VS Code session", async () => {
+    const groupedSnapshot = createGroupedSnapshot();
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/instances")) {
+          return jsonResponse({
+            currentInstanceId: "instance-1",
+            instances: [
+              {
+                instanceId: "instance-1",
+                workspaceName: "Workspace",
+                workspacePath: "/workspace",
+                url: "http://127.0.0.1:3333",
+                status: { kind: "idle", label: "Idle" },
+              },
+            ],
+          });
+        }
+        if (url.includes("/api/ask-agent/session")) {
+          return jsonResponse(createAskAgentSessionResponse());
+        }
+        if (url.includes("/api/ui-state")) return jsonResponse(groupedSnapshot);
+        if (url.includes("/api/session-detail")) {
+          expect(init).toMatchObject({
+            credentials: "same-origin",
+            headers: { Authorization: "Bearer test-token" },
+          });
+          return directSessionDetailResponse(
+            groupedSnapshot,
+            "Detached T2 transcript",
+          );
+        }
+        if (url.includes("/api/models")) return jsonResponse({ models: [] });
+        if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+        if (url.includes("/api/slash-commands")) {
+          return jsonResponse({ commands: [] });
+        }
+        if (url.includes("/api/sessions"))
+          return jsonResponse({ sessions: [] });
+        if (url.includes("/api/debug/refresh"))
+          return jsonResponse({ ok: true });
+        return jsonResponse({ error: "not_found" }, 404);
+      },
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    const t1 = await screen.findByRole("tab", {
+      name: /T1.*Foreground chat/,
+    });
+    const t2 = screen.getByRole("tab", { name: /T2.*Detached chat/ });
+    const tablist = screen.getByRole("tablist", { name: "Instances" });
+    expect(tablist.contains(t1)).toBe(true);
+    expect(tablist.contains(t2)).toBe(true);
+    await waitFor(() => {
+      expect(t1.getAttribute("aria-selected")).toBe("true");
+    });
+    expect(t2.getAttribute("aria-selected")).toBe("false");
+    expect(screen.queryByRole("region", { name: "Workspace" })).toBeNull();
+
+    fireEvent.click(t2);
+
+    expect(await screen.findByText("Detached T2 transcript")).toBeTruthy();
+    expect(t2.getAttribute("aria-selected")).toBe("true");
+    const detailUrl = fetchMock.mock.calls
+      .map(([input]) => String(input))
+      .find((url) => url.includes("/api/session-detail"));
+    expect(detailUrl).toContain("controllerEpoch=controller-1");
+    expect(detailUrl).toContain("tabId=tab-2");
+    expect(detailUrl).toContain("sessionId=session-2");
+    expect(detailUrl).toContain("instanceId=instance-1");
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/api/session/load"),
+      ),
+    ).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/api/ask-agent/session/load"),
+      ),
+    ).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/api/relay/commands"),
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores detached detail resolved after another logical tab becomes active", async () => {
+    const groupedSnapshot = createGroupedSnapshot();
+    let resolveDetail: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/ask-agent/session")) {
+        return jsonResponse(createAskAgentSessionResponse());
+      }
+      if (url.includes("/api/ui-state")) return jsonResponse(groupedSnapshot);
+      if (url.includes("/api/session-detail")) {
+        return new Promise<Response>((resolve) => {
+          resolveDetail = resolve;
+        });
+      }
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/slash-commands")) {
+        return jsonResponse({ commands: [] });
+      }
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    const t1 = await screen.findByRole("tab", {
+      name: /T1.*Foreground chat/,
+    });
+    const t2 = screen.getByRole("tab", { name: /T2.*Detached chat/ });
+    const tablist = screen.getByRole("tablist", { name: "Instances" });
+    expect(tablist.contains(t1)).toBe(true);
+    expect(tablist.contains(t2)).toBe(true);
+    fireEvent.click(t2);
+    await waitFor(() => expect(resolveDetail).toBeTypeOf("function"));
+
+    fireEvent.click(t1);
+    await screen.findByText("Foreground T1 transcript");
+    await act(async () => {
+      resolveDetail?.(
+        directSessionDetailResponse(
+          groupedSnapshot,
+          "Late detached transcript",
+        ),
+      );
+      await Promise.resolve();
+    });
+
+    expect(t1.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("Foreground T1 transcript")).toBeTruthy();
+    expect(screen.queryByText("Late detached transcript")).toBeNull();
   });
 
   it("keeps Ask Agent pinned when no routed VS Code instances are available", async () => {

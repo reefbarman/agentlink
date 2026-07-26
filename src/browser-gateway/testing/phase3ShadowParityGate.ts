@@ -497,6 +497,7 @@ function createLegacySnapshot(
     session: {
       projects: readSet.catalog.projects.map((project) => ({ ...project })),
       defaultProjectId: readSet.catalog.defaultProjectId,
+      chatWorkspace: null,
       sessions: readSet.catalog.sessions.map((session) => ({
         id: session.sessionId,
         project: session.projectId

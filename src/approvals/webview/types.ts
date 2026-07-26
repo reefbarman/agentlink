@@ -97,6 +97,13 @@ export interface ApprovalRequest {
   writeOperation?: "create" | "modify";
   /** For writes: whether the file is outside workspace */
   outsideWorkspace?: boolean;
+  /** For non-file write approvals, such as quota-consuming image generation. */
+  writeChoices?: Array<{
+    label: string;
+    value: string;
+    isPrimary?: boolean;
+    isDanger?: boolean;
+  }>;
   /** For renames: the current symbol name */
   oldName?: string;
   /** For renames: the new symbol name */

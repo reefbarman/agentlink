@@ -1425,6 +1425,70 @@ describe("TranscriptMessageList streaming baseline metrics", () => {
     cleanup();
   });
 
+  it("does not rerender completed split segments while a later segment streams", () => {
+    const stableText = {
+      type: "text" as const,
+      text: "Stable analysis.",
+    };
+    const backgroundResult = {
+      type: "bg_agent_result" as const,
+      sessionId: "bg-stable",
+      task: "Review completed work",
+      status: "completed" as const,
+      resultText: "Large completed result remains stable.",
+    };
+    const active: ChatMessage = {
+      id: "assistant-split-streaming",
+      role: "assistant",
+      content: "",
+      timestamp: 1,
+      blocks: [
+        stableText,
+        backgroundResult,
+        { type: "text", text: "Streaming" },
+      ],
+    };
+    const recorder = new StreamingBaselineRecorder();
+    const baseProps = {
+      streaming: true,
+      streamingMetrics: recorder,
+      streamingMetricsSurface: "vscode-webview" as const,
+      streamingMetricsScope: "split-streaming",
+    };
+    const { rerender } = render(
+      h(TranscriptMessageList, { ...baseProps, messages: [active] }),
+    );
+    recorder.reset();
+
+    rerender(
+      h(TranscriptMessageList, {
+        ...baseProps,
+        messages: [
+          {
+            ...active,
+            blocks: [
+              stableText,
+              backgroundResult,
+              { type: "text", text: "Streaming update" },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(
+      recorder.summarize("vscode-webview", "split-streaming"),
+    ).toMatchObject({
+      historyRenders: 0,
+      unchangedHistoryRenders: 0,
+      activeRenders: 1,
+      historyCommits: 0,
+      unchangedHistoryCommits: 0,
+      activeCommits: 1,
+    });
+    cleanup();
+  });
+
   it("classifies split background results outside the active row", () => {
     const recorder = new StreamingBaselineRecorder();
     const messages: ChatMessage[] = [

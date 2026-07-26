@@ -142,6 +142,7 @@ export class RelaySnapshotProjector {
         defaultProjectId: checkpoint.catalog.defaultProjectId,
         repository: projectRepository(checkpoint, projectsById),
         sessions,
+        chatWorkspace: checkpoint.catalog.chatWorkspace ?? null,
         foreground,
       },
       background: projectBackground(checkpoint),

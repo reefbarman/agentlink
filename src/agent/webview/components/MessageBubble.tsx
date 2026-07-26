@@ -24,6 +24,7 @@ import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ThinkingContent } from "./ThinkingContent";
 import { ToolCallBlock } from "./ToolCallBlock";
+import { createPortal } from "preact/compat";
 import { getFinalMessageContinueAction } from "../../../shared/finalStatus";
 import { getStreamingActivity } from "./activityPresentation";
 import { normalizeProjectedToolName } from "../../../shared/chatProjection";
@@ -1011,52 +1012,54 @@ function UserAttachments({
           )}
         </div>
       )}
-      {selectedImage && (
-        <div
-          class="user-image-lightbox"
-          role="dialog"
-          aria-modal="true"
-          aria-label={selectedImage.name || "Attached image preview"}
-          onClick={() => setSelectedImage(null)}
-        >
+      {selectedImage &&
+        createPortal(
           <div
-            class="user-image-lightbox-content"
-            onClick={(event) => event.stopPropagation()}
+            class="user-image-lightbox"
+            role="dialog"
+            aria-modal="true"
+            aria-label={selectedImage.name || "Attached image preview"}
+            onClick={() => setSelectedImage(null)}
           >
-            <div class="user-image-lightbox-header">
-              <span class="user-image-lightbox-title">
-                {selectedImage.name || "Attached image"}
-              </span>
-              <a
-                class="icon-button user-image-lightbox-download"
-                href={selectedImage.src}
-                download={imageDownloadName(selectedImage)}
-                rel="noopener"
-                title="Download image"
-                aria-label="Download image"
-              >
-                <i class="codicon codicon-save" />
-              </a>
-              <button
-                class="icon-button user-image-lightbox-close"
-                type="button"
-                title="Close"
-                aria-label="Close image preview"
+            <div
+              class="user-image-lightbox-content"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div class="user-image-lightbox-header">
+                <span class="user-image-lightbox-title">
+                  {selectedImage.name || "Attached image"}
+                </span>
+                <a
+                  class="icon-button user-image-lightbox-download"
+                  href={selectedImage.src}
+                  download={imageDownloadName(selectedImage)}
+                  rel="noopener"
+                  title="Download image"
+                  aria-label="Download image"
+                >
+                  <i class="codicon codicon-save" />
+                </a>
+                <button
+                  class="icon-button user-image-lightbox-close"
+                  type="button"
+                  title="Close"
+                  aria-label="Close image preview"
+                  onClick={() => setSelectedImage(null)}
+                >
+                  <i class="codicon codicon-close" />
+                </button>
+              </div>
+              <img
+                class="user-image-lightbox-image"
+                src={selectedImage.src}
+                alt={selectedImage.name || imageAlt}
+                title="Click to close"
                 onClick={() => setSelectedImage(null)}
-              >
-                <i class="codicon codicon-close" />
-              </button>
+              />
             </div>
-            <img
-              class="user-image-lightbox-image"
-              src={selectedImage.src}
-              alt={selectedImage.name || imageAlt}
-              title="Click to close"
-              onClick={() => setSelectedImage(null)}
-            />
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }

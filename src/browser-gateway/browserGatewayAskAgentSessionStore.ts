@@ -239,6 +239,7 @@ export interface BrowserGatewayAskAgentPersistedSession {
   lastActiveAt: number;
   messages: ChatMessage[];
   nextMessageSequence: number;
+  generateImageApproved?: boolean;
   /** Server-only exact model replay. Never include this in browser snapshots. */
   privateModelHistory?: BrowserGatewayAskAgentPrivateModelHistory;
 }
@@ -408,6 +409,16 @@ export class BrowserGatewayAskAgentSessionStore {
 
   getActiveSessionId(): string {
     return this.getActiveSession().id;
+  }
+
+  isGenerateImageApproved(): boolean {
+    return this.getActiveSession().generateImageApproved === true;
+  }
+
+  approveGenerateImageForSession(now = Date.now()): void {
+    const session = this.getActiveSession(now);
+    session.generateImageApproved = true;
+    session.lastActiveAt = now;
   }
 
   listSessions(): BrowserGatewayAskAgentSessionSummary[] {

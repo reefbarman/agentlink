@@ -18,35 +18,11 @@ import {
 
 export type QuestionDetectionMode = "heuristic" | "agent" | "openai";
 
-/**
- * Resolve the question-detection mode, honoring the legacy boolean
- * `agentlink.questionDetection.llmEnabled` if the new `mode` has not been
- * explicitly configured.
- */
 export function getQuestionDetectionMode(): QuestionDetectionMode {
-  const cfg = vscode.workspace.getConfiguration("agentlink");
-  const modeInspect = cfg.inspect<QuestionDetectionMode>(
-    "questionDetection.mode",
-  );
-  const explicitMode =
-    modeInspect?.globalValue ??
-    modeInspect?.workspaceValue ??
-    modeInspect?.workspaceFolderValue ??
-    modeInspect?.globalLanguageValue ??
-    modeInspect?.workspaceLanguageValue ??
-    modeInspect?.workspaceFolderLanguageValue;
-  if (
-    explicitMode === "heuristic" ||
-    explicitMode === "agent" ||
-    explicitMode === "openai"
-  ) {
-    return explicitMode;
-  }
-
-  const legacyEnabled = cfg.get<boolean>("questionDetection.llmEnabled", false);
-  if (legacyEnabled) return "openai";
-
-  return "heuristic";
+  const mode = vscode.workspace
+    .getConfiguration("agentlink")
+    .get<QuestionDetectionMode>("questionDetection.mode", "heuristic");
+  return mode === "agent" || mode === "openai" ? mode : "heuristic";
 }
 
 export interface QuestionDetectionAgentContext {

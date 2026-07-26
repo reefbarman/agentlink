@@ -138,6 +138,11 @@ export const BROWSER_GATEWAY_SNAPSHOT_PARITY_CONTRACT = {
       "checkpoint",
       "owner_event",
     ),
+    chatWorkspace: covered(
+      "Projected into checkpoint.catalog.chatWorkspace as lightweight logical-tab summaries without transcript detail.",
+      "checkpoint",
+      "owner_event",
+    ),
     repository: partial(
       "Repository branch/dirty state is present, but project association is not represented.",
       "checkpoint",
