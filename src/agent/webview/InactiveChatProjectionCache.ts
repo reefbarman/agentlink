@@ -21,7 +21,9 @@ export class InactiveChatProjectionCache {
   take(sessionId: string): SessionExtensionMessage[] {
     const events = this.bySession.get(sessionId) ?? [];
     this.bySession.delete(sessionId);
-    return events.map((event) => structuredClone(event));
+    // append() already cloned these events, and deleting the entry transfers
+    // ownership to the active session replay path.
+    return events;
   }
 
   retainSessions(sessionIds: ReadonlySet<string>): void {

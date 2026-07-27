@@ -4002,6 +4002,41 @@ describe("ChatViewProvider session state sync", () => {
     );
   });
 
+  it("clears optimistic interjection readiness when registration is rejected", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = { id: "session-1", status: "idle" };
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+    } as never);
+    const postMessage = vi.fn();
+    (provider as unknown as { postMessage: typeof postMessage }).postMessage =
+      postMessage;
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(msg: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "agentInterjectQueuedMessage",
+      sessionId: "session-1",
+      queueId: "queue-1",
+      text: "interject this",
+    });
+
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "agentQueueInterjectionReady",
+      sessionId: "session-1",
+      queueId: "queue-1",
+      ready: false,
+    });
+  });
+
   it("pauses a pending interjection while its queued message is edited", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 

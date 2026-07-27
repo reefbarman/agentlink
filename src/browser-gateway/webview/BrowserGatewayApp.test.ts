@@ -2259,6 +2259,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
     await selectWorkspaceTab();
     fireEvent.click(await screen.findByTitle("Interject at next break"));
+    expect(screen.getByTitle("Ready to interject at next break")).toBeTruthy();
     await waitFor(() => expect(resolveInterjection).toBeTypeOf("function"));
     const askAgentTab = screen.getByRole("tab", { name: /Ask Agent/ });
     fireEvent.click(askAgentTab);
@@ -2650,6 +2651,190 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         String(input).includes("/api/relay/commands"),
       ),
     ).toBe(false);
+  });
+
+  it("keeps every visited instance's logical tabs visible in labeled groups", async () => {
+    const workspaceSnapshot = createGroupedSnapshot();
+    const workerSnapshot = createGroupedSnapshot();
+    workerSnapshot.session.foreground.sessionId = "worker-session-1";
+    workerSnapshot.session.foreground.title = "Worker foreground";
+    workerSnapshot.session.chatWorkspace = {
+      controllerEpoch: "worker-controller-1",
+      focusedTabId: "worker-tab-1",
+      tabs: [
+        {
+          tabId: "worker-tab-1",
+          displayNumber: 1,
+          label: "T1",
+          sessionId: "worker-session-1",
+          placement: "docked",
+          title: "Worker foreground",
+          status: "completed",
+          busy: false,
+        },
+        {
+          tabId: "worker-tab-2",
+          displayNumber: 2,
+          label: "T2",
+          sessionId: "worker-session-2",
+          placement: "docked",
+          title: "Worker detached",
+          status: "idle",
+          busy: false,
+        },
+      ],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+            {
+              instanceId: "instance-2",
+              workspaceName: "Worker",
+              workspacePath: "/worker",
+              url: "http://127.0.0.1:3334",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/ask-agent/session")) {
+        return jsonResponse(createAskAgentSessionResponse());
+      }
+      if (url.includes("/api/ui-state")) {
+        return jsonResponse(
+          url.includes("instanceId=instance-2")
+            ? workerSnapshot
+            : workspaceSnapshot,
+        );
+      }
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/slash-commands")) {
+        return jsonResponse({ commands: [] });
+      }
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { container } = render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    await screen.findByRole("tab", { name: /T2.*Detached chat/ });
+    fireEvent.click(await screen.findByRole("tab", { name: /Worker/ }));
+    await screen.findByRole("tab", { name: /T2.*Worker detached/ });
+
+    const groups = Array.from(
+      container.querySelectorAll<HTMLElement>(".browser-instance-group"),
+    );
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.textContent)).toEqual([
+      expect.stringMatching(/Worker.*T1.*T2/),
+      expect.stringMatching(/Workspace.*T1.*T2/),
+    ]);
+    expect(screen.getByRole("tab", { name: /T2.*Detached chat/ })).toBeTruthy();
+    expect(
+      screen.getByRole("tab", { name: /T2.*Worker detached/ }),
+    ).toBeTruthy();
+  });
+
+  it("refreshes detached session detail after accepted rapid sends", async () => {
+    const groupedSnapshot = createGroupedSnapshot();
+    let detailRequestCount = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/ask-agent/session")) {
+        return jsonResponse(createAskAgentSessionResponse());
+      }
+      if (url.includes("/api/ui-state")) return jsonResponse(groupedSnapshot);
+      if (url.includes("/api/session-detail")) {
+        detailRequestCount += 1;
+        return directSessionDetailResponse(
+          groupedSnapshot,
+          detailRequestCount === 1
+            ? "Detached before sends"
+            : "Detached after rapid sends",
+        );
+      }
+      if (url.includes("/api/send")) return jsonResponse({ ok: true });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/slash-commands")) {
+        return jsonResponse({ commands: [] });
+      }
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) {
+        return jsonResponse({ ok: true });
+      }
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    fireEvent.click(
+      await screen.findByRole("tab", { name: /T2.*Detached chat/ }),
+    );
+    await screen.findByText("Detached before sends");
+
+    const send = screen.getByTestId("trigger-send");
+    fireEvent.click(send);
+    fireEvent.click(send);
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.filter(([input]) =>
+          String(input).includes("/api/send"),
+        ),
+      ).toHaveLength(2);
+      expect(detailRequestCount).toBeGreaterThanOrEqual(2);
+      expect(screen.getByText("Detached after rapid sends")).toBeTruthy();
+    });
+    expect(
+      screen
+        .getByRole("tab", { name: /T2.*Detached chat/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
   });
 
   it("ignores detached detail resolved after another logical tab becomes active", async () => {

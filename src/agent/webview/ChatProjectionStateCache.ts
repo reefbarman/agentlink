@@ -33,24 +33,24 @@ export class ChatProjectionStateCache {
   restore(sessionId: string | null, shared: SharedProjectionFields): AppState {
     const cached = sessionId ? this.bySession.get(sessionId) : undefined;
     if (!cached) {
-      return {
-        ...structuredClone(initialState),
-        ...structuredClone(shared),
+      return structuredClone({
+        ...initialState,
+        ...shared,
         chatState: {
-          ...structuredClone(initialState.chatState),
+          ...initialState.chatState,
           sessionId,
         },
-      };
+      });
     }
     this.bySession.delete(sessionId!);
     this.bySession.set(sessionId!, cached);
-    return {
-      ...structuredClone(cached),
-      ...structuredClone(shared),
+    return structuredClone({
+      ...cached,
+      ...shared,
       debugInfo: null,
       systemPrompt: null,
       loadedInstructions: null,
-    };
+    });
   }
 
   retainSessions(sessionIds: ReadonlySet<string>): void {
@@ -74,5 +74,7 @@ function toSessionProjection(state: AppState): SessionProjectionState {
     loadedInstructions: _loadedInstructions,
     ...sessionState
   } = state;
-  return structuredClone(sessionState);
+  // Reducer states are immutable. Retain their nested data here and create the
+  // active session's sole writable copy when it is restored.
+  return sessionState;
 }

@@ -1505,7 +1505,8 @@ export function shouldDropSessionScopedEvent(
 export function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case "RESTORE_PROJECTION":
-      return structuredClone(action.state);
+      // The session cache returns a projection owned by the active reducer.
+      return action.state;
 
     case "SET_STATE":
       return {

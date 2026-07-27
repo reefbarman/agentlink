@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { InactiveChatProjectionCache } from "./InactiveChatProjectionCache.js";
 
@@ -46,6 +46,56 @@ describe("InactiveChatProjectionCache", () => {
         type: "agentTextDelta",
         sessionId: "session-2",
         text: "other",
+      },
+    ]);
+  });
+
+  it("clones events at ingress and transfers them without cloning again", () => {
+    const cache = new InactiveChatProjectionCache();
+    const event = {
+      type: "agentQueuedMessage" as const,
+      sessionId: "session-1",
+      queueId: "queue-1",
+      text: "queued",
+      displayText: "queued",
+      isSlashCommand: false,
+    };
+    const clone = vi.spyOn(globalThis, "structuredClone");
+
+    cache.append(event);
+    expect(clone).toHaveBeenCalledTimes(1);
+
+    const [taken] = cache.take("session-1");
+    expect(clone).toHaveBeenCalledTimes(1);
+    expect(taken).toEqual(event);
+    expect(taken).not.toBe(event);
+    expect(cache.size("session-1")).toBe(0);
+    clone.mockRestore();
+  });
+
+  it("isolates nested event payloads from later caller mutation", () => {
+    const cache = new InactiveChatProjectionCache();
+    const event = {
+      type: "agentTodoUpdate" as const,
+      sessionId: "session-1",
+      todos: [
+        {
+          id: "todo-1",
+          content: "original",
+          activeForm: "Working",
+          status: "in_progress" as const,
+          children: [],
+        },
+      ],
+    };
+
+    cache.append(event);
+    event.todos[0].content = "mutated";
+
+    expect(cache.take("session-1")).toEqual([
+      {
+        ...event,
+        todos: [{ ...event.todos[0], content: "original" }],
       },
     ]);
   });

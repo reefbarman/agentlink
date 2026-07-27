@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { initialState, type AppState } from "../../shared/chatProjection.js";
+import {
+  initialState,
+  reducer,
+  type AppState,
+} from "../../shared/chatProjection.js";
 import { ChatProjectionStateCache } from "./ChatProjectionStateCache.js";
 
 function stateFor(
@@ -79,6 +83,38 @@ describe("ChatProjectionStateCache", () => {
     expect(cache.restore("session-2", shared).approvalRequest?.id).toBe(
       "approval-2",
     );
+  });
+
+  it("clones a large projection only once when restoring it", () => {
+    const cache = new ChatProjectionStateCache();
+    const source = stateFor("session-large", { estimatedTotalUsed: 100 });
+    source.messages = [
+      {
+        id: "large-message",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "payload".repeat(100_000) }],
+      },
+    ];
+    const clone = vi.spyOn(globalThis, "structuredClone");
+
+    cache.save(source);
+    expect(clone).not.toHaveBeenCalled();
+
+    const restored = cache.restore("session-large", shared);
+    expect(clone).toHaveBeenCalledTimes(1);
+    expect(restored.messages).toEqual(source.messages);
+    expect(restored.messages).not.toBe(source.messages);
+
+    const updated = reducer(restored, { type: "TEXT_DELTA", text: " updated" });
+    expect(updated.messages[0].blocks).toEqual([
+      { type: "text", text: `${"payload".repeat(100_000)} updated` },
+    ]);
+    expect(cache.restore("session-large", shared).messages).toEqual(
+      source.messages,
+    );
+    clone.mockRestore();
   });
 
   it("drops closed sessions without affecting retained projections", () => {

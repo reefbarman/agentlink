@@ -77,6 +77,16 @@ function setupInterjectedMessage(
   });
   const queueId = interjectCalls[0].queueId as string;
   expect(queueId).toBeTruthy();
+  expect(
+    container
+      .querySelector(".queue-item-interject")
+      ?.classList.contains("active"),
+  ).toBe(true);
+  expect(
+    container
+      .querySelector(".queue-item")
+      ?.classList.contains("interjection-ready"),
+  ).toBe(true);
 
   // Extension confirms the pending interjection is registered.
   deliver({
@@ -90,6 +100,52 @@ function setupInterjectedMessage(
 }
 
 describe("queued interjection editing and removal", () => {
+  it("immediately marks and can pause an existing queued interjection", () => {
+    const vscodeApi = createVsCodeApi();
+    const { postMessage } = vscodeApi;
+    const { container, getByRole, getByTitle } = render(
+      <App vscodeApi={vscodeApi} />,
+    );
+
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        streaming: true,
+      },
+    });
+    deliver({
+      type: "agentQueuedMessage",
+      queueId: "queue-1",
+      text: "queued message",
+    });
+
+    fireEvent.click(getByTitle("Interject at next break"));
+
+    expect(findCalls(postMessage, "agentInterjectQueuedMessage")).toHaveLength(
+      1,
+    );
+    expect(getByTitle("Ready to interject at next break")).toBeTruthy();
+    expect(
+      container
+        .querySelector(".queue-item-interject")
+        ?.classList.contains("active"),
+    ).toBe(true);
+
+    fireEvent.click(getByRole("button", { name: "Edit" }));
+    expect(
+      findCalls(postMessage, "agentPauseQueuedMessageInterjection"),
+    ).toEqual([
+      {
+        command: "agentPauseQueuedMessageInterjection",
+        sessionId: "session-1",
+        queueId: "queue-1",
+      },
+    ]);
+  });
+
   it("re-registers the interjection with the edited text after an edit", () => {
     const vscodeApi = createVsCodeApi();
     const { postMessage } = vscodeApi;

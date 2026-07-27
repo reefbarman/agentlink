@@ -122,6 +122,7 @@ export interface RelaySessionDetailResponse {
 export interface RelayGatewayConnection {
   dispatchCommand: (
     command: BrowserGatewayOwnerCommandBody,
+    operationId?: string,
   ) => Promise<RelayCommandDispatchResult>;
   requestSessionDetail: (
     request: RelaySessionDetailRequest,
@@ -192,6 +193,7 @@ export function useRelayGatewayConnection(
   const dispatchCommand = useCallback(
     async (
       command: BrowserGatewayOwnerCommandBody,
+      operationId?: string,
     ): Promise<RelayCommandDispatchResult> => {
       if (!latest.current.enabled) return { handled: false };
       const manager = managerRef.current;
@@ -212,7 +214,7 @@ export function useRelayGatewayConnection(
       }
       return {
         handled: true,
-        operation: await manager.sendCommand({ command }),
+        operation: await manager.sendCommand({ command, operationId }),
       };
     },
     [],

@@ -6704,6 +6704,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               | undefined) ?? [],
         });
         if (!accepted) {
+          this.postMessage({
+            type: "agentQueueInterjectionReady",
+            sessionId: msg.sessionId as string,
+            queueId: msg.queueId as string,
+            ready: false,
+          });
           vscode.window.showInformationMessage(
             "The agent is no longer running — the message stays queued and is sent when you submit next.",
           );

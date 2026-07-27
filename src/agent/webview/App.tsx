@@ -1760,6 +1760,7 @@ export function App({
           ...(images.length > 0 ? { images } : {}),
           ...(documents.length > 0 ? { documents } : {}),
           ...(displayMedia ? { displayMedia } : {}),
+          ...(interject ? { interjectionReady: true } : {}),
           source: "vscode" as const,
         };
         messageQueueRef.current = [...messageQueueRef.current, queueItem];
@@ -1779,6 +1780,13 @@ export function App({
           displayMedia,
           source: "vscode",
         });
+        if (interject) {
+          dispatch({
+            type: "MARK_QUEUE_INTERJECTION_READY",
+            id: queueId,
+            ready: true,
+          });
+        }
         if (interject) {
           vscodeApi.postMessage({
             command: "agentInterjectQueuedMessage",
@@ -3098,6 +3106,17 @@ export function App({
                   });
                 }}
                 onInterject={(item) => {
+                  messageQueueRef.current = messageQueueRef.current.map(
+                    (queued) =>
+                      queued.id === item.id
+                        ? { ...queued, interjectionReady: true }
+                        : queued,
+                  );
+                  dispatch({
+                    type: "MARK_QUEUE_INTERJECTION_READY",
+                    id: item.id,
+                    ready: true,
+                  });
                   vscodeApi.postMessage({
                     command: "agentInterjectQueuedMessage",
                     sessionId: stateRef.current.sessionId,

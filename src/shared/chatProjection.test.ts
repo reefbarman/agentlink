@@ -176,9 +176,8 @@ describe("session projection isolation", () => {
       state: destination,
     });
 
-    expect(restored).toEqual(destination);
-    expect(restored).not.toBe(destination);
-    expect(restored.messageQueue).not.toBe(destination.messageQueue);
+    expect(restored).toBe(destination);
+    expect(restored.messageQueue).toBe(destination.messageQueue);
   });
 });
 

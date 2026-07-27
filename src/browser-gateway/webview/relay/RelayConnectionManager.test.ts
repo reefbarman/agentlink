@@ -543,6 +543,100 @@ describe("RelayConnectionManager", () => {
     manager.close();
   });
 
+  it("reports a caller-addressed send completion before its command response", async () => {
+    const sources: EventSourceFixture[] = [];
+    const commandResponse = deferredResponse();
+    const operations: Array<{
+      operationId: string;
+      kind: string;
+      state: string;
+    }> = [];
+    let commandRequest: { operationId: string } | undefined;
+    const fetch = vi.fn(
+      async (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        const path = String(input);
+        if (path.endsWith("/subscription")) {
+          return jsonResponse(subscription(), 202);
+        }
+        if (path.endsWith("/commands")) {
+          commandRequest = JSON.parse(String(init?.body));
+          return await commandResponse.promise;
+        }
+        throw new Error(`unexpected request: ${path}`);
+      },
+    );
+    const manager = new RelayConnectionManager({
+      store: new RelayOwnerStore(),
+      eventSourceFactory: (url) => {
+        const source = new EventSourceFixture(url);
+        sources.push(source);
+        return source;
+      },
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      onOperation: (operation) => operations.push(operation),
+    });
+
+    manager.selectOwner({ ownerId, ownerGenerationId });
+    manager.start();
+    sources[0]!.emit("hello", hello());
+    await flushPromises();
+
+    const sendPromise = manager.sendCommand({
+      operationId: "browser-send-1",
+      command: {
+        kind: "session.send",
+        sessionId: "session-2",
+        text: "hello",
+        detailHandles: [],
+      },
+    });
+    await vi.waitFor(() => expect(commandRequest).toBeDefined());
+    expect(commandRequest?.operationId).toBe("browser-send-1");
+
+    sources[0]!.emit("relay.operation", {
+      protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
+      helperGenerationId,
+      subscriptionId: "subscription-1",
+      ownerId,
+      ownerGenerationId,
+      operation: {
+        operationId: "browser-send-1",
+        kind: "session.send",
+        state: "completed",
+      },
+    });
+    expect(operations.at(-1)).toMatchObject({
+      operationId: "browser-send-1",
+      kind: "session.send",
+      state: "completed",
+    });
+
+    commandResponse.resolve(
+      jsonResponse(
+        {
+          ok: true,
+          ownerId,
+          ownerGenerationId,
+          operation: {
+            operationId: "browser-send-1",
+            kind: "session.send",
+            state: "accepted",
+          },
+        },
+        202,
+      ),
+    );
+    await expect(sendPromise).resolves.toMatchObject({
+      operationId: "browser-send-1",
+      kind: "session.send",
+      state: "accepted",
+    });
+    manager.close();
+  });
+
   it("rejects detached detail when the owner generation changes in flight", async () => {
     const sources: EventSourceFixture[] = [];
     const commandResponse = deferredResponse();
