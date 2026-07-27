@@ -1,6 +1,6 @@
 # AgentLink: an agent harness built into VS Code
 
-_Last updated: 2026-07-26._
+_Last updated: 2026-07-27._
 
 Coding agents have gotten remarkably good, and most of the tooling race has been about giving them more autonomy: more parallelism, more cloud, more hands-off execution. Autonomy is necessary — but it's not what makes an agent produce good work.
 
@@ -15,7 +15,7 @@ Most agent harnesses treat a codebase as a directory tree: grep for strings, rea
 - **Edits as diffs you can touch.** Changes open in a native diff view. Accept, reject — or fix something by hand, and your manual corrections flow back into the agent's context. Even format-on-save output is fed back so the agent learns your formatter.
 - **Real terminals.** Commands run in the integrated terminal you can see and interact with — named terminals, split groups, background processes — not a hidden subprocess.
 - **Structural awareness.** A budgeted repo map and per-module dependency views (imports, exports, reverse dependents) give the agent blast-radius awareness before it touches anything — no external index required.
-- **Agent work that fits the editor.** Independent chat tabs can keep multiple sessions moving without focus changes interrupting them, and any tab except the last docked one can move into a restorable editor panel when the work deserves its own group or window.
+- **Agent work that fits the editor.** Independent chat tabs keep multiple sessions available without focus changes interrupting them; read-only turns may run concurrently, while write-capable turns in one window currently serialize for workspace safety. Any tab except the last docked one can move into a restorable editor panel when the work deserves its own group or window. The browser remote reflects those same logical tabs in per-window groups, so you can supervise a different session without stealing focus or rearranging the editor.
 
 This is the harness's core: an agent with the editor's intelligence makes fewer wrong turns, and when it makes one, both of you find out immediately.
 

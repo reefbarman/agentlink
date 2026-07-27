@@ -1645,6 +1645,18 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "TOOL_START": {
+      if (
+        action.toolName === "ask_user" &&
+        state.messages.some((message) =>
+          message.blocks.some(
+            (block) =>
+              block.type === "tool_call" && block.id === action.toolCallId,
+          ),
+        )
+      ) {
+        return { ...state, statusOverride: null };
+      }
+
       if (action.parentCallId) {
         const messages = state.messages.map((message) => ({
           ...message,
@@ -2533,13 +2545,35 @@ export function reducer(state: AppState, action: AppAction): AppState {
         : state;
 
     case "SET_QUESTION": {
-      const messages = addQuestionContextMessage(
-        state.messages,
-        action.id,
-        action.context,
-      );
+      let messages = state.messages;
+      if (
+        action.toolCallId &&
+        !action.backgroundTask &&
+        !messages.some((message) =>
+          message.blocks.some(
+            (block) =>
+              block.type === "tool_call" && block.id === action.toolCallId,
+          ),
+        )
+      ) {
+        const all = ensureAssistant(messages);
+        const cloned = cloneLast(all);
+        cloned.last.blocks.push({
+          type: "tool_call",
+          id: action.toolCallId,
+          name: "ask_user",
+          inputJson: JSON.stringify({
+            context: action.context,
+            questions: action.questions,
+          }),
+          result: "",
+          complete: false,
+        });
+        messages = cloned.msgs;
+      }
+      messages = addQuestionContextMessage(messages, action.id, action.context);
       let toolCallId = action.toolCallId;
-      if (!toolCallId) {
+      if (!toolCallId && !action.backgroundTask) {
         for (
           let messageIdx = messages.length - 1;
           messageIdx >= 0;

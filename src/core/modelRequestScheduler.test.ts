@@ -1,9 +1,8 @@
-import { describe, expect, it } from "vitest";
-
 import {
   ModelRequestScheduler,
   normalizeMaxConcurrentModelRequests,
 } from "./modelRequestScheduler.js";
+import { describe, expect, it } from "vitest";
 
 describe("ModelRequestScheduler", () => {
   it("limits requests independently per provider", async () => {
@@ -18,28 +17,33 @@ describe("ModelRequestScheduler", () => {
     anthropic.release();
   });
 
-  it("admits interactive work immediately even when the provider is saturated", async () => {
-    const scheduler = new ModelRequestScheduler(1);
-    const active = await scheduler.acquire("codex", "background");
+  it("queues saturated interactive work ahead of background work", async () => {
+    let now = 100;
+    const scheduler = new ModelRequestScheduler(1, () => now);
+    const active = await scheduler.acquire("codex", "interactive");
     const backgroundPromise = scheduler.acquire("codex", "background");
+    const interactivePromise = scheduler.acquire("codex", "interactive");
 
-    const foreground = await scheduler.acquire("codex", "interactive");
-    expect(foreground).toMatchObject({ queued: false, waitMs: 0 });
-    expect(scheduler.hasCapacity("codex", "interactive")).toBe(true);
-
+    expect(scheduler.hasCapacity("codex", "interactive")).toBe(false);
+    let interactiveStarted = false;
     let backgroundStarted = false;
+    void interactivePromise.then(() => {
+      interactiveStarted = true;
+    });
     void backgroundPromise.then(() => {
       backgroundStarted = true;
     });
     await Promise.resolve();
+    expect(interactiveStarted).toBe(false);
     expect(backgroundStarted).toBe(false);
 
-    foreground.release();
-    // Interactive counted toward active, so background stays queued until the
-    // original background permit is released too.
-    await Promise.resolve();
-    expect(backgroundStarted).toBe(false);
+    now = 175;
     active.release();
+    const interactive = await interactivePromise;
+    expect(interactive).toMatchObject({ queued: true, waitMs: 75 });
+    expect(backgroundStarted).toBe(false);
+
+    interactive.release();
     const background = await backgroundPromise;
     background.release();
   });
@@ -61,11 +65,11 @@ describe("ModelRequestScheduler", () => {
     maintenance.release();
   });
 
-  it("removes aborted queued requests without consuming a permit", async () => {
+  it("removes aborted queued interactive requests without consuming a permit", async () => {
     const scheduler = new ModelRequestScheduler(1);
-    const active = await scheduler.acquire("codex", "background");
+    const active = await scheduler.acquire("codex", "interactive");
     const controller = new AbortController();
-    const queued = scheduler.acquire("codex", "background", controller.signal);
+    const queued = scheduler.acquire("codex", "interactive", controller.signal);
 
     controller.abort();
     await expect(queued).rejects.toMatchObject({ name: "AbortError" });

@@ -484,6 +484,111 @@ describe("ask_user result projection", () => {
     ]);
   });
 
+  it("reconstructs a missing ask_user tool call from the question request", () => {
+    let state = reducer(initialState, {
+      type: "SET_STATUS_OVERRIDE",
+      message: "Retrying…",
+    });
+    state = reducer(state, {
+      type: "SET_QUESTION",
+      id: "request-1",
+      toolCallId: "tool-ask-1",
+      context: "Choose.",
+      questions: [question],
+    });
+
+    expect(state.messages.flatMap((message) => message.blocks)).toContainEqual({
+      type: "tool_call",
+      id: "tool-ask-1",
+      name: "ask_user",
+      inputJson: JSON.stringify({ context: "Choose.", questions: [question] }),
+      result: "",
+      complete: false,
+    });
+
+    state = reducer(state, {
+      type: "SUBMIT_QUESTION",
+      id: "request-1",
+      answers: { choice: "B" },
+      notes: {},
+    });
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "tool-ask-1",
+      toolName: "ask_user",
+      input: { context: "Choose.", questions: [question] },
+    });
+
+    const blocks = state.messages.flatMap((message) => message.blocks);
+    expect(
+      blocks.filter(
+        (block) => block.type === "tool_call" && block.id === "tool-ask-1",
+      ),
+    ).toHaveLength(1);
+    expect(blocks).toContainEqual({
+      type: "question_answer",
+      toolCallId: "tool-ask-1",
+      items: [{ question: "Which option?", answer: "B" }],
+    });
+    expect(state.statusOverride).toBeNull();
+  });
+
+  it("does not synthesize a foreground tool call for a background question", () => {
+    const state = reducer(initialState, {
+      type: "SET_QUESTION",
+      id: "request-bg",
+      toolCallId: "tool-ask-bg",
+      context: "Background review needs input.",
+      questions: [question],
+      backgroundTask: "Review implementation",
+    });
+
+    expect(state.questionRequest).toMatchObject({
+      id: "request-bg",
+      toolCallId: "tool-ask-bg",
+      backgroundTask: "Review implementation",
+    });
+    expect(
+      state.messages
+        .flatMap((message) => message.blocks)
+        .some((block) => block.type === "tool_call"),
+    ).toBe(false);
+  });
+
+  it("does not infer a foreground tool call for an uncorrelated background question", () => {
+    let state = reducer(initialState, {
+      type: "TOOL_START",
+      toolCallId: "tool-ask-foreground",
+      toolName: "ask_user",
+      input: { context: "Foreground choice.", questions: [question] },
+    });
+    state = reducer(state, {
+      type: "SET_QUESTION",
+      id: "request-bg",
+      context: "Background review needs input.",
+      questions: [question],
+      backgroundTask: "Review implementation",
+    });
+
+    expect(state.questionRequest).toMatchObject({
+      id: "request-bg",
+      backgroundTask: "Review implementation",
+    });
+    expect(state.questionRequest).not.toHaveProperty("toolCallId");
+
+    state = reducer(state, {
+      type: "SUBMIT_QUESTION",
+      id: "request-bg",
+      answers: { choice: "B" },
+      notes: {},
+    });
+    expect(
+      state.messages
+        .flatMap((message) => message.blocks)
+        .some((block) => block.type === "question_answer"),
+    ).toBe(false);
+  });
+
   it("uses an explicit tool-call ID when multiple ask_user calls are present", () => {
     let state = reducer(initialState, {
       type: "TOOL_START",

@@ -81,11 +81,19 @@ export function ChatWorkspace({
                     onClick={() => onFocus(tab.tabId)}
                     title={`${tab.label}: ${tab.title ?? "New Chat"} — ${statusLabel}`}
                   >
-                    <span
-                      class={`chat-tab-status status-${tab.status}`}
-                      title={statusLabel}
-                      aria-label={statusLabel}
-                    />
+                    {tab.status === "idle" || tab.status === "completed" ? (
+                      <i
+                        class={`chat-tab-status status-${tab.status} codicon codicon-check`}
+                        title={statusLabel}
+                        aria-label={statusLabel}
+                      />
+                    ) : (
+                      <span
+                        class={`chat-tab-status status-${tab.status}`}
+                        title={statusLabel}
+                        aria-label={statusLabel}
+                      />
+                    )}
                     <span class="chat-tab-label">{tab.label}</span>
                     <span class="chat-tab-title">
                       {tab.title ?? "New Chat"}

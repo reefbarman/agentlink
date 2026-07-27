@@ -5592,7 +5592,7 @@ export function BrowserGatewayApp({
                       </span>
                       <span class="instance-tab-status">
                         <i
-                          class={`codicon codicon-${getInstanceStatusIcon(tabStatus.kind)}${tabStatus.kind === "working" ? " codicon-modifier-spin" : ""}`}
+                          class={`codicon codicon-${tabStatus.kind === "idle" ? "check" : getInstanceStatusIcon(tabStatus.kind)}${tabStatus.kind === "working" ? " codicon-modifier-spin" : ""}`}
                         />
                         <span>{tabStatus.label}</span>
                       </span>

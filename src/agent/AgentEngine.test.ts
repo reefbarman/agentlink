@@ -532,6 +532,84 @@ describe("AgentEngine", () => {
         expect.arrayContaining([expect.objectContaining({ type: "done" })]),
       );
     });
+
+    it("lets an opted-in background wait overlap a later ordered call", async () => {
+      const toolCalls = [
+        {
+          id: "background-result",
+          name: "get_background_result",
+          input: { sessionId: "background-session" },
+        },
+        { id: "terminal-cleanup", name: "close_terminals", input: {} },
+        { id: "later-read", name: "read_file", input: {} },
+      ];
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCount += 1;
+        if (streamCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: toolCalls.map((call) => ({
+              type: "tool_use" as const,
+              ...call,
+            })),
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      let releaseBackgroundResult!: () => void;
+      const backgroundResultGate = new Promise<void>((resolve) => {
+        releaseBackgroundResult = resolve;
+      });
+      const started: string[] = [];
+      const completed: string[] = [];
+      const session = await makeSession();
+      session.addUserMessage("wait for the agent and clean up terminals");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () =>
+          toolCalls.map((call) => ({
+            name: call.name,
+            description: call.name,
+            input_schema: { type: "object" },
+          })),
+        isParallelSafe: (name) =>
+          name === "get_background_result" || name === "read_file",
+        canOverlapLaterCall: (runningName, _runningInput, laterName) =>
+          runningName === "get_background_result" &&
+          laterName === "close_terminals",
+        executeTool: async (request) => {
+          started.push(request.name);
+          if (request.name === "get_background_result") {
+            await backgroundResultGate;
+          }
+          completed.push(request.name);
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+      });
+
+      const run = collectEvents(engine.run(session));
+      await vi.waitFor(() =>
+        expect(started).toEqual(["get_background_result", "close_terminals"]),
+      );
+      expect(completed).toEqual(["close_terminals"]);
+      expect(started).not.toContain("read_file");
+
+      releaseBackgroundResult();
+      await expect(run).resolves.toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "done" })]),
+      );
+      expect(completed).toEqual([
+        "close_terminals",
+        "get_background_result",
+        "read_file",
+      ]);
+    });
   });
 
   describe("mode switch turn boundary", () => {
@@ -4393,7 +4471,7 @@ describe("AgentEngine", () => {
       expect(session.estimatedInputUsed).toBe(12_000);
     });
 
-    it("admits foreground condense immediately on a saturated provider and releases its permit", async () => {
+    it("queues foreground condense on a saturated provider and releases its permit", async () => {
       mocks.mockSummarizeConversation.mockResolvedValue({
         messages: [{ role: "user", content: "summary", isSummary: true }],
         summary: "summary",
@@ -4411,9 +4489,7 @@ describe("AgentEngine", () => {
       const phases: Array<"queued_for_provider" | "running"> = [];
       const engine = new AgentEngine(registry);
 
-      // Foreground condense is interactive-priority work: it bypasses the
-      // provider cap instead of waiting behind the background permit.
-      await collectEvents(
+      const condense = collectEvents(
         engine.condenseSession(
           session,
           true,
@@ -4426,10 +4502,16 @@ describe("AgentEngine", () => {
           },
         ),
       );
-      expect(phases).toEqual(["running", "running"]);
-      expect(mocks.mockSummarizeConversation).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(phases).toEqual(["queued_for_provider"]);
+      });
+      expect(mocks.mockSummarizeConversation).not.toHaveBeenCalled();
 
       blocker.release();
+      await condense;
+      expect(phases).toEqual(["queued_for_provider", "running"]);
+      expect(mocks.mockSummarizeConversation).toHaveBeenCalledTimes(1);
+
       const nextPermit = await registry.requestScheduler.acquire(
         "mock",
         "background",

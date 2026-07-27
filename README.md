@@ -69,7 +69,7 @@ flowchart LR
 
 ### Core built-in agent features
 
-- **Independent chat tabs and editor pop-outs** — run multiple built-in agent sessions in stable VS Code chat tabs without switching interrupting active work. Any tab except the last docked tab can move into its own editor panel; popped layouts and session bindings restore across reloads, and closing a panel docks its tab again.
+- **Independent chat tabs and editor pop-outs** — run multiple built-in agent sessions in stable VS Code chat tabs without switching interrupting active work. Read-only turns can run concurrently; write-capable turns in the same window currently serialize across the shared workspace mutation domain. Any tab except the last docked tab can move into its own editor panel; popped layouts and session bindings restore across reloads, and closing a panel docks its tab again.
 - **Inline approvals in chat** — command, write, rename, MCP, and mode-switch approvals render in the built-in chat UI. The separate approval panel provides a focused review surface for pending operations.
 - **Session history and restore** — chat sessions are persisted and restored across VS Code reloads/startup.
 - **Checkpoints and revert** — create workspace checkpoints and revert later. Checkpoints are stored in AgentLink’s own shadow git repo under `.agentlink/checkpoints/`, separate from your project’s real git history.
@@ -1587,7 +1587,7 @@ Fetch a specific prompt template from an MCP server.
 AgentLink includes static routing policy for background agents (`src/agent/backgroundModelRouting.config.json`) with explainable outcomes.
 
 - **Default behavior**: non-review tasks stay on the foreground model when policy says `useForegroundModelByDefault`.
-- **Provider admission**: streaming agent turns and native web tool requests share a provider-aware scheduler. Foreground session requests are always admitted immediately — they never wait on the concurrency limit. Background agents, maintenance work, and native web tools share up to 24 active request slots per provider by default, configurable with `agentlink.provider.maxConcurrentRequests`; status-summary requests run only when that provider is otherwise idle. Active requests are not preempted, and lowering the setting lets existing requests finish before enforcing the new limit.
+- **Provider admission**: streaming agent turns and native web tool requests share a provider-aware scheduler. All requests consume the same per-provider capacity (24 active request slots by default, configurable with `agentlink.provider.maxConcurrentRequests`); when saturated, foreground sessions queue visibly with cancellation and are admitted ahead of background and maintenance work. Status-summary requests run only when that provider is otherwise idle. Active requests are not preempted, and lowering the setting lets existing requests finish before enforcing the new limit.
 - **Status summaries**: heuristic summaries are the default and make no model call. The optional `agent` and `openai` modes are traced as background-summary activity; same-provider `agent` summaries use maintenance-priority admission.
 - **Coordinator behavior**: background agents are intended for parallel lanes. Native background `ask_user` calls are routed first to the root foreground coordinator, which answers them with `respond_to_background_question` from existing task/delegation/workspace context or deliberately escalates with its own `ask_user` when human input is necessary. While blocked, the agent reports `phase: "awaiting_coordinator"` and the fleet UI says **Waiting on coordinator**. Use `get_background_status` for non-blocking progress and health telemetry while continuing foreground work. Judge quiet runs by `phase` and `idleMs`, not elapsed time alone; steer a useful run to return early or kill one that is no longer worth waiting for. Use `get_background_result` only when ready to block and integrate.
 - **Writable lanes**: background agents may write code/tests/docs when delegated a non-conflicting scope and remain subject to normal approval gates. Native children inherit the parent's effective command policy (including **Approve for Me**) plus session-scoped write, path, command, network, and MCP approvals at spawn; later approval-mode changes and newly granted parent approvals are also propagated to active descendants in that tab's agent tree. ACP children receive the same stored session snapshot, and inherited write/path authority is reused when an ACP edit request supplies complete structured file locations; provider-defined opaque command and MCP permission requests still require review. Background agents cannot launch or request worktrees. Child-only grants remain isolated, and revoking parent trust does not interrupt an already-running child. Use explicit owned/forbidden paths in the spawn message.
@@ -1826,11 +1826,11 @@ A shared local helper process serves the browser UI on a stable configured port 
 
 The helper-owned browser data plane is controlled by `agentlink.browserGateway.dataPlane`: `on` is the dogfood default and selects the helper relay/browser client, `shadow` dual-publishes while browsers stay on legacy traffic, and `off` restores the complete legacy snapshot/proxy client. The helper remains authoritative across open VS Code windows: any explicitly configured `off` window forces the effective helper mode to `off`, while `shadow` takes precedence over `on`. A stale or version-skewed registry record that does not advertise a recognized mode also fails safely to `off` and is logged by the helper. Restart the affected VS Code windows/helper after changing the mode so all protocol-v1 participants use the same extension build.
 
-When multiple VS Code windows are open, each registers with the helper so the browser can switch between them by instance from a single URL. The per-window API/SSE bridge remains available during staged coexistence as the complete legacy rollback path.
+When multiple VS Code windows are open, each registers with the helper so the browser can switch between them from a single URL. The browser keeps **Ask Agent** pinned above non-collapsible, color-coded instance/workspace groups that contain each window's T1/T2+ logical chat tabs. Selecting a browser tab is client-local and routes by the owning instance, tab, and session without changing VS Code focus or editor layout; docked and popped-out tabs are both reflected in their owning group. The per-window API/SSE bridge remains available during staged coexistence as the complete legacy rollback path.
 
 The browser surface supports:
 
-- live transcript viewing and send, including slash-command autocomplete backed by the same registry as VS Code
+- live transcript viewing and send for the selected logical tab, including slash-command autocomplete backed by the same registry as VS Code
 - approvals and structured questions as chat-pane cards
 - background task visibility
 - read-only file diff review in the Review pane for pending write-tool changes
@@ -1843,7 +1843,7 @@ The browser surface supports:
 
 The Review pane is intentionally diff-only: it shows pending file changes from write tools in a read-only Monaco diff viewer and does not duplicate approval or question cards from the chat pane. Pending diffs are selected from a VS Code-like file-tab strip, and the editor uses captured VS Code CSS theme variables for tab/editor/diff chrome plus Monaco language tokenization for syntax highlighting. Exact custom theme token colors are best-effort today because the gateway receives CSS variables, not the full resolved VS Code TextMate token color rules.
 
-It is **not** a full browser IDE — diff editing/apply and terminal interaction intentionally stay in VS Code. The browser does not emulate the integrated terminal; command output is available from the `execute_command` tool-call result in the chat transcript. The gateway is designed for local/dev use; treat it as MVP-grade rather than final-hardened.
+It is **not** a full browser IDE — diff editing/apply and terminal interaction intentionally stay in VS Code. The browser also does not create, close, reorder, dock, or pop out VS Code logical tabs; those layout and lifecycle controls remain in the owning VS Code window. The browser does not emulate the integrated terminal; command output is available from the `execute_command` tool-call result in the chat transcript. The gateway is designed for local/dev use; treat it as MVP-grade rather than final-hardened.
 
 ## Multi-Window Support
 
@@ -1851,7 +1851,7 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 
 - **Correct window routing** — diffs, approvals, command execution, and file access happen in the window that owns the workspace.
 - **Workspace-scoped identity** — instance IDs are persisted per workspace window so multiple open windows remain distinct.
-- **Shared browser entry point** — the helper routes browser actions to the selected healthy VS Code instance.
+- **Shared browser entry point** — the helper groups every healthy window's logical tabs and routes browser actions to the selected owning instance and session without stealing VS Code focus.
 
 ## Extension Settings
 
@@ -1873,7 +1873,7 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 | `agentlink.modelCondenseThresholds`            | `{}`                       | Per-model condense thresholds for the built-in agent                                                                                        |
 | `agentlink.codexStatefulResponses`             | `true`                     | Chain OpenAI/Codex Responses API turns with `previous_response_id` when available                                                           |
 | `agentlink.codexStoreResponses`                | `false`                    | Opt into OpenAI server-side response storage for stateful Codex/API-key sessions                                                            |
-| `agentlink.provider.maxConcurrentRequests`     | `24`                       | Max simultaneous background model requests per provider; foreground turns bypass the limit (range 1–128)                                    |
+| `agentlink.provider.maxConcurrentRequests`     | `24`                       | Max simultaneous model requests per provider; queued foreground turns take priority (range 1–128)                                           |
 | `agentlink.openaiCompatible.baseUrl`           | `http://127.0.0.1:1234/v1` | OpenAI-compatible helper endpoint for optional question detection/background summaries                                                      |
 | `agentlink.openaiCompatible.model`             | `""`                       | Helper endpoint model id; empty lets compatible local servers choose                                                                        |
 | `agentlink.openaiCompatible.apiKey`            | `""`                       | Optional helper endpoint Bearer token                                                                                                       |

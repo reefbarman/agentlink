@@ -91,34 +91,48 @@ body {
 }
 
 .chat-tab-status {
+  position: relative;
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+
+.chat-tab-status:not(.codicon)::before {
+  position: absolute;
+  top: 2px;
+  left: 2px;
   width: 7px;
   height: 7px;
-  flex-shrink: 0;
   border-radius: 50%;
   background: var(--vscode-descriptionForeground);
   opacity: 0.6;
+  content: "";
 }
 
-.chat-tab-status.status-streaming {
+.chat-tab-status.status-streaming::before {
   background: #4ec9b0;
   box-shadow: 0 0 0 2px color-mix(in srgb, #4ec9b0 20%, transparent);
+  opacity: 1;
 }
 
-.chat-tab-status.status-queued_for_provider,
-.chat-tab-status.status-queued_for_workspace_write {
+.chat-tab-status.status-queued_for_provider::before,
+.chat-tab-status.status-queued_for_workspace_write::before {
   background: var(--vscode-charts-yellow, #cca700);
 }
 
-.chat-tab-status.status-needs_input {
+.chat-tab-status.status-needs_input::before {
   background: var(--vscode-charts-orange, #d18616);
 }
 
-.chat-tab-status.status-failed {
+.chat-tab-status.status-failed::before {
   background: var(--vscode-errorForeground, #f14c4c);
 }
 
-.chat-tab-status.status-completed {
-  background: var(--vscode-charts-green, #89d185);
+.chat-tab-status.status-idle.codicon,
+.chat-tab-status.status-completed.codicon {
+  color: var(--vscode-charts-green, #89d185);
+  font-size: 11px;
+  opacity: 1;
 }
 
 .chat-tab-label {

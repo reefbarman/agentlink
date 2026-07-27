@@ -198,6 +198,48 @@ describe("AgentSessionManager host injection", () => {
     expect(unavailable.terminalProvider).toBeUndefined();
   });
 
+  it("forwards background question tool-call identity through the manager wrapper", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    (session as any).background = true;
+    const onQuestion = vi.fn().mockResolvedValue({
+      answers: { choice: "A" },
+      notes: {},
+    });
+    const overrides = (mgr as any).buildBackgroundInteractionOverrides(
+      session,
+      "Review implementation",
+      { onQuestion },
+    );
+    const questions = [
+      {
+        id: "choice",
+        type: "multiple_choice",
+        question: "Which option?",
+        options: ["A", "B"],
+        recommended: "A",
+      },
+    ];
+
+    await overrides.onQuestion(
+      "Choose.",
+      questions,
+      session.id,
+      undefined,
+      undefined,
+      "tool-call-background-1",
+    );
+
+    expect(onQuestion).toHaveBeenCalledWith(
+      "Choose.",
+      questions,
+      session.id,
+      "Review implementation",
+      undefined,
+      "tool-call-background-1",
+    );
+  });
+
   it("acquires and marks a mutation lease at a late mutating boundary", async () => {
     const coordinator = new WorkspaceMutationCoordinator(undefined, {
       createEpoch: () => "test-epoch",
@@ -2437,6 +2479,38 @@ describe("AgentSessionManager manual condense", () => {
     expect(onEvent).not.toHaveBeenCalledWith(
       session.id,
       expect.objectContaining({ type: "text_delta" }),
+    );
+    expect(session.status).toBe("idle");
+  });
+
+  it("does not report an aborted manual condense as an error", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    session.status = "idle";
+    (session as any).loadedSkills = new Set<string>();
+    (session as any).createAbortController = vi.fn(() => {
+      const controller = new AbortController();
+      controller.abort();
+      return controller;
+    });
+    (mgr as any).foregroundId = session.id;
+    const onEvent = vi.fn();
+    mgr.onEvent = onEvent;
+    const engine = {
+      condenseSession: vi.fn(async function* () {
+        yield { type: "condense_start", isAutomatic: false };
+        throw new DOMException("Model request admission aborted", "AbortError");
+      }),
+      run: vi.fn(async function* () {}),
+      isOverCondenseThreshold: vi.fn(() => false),
+    };
+    (mgr as any).host.createEngine = vi.fn(() => engine);
+
+    await mgr.condenseCurrentSession();
+
+    expect(onEvent).not.toHaveBeenCalledWith(
+      session.id,
+      expect.objectContaining({ type: "condense_error" }),
     );
     expect(session.status).toBe("idle");
   });

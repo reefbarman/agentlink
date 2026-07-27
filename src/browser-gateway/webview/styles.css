@@ -447,6 +447,10 @@ textarea {
   color: var(--ag-muted);
 }
 
+.instance-tab-idle .instance-tab-status .codicon-check {
+  color: var(--vscode-charts-green, #89d185);
+}
+
 .instance-tab-working .instance-tab-status .codicon {
   color: var(--ag-accent);
 }

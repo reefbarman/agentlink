@@ -2194,6 +2194,13 @@ export function createAgentToolRuntime(
             false)
         : false;
     },
+    canOverlapLaterCall(runningToolName, _runningInput, laterToolName) {
+      return (
+        !ctx.isBackgroundSession &&
+        runningToolName === "get_background_result" &&
+        laterToolName === "close_terminals"
+      );
+    },
     getToolCallTracker() {
       return ctx.toolCallTracker;
     },

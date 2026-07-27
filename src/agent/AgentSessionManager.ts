@@ -5105,8 +5105,10 @@ export class AgentSessionManager {
       }
       this.saveSession(session.id);
     } catch (err: unknown) {
-      const error = err instanceof Error ? err.message : String(err);
-      this.recordAndEmitEvent(session.id, { type: "condense_error", error });
+      if (!signal.aborted) {
+        const error = err instanceof Error ? err.message : String(err);
+        this.recordAndEmitEvent(session.id, { type: "condense_error", error });
+      }
     } finally {
       this.releaseSessionToolContext(session.id, requestToolContext);
       session.status = "idle";
@@ -6551,6 +6553,7 @@ export class AgentSessionManager {
       backgroundSessionId,
       _backgroundTask,
       pendingQuestionRecovery,
+      toolCallId,
     ) => {
       const coordinator = this.getBackgroundQuestionCoordinator(session);
       if (!coordinator) {
@@ -6566,6 +6569,7 @@ export class AgentSessionManager {
           backgroundSessionId,
           task,
           pendingQuestionRecovery,
+          toolCallId,
         );
       }
 
@@ -6584,6 +6588,7 @@ export class AgentSessionManager {
             backgroundSessionId,
             task,
             pendingQuestionRecovery,
+            toolCallId,
           ),
       });
     };

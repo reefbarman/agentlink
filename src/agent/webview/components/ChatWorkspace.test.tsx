@@ -62,6 +62,43 @@ describe("ChatWorkspace", () => {
     ).toBe("tab-2:session-2");
   });
 
+  it("renders a check for completed tabs and keeps running tabs as activity dots", () => {
+    const { container } = render(
+      <ChatWorkspace
+        snapshot={{
+          ...snapshot,
+          tabs: [
+            { ...snapshot.tabs[0]!, status: "completed", busy: false },
+            { ...snapshot.tabs[1]!, status: "streaming", busy: true },
+            {
+              ...snapshot.tabs[0]!,
+              tabId: "tab-3",
+              sessionId: "session-3",
+              displayNumber: 3,
+              label: "T3",
+              title: "Idle task",
+              status: "idle",
+              busy: false,
+            },
+          ],
+        }}
+        onFocus={vi.fn()}
+        onNewTab={vi.fn()}
+        onClose={vi.fn()}
+        onReorder={vi.fn()}
+      >
+        pane
+      </ChatWorkspace>,
+    );
+
+    expect(screen.getByLabelText("Completed").classList).toContain(
+      "codicon-check",
+    );
+    expect(screen.getByLabelText("Idle").classList).toContain("codicon-check");
+    expect(screen.getByLabelText("Running").classList).not.toContain("codicon");
+    expect(container.querySelector(".status-streaming")).toBeTruthy();
+  });
+
   it("routes focus, pop-out, close, New Tab, and drag reorder actions", () => {
     const onFocus = vi.fn();
     const onPopOut = vi.fn();

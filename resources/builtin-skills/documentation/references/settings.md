@@ -12,7 +12,7 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 - `thinkingBudget`, `showThinking` — extended-thinking budget and UI visibility
 - `defaultMode` — mode for new sessions
 - `anthropic.dynamicModelCapabilities` — refresh Anthropic model metadata from the API
-- `provider.maxConcurrentRequests` — cap on simultaneous background model requests per provider (foreground turns are always admitted immediately)
+- `provider.maxConcurrentRequests` — cap on simultaneous model requests per provider; queued foreground requests take priority over background and maintenance work
 
 ## Context condensing
 

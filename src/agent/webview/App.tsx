@@ -993,6 +993,7 @@ export function App({
           dispatch({
             type: "SET_QUESTION",
             id: msg.id,
+            toolCallId: msg.toolCallId,
             context: msg.context,
             questions: msg.questions,
             ...(msg.backgroundTask

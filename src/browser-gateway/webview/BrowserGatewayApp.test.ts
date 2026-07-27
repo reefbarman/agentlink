@@ -2623,6 +2623,10 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       expect(t1.getAttribute("aria-selected")).toBe("true");
     });
     expect(t2.getAttribute("aria-selected")).toBe("false");
+    expect(
+      t1.querySelector(".instance-tab-status .codicon-check"),
+    ).toBeTruthy();
+    expect(t2.querySelector(".instance-tab-status .codicon-check")).toBeNull();
     expect(screen.queryByRole("region", { name: "Workspace" })).toBeNull();
 
     fireEvent.click(t2);

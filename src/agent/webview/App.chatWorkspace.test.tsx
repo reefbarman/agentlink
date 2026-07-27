@@ -136,6 +136,31 @@ describe("App chat workspace integration", () => {
     ]);
   });
 
+  it("renders ask_user from an explicitly correlated question request", () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+
+    deliver({
+      type: "agentQuestionRequest",
+      sessionId: "session-1",
+      id: "question-a",
+      toolCallId: "tool-ask-a",
+      context: "Need a decision.",
+      questions: [
+        {
+          id: "continue",
+          type: "yes_no",
+          question: "Continue?",
+        },
+      ],
+    });
+
+    expect(screen.getByText("Continue?")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^ask_user/ })).toBeTruthy();
+  });
+
   it("routes question cards to their owning tab", async () => {
     const vscodeApi = createVsCodeApi();
     render(<App vscodeApi={vscodeApi} />);

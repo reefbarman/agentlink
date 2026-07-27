@@ -433,6 +433,51 @@ describe("READ_ONLY_TOOLS", () => {
     expect(READ_ONLY_TOOLS.has("set_task_status")).toBe(false);
   });
 
+  it("only overlaps foreground background-result waits with terminal cleanup", () => {
+    const runtime = createAgentToolRuntime(mockCtx);
+    const canOverlap = runtime.canOverlapLaterCall;
+
+    expect(canOverlap).toBeDefined();
+    expect(
+      canOverlap?.(
+        "get_background_result",
+        { sessionId: "bg-1" },
+        "close_terminals",
+        {},
+      ),
+    ).toBe(true);
+    expect(
+      canOverlap?.(
+        "get_background_result",
+        { sessionId: "bg-1" },
+        "kill_background_agent",
+        { sessionId: "bg-2" },
+      ),
+    ).toBe(false);
+    expect(
+      canOverlap?.(
+        "get_background_result",
+        { sessionId: "bg-1" },
+        "read_file",
+        {},
+      ),
+    ).toBe(false);
+    expect(canOverlap?.("read_file", {}, "close_terminals", {})).toBe(false);
+
+    const backgroundRuntime = createAgentToolRuntime({
+      ...mockCtx,
+      isBackgroundSession: true,
+    });
+    expect(
+      backgroundRuntime.canOverlapLaterCall?.(
+        "get_background_result",
+        { sessionId: "bg-1" },
+        "close_terminals",
+        {},
+      ),
+    ).toBe(false);
+  });
+
   it("uses per-tool MCP parallel safety for direct and deferred calls", () => {
     const isToolParallelSafe = vi.fn(
       (serverName: string, toolName: string) =>

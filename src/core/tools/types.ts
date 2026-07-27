@@ -144,6 +144,16 @@ export interface AgentToolRuntime {
   listTools(request: AgentToolListRequest): CoreToolDefinition[];
   executeTool(request: AgentToolExecutionRequest): Promise<ToolResult>;
   isParallelSafe(toolName: string, input?: Record<string, unknown>): boolean;
+  /**
+   * Whether a running parallel-safe call may remain in flight while a later
+   * call executes. Omitted means later calls wait for prior work.
+   */
+  canOverlapLaterCall?(
+    runningToolName: string,
+    runningInput: Record<string, unknown>,
+    laterToolName: string,
+    laterInput: Record<string, unknown>,
+  ): boolean;
   getToolCallTracker?(): AgentToolCallTracker | undefined;
   getConnectedMcpToolDefs?(): CoreToolDefinition[];
   getMcpToolDisclosureMode?(

@@ -2477,12 +2477,39 @@ export class AgentEngine {
       onToolComplete?.(callResult);
     };
 
-    // Preserve model order with exclusive barriers: adjacent parallel-safe
-    // calls may overlap, while every non-parallel call waits for prior work and
-    // blocks later work. This matches Codex's shared/exclusive dispatch gate.
+    const pendingOverlaps = new Map<
+      number,
+      { call: ToolUseBlock; promise: Promise<void> }
+    >();
+    const canOverlapLaterCall = (
+      runningCall: ToolUseBlock,
+      laterCall: ToolUseBlock,
+    ): boolean =>
+      this.toolRuntime?.canOverlapLaterCall?.(
+        runningCall.name,
+        runningCall.input as Record<string, unknown>,
+        laterCall.name,
+        laterCall.input as Record<string, unknown>,
+      ) ?? false;
+    const awaitPendingBarriers = async (
+      laterCall: ToolUseBlock,
+    ): Promise<void> => {
+      const barriers: Promise<void>[] = [];
+      for (const [index, pending] of pendingOverlaps) {
+        if (canOverlapLaterCall(pending.call, laterCall)) continue;
+        pendingOverlaps.delete(index);
+        barriers.push(pending.promise);
+      }
+      await Promise.all(barriers);
+    };
+
+    // Preserve model order with exclusive barriers by default. A runtime may
+    // explicitly let a pending parallel-safe call overlap a later ordered call;
+    // ordered calls themselves still execute one at a time.
     let nextIndex = 0;
     while (nextIndex < calls.length && !signal.aborted) {
       const call = calls[nextIndex];
+      await awaitPendingBarriers(call);
       const parallelSafe =
         this.toolRuntime?.isParallelSafe(
           call.name,
@@ -2505,7 +2532,26 @@ export class AgentEngine {
           batch.push(nextIndex);
           nextIndex += 1;
         }
-        await Promise.all(batch.map((index) => executeAtIndex(index)));
+
+        const nextOrderedCall = calls[nextIndex];
+        const batchPromises = batch.map((index) => ({
+          index,
+          call: calls[index],
+          promise: executeAtIndex(index),
+        }));
+        const barriers: Promise<void>[] = [];
+        for (const pending of batchPromises) {
+          if (
+            nextOrderedCall &&
+            canOverlapLaterCall(pending.call, nextOrderedCall)
+          ) {
+            void pending.promise.catch(() => {});
+            pendingOverlaps.set(pending.index, pending);
+          } else {
+            barriers.push(pending.promise);
+          }
+        }
+        await Promise.all(barriers);
         continue;
       }
 
@@ -2533,6 +2579,10 @@ export class AgentEngine {
       }
       break;
     }
+
+    await Promise.all(
+      [...pendingOverlaps.values()].map(({ promise }) => promise),
+    );
 
     if (signal.aborted) {
       for (let i = 0; i < resultSlots.length; i++) {

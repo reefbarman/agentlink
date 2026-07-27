@@ -42,10 +42,9 @@ export function normalizeMaxConcurrentModelRequests(value: unknown): number {
 
 /**
  * Admission control shared by all model requests using one provider registry.
- * Interactive (foreground) requests are always admitted immediately — a user
- * turn must never wait behind fleet or maintenance work. The concurrency cap
- * applies to background work; queued work is admitted by priority and then
- * FIFO order. Active requests are never preempted.
+ * Every request consumes provider capacity; queued work is admitted by priority
+ * and then FIFO order, so interactive turns run before background or maintenance
+ * work when capacity becomes available. Active requests are never preempted.
  */
 export class ModelRequestScheduler {
   private readonly queues = new Map<string, ProviderQueue>();
@@ -86,7 +85,10 @@ export class ModelRequestScheduler {
     providerId: string,
     priority: ModelRequestPriority = "background",
   ): boolean {
-    return this.canAdmit(this.getQueue(providerId), priority);
+    return this.canAdmit(
+      this.queues.get(providerId) ?? { active: 0, pending: [] },
+      priority,
+    );
   }
 
   acquire(
@@ -202,9 +204,6 @@ export class ModelRequestScheduler {
     queue: ProviderQueue,
     priority: ModelRequestPriority,
   ): boolean {
-    // Foreground turns are never gated: they still count toward `active` (so
-    // background admission sees the load) but are admitted even past the cap.
-    if (priority === "interactive") return true;
     if (queue.active >= this.maxConcurrentPerProvider) return false;
     // Status summarization and other maintenance should never consume provider
     // capacity alongside user-visible work. It runs only when the provider is
