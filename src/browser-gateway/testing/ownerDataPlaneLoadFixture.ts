@@ -745,6 +745,17 @@ function updateSources(
           requestId: `load-interaction-${index}`,
           kind: "approval",
           backgroundTask: "Load approval",
+          payload: {
+            approval: {
+              id: `load-interaction-${index}`,
+              kind: "command",
+              command: "npm test",
+            },
+            question: null,
+            questionProgress: null,
+            formElicitation: null,
+            urlElicitation: null,
+          },
         };
     sources.fire("ui");
     return;

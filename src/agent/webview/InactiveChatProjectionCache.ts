@@ -8,10 +8,6 @@ export class InactiveChatProjectionCache {
   constructor(private readonly maxEventsPerSession = 500) {}
 
   append(message: SessionExtensionMessage): void {
-    if (message.type === "agentDone") {
-      this.bySession.delete(message.sessionId);
-      return;
-    }
     const events = this.bySession.get(message.sessionId) ?? [];
     if (!coalesceDelta(events, message)) {
       events.push(structuredClone(message));
@@ -25,7 +21,9 @@ export class InactiveChatProjectionCache {
   take(sessionId: string): SessionExtensionMessage[] {
     const events = this.bySession.get(sessionId) ?? [];
     this.bySession.delete(sessionId);
-    return events.map((event) => structuredClone(event));
+    // append() already cloned these events, and deleting the entry transfers
+    // ownership to the active session replay path.
+    return events;
   }
 
   retainSessions(sessionIds: ReadonlySet<string>): void {

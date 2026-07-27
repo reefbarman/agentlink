@@ -154,6 +154,8 @@ export interface PersistedFleetMetadata {
   partialResult?: string;
   /** Whether the provider/engine classified a failed run as retryable. */
   agentRetryable?: boolean;
+  /** Timestamp when a running child was first recovered as reload-interrupted. */
+  reloadInterruptionRecordedAt?: number;
   /** Timestamp when the terminal result was surfaced in the parent transcript. */
   resultAnnouncedAt?: number;
   goalId?: string;

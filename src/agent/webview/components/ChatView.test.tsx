@@ -9,6 +9,7 @@ import {
   within,
 } from "@testing-library/preact";
 
+import { BgAgentResultBlock } from "./BgAgentResultBlock";
 import type { ChatMessage } from "../types";
 import { ChatView } from "./ChatView";
 import { TranscriptView } from "./TranscriptView";
@@ -144,6 +145,40 @@ describe("ChatView message windowing", () => {
     expect(screen.getByText("Tasks 0/1")).toBeTruthy();
     expect(screen.getAllByText("Reviewing implementation")).toHaveLength(2);
     expect(screen.getByText("Waiting for provider…")).toBeTruthy();
+  });
+
+  it("shows the resolved provider and model in background transcript and result headers", () => {
+    const { unmount } = render(
+      h(TranscriptView, {
+        task: "Review implementation",
+        sessionId: "background-1",
+        messages: makeMessages(1),
+        runtimeStatus: {
+          phase: "responding",
+          resolvedProvider: "acp",
+          resolvedModel: "acp:claude",
+        },
+        onClose: vi.fn(),
+      }),
+    );
+
+    expect(
+      screen.getByText("Review implementation — acp / acp:claude"),
+    ).toBeTruthy();
+    unmount();
+
+    render(
+      h(BgAgentResultBlock, {
+        sessionId: "background-1",
+        task: "Review implementation",
+        status: "completed",
+        resultText: "No issues found.",
+        resolvedProvider: "acp",
+        resolvedModel: "acp:claude",
+      }),
+    );
+
+    expect(screen.getByText("acp / acp:claude")).toBeTruthy();
   });
 
   it("cancels pending bottom scrolling before revealing earlier history", () => {

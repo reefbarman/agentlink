@@ -35,6 +35,7 @@ import type {
   BrowserGatewaySnapshotPublication,
 } from "./BrowserGatewayService.js";
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
+import { parseChatTabActionAddress } from "../agent/chatTabProtocol.js";
 import type { DecisionMessage } from "../approvals/webview/types.js";
 import { isCommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
@@ -46,6 +47,7 @@ import {
   type BrowserGatewayRouteErrorPolicy,
   type BrowserGatewayRouteMatch,
 } from "./browserGatewayHttpRouter.js";
+import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./dataPlane/limits.js";
 import { readJsonBody } from "./nodeHttpPrimitives.js";
 import { SseHub, type SsePublication } from "./SseHub.js";
 import {
@@ -67,6 +69,7 @@ export type BrowserGatewayInstanceListItem = Omit<
 const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
 const REGISTRY_HEARTBEAT_INTERVAL_MS = 10_000;
 const MAX_BROWSER_DIFF_DETAIL_CHARS = 2_000_000;
+const MAX_SESSION_DETAIL_ID_CHARS = 256;
 
 export class BrowserGatewayServer implements vscode.Disposable {
   private server: http.Server | null = null;
@@ -342,6 +345,13 @@ export class BrowserGatewayServer implements vscode.Disposable {
             this.gatewayService.getInstanceStatusSummary(),
           );
         },
+        none,
+        ({ req }) => this.isAuthorized(req),
+      ),
+      route(
+        "GET",
+        pathExact("/api/session-detail"),
+        ({ rawUrl, res }) => this.handleSessionDetailRequest(rawUrl, res),
         none,
         ({ req }) => this.isAuthorized(req),
       ),
@@ -1356,10 +1366,17 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const result = await this.chatViewProvider.submitBrowserModeSwitch(
-      body.mode,
-      projectId,
-    );
+    const result =
+      typeof body.sessionId === "string" && body.sessionId.trim()
+        ? await this.chatViewProvider.submitBrowserModeSwitch(
+            body.mode,
+            projectId,
+            sessionId,
+          )
+        : await this.chatViewProvider.submitBrowserModeSwitch(
+            body.mode,
+            projectId,
+          );
     this.writeJson(res, result.approved ? 200 : 409, result);
   }
 
@@ -1470,15 +1487,18 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     const body = (await readJsonBody(req)) as {
       model?: string;
+      sessionId?: unknown;
     };
     if (typeof body?.model !== "string" || !body.model.trim()) {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
     }
 
-    const result = await this.chatViewProvider.submitBrowserSetModel(
-      body.model,
-    );
+    const sessionId = this.parseOptionalSessionId(body.sessionId, res);
+    if (sessionId === false) return;
+    const result = sessionId
+      ? await this.chatViewProvider.submitBrowserSetModel(body.model, sessionId)
+      : await this.chatViewProvider.submitBrowserSetModel(body.model);
     this.writeJson(
       res,
       result.ok ? 200 : 400,
@@ -1497,15 +1517,21 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     const body = (await readJsonBody(req)) as {
       mode?: string;
+      sessionId?: unknown;
     };
     if (typeof body?.mode !== "string" || !body.mode.trim()) {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
     }
 
-    const result = this.chatViewProvider.submitBrowserSetWriteApproval(
-      body.mode,
-    );
+    const sessionId = this.parseOptionalSessionId(body.sessionId, res);
+    if (sessionId === false) return;
+    const result = sessionId
+      ? this.chatViewProvider.submitBrowserSetWriteApproval(
+          body.mode,
+          sessionId,
+        )
+      : this.chatViewProvider.submitBrowserSetWriteApproval(body.mode);
     this.writeJson(res, result.ok ? 200 : 400, result);
   }
 
@@ -1518,14 +1544,24 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await readJsonBody(req)) as { policy?: unknown };
+    const body = (await readJsonBody(req)) as {
+      policy?: unknown;
+      sessionId?: unknown;
+    };
     if (!isCommandApprovalPolicy(body?.policy)) {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
     }
-    const result = this.chatViewProvider.submitBrowserSetCommandApprovalPolicy(
-      body.policy,
-    );
+    const sessionId = this.parseOptionalSessionId(body.sessionId, res);
+    if (sessionId === false) return;
+    const result = sessionId
+      ? this.chatViewProvider.submitBrowserSetCommandApprovalPolicy(
+          body.policy,
+          sessionId,
+        )
+      : this.chatViewProvider.submitBrowserSetCommandApprovalPolicy(
+          body.policy,
+        );
     this.writeJson(
       res,
       result.ok ? 200 : 400,
@@ -1545,16 +1581,23 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const body = (await readJsonBody(req)) as {
       enabled?: boolean;
       effort?: import("../agent/providers/types.js").ReasoningEffort;
+      sessionId?: unknown;
     };
+    const sessionId = this.parseOptionalSessionId(body.sessionId, res);
+    if (sessionId === false) return;
     if (typeof body?.effort === "string" && body.effort.trim()) {
       if (!isCoreReasoningEffort(body.effort)) {
         this.writeJson(res, 400, { error: "invalid_request" });
         return;
       }
-      const result =
-        await this.chatViewProvider.submitBrowserSetReasoningEffort(
-          body.effort,
-        );
+      const result = sessionId
+        ? await this.chatViewProvider.submitBrowserSetReasoningEffort(
+            body.effort,
+            sessionId,
+          )
+        : await this.chatViewProvider.submitBrowserSetReasoningEffort(
+            body.effort,
+          );
       this.writeJson(res, result.ok ? 200 : 400, result);
       return;
     }
@@ -1563,9 +1606,14 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const result = await this.chatViewProvider.submitBrowserSetThinkingEnabled(
-      body.enabled,
-    );
+    const result = sessionId
+      ? await this.chatViewProvider.submitBrowserSetThinkingEnabled(
+          body.enabled,
+          sessionId,
+        )
+      : await this.chatViewProvider.submitBrowserSetThinkingEnabled(
+          body.enabled,
+        );
     this.writeJson(res, result.ok ? 200 : 400, result);
   }
 
@@ -1763,17 +1811,29 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const body = (await readJsonBody(req)) as {
       mode?: string;
       projectId?: unknown;
+      selection?: unknown;
+      stopRunning?: unknown;
     };
     const projectId = this.resolveRequestedProjectId(body?.projectId, res);
     if (!projectId) return;
-    const result = await this.chatViewProvider.submitBrowserNewSession(
-      body?.mode,
-      projectId,
-    );
+    const selection = this.parseOptionalChatTabSelection(body.selection, res);
+    if (selection === false) return;
+    const submit = async (stopRunning: boolean) =>
+      selection
+        ? this.chatViewProvider.submitBrowserNewSession(
+            body?.mode,
+            projectId,
+            selection,
+            stopRunning,
+          )
+        : this.chatViewProvider.submitBrowserNewSession(body?.mode, projectId);
+    const result = await submit(body.stopRunning === true);
     this.writeJson(
       res,
-      result.ok ? 200 : 400,
-      result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
+      result.ok ? 200 : 409,
+      result.ok && !selection
+        ? { ...result, snapshot: this.getSnapshot() }
+        : result,
     );
   }
 
@@ -1789,6 +1849,8 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const body = (await readJsonBody(req)) as {
       sessionId?: string;
       projectId?: unknown;
+      selection?: unknown;
+      stopRunning?: unknown;
     };
     if (typeof body?.sessionId !== "string" || !body.sessionId.trim()) {
       this.writeJson(res, 400, { error: "invalid_request" });
@@ -1799,10 +1861,47 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const result = await this.chatViewProvider.submitBrowserLoadSession(
-      body.sessionId,
+    const selection = this.parseOptionalChatTabSelection(body.selection, res);
+    if (selection === false) return;
+    const result = selection
+      ? await this.chatViewProvider.submitBrowserLoadSession(
+          body.sessionId,
+          selection,
+          body.stopRunning === true,
+        )
+      : await this.chatViewProvider.submitBrowserLoadSession(body.sessionId);
+    this.writeJson(res, result.ok ? 200 : selection ? 409 : 404, result);
+  }
+
+  private parseOptionalSessionId(
+    value: unknown,
+    res: http.ServerResponse,
+  ): string | false | undefined {
+    if (value === undefined) return undefined;
+    if (typeof value !== "string" || !value.trim() || value !== value.trim()) {
+      this.writeJson(res, 400, { error: "invalid_session_id" });
+      return false;
+    }
+    return value;
+  }
+
+  private parseOptionalChatTabSelection(
+    value: unknown,
+    res: http.ServerResponse,
+  ): ReturnType<typeof parseChatTabActionAddress> | false | undefined {
+    if (value === undefined) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      this.writeJson(res, 400, { error: "invalid_selection" });
+      return false;
+    }
+    const selection = parseChatTabActionAddress(
+      value as Record<string, unknown>,
     );
-    this.writeJson(res, result.ok ? 200 : 404, result);
+    if (!selection) {
+      this.writeJson(res, 400, { error: "invalid_selection" });
+      return false;
+    }
+    return selection;
   }
 
   private async handleSessionDeleteAction(
@@ -2270,8 +2369,10 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const result = this.chatViewProvider.submitBrowserResume(body.sessionId);
-    this.writeJson(res, result.ok ? 202 : 404, result);
+    const result = await this.chatViewProvider.submitBrowserResume(
+      body.sessionId,
+    );
+    this.writeJson(res, result.ok ? 202 : 409, result);
   }
 
   private async handleBackgroundStopAction(
@@ -2327,6 +2428,62 @@ export class BrowserGatewayServer implements vscode.Disposable {
       message: body.message,
     });
     this.writeJson(res, result.ok ? 200 : 400, result);
+  }
+
+  private handleSessionDetailRequest(
+    rawUrl: string,
+    res: http.ServerResponse,
+  ): void {
+    const parsedUrl = new URL(rawUrl, "http://127.0.0.1");
+    const controllerEpoch = this.parseSessionDetailId(
+      parsedUrl.searchParams.get("controllerEpoch"),
+    );
+    const tabId = this.parseSessionDetailId(
+      parsedUrl.searchParams.get("tabId"),
+    );
+    const sessionId = this.parseSessionDetailId(
+      parsedUrl.searchParams.get("sessionId"),
+    );
+    if (!controllerEpoch || !tabId || !sessionId) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+
+    const detail = this.gatewayService.getSerializableSessionDetail({
+      controllerEpoch,
+      tabId,
+      sessionId,
+    });
+    if (!detail) {
+      this.writeJson(res, 404, { error: "stale_selection" });
+      return;
+    }
+    const serialized = JSON.stringify(detail);
+    const byteLength = Buffer.byteLength(serialized, "utf8");
+    if (
+      byteLength >
+      BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes
+    ) {
+      this.writeJson(res, 413, { error: "session_detail_too_large" });
+      return;
+    }
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Length": byteLength,
+    });
+    res.end(serialized);
+  }
+
+  private parseSessionDetailId(value: string | null): string | null {
+    const normalized = value?.trim();
+    if (
+      !normalized ||
+      normalized.length > MAX_SESSION_DETAIL_ID_CHARS ||
+      normalized !== value
+    ) {
+      return null;
+    }
+    return normalized;
   }
 
   private async handleBackgroundOpenTranscriptAction(

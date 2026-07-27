@@ -29,6 +29,7 @@ describe("BrowserGatewayAskAgentHistoryStore", () => {
           createdAt: 100,
           lastActiveAt: 110,
           nextMessageSequence: 2,
+          generateImageApproved: true,
           messages: [
             {
               id: "message-1",
@@ -57,6 +58,7 @@ describe("BrowserGatewayAskAgentHistoryStore", () => {
         {
           id: "session-1",
           title: "First chat",
+          generateImageApproved: true,
           messages: [{ content: "Hello" }],
         },
         { id: "session-2", title: "Second chat", messages: [] },

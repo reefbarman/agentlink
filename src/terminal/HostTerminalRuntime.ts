@@ -343,6 +343,9 @@ export class HostTerminalRuntime {
     if (
       terminalInstanceId !== this.terminalInstanceId ||
       rendererEpoch !== this.rendererEpoch ||
+      // Batches produced under backpressure stay queued until an acknowledgment
+      // clears it; delivering them earlier would outrun the renderer.
+      this.backpressured ||
       !Number.isSafeInteger(sequence) ||
       sequence !== this.lastDeliveredSequence + 1 ||
       sequence >= this.nextSequence ||
@@ -891,7 +894,11 @@ export class HostTerminalRuntime {
       suppressedOutputCharacters,
       outputPolicyDecisions: decisions,
     };
-    if (this.rendererEpoch !== undefined && !this.backpressured) {
+    // Account for every batch produced while a renderer is attached, including
+    // those made under backpressure: the surface controller queues them and
+    // delivers them in order once acknowledgements drain, so they still need
+    // delivery accounting.
+    if (this.rendererEpoch !== undefined) {
       this.batchWriteBytes.set(sequence, writtenBytes);
     }
     return { batch, continueOutput: !this.backpressured };

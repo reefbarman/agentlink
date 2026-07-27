@@ -5,6 +5,7 @@ export const DEFAULT_ACP_INIT_TIMEOUT_MS = 10_000;
 export interface AcpBackgroundAgentConfig {
   id: string;
   label: string;
+  provider?: string;
   command: string;
   args: string[];
   env: Record<string, string>;
@@ -14,11 +15,13 @@ export interface AcpBackgroundAgentConfig {
 
 export interface BackgroundAgentSettings {
   defaultAgent: string;
+  reviewAgent: string;
   acpAgents: AcpBackgroundAgentConfig[];
 }
 
 export interface RawBackgroundAgentSettings {
   defaultAgent?: unknown;
+  reviewAgent?: unknown;
   acpAgents?: unknown;
 }
 
@@ -110,10 +113,15 @@ function normalizeAcpAgent(
 
   const label =
     typeof obj.label === "string" && obj.label.trim() ? obj.label.trim() : id;
+  const provider =
+    typeof obj.provider === "string" && obj.provider.trim()
+      ? obj.provider.trim().toLowerCase()
+      : undefined;
 
   return {
     id,
     label,
+    ...(provider ? { provider } : {}),
     command,
     args: normalizeStringArray(obj.args, "args"),
     env: normalizeEnv(obj.env),
@@ -125,19 +133,32 @@ function normalizeAcpAgent(
 export function normalizeBackgroundAgentSettings(
   raw: RawBackgroundAgentSettings,
 ): BackgroundAgentSettings {
-  const defaultAgent =
-    typeof raw.defaultAgent === "string" && raw.defaultAgent.trim()
-      ? raw.defaultAgent.trim()
-      : NATIVE_BACKGROUND_AGENT;
+  const normalizeAgentReference = (
+    value: unknown,
+    setting: "defaultAgent" | "reviewAgent",
+  ): string => {
+    const reference =
+      typeof value === "string" && value.trim()
+        ? value.trim()
+        : NATIVE_BACKGROUND_AGENT;
+    if (
+      reference !== NATIVE_BACKGROUND_AGENT &&
+      !isAcpBackgroundAgentReference(reference)
+    ) {
+      const label =
+        setting === "defaultAgent" ? "default agent" : "review agent";
+      throw new Error(
+        `Unsupported background ${label} "${reference}". Use "native:auto" or "acp:<agent-id>".`,
+      );
+    }
+    return reference;
+  };
 
-  if (
-    defaultAgent !== NATIVE_BACKGROUND_AGENT &&
-    !isAcpBackgroundAgentReference(defaultAgent)
-  ) {
-    throw new Error(
-      `Unsupported background default agent "${defaultAgent}". Use "native:auto" or "acp:<agent-id>".`,
-    );
-  }
+  const defaultAgent = normalizeAgentReference(
+    raw.defaultAgent,
+    "defaultAgent",
+  );
+  const reviewAgent = normalizeAgentReference(raw.reviewAgent, "reviewAgent");
 
   const rawAgents = raw.acpAgents ?? [];
   if (!Array.isArray(rawAgents)) {
@@ -153,7 +174,7 @@ export function normalizeBackgroundAgentSettings(
     seen.add(agent.id);
   }
 
-  return { defaultAgent, acpAgents };
+  return { defaultAgent, reviewAgent, acpAgents };
 }
 
 export function resolveAcpBackgroundAgent(

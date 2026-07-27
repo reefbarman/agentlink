@@ -1,7 +1,10 @@
+import { randomUUID } from "crypto";
+
 import type { BrowserGatewayCoreOwnerLeaseRegistration } from "../protocol.js";
 import {
   BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
   parseBrowserGatewayOwnerCommandAck,
+  type BrowserGatewayDetailHandle,
   type BrowserGatewayOwnerCommand,
   type BrowserGatewayOwnerCommandBody,
   type BrowserGatewayOwnerCommandKind,
@@ -18,8 +21,17 @@ import {
   type BrowserGatewayOwnerProjectionPublication,
 } from "./ownerProjectionAdapter.js";
 import type { BrowserGatewayOwnerProjectionSources } from "./ownerProjectionSources.js";
+import {
+  BROWSER_GATEWAY_DATA_PLANE_LIMITS,
+  browserGatewayDetailResponseByteLimit,
+} from "./limits.js";
 
 export interface BrowserGatewayOwnerCommandExecutionResult {
+  readonly detail?: {
+    readonly content: Uint8Array;
+    readonly mediaType: string;
+    readonly kind: BrowserGatewayDetailHandle["kind"];
+  };
   readonly history?: {
     readonly messages: Parameters<
       BrowserGatewayOwnerProjectionAdapter["publishTranscriptHistory"]
@@ -242,6 +254,17 @@ export class BrowserGatewayOwnerRuntime {
         controller.signal,
       );
       if (controller.signal.aborted) return;
+      let detailHandle: BrowserGatewayDetailHandle | undefined;
+      if (result?.detail) {
+        if (
+          result.detail.content.byteLength >
+          browserGatewayDetailResponseByteLimit(result.detail.kind)
+        ) {
+          throw new Error("browser_gateway_session_detail_too_large");
+        }
+        detailHandle = this.createCommandDetailHandle(result.detail);
+        await this.transport.uploadDetail(detailHandle, result.detail.content);
+      }
       if (result?.history) {
         this.requireProjection().publishTranscriptHistory(
           result.history.messages,
@@ -249,7 +272,10 @@ export class BrowserGatewayOwnerRuntime {
           result.history.hasEarlier,
         );
       }
-      await this.acknowledge(command, { state: "completed" });
+      await this.acknowledge(command, {
+        state: "completed",
+        detailHandle,
+      });
     } catch (error) {
       if (controller.signal.aborted) return;
       await this.acknowledge(command, {
@@ -268,9 +294,30 @@ export class BrowserGatewayOwnerRuntime {
     this.commandControllers.delete(operationId);
   }
 
+  private createCommandDetailHandle(
+    detail: NonNullable<BrowserGatewayOwnerCommandExecutionResult["detail"]>,
+  ): BrowserGatewayDetailHandle {
+    const registration = this.requireRegistration();
+    return {
+      helperGenerationId: registration.helperGenerationId,
+      ownerId: registration.effectiveOwnerId,
+      ownerGenerationId: registration.ownerGenerationId,
+      handleId: randomUUID(),
+      kind: detail.kind,
+      byteLength: detail.content.byteLength,
+      expiresAt:
+        this.now() +
+        BROWSER_GATEWAY_DATA_PLANE_LIMITS.ownerTranscriptDetailTtlMs,
+      mediaType: detail.mediaType,
+    };
+  }
+
   private acknowledge(
     command: BrowserGatewayOwnerCommand,
-    operation: Pick<BrowserGatewayOperationState, "state" | "message">,
+    operation: Pick<
+      BrowserGatewayOperationState,
+      "state" | "message" | "detailHandle"
+    >,
   ): Promise<void> {
     return this.transport.acknowledge(
       parseBrowserGatewayOwnerCommandAck({
@@ -284,6 +331,9 @@ export class BrowserGatewayOwnerRuntime {
           kind: command.command.kind,
           state: operation.state,
           ...(operation.message ? { message: operation.message } : {}),
+          ...(operation.detailHandle
+            ? { detailHandle: operation.detailHandle }
+            : {}),
         },
       }),
     );

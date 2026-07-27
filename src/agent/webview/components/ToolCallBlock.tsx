@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useState } from "preact/hooks";
 
 import type { ContentBlock } from "../types";
-import { JsonHighlight } from "../../../shared/ui/JsonHighlight";
 import { InlineDiff } from "./InlineDiff";
+import { JsonHighlight } from "../../../shared/ui/JsonHighlight";
 import { matchFilePaths } from "./filePathLinks";
 
 export type ToolCallData = ContentBlock & { type: "tool_call" };
@@ -143,6 +143,26 @@ function stripMediaPlaceholderLines(result: string): string {
     .trim();
 }
 
+function getGenericInputSummary(
+  input: Record<string, unknown> | null,
+): SummaryPart[] {
+  if (!input) return [];
+  const description = String(input.description ?? "").trim();
+  if (description) {
+    return [{ type: "text", text: truncateSummaryText(description, 100) }];
+  }
+  const command = String(input.command ?? "").trim();
+  if (command) {
+    return [{ type: "text", text: truncateSummaryText(command, 80) }];
+  }
+  const path = String(input.path ?? input.file_path ?? "").trim();
+  if (path) return [filePart(path)];
+  const query = String(input.query ?? "").trim();
+  if (query) return [{ type: "text", text: query.slice(0, 100) }];
+  const url = String(input.url ?? "").trim();
+  return url ? [{ type: "text", text: url.slice(0, 140) }] : [];
+}
+
 /** Generate a smart one-liner summary for known tools. */
 function getToolSummary(
   name: string,
@@ -230,8 +250,7 @@ function getToolSummary(
       // Reserve space for exit/approval badges; truncate command to fit
       const maxLen =
         exitCode !== null && exitCode !== "0" ? 48 : approvalBadge ? 50 : 60;
-      const cmdText =
-        cmd.length > maxLen ? cmd.slice(0, maxLen - 3) + "..." : cmd;
+      const cmdText = truncateSummaryText(cmd, maxLen);
       const parts: SummaryPart[] = [];
       if (exitCode !== null && exitCode !== "0") {
         parts.push({ type: "text", text: `\x00exit:${exitCode}` }); // sentinel for exit badge — rendered before command
@@ -294,13 +313,25 @@ function getToolSummary(
     case "todo_write":
       return [{ type: "text", text: result || "updated" }];
     default: {
-      const t =
-        displayResult.length > 60
-          ? displayResult.slice(0, 57) + "..."
-          : displayResult || "";
+      const inputSummary = getGenericInputSummary(input);
+      if (inputSummary.length > 0) return inputSummary;
+      const t = truncateSummaryText(displayResult, 60);
       return [{ type: "text", text: t }];
     }
   }
+}
+
+function truncateSummaryText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  const crossingPath = matchFilePaths(text).find(
+    (match) =>
+      match.index < maxLength &&
+      match.index + match.fullMatch.length > maxLength,
+  );
+  if (crossingPath) {
+    return `${text.slice(0, crossingPath.index)}${crossingPath.fullMatch}...`;
+  }
+  return `${text.slice(0, maxLength - 3)}...`;
 }
 
 /** Create a file link summary part. */
@@ -348,7 +379,7 @@ function getStreamingSummary(
         },
       ];
     default:
-      return path ? [filePart(path)] : [];
+      return getGenericInputSummary(input);
   }
 }
 
@@ -642,6 +673,7 @@ export function ToolCallBlock({
 
   const handleFileClick = useCallback(
     (e: MouseEvent, path: string, line?: number) => {
+      e.preventDefault();
       e.stopPropagation();
       onOpenFile?.(path, line);
     },
@@ -684,31 +716,37 @@ export function ToolCallBlock({
     !complete &&
     toolCall.name === "execute_command" &&
     !!onRevealToolCallTerminal;
+  const handleHeaderClick = useCallback(() => {
+    if (revealsRunningTerminal) {
+      onRevealToolCallTerminal?.(toolCall.id);
+      return;
+    }
+    setExpanded((current) => !current);
+  }, [onRevealToolCallTerminal, revealsRunningTerminal, toolCall.id]);
 
   return (
     <div class={`tool-call-block ${statusClass}`}>
       <div
         class={`tool-call-row${showRunningActions ? " tool-call-row-with-actions" : ""}`}
       >
-        <button
-          class="tool-call-header"
-          onClick={() => {
-            if (revealsRunningTerminal) {
-              onRevealToolCallTerminal(toolCall.id);
-              return;
+        <div class="tool-call-header" onClick={handleHeaderClick}>
+          <button
+            class="tool-call-header-toggle"
+            type="button"
+            onClick={(event: MouseEvent) => {
+              event.stopPropagation();
+              handleHeaderClick();
+            }}
+            title={
+              revealsRunningTerminal ? "Show the running terminal" : undefined
             }
-            setExpanded(!expanded);
-          }}
-          title={
-            revealsRunningTerminal ? "Show the running terminal" : undefined
-          }
-          type="button"
-        >
-          <i
-            class={`codicon codicon-chevron-${expanded ? "down" : "right"} tool-call-chevron`}
-          />
-          <i class={`codicon tool-call-status-icon ${statusIconClass}`} />
-          <span class="tool-call-name">{toolCall.name}</span>
+          >
+            <i
+              class={`codicon codicon-chevron-${expanded ? "down" : "right"} tool-call-chevron`}
+            />
+            <i class={`codicon tool-call-status-icon ${statusIconClass}`} />
+            <span class="tool-call-name">{toolCall.name}</span>
+          </button>
           {cmdExitBadge !== null && (
             <span class="tool-exit-badge">exit {cmdExitBadge}</span>
           )}
@@ -723,6 +761,7 @@ export function ToolCallBlock({
                     <a
                       key={i}
                       class="tool-file-link"
+                      href="#"
                       title={part.path + (part.line ? `:${part.line}` : "")}
                       onClick={(e: MouseEvent) =>
                         handleFileClick(e, part.path, part.line)
@@ -739,7 +778,12 @@ export function ToolCallBlock({
                       {part.text}
                     </span>
                   ) : (
-                    <span key={i}>{part.text}</span>
+                    <span key={i}>
+                      <FilePathLinkedText
+                        text={part.text}
+                        onOpenFile={onOpenFile}
+                      />
+                    </span>
                   ),
                 )}
             </span>
@@ -763,7 +807,7 @@ export function ToolCallBlock({
               {fmtDuration(toolCall.durationMs)}
             </span>
           )}
-        </button>
+        </div>
         {showRunningActions && (
           <div
             class="tool-call-inline-actions"

@@ -53,6 +53,10 @@ export type ReplaceChatTabSessionResult =
   | { ok: true; tab: ChatTab }
   | { ok: false; reason: "not_found" | "conflict" | "already_open" };
 
+export type SetChatTabPlacementResult =
+  | { ok: true; tab: ChatTab }
+  | { ok: false; reason: "not_found" | "conflict" | "last_docked" };
+
 export class ChatTabController {
   private layout: ChatTabLayout;
   private focusedTabId: string;
@@ -187,9 +191,10 @@ export class ChatTabController {
         return existing;
       }
     }
+    const displayNumber = this.lowestAvailableDisplayNumber();
     const tab: ChatTab = {
       id: this.createUniqueId(),
-      displayNumber: this.layout.nextDisplayNumber,
+      displayNumber,
       sessionId,
       placement: "docked",
       terminalGeneration: 1,
@@ -197,7 +202,10 @@ export class ChatTabController {
     this.layout = {
       ...this.layout,
       tabs: [...this.layout.tabs, tab],
-      nextDisplayNumber: tab.displayNumber + 1,
+      nextDisplayNumber: Math.max(
+        this.layout.nextDisplayNumber,
+        displayNumber + 1,
+      ),
     };
     this.focusedTabId = tab.id;
     await this.commit();
@@ -290,27 +298,58 @@ export class ChatTabController {
     return true;
   }
 
-  async setPlacement(
+  canSetPlacement(
     tabId: string,
+    expectedPlacement: ChatTabPlacement,
     placement: ChatTabPlacement,
-  ): Promise<boolean> {
+  ): SetChatTabPlacementResult {
     const tab = this.layout.tabs.find((candidate) => candidate.id === tabId);
-    if (!tab) return false;
-    if (tab.placement === placement) return true;
+    if (!tab) return { ok: false, reason: "not_found" };
+    if (tab.placement !== expectedPlacement) {
+      return { ok: false, reason: "conflict" };
+    }
     if (
       placement === "popped" &&
+      tab.placement !== placement &&
       this.layout.tabs.filter((candidate) => candidate.placement === "docked")
         .length === 1
     ) {
-      return false;
+      return { ok: false, reason: "last_docked" };
     }
+    return { ok: true, tab: structuredClone(tab) };
+  }
+
+  async setPlacement(
+    tabId: string,
+    expectedPlacement: ChatTabPlacement,
+    placement: ChatTabPlacement,
+  ): Promise<SetChatTabPlacementResult> {
+    const validation = this.canSetPlacement(
+      tabId,
+      expectedPlacement,
+      placement,
+    );
+    if (!validation.ok) return validation;
+    const tab = validation.tab;
+    if (tab.placement === placement) return validation;
+    const previousLayout = this.layout;
+    const previousFocusedTabId = this.focusedTabId;
     const next = { ...tab, placement };
     this.replaceTab(next);
     if (this.focusedTabId === tabId && placement === "popped") {
       this.focusedTabId = this.firstDockedTab(this.layout).id;
     }
-    await this.commit();
-    return true;
+    const attemptedLayout = this.layout;
+    try {
+      await this.commit();
+    } catch (error) {
+      if (this.layout === attemptedLayout) {
+        this.layout = previousLayout;
+        this.focusedTabId = previousFocusedTabId;
+      }
+      throw error;
+    }
+    return { ok: true, tab: structuredClone(next) };
   }
 
   async closeTab(tabId: string): Promise<boolean> {
@@ -505,6 +544,13 @@ export class ChatTabController {
       ],
       nextDisplayNumber: 2,
     };
+  }
+
+  private lowestAvailableDisplayNumber(): number {
+    const used = new Set(this.layout.tabs.map((tab) => tab.displayNumber));
+    let displayNumber = 1;
+    while (used.has(displayNumber)) displayNumber += 1;
+    return displayNumber;
   }
 
   private createUniqueId(): string {

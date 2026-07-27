@@ -18,16 +18,20 @@ const STATUS_LABELS: Record<ChatTabViewStatus, string> = {
 
 export function ChatWorkspace({
   snapshot,
+  showTabStrip = true,
   onFocus,
   onNewTab,
   onClose,
+  onPopOut,
   onReorder,
   children,
 }: {
   snapshot: ChatWorkspaceViewSnapshot | null;
+  showTabStrip?: boolean;
   onFocus(tabId: string): void;
   onNewTab(): void;
   onClose(tabId: string): void;
+  onPopOut?(tabId: string): void;
   onReorder(tabIds: string[]): void;
   children: ComponentChildren;
 }) {
@@ -53,66 +57,86 @@ export function ChatWorkspace({
 
   return (
     <div class="chat-workspace">
-      <div class="chat-tab-strip" role="tablist" aria-label="Agent chats">
-        <div class="chat-tab-strip-scroll">
-          {dockedTabs.map((tab) => {
-            const selected = tab.tabId === snapshot?.focusedTabId;
-            const statusLabel = STATUS_LABELS[tab.status];
-            return (
-              <div
-                key={tab.tabId}
-                class={`chat-tab${selected ? " selected" : ""}`}
-                role="tab"
-                aria-selected={selected}
-                draggable
-                onDragStart={() => setDraggedTabId(tab.tabId)}
-                onDragEnd={() => setDraggedTabId(null)}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => handleDrop(event, tab.tabId)}
-              >
-                <button
-                  type="button"
-                  class="chat-tab-select"
-                  onClick={() => onFocus(tab.tabId)}
-                  title={`${tab.label}: ${tab.title ?? "New Chat"} — ${statusLabel}`}
+      {showTabStrip && (
+        <div class="chat-tab-strip" role="tablist" aria-label="Agent chats">
+          <div class="chat-tab-strip-scroll">
+            {dockedTabs.map((tab) => {
+              const selected = tab.tabId === snapshot?.focusedTabId;
+              const statusLabel = STATUS_LABELS[tab.status];
+              return (
+                <div
+                  key={tab.tabId}
+                  class={`chat-tab${selected ? " selected" : ""}`}
+                  role="tab"
+                  aria-selected={selected}
+                  draggable
+                  onDragStart={() => setDraggedTabId(tab.tabId)}
+                  onDragEnd={() => setDraggedTabId(null)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => handleDrop(event, tab.tabId)}
                 >
-                  <span
-                    class={`chat-tab-status status-${tab.status}`}
-                    title={statusLabel}
-                    aria-label={statusLabel}
-                  />
-                  <span class="chat-tab-label">{tab.label}</span>
-                  <span class="chat-tab-title">{tab.title ?? "New Chat"}</span>
-                </button>
-                <button
-                  type="button"
-                  class="chat-tab-close"
-                  onClick={() => onClose(tab.tabId)}
-                  disabled={dockedTabs.length === 1}
-                  title={
-                    dockedTabs.length === 1
-                      ? "At least one chat tab must remain open"
-                      : `Close ${tab.label}`
-                  }
-                  aria-label={`Close ${tab.label}`}
-                >
-                  <i class="codicon codicon-close" />
-                </button>
-              </div>
-            );
-          })}
+                  <button
+                    type="button"
+                    class="chat-tab-select"
+                    onClick={() => onFocus(tab.tabId)}
+                    title={`${tab.label}: ${tab.title ?? "New Chat"} — ${statusLabel}`}
+                  >
+                    <span
+                      class={`chat-tab-status status-${tab.status}`}
+                      title={statusLabel}
+                      aria-label={statusLabel}
+                    />
+                    <span class="chat-tab-label">{tab.label}</span>
+                    <span class="chat-tab-title">
+                      {tab.title ?? "New Chat"}
+                    </span>
+                  </button>
+                  {onPopOut && (
+                    <button
+                      type="button"
+                      class="chat-tab-pop-out"
+                      onClick={() => onPopOut(tab.tabId)}
+                      disabled={dockedTabs.length === 1}
+                      title={
+                        dockedTabs.length === 1
+                          ? "At least one chat tab must remain docked"
+                          : `Pop out ${tab.label}`
+                      }
+                      aria-label={`Pop out ${tab.label}`}
+                    >
+                      <i class="codicon codicon-open-preview" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    class="chat-tab-close"
+                    onClick={() => onClose(tab.tabId)}
+                    disabled={dockedTabs.length === 1}
+                    title={
+                      dockedTabs.length === 1
+                        ? "At least one chat tab must remain open"
+                        : `Close ${tab.label}`
+                    }
+                    aria-label={`Close ${tab.label}`}
+                  >
+                    <i class="codicon codicon-close" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            class="chat-tab-new"
+            onClick={onNewTab}
+            title="New Tab"
+            aria-label="New Tab"
+            disabled={!snapshot}
+          >
+            <i class="codicon codicon-add" />
+          </button>
         </div>
-        <button
-          type="button"
-          class="chat-tab-new"
-          onClick={onNewTab}
-          title="New Tab"
-          aria-label="New Tab"
-          disabled={!snapshot}
-        >
-          <i class="codicon codicon-add" />
-        </button>
-      </div>
+      )}
       {children}
     </div>
   );

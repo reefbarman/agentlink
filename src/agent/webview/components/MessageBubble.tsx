@@ -1,5 +1,5 @@
+import type { ChatMessage, ContentBlock } from "../types";
 import { ToolCallGroup, segmentBlocks } from "./ToolCallGroup";
-import { Fragment } from "preact";
 import {
   useCallback,
   useEffect,
@@ -12,10 +12,10 @@ import { ApiRequestBlock } from "./ApiRequestBlock";
 import { BgAgentBlock } from "./BgAgentBlock";
 import { BgAgentResultBlock } from "./BgAgentResultBlock";
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
-import type { ChatMessage, ContentBlock } from "../types";
 import type { DetectedQuestion } from "../questionDetection";
 import { ErrorBlock } from "./ErrorBlock";
 import type { FinalMarkerToolCall } from "../../../shared/finalStatus";
+import { Fragment } from "preact";
 import { LiveLinkIndicator } from "./LiveLinkIndicator";
 import { PairingCodeBlock } from "./PairingCodeBlock";
 import { QuestionAnswerBlock } from "./QuestionAnswerBlock";
@@ -24,8 +24,9 @@ import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ThinkingContent } from "./ThinkingContent";
 import { ToolCallBlock } from "./ToolCallBlock";
-import { getStreamingActivity } from "./activityPresentation";
+import { createPortal } from "preact/compat";
 import { getFinalMessageContinueAction } from "../../../shared/finalStatus";
+import { getStreamingActivity } from "./activityPresentation";
 import { normalizeProjectedToolName } from "../../../shared/chatProjection";
 
 const TOOL_GROUP_SETTLE_MS = 350;
@@ -498,7 +499,10 @@ export function MessageBubble({
                   onStop={onStopBackground}
                 />
               );
-            case "bg_agent_result":
+            case "bg_agent_result": {
+              const bgSession = bgSessions?.find(
+                (session) => session.id === block.sessionId,
+              );
               return (
                 <BgAgentResultBlock
                   key={`bgr-${block.sessionId}`}
@@ -507,9 +511,12 @@ export function MessageBubble({
                   status={block.status}
                   resultText={block.resultText}
                   summary={block.summary}
+                  resolvedModel={bgSession?.resolvedModel}
+                  resolvedProvider={bgSession?.resolvedProvider}
                   onOpenTranscript={onOpenTranscript}
                 />
               );
+            }
             case "question_answer":
               return (
                 <QuestionAnswerBlock key={`qa-${blockIndex}`} block={block} />
@@ -1005,52 +1012,54 @@ function UserAttachments({
           )}
         </div>
       )}
-      {selectedImage && (
-        <div
-          class="user-image-lightbox"
-          role="dialog"
-          aria-modal="true"
-          aria-label={selectedImage.name || "Attached image preview"}
-          onClick={() => setSelectedImage(null)}
-        >
+      {selectedImage &&
+        createPortal(
           <div
-            class="user-image-lightbox-content"
-            onClick={(event) => event.stopPropagation()}
+            class="user-image-lightbox"
+            role="dialog"
+            aria-modal="true"
+            aria-label={selectedImage.name || "Attached image preview"}
+            onClick={() => setSelectedImage(null)}
           >
-            <div class="user-image-lightbox-header">
-              <span class="user-image-lightbox-title">
-                {selectedImage.name || "Attached image"}
-              </span>
-              <a
-                class="icon-button user-image-lightbox-download"
-                href={selectedImage.src}
-                download={imageDownloadName(selectedImage)}
-                rel="noopener"
-                title="Download image"
-                aria-label="Download image"
-              >
-                <i class="codicon codicon-save" />
-              </a>
-              <button
-                class="icon-button user-image-lightbox-close"
-                type="button"
-                title="Close"
-                aria-label="Close image preview"
+            <div
+              class="user-image-lightbox-content"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div class="user-image-lightbox-header">
+                <span class="user-image-lightbox-title">
+                  {selectedImage.name || "Attached image"}
+                </span>
+                <a
+                  class="icon-button user-image-lightbox-download"
+                  href={selectedImage.src}
+                  download={imageDownloadName(selectedImage)}
+                  rel="noopener"
+                  title="Download image"
+                  aria-label="Download image"
+                >
+                  <i class="codicon codicon-save" />
+                </a>
+                <button
+                  class="icon-button user-image-lightbox-close"
+                  type="button"
+                  title="Close"
+                  aria-label="Close image preview"
+                  onClick={() => setSelectedImage(null)}
+                >
+                  <i class="codicon codicon-close" />
+                </button>
+              </div>
+              <img
+                class="user-image-lightbox-image"
+                src={selectedImage.src}
+                alt={selectedImage.name || imageAlt}
+                title="Click to close"
                 onClick={() => setSelectedImage(null)}
-              >
-                <i class="codicon codicon-close" />
-              </button>
+              />
             </div>
-            <img
-              class="user-image-lightbox-image"
-              src={selectedImage.src}
-              alt={selectedImage.name || imageAlt}
-              title="Click to close"
-              onClick={() => setSelectedImage(null)}
-            />
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }

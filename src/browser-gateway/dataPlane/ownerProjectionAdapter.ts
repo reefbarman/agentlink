@@ -608,7 +608,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       ? projectBrowserGatewayOwnerInteractionPayload(source.payload)
       : null;
     if (!payload || !interactionPayloadMatches(source, payload)) {
-      return { interaction: projectInteraction(source), details: [] };
+      return { interaction: null, details: [] };
     }
     const serialized = JSON.stringify(payload);
     const locator = `interaction:${source.requestId}`;
@@ -825,6 +825,42 @@ function projectCatalog(
       : null,
     foregroundSessionId: readSet.catalog.foregroundSessionId
       ? bounded(readSet.catalog.foregroundSessionId, 256)
+      : null,
+    chatWorkspace: readSet.catalog.chatWorkspace
+      ? {
+          controllerEpoch: bounded(
+            readSet.catalog.chatWorkspace.controllerEpoch,
+            256,
+          ),
+          focusedTabId: bounded(
+            readSet.catalog.chatWorkspace.focusedTabId,
+            256,
+          ),
+          tabs: readSet.catalog.chatWorkspace.tabs.map((tab) => ({
+            tabId: bounded(tab.tabId, 256),
+            displayNumber: Math.max(1, safeInteger(tab.displayNumber)),
+            label: bounded(tab.label, 64),
+            sessionId: tab.sessionId ? bounded(tab.sessionId, 256) : null,
+            placement: tab.placement,
+            ...(tab.title ? { title: bounded(tab.title, 1_000) } : {}),
+            status: tab.status,
+            busy: tab.busy,
+            ...(tab.needsAttention !== undefined
+              ? { needsAttention: tab.needsAttention }
+              : {}),
+            ...(tab.mode ? { mode: bounded(tab.mode, 256) } : {}),
+            ...(tab.model ? { model: bounded(tab.model, 256) } : {}),
+            ...(tab.interactiveExecutionPhase
+              ? { interactiveExecutionPhase: tab.interactiveExecutionPhase }
+              : {}),
+            ...(tab.estimatedTokens !== undefined
+              ? { estimatedTokens: safeInteger(tab.estimatedTokens) }
+              : {}),
+            ...(tab.maximumTokens !== undefined
+              ? { maximumTokens: safeInteger(tab.maximumTokens) }
+              : {}),
+          })),
+        }
       : null,
   };
 }
@@ -1328,6 +1364,7 @@ function projectBlock(
       return {
         type: "question_answer",
         blockId: `question-answer-${index}`,
+        ...(block.toolCallId ? { toolCallId: block.toolCallId } : {}),
         items: block.items.map((item) => ({
           question: bounded(item.question, 8_000),
           answer: Array.isArray(item.answer)

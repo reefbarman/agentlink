@@ -80,6 +80,7 @@ function createState(overrides: Partial<AppState> = {}): AppState {
     ],
     questionRequest: {
       id: "question-1",
+      toolCallId: "tool-ask-1",
       context: "Choose one.",
       questions: [
         {
@@ -156,6 +157,10 @@ describe("createBrowserForegroundSnapshot", () => {
       approvalReviewer: "auto-review",
       executionPreset: "workspace-write",
       systemPrompt: "system prompt",
+      questionRequest: {
+        id: "question-1",
+        toolCallId: "tool-ask-1",
+      },
     });
 
     expect(

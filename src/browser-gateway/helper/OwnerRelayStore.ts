@@ -1,4 +1,7 @@
-import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "../dataPlane/limits.js";
+import {
+  BROWSER_GATEWAY_DATA_PLANE_LIMITS,
+  browserGatewayDetailResponseByteLimit,
+} from "../dataPlane/limits.js";
 import {
   BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
   parseBrowserGatewayOwnerPublicationBatch,
@@ -65,6 +68,7 @@ export interface OwnerRelayStoreOptions {
   readonly retainedReplayAgeMs?: number;
   readonly aggregateHelperReplayBytes?: number;
   readonly authenticatedDetailResponseBytes?: number;
+  readonly authenticatedSessionDetailResponseBytes?: number;
   readonly authenticatedDetailStoreBytes?: number;
 }
 
@@ -110,6 +114,7 @@ export class OwnerRelayStore {
   private readonly replayAgeMs: number;
   private readonly aggregateReplayBytes: number;
   private readonly detailResponseBytes: number;
+  private readonly sessionDetailResponseBytes: number;
   private readonly detailStoreBytes: number;
   private nextRelaySequence = 1;
   private totalReplayBytes = 0;
@@ -132,6 +137,9 @@ export class OwnerRelayStore {
     this.detailResponseBytes =
       options.authenticatedDetailResponseBytes ??
       BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes;
+    this.sessionDetailResponseBytes =
+      options.authenticatedSessionDetailResponseBytes ??
+      browserGatewayDetailResponseByteLimit("session");
     this.detailStoreBytes =
       options.authenticatedDetailStoreBytes ??
       BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailStoreBytes;
@@ -320,9 +328,13 @@ export class OwnerRelayStore {
       );
     }
     const bytes = Buffer.from(content);
+    const maximumBytes =
+      handle.kind === "session"
+        ? this.sessionDetailResponseBytes
+        : this.detailResponseBytes;
     if (
       bytes.byteLength !== handle.byteLength ||
-      bytes.byteLength > this.detailResponseBytes
+      bytes.byteLength > maximumBytes
     ) {
       throw new Error("browser_gateway_relay_detail_size_mismatch");
     }

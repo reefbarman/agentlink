@@ -55,14 +55,13 @@ import { migrateLegacyMemoryFiles } from "./agent/legacyMemoryMigration.js";
 import { ChatViewProvider } from "./agent/ChatViewProvider.js";
 import { AgentSessionManager } from "./agent/AgentSessionManager.js";
 import { ChatTabController, type ChatTab } from "./agent/ChatTabController.js";
+import { ChatTabPanelHost } from "./agent/ChatTabPanelHost.js";
+import { createChatWorkspaceViewSnapshot } from "./agent/chatTabProtocol.js";
 import { createForegroundChatTabSync } from "./agent/chatTabForegroundSync.js";
 import { TabTerminalProviderRegistry } from "./agent/TabTerminalProviderRegistry.js";
 import { WorkspaceMutationCoordinator } from "./agent/WorkspaceMutationCoordinator.js";
 import { ProjectCustomizationRegistry } from "./agent/ProjectCustomizationRegistry.js";
-import {
-  getConfiguredBaseThresholdForModel,
-  getMigratedModelCondenseThresholdMap,
-} from "./agent/modelCondenseThresholds.js";
+import { getConfiguredBaseThresholdForModel } from "./agent/modelCondenseThresholds.js";
 import {
   resolveModelForMode,
   FALLBACK_AGENT_MODEL,
@@ -85,6 +84,7 @@ import {
   queryCodexCliUsage,
 } from "./agent/providers/index.js";
 import { BrowserGatewayService } from "./browser-gateway/BrowserGatewayService.js";
+import { wireBrowserGatewayApprovalPolicies } from "./browser-gateway/browserGatewayPolicyWiring.js";
 import { BrowserGatewayRepositoryObserver } from "./browser-gateway/BrowserGatewayRepositoryObserver.js";
 import { BrowserGatewayServer } from "./browser-gateway/BrowserGatewayServer.js";
 import { registerBrowserGatewayCommands } from "./browser-gateway/browserGatewayCommands.js";
@@ -124,7 +124,10 @@ import {
 } from "./util/httpDispatcher.js";
 import { resolveWorkspaceSessionLocation } from "./agent/workspaceSessionIdentity.js";
 import { createSessionProjectScope } from "./core/workspaceProjects.js";
-import { createWorkspaceProjectCatalog } from "./adapters/vscode/workspaceProjectCapabilities.js";
+import {
+  createWorkspaceProjectCatalog,
+  selectNewSessionProject,
+} from "./adapters/vscode/workspaceProjectCapabilities.js";
 import { getAffectedProjectSettingIds } from "./adapters/vscode/projectSettingsAccessor.js";
 import {
   createToolUsageTelemetry,
@@ -182,6 +185,7 @@ let indexerManager: IndexerManager | null = null;
 let chatViewProvider: ChatViewProvider;
 let agentSessionManager: AgentSessionManager;
 let chatTabController: ChatTabController;
+let chatTabPanelHost: ChatTabPanelHost | null = null;
 let browserGatewayService: BrowserGatewayService | null = null;
 let browserGatewayServer: BrowserGatewayServer | null = null;
 let browserGatewayAuthToken: string | null = null;
@@ -270,17 +274,6 @@ function resolveApprovalProjectContext(input: {
     targetPath,
     projectResourceUri: sourceScope?.workspaceFolderUri,
   };
-}
-
-function getExplicitAgentModel(
-  config: vscode.WorkspaceConfiguration,
-): string | undefined {
-  const inspected = config.inspect<string>("agentModel");
-  return (
-    inspected?.workspaceFolderValue ??
-    inspected?.workspaceValue ??
-    inspected?.globalValue
-  );
 }
 
 async function consumeWorktreeStartupIntent(
@@ -1081,23 +1074,28 @@ export function activate(context: vscode.ExtensionContext): void {
       `[history] No supported workspace state anchor is available; persistence and local execution will remain unavailable until a folder is opened.`,
     );
   }
-  const explicitAgentModel = getExplicitAgentModel(agentConfiguration);
+  const browserPreferredProjectId = context.workspaceState.get<string>(
+    "browserPreferredProjectId",
+  );
+  const startupProjectSelection = selectNewSessionProject(projectCatalog, {
+    activeResourceUri: vscode.window.activeTextEditor?.document.uri.toString(),
+    browserPreferredProjectId,
+  });
+  const startupAgentConfiguration =
+    startupProjectSelection.status === "selected"
+      ? vscode.workspace.getConfiguration(
+          "agentlink",
+          vscode.Uri.parse(startupProjectSelection.scope.workspaceFolderUri),
+        )
+      : agentConfiguration;
   const configuredMode =
-    (vscode.workspace.workspaceFolders?.length ?? 0) === 0
-      ? "ask"
-      : agentConfiguration.get<string>("defaultMode")?.trim() || "code";
-  const configuredModel =
-    explicitAgentModel ??
-    resolveModelForMode(
-      agentConfiguration,
-      configuredMode,
-      FALLBACK_AGENT_MODEL,
-    );
-  const startupModel =
-    explicitAgentModel ?? sessionStore?.list()[0]?.model ?? configuredModel;
-  const migratedThresholds = getMigratedModelCondenseThresholdMap(
-    agentConfiguration,
-    startupModel,
+    startupProjectSelection.status === "selected"
+      ? startupAgentConfiguration.get<string>("defaultMode")?.trim() || "code"
+      : "ask";
+  const startupModel = resolveModelForMode(
+    startupAgentConfiguration,
+    configuredMode,
+    FALLBACK_AGENT_MODEL,
   );
   let agentConfig: AgentConfig = {
     model: startupModel,
@@ -1105,9 +1103,10 @@ export function activate(context: vscode.ExtensionContext): void {
     thinkingBudget: agentConfiguration.get<number>("thinkingBudget") ?? 10000,
     showThinking: agentConfiguration.get<boolean>("showThinking") ?? true,
     autoCondense: agentConfiguration.get<boolean>("autoCondense") ?? true,
-    autoCondenseThreshold:
-      migratedThresholds[startupModel] ??
-      getConfiguredBaseThresholdForModel(agentConfiguration, startupModel),
+    autoCondenseThreshold: getConfiguredBaseThresholdForModel(
+      startupAgentConfiguration,
+      startupModel,
+    ),
     codexStatefulResponses:
       agentConfiguration.get<boolean>("codexStatefulResponses") ?? true,
     codexStoreResponses:
@@ -1136,9 +1135,11 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   chatTabController = new ChatTabController(context.workspaceState, { log });
   context.subscriptions.push(chatTabController);
-  void chatTabController.initialize().catch((error) => {
-    log(`[chat-tabs] Failed to initialize tab layout: ${String(error)}`);
-  });
+  const chatTabControllerInitialization = chatTabController
+    .initialize()
+    .catch((error) => {
+      log(`[chat-tabs] Failed to initialize tab layout: ${String(error)}`);
+    });
   chatViewProvider = new ChatViewProvider(
     context.extensionUri,
     context.globalState,
@@ -1146,6 +1147,23 @@ export function activate(context: vscode.ExtensionContext): void {
     extVersion,
   );
   chatViewProvider.setChatTabController(chatTabController);
+  chatTabPanelHost = new ChatTabPanelHost({
+    extensionUri: context.extensionUri,
+    tabs: chatTabController,
+    hydrateEditor: (...args) => chatViewProvider.hydrateEditorPane(...args),
+    hydrateSidebar: (...args) => chatViewProvider.hydrateSidebarPane(...args),
+    onEditorMessage: (...args) =>
+      chatViewProvider.handleEditorPaneMessage(...args),
+    onLayoutChanged: () => chatViewProvider.refreshChatWorkspace(),
+    log,
+  });
+  chatViewProvider.setChatTabPanelHost(chatTabPanelHost);
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer(
+      ChatTabPanelHost.viewType,
+      chatTabPanelHost,
+    ),
+  );
 
   // Register providers after chatViewProvider is created so all auth logs
   // (including initial client construction) go to the agent output channel.
@@ -1173,6 +1191,18 @@ export function activate(context: vscode.ExtensionContext): void {
   openAiCodexAuthManager.initialize(context);
   const codexProvider = new CodexProvider(openAiCodexAuthManager, agentLog);
   providerRegistry.register(codexProvider);
+  const readDisabledProviderIds = (): string[] => {
+    const raw = vscode.workspace
+      .getConfiguration("agentlink")
+      .get<unknown>("disabledProviders", []);
+    return Array.isArray(raw)
+      ? raw
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : [];
+  };
+  providerRegistry.setDisabledProviders(readDisabledProviderIds());
 
   const openAiCompatibleConfiguration = vscode.workspace.getConfiguration(
     "agentlink.openaiCompatible",
@@ -1217,7 +1247,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const getConfiguredThresholdWithCapabilities = (model: string): number =>
     getConfiguredBaseThresholdForModel(
-      vscode.workspace.getConfiguration("agentlink"),
+      startupAgentConfiguration,
       model,
       providerRegistry.tryResolveProvider(model)?.getCapabilities(model),
     );
@@ -1227,6 +1257,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const resolvedStartupModel =
     startupModelResolution?.model ??
     providerRegistry.resolveAvailableModel(FALLBACK_AGENT_MODEL)?.model ??
+    providerRegistry.listAllModels()[0]?.id ??
     FALLBACK_AGENT_MODEL;
   if (startupModelResolution?.migratedFrom) {
     log(
@@ -1237,7 +1268,6 @@ export function activate(context: vscode.ExtensionContext): void {
     ...agentConfig,
     model: resolvedStartupModel,
     autoCondenseThreshold:
-      migratedThresholds[resolvedStartupModel] ??
       getConfiguredThresholdWithCapabilities(resolvedStartupModel),
   };
 
@@ -1304,11 +1334,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const getPublishableBrowserGatewayModelCredentialProviderIds =
     (): string[] => [
-      "openai-codex",
-      "anthropic",
+      ...(providerRegistry.isProviderEnabled("codex") ? ["openai-codex"] : []),
+      ...(providerRegistry.isProviderEnabled("anthropic") ? ["anthropic"] : []),
       ...openAiCompatibleProviderManager
         .listProviders()
-        .filter((provider) => provider.authKey !== undefined)
+        .filter(
+          (provider) =>
+            provider.authKey !== undefined &&
+            providerRegistry.isProviderEnabled(provider.id),
+        )
         .map((provider) => provider.id),
     ];
 
@@ -1316,6 +1350,17 @@ export function activate(context: vscode.ExtensionContext): void {
     const discovery = browserGatewayHelperDiscovery;
     const client = browserGatewayHelperModelAuthLeaseClient;
     if (!discovery?.helperGenerationId || !client) return;
+    for (const providerId of readDisabledProviderIds()) {
+      const credentialProviderId =
+        providerId === "codex" ? "openai-codex" : providerId;
+      try {
+        await client.clearCredential(credentialProviderId);
+      } catch (err) {
+        log(
+          `[browser-gateway-helper] disabled ${credentialProviderId} credential clear failed: ${err}`,
+        );
+      }
+    }
     for (const providerId of getPublishableBrowserGatewayModelCredentialProviderIds()) {
       try {
         const credential = await client.grantCredential({
@@ -1342,6 +1387,37 @@ export function activate(context: vscode.ExtensionContext): void {
         );
       }
     }
+  };
+
+  const applyDisabledProviders = async (): Promise<void> => {
+    const disabledProviderIds = readDisabledProviderIds();
+    providerRegistry.setDisabledProviders(disabledProviderIds);
+
+    const foregroundModel = agentSessionManager?.getForegroundSession()?.model;
+    if (
+      foregroundModel &&
+      !providerRegistry.resolveAvailableModel(foregroundModel)
+    ) {
+      const fallbackModel =
+        providerRegistry.resolveAvailableModel(FALLBACK_AGENT_MODEL)?.model ??
+        providerRegistry.listAllModels()[0]?.id;
+      if (fallbackModel) {
+        try {
+          await agentSessionManager.setModel(fallbackModel);
+          void vscode.window.showWarningMessage(
+            `The provider for “${foregroundModel}” is disabled. AgentLink switched this session to “${fallbackModel}”.`,
+          );
+        } catch (error) {
+          log(
+            `[providers] could not move foreground session away from disabled model “${foregroundModel}”: ${error}`,
+          );
+        }
+      }
+    }
+
+    chatViewProvider.refreshModels();
+    await publishBrowserGatewayModelCatalog();
+    await grantBrowserGatewayModelCredentials();
   };
 
   let openAiCompatibleRefreshInFlight:
@@ -1430,9 +1506,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const bgMaxConcurrent = normalizeBackgroundMaxConcurrent(
     getConfig<number>("background.maxConcurrent"),
   );
-  const browserPreferredProjectId = context.workspaceState.get<string>(
-    "browserPreferredProjectId",
-  );
   const terminalOwnerForTab = (tab: ChatTab, sessionId: string) => ({
     tabId: tab.id,
     tabLabel: `T${tab.displayNumber}`,
@@ -1516,11 +1589,20 @@ export function activate(context: vscode.ExtensionContext): void {
     chatViewProvider.getUiEventHub(),
     agentSessionManager,
     () => chatViewProvider.getBrowserGatewayThemeSnapshot(),
-    () => chatViewProvider.getBrowserAgentWriteApprovalState(),
+    (sessionId) =>
+      chatViewProvider.getBrowserAgentWriteApprovalState(sessionId),
     () => chatViewProvider.getBrowserThinkingEnabledState(),
     () => chatViewProvider.getBrowserReasoningEffortState(),
     () => chatViewProvider.getBrowserProjectedForegroundState(),
     () => chatViewProvider.getBrowserMcpStatusInfos(),
+  );
+  browserGatewayService.setChatWorkspaceProvider(
+    () =>
+      createChatWorkspaceViewSnapshot(
+        chatTabController.getWorkspaceSnapshot(),
+        agentSessionManager.getSessionInfos(),
+      ),
+    (listener) => chatTabController.onDidChangeWorkspace(() => listener()),
   );
   const browserGatewayRepositoryObserver = new BrowserGatewayRepositoryObserver(
     {
@@ -1542,10 +1624,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(browserGatewayRepositoryObserver);
   void browserGatewayRepositoryObserver.initialize();
-  browserGatewayService.setCommandApprovalPolicyGetters(
-    () => chatViewProvider.getBrowserCommandApprovalPolicy(),
-    () => chatViewProvider.getConfiguredCommandApprovalPolicy(),
-  );
+  wireBrowserGatewayApprovalPolicies(browserGatewayService, chatViewProvider);
   browserGatewayService.subscribeToProjectedForegroundChanges((listener) =>
     chatViewProvider.onDidChangeBrowserProjectedForeground(listener),
   );
@@ -1783,6 +1862,8 @@ export function activate(context: vscode.ExtensionContext): void {
       sources: service.getOwnerProjectionSources(),
       executor: new ProductionBrowserGatewayOwnerCommandExecutor(
         chatViewProvider,
+        browserGatewayInstanceId,
+        (selection) => service.getSerializableSessionDetail(selection),
       ),
       commandCapabilities:
         BROWSER_GATEWAY_PRODUCTION_OWNER_COMMAND_CAPABILITIES,
@@ -2201,9 +2282,11 @@ export function activate(context: vscode.ExtensionContext): void {
     });
 
   // Initialize modes, slash commands, MCP hub, and file watchers
-  chatViewProvider.initialize(workspaceCwd).catch((err) => {
-    log(`[agent] ChatViewProvider.initialize failed: ${err}`);
-  });
+  const chatViewProviderInitialization = chatViewProvider
+    .initialize(workspaceCwd)
+    .catch((err) => {
+      log(`[agent] ChatViewProvider.initialize failed: ${err}`);
+    });
 
   // Dedicated approval panel for the built-in agent — routes rich approval cards
   // (CommandCard, WriteCard, etc.) inline into the chat webview instead of the
@@ -2373,6 +2456,57 @@ export function activate(context: vscode.ExtensionContext): void {
   }
   chatViewProvider.setSessionManager(agentSessionManager);
 
+  void (async () => {
+    await chatTabControllerInitialization;
+    const restoredRootSessionIds = new Set<string>();
+    for (const tab of chatTabController.getLayout().tabs) {
+      if (!tab.sessionId) continue;
+      const session = await agentSessionManager.hydratePersistedSession(
+        tab.sessionId,
+      );
+      if (session) {
+        restoredRootSessionIds.add(session.id);
+        continue;
+      }
+      if (tab.placement === "popped") {
+        await chatTabController.setPlacement(tab.id, "popped", "docked");
+      }
+      await chatTabController.replaceSession(tab.id, tab.sessionId, null);
+    }
+    await agentSessionManager.restorePersistedBackgroundSessions(
+      restoredRootSessionIds,
+    );
+
+    let foregroundTab = chatTabController.getFocusedTab();
+    if (
+      !foregroundTab.sessionId ||
+      !agentSessionManager.getSession(foregroundTab.sessionId)
+    ) {
+      const fallback = chatTabController
+        .getLayout()
+        .tabs.find(
+          (tab) =>
+            tab.placement === "docked" &&
+            tab.sessionId !== null &&
+            agentSessionManager.getSession(tab.sessionId) !== undefined,
+        );
+      if (fallback) {
+        await chatTabController.focusTab(fallback.id);
+        foregroundTab = fallback;
+      }
+    }
+    if (foregroundTab.sessionId) {
+      agentSessionManager.switchTo(foregroundTab.sessionId);
+    }
+
+    await chatViewProviderInitialization;
+    chatTabPanelHost?.markRuntimeReady();
+    await chatTabPanelHost?.restoreMissingPanels();
+  })().catch((error) => {
+    log(`[chat-tabs] Failed to restore tab panels: ${String(error)}`);
+    chatTabPanelHost?.markRuntimeReady();
+  });
+
   void consumeWorktreeStartupIntent(context, chatViewProvider, log);
 
   context.subscriptions.push(
@@ -2394,11 +2528,13 @@ export function activate(context: vscode.ExtensionContext): void {
   // Update agent config when settings change
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("agentlink.disabledProviders")) {
+        void applyDisabledProviders();
+      }
       if (e.affectsConfiguration("agentlink.openaiCompatible.connections")) {
         void refreshOpenAiCompatibleProviders();
       }
       if (
-        e.affectsConfiguration("agentlink.agentModel") ||
         e.affectsConfiguration("agentlink.modeModelPreferences") ||
         e.affectsConfiguration("agentlink.modeReasoningEffortPreferences") ||
         e.affectsConfiguration("agentlink.defaultMode") ||
@@ -2406,7 +2542,6 @@ export function activate(context: vscode.ExtensionContext): void {
         e.affectsConfiguration("agentlink.thinkingBudget") ||
         e.affectsConfiguration("agentlink.showThinking") ||
         e.affectsConfiguration("agentlink.autoCondense") ||
-        e.affectsConfiguration("agentlink.autoCondenseThreshold") ||
         e.affectsConfiguration("agentlink.modelCondenseThresholds") ||
         e.affectsConfiguration("agentlink.codexStatefulResponses") ||
         e.affectsConfiguration("agentlink.codexStoreResponses") ||
@@ -2492,6 +2627,43 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Commands
   context.subscriptions.push(
+    vscode.commands.registerCommand("agentlink.popChatTab", async () => {
+      const tab = chatTabController.getFocusedTab();
+      if (await chatTabPanelHost?.popOut(tab.id)) return;
+      void vscode.window.showWarningMessage(
+        "This chat tab could not be popped out. At least one chat tab must remain docked.",
+      );
+    }),
+    vscode.commands.registerCommand("agentlink.dockChatTab", async () => {
+      const poppedTabs = chatTabController
+        .getLayout()
+        .tabs.filter((tab) => tab.placement === "popped");
+      if (poppedTabs.length === 0) {
+        void vscode.window.showInformationMessage(
+          "There are no popped-out AgentLink chat tabs.",
+        );
+        return;
+      }
+      const selected =
+        poppedTabs.length === 1
+          ? poppedTabs[0]
+          : await vscode.window.showQuickPick(
+              poppedTabs.map((tab) => ({
+                label: `T${tab.displayNumber}`,
+                description:
+                  agentSessionManager.getSession(tab.sessionId ?? "")?.title ??
+                  "New Chat",
+                tabId: tab.id,
+              })),
+              { placeHolder: "Choose a chat tab to dock" },
+            );
+      if (!selected) return;
+      const tabId = "tabId" in selected ? selected.tabId : selected.id;
+      if (await chatTabPanelHost?.dock(tabId)) return;
+      void vscode.window.showWarningMessage(
+        "This chat tab could not be docked. Please try again.",
+      );
+    }),
     ...registerDiffViewCommands(),
     ...registerAgentActivityCommands({
       addTrustedCommand: () => addTrustedCommandViaUi(approvalManager),
@@ -2667,6 +2839,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // Cleanup on deactivation
   context.subscriptions.push({
     dispose: () => {
+      chatTabPanelHost?.dispose();
+      chatTabPanelHost = null;
       agentSessionManager.saveAllSessions();
       agentSessionManager.disposeFleetVisibilityExpiry();
       disposeTerminalManager();

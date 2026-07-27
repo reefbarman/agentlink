@@ -1,11 +1,11 @@
+import type { ChatMessage, TodoItem } from "../types";
 import { EmptyState, PaneHeader } from "../../../shared/ui/Panes";
 
-import type { ChatMessage, TodoItem } from "../types";
+import type { BackgroundRuntimeStatus } from "./backgroundRuntimeStatus";
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import { ChatView } from "./ChatView";
 import { StreamingStatusBar } from "./StreamingStatusBar";
 import { TodoPanel } from "./TodoPanel";
-import type { BackgroundRuntimeStatus } from "./backgroundRuntimeStatus";
 
 interface TranscriptViewProps {
   task: string;
@@ -13,7 +13,8 @@ interface TranscriptViewProps {
   messages: ChatMessage[];
   streaming?: boolean;
   statusOverride?: string | null;
-  runtimeStatus?: BackgroundRuntimeStatus;
+  runtimeStatus?: BackgroundRuntimeStatus &
+    Pick<BgSessionInfoProps, "resolvedModel" | "resolvedProvider">;
   todos?: TodoItem[];
   onOpenFile?: (path: string, line?: number) => void;
   onOpenSpecialBlockPanel?: (block: {
@@ -47,11 +48,17 @@ export function TranscriptView({
   onOpenTranscript,
   onClose,
 }: TranscriptViewProps) {
+  const resolvedModel = runtimeStatus?.resolvedModel;
+  const resolvedProvider = runtimeStatus?.resolvedProvider;
+  const title = resolvedModel
+    ? `${task} — ${resolvedProvider ? `${resolvedProvider} / ` : ""}${resolvedModel}`
+    : task;
+
   return (
     <div class="transcript-overlay">
       <PaneHeader
         className="transcript-header"
-        title={task}
+        title={title}
         right={
           <button
             class="icon-button transcript-close"

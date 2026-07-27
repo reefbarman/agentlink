@@ -62,8 +62,9 @@ describe("ChatWorkspace", () => {
     ).toBe("tab-2:session-2");
   });
 
-  it("routes focus, close, New Tab, and drag reorder actions", () => {
+  it("routes focus, pop-out, close, New Tab, and drag reorder actions", () => {
     const onFocus = vi.fn();
+    const onPopOut = vi.fn();
     const onClose = vi.fn();
     const onNewTab = vi.fn();
     const onReorder = vi.fn();
@@ -73,6 +74,7 @@ describe("ChatWorkspace", () => {
         onFocus={onFocus}
         onNewTab={onNewTab}
         onClose={onClose}
+        onPopOut={onPopOut}
         onReorder={onReorder}
       >
         pane
@@ -80,6 +82,7 @@ describe("ChatWorkspace", () => {
     );
 
     fireEvent.click(screen.getByTitle("T1: First task — Waiting for provider"));
+    fireEvent.click(screen.getByLabelText("Pop out T1"));
     fireEvent.click(screen.getByLabelText("Close T1"));
     fireEvent.click(screen.getByLabelText("New Tab"));
     const tabs = container.querySelectorAll<HTMLElement>(".chat-tab");
@@ -88,12 +91,13 @@ describe("ChatWorkspace", () => {
     fireEvent.drop(tabs[1]!);
 
     expect(onFocus).toHaveBeenCalledWith("tab-1");
+    expect(onPopOut).toHaveBeenCalledWith("tab-1");
     expect(onClose).toHaveBeenCalledWith("tab-1");
     expect(onNewTab).toHaveBeenCalledOnce();
     expect(onReorder).toHaveBeenCalledWith(["tab-2", "tab-1"]);
   });
 
-  it("prevents closing the only docked tab", () => {
+  it("prevents closing or popping out the only docked tab", () => {
     render(
       <ChatWorkspace
         snapshot={{
@@ -104,6 +108,7 @@ describe("ChatWorkspace", () => {
         onFocus={vi.fn()}
         onNewTab={vi.fn()}
         onClose={vi.fn()}
+        onPopOut={vi.fn()}
         onReorder={vi.fn()}
       >
         pane
@@ -112,6 +117,9 @@ describe("ChatWorkspace", () => {
 
     expect(
       (screen.getByLabelText("Close T1") as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByLabelText("Pop out T1") as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(
       (screen.getByLabelText("New Tab") as HTMLButtonElement).disabled,

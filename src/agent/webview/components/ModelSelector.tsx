@@ -46,7 +46,8 @@ export function ModelSelector({
   const ref = useRef<HTMLDivElement>(null);
 
   const current = models.find((m) => m.id === currentModel);
-  const displayName = current?.displayName ?? currentModel;
+  const displayName =
+    (current?.displayName ?? currentModel) || "Loading model…";
   const effectiveCurrentThreshold =
     sliderOpen && draftThreshold != null
       ? draftThreshold

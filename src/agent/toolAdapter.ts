@@ -1751,9 +1751,20 @@ function createMcpToolInvocationProvider(
 function createUserQuestionProvider(
   onQuestion: NonNullable<ToolDispatchContext["onQuestion"]>,
   pendingQuestionRecovery?: AgentToolExecutionRequest["context"]["pendingQuestionRecovery"],
+  toolCallId?: string,
 ): UserQuestionProvider {
   return {
     ask(request) {
+      if (toolCallId !== undefined) {
+        return onQuestion(
+          request.context,
+          request.questions as Question[],
+          request.sessionId,
+          undefined,
+          pendingQuestionRecovery,
+          toolCallId,
+        );
+      }
       if (pendingQuestionRecovery) {
         return onQuestion(
           request.context,
@@ -1897,6 +1908,8 @@ export interface ToolDispatchContext {
      */
     backgroundTask?: string,
     pendingQuestionRecovery?: AgentToolExecutionRequest["context"]["pendingQuestionRecovery"],
+    /** Exact provider tool-call identity used to correlate the result card. */
+    toolCallId?: string,
   ) => Promise<QuestionResponse>;
   /** Resolves a background ask_user request after its root coordinator answers. */
   onRespondToBackgroundQuestion?: (
@@ -1982,6 +1995,8 @@ export interface ToolDispatchContext {
   toolAbortSignal?: AbortSignal;
   /** Durable recovery context for a foreground ask_user call waiting on input. */
   pendingQuestionRecovery?: AgentToolExecutionRequest["context"]["pendingQuestionRecovery"];
+  /** Current provider tool-call identity for exact UI/result correlation. */
+  toolCallId?: string;
   /** Records the intended final marker for the current foreground turn. */
   onFinalStatus?: (marker: FinalMessageMarker) => void;
   /** Structured result contract requested by the parent of a background session. */
@@ -2344,6 +2359,7 @@ export function createAgentToolRuntime(
                   trackerCtx: request.context
                     .trackerCtx as ToolDispatchContext["trackerCtx"],
                   toolAbortSignal: request.context.toolAbortSignal,
+                  toolCallId: request.context.toolCallId,
                   getAdvertisedSkills: request.context.getAdvertisedSkills,
                   getAdvertisedRules: request.context.getAdvertisedRules,
                   onSkillLoad: request.context.onSkillLoad,
@@ -4021,6 +4037,7 @@ export async function dispatchToolCall(
           ? createUserQuestionProvider(
               ctx.onQuestion,
               ctx.pendingQuestionRecovery,
+              ctx.toolCallId,
             )
           : undefined);
       if (!userQuestionProvider) {

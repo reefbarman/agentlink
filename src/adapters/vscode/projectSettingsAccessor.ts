@@ -11,6 +11,7 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "semanticSearchEnabled",
   "bgSummary.mode",
   "background.defaultAgent",
+  "background.reviewAgent",
   "background.acpAgents",
   "background.maxConcurrent",
   "autoIndex",
@@ -19,7 +20,6 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "recentApprovalTtl",
   "commandAutoApproveTier",
   "worktreeDirectorySuffix",
-  "agentModel",
   "modeModelPreferences",
   "modeReasoningEffortPreferences",
   "modelPromptProfiles",
@@ -44,6 +44,7 @@ export const MACHINE_SCOPED_AGENTLINK_SETTINGS = [
 
 export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "provider.maxConcurrentRequests",
+  "disabledProviders",
   "webAccess.searchBackend",
   "webAccess.fetchBackend",
   "webAccess.nativeSearchMode",
@@ -65,15 +66,6 @@ export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "memory.mode",
   "showThinking",
   "anthropic.dynamicModelCapabilities",
-] as const;
-
-export const COMPATIBILITY_AGENTLINK_SETTINGS = [
-  "questionDetection.llmEnabled",
-  "questionDetection.baseUrl",
-  "questionDetection.model",
-  "questionDetection.apiKey",
-  "questionDetection.timeoutMs",
-  "autoCondenseThreshold",
 ] as const;
 
 export type ProjectScopedAgentLinkSetting =

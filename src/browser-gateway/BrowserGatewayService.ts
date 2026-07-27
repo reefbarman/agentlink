@@ -1,7 +1,9 @@
 import * as vscode from "vscode";
 
 import type { AgentSessionManager } from "../agent/AgentSessionManager.js";
-import type { AgentMessage } from "../agent/types.js";
+import type { ChatWorkspaceViewSnapshot } from "../agent/chatTabProtocol.js";
+import { getLatestTodoState } from "../agent/todoTool.js";
+import type { AgentMessage, SessionInfo } from "../agent/types.js";
 
 import type {
   ChatMessage,
@@ -26,6 +28,7 @@ import {
 
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import type { BrowserGatewayInstanceStatusSummary } from "./protocol.js";
+import type { BrowserGatewayChatWorkspaceSummary } from "./dataPlane/protocol.js";
 import type { McpFormElicitationRequest } from "../shared/mcpElicitation.js";
 import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
 import type {
@@ -75,6 +78,7 @@ export interface BrowserGatewayUiState {
   question:
     | {
         id: string;
+        toolCallId?: string;
         context: string;
         questions: Question[];
         backgroundTask?: string;
@@ -90,6 +94,7 @@ export interface BrowserGatewayWireState {
   approval: ApprovalRequest | null;
   question: {
     id: string;
+    toolCallId?: string;
     context: string;
     questions: Question[];
     backgroundTask?: string;
@@ -111,6 +116,7 @@ export interface BrowserGatewaySessionState {
   projects: BrowserGatewayProjectInfo[];
   defaultProjectId: string | null;
   sessions: SessionSummary[];
+  chatWorkspace: BrowserGatewayChatWorkspaceSummary | null;
   repository: BrowserGatewayRepositoryInfo | null;
   foreground:
     | {
@@ -136,6 +142,7 @@ export interface BrowserGatewaySessionState {
         messageQueue: AppState["messageQueue"];
         questionRequest: {
           id: string;
+          toolCallId?: string;
           context: string;
           questions: Question[];
           backgroundTask?: string;
@@ -166,6 +173,7 @@ export interface BrowserGatewayWireSessionState {
   projects: BrowserGatewayProjectInfo[];
   defaultProjectId: string | null;
   sessions: SessionSummary[];
+  chatWorkspace: BrowserGatewayChatWorkspaceSummary | null;
   repository: BrowserGatewayRepositoryInfo | null;
   foreground: {
     sessionId: string;
@@ -189,6 +197,7 @@ export interface BrowserGatewayWireSessionState {
     messageQueue: AppState["messageQueue"];
     questionRequest: {
       id: string;
+      toolCallId?: string;
       context: string;
       questions: Question[];
       backgroundTask?: string;
@@ -213,6 +222,35 @@ export interface BrowserGatewayWireSessionState {
       "approve-for-me"
     >;
   } | null;
+}
+
+export interface BrowserGatewayDetachedSessionSelection {
+  controllerEpoch: string;
+  tabId: string;
+  sessionId: string;
+}
+
+export interface BrowserGatewayDetachedSessionUiState {
+  approval: ApprovalRequest | null;
+  question: {
+    id: string;
+    toolCallId?: string;
+    context: string;
+    questions: Question[];
+    backgroundTask?: string;
+  } | null;
+  questionProgress: QuestionProgressState | null;
+  formElicitation: McpFormElicitationRequest | null;
+  urlElicitation: McpUrlElicitationRequest | null;
+}
+
+export interface BrowserGatewayDetachedSessionDetail {
+  selection: BrowserGatewayDetachedSessionSelection;
+  session: NonNullable<BrowserGatewayWireSessionState["foreground"]>;
+  ui: BrowserGatewayDetachedSessionUiState;
+  revertRecoveryState: ReturnType<
+    AgentSessionManager["getRevertRecoveryState"]
+  >;
 }
 
 export interface BrowserGatewaySnapshotState {
@@ -259,6 +297,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   private question:
     | {
         id: string;
+        toolCallId?: string;
         context: string;
         questions: Question[];
         backgroundTask?: string;
@@ -278,11 +317,15 @@ export class BrowserGatewayService implements vscode.Disposable {
     | undefined;
   private getRepositoryInfoProvider: () => BrowserGatewayRepositoryInfo | null =
     () => null;
+  private getChatWorkspaceSnapshot: () =>
+    | ChatWorkspaceViewSnapshot
+    | undefined = () => undefined;
   private getCommandApprovalPolicy: () => CommandApprovalPolicy = () => "safe";
-  private getConfiguredCommandApprovalPolicy: () => Exclude<
-    CommandApprovalPolicy,
-    "approve-for-me"
-  > = () => "safe";
+  private getConfiguredCommandApprovalPolicy: (
+    projectScope?: Parameters<
+      ChatViewProvider["getConfiguredCommandApprovalPolicy"]
+    >[0],
+  ) => Exclude<CommandApprovalPolicy, "approve-for-me"> = () => "safe";
 
   readonly onDidChange = this.onDidChangeEmitter.event;
 
@@ -298,9 +341,9 @@ export class BrowserGatewayService implements vscode.Disposable {
     private readonly uiEventHub: ReadableAgentUiEventHub,
     private readonly sessionManager: AgentSessionManager,
     private readonly getThemeSnapshot: () => BrowserGatewayThemeSnapshot,
-    private readonly getAgentWriteApprovalState: () => ReturnType<
-      ChatViewProvider["getBrowserAgentWriteApprovalState"]
-    >,
+    private readonly getAgentWriteApprovalState: (
+      sessionId?: string,
+    ) => ReturnType<ChatViewProvider["getBrowserAgentWriteApprovalState"]>,
     private readonly getThinkingEnabledState: () => ReturnType<
       ChatViewProvider["getBrowserThinkingEnabledState"]
     >,
@@ -359,6 +402,19 @@ export class BrowserGatewayService implements vscode.Disposable {
     this.repositoryInfoCache = undefined;
   }
 
+  setChatWorkspaceProvider(
+    getSnapshot: () => ChatWorkspaceViewSnapshot | undefined,
+    onDidChange: (listener: () => void) => { dispose(): void },
+  ): void {
+    this.getChatWorkspaceSnapshot = getSnapshot;
+    this.disposables.push(
+      onDidChange(() => {
+        this.onDidChangeOwnerProjectionEmitter.fire("sessions");
+        this.invalidateBrowserSnapshot();
+      }),
+    );
+  }
+
   subscribeToRepositoryChanges(
     onDidChangeRepository: (listener: () => void) => { dispose(): void },
   ): void {
@@ -400,9 +456,11 @@ export class BrowserGatewayService implements vscode.Disposable {
     getEffective: () => ReturnType<
       ChatViewProvider["getBrowserCommandApprovalPolicy"]
     >,
-    getConfigured: () => ReturnType<
-      ChatViewProvider["getConfiguredCommandApprovalPolicy"]
-    >,
+    getConfigured: (
+      projectScope?: Parameters<
+        ChatViewProvider["getConfiguredCommandApprovalPolicy"]
+      >[0],
+    ) => ReturnType<ChatViewProvider["getConfiguredCommandApprovalPolicy"]>,
   ): void {
     this.getCommandApprovalPolicy = getEffective;
     this.getConfiguredCommandApprovalPolicy = getConfigured;
@@ -515,6 +573,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     const projectsById = new Map(
       projects.map((project) => [project.projectId, project]),
     );
+    const sessionInfos = this.sessionManager.getSessionInfos();
     const sessions = this.sessionManager
       .listPersistedSessions()
       .map((session) => {
@@ -546,6 +605,7 @@ export class BrowserGatewayService implements vscode.Disposable {
         projects,
         defaultProjectId,
         sessions,
+        chatWorkspace: this.createChatWorkspaceSummary(sessionInfos),
         repository: this.getRepositoryInfo(),
         foreground: undefined,
       };
@@ -563,9 +623,11 @@ export class BrowserGatewayService implements vscode.Disposable {
     const projected = this.getProjectedForegroundState();
     const projectedMatchesForeground =
       projected && projected.sessionId === foreground.id;
+    const configuredCommandApprovalPolicy =
+      this.getConfiguredCommandApprovalPolicy(foreground.projectScope);
     const approvalMode = this.sessionManager.getSessionApprovalMode(
       foreground.id,
-      this.getConfiguredCommandApprovalPolicy(),
+      configuredCommandApprovalPolicy,
     );
 
     const projectionStartedAt = this.streamingMetrics.enabled
@@ -588,15 +650,17 @@ export class BrowserGatewayService implements vscode.Disposable {
     const foregroundProject = projectsById.get(
       foreground.projectScope.projectId,
     );
-    const interactiveExecutionPhase = this.sessionManager
-      .getSessionInfos()
-      .find(
-        (session) => session.id === foreground.id,
-      )?.interactiveExecutionPhase;
+    const interactiveExecutionPhase = sessionInfos.find(
+      (session) => session.id === foreground.id,
+    )?.interactiveExecutionPhase;
     return {
       projects,
       defaultProjectId,
       sessions,
+      chatWorkspace: this.createChatWorkspaceSummary(
+        sessionInfos,
+        projectedMatchesForeground ? projected : undefined,
+      ),
       repository: this.getRepositoryInfo(),
       foreground: {
         sessionId: foreground.id,
@@ -697,9 +761,166 @@ export class BrowserGatewayService implements vscode.Disposable {
         executionPreset: projectedMatchesForeground
           ? (projected.executionPreset ?? approvalMode.executionPreset)
           : approvalMode.executionPreset,
-        configuredCommandApprovalPolicy:
-          this.getConfiguredCommandApprovalPolicy(),
+        configuredCommandApprovalPolicy,
       },
+    };
+  }
+
+  getSerializableSessionDetail(
+    selection: BrowserGatewayDetachedSessionSelection,
+  ): BrowserGatewayDetachedSessionDetail | null {
+    const workspace = this.getChatWorkspaceSnapshot();
+    if (
+      !workspace ||
+      workspace.controllerEpoch !== selection.controllerEpoch ||
+      !workspace.tabs.some(
+        (tab) =>
+          tab.tabId === selection.tabId &&
+          tab.sessionId === selection.sessionId,
+      )
+    ) {
+      return null;
+    }
+
+    const session = this.sessionManager.getSession(selection.sessionId);
+    if (!session) return null;
+
+    // Detached detail is available only for materialized sessions. Prefer the
+    // live in-memory transcript here so browser tabs do not lag the active tail
+    // by the persistence interval used by the global foreground snapshot.
+    const messages = session.getAllMessages();
+    const projected = this.getProjectedForegroundState();
+    const projectedMatchesSession = projected?.sessionId === session.id;
+    const projectedMessages = projectedMatchesSession
+      ? projected.projectedMessages
+      : agentMessagesToChatMessages(messages);
+    const sessionInfo = this.sessionManager
+      .getSessionInfos()
+      .find((candidate) => candidate.id === session.id);
+    const configuredCommandApprovalPolicy =
+      this.getConfiguredCommandApprovalPolicy(session.projectScope);
+    const approvalMode = this.sessionManager.getSessionApprovalMode(
+      session.id,
+      configuredCommandApprovalPolicy,
+    );
+    const ui = createDetachedSessionUiState(
+      this.uiEventHub.getSnapshot(session.id),
+    );
+    const pendingQuestion = this.sessionManager.getPendingQuestionRecovery(
+      session.id,
+    );
+    if (!ui.question && pendingQuestion) {
+      ui.question = {
+        id: pendingQuestion.questionRequestId,
+        toolCallId: pendingQuestion.toolUseId,
+        context: pendingQuestion.context,
+        questions: structuredClone(pendingQuestion.questions),
+      };
+    }
+
+    return {
+      selection: { ...selection },
+      session: {
+        sessionId: session.id,
+        project: {
+          projectId: session.projectScope.projectId,
+          displayName: session.projectScope.displayName,
+          availability:
+            session.projectAvailability === "available"
+              ? "available"
+              : "unavailable",
+        },
+        title: session.title,
+        originalPrompt:
+          (projectedMatchesSession ? projected.originalPrompt : undefined) ??
+          projectedMessages.find((message) => message.role === "user")?.content,
+        mode: projectedMatchesSession ? projected.mode : session.mode,
+        model: projectedMatchesSession ? projected.model : session.model,
+        status: session.status,
+        interactiveExecutionPhase: sessionInfo?.interactiveExecutionPhase,
+        streaming: projectedMatchesSession
+          ? projected.streaming
+          : session.status === "streaming" ||
+            session.status === "tool_executing" ||
+            session.status === "awaiting_approval",
+        interrupted: projectedMatchesSession
+          ? Boolean(projected.interrupted)
+          : Boolean(
+              session.runState?.phase === "running" &&
+              session.status !== "streaming" &&
+              session.status !== "tool_executing" &&
+              session.status !== "awaiting_approval",
+            ),
+        projectedMessages,
+        statusOverride: projectedMatchesSession
+          ? projected.statusOverride
+          : null,
+        contextHealth: projectedMatchesSession ? projected.contextHealth : null,
+        thinkingEnabled: projectedMatchesSession
+          ? projected.thinkingEnabled
+          : session.reasoningEffort !== "none",
+        reasoningEffort: projectedMatchesSession
+          ? projected.reasoningEffort
+          : session.reasoningEffort,
+        lastInputTokens: projectedMatchesSession
+          ? projected.lastInputTokens
+          : session.lastInputTokens,
+        lastOutputTokens: projectedMatchesSession
+          ? projected.lastOutputTokens
+          : session.lastOutputTokens,
+        lastCacheReadTokens: projectedMatchesSession
+          ? projected.lastCacheReadTokens
+          : session.lastCacheReadTokens,
+        estimatedTotalUsed: projectedMatchesSession
+          ? projected.estimatedTotalUsed
+          : session.estimatedTotalUsed,
+        messageQueue: projectedMatchesSession ? projected.messageQueue : [],
+        questionRequest: projectedMatchesSession
+          ? projected.questionRequest
+          : ui.question,
+        detectedQuestion: projectedMatchesSession
+          ? projected.detectedQuestion
+          : null,
+        todos: projectedMatchesSession
+          ? structuredClone(projected.todos)
+          : structuredClone(getLatestTodoState(messages)),
+        debugInfo: projectedMatchesSession ? projected.debugInfo : null,
+        systemPrompt: projectedMatchesSession ? projected.systemPrompt : null,
+        loadedInstructions: projectedMatchesSession
+          ? projected.loadedInstructions
+          : null,
+        restoringSession: projectedMatchesSession
+          ? projected.restoringSession
+          : false,
+        revertRecoveryNotice: projectedMatchesSession
+          ? projected.revertRecoveryNotice
+          : null,
+        contextBudget: projectedMatchesSession
+          ? projected.contextBudget
+          : undefined,
+        condenseThreshold: projectedMatchesSession
+          ? projected.condenseThreshold
+          : undefined,
+        agentWriteApproval: this.getAgentWriteApprovalState(session.id),
+        commandApprovalPolicy: projectedMatchesSession
+          ? (projected.commandApprovalPolicy ??
+            approvalMode.commandApprovalPolicy)
+          : approvalMode.commandApprovalPolicy,
+        approvalPolicy: projectedMatchesSession
+          ? (projected.approvalPolicy ?? approvalMode.approvalPolicy)
+          : approvalMode.approvalPolicy,
+        approvalReviewer: projectedMatchesSession
+          ? (projected.approvalReviewer ?? approvalMode.approvalReviewer)
+          : approvalMode.approvalReviewer,
+        executionPreset: projectedMatchesSession
+          ? (projected.executionPreset ?? approvalMode.executionPreset)
+          : approvalMode.executionPreset,
+        configuredCommandApprovalPolicy,
+      },
+      ui,
+      revertRecoveryState: this.sessionManager.getRevertRecoveryState(
+        session.id,
+      ),
     };
   }
 
@@ -727,6 +948,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       projects: sessionState.projects,
       defaultProjectId: sessionState.defaultProjectId,
       sessions: sessionState.sessions,
+      chatWorkspace: sessionState.chatWorkspace,
       repository: sessionState.repository,
       foreground: sessionState.foreground
         ? {
@@ -761,7 +983,9 @@ export class BrowserGatewayService implements vscode.Disposable {
             contextBudget: sessionState.foreground.contextBudget,
             contextHealth: sessionState.foreground.contextHealth,
             condenseThreshold: sessionState.foreground.condenseThreshold,
-            agentWriteApproval: this.getAgentWriteApprovalState(),
+            agentWriteApproval: this.getAgentWriteApprovalState(
+              sessionState.foreground.sessionId,
+            ),
             commandApprovalPolicy:
               sessionState.foreground.commandApprovalPolicy,
             approvalPolicy: sessionState.foreground.approvalPolicy,
@@ -792,8 +1016,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       ui.question ||
       ui.formElicitation ||
       ui.urlElicitation ||
-      session?.questionRequest ||
-      session?.status === "awaiting_approval"
+      session?.questionRequest
     ) {
       return {
         kind: "awaiting_approval",
@@ -812,12 +1035,22 @@ export class BrowserGatewayService implements vscode.Disposable {
     if (
       session?.streaming ||
       session?.status === "streaming" ||
-      session?.status === "tool_executing"
+      session?.status === "tool_executing" ||
+      session?.status === "awaiting_approval"
     ) {
       return {
         kind: "working",
-        label: session.status === "tool_executing" ? "Tool running" : "Working",
-        detail: session.statusOverride ?? session.status,
+        label:
+          session.status === "tool_executing"
+            ? "Tool running"
+            : session.status === "awaiting_approval"
+              ? "Waiting"
+              : "Working",
+        detail:
+          session.statusOverride ??
+          (session.status === "awaiting_approval"
+            ? "Awaiting interaction details"
+            : session.status),
         sessionTitle: session.title,
       };
     }
@@ -939,6 +1172,7 @@ export class BrowserGatewayService implements vscode.Disposable {
         })),
         defaultProjectId: snapshot.session.defaultProjectId,
         foregroundSessionId: foreground?.sessionId ?? null,
+        chatWorkspace: snapshot.session.chatWorkspace,
       },
       foreground: foreground
         ? {
@@ -1015,6 +1249,49 @@ export class BrowserGatewayService implements vscode.Disposable {
     };
   }
 
+  private createChatWorkspaceSummary(
+    sessionInfos: readonly SessionInfo[],
+    projected?: ReturnType<
+      ChatViewProvider["getBrowserProjectedForegroundState"]
+    >,
+  ): BrowserGatewayChatWorkspaceSummary | null {
+    const workspace = this.getChatWorkspaceSnapshot();
+    if (!workspace) return null;
+    const sessionsById = new Map(
+      sessionInfos.map((session) => [session.id, session]),
+    );
+    return {
+      controllerEpoch: workspace.controllerEpoch,
+      focusedTabId: workspace.focusedTabId,
+      tabs: workspace.tabs.map((tab) => {
+        const session = tab.sessionId
+          ? sessionsById.get(tab.sessionId)
+          : undefined;
+        const projectedMatches = projected?.sessionId === tab.sessionId;
+        return {
+          ...tab,
+          needsAttention:
+            tab.status === "needs_input" || tab.status === "failed",
+          ...(session?.mode ? { mode: session.mode } : {}),
+          ...(session?.model ? { model: session.model } : {}),
+          ...(session?.interactiveExecutionPhase
+            ? {
+                interactiveExecutionPhase: session.interactiveExecutionPhase,
+              }
+            : {}),
+          ...(projectedMatches
+            ? {
+                estimatedTokens: projected.estimatedTotalUsed,
+                ...(projected.contextBudget?.contextWindow !== undefined
+                  ? { maximumTokens: projected.contextBudget.contextWindow }
+                  : {}),
+              }
+            : {}),
+        };
+      }),
+    };
+  }
+
   private getForegroundQuestion(): BrowserGatewayUiState["question"] {
     const foreground = this.sessionManager.getForegroundSession();
     const projected = this.getProjectedForegroundState();
@@ -1023,6 +1300,9 @@ export class BrowserGatewayService implements vscode.Disposable {
       if (foregroundQuestion) {
         return {
           id: foregroundQuestion.id,
+          ...(foregroundQuestion.toolCallId
+            ? { toolCallId: foregroundQuestion.toolCallId }
+            : {}),
           context: foregroundQuestion.context,
           questions: foregroundQuestion.questions.map((question) => ({
             ...question,
@@ -1079,9 +1359,20 @@ export class BrowserGatewayService implements vscode.Disposable {
     const sessionId = this.sessionManager.getForegroundSession()?.id;
     if (sessionId === this.seededForegroundSessionId) return;
     this.seededForegroundSessionId = sessionId;
+    const visibleBackgroundApproval = this.approval?.backgroundTask
+      ? this.approval
+      : undefined;
+    const visibleBackgroundApprovalSessionId = visibleBackgroundApproval
+      ? this.approvalSessionId
+      : undefined;
     this.clearInteractionState();
+    this.approval = visibleBackgroundApproval;
+    this.approvalSessionId = visibleBackgroundApprovalSessionId;
     if (!sessionId) return;
     for (const event of this.uiEventHub.getSnapshot(sessionId)) {
+      if (visibleBackgroundApproval && event.event.type === "showApproval") {
+        continue;
+      }
       this.applyEvent(event, false);
     }
   }
@@ -1133,13 +1424,26 @@ export class BrowserGatewayService implements vscode.Disposable {
           this.approvalSessionId === sessionId &&
           this.approval?.id === event.id
         ) {
+          const clearedBackgroundApproval = Boolean(
+            this.approval.backgroundTask,
+          );
           this.approval = undefined;
           this.approvalSessionId = undefined;
+          if (clearedBackgroundApproval && selectedSessionId) {
+            for (const selectedEvent of this.uiEventHub.getSnapshot(
+              selectedSessionId,
+            )) {
+              if (selectedEvent.event.type === "showApproval") {
+                this.applyEvent(selectedEvent, false);
+              }
+            }
+          }
         }
         break;
       case "agentQuestionRequest":
         this.question = {
           id: event.id,
+          ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
           context: event.context,
           questions: event.questions,
           ...(event.backgroundTask
@@ -1316,6 +1620,61 @@ export class BrowserGatewayService implements vscode.Disposable {
     }
     return bytes;
   }
+}
+
+function createDetachedSessionUiState(
+  events: readonly SessionUiEvent[],
+): BrowserGatewayDetachedSessionUiState {
+  const state: BrowserGatewayDetachedSessionUiState = {
+    approval: null,
+    question: null,
+    questionProgress: null,
+    formElicitation: null,
+    urlElicitation: null,
+  };
+
+  for (const { event } of events) {
+    switch (event.type) {
+      case "showApproval":
+        state.approval = structuredClone(event.request);
+        break;
+      case "agentQuestionRequest":
+        state.question = {
+          id: event.id,
+          ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+          context: event.context,
+          questions: structuredClone(event.questions),
+          ...(event.backgroundTask
+            ? { backgroundTask: event.backgroundTask }
+            : {}),
+        };
+        break;
+      case "agentQuestionProgress":
+        if (state.question?.id === event.id) {
+          state.questionProgress = {
+            id: event.id,
+            step: event.step,
+            answers: structuredClone(event.answers),
+            notes: { ...event.notes },
+            origin: event.origin,
+          };
+        }
+        break;
+      case "agentFormElicitationRequest":
+        state.formElicitation = cloneFormElicitationRequest(event.request);
+        break;
+      case "agentUrlElicitationRequest":
+        state.urlElicitation = { ...event.request };
+        break;
+      case "idle":
+      case "agentQuestionCleared":
+      case "agentFormElicitationCleared":
+      case "agentUrlElicitationCleared":
+        break;
+    }
+  }
+
+  return state;
 }
 
 function cloneFormElicitationRequest(

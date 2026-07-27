@@ -74,6 +74,7 @@ import type { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
 import {
   getProviderAuxiliaryModel,
   type ContentBlock,
+  type DocumentBlock,
   type ImageBlock,
   type ModelProvider,
   type ReasoningEffort,
@@ -101,6 +102,9 @@ import type {
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionUpdate,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallStatus,
   ToolKind,
 } from "@agentclientprotocol/sdk" with { "resolution-mode": "import" };
 import { normalizeBackgroundAgentSettings } from "./background/acpAgentConfig.js";
@@ -116,6 +120,7 @@ import {
   type McpToolDisclosurePartition,
 } from "./mcpToolDisclosure.js";
 import { CODEX_CONDENSE_MODEL_FALLBACKS } from "../core/model/providers/codex/models.js";
+import { FALLBACK_AGENT_MODEL } from "./modeModelPreferences.js";
 import { getEffectiveAutoCondenseThreshold } from "./modelCondenseThresholds.js";
 import {
   callOpenAiCompatibleChat,
@@ -199,11 +204,25 @@ const AUTOMATIC_MEMORY_MAX_CHARS = 6_000;
 const AUTOMATIC_MEMORY_QUERY_MAX_CHARS = 6_000;
 const AUTOMATIC_MEMORY_QUERY_USER_TURNS = 3;
 
+interface AcpToolCallState {
+  toolCallId: string;
+  title: string;
+  status?: ToolCallStatus;
+  content?: ToolCallContent[];
+  locations?: ToolCallLocation[];
+  rawInput?: unknown;
+  rawOutput?: unknown;
+  startedAt: number;
+  startEmitted: boolean;
+  lastTerminalSignature?: string;
+}
+
 interface AcpOutputState {
   assistantTextParts: string[];
   directImages: ImageBlock[];
-  toolImages: Map<string, ImageBlock[]>;
+  toolCalls: Map<string, AcpToolCallState>;
   warnings: Set<string>;
+  transcriptCommitted: boolean;
 }
 
 interface PendingBackgroundQuestion {
@@ -240,6 +259,8 @@ export type BtwProgressEvent =
     };
 
 export interface BtwQuestionOptions {
+  /** Session whose context should seed the side question. Defaults to foreground. */
+  sessionId?: string;
   /** Streamed incremental progress (text, tool activity, warnings, budget). */
   onProgress?: (event: BtwProgressEvent) => void;
   /** External cancellation (e.g. a Cancel button). Aborts the side session. */
@@ -273,6 +294,8 @@ const BTW_DEFAULT_TIMEOUT_MS = 120_000;
 export type WorktreeSetupProgressEvent = BtwProgressEvent;
 
 export interface WorktreeSetupOptions {
+  /** Session whose project/model should seed setup. Defaults to foreground. */
+  sessionId?: string;
   onProgress?: (event: WorktreeSetupProgressEvent) => void;
   onSessionStarted?: (sessionId: string) => void;
   signal?: AbortSignal;
@@ -586,6 +609,10 @@ export class AgentSessionManager {
   >();
   private devMode: boolean;
   private persistence?: SessionStore;
+  private readonly sessionHydrations = new Map<
+    string,
+    Promise<AgentSession | null>
+  >();
   private sessionRevisions = new Map<string, PersistenceRevision>();
   private sessionRevertPending = new Map<string, RevertRecoveryState>();
   private sessionSaveQueues = new Map<string, Promise<void>>();
@@ -646,6 +673,8 @@ export class AgentSessionManager {
   private bgBudgetWrapUps = new Map<string, { kind: string }>();
   /** Accumulated streaming text for background sessions (for UI preview). */
   private bgStreamingText = new Map<string, string>();
+  /** In-flight ACP output used to rebuild transcripts before the final turn is committed. */
+  private activeAcpOutputs = new Map<string, AcpOutputState>();
   /** Bounded substantive output retained for terminal failure and reload recovery. */
   private bgPartialResults = new Map<string, string>();
   /** Provider/engine retryability for terminal background failures. */
@@ -1973,38 +2002,190 @@ export class AgentSessionManager {
     excludingToolCallId?: string,
   ): number {
     let count = state.directImages.length;
-    for (const [toolCallId, images] of state.toolImages) {
-      if (toolCallId !== excludingToolCallId) count += images.length;
+    for (const toolCall of state.toolCalls.values()) {
+      if (toolCall.toolCallId === excludingToolCallId) continue;
+      count += (toolCall.content ?? []).filter(
+        (item) => item.type === "content" && item.content.type === "image",
+      ).length;
     }
     return count;
   }
 
-  private setAcpToolImages(
-    state: AcpOutputState,
-    update: Extract<SessionUpdate, { sessionUpdate: "tool_call_update" }>,
-  ): void {
-    if (!update.content) return;
-    const images: ImageBlock[] = [];
-    const available = Math.max(
+  private stringifyAcpValue(value: unknown): string {
+    if (typeof value === "string") return value;
+    if (value === undefined) return "";
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+
+  private normalizeAcpToolResult(
+    output: AcpOutputState,
+    toolCall: AcpToolCallState,
+  ): ToolResult["content"] {
+    const content: ToolResult["content"] = [];
+    const rawOutput = this.stringifyAcpValue(toolCall.rawOutput);
+    if (rawOutput) content.push({ type: "text", text: rawOutput });
+
+    const availableImages = Math.max(
       0,
       MAX_ACP_OUTPUT_IMAGES -
-        this.acpOutputImageCount(state, update.toolCallId),
+        this.acpOutputImageCount(output, toolCall.toolCallId),
     );
-    let validImageCount = 0;
-    for (const item of update.content) {
-      if (item.type !== "content" || item.content.type !== "image") continue;
-      const converted = convertAcpContentBlock(item.content);
-      if (converted.warning) state.warnings.add(converted.warning);
-      if (converted.content?.type !== "image") continue;
-      validImageCount += 1;
-      if (images.length < available) images.push(converted.content);
+    let imageCount = 0;
+    for (const item of toolCall.content ?? []) {
+      if (item.type === "content") {
+        const converted = convertAcpContentBlock(item.content);
+        if (converted.warning) output.warnings.add(converted.warning);
+        if (converted.content?.type === "image") {
+          imageCount += 1;
+          if (imageCount <= availableImages) {
+            content.push({
+              type: "image",
+              data: converted.content.source.data,
+              mimeType: converted.content.source.media_type,
+            });
+          }
+        } else if (!rawOutput && converted.content?.type === "text") {
+          content.push({ type: "text", text: converted.content.text });
+        } else if (!rawOutput && !converted.content) {
+          content.push({ type: "text", text: this.stringifyAcpValue(item) });
+        }
+        continue;
+      }
+      if (!rawOutput) {
+        content.push({ type: "text", text: this.stringifyAcpValue(item) });
+      }
     }
-    if (validImageCount > images.length) {
-      state.warnings.add(
+    if (imageCount > availableImages) {
+      output.warnings.add(
         `[ACP images truncated: showing at most ${MAX_ACP_OUTPUT_IMAGES} images]`,
       );
     }
-    state.toolImages.set(update.toolCallId, images);
+
+    if (toolCall.status === "failed") {
+      const outputText = content
+        .filter(
+          (item): item is { type: "text"; text: string } =>
+            item.type === "text",
+        )
+        .map((item) => item.text)
+        .join("\n")
+        .trim();
+      const media = content.filter((item) => item.type !== "text");
+      return [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "failed",
+            output: outputText || "ACP tool call failed without output.",
+          }),
+        },
+        ...media,
+      ];
+    }
+
+    return content.length > 0
+      ? content
+      : [{ type: "text", text: "ACP tool call completed without output." }];
+  }
+
+  private acpToolInputForHistory(input: unknown): Record<string, unknown> {
+    if (input && typeof input === "object" && !Array.isArray(input)) {
+      return input as Record<string, unknown>;
+    }
+    return input === undefined ? {} : { value: input };
+  }
+
+  private acpToolResultForHistory(
+    output: AcpOutputState,
+    toolCall: AcpToolCallState,
+  ): PersistedPendingToolResult {
+    const result = this.normalizeAcpToolResult(output, toolCall);
+    const historyContent: ContentBlock[] = result.map((item) => {
+      if (item.type === "image") {
+        return {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: item.mimeType as ImageBlock["source"]["media_type"],
+            data: item.data,
+          },
+        };
+      }
+      if (item.type === "document") {
+        return {
+          type: "document",
+          source: {
+            type: "base64",
+            media_type: item.mimeType as DocumentBlock["source"]["media_type"],
+            data: item.data,
+          },
+          title: item.name,
+        };
+      }
+      return item;
+    });
+    return {
+      type: "tool_result",
+      tool_use_id: toolCall.toolCallId,
+      content: historyContent,
+      ...(toolCall.status === "failed" ? { is_error: true } : {}),
+    };
+  }
+
+  private buildAcpTranscriptMessages(
+    output: AcpOutputState,
+    extraText?: string,
+  ): AgentMessage[] {
+    const toolCalls = Array.from(output.toolCalls.values());
+    const messages: AgentMessage[] = [];
+    if (toolCalls.length > 0) {
+      messages.push({
+        role: "assistant",
+        content: toolCalls.map((toolCall) => ({
+          type: "tool_use" as const,
+          id: toolCall.toolCallId,
+          name: toolCall.title,
+          input: this.acpToolInputForHistory(toolCall.rawInput),
+        })),
+      });
+      const results = toolCalls
+        .filter(
+          (toolCall) =>
+            toolCall.status === "completed" || toolCall.status === "failed",
+        )
+        .map((toolCall) => this.acpToolResultForHistory(output, toolCall));
+      if (results.length > 0) messages.push({ role: "user", content: results });
+    }
+
+    const assistantContent = this.buildAcpAssistantContent(output, extraText);
+    if (assistantContent.length > 0) {
+      messages.push({ role: "assistant", content: assistantContent });
+    }
+    return messages;
+  }
+
+  private commitAcpTranscript(
+    session: AgentSession,
+    output: AcpOutputState,
+    extraText?: string,
+  ): void {
+    for (const message of this.buildAcpTranscriptMessages(output, extraText)) {
+      if (message.role === "assistant" && Array.isArray(message.content)) {
+        session.appendAssistantTurn(message.content);
+      } else if (
+        Array.isArray(message.content) &&
+        message.content.every((block) => block.type === "tool_result")
+      ) {
+        session.appendToolResults(
+          message.content as PersistedPendingToolResult[],
+        );
+      }
+    }
+    output.transcriptCommitted = true;
   }
 
   private buildAcpAssistantContent(
@@ -2013,8 +2194,7 @@ export class AgentSessionManager {
   ): ContentBlock[] {
     const responseText = state.assistantTextParts.join("").trim();
     const warningText = Array.from(state.warnings).join("\n").trim();
-    const toolImages = Array.from(state.toolImages.values()).flat();
-    const imageCount = state.directImages.length + toolImages.length;
+    const imageCount = state.directImages.length;
     const text = [
       responseText ||
         (imageCount > 0
@@ -2028,7 +2208,6 @@ export class AgentSessionManager {
     return [
       ...(text ? ([{ type: "text", text }] as ContentBlock[]) : []),
       ...state.directImages,
-      ...toolImages,
     ];
   }
 
@@ -2252,6 +2431,80 @@ export class AgentSessionManager {
     return { outcome: { outcome: "selected", optionId: selected } };
   }
 
+  private emitAcpToolStart(
+    session: AgentSession,
+    toolCall: AcpToolCallState,
+  ): void {
+    if (toolCall.startEmitted) return;
+    toolCall.startEmitted = true;
+    this.recordAndEmitEvent(session.id, {
+      type: "tool_start",
+      toolCallId: toolCall.toolCallId,
+      toolName: toolCall.title,
+      input: toolCall.rawInput,
+    });
+  }
+
+  private emitAcpToolResult(
+    session: AgentSession,
+    output: AcpOutputState,
+    toolCall: AcpToolCallState,
+  ): void {
+    if (toolCall.status !== "completed" && toolCall.status !== "failed") return;
+    this.emitAcpToolStart(session, toolCall);
+    const result = this.normalizeAcpToolResult(output, toolCall);
+    const signature = this.stringifyAcpValue({
+      status: toolCall.status,
+      title: toolCall.title,
+      input: this.stringifyAcpValue(toolCall.rawInput),
+      result,
+    });
+    if (toolCall.lastTerminalSignature === signature) return;
+    toolCall.lastTerminalSignature = signature;
+    this.recordAndEmitEvent(session.id, {
+      type: "tool_result",
+      toolCallId: toolCall.toolCallId,
+      toolName: toolCall.title,
+      result,
+      durationMs: Math.max(0, Date.now() - toolCall.startedAt),
+      input: toolCall.rawInput,
+    });
+  }
+
+  private mergeAcpToolCallUpdate(
+    current: AcpToolCallState,
+    update: Extract<SessionUpdate, { sessionUpdate: "tool_call_update" }>,
+  ): AcpToolCallState {
+    const has = (key: keyof typeof update): boolean =>
+      Object.prototype.hasOwnProperty.call(update, key);
+    return {
+      ...current,
+      ...(has("title")
+        ? { title: update.title?.trim() || current.title || "ACP tool" }
+        : {}),
+      ...(has("status") ? { status: update.status ?? undefined } : {}),
+      ...(has("content") ? { content: update.content ?? undefined } : {}),
+      ...(has("locations") ? { locations: update.locations ?? undefined } : {}),
+      ...(has("rawInput") ? { rawInput: update.rawInput } : {}),
+      ...(has("rawOutput") ? { rawOutput: update.rawOutput } : {}),
+    };
+  }
+
+  private finalizeUnresolvedAcpTools(
+    session: AgentSession,
+    output: AcpOutputState,
+    reason: string,
+  ): void {
+    for (const toolCall of output.toolCalls.values()) {
+      if (toolCall.status === "completed" || toolCall.status === "failed")
+        continue;
+      toolCall.status = "failed";
+      if (toolCall.rawOutput === undefined) toolCall.rawOutput = reason;
+      this.emitAcpToolResult(session, output, toolCall);
+    }
+    session.currentTool = undefined;
+  }
+
   private applyAcpSessionUpdate(args: {
     session: AgentSession;
     output: AcpOutputState;
@@ -2286,31 +2539,75 @@ export class AgentSessionManager {
       session.currentTool = update.title;
       session.status = "tool_executing";
       this.bgStatusDetail.set(session.id, update.title);
-      const meta = this.bgMeta.get(session.id);
-      if (meta) meta.toolCalls += 1;
-      this.recordAndEmitEvent(session.id, {
-        type: "tool_start",
+      const existing = args.output.toolCalls.get(update.toolCallId);
+      const toolCall: AcpToolCallState = {
         toolCallId: update.toolCallId,
-        toolName: update.title,
-      });
+        title: update.title,
+        status: update.status,
+        content: update.content,
+        locations: update.locations,
+        rawInput: update.rawInput,
+        rawOutput: update.rawOutput,
+        startedAt: existing?.startedAt ?? Date.now(),
+        startEmitted: existing?.startEmitted ?? false,
+        lastTerminalSignature: existing?.lastTerminalSignature,
+      };
+      args.output.toolCalls.set(update.toolCallId, toolCall);
+      if (!existing) {
+        const meta = this.bgMeta.get(session.id);
+        if (meta) meta.toolCalls += 1;
+      }
+      this.emitAcpToolStart(session, toolCall);
+      this.emitAcpToolResult(session, args.output, toolCall);
+      if (toolCall.status === "completed" || toolCall.status === "failed") {
+        session.currentTool = undefined;
+        this.noteBackgroundProgress(session.id, "waiting_for_provider");
+      }
       this.enforceBackgroundBudget(session);
       return;
     }
 
     if (update.sessionUpdate === "tool_call_update") {
-      this.setAcpToolImages(args.output, update);
+      const existing = args.output.toolCalls.get(update.toolCallId);
+      const current: AcpToolCallState =
+        existing ??
+        ({
+          toolCallId: update.toolCallId,
+          title: update.title?.trim() || "ACP tool",
+          startedAt: Date.now(),
+          startEmitted: false,
+        } satisfies AcpToolCallState);
+      const toolCall = this.mergeAcpToolCallUpdate(current, update);
+      args.output.toolCalls.set(update.toolCallId, toolCall);
+      if (!existing) {
+        const meta = this.bgMeta.get(session.id);
+        if (meta) meta.toolCalls += 1;
+      }
+      this.emitAcpToolStart(session, toolCall);
+      this.emitAcpToolResult(session, args.output, toolCall);
+      const terminal =
+        toolCall.status === "completed" || toolCall.status === "failed";
       this.noteBackgroundProgress(
         session.id,
-        update.status === "completed" || update.status === "failed"
-          ? "waiting_for_provider"
-          : "executing_tool",
+        terminal ? "waiting_for_provider" : "executing_tool",
       );
-      if (update.title) {
-        session.currentTool = update.title;
-        this.bgStatusDetail.set(session.id, update.title);
-      }
-      if (update.status === "completed" || update.status === "failed") {
-        session.currentTool = undefined;
+      if (terminal) {
+        const toolCalls = Array.from(args.output.toolCalls.values());
+        let activeTool: AcpToolCallState | undefined;
+        for (let index = toolCalls.length - 1; index >= 0; index--) {
+          const candidate = toolCalls[index];
+          if (
+            candidate.status !== "completed" &&
+            candidate.status !== "failed"
+          ) {
+            activeTool = candidate;
+            break;
+          }
+        }
+        session.currentTool = activeTool?.title;
+      } else {
+        session.currentTool = toolCall.title;
+        this.bgStatusDetail.set(session.id, toolCall.title);
       }
       return;
     }
@@ -2766,20 +3063,6 @@ export class AgentSessionManager {
       overrides: normalizePromptProfileOverrides(config.promptProfileOverrides),
     });
 
-    if (projectless) {
-      session.providerId = providerId;
-      const compatibility = resolvePromptProfile({
-        providerId,
-        modelId: session.model,
-      });
-      session.promptProfile = compatibility;
-      session.contextBreakdown.prompt.profile = compatibility.profile;
-      session.contextBreakdown.prompt.profileSource = compatibility.source;
-      session.contextBreakdown.prompt.profilePolicyRevision =
-        compatibility.policyRevision;
-      return;
-    }
-
     if (
       providerId === session.providerId &&
       isDeepStrictEqual(expected, session.promptProfile)
@@ -2794,6 +3077,13 @@ export class AgentSessionManager {
       disabledSkillIds: config.disabledSkillIds,
       promptProfileOverrides: config.promptProfileOverrides,
     });
+    session.promptProfile = expected;
+    if (session.contextBreakdown?.prompt) {
+      session.contextBreakdown.prompt.profile = expected.profile;
+      session.contextBreakdown.prompt.profileSource = expected.source;
+      session.contextBreakdown.prompt.profilePolicyRevision =
+        expected.policyRevision;
+    }
     this.updateSkillCatalogFallback(session);
   }
 
@@ -2802,9 +3092,32 @@ export class AgentSessionManager {
     scope?: Readonly<SessionProjectScope>,
   ): string {
     try {
-      return this.resolveAvailableModelId(
-        this.host.config.resolveModelForMode(mode, this.config.model, scope),
+      const configuredModel = this.host.config.resolveModelForMode(
+        mode,
+        this.config.model,
+        scope,
       );
+      const candidates = [
+        configuredModel,
+        this.config.model,
+        FALLBACK_AGENT_MODEL,
+        ...this.host.providers.listAllModels().map((model) => model.id),
+      ];
+      for (const candidate of new Set(candidates)) {
+        const resolution = this.host.providers.resolveAvailableModel(candidate);
+        if (!resolution) continue;
+        if (resolution.migratedFrom === configuredModel) {
+          this.log?.(
+            `[model] migrated configured ${mode} model "${configuredModel}" to "${resolution.model}" for this session`,
+          );
+        } else if (resolution.model !== configuredModel) {
+          this.log?.(
+            `[model] configured ${mode} model "${configuredModel}" is unavailable; using "${resolution.model}" for this session`,
+          );
+        }
+        return resolution.model;
+      }
+      return configuredModel;
     } catch (err) {
       this.log?.(
         `[agent] Failed to resolve configured model for mode ${mode}: ${err instanceof Error ? err.message : String(err)}`,
@@ -2944,7 +3257,11 @@ export class AgentSessionManager {
 
   async createSession(
     mode: string,
-    opts?: { activeFilePath?: string; projectId?: string },
+    opts?: {
+      activeFilePath?: string;
+      projectId?: string;
+      foreground?: boolean;
+    },
   ): Promise<AgentSession> {
     const projectScope =
       mode === "ask" &&
@@ -2961,10 +3278,12 @@ export class AgentSessionManager {
     const model = this.getModelForMode(mode, settingsScope);
     const config = this.buildConfigForModel(model, settingsScope);
     const providerId = this.host.providers.tryResolveProvider(config.model)?.id;
-    this.updateConfig({
-      model,
-      autoCondenseThreshold: config.autoCondenseThreshold,
-    });
+    if (opts?.foreground !== false) {
+      this.updateConfig({
+        model,
+        autoCondenseThreshold: config.autoCondenseThreshold,
+      });
+    }
     const projectMcpGeneration = isProjectlessSessionScope(projectScope)
       ? undefined
       : this.projectMcpHubRegistry?.getCurrent(projectScope);
@@ -2996,13 +3315,15 @@ export class AgentSessionManager {
     if (!isProjectlessSessionScope(projectScope)) {
       this.getCheckpointManagerForSession(session);
     }
-    const pendingApprovalMode = this.sessionApprovalModes.get("agent");
-    if (pendingApprovalMode) {
-      this.sessionApprovalModes.set(session.id, pendingApprovalMode);
-      this.sessionApprovalModes.delete("agent");
-      this.syncSessionApproveForMe(session);
+    if (opts?.foreground !== false) {
+      const pendingApprovalMode = this.sessionApprovalModes.get("agent");
+      if (pendingApprovalMode) {
+        this.sessionApprovalModes.set(session.id, pendingApprovalMode);
+        this.sessionApprovalModes.delete("agent");
+        this.syncSessionApproveForMe(session);
+      }
+      this.foregroundId = session.id;
     }
-    this.foregroundId = session.id;
     this.notifySessionsChanged();
     return session;
   }
@@ -3041,47 +3362,81 @@ export class AgentSessionManager {
     if (firstError !== undefined) throw firstError;
   }
 
-  /**
-   * Update the model on the active foreground session.
-   * If the model crosses a provider boundary (e.g. Anthropic → Codex),
-   * updates the session's providerId and rebuilds the system prompt so
-   * provider-specific behavioral tuning takes effect.
-   */
-  async setModel(model: string): Promise<string> {
-    const fg = this.getForegroundSession();
-    const projectless = fg ? isProjectlessSessionScope(fg.projectScope) : false;
-    if (fg && !projectless) this.requireSessionExecution(fg);
+  /** Update one session's model without changing foreground ownership. */
+  async setSessionModel(sessionId: string, model: string): Promise<string> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`Session ${sessionId} not found.`);
+    const projectless = isProjectlessSessionScope(session.projectScope);
+    if (!projectless) this.requireSessionExecution(session);
+
     const requestedModel = model;
-    model = this.resolveAvailableModelId(model);
+    const resolution = this.host.providers.resolveAvailableModel(model);
+    if (!resolution && this.host.providers.listProviders().length > 0) {
+      throw new Error(`Model "${model}" is not available.`);
+    }
+    model = resolution?.model ?? model;
+
     const previousConfigModel = this.config.model;
     const previousConfigThreshold = this.config.autoCondenseThreshold;
-    this.updateConfig({
+    const previousSessionModel = session.model;
+    const previousProviderId = session.providerId;
+    const previousSessionThreshold = session.autoCondenseThreshold;
+    const foreground = this.foregroundId === session.id;
+    const threshold = this.getCondenseThresholdForModel(
       model,
-      autoCondenseThreshold: this.getCondenseThresholdForModel(
-        model,
-        projectless ? undefined : fg?.projectScope,
-      ),
-    });
-    if (!fg) return model;
+      projectless ? undefined : session.projectScope,
+    );
 
-    const previousSessionModel = fg.model;
-    const previousProviderId = fg.providerId;
-    const previousSessionThreshold = fg.autoCondenseThreshold;
-    fg.model = model;
-    this.applyThresholdToSession(fg);
+    if (foreground) {
+      this.updateConfig({ model, autoCondenseThreshold: threshold });
+    }
     try {
-      await this.reconcileSessionPromptProfile(fg);
-    } catch (error) {
-      this.updateConfig({
-        model: previousConfigModel,
-        autoCondenseThreshold: previousConfigThreshold,
+      const providerId = this.host.providers.tryResolveProvider(model)?.id;
+      await session.updateModelSelection(model, providerId, {
+        devMode: this.devMode,
+        workspaceFolders: this.getWorkspaceFolders(),
       });
-      fg.model = previousSessionModel;
-      fg.providerId = previousProviderId;
-      fg.autoCondenseThreshold = previousSessionThreshold;
+      session.autoCondenseThreshold = threshold;
+      await this.reconcileSessionPromptProfile(session);
+    } catch (error) {
+      if (foreground) {
+        this.updateConfig({
+          model: previousConfigModel,
+          autoCondenseThreshold: previousConfigThreshold,
+        });
+      }
+      session.model = previousSessionModel;
+      session.providerId = previousProviderId;
+      session.autoCondenseThreshold = previousSessionThreshold;
       throw error;
     }
-    await this.maybeAutoCondenseForegroundSession();
+
+    await this.maybeAutoCondenseSession(session.id);
+    this.saveSession(session.id);
+    this.notifySessionsChanged();
+    if (requestedModel !== model) {
+      this.log?.(
+        `[model] migrated retired model "${requestedModel}" to "${model}"`,
+      );
+    }
+    return model;
+  }
+
+  /** Update the active foreground session's model. */
+  async setModel(model: string): Promise<string> {
+    const foreground = this.getForegroundSession();
+    if (foreground) return this.setSessionModel(foreground.id, model);
+
+    const requestedModel = model;
+    const resolution = this.host.providers.resolveAvailableModel(model);
+    if (!resolution && this.host.providers.listProviders().length > 0) {
+      throw new Error(`Model "${model}" is not available.`);
+    }
+    model = resolution?.model ?? model;
+    this.updateConfig({
+      model,
+      autoCondenseThreshold: this.getCondenseThresholdForModel(model),
+    });
     if (requestedModel !== model) {
       this.log?.(
         `[model] migrated retired model "${requestedModel}" to "${model}"`,
@@ -3092,6 +3447,17 @@ export class AgentSessionManager {
 
   getSession(id: string): AgentSession | undefined {
     return this.sessions.get(id);
+  }
+
+  getBackgroundTranscriptMessages(id: string): AgentMessage[] | undefined {
+    const session = this.sessions.get(id);
+    if (!session?.background) return undefined;
+
+    const messages = [...session.getAllMessages()];
+    const activeAcpOutput = this.activeAcpOutputs.get(id);
+    return activeAcpOutput && !activeAcpOutput.transcriptCommitted
+      ? [...messages, ...this.buildAcpTranscriptMessages(activeAcpOutput)]
+      : messages;
   }
 
   getCommandApprovalPolicy(
@@ -3165,10 +3531,10 @@ export class AgentSessionManager {
   /**
    * Keep the session's prompt-facing Approve for Me flag in step with its
    * command approval policy. When the flag crosses the approve-for-me boundary,
-   * rebuild the system prompt so mode-switch guidance flips between user
-   * consent and automatic guardian review. Rebuilds are fire-and-forget and
-   * serialized per session; the engine picks up the new prompt on its next
-   * API request.
+   * rebuild the system prompt and conversation-placed mode anchor so mode-switch
+   * guidance flips between user consent and automatic guardian review. Rebuilds
+   * are fire-and-forget and serialized per session; the engine picks up the new
+   * prompt and anchor on its next API request.
    */
   private syncSessionApproveForMe(session: AgentSession | undefined): void {
     if (!session) return;
@@ -3181,12 +3547,13 @@ export class AgentSessionManager {
     const previous =
       this.approveForMePromptRebuilds.get(session.id) ?? Promise.resolve();
     const next = previous
-      .then(() =>
-        session.rebuildSystemPrompt({
+      .then(async () => {
+        await session.rebuildSystemPrompt({
           devMode: this.devMode,
           workspaceFolders: this.getWorkspaceFolders(),
-        }),
-      )
+        });
+        await session.refreshModeInstructionAnchor();
+      })
       .then(() => {
         this.updateSkillCatalogFallback(session);
         this.log?.(
@@ -3224,14 +3591,22 @@ export class AgentSessionManager {
     this.notifySessionsChanged();
   }
 
-  setForegroundReasoningEffort(effort: ReasoningEffort): boolean {
-    const session = this.getForegroundSession();
+  setSessionReasoningEffort(
+    sessionId: string,
+    effort: ReasoningEffort,
+  ): boolean {
+    const session = this.sessions.get(sessionId);
     if (!session) return false;
 
     this.applyReasoningEffortToSession(session, effort);
     this.saveSession(session.id);
     this.notifySessionsChanged();
     return true;
+  }
+
+  setForegroundReasoningEffort(effort: ReasoningEffort): boolean {
+    const session = this.getForegroundSession();
+    return session ? this.setSessionReasoningEffort(session.id, effort) : false;
   }
 
   saveAllSessions(): void {
@@ -3589,7 +3964,13 @@ export class AgentSessionManager {
       };
     }
 
-    const fg = this.getForegroundSession();
+    const fg =
+      opts?.sessionId === undefined
+        ? this.getForegroundSession()
+        : this.sessions.get(opts.sessionId);
+    if (opts?.sessionId !== undefined && !fg) {
+      throw new Error(`Session ${opts.sessionId} not found.`);
+    }
     if (fg) this.requireSessionExecution(fg);
 
     const mode = fg?.mode ?? "code";
@@ -3771,7 +4152,13 @@ export class AgentSessionManager {
       throw new Error("Worktree agent startup is unavailable in this window");
     }
 
-    const fg = this.getForegroundSession();
+    const fg =
+      opts.sessionId === undefined
+        ? this.getForegroundSession()
+        : this.sessions.get(opts.sessionId);
+    if (opts.sessionId !== undefined && !fg) {
+      throw new Error(`Session ${opts.sessionId} not found.`);
+    }
     if (fg) this.requireSessionExecution(fg);
     const mode = "ask";
     const model = fg?.model ?? this.config.model;
@@ -4709,16 +5096,20 @@ export class AgentSessionManager {
     ].join("\n");
 
     this.resumingInterruptedSessions.add(sessionId);
-    try {
-      await this.sendMessage(session.id, prompt, session.mode, {
-        displayText: "Resume interrupted session",
-        isSlashCommand: true,
-        slashCommandLabel: "/resume interrupted session",
+    void this.sendMessage(session.id, prompt, session.mode, {
+      displayText: "Resume interrupted session",
+      isSlashCommand: true,
+      slashCommandLabel: "/resume interrupted session",
+    })
+      .catch((error) => {
+        this.log?.(
+          `[session] interrupted resume failed for ${session.id}: ${String(error)}`,
+        );
+      })
+      .finally(() => {
+        this.resumingInterruptedSessions.delete(sessionId);
       });
-      return true;
-    } finally {
-      this.resumingInterruptedSessions.delete(sessionId);
-    }
+    return true;
   }
 
   /**
@@ -5135,12 +5526,11 @@ export class AgentSessionManager {
     return this.checkpoints.get(sessionId) ?? [];
   }
 
-  /**
-   * Create a checkpoint for the current workspace/session state on demand.
-   * Returns null when no foreground session exists or checkpoint creation fails.
-   */
-  async createManualCheckpoint(): Promise<Checkpoint | null> {
-    const session = this.getForegroundSession();
+  /** Create a checkpoint for one session without changing foreground ownership. */
+  async createManualCheckpointForSession(
+    sessionId: string,
+  ): Promise<Checkpoint | null> {
+    const session = this.sessions.get(sessionId);
     if (!session) return null;
     this.requireSessionExecution(session);
 
@@ -5152,6 +5542,12 @@ export class AgentSessionManager {
     return this.ensureCheckpointForTurn(session, turnIndex, {
       refreshExisting: true,
     });
+  }
+
+  /** Create a checkpoint for the current foreground session on demand. */
+  async createManualCheckpoint(): Promise<Checkpoint | null> {
+    const session = this.getForegroundSession();
+    return session ? this.createManualCheckpointForSession(session.id) : null;
   }
 
   private getCheckpointProjectSnapshots(checkpoint: Checkpoint): Array<{
@@ -5730,6 +6126,54 @@ export class AgentSessionManager {
   }
 
   /**
+   * Materialize a persisted session in memory without changing foreground
+   * ownership. Used when startup layout restoration needs multiple tab-bound
+   * sessions available before choosing which tab is focused.
+   */
+  async hydratePersistedSession(
+    sessionId: string,
+  ): Promise<AgentSession | null> {
+    const existing = this.sessions.get(sessionId);
+    if (existing) return existing;
+    const inFlight = this.sessionHydrations.get(sessionId);
+    if (inFlight) return inFlight;
+    if (!this.persistence) return null;
+
+    const hydration = this.hydratePersistedSessionOnce(sessionId);
+    this.sessionHydrations.set(sessionId, hydration);
+    try {
+      return await hydration;
+    } finally {
+      if (this.sessionHydrations.get(sessionId) === hydration) {
+        this.sessionHydrations.delete(sessionId);
+      }
+    }
+  }
+
+  private async hydratePersistedSessionOnce(
+    sessionId: string,
+  ): Promise<AgentSession | null> {
+    const readResult = await this.persistence!.readSession(sessionId);
+    if (!readResult.ok) return null;
+
+    const raced = this.sessions.get(sessionId);
+    if (raced) {
+      if (!this.sessionRevisions.has(sessionId)) {
+        this.sessionRevisions.set(sessionId, readResult.revision);
+      }
+      return raced;
+    }
+
+    const session = await this.restorePersistedSessionRecord(
+      sessionId,
+      readResult,
+    );
+    if (!session) return null;
+    this.notifySessionsChanged();
+    return session;
+  }
+
+  /**
    * Load a persisted session's message history into memory and make it the
    * foreground session. Returns the loaded session or null if not found.
    */
@@ -5741,22 +6185,50 @@ export class AgentSessionManager {
 
     const readResult = await this.persistence.readSession(sessionId);
     if (!readResult.ok) return null;
-    const { summary, messages, metadata } = readResult.value;
 
     if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
 
-    // Reuse in-memory session if already loaded
-    if (this.sessions.has(sessionId)) {
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
       if (!this.sessionRevisions.has(sessionId)) {
         this.sessionRevisions.set(sessionId, readResult.revision);
       }
       if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
       this.foregroundId = sessionId;
-      await this.restorePersistedBackgroundSessions(sessionId);
+      await this.restorePersistedBackgroundSessions(
+        this.getRestoredBackgroundRootSessionIds(sessionId),
+      );
       this.notifySessionsChanged();
-      return this.sessions.get(sessionId)!;
+      return existing;
     }
 
+    const session = await this.restorePersistedSessionRecord(
+      sessionId,
+      readResult,
+      () => !opts?.onlyIfForegroundUnset || !this.foregroundId,
+    );
+    if (!session) return null;
+    if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
+    this.foregroundId = sessionId;
+    await this.restorePersistedBackgroundSessions(
+      this.getRestoredBackgroundRootSessionIds(sessionId),
+    );
+    this.notifySessionsChanged();
+    return session;
+  }
+
+  private async restorePersistedSessionRecord(
+    sessionId: string,
+    readResult: Extract<
+      Awaited<ReturnType<SessionStore["readSession"]>>,
+      { ok: true }
+    >,
+    canCommit: () => boolean = () => true,
+  ): Promise<AgentSession | null> {
+    const existing = this.sessions.get(sessionId);
+    if (existing) return existing;
+
+    const { summary, messages, metadata } = readResult.value;
     this.sessionRevisions.set(sessionId, readResult.revision);
     const session = await this.createRestoredSession({ summary, metadata });
     this.sessionApprovalModes.set(sessionId, restoredApprovalMode(metadata));
@@ -5784,7 +6256,6 @@ export class AgentSessionManager {
       this.sessionRevertPending.delete(sessionId);
     }
 
-    // Restore persisted state
     const interruptedRunRecovery = recoverInterruptedRunMessages(
       messages,
       metadata.runState,
@@ -5809,16 +6280,15 @@ export class AgentSessionManager {
       modeInstructionAnchors: readResult.value.modeInstructionAnchors,
     });
 
-    if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
+    if (!canCommit()) return null;
+    const raced = this.sessions.get(sessionId);
+    if (raced) return raced;
     this.sessions.set(sessionId, session);
     this.updateSkillCatalogFallback(session);
     this.syncSessionApproveForMe(session);
-    this.foregroundId = sessionId;
     if (interruptedRunRecovery.changed) {
       await this.saveSessionNow(session.id);
     }
-    await this.restorePersistedBackgroundSessions(sessionId);
-    this.notifySessionsChanged();
     return session;
   }
 
@@ -5845,9 +6315,24 @@ export class AgentSessionManager {
     return session;
   }
 
-  /** Remove inactive restored trees before loading another foreground's children. */
-  private pruneRestoredBackgroundSessions(rootSessionId?: string): void {
-    if (!rootSessionId) return;
+  private getRestoredBackgroundRootSessionIds(
+    selectedSessionId: string,
+  ): ReadonlySet<string> {
+    const rootSessionIds = new Set([selectedSessionId]);
+    for (const restoredSessionId of this.restoredBackgroundSessionIds) {
+      const fleet = this.sessions.get(restoredSessionId)?.fleetMetadata;
+      if (fleet?.rootSessionId) rootSessionIds.add(fleet.rootSessionId);
+      else if (fleet?.parentSessionId)
+        rootSessionIds.add(fleet.parentSessionId);
+    }
+    return rootSessionIds;
+  }
+
+  /** Remove inactive restored trees outside the selected foreground/tab roots. */
+  private pruneRestoredBackgroundSessions(
+    rootSessionIds?: ReadonlySet<string>,
+  ): void {
+    if (!rootSessionIds) return;
     for (const sessionId of this.restoredBackgroundSessionIds) {
       const session = this.sessions.get(sessionId);
       if (!session) {
@@ -5856,8 +6341,8 @@ export class AgentSessionManager {
       }
       const fleet = session.fleetMetadata;
       if (
-        fleet?.rootSessionId === rootSessionId ||
-        fleet?.parentSessionId === rootSessionId ||
+        (fleet?.rootSessionId && rootSessionIds.has(fleet.rootSessionId)) ||
+        (fleet?.parentSessionId && rootSessionIds.has(fleet.parentSessionId)) ||
         !this.getProjectedBgStatus(session).done
       ) {
         continue;
@@ -5885,14 +6370,18 @@ export class AgentSessionManager {
     }
   }
 
-  /** Restore durable background records belonging to one foreground session. */
+  /** Restore durable background records belonging to selected foreground/tab roots. */
   async restorePersistedBackgroundSessions(
-    rootSessionId?: string,
+    rootSessionId?: string | ReadonlySet<string>,
   ): Promise<AgentSession[]> {
     if (!this.persistence || typeof this.persistence.listAll !== "function") {
       return [];
     }
-    this.pruneRestoredBackgroundSessions(rootSessionId);
+    const rootSessionIds =
+      typeof rootSessionId === "string"
+        ? new Set([rootSessionId])
+        : rootSessionId;
+    this.pruneRestoredBackgroundSessions(rootSessionIds);
     const restored: AgentSession[] = [];
     for (const summary of this.persistence
       .listAll()
@@ -5902,9 +6391,13 @@ export class AgentSessionManager {
       if (!readResult.ok) continue;
       const { messages, metadata } = readResult.value;
       if (
-        rootSessionId &&
-        metadata.fleet?.rootSessionId !== rootSessionId &&
-        metadata.fleet?.parentSessionId !== rootSessionId
+        rootSessionIds &&
+        !(
+          (metadata.fleet?.rootSessionId &&
+            rootSessionIds.has(metadata.fleet.rootSessionId)) ||
+          (metadata.fleet?.parentSessionId &&
+            rootSessionIds.has(metadata.fleet.parentSessionId))
+        )
       ) {
         continue;
       }
@@ -5933,11 +6426,13 @@ export class AgentSessionManager {
       });
 
       const fleet = session.fleetMetadata;
-      if (fleet?.lifecycle === "running") {
+      const interruptedOnRestore = fleet?.lifecycle === "running";
+      if (interruptedOnRestore) {
         fleet.lifecycle = "interrupted";
         fleet.resultState = "interrupted";
         fleet.terminalReason = "extension_reloaded_during_run";
         fleet.completedAt = Date.now();
+        fleet.reloadInterruptionRecordedAt = fleet.completedAt;
       }
       if (fleet?.lifecycle === "cancelled") {
         this.bgCancelled.add(session.id);
@@ -6004,7 +6499,7 @@ export class AgentSessionManager {
       this.restoredBackgroundSessionIds.add(session.id);
       this.sessionRevisions.set(session.id, readResult.revision);
       restored.push(session);
-      if (fleet?.lifecycle === "interrupted") {
+      if (interruptedOnRestore) {
         await this.saveSessionNow(session.id);
       }
     }
@@ -6879,12 +7374,18 @@ export class AgentSessionManager {
         )}`
       : message;
 
+    const fg = this.getForegroundSession();
+    parentSessionId = parent?.id;
+    const foregroundModel = parent?.model ?? fg?.model ?? this.config.model;
+    const foregroundProvider =
+      parent?.providerId ??
+      fg?.providerId ??
+      this.host.providers.tryResolveProvider(foregroundModel)?.id;
     const backendRoute = resolveBackgroundBackendRoute(
       this.getBackgroundAgentSettings(inheritedScope),
       request,
+      { foregroundProvider },
     );
-    const fg = this.getForegroundSession();
-    parentSessionId = parent?.id;
 
     if (backendRoute.backend === "acp") {
       if (inheritedSkillAuthoritySnapshot?.allowedTools) {
@@ -6909,6 +7410,12 @@ export class AgentSessionManager {
       );
       const resolvedMode = request.mode?.trim() || "review";
       const taskClass = request.taskClass?.trim() || "review";
+      const acpRoutingReason =
+        backendRoute.reason === "explicit_provider"
+          ? `explicit ACP provider override (${backendRoute.reference})`
+          : backendRoute.reason === "review_agent"
+            ? `configured adversarial review ACP agent (${backendRoute.reference})`
+            : `configured default ACP background agent (${backendRoute.reference})`;
       const session = await this.createBoundSession({
         mode: resolvedMode,
         config: {
@@ -6940,10 +7447,7 @@ export class AgentSessionManager {
         resolvedModel: `acp:${backendRoute.agent.id}`,
         resolvedProvider: "acp",
         taskClass,
-        routingReason:
-          backendRoute.reason === "explicit_provider"
-            ? `explicit ACP provider override (${backendRoute.reference})`
-            : `configured default ACP background agent (${backendRoute.reference})`,
+        routingReason: acpRoutingReason,
         fallbackUsed: false,
         toolCalls: 0,
         tokenUsage: 0,
@@ -6962,10 +7466,7 @@ export class AgentSessionManager {
         resolvedModel: `acp:${backendRoute.agent.id}`,
         resolvedProvider: "acp",
         taskClass,
-        routingReason:
-          backendRoute.reason === "explicit_provider"
-            ? `explicit ACP provider override (${backendRoute.reference})`
-            : `configured default ACP background agent (${backendRoute.reference})`,
+        routingReason: acpRoutingReason,
         fallbackUsed: false,
         delegation: {
           ownedPaths: request.ownedPaths,
@@ -6995,15 +7496,21 @@ export class AgentSessionManager {
       const acpOutput: AcpOutputState = {
         assistantTextParts: [],
         directImages: [],
-        toolImages: new Map(),
+        toolCalls: new Map(),
         warnings: new Set(),
+        transcriptCommitted: false,
       };
       const mutationLeaseHolder = backendRoute.agent.readonlyOnly
         ? undefined
         : ({ sessionId: session.id } satisfies WorkspaceMutationLeaseHolder);
       let promptResponse: PromptResponse | undefined;
       const runAcpBackground = async () => {
+        this.activeAcpOutputs.set(session.id, acpOutput);
         let lastPersistedPartialResult = session.fleetMetadata?.partialResult;
+        let transcriptCommitted = false;
+        let terminalDoneEvent:
+          | Extract<AgentEvent, { type: "done" }>
+          | undefined;
         const persistPartialResult = (
           durability: PersistDurability = "durable",
         ) => {
@@ -7078,13 +7585,14 @@ export class AgentSessionManager {
             const stopReasonMessage = promptResponse
               ? this.acpStopReasonMessage(promptResponse)
               : undefined;
-            const assistantContent = this.buildAcpAssistantContent(
+            this.finalizeUnresolvedAcpTools(
+              session,
               acpOutput,
-              stopReasonMessage,
+              stopReasonMessage ??
+                "ACP prompt ended before the tool reported a result.",
             );
-            if (assistantContent.length > 0) {
-              session.appendAssistantTurn(assistantContent);
-            }
+            this.commitAcpTranscript(session, acpOutput, stopReasonMessage);
+            transcriptCommitted = true;
             if (stopReasonMessage) {
               session.status = "error";
               this.setBgError(session.id, stopReasonMessage, false);
@@ -7096,23 +7604,28 @@ export class AgentSessionManager {
             } else {
               session.status = "idle";
             }
-            this.recordAndEmitEvent(session.id, {
+            terminalDoneEvent = {
               type: "done",
               totalInputTokens: session.totalInputTokens,
               totalOutputTokens: session.totalOutputTokens,
               totalCacheReadTokens: session.totalCacheReadTokens,
               totalCacheCreationTokens: session.totalCacheCreationTokens,
-            });
+            };
           }
         } catch (err: unknown) {
           const error = err instanceof Error ? err.message : String(err);
-          if (this.bgCancelled.has(session.id) || session.isAborted) {
+          const cancelled =
+            this.bgCancelled.has(session.id) || session.isAborted;
+          this.finalizeUnresolvedAcpTools(
+            session,
+            acpOutput,
+            cancelled ? "ACP background agent cancelled." : error,
+          );
+          this.commitAcpTranscript(session, acpOutput);
+          transcriptCommitted = true;
+          if (cancelled) {
             this.bgCancelled.add(session.id);
           } else {
-            const partialContent = this.buildAcpAssistantContent(acpOutput);
-            if (partialContent.length > 0) {
-              session.appendAssistantTurn(partialContent);
-            }
             session.status = "error";
             this.setBgError(session.id, error, false);
             this.recordAndEmitEvent(session.id, {
@@ -7122,6 +7635,15 @@ export class AgentSessionManager {
             });
           }
         } finally {
+          if (!transcriptCommitted) {
+            this.finalizeUnresolvedAcpTools(
+              session,
+              acpOutput,
+              "ACP background agent cancelled.",
+            );
+            this.commitAcpTranscript(session, acpOutput);
+          }
+          this.activeAcpOutputs.delete(session.id);
           if (mutationLeaseHolder) {
             this.releaseWorkspaceMutationLease(mutationLeaseHolder);
           }
@@ -7142,9 +7664,11 @@ export class AgentSessionManager {
               fallbackMsg,
             );
             this.cancelOwnedChildrenOnCompletion(session.id);
-            this.finalizeFleetMetadata(session, resolution);
-            await this.saveSessionNow(session.id);
+            await this.finalizeFleetMetadata(session, resolution);
             this.bgFinalResults.set(session.id, resolution.resultText);
+            if (terminalDoneEvent) {
+              this.recordAndEmitEvent(session.id, terminalDoneEvent);
+            }
             for (const t of this.bgSafetyTimers.get(session.id) ?? []) {
               this.host.timers.clearTimeout(t);
             }
@@ -7172,16 +7696,12 @@ export class AgentSessionManager {
         resolvedModel: `acp:${backendRoute.agent.id}`,
         resolvedProvider: "acp",
         taskClass,
-        routingReason:
-          backendRoute.reason === "explicit_provider"
-            ? `explicit ACP provider override (${backendRoute.reference})`
-            : `configured default ACP background agent (${backendRoute.reference})`,
+        routingReason: acpRoutingReason,
         fallbackUsed: false,
       };
     }
 
     const foregroundMode = parent?.mode ?? fg?.mode ?? "code";
-    const foregroundModel = parent?.model ?? fg?.model ?? this.config.model;
 
     const route = await resolveBackgroundRoute(this.host.providers, request, {
       mode: foregroundMode,
@@ -7347,6 +7867,7 @@ export class AgentSessionManager {
       let lastPersistedActiveAt = session.lastActiveAt;
       let lastPersistedPartialResult = session.fleetMetadata?.partialResult;
       let terminalEngineError: (AgentEvent & { type: "error" }) | undefined;
+      let terminalDoneEvent: Extract<AgentEvent, { type: "done" }> | undefined;
       const persistIfHistoryChanged = (
         durability: PersistDurability = "durable",
       ) => {
@@ -7444,8 +7965,12 @@ export class AgentSessionManager {
             statusDetail: this.bgStatusDetail.get(session.id),
           });
 
-          this.recordAndEmitEvent(session.id, event);
-          this.notifySessionChangeListeners();
+          if (event.type === "done") {
+            terminalDoneEvent = event;
+          } else {
+            this.recordAndEmitEvent(session.id, event);
+            this.notifySessionChangeListeners();
+          }
         }
         if (terminalEngineError) {
           session.status = "error";
@@ -7466,13 +7991,13 @@ export class AgentSessionManager {
           error,
           retryable: false,
         });
-        this.recordAndEmitEvent(session.id, {
+        terminalDoneEvent = {
           type: "done",
           totalInputTokens: session.totalInputTokens,
           totalOutputTokens: session.totalOutputTokens,
           totalCacheReadTokens: session.totalCacheReadTokens,
           totalCacheCreationTokens: session.totalCacheCreationTokens,
-        });
+        };
       } finally {
         this.releaseSessionToolContext(session.id, bgCtx);
         this.releasePreparedTurnMutationLease(preparedTurn);
@@ -7498,11 +8023,13 @@ export class AgentSessionManager {
         : "(background agent completed without output)";
       const resolution = this.resolveBackgroundResult(session, fallbackMsg);
       this.cancelOwnedChildrenOnCompletion(session.id);
-      this.finalizeFleetMetadata(session, resolution);
-      await this.saveSessionNow(session.id);
+      await this.finalizeFleetMetadata(session, resolution);
 
-      // Store result BEFORE resolving waiters to close the race window
+      // Store and publish the result only after its terminal fleet metadata is durable.
       this.bgFinalResults.set(session.id, resolution.resultText);
+      if (terminalDoneEvent) {
+        this.recordAndEmitEvent(session.id, terminalDoneEvent);
+      }
 
       // Clear all safety timers for this session
       for (const t of this.bgSafetyTimers.get(session.id) ?? [])
@@ -8206,13 +8733,7 @@ export class AgentSessionManager {
     const caller = this.sessions.get(callerSessionId);
     const target = this.sessions.get(targetSessionId);
     if (!caller || !target?.background) return false;
-    if (!caller.background) return caller.id === this.foregroundId;
-    let parentId = target.fleetMetadata?.parentSessionId;
-    while (parentId) {
-      if (parentId === callerSessionId) return true;
-      parentId = this.sessions.get(parentId)?.fleetMetadata?.parentSessionId;
-    }
-    return false;
+    return this.isFleetDescendant(targetSessionId, callerSessionId);
   }
 
   getAuthorizedBackgroundStatus(
@@ -8312,19 +8833,34 @@ export class AgentSessionManager {
     ) {
       return text;
     }
-    const images = session
-      .getAllMessages()
-      .flatMap((message) =>
-        message.role === "assistant" && Array.isArray(message.content)
-          ? message.content
-              .filter((block): block is ImageBlock => block.type === "image")
-              .map((block) => ({
-                data: block.source.data,
-                mimeType: block.source.media_type,
-              }))
-          : [],
-      )
-      .slice(0, MAX_ACP_OUTPUT_IMAGES);
+    const messages = session.getAllMessages();
+    const collectImages = (content: ContentBlock[]) =>
+      content
+        .filter((block): block is ImageBlock => block.type === "image")
+        .map((block) => ({
+          data: block.source.data,
+          mimeType: block.source.media_type,
+        }));
+    const directImages = messages.flatMap((message) =>
+      message.role === "assistant" && Array.isArray(message.content)
+        ? collectImages(message.content)
+        : [],
+    );
+    const toolImages = messages.flatMap((message) =>
+      message.role === "user" && Array.isArray(message.content)
+        ? collectImages(
+            message.content.flatMap((block) =>
+              block.type === "tool_result" && Array.isArray(block.content)
+                ? block.content
+                : [],
+            ),
+          )
+        : [],
+    );
+    const images = [...directImages, ...toolImages].slice(
+      0,
+      MAX_ACP_OUTPUT_IMAGES,
+    );
     return images.length > 0 ? { text, images } : text;
   }
 
@@ -8693,11 +9229,12 @@ export class AgentSessionManager {
     session: AgentSession,
     type: NonNullable<PersistedFleetMetadata["events"]>[number]["type"],
     summary: string,
-  ): void {
+    options?: { deferPublish?: boolean },
+  ): NonNullable<PersistedFleetMetadata["events"]>[number] | undefined {
     const fleet = session.fleetMetadata;
-    if (!fleet) return;
+    if (!fleet) return undefined;
     const existing = fleet.events?.at(-1);
-    if (existing?.type === type && !existing.readAt) return;
+    if (existing?.type === type && !existing.readAt) return undefined;
     const sequence = (fleet.eventSequence ?? 0) + 1;
     fleet.eventSequence = sequence;
     const event = {
@@ -8708,10 +9245,20 @@ export class AgentSessionManager {
       summary: summary.slice(0, 240),
     };
     fleet.events = [...(fleet.events ?? []).slice(-99), event];
-    this.saveSession(session.id);
-    this.onFleetEvent?.(session.id, event);
+    if (!options?.deferPublish) {
+      this.saveSession(session.id);
+      this.publishFleetEvent(session.id, event);
+    }
+    return event;
+  }
+
+  private publishFleetEvent(
+    sessionId: string,
+    event: NonNullable<PersistedFleetMetadata["events"]>[number],
+  ): void {
+    this.onFleetEvent?.(sessionId, event);
     for (const listener of this.fleetEventListeners) {
-      listener(session.id, event);
+      listener(sessionId, event);
     }
     this.notifySessionsChanged();
   }
@@ -8782,7 +9329,7 @@ export class AgentSessionManager {
     };
   }
 
-  private finalizeFleetMetadata(
+  private async finalizeFleetMetadata(
     session: AgentSession,
     resolution: {
       resultText: string;
@@ -8790,7 +9337,7 @@ export class AgentSessionManager {
       resultState: BackgroundResultState;
       partialResult?: string;
     },
-  ): void {
+  ): Promise<void> {
     const fleet = session.fleetMetadata;
     if (!fleet) return;
     this.bgBudgetWrapUps.delete(session.id);
@@ -8813,6 +9360,9 @@ export class AgentSessionManager {
           : undefined,
       };
     }
+    let terminalEvent:
+      | NonNullable<PersistedFleetMetadata["events"]>[number]
+      | undefined;
     if (resolution.resultState === "completed") {
       fleet.lifecycle = "completed";
       fleet.terminalReason = undefined;
@@ -8820,30 +9370,53 @@ export class AgentSessionManager {
       session.status = "idle";
       this.bgErrors.delete(session.id);
       this.bgAgentRetryable.delete(session.id);
-      this.appendFleetEvent(session, "completed", "Agent completed");
+      terminalEvent = this.appendFleetEvent(
+        session,
+        "completed",
+        "Agent completed",
+        { deferPublish: true },
+      );
     } else if (resolution.resultState === "cancelled") {
       fleet.lifecycle = "cancelled";
       fleet.terminalReason ??= "cancelled_by_user";
-      this.appendFleetEvent(session, "cancelled", "Agent cancelled");
+      terminalEvent = this.appendFleetEvent(
+        session,
+        "cancelled",
+        "Agent cancelled",
+        { deferPublish: true },
+      );
     } else if (resolution.resultState === "budget_exhausted") {
       fleet.lifecycle = "budget_exhausted";
-      this.appendFleetEvent(
+      terminalEvent = this.appendFleetEvent(
         session,
         "failed",
         fleet.terminalReason ?? "budget_exhausted",
+        { deferPublish: true },
       );
     } else if (resolution.resultState === "interrupted") {
       fleet.lifecycle = "interrupted";
       fleet.terminalReason ??= "background_agent_interrupted";
-      this.appendFleetEvent(session, "failed", fleet.terminalReason);
+      terminalEvent = this.appendFleetEvent(
+        session,
+        "failed",
+        fleet.terminalReason,
+        { deferPublish: true },
+      );
     } else {
       fleet.lifecycle = "failed";
       fleet.terminalReason =
         resolution.resultState === "incomplete_expected_result"
           ? "incomplete_expected_result"
           : (this.bgErrors.get(session.id) ?? "agent_error");
-      this.appendFleetEvent(session, "failed", fleet.terminalReason);
+      terminalEvent = this.appendFleetEvent(
+        session,
+        "failed",
+        fleet.terminalReason,
+        { deferPublish: true },
+      );
     }
+    await this.saveSessionNow(session.id);
+    if (terminalEvent) this.publishFleetEvent(session.id, terminalEvent);
   }
 
   private resolveBackgroundResult(
@@ -9336,6 +9909,15 @@ export class AgentSessionManager {
         // Already surfaced in the parent transcript (live or on a prior
         // restore) — re-announcing on every reload would duplicate it.
         if (fleet?.resultAnnouncedAt) return false;
+        // Legacy reload interruptions predate durable delivery tracking and can
+        // otherwise replay indefinitely. Newly recovered interruptions carry an
+        // explicit marker and remain eligible until they are announced.
+        if (
+          fleet?.terminalReason === "extension_reloaded_during_run" &&
+          fleet.reloadInterruptionRecordedAt === undefined
+        ) {
+          return false;
+        }
         // User-initiated cancellations were witnessed when they happened;
         // redelivering them as fresh results on restore is noise.
         if (

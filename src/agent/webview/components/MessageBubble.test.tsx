@@ -302,8 +302,9 @@ describe("MessageBubble slash-command rendering", () => {
       screen.getByRole("button", { name: "Open screenshot.png" }),
     );
     const dialog = screen.getByRole("dialog", { name: "screenshot.png" });
-    expect(dialog).toBeTruthy();
-    const fullPreview = container.querySelector(
+    expect(dialog.parentElement).toBe(document.body);
+    expect(container.contains(dialog)).toBe(false);
+    const fullPreview = dialog.querySelector(
       ".user-image-lightbox-image",
     ) as HTMLImageElement;
     expect(fullPreview).toBeTruthy();
@@ -316,9 +317,9 @@ describe("MessageBubble slash-command rendering", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Open screenshot.png" }),
     );
-    const reopened = container.querySelector(
-      ".user-image-lightbox-image",
-    ) as HTMLImageElement;
+    const reopened = screen
+      .getByRole("dialog", { name: "screenshot.png" })
+      .querySelector(".user-image-lightbox-image") as HTMLImageElement;
     expect(reopened).toBeTruthy();
     fireEvent.click(reopened);
     expect(screen.queryByRole("dialog", { name: "screenshot.png" })).toBeNull();

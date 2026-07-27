@@ -103,11 +103,16 @@ import {
   type WriteApprovalSelection,
 } from "../../shared/selectionCommands";
 import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy";
+import {
+  addressChatPaneMessage,
+  type ChatWebviewBootstrap,
+} from "../chatPaneProtocol";
 import type {
   ChatTabActionConfirmationRequest,
   ChatWorkspaceViewSnapshot,
 } from "../chatTabProtocol";
 import { InactiveChatProjectionCache } from "./InactiveChatProjectionCache";
+import { ChatProjectionStateCache } from "./ChatProjectionStateCache";
 import { addressChatWebviewMessage } from "./chatTabActions";
 import { useWebviewMessageConnection } from "./useWebviewMessageConnection";
 
@@ -123,6 +128,7 @@ interface OpenTranscriptState {
   streaming: boolean;
   todos: TodoItem[];
   statusOverride: string | null;
+  visible: boolean;
 }
 
 function reduceOpenTranscript(
@@ -160,6 +166,13 @@ function reduceOpenTranscript(
  * may be a long time away. Terminal events turn it off; anything else leaves
  * the flag untouched.
  */
+export function shouldReuseBackgroundTranscript(
+  currentSessionId: string | undefined,
+  requestedSessionId: string,
+): boolean {
+  return currentSessionId === requestedSessionId;
+}
+
 export function bgTranscriptStreamingOverride(
   msgType: string,
 ): { streaming: boolean } | undefined {
@@ -251,6 +264,16 @@ export {
   shouldProjectBackgroundCompletion,
 };
 
+export function selectedWorkspaceSessionId(
+  snapshot: ChatWorkspaceViewSnapshot | null,
+  pinnedTabId?: string,
+): string | null {
+  const selectedTabId = pinnedTabId ?? snapshot?.focusedTabId;
+  return (
+    snapshot?.tabs.find((tab) => tab.tabId === selectedTabId)?.sessionId ?? null
+  );
+}
+
 export function queuedMessagesReadyToDrain(
   queue: MessageQueueItem[],
   editingQueueId: string | null,
@@ -273,23 +296,40 @@ const streamingBaselineMetrics = __DEV_BUILD__
   ? getDevelopmentStreamingBaselineMetrics("vscode-webview", true)
   : undefined;
 
-export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
+export function App({
+  vscodeApi: hostVscodeApi,
+  pane = { surface: "sidebar" },
+}: {
+  vscodeApi: VsCodeApi;
+  pane?: ChatWebviewBootstrap;
+}) {
+  const pinnedPane = pane.surface === "editor" ? pane.address : undefined;
+  const pinnedTabId = pinnedPane?.tabId;
   const [state, dispatch] = useReducer(reducer, initialState);
   const [workspaceSnapshot, setWorkspaceSnapshot] =
     useState<ChatWorkspaceViewSnapshot | null>(null);
   const workspaceSnapshotRef = useRef<ChatWorkspaceViewSnapshot | null>(null);
-  workspaceSnapshotRef.current = workspaceSnapshot;
   const inactiveProjectionCacheRef = useRef(new InactiveChatProjectionCache());
+  const projectionStateCacheRef = useRef(new ChatProjectionStateCache());
+  const flushConnectionDeltasRef = useRef<() => void>(() => {});
   const vscodeApi = useMemo<VsCodeApi>(
     () => ({
-      postMessage: (message) =>
+      postMessage: (message) => {
+        const addressed = addressChatWebviewMessage(
+          message,
+          workspaceSnapshotRef.current,
+          pinnedPane,
+        );
         hostVscodeApi.postMessage(
-          addressChatWebviewMessage(message, workspaceSnapshotRef.current),
-        ),
+          pinnedPane
+            ? addressChatPaneMessage(addressed, pinnedPane)
+            : addressed,
+        );
+      },
       getState: () => hostVscodeApi.getState(),
       setState: (nextState) => hostVscodeApi.setState(nextState),
     }),
-    [hostVscodeApi],
+    [hostVscodeApi, pinnedPane],
   );
   const stateRef = useRef(state.chatState);
   stateRef.current = state.chatState;
@@ -385,9 +425,11 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
   const [chatTabConfirmation, setChatTabConfirmation] =
     useState<ChatTabActionConfirmationRequest | null>(null);
   const [chatTabFailure, setChatTabFailure] = useState<string | null>(null);
-  const [forwardedApproval, setForwardedApproval] =
-    useState<ApprovalRequest | null>(null);
-  const forwardedApprovalRef = useRef<ApprovalRequest | null>(null);
+  const [globalApproval, setGlobalApproval] = useState<ApprovalRequest | null>(
+    null,
+  );
+  const globalApprovalRef = useRef<ApprovalRequest | null>(null);
+  globalApprovalRef.current = globalApproval;
   const [approvalPanelHeight, setApprovalPanelHeight] = useState(
     DEFAULT_APPROVAL_PANEL_HEIGHT,
   );
@@ -483,13 +525,49 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
     [],
   );
 
+  const applyWorkspaceSnapshot = useCallback(
+    (snapshot: ChatWorkspaceViewSnapshot) => {
+      const previousSessionId = selectedWorkspaceSessionId(
+        workspaceSnapshotRef.current,
+        pinnedTabId,
+      );
+      const nextSessionId = selectedWorkspaceSessionId(snapshot, pinnedTabId);
+      const openSessionIds = new Set(
+        snapshot.tabs.flatMap((tab) => (tab.sessionId ? [tab.sessionId] : [])),
+      );
+      if (previousSessionId !== nextSessionId) {
+        flushConnectionDeltasRef.current();
+        projectionStateCacheRef.current.save(fullStateRef.current);
+        const restored = projectionStateCacheRef.current.restore(
+          nextSessionId,
+          {
+            modes: fullStateRef.current.modes,
+            availableModels: fullStateRef.current.availableModels,
+            slashCommands: fullStateRef.current.slashCommands,
+          },
+        );
+        fullStateRef.current = restored;
+        stateRef.current = restored.chatState;
+        messageQueueRef.current = restored.messageQueue;
+        streamingRef.current = restored.streaming;
+        workspaceSnapshotRef.current = snapshot;
+        dispatch({ type: "RESTORE_PROJECTION", state: restored });
+      }
+      inactiveProjectionCacheRef.current.retainSessions(openSessionIds);
+      projectionStateCacheRef.current.retainSessions(openSessionIds);
+      workspaceSnapshotRef.current = snapshot;
+      setWorkspaceSnapshot(snapshot);
+    },
+    [pinnedTabId],
+  );
+
   const replayInactiveSessionMessage = useWebviewMessageConnection({
     vscodeApi,
     sessionIdRef: {
       get current() {
         const snapshot = workspaceSnapshotRef.current;
         const selected = snapshot?.tabs.find(
-          (tab) => tab.tabId === snapshot.focusedTabId,
+          (tab) => tab.tabId === (pinnedTabId ?? snapshot.focusedTabId),
         );
         return selected?.sessionId ?? stateRef.current.sessionId;
       },
@@ -504,8 +582,10 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
         );
       },
     },
+    flushDeltasRef: flushConnectionDeltasRef,
     dispatchDelta: dispatch,
     onInactiveSessionMessage: (msg) => {
+      if (msg.type === "agentSessionLoaded") return;
       inactiveProjectionCacheRef.current.append(msg);
     },
     onMessage: (msg, controls) => {
@@ -513,28 +593,21 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
 
       switch (msg.type) {
         case "chatWorkspaceUpdate":
-          inactiveProjectionCacheRef.current.retainSessions(
-            new Set(
-              msg.snapshot.tabs.flatMap((tab) =>
-                tab.sessionId ? [tab.sessionId] : [],
-              ),
-            ),
-          );
-          setWorkspaceSnapshot(msg.snapshot);
+          applyWorkspaceSnapshot(msg.snapshot);
           setChatTabFailure(null);
           break;
         case "chatTabActionConfirmationRequested":
           setChatTabConfirmation(msg.request);
           break;
         case "chatTabActionRejected":
-          setWorkspaceSnapshot(msg.rejection.snapshot);
+          applyWorkspaceSnapshot(msg.rejection.snapshot);
           setChatTabConfirmation(null);
           setChatTabFailure(
             "That chat tab changed. Please try the action again.",
           );
           break;
         case "chatTabActionFailed":
-          setWorkspaceSnapshot(msg.failure.snapshot);
+          applyWorkspaceSnapshot(msg.failure.snapshot);
           setChatTabConfirmation(null);
           setChatTabFailure(
             msg.failure.reason === "close_blocked"
@@ -543,13 +616,26 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
                 ? "That saved chat is no longer available."
                 : msg.failure.reason === "invalid_order"
                   ? "The tab order changed before it could be saved."
-                  : "The chat tab could not be updated.",
+                  : msg.failure.reason === "placement_failed"
+                    ? "The chat tab could not be moved. Please try again."
+                    : "The chat tab could not be updated.",
           );
           break;
-        case "stateUpdate":
+        case "stateUpdate": {
+          const selectedSessionId = selectedWorkspaceSessionId(
+            workspaceSnapshotRef.current,
+            pinnedTabId,
+          );
+          if (
+            workspaceSnapshotRef.current &&
+            msg.state.sessionId !== selectedSessionId
+          ) {
+            break;
+          }
           streamingRef.current = Boolean(msg.state.streaming);
           dispatch({ type: "SET_STATE", state: msg.state });
           break;
+        }
         case "agentRestoreSessionStart":
           dispatch({ type: "SET_RESTORING_SESSION", restoring: true });
           break;
@@ -719,47 +805,46 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
             editingQueuedMessageRef.current?.id ?? null,
           );
           if (queue.length > 0) {
+            const originSessionId = msg.sessionId;
+            const originMode = stateRef.current.mode;
+            const originReasoningEffort = reasoningEffortRef.current;
             messageQueueRef.current = messageQueueRef.current.filter(
               (q) => !queue.some((item) => item.id === q.id),
             );
+            streamingRef.current = true;
             for (const item of queue) {
               dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
-            }
-            setTimeout(() => {
-              streamingRef.current = true;
-              for (const item of queue) {
-                dispatch({
-                  type: "ADD_USER_MESSAGE",
-                  text: item.text,
-                  isSlashCommand: item.isSlashCommand === true,
-                  slashCommandLabel: item.slashCommandLabel,
-                  displayMedia: item.displayMedia,
-                });
-              }
-              vscodeApi.postMessage({
-                command: "agentSend",
-                text: queue[0]?.fullText ?? queue[0]?.text ?? "",
-                displayText: queue[0]?.text,
-                isSlashCommand: queue[0]?.isSlashCommand === true,
-                slashCommandLabel: queue[0]?.slashCommandLabel,
-                attachments: queue[0]?.attachments,
-                images: queue[0]?.images,
-                documents: queue[0]?.documents,
-                messages: queue.map((item) => ({
-                  text: item.fullText ?? item.text,
-                  displayText: item.text,
-                  isSlashCommand: item.isSlashCommand === true,
-                  slashCommandLabel: item.slashCommandLabel,
-                  attachments: item.attachments,
-                  images: item.images,
-                  documents: item.documents,
-                })),
-                sessionId: stateRef.current.sessionId,
-                mode: stateRef.current.mode,
-                reasoningEffort: reasoningEffortRef.current,
-                thinkingEnabled: reasoningEffortRef.current !== "none",
+              dispatch({
+                type: "ADD_USER_MESSAGE",
+                text: item.text,
+                isSlashCommand: item.isSlashCommand === true,
+                slashCommandLabel: item.slashCommandLabel,
+                displayMedia: item.displayMedia,
               });
-            }, 0);
+            }
+            vscodeApi.postMessage({
+              command: "agentSend",
+              text: queue[0]?.fullText ?? queue[0]?.text ?? "",
+              displayText: queue[0]?.text,
+              isSlashCommand: queue[0]?.isSlashCommand === true,
+              slashCommandLabel: queue[0]?.slashCommandLabel,
+              attachments: queue[0]?.attachments,
+              images: queue[0]?.images,
+              documents: queue[0]?.documents,
+              messages: queue.map((item) => ({
+                text: item.fullText ?? item.text,
+                displayText: item.text,
+                isSlashCommand: item.isSlashCommand === true,
+                slashCommandLabel: item.slashCommandLabel,
+                attachments: item.attachments,
+                images: item.images,
+                documents: item.documents,
+              })),
+              sessionId: originSessionId,
+              mode: originMode,
+              reasoningEffort: originReasoningEffort,
+              thinkingEnabled: originReasoningEffort !== "none",
+            });
           }
           break;
         }
@@ -876,12 +961,22 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
           }
           break;
         case "showApproval":
-          forwardedApprovalRef.current = msg.request as ApprovalRequest;
-          setForwardedApproval(msg.request as ApprovalRequest);
+          if (msg.sessionId === undefined) {
+            globalApprovalRef.current = msg.request;
+            setGlobalApproval(msg.request);
+          } else {
+            dispatch({ type: "SET_APPROVAL", request: msg.request });
+          }
           break;
         case "idle":
-          forwardedApprovalRef.current = null;
-          setForwardedApproval(null);
+          if (msg.sessionId === undefined) {
+            if (globalApprovalRef.current?.id === msg.id) {
+              globalApprovalRef.current = null;
+              setGlobalApproval(null);
+            }
+          } else {
+            dispatch({ type: "CLEAR_APPROVAL", id: msg.id });
+          }
           break;
 
         case "agentCondense":
@@ -975,15 +1070,15 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
 
         case "agentQuestionCleared":
-          dispatch({ type: "CLEAR_QUESTION" });
-          setRemoteQuestionProgress(null);
+          dispatch({ type: "CLEAR_QUESTION", id: msg.id });
+          setRemoteQuestionProgress((progress) =>
+            progress?.id === msg.id ? null : progress,
+          );
           break;
 
         case "agentInteractionPromptsCleared":
           activeDetectRequestRef.current = null;
           dispatch({ type: "CLEAR_INTERACTION_PROMPTS" });
-          forwardedApprovalRef.current = null;
-          setForwardedApproval(null);
           setElicitation(null);
           setRemoteQuestionProgress(null);
           break;
@@ -1006,6 +1101,16 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
 
         case "agentSessionLoaded": {
           if (msg.restored && !startupRestorePendingRef.current) {
+            break;
+          }
+          if (
+            workspaceSnapshotRef.current &&
+            msg.sessionId !==
+              selectedWorkspaceSessionId(
+                workspaceSnapshotRef.current,
+                pinnedTabId,
+              )
+          ) {
             break;
           }
           const inactiveEvents = inactiveProjectionCacheRef.current.take(
@@ -1034,12 +1139,8 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
             hasMoreBefore: msg.hasMoreBefore,
           });
           setShowHistory(false);
-          if (inactiveEvents.length > 0) {
-            setTimeout(() => {
-              for (const inactiveEvent of inactiveEvents) {
-                replayInactiveSessionMessage(inactiveEvent);
-              }
-            }, 0);
+          for (const inactiveEvent of inactiveEvents) {
+            replayInactiveSessionMessage(inactiveEvent);
           }
           break;
         }
@@ -1608,6 +1709,7 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
             streaming:
               bgInfo?.status === "streaming" ||
               bgInfo?.status === "tool_executing",
+            visible: true,
           });
           break;
         }
@@ -1726,6 +1828,7 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
           ...(images.length > 0 ? { images } : {}),
           ...(documents.length > 0 ? { documents } : {}),
           ...(displayMedia ? { displayMedia } : {}),
+          ...(interject ? { interjectionReady: true } : {}),
           source: "vscode" as const,
         };
         messageQueueRef.current = [...messageQueueRef.current, queueItem];
@@ -1745,6 +1848,13 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
           displayMedia,
           source: "vscode",
         });
+        if (interject) {
+          dispatch({
+            type: "MARK_QUEUE_INTERJECTION_READY",
+            id: queueId,
+            ready: true,
+          });
+        }
         if (interject) {
           vscodeApi.postMessage({
             command: "agentInterjectQueuedMessage",
@@ -1831,8 +1941,6 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
     if (stateRef.current.sessionId) {
       activeDetectRequestRef.current = null;
       dispatch({ type: "CLEAR_INTERACTION_PROMPTS" });
-      forwardedApprovalRef.current = null;
-      setForwardedApproval(null);
       setElicitation(null);
       setRemoteQuestionProgress(null);
       vscodeApi.postMessage({
@@ -1989,7 +2097,8 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
   useEffect(() => {
     if (!autoContinueEnabled || state.streaming) return;
     if (!state.chatState.sessionId) return;
-    if (state.questionRequest || forwardedApproval) return;
+    if (state.questionRequest || globalApproval || state.approvalRequest)
+      return;
 
     const lastMessage = state.messages[state.messages.length - 1];
     if (lastMessage?.error) {
@@ -2062,8 +2171,9 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
     );
   }, [
     autoContinueEnabled,
-    forwardedApproval,
+    globalApproval,
     handleSend,
+    state.approvalRequest,
     state.chatState.sessionId,
     state.messages,
     state.questionRequest,
@@ -2072,9 +2182,26 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
 
   const handleOpenBgTranscript = useCallback(
     (sessionId: string) => {
+      if (
+        shouldReuseBackgroundTranscript(transcriptView?.sessionId, sessionId)
+      ) {
+        setTranscriptView((current) =>
+          current ? { ...current, visible: true } : current,
+        );
+        const bgInfo = bgSessionsRef.current.find(
+          (session) => session.id === sessionId,
+        );
+        if (
+          bgInfo?.status === "streaming" ||
+          bgInfo?.status === "tool_executing" ||
+          bgInfo?.status === "awaiting_approval"
+        ) {
+          return;
+        }
+      }
       vscodeApi.postMessage({ command: "openBgTranscript", sessionId });
     },
-    [vscodeApi],
+    [transcriptView?.sessionId, vscodeApi],
   );
 
   const handleLoadEarlierSessionMessages = useCallback(() => {
@@ -2346,13 +2473,14 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
   const handleForwardedApprovalSubmit = useCallback(
     (data: Omit<DecisionMessage, "type">) => {
       const submittedApprovalId = data.id;
-      const approvalKind = forwardedApprovalRef.current?.kind;
-      setForwardedApproval((current) => {
-        if (!current || current.id === submittedApprovalId) return null;
-        return current;
-      });
-      if (forwardedApprovalRef.current?.id === submittedApprovalId) {
-        forwardedApprovalRef.current = null;
+      const approvalKind =
+        globalApprovalRef.current?.kind ??
+        fullStateRef.current.approvalRequest?.kind;
+      if (globalApprovalRef.current?.id === submittedApprovalId) {
+        globalApprovalRef.current = null;
+        setGlobalApproval(null);
+      } else {
+        dispatch({ type: "CLEAR_APPROVAL", id: submittedApprovalId });
       }
       forwardedFollowUpRef.current = "";
       vscodeApi.postMessage({
@@ -2674,6 +2802,24 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
     },
     [findWorkspaceTab, vscodeApi],
   );
+  const handlePopOutChatTab = useCallback(
+    (tabId: string) => {
+      const tab = findWorkspaceTab(tabId);
+      if (!tab) return;
+      setChatTabFailure(null);
+      vscodeApi.postMessage({
+        command: "chatTabPopOut",
+        tabId: tab.tabId,
+        sessionId: tab.sessionId,
+      });
+    },
+    [findWorkspaceTab, vscodeApi],
+  );
+  const handleDockChatTab = useCallback(() => {
+    if (!pinnedPane) return;
+    setChatTabFailure(null);
+    vscodeApi.postMessage({ command: "chatTabDock" });
+  }, [pinnedPane, vscodeApi]);
   const handleReorderChatTabs = useCallback(
     (tabIds: string[]) => {
       vscodeApi.postMessage({ command: "chatTabReorder", tabIds });
@@ -2694,7 +2840,7 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
     });
   }, [chatTabConfirmation, vscodeApi]);
   const selectedWorkspaceTab = workspaceSnapshot?.tabs.find(
-    (tab) => tab.tabId === workspaceSnapshot.focusedTabId,
+    (tab) => tab.tabId === (pinnedTabId ?? workspaceSnapshot.focusedTabId),
   );
   const selectedTabKey = selectedWorkspaceTab
     ? `${selectedWorkspaceTab.tabId}:${selectedWorkspaceTab.sessionId ?? "new"}`
@@ -2857,11 +3003,39 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
           onCancel={() => setChatTabConfirmation(null)}
         />
       )}
+      {pane.surface === "editor" && selectedWorkspaceTab && (
+        <div class="chat-editor-actions">
+          <span>
+            {selectedWorkspaceTab.label} ·{" "}
+            {selectedWorkspaceTab.title ?? "New Chat"}
+          </span>
+          <button
+            type="button"
+            class="chat-editor-action"
+            onClick={handleDockChatTab}
+            title="Dock in AgentLink sidebar"
+          >
+            <i class="codicon codicon-layout-sidebar-left" />
+            Dock
+          </button>
+          <button
+            type="button"
+            class="chat-editor-action"
+            onClick={() => handleCloseChatTab(selectedWorkspaceTab.tabId)}
+            title={`Close ${selectedWorkspaceTab.label}`}
+          >
+            <i class="codicon codicon-close" />
+            Close Tab
+          </button>
+        </div>
+      )}
       <ChatWorkspace
         snapshot={workspaceSnapshot}
+        showTabStrip={pane.surface === "sidebar"}
         onFocus={handleFocusChatTab}
         onNewTab={handleNewChatTab}
         onClose={handleCloseChatTab}
+        onPopOut={pane.surface === "sidebar" ? handlePopOutChatTab : undefined}
         onReorder={handleReorderChatTabs}
       >
         <ChatSessionPane tabKey={selectedTabKey}>
@@ -2887,7 +3061,7 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
                 </button>
               </div>
             )}
-            {transcriptView && (
+            {transcriptView?.visible && (
               <TranscriptView
                 task={transcriptView.task}
                 sessionId={transcriptView.sessionId}
@@ -2906,7 +3080,11 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
                 bgSessions={bgSessions}
                 onStopBackground={handleStopBackground}
                 onOpenTranscript={handleOpenBgTranscript}
-                onClose={() => setTranscriptView(null)}
+                onClose={() =>
+                  setTranscriptView((current) =>
+                    current ? { ...current, visible: false } : current,
+                  )
+                }
               />
             )}
             {shiftDragOver && (
@@ -2988,7 +3166,9 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
               streamingMetricsScope={state.chatState.sessionId ?? "foreground"}
             />
             <ChatActivityShelf
-              revealKey={forwardedApproval?.id ?? null}
+              revealKey={
+                globalApproval?.id ?? state.approvalRequest?.id ?? null
+              }
               revealMinHeight={approvalPanelHeight + 10}
             >
               <MessageQueuePanel
@@ -3013,6 +3193,17 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
                   });
                 }}
                 onInterject={(item) => {
+                  messageQueueRef.current = messageQueueRef.current.map(
+                    (queued) =>
+                      queued.id === item.id
+                        ? { ...queued, interjectionReady: true }
+                        : queued,
+                  );
+                  dispatch({
+                    type: "MARK_QUEUE_INTERJECTION_READY",
+                    id: item.id,
+                    ready: true,
+                  });
                   vscodeApi.postMessage({
                     command: "agentInterjectQueuedMessage",
                     sessionId: stateRef.current.sessionId,
@@ -3358,8 +3549,15 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
                         },
                       ),
                     );
-                    dispatch({ type: "CLEAR_QUESTION" });
-                    setRemoteQuestionProgress(null);
+                    dispatch({
+                      type: "SUBMIT_QUESTION",
+                      id,
+                      answers,
+                      notes,
+                    });
+                    setRemoteQuestionProgress((progress) =>
+                      progress?.id === id ? null : progress,
+                    );
                     setQuestionContextMode(null);
                     setQuestionAttachments({});
                     vscodeApi.postMessage({
@@ -3372,9 +3570,9 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
                   }}
                 />
               )}
-              {forwardedApproval && (
+              {(globalApproval ?? state.approvalRequest) && (
                 <ApprovalPanelEmbed
-                  request={forwardedApproval}
+                  request={(globalApproval ?? state.approvalRequest)!}
                   height={approvalPanelHeight}
                   resizing={approvalResizing}
                   followUpRef={forwardedFollowUpRef}

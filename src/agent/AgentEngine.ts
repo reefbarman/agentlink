@@ -1125,11 +1125,12 @@ export class AgentEngine {
     // to return false in this (still-running) loop and allowing spurious API calls.
     const { signal } = ac;
 
-    // Model selection can change while a turn is running. Keep this turn on
-    // the provider/model pair resolved at its boundary; provider-owned
-    // fallback updates activeModel explicitly below.
+    // Model selection updates are adopted between provider requests. An in-flight
+    // stream completes under the provider/model pair that started it.
+    await session.waitForModelSelectionUpdate();
     let activeModel = session.model;
-    const provider = this.registry.resolveProvider(activeModel);
+    let provider = this.registry.resolveProvider(activeModel);
+    let modelSelectionRevision = session.modelSelectionRevision;
     const logicalTurnUserMessage = [...session.getMessages()]
       .reverse()
       .find(
@@ -1182,6 +1183,25 @@ export class AgentEngine {
       while (true) {
         if (signal.aborted) break;
 
+        await session.waitForModelSelectionUpdate();
+        if (signal.aborted) break;
+        if (session.modelSelectionRevision !== modelSelectionRevision) {
+          activeModel = session.model;
+          provider = this.registry.resolveProvider(activeModel);
+          modelSelectionRevision = session.modelSelectionRevision;
+          requestRetryCount = 0;
+          streamRetryCount = 0;
+          visibleTextFromRetriedStream = "";
+          credentialRefreshCount = 0;
+          thinkingSignatureRetryAttempted = false;
+          session.resetProviderResponseState();
+          this.log?.(
+            `[model] adopted live selection ${provider.id}/${activeModel} at provider request boundary`,
+          );
+        }
+
+        const requestModelSelectionRevision = modelSelectionRevision;
+        const requestSystemPrompt = session.systemPrompt;
         const toolSetupStartedAt = Date.now();
         // Include tools when dispatch context is available, filtered by mode.
         // Compute this before any condense path so both automatic and retry-triggered
@@ -1642,7 +1662,7 @@ export class AgentEngine {
             session.omittedToolResultContextAttributions;
           const streamGen = provider.stream({
             model: activeModel,
-            systemPrompt: session.systemPrompt,
+            systemPrompt: requestSystemPrompt,
             messages: apiMessages,
             tools,
             maxTokens,
@@ -1695,18 +1715,29 @@ export class AgentEngine {
               switch (event.type) {
                 case "model_fallback":
                   activeModel = event.effectiveModel;
-                  session.model = activeModel;
-                  await opts?.onModelFallback?.({
-                    requestedModel: event.requestedModel,
-                    effectiveModel: event.effectiveModel,
-                  });
-                  yield {
-                    type: "warning",
-                    message: `${event.requestedModel} is unavailable for this account. Switched to ${event.effectiveModel}.`,
-                    modelFallback: {
+                  const fallbackStillSelected =
+                    session.modelSelectionRevision ===
+                    requestModelSelectionRevision;
+                  if (fallbackStillSelected) {
+                    session.model = activeModel;
+                    await opts?.onModelFallback?.({
                       requestedModel: event.requestedModel,
                       effectiveModel: event.effectiveModel,
-                    },
+                    });
+                  }
+                  yield {
+                    type: "warning",
+                    message: fallbackStillSelected
+                      ? `${event.requestedModel} is unavailable for this account. Switched to ${event.effectiveModel}.`
+                      : `${event.requestedModel} is unavailable for this account. Its fallback to ${event.effectiveModel} was superseded by a newer model selection.`,
+                    ...(fallbackStillSelected
+                      ? {
+                          modelFallback: {
+                            requestedModel: event.requestedModel,
+                            effectiveModel: event.effectiveModel,
+                          },
+                        }
+                      : {}),
                   };
                   break;
                 case "thinking_start":
@@ -1813,6 +1844,11 @@ export class AgentEngine {
             this.log?.(
               `[provider-timeout] ${streamErr.message} transportEstablished=${transportMonitor?.hasTransportActivity ?? false} lastActivityAt=${transportMonitor?.lastActivityAt ?? "none"} lastProgressAt=${transportMonitor?.lastProgressAt ?? "none"} activeHttp=${http.activeRequests} peakHttp=${http.peakActiveRequests} bodyChunks=${http.bodyChunks} transportErrors=${http.transportErrors}`,
             );
+          }
+          if (
+            session.modelSelectionRevision !== requestModelSelectionRevision
+          ) {
+            continue;
           }
 
           // Broken tool_use/tool_result pairing (e.g. from an aborted run or
@@ -2021,7 +2057,12 @@ export class AgentEngine {
           cacheReadTokens,
           cacheCreationTokens,
         );
-        session.setProviderResponseId(providerResponseId);
+        if (
+          session.modelSelectionRevision === requestModelSelectionRevision &&
+          session.model === activeModel
+        ) {
+          session.setProviderResponseId(providerResponseId);
+        }
 
         // Provider inputTokens is normalized to the uncached prompt portion.
         // For context window tracking, report the total: uncached + cache reads + cache writes.
@@ -2690,6 +2731,7 @@ export class AgentEngine {
         // session accumulator above. Check if we've crossed the threshold.
         if (
           !signal.aborted &&
+          session.modelSelectionRevision === requestModelSelectionRevision &&
           isOverCondenseThresholdInternal(session, provider, activeModel)
         ) {
           const condensed = yield* this.condenseSession(

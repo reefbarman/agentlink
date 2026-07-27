@@ -1,5 +1,4 @@
 import {
-  COMPATIBILITY_AGENTLINK_SETTINGS,
   MACHINE_SCOPED_AGENTLINK_SETTINGS,
   PROJECT_SCOPED_AGENTLINK_SETTINGS,
   WINDOW_SCOPED_AGENTLINK_SETTINGS,
@@ -37,8 +36,8 @@ describe("ProjectSettingsAccessor", () => {
     expect(
       accessor.get(
         { workspaceFolderUri: "vscode-remote://host/workspace/api" },
-        "agentModel",
-        "fallback-model",
+        "modeModelPreferences",
+        {},
       ),
     ).toBe("project-model");
     expect(parse).toHaveBeenCalledWith("vscode-remote://host/workspace/api");
@@ -51,7 +50,7 @@ describe("ProjectSettingsAccessor", () => {
     expect(getConfiguration).toHaveBeenLastCalledWith("agentlink", {
       value: "file:///workspace/other",
     });
-    expect(get).toHaveBeenCalledWith("agentModel", "fallback-model");
+    expect(get).toHaveBeenCalledWith("modeModelPreferences", {});
   });
 
   it("attributes project-scoped setting changes by workspace-folder URI", () => {
@@ -101,7 +100,6 @@ describe("ProjectSettingsAccessor", () => {
       ...PROJECT_SCOPED_AGENTLINK_SETTINGS,
       ...MACHINE_SCOPED_AGENTLINK_SETTINGS,
       ...WINDOW_SCOPED_AGENTLINK_SETTINGS,
-      ...COMPATIBILITY_AGENTLINK_SETTINGS,
     ];
     const manifest = JSON.parse(readFileSync("package.json", "utf8")) as {
       contributes: {
@@ -112,9 +110,11 @@ describe("ProjectSettingsAccessor", () => {
     };
     const properties = manifest.contributes.configuration.properties;
 
-    expect(classifications).toHaveLength(59);
+    expect(classifications).toHaveLength(54);
     expect(PROJECT_SCOPED_AGENTLINK_SETTINGS).toContain("modelPromptProfiles");
     expect(PROJECT_SCOPED_AGENTLINK_SETTINGS).toContain("skills.disabledIds");
+    expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain("disabledProviders");
+    expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain("memory.mode");
     expect(MACHINE_SCOPED_AGENTLINK_SETTINGS).toContain(
       "terminal.environmentPolicy",
     );
@@ -153,10 +153,7 @@ describe("ProjectSettingsAccessor", () => {
     for (const setting of MACHINE_SCOPED_AGENTLINK_SETTINGS) {
       expect(properties[`agentlink.${setting}`]?.scope).toBe("machine");
     }
-    for (const setting of [
-      ...WINDOW_SCOPED_AGENTLINK_SETTINGS,
-      ...COMPATIBILITY_AGENTLINK_SETTINGS,
-    ]) {
+    for (const setting of WINDOW_SCOPED_AGENTLINK_SETTINGS) {
       expect(properties[`agentlink.${setting}`]?.scope).toBe("window");
     }
   });

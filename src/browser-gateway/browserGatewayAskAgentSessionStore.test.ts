@@ -63,6 +63,34 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(userMessage).not.toHaveProperty("origin");
   });
 
+  it("persists generate_image approval per Ask Agent session", () => {
+    const store = createStore();
+    store.sendMessage({
+      now: 100,
+      theme,
+      modelCredentialStatus: { state: "not_required", providerId: "test" },
+      text: "Create an image",
+    });
+
+    expect(store.isGenerateImageApproved()).toBe(false);
+    store.approveGenerateImageForSession(110);
+    expect(store.isGenerateImageApproved()).toBe(true);
+
+    const history = store.getHistorySnapshot();
+    const reloaded = createStore();
+    reloaded.loadHistory(history);
+    expect(reloaded.isGenerateImageApproved()).toBe(true);
+
+    reloaded.createSession(200);
+    reloaded.sendMessage({
+      now: 200,
+      theme,
+      modelCredentialStatus: { state: "not_required", providerId: "test" },
+      text: "A different session",
+    });
+    expect(reloaded.isGenerateImageApproved()).toBe(false);
+  });
+
   it("does not accumulate empty sessions when creating new sessions repeatedly", () => {
     const store = createStore();
 
@@ -824,6 +852,33 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(nextSession.snapshot.ui.question).toBeNull();
     expect(nextSession.snapshot.session.foreground.todos).toEqual([]);
     expect(nextSession.snapshot.ui.projectHandoff).toBeNull();
+  });
+
+  it("answers against the provider tool-call ID when the UI request ID differs", () => {
+    const store = createStore();
+    const assistant = store.startAssistantMessage({ now: 100 });
+    store.startAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "tool-ask-provider",
+      toolName: "ask_user",
+      input: {},
+    });
+    store.setQuestionRequest({
+      id: "question-ui-request",
+      toolCallId: "tool-ask-provider",
+      context: "Need a decision.",
+      questions: [{ id: "continue", type: "yes_no", question: "Continue?" }],
+    });
+
+    const result = store.answerQuestion("question-ui-request", {
+      continue: true,
+    });
+
+    expect(result).toMatchObject({
+      messageId: assistant.id,
+      toolCallId: "tool-ask-provider",
+      responses: [{ question: "Continue?", answer: true }],
+    });
   });
 
   it("returns ordered question attachment metadata and media", () => {

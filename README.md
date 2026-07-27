@@ -69,6 +69,7 @@ flowchart LR
 
 ### Core built-in agent features
 
+- **Independent chat tabs and editor pop-outs** — run multiple built-in agent sessions in stable VS Code chat tabs without switching interrupting active work. Any tab except the last docked tab can move into its own editor panel; popped layouts and session bindings restore across reloads, and closing a panel docks its tab again.
 - **Inline approvals in chat** — command, write, rename, MCP, and mode-switch approvals render in the built-in chat UI. The separate approval panel provides a focused review surface for pending operations.
 - **Session history and restore** — chat sessions are persisted and restored across VS Code reloads/startup.
 - **Checkpoints and revert** — create workspace checkpoints and revert later. Checkpoints are stored in AgentLink’s own shadow git repo under `.agentlink/checkpoints/`, separate from your project’s real git history.
@@ -156,6 +157,7 @@ A failure after a sandbox provider has been selected remains fail-closed; AgentL
    - **AgentLink: Sign In to OpenAI/Codex** for ChatGPT/Codex OAuth or OpenAI API-key-backed models
    - **AgentLink: Set OpenAI API Key** for direct OpenAI API key setup
    - **AgentLink: Set Anthropic API Key** for Anthropic models
+   - To temporarily remove a provider from model selection and automatic routing without clearing credentials, add its ID to `agentlink.disabledProviders` (for example `["anthropic"]`; built-in IDs are `anthropic` and `codex`)
 4. Start chatting in the sidebar
 5. Switch modes as needed (`code`, `architect`, `ask`, `debug`, `review`)
 6. Approve edits and commands inline when the agent requests them
@@ -321,7 +323,7 @@ Security and compatibility notes:
 - Capabilities are declarations, not probes. A server/model template may still emit malformed tool calls; AgentLink validates completed arguments as JSON objects before execution.
 - Missing usage is locally estimated and marked; `finish_reason: "length"` preserves partial output and surfaces truncation instead of pretending the turn ended normally.
 - Direct-provider model IDs can be short-lived or deprecated. The wizard performs bounded, user-invoked `/models` discovery with manual fallback; it does not probe capabilities with chat requests or refresh catalogs automatically after setup.
-- The legacy window-scoped `agentlink.openaiCompatible.baseUrl`, `.model`, `.apiKey`, and `.timeoutMs` settings remain separate helper-only configuration. Their plaintext `.apiKey` is compatibility debt and is never used by configured chat connections.
+- The window-scoped `agentlink.openaiCompatible.baseUrl`, `.model`, `.apiKey`, and `.timeoutMs` settings configure the shared helper endpoint for optional question detection and background-agent summaries. Their plaintext `.apiKey` is never used by configured chat connections.
 
 ### Built-in chat entry points
 
@@ -988,7 +990,7 @@ Response fields may include `user_edits` (proposed content → reviewer-edited c
 
 ### generate_image
 
-Generate PNG images through OpenAI/Codex auth and show them inline in chat. With ChatGPT/Codex OAuth, usage consumes the active account's image-generation quota; with an OpenAI API key, usage is billed to the API key. The tool always shows an approval prompt before generation because quota/billing is consumed before images are returned. In VS Code, pass `output_path` to also save generated PNGs into the workspace; browser-initiated generation is display-only.
+Generate PNG images through OpenAI/Codex auth and show them inline in chat. With ChatGPT/Codex OAuth, usage consumes the active account's image-generation quota; with an OpenAI API key, usage is billed to the API key. The first call requires approval because quota/billing is consumed before images are returned; choose **Generate for Session** to auto-approve later `generate_image` calls in that same chat session. In VS Code, pass `output_path` to also save generated PNGs into the workspace; browser-initiated generation is display-only.
 
 | Parameter               | Type               | Description                                                                                                                                                                                                  |
 | ----------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -1001,7 +1003,7 @@ Generate PNG images through OpenAI/Codex auth and show them inline in chat. With
 | `use_recent_images`     | boolean \| number? | Use recent session images as references, including user attachments and image tool results. `true` uses up to 4 recent images; a number uses that many.                                                      |
 | `timeout_seconds`       | number?            | Overall timeout in seconds. Default and maximum: 300                                                                                                                                                         |
 
-**Approval prompt:** shows the generation prompt, requested size/count, reference image labels, billing/quota note, and either chat-only output or workspace output paths. Approving uses the standard `accept` decision; rejecting returns `User denied image generation` and any planned output paths.
+**Approval prompt:** shows the generation prompt, requested size/count, reference image labels, billing/quota note, and either chat-only output or workspace output paths. **Generate** approves only the current call. **Generate for Session** also persists a `generate_image` grant for the current restored chat session, so later calls proceed without another prompt, including calls that create new collision-avoiding PNG outputs inside the workspace; the grant does not authorize unrelated file writes or overwrites. Browser Ask Agent remains display-only. Rejecting returns `User denied image generation` and any planned output paths.
 
 **Response includes:** `status`, `model`, `billing`, `requested_count`, `generated_count`, `reference_images` metadata, generated `images` metadata, Codex stream `event_types`, and image blocks rendered inline in chat. `images[].path` is present only when `output_path` saved a file.
 
@@ -1578,9 +1580,9 @@ Create or replace the built-in structured task list used to track progress on mu
 | --------- | ------ | ------------------------------------------------------------- |
 | `todos`   | todo[] | Complete task list, including completed and in-progress items |
 
-Use this for larger tasks that benefit from explicit progress tracking. The list is user-visible execution state: keep exactly one current item in progress, mark work complete immediately after it is achieved and verified, and update the list in the same transition before starting the next item. Reconcile descriptions and statuses after scope changes, condensation, or resume; stale pending status is bookkeeping to repair, not a reason to repeat completed work. Preserve unfinished items unless they leave the user's scope or are explicitly superseded. When finishing a turn and the current todo list should all be complete, prefer `set_task_status` with `status: "completed"` and `completeTodos: true` instead of a final `todo_write` call whose only purpose is marking todos complete.
+Use this for larger tasks that benefit from explicit progress tracking. The list is user-visible execution state: keep exactly one current item in progress, mark work complete immediately after it is achieved and verified, and update the list in the same transition before starting the next item. Reconcile descriptions and statuses after scope changes, condensation, or resume; stale pending status is bookkeeping to repair, not a reason to repeat completed work. Preserve unfinished items unless they leave the user's scope or are explicitly superseded. When the top-level list exceeds 10 items, keep every unfinished item and the 3 most recent ordinary completed items (excluding the history summary), then replace earlier completed items with one concise completed summary using the reserved id `completed-history`. Reuse and update that summary as history grows; it should state the represented task count and outcomes. Nested subtasks do not count toward this limit, and replaced details are omitted rather than retained as children. When finishing a turn and the current todo list should all be complete, prefer `set_task_status` with `status: "completed"` and `completeTodos: true` instead of a final `todo_write` call whose only purpose is marking todos complete.
 
-The result reports completed, in-progress, and pending counts. If more than one item is marked in progress, it also returns model-visible reconciliation guidance before work continues.
+The result reports completed, in-progress, and pending counts. If more than one item is marked in progress, it returns model-visible reconciliation guidance before work continues. It also requests cleanup when an oversized top-level list has older completed items that can be folded into the history summary.
 
 ## Built-in MCP client tools
 
@@ -1673,11 +1675,16 @@ Configure ACP agents in VS Code settings:
 {
   // Keep native AgentLink routing by default, or set this to "acp:<id>".
   "agentlink.background.defaultAgent": "acp:external-reviewer",
+  // Optional: use this ACP agent only for adversarial review_* task classes.
+  "agentlink.background.reviewAgent": "acp:external-reviewer",
 
   "agentlink.background.acpAgents": [
     {
       "id": "external-reviewer",
       "label": "External ACP Reviewer",
+      // Required when referenced by reviewAgent so same-provider reviews keep
+      // AgentLink's native cross-provider routing.
+      "provider": "anthropic",
       "command": "external-acp-agent",
       "args": ["--stdio"],
       "env": {
@@ -1695,6 +1702,7 @@ Routing options:
 
 - Use `"agentlink.background.defaultAgent": "native:auto"` to keep AgentLink's native background routing.
 - Use `"agentlink.background.defaultAgent": "acp:<id>"` to make all background spawns default to that ACP backend.
+- Use `"agentlink.background.reviewAgent": "acp:<id>"` to replace only the opposite-provider side of adversarial `review_*` tasks with that ACP backend. Set the ACP entry's `provider` family: when it matches the foreground provider, AgentLink keeps native cross-provider routing instead (for example, an Anthropic foreground still gets a Codex review). An explicit native `model` or `provider` on the spawn request always wins over this preference.
 - A foreground agent can target one ACP backend explicitly with `spawn_background_agent({ provider: "acp:<id>", ... })`; this bypasses native background model routing for that spawn.
 
 Runtime behavior:
@@ -1725,6 +1733,7 @@ Use this when wiring a real ACP stdio agent:
 - **Refusal / max token / max turn result** — AgentLink surfaces non-`end_turn` ACP stop reasons in the background result and marks the background session as an error.
 - **Permission request cancelled** — read-only ACP backends reject writes, deletes, moves, command execution, and unknown tool kinds. Keep ACP background agents focused on review/research until writable ACP support is designed.
 - **Native routing unexpectedly used** — confirm `agentlink.background.defaultAgent` is exactly `acp:<id>` or the spawn request uses `provider: "acp:<id>"`.
+- **Review ACP routing unexpectedly skipped** — confirm `agentlink.background.reviewAgent` references an ACP entry whose `provider` differs from the foreground provider. Matching providers deliberately fall through to native adversarial routing.
 
 ### Background guardrails
 
@@ -1921,16 +1930,15 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 | `agentlink.browserGatewayMdnsName`             | `agentlink`                | mDNS hostname advertised as `<name>.local` when LAN access is enabled                                                                                                         |
 | `agentlink.browserGateway.dataPlane`           | `on`                       | Helper-owned relay default; set `off` for complete legacy rollback or `shadow` for dual publication with legacy browser traffic                                               |
 | `agentlink.defaultMode`                        | `code`                     | Default mode for new built-in agent sessions                                                                                                                                  |
-| `agentlink.agentModel`                         | `gpt-5.6-sol`              | Legacy fallback model for the built-in agent chat; mode defaults use `agentlink.modeModelPreferences`                                                                         |
-| `agentlink.modeModelPreferences`               | GPT-5.6 Sol per mode       | Default model by mode slug; changing the picker in a mode updates that mode's preference                                                                                      |
+| `agentlink.modeModelPreferences`               | GPT-5.6 Sol per mode       | Startup model by mode slug; the last model selected in each mode becomes that mode's default                                                                                  |
 | `agentlink.modeReasoningEffortPreferences`     | `{}`                       | Default thinking level by mode slug; changing the picker in a mode updates that mode's preference                                                                             |
 | `agentlink.modelPromptProfiles`                | `{}`                       | Exact model-ID overrides for `compatibility` or compact `reasoning` prompts; unknown models default to compatibility and automatic reasoning rollout remains evaluation-gated |
 | `agentlink.agentMaxTokens`                     | `8192`                     | Maximum output tokens per built-in agent response                                                                                                                             |
 | `agentlink.thinkingBudget`                     | `10000`                    | Extended thinking budget for thinking-capable models                                                                                                                          |
 | `agentlink.showThinking`                       | `true`                     | Show thinking blocks in the built-in agent chat UI                                                                                                                            |
 | `agentlink.anthropic.dynamicModelCapabilities` | `true`                     | Lazily refresh Anthropic model capabilities and merge them over built-in defaults                                                                                             |
+| `agentlink.disabledProviders`                  | `[]`                       | Temporarily remove provider IDs from model selection and automatic routing without clearing credentials                                                                       |
 | `agentlink.autoCondense`                       | `true`                     | Automatically condense built-in agent conversation context when it fills up                                                                                                   |
-| `agentlink.autoCondenseThreshold`              | `0.9`                      | Legacy global condense threshold retained for migration; prefer `agentlink.modelCondenseThresholds`                                                                           |
 | `agentlink.modelCondenseThresholds`            | `{}`                       | Per-model condense thresholds for the built-in agent                                                                                                                          |
 | `agentlink.codexStatefulResponses`             | `true`                     | Chain OpenAI/Codex Responses API turns with `previous_response_id` when available                                                                                             |
 | `agentlink.codexStoreResponses`                | `false`                    | Opt into OpenAI server-side response storage for stateful Codex/API-key sessions                                                                                              |
@@ -1942,6 +1950,7 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 | `agentlink.questionDetection.mode`             | `heuristic`                | How AgentLink detects idle agent questions and generates answer buttons (`heuristic`, `agent`, `openai`)                                                                      |
 | `agentlink.bgSummary.mode`                     | `heuristic`                | How background-agent status snippets are summarized (`heuristic`, `agent`, `openai`); model-backed modes use low-priority provider requests                                   |
 | `agentlink.background.defaultAgent`            | `native:auto`              | Background backend: native routing or a configured ACP backend (`acp:<id>`)                                                                                                   |
+| `agentlink.background.reviewAgent`             | `native:auto`              | ACP backend for adversarial `review_*` tasks when its declared provider differs from the foreground provider                                                                  |
 | `agentlink.background.acpAgents`               | `[]`                       | ACP stdio subprocesses available as background-agent backends                                                                                                                 |
 | `agentlink.background.maxConcurrent`           | `8`                        | Max background agents running at once (also caps per-root and per-provider concurrency); extra launches queue                                                                 |
 | `agentlink.semanticSearchEnabled`              | `false`                    | Enable embedded local codebase retrieval; lexical ranking works without credentials and optional embeddings add vector/hybrid ranking                                         |
@@ -1988,7 +1997,7 @@ Common fixes:
 - **Model unavailable or unauthenticated** — configure credentials with **AgentLink: Sign In to OpenAI/Codex**, **AgentLink: Set OpenAI API Key**, or **AgentLink: Set Anthropic API Key**
 - **Too much context / degraded responses** — use `/condense`, lower the active model's condense threshold, or leave `agentlink.autoCondense` enabled
 - **Approvals feel too noisy** — adjust write/command approvals and `agentlink.recentApprovalTtl`
-- **Want a different startup behavior** — change `agentlink.defaultMode`, `agentlink.modeModelPreferences`, or legacy fallback `agentlink.agentModel`
+- **Want a different startup behavior** — change `agentlink.defaultMode` or `agentlink.modeModelPreferences`
 - **ACP background agent not starting** — verify `agentlink.background.defaultAgent`, the matching `agentlink.background.acpAgents` entry, the subprocess command/args, and **View > Output > AgentLink** for `[acp:<id>]` logs
 
 ### Semantic search not working

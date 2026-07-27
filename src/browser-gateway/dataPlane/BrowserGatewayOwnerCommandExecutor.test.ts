@@ -21,6 +21,7 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
   it("advertises only commands with complete production mappings", () => {
     expect(BROWSER_GATEWAY_PRODUCTION_OWNER_COMMAND_CAPABILITIES).toEqual([
       "session.select",
+      "session.detail",
       "session.send",
       "session.stop",
     ]);
@@ -30,6 +31,8 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
     const commandTarget = target();
     const executor = new ProductionBrowserGatewayOwnerCommandExecutor(
       commandTarget,
+      "instance-1",
+      vi.fn(() => null),
     );
     const signal = new AbortController().signal;
 
@@ -61,10 +64,84 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
     expect(commandTarget.submitBrowserStop).toHaveBeenCalledWith("session-1");
   });
 
+  it("returns detached session detail without selecting the VS Code session", async () => {
+    const commandTarget = target();
+    const getSessionDetail = vi.fn(() => ({
+      selection: {
+        controllerEpoch: "controller-1",
+        tabId: "tab-2",
+        sessionId: "session-2",
+      },
+      session: { sessionId: "session-2", title: "Detached" },
+    }));
+    const executor = new ProductionBrowserGatewayOwnerCommandExecutor(
+      commandTarget,
+      "instance-1",
+      getSessionDetail as never,
+    );
+
+    const result = await executor.execute(
+      {
+        kind: "session.detail",
+        instanceId: "instance-1",
+        controllerEpoch: "controller-1",
+        tabId: "tab-2",
+        sessionId: "session-2",
+      },
+      new AbortController().signal,
+    );
+
+    expect(getSessionDetail).toHaveBeenCalledWith({
+      controllerEpoch: "controller-1",
+      tabId: "tab-2",
+      sessionId: "session-2",
+    });
+    expect(result?.detail).toMatchObject({
+      kind: "session",
+      mediaType: "application/json; charset=utf-8",
+    });
+    expect(
+      JSON.parse(new TextDecoder().decode(result?.detail?.content)),
+    ).toMatchObject({
+      selection: { tabId: "tab-2", sessionId: "session-2" },
+      session: { sessionId: "session-2", title: "Detached" },
+    });
+    expect(commandTarget.submitBrowserLoadSession).not.toHaveBeenCalled();
+
+    await expect(
+      executor.execute(
+        {
+          kind: "session.detail",
+          instanceId: "another-instance",
+          controllerEpoch: "controller-1",
+          tabId: "tab-2",
+          sessionId: "session-2",
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("browser_gateway_session_detail_instance_mismatch");
+
+    getSessionDetail.mockReturnValue(null as never);
+    await expect(
+      executor.execute(
+        {
+          kind: "session.detail",
+          instanceId: "instance-1",
+          controllerEpoch: "stale-controller",
+          tabId: "tab-2",
+          sessionId: "session-2",
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("browser_gateway_session_detail_unavailable");
+  });
+
   it("rejects send detail handles before invoking ChatViewProvider", async () => {
     const commandTarget = target();
     const executor = new ProductionBrowserGatewayOwnerCommandExecutor(
       commandTarget,
+      "instance-1",
+      vi.fn(() => null),
     );
 
     await expect(
@@ -103,6 +180,8 @@ describe("ProductionBrowserGatewayOwnerCommandExecutor", () => {
     });
     const executor = new ProductionBrowserGatewayOwnerCommandExecutor(
       commandTarget,
+      "instance-1",
+      vi.fn(() => null),
     );
 
     await expect(

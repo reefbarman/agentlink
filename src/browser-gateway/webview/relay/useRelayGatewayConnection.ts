@@ -9,14 +9,19 @@ import type {
   BrowserGatewayOwnerCommandBody,
   BrowserGatewayOwnerEvent,
 } from "../../dataPlane/protocol";
+import type { BrowserGatewayDetachedSessionDetail } from "../../BrowserGatewayService";
 import type { GatewaySnapshot } from "../BrowserGatewayApp";
 import type { BrowserGatewayOwnerInteractionPayload } from "../../dataPlane/interactionPayload";
-import { RelayConnectionManager } from "./RelayConnectionManager";
+import {
+  RelayConnectionManager,
+  type RelaySessionDetailRequest,
+} from "./RelayConnectionManager";
 import { RelayOwnerStore, type RelayCatalogOwner } from "./RelayOwnerStore";
 import {
   parseRelayInteractionPayload,
   RelaySnapshotProjector,
 } from "./relaySnapshotProjection";
+import { parseSessionDetail } from "../sessionDetailTransport";
 
 export type RelaySourceEventPaintCategory =
   | "text"
@@ -107,11 +112,26 @@ export type RelayCommandDispatchResult =
   | { handled: false }
   | { handled: true; operation: BrowserGatewayOperationState };
 
+export interface RelaySessionDetailResponse {
+  operationId: string;
+  ownerId: string;
+  ownerGenerationId: string;
+  detail: BrowserGatewayDetachedSessionDetail;
+}
+
+export interface RelayGatewayConnection {
+  dispatchCommand: (
+    command: BrowserGatewayOwnerCommandBody,
+    operationId?: string,
+  ) => Promise<RelayCommandDispatchResult>;
+  requestSessionDetail: (
+    request: RelaySessionDetailRequest,
+  ) => Promise<RelaySessionDetailResponse | null>;
+}
+
 export function useRelayGatewayConnection(
   options: RelayGatewayConnectionOptions,
-): (
-  command: BrowserGatewayOwnerCommandBody,
-) => Promise<RelayCommandDispatchResult> {
+): RelayGatewayConnection {
   const latest = useRef(options);
   latest.current = options;
   const catalogRef = useRef<readonly RelayCatalogOwner[]>([]);
@@ -170,29 +190,90 @@ export function useRelayGatewayConnection(
     selectCurrentTab(manager, catalogRef.current, options.selectedTabId);
   }, [options.enabled, options.selectedTabId, options.selectedTabGeneration]);
 
-  return useCallback(async (command: BrowserGatewayOwnerCommandBody) => {
-    if (!latest.current.enabled) return { handled: false };
-    const manager = managerRef.current;
-    const owner = resolveOwnerForTab(
-      catalogRef.current,
-      latest.current.selectedTabId,
-    );
-    const capability = owner?.capabilities.find(
-      (candidate) => candidate.capabilityId === command.kind,
-    );
-    if (
-      !manager ||
-      !owner ||
-      capability?.state !== "enabled" ||
-      !manager.isSubscribedTo(owner)
-    ) {
-      return { handled: false };
-    }
-    return {
-      handled: true,
-      operation: await manager.sendCommand({ command }),
-    };
-  }, []);
+  const dispatchCommand = useCallback(
+    async (
+      command: BrowserGatewayOwnerCommandBody,
+      operationId?: string,
+    ): Promise<RelayCommandDispatchResult> => {
+      if (!latest.current.enabled) return { handled: false };
+      const manager = managerRef.current;
+      const owner = resolveOwnerForTab(
+        catalogRef.current,
+        latest.current.selectedTabId,
+      );
+      const capability = owner?.capabilities.find(
+        (candidate) => candidate.capabilityId === command.kind,
+      );
+      if (
+        !manager ||
+        !owner ||
+        capability?.state !== "enabled" ||
+        !manager.isSubscribedTo(owner)
+      ) {
+        return { handled: false };
+      }
+      return {
+        handled: true,
+        operation: await manager.sendCommand({ command, operationId }),
+      };
+    },
+    [],
+  );
+
+  const requestSessionDetail = useCallback(
+    async (
+      request: RelaySessionDetailRequest,
+    ): Promise<RelaySessionDetailResponse | null> => {
+      const current = latest.current;
+      if (!current.enabled) return null;
+      const manager = managerRef.current;
+      const owner = resolveOwnerForTab(
+        catalogRef.current,
+        current.selectedTabId,
+      );
+      const capability = owner?.capabilities.find(
+        (candidate) => candidate.capabilityId === "session.detail",
+      );
+      if (
+        !manager ||
+        !owner ||
+        owner.instanceId !== request.instanceId ||
+        capability?.state !== "enabled" ||
+        !manager.isSubscribedTo(owner)
+      ) {
+        return null;
+      }
+
+      const selectedTabId = current.selectedTabId;
+      const selectedTabGeneration = current.selectedTabGeneration;
+      const result = await manager.requestSessionDetail(request);
+      const latestOptions = latest.current;
+      const latestOwner = resolveOwnerForTab(
+        catalogRef.current,
+        latestOptions.selectedTabId,
+      );
+      if (
+        latestOptions.selectedTabId !== selectedTabId ||
+        latestOptions.selectedTabGeneration !== selectedTabGeneration ||
+        latestOwner?.ownerId !== owner.ownerId ||
+        latestOwner.ownerGenerationId !== owner.ownerGenerationId ||
+        result.handle.ownerId !== owner.ownerId ||
+        result.handle.ownerGenerationId !== owner.ownerGenerationId
+      ) {
+        return null;
+      }
+
+      return {
+        operationId: result.operationId,
+        ownerId: owner.ownerId,
+        ownerGenerationId: owner.ownerGenerationId,
+        detail: parseRelaySessionDetail(result.content, request),
+      };
+    },
+    [],
+  );
+
+  return { dispatchCommand, requestSessionDetail };
 }
 
 export async function commitRelayCheckpoint(options: {
@@ -394,6 +475,13 @@ function classifyRelaySourceEvent(
     return { category: "progress", latencyClass: "text_progress" };
   }
   return undefined;
+}
+
+export function parseRelaySessionDetail(
+  content: Uint8Array,
+  request: RelaySessionDetailRequest,
+): BrowserGatewayDetachedSessionDetail {
+  return parseSessionDetail(content, request, "relay");
 }
 
 async function fetchRelayInteractionDetail(

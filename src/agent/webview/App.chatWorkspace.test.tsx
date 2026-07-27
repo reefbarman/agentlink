@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/preact";
 
 import { App } from "./App.js";
 import type { ChatWorkspaceViewSnapshot } from "../chatTabProtocol.js";
@@ -36,6 +42,20 @@ function postedCommands(
   return postMessage.mock.calls
     .map(([message]) => message as Record<string, unknown>)
     .filter((message) => message.command === command);
+}
+
+function sessionLoaded(sessionId: string, message: string) {
+  return {
+    type: "agentSessionLoaded",
+    sessionId,
+    title: `Loaded ${sessionId}`,
+    mode: "code",
+    model: "claude-opus-5",
+    messages: [{ role: "user", content: message }],
+    todos: [],
+    lastInputTokens: 0,
+    lastOutputTokens: 0,
+  };
 }
 
 function createSnapshot(focusedTabId = "tab-1"): ChatWorkspaceViewSnapshot {
@@ -102,6 +122,332 @@ describe("App chat workspace integration", () => {
         sessionId: "session-1",
       },
     ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+    expect(postedCommands(vscodeApi.postMessage, "chatTabNewChat")).toEqual([
+      {
+        command: "chatTabNewChat",
+        mode: "code",
+        projectId: undefined,
+        controllerEpoch: "epoch-1",
+        tabId: "tab-1",
+        sessionId: "session-1",
+      },
+    ]);
+  });
+
+  it("routes question cards to their owning tab", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+
+    deliver({
+      type: "agentQuestionRequest",
+      sessionId: "session-2",
+      id: "question-b",
+      context: "Only T2 should show this question.",
+      questions: [
+        {
+          id: "choice",
+          type: "multiple_choice",
+          question: "Choose for T2",
+          options: ["one", "two"],
+          recommended: "one",
+        },
+      ],
+    });
+
+    expect(screen.queryByText("Choose for T2")).toBeNull();
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Choose for T2")).toBeTruthy();
+    });
+  });
+
+  it("routes approval cards and clears to their owning tab and request", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+
+    deliver({
+      type: "showApproval",
+      sessionId: "session-2",
+      request: {
+        kind: "write",
+        id: "approval-b",
+        filePath: "src/only-t2.ts",
+        writeOperation: "modify",
+      },
+    });
+
+    expect(screen.queryByText("src/only-t2.ts")).toBeNull();
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B"));
+
+    await waitFor(() => {
+      expect(screen.getByText("src/only-t2.ts")).toBeTruthy();
+    });
+
+    deliver({ type: "idle", sessionId: "session-1", id: "approval-b" });
+    deliver({ type: "idle", sessionId: "session-2", id: "approval-other" });
+    expect(screen.getByText("src/only-t2.ts")).toBeTruthy();
+
+    deliver({ type: "idle", sessionId: "session-2", id: "approval-b" });
+    await waitFor(() => {
+      expect(screen.queryByText("src/only-t2.ts")).toBeNull();
+    });
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+    expect(screen.queryByText("src/only-t2.ts")).toBeNull();
+  });
+
+  it("keeps background approvals globally visible and clears them across tab switches", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+
+    deliver({
+      type: "showApproval",
+      request: {
+        kind: "write",
+        id: "approval-bg",
+        filePath: "src/background-global.ts",
+        writeOperation: "modify",
+        backgroundTask: "Detached review",
+      },
+    });
+
+    expect(screen.getByText("src/background-global.ts")).toBeTruthy();
+    expect(screen.getByText("Detached review")).toBeTruthy();
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B"));
+    expect(screen.getByText("src/background-global.ts")).toBeTruthy();
+
+    deliver({ type: "idle", id: "approval-bg" });
+    await waitFor(() => {
+      expect(screen.queryByText("src/background-global.ts")).toBeNull();
+    });
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+    expect(screen.queryByText("src/background-global.ts")).toBeNull();
+  });
+
+  it("keeps coordinator-less background questions globally visible", () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+
+    deliver({
+      type: "agentQuestionRequest",
+      id: "question-bg",
+      context: "A detached background agent needs input.",
+      questions: [
+        {
+          id: "continue",
+          type: "yes_no",
+          question: "Continue background work?",
+        },
+      ],
+      backgroundTask: "Detached review",
+    });
+
+    expect(screen.getByText("Continue background work?")).toBeTruthy();
+    expect(screen.getByText("Detached review")).toBeTruthy();
+  });
+
+  it("isolates context usage and queued messages across tab switches", () => {
+    const vscodeApi = createVsCodeApi();
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "claude-opus-5",
+        streaming: true,
+        thinkingEnabled: true,
+        reasoningEffort: "high",
+        contextBudget: {
+          maxInputTokens: 1_000_000,
+          usedInputTokens: 250_000,
+          outputReservation: 0,
+        },
+      },
+    });
+    deliver({
+      type: "agentTokenEstimate",
+      sessionId: "session-1",
+      estimatedTotalUsed: 250_000,
+    });
+    deliver({
+      type: "agentQueuedMessage",
+      sessionId: "session-1",
+      queueId: "queue-1",
+      text: "queued for the first tab",
+      displayText: "queued for the first tab",
+      isSlashCommand: false,
+    });
+
+    expect(
+      container.querySelector(".context-bar-label")?.textContent,
+    ).toContain("250.0k");
+    expect(screen.getByText("queued for the first tab")).toBeTruthy();
+
+    const unboundSecondTab = createSnapshot("tab-2");
+    unboundSecondTab.tabs[1] = {
+      ...unboundSecondTab.tabs[1]!,
+      sessionId: null,
+    };
+    deliver({ type: "chatWorkspaceUpdate", snapshot: unboundSecondTab });
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "claude-opus-5",
+        streaming: true,
+        contextBudget: {
+          maxInputTokens: 1_000_000,
+          usedInputTokens: 250_000,
+          outputReservation: 0,
+        },
+      },
+    });
+    expect(container.querySelector(".context-bar-label")).toBeNull();
+    expect(screen.queryByText("queued for the first tab")).toBeNull();
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    expect(container.querySelector(".context-bar-label")).toBeNull();
+
+    deliver({
+      type: "agentDone",
+      sessionId: "session-1",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+    });
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver({
+      type: "agentSessionLoaded",
+      sessionId: "session-1",
+      title: "First chat",
+      mode: "code",
+      model: "claude-opus-5",
+      messages: [],
+      todos: [],
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+    });
+
+    expect(
+      container.querySelector(".context-bar-label")?.textContent,
+    ).toContain("250.0k");
+    expect(screen.getByText("queued for the first tab")).toBeTruthy();
+  });
+
+  it("rejects late session loads without consuming inactive events", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B"));
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    expect(screen.getAllByText("transcript for A")).not.toHaveLength(0);
+
+    deliver({
+      type: "agentQueuedMessage",
+      sessionId: "session-2",
+      queueId: "queue-b",
+      text: "buffered for B",
+      displayText: "buffered for B",
+      isSlashCommand: false,
+    });
+    deliver(sessionLoaded("session-2", "late overwrite from B"));
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-2",
+        mode: "code",
+        model: "claude-opus-5",
+        streaming: false,
+        contextBudget: {
+          maxInputTokens: 1_000_000,
+          usedInputTokens: 400_000,
+          outputReservation: 0,
+        },
+      },
+    });
+
+    expect(screen.getAllByText("transcript for A")).not.toHaveLength(0);
+    expect(screen.queryByText("late overwrite from B")).toBeNull();
+    expect(screen.queryByText("buffered for B")).toBeNull();
+    expect(document.querySelector(".context-bar-label")).toBeNull();
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B"));
+
+    await waitFor(() => {
+      expect(screen.getAllByText("transcript for B")).not.toHaveLength(0);
+      expect(screen.getByText("buffered for B")).toBeTruthy();
+    });
+  });
+
+  it("does not duplicate an inactive queued interjection after terminal replay", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B"));
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+
+    deliver({
+      type: "agentQueuedMessage",
+      sessionId: "session-2",
+      queueId: "queue-b",
+      text: "interject once",
+      displayText: "interject once",
+      isSlashCommand: false,
+    });
+    deliver({
+      type: "agentInterjection",
+      sessionId: "session-2",
+      queueId: "queue-b",
+      text: "interject once",
+      displayText: "interject once",
+      isSlashCommand: false,
+    });
+    deliver({
+      type: "agentDone",
+      sessionId: "session-2",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+    });
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B"));
+
+    await waitFor(() => {
+      expect(screen.getAllByText("interject once")).toHaveLength(1);
+    });
+    expect(screen.queryByText("Queued (1)")).toBeNull();
+    expect(postedCommands(vscodeApi.postMessage, "agentSend")).toHaveLength(0);
   });
 
   it("replays the exact confirmed address and allows cancellation", () => {
@@ -165,7 +511,19 @@ describe("App chat workspace integration", () => {
   it("applies a stale-action snapshot and shows recoverable feedback", () => {
     const vscodeApi = createVsCodeApi();
     const { container } = render(<App vscodeApi={vscodeApi} />);
-    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot() });
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B"));
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+    deliver({
+      type: "agentQueuedMessage",
+      sessionId: "session-1",
+      queueId: "queue-a",
+      text: "queued for A",
+      displayText: "queued for A",
+      isSlashCommand: false,
+    });
+
     deliver({
       type: "chatTabActionRejected",
       rejection: {
@@ -182,6 +540,9 @@ describe("App chat workspace integration", () => {
       container.querySelector<HTMLElement>(".chat-session-pane")?.dataset
         .tabKey,
     ).toBe("tab-2:session-2");
+    expect(screen.getAllByText("transcript for B")).not.toHaveLength(0);
+    expect(screen.queryByText("transcript for A")).toBeNull();
+    expect(screen.queryByText("queued for A")).toBeNull();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Dismiss tab message" }),

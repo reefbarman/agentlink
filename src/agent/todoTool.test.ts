@@ -14,7 +14,7 @@ describe("todoTool", () => {
     expect(todoTool.description).toContain("instead of a final todo_write");
   });
 
-  it("requires continuous reconciliation instead of stale end-of-turn updates", () => {
+  it("requires continuous reconciliation and completed-history compaction", () => {
     expect(todoTool.description).toContain(
       "Treat the list as user-visible execution state",
     );
@@ -26,6 +26,12 @@ describe("todoTool", () => {
     );
     expect(todoTool.description).toContain(
       "do not redo completed work merely because an item still says pending",
+    );
+    expect(todoTool.description).toContain(
+      "When the top-level list exceeds 10 items",
+    );
+    expect(todoTool.description).toContain(
+      "keep every unfinished item and the 3 most recent ordinary completed items",
     );
   });
 });
@@ -115,6 +121,103 @@ describe("handleTodoWrite", () => {
     const { content } = handleTodoWrite({ todos });
     // total=3, completed=2 (Mid+Leaf), inProgress=0, pending=1 (Root)
     expect(content).toBe("Updated: 2/3 complete, 0 in progress, 1 pending");
+  });
+
+  it("requests cleanup when older completed top-level items can be grouped", () => {
+    const todos = [
+      ...Array.from({ length: 8 }, (_, index) =>
+        makeItem({
+          id: `done-${index}`,
+          content: `Done ${index}`,
+          status: "completed",
+        }),
+      ),
+      ...Array.from({ length: 3 }, (_, index) =>
+        makeItem({ id: `pending-${index}`, content: `Pending ${index}` }),
+      ),
+    ];
+
+    const { content, todos: out } = handleTodoWrite({ todos });
+
+    expect(content).toContain(
+      "Cleanup required: this list has 11 top-level items",
+    );
+    expect(content).toContain(
+      'Fold the 5 older completed items into the completed summary with id "completed-history"',
+    );
+    expect(content).toContain(
+      "Keep every unfinished item and the 3 most recent ordinary completed items",
+    );
+    expect(out).toBe(todos);
+  });
+
+  it("ignores nested subtasks and avoids a new one-task summary", () => {
+    const nestedTodos = [
+      makeItem({
+        id: "parent",
+        content: "Parent",
+        children: Array.from({ length: 11 }, (_, index) =>
+          makeItem({
+            id: `child-${index}`,
+            content: `Child ${index}`,
+            status: "completed",
+          }),
+        ),
+      }),
+    ];
+    const singleReplaceable = [
+      ...Array.from({ length: 4 }, (_, index) =>
+        makeItem({
+          id: `done-${index}`,
+          content: `Done ${index}`,
+          status: "completed",
+        }),
+      ),
+      ...Array.from({ length: 7 }, (_, index) =>
+        makeItem({ id: `pending-${index}`, content: `Pending ${index}` }),
+      ),
+    ];
+
+    expect(handleTodoWrite({ todos: nestedTodos }).content).not.toContain(
+      "Cleanup required",
+    );
+    expect(handleTodoWrite({ todos: singleReplaceable }).content).not.toContain(
+      "Cleanup required",
+    );
+  });
+
+  it("requests the reserved summary id and excludes it from recent completed items", () => {
+    const todos = [
+      makeItem({
+        id: "completed-history",
+        content: "Earlier work (5 tasks): prepared the implementation",
+        status: "completed",
+      }),
+      ...Array.from({ length: 4 }, (_, index) =>
+        makeItem({
+          id: `done-${index}`,
+          content: `Done ${index}`,
+          status: "completed",
+        }),
+      ),
+      ...Array.from({ length: 6 }, (_, index) =>
+        makeItem({ id: `pending-${index}`, content: `Pending ${index}` }),
+      ),
+    ];
+
+    const { content } = handleTodoWrite({ todos });
+
+    expect(content).toContain(
+      'Fold the 1 older completed item into the completed summary with id "completed-history"',
+    );
+    expect(content).toContain(
+      "reuse and update that item if it already exists",
+    );
+    expect(content).toContain(
+      "3 most recent ordinary completed items, excluding the history summary",
+    );
+    expect(todoTool.description).toContain('id is "completed-history"');
+    expect(todoTool.description).toContain("Reuse and update that summary");
   });
 
   it("handles all completed", () => {

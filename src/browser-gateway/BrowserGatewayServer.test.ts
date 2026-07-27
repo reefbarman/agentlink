@@ -2,6 +2,7 @@ import * as http from "http";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./dataPlane/limits.js";
 import type { BrowserGatewayInstanceRecord } from "./browserGatewayRegistry.js";
 import { BrowserGatewayServer } from "./BrowserGatewayServer.js";
 import { BrowserGatewayService } from "./BrowserGatewayService.js";
@@ -264,6 +265,7 @@ function makeChatViewProviderStub() {
     submitBrowserSetCommandApprovalPolicy: vi.fn(() => ({ ok: true })),
     submitBrowserSetThinkingEnabled: vi.fn(() => ({ ok: true })),
     submitBrowserNewSession: vi.fn(async () => ({ ok: true })),
+    submitBrowserLoadSession: vi.fn(async () => ({ ok: true })),
     submitBrowserAttachFile: vi.fn(async () => ({
       files: ["/tmp/from-picker.txt"],
     })),
@@ -271,7 +273,9 @@ function makeChatViewProviderStub() {
     submitBrowserSteerQueuedMessage: vi.fn(async () => ({ ok: true })),
     submitBrowserInterjectQueuedMessage: vi.fn(() => ({ ok: true })),
     submitBrowserStop: vi.fn(() => ({ ok: true })),
-    submitBrowserResume: vi.fn(() => ({ ok: true })),
+    submitBrowserResume: vi.fn<
+      () => Promise<{ ok: true } | { ok: false; error: string }>
+    >(async () => ({ ok: true })),
     submitBrowserStopBackground: vi.fn(() => ({ ok: true })),
     submitBrowserAskAgentWebPolicy: vi.fn(() => ({
       ok: true,
@@ -754,6 +758,16 @@ describe("BrowserGatewayServer", () => {
       }),
       () => [],
     );
+    const getSerializableSessionDetail = vi
+      .spyOn(service, "getSerializableSessionDetail")
+      .mockImplementation((selection) =>
+        selection.controllerEpoch === "controller-1"
+          ? ({
+              selection,
+              session: { sessionId: selection.sessionId },
+            } as never)
+          : null,
+      );
     const server = new BrowserGatewayServer(
       service,
       chatViewProvider as never,
@@ -856,6 +870,86 @@ describe("BrowserGatewayServer", () => {
       label: "Question",
       detail: "Awaiting response",
       sessionTitle: "Test Session",
+    });
+
+    const sessionDetailQuery = new URLSearchParams({
+      controllerEpoch: "controller-1",
+      tabId: "tab-2",
+      sessionId: "session-2",
+    });
+    const unauthorizedSessionDetail = await fetch(
+      `${baseUrl}/api/session-detail?${sessionDetailQuery}`,
+    );
+    expect(unauthorizedSessionDetail.status).toBe(401);
+
+    const invalidSessionDetail = await fetch(
+      `${baseUrl}/api/session-detail?tabId=tab-2&sessionId=session-2`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(invalidSessionDetail.status).toBe(400);
+    await expect(invalidSessionDetail.json()).resolves.toEqual({
+      error: "invalid_request",
+    });
+
+    const sessionDetailResponse = await fetch(
+      `${baseUrl}/api/session-detail?${sessionDetailQuery}`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(sessionDetailResponse.status).toBe(200);
+    expect(sessionDetailResponse.headers.get("Content-Type")).toBe(
+      "application/json; charset=utf-8",
+    );
+    await expect(sessionDetailResponse.json()).resolves.toMatchObject({
+      selection: {
+        controllerEpoch: "controller-1",
+        tabId: "tab-2",
+        sessionId: "session-2",
+      },
+      session: { sessionId: "session-2" },
+    });
+    expect(getSerializableSessionDetail).toHaveBeenCalledWith({
+      controllerEpoch: "controller-1",
+      tabId: "tab-2",
+      sessionId: "session-2",
+    });
+
+    getSerializableSessionDetail.mockReturnValueOnce({
+      selection: {
+        controllerEpoch: "controller-1",
+        tabId: "tab-2",
+        sessionId: "session-2",
+      },
+      session: {
+        sessionId: "session-2",
+        projectedMessages: [
+          {
+            content: "x".repeat(
+              BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes,
+            ),
+          },
+        ],
+      },
+    } as never);
+    const oversizedSessionDetail = await fetch(
+      `${baseUrl}/api/session-detail?${sessionDetailQuery}`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(oversizedSessionDetail.status).toBe(413);
+    await expect(oversizedSessionDetail.json()).resolves.toEqual({
+      error: "session_detail_too_large",
+    });
+
+    const staleSessionDetail = await fetch(
+      `${baseUrl}/api/session-detail?${new URLSearchParams({
+        controllerEpoch: "stale-controller",
+        tabId: "tab-2",
+        sessionId: "session-2",
+      })}`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(staleSessionDetail.status).toBe(404);
+    await expect(staleSessionDetail.json()).resolves.toEqual({
+      error: "stale_selection",
     });
 
     const unauthorizedAskWebPolicyResponse = await fetch(
@@ -2156,6 +2250,66 @@ describe("BrowserGatewayServer", () => {
       "project-a",
     );
 
+    const browserSelection = {
+      controllerEpoch: "controller-1",
+      tabId: "tab-2",
+      sessionId: "session-2",
+    };
+    chatViewProvider.submitBrowserNewSession.mockResolvedValueOnce({
+      ok: true,
+      controllerEpoch: "controller-1",
+      tabId: "tab-2",
+      sessionId: "session-new",
+      projectId: "project-a",
+    } as never);
+    const selectedNewSession = await fetch(`${baseUrl}/api/session/new`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({
+        mode: "code",
+        projectId: "project-a",
+        selection: browserSelection,
+        stopRunning: true,
+      }),
+    });
+    expect(selectedNewSession.status).toBe(200);
+    await expect(selectedNewSession.json()).resolves.toEqual({
+      ok: true,
+      controllerEpoch: "controller-1",
+      tabId: "tab-2",
+      sessionId: "session-new",
+      projectId: "project-a",
+    });
+    expect(chatViewProvider.submitBrowserNewSession).toHaveBeenLastCalledWith(
+      "code",
+      "project-a",
+      browserSelection,
+      true,
+    );
+
+    const selectedLoadSession = await fetch(`${baseUrl}/api/session/load`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({
+        sessionId: "session-1",
+        projectId: "project-a",
+        selection: browserSelection,
+        stopRunning: true,
+      }),
+    });
+    expect(selectedLoadSession.status).toBe(200);
+    expect(chatViewProvider.submitBrowserLoadSession).toHaveBeenCalledWith(
+      "session-1",
+      browserSelection,
+      true,
+    );
+
     sessionManager.getWorkspaceProjects.mockReturnValue([
       {
         id: "project-a",
@@ -2388,6 +2542,24 @@ describe("BrowserGatewayServer", () => {
     expect(chatViewProvider.submitBrowserResume).toHaveBeenCalledWith(
       "session-1",
     );
+
+    chatViewProvider.submitBrowserResume.mockResolvedValueOnce({
+      ok: false,
+      error: "resume_not_started",
+    });
+    const rejectedResume = await fetch(`${baseUrl}/api/resume`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ sessionId: "session-1" }),
+    });
+    expect(rejectedResume.status).toBe(409);
+    expect(await rejectedResume.json()).toEqual({
+      ok: false,
+      error: "resume_not_started",
+    });
 
     const invalidResume = await fetch(`${baseUrl}/api/resume`, {
       method: "POST",

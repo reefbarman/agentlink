@@ -23,8 +23,18 @@ interface WriteCardProps {
 export function WriteCard({ request, submit, followUpRef }: WriteCardProps) {
   const filePath = request.filePath ?? "";
   const operation = request.writeOperation ?? "modify";
+  const explicitChoices = request.writeChoices ?? [];
+  const positiveChoices = explicitChoices.filter((choice) => !choice.isDanger);
+  const primaryChoice =
+    positiveChoices.find((choice) => choice.isPrimary) ?? positiveChoices[0];
+  const secondaryChoice = positiveChoices.find(
+    (choice) => choice !== primaryChoice,
+  );
   const outsideWorkspace = request.outsideWorkspace ?? false;
-  const purpose = `${operation === "create" ? "Create" : "Modify"} ${outsideWorkspace ? "a file outside the workspace" : "a file"}`;
+  const purpose =
+    explicitChoices.length > 0
+      ? filePath
+      : `${operation === "create" ? "Create" : "Modify"} ${outsideWorkspace ? "a file outside the workspace" : "a file"}`;
 
   const [trustScope, setTrustScope] = useState<(typeof TRUST_SCOPES)[number]>(
     outsideWorkspace ? "pattern" : "all-files",
@@ -38,10 +48,10 @@ export function WriteCard({ request, submit, followUpRef }: WriteCardProps) {
   const handleAccept = useCallback(() => {
     submit({
       id: request.id,
-      decision: "accept",
+      decision: primaryChoice?.value ?? "accept",
       followUp: followUpRef.current?.trim() || undefined,
     });
-  }, [request.id, submit, followUpRef]);
+  }, [request.id, primaryChoice?.value, submit, followUpRef]);
 
   const handleSaveAndAccept = useCallback(() => {
     const decision =
@@ -158,29 +168,44 @@ export function WriteCard({ request, submit, followUpRef }: WriteCardProps) {
       targetProject={request.targetProject}
       targetPath={request.targetPath}
       purpose={purpose}
-      rulesContent={rulesJsx}
-      rulesModified={!isSkipped}
-      primaryLabel="Accept"
+      rulesContent={explicitChoices.length > 0 ? undefined : rulesJsx}
+      rulesModified={explicitChoices.length > 0 ? false : !isSkipped}
+      primaryLabel={primaryChoice?.label ?? "Accept"}
       primaryWithRulesLabel="Save Rule & Accept"
       onAccept={handleAccept}
       onSaveAndAccept={handleSaveAndAccept}
+      secondaryAction={
+        secondaryChoice
+          ? {
+              label: secondaryChoice.label,
+              onClick: () =>
+                submit({
+                  id: request.id,
+                  decision: secondaryChoice.value,
+                  followUp: followUpRef.current?.trim() || undefined,
+                }),
+            }
+          : undefined
+      }
       onReject={handleReject}
       followUpRef={followUpRef}
     >
-      <div class="file-card">
-        <div class="file-card-header">
-          <span
-            class={`codicon ${operation === "create" ? "codicon-new-file" : "codicon-edit"}`}
-          />
-          <span class="file-path">{filePath}</span>
-          <span class={`operation-badge ${operation}`}>{operation}</span>
-        </div>
-        {outsideWorkspace && (
-          <div class="outside-badge">
-            <span class="codicon codicon-warning" /> Outside workspace
+      {explicitChoices.length === 0 && (
+        <div class="file-card">
+          <div class="file-card-header">
+            <span
+              class={`codicon ${operation === "create" ? "codicon-new-file" : "codicon-edit"}`}
+            />
+            <span class="file-path">{filePath}</span>
+            <span class={`operation-badge ${operation}`}>{operation}</span>
           </div>
-        )}
-      </div>
+          {outsideWorkspace && (
+            <div class="outside-badge">
+              <span class="codicon codicon-warning" /> Outside workspace
+            </div>
+          )}
+        </div>
+      )}
       {request.detail && (
         <pre class="approval-detail-text">{request.detail}</pre>
       )}

@@ -13,6 +13,20 @@ import type { BrowserGatewayModelCredentialRecord } from "../browserGatewayModel
 import { normalizeCoreWebAccessSettings } from "../../core/webAccess.js";
 
 describe("BrowserGatewayAskAgentModelClient", () => {
+  it("keeps TODO compaction guidance in parity with the main agent", () => {
+    const todoTool = ASK_AGENT_SAFE_PROJECTLESS_TOOLS.find(
+      (tool) => tool.name === "todo_write",
+    );
+
+    expect(todoTool?.description).toContain(
+      "When the top-level list exceeds 10 items",
+    );
+    expect(todoTool?.description).toContain('id is "completed-history"');
+    expect(todoTool?.description).toContain(
+      "3 most recent ordinary completed items",
+    );
+  });
+
   const baseCredential = {
     providerId: "openai-codex",
     bearerToken: "token",

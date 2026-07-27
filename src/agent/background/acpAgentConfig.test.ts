@@ -13,16 +13,19 @@ describe("ACP background agent config", () => {
     const settings = normalizeBackgroundAgentSettings({});
 
     expect(settings.defaultAgent).toBe(NATIVE_BACKGROUND_AGENT);
+    expect(settings.reviewAgent).toBe(NATIVE_BACKGROUND_AGENT);
     expect(settings.acpAgents).toEqual([]);
   });
 
   it("normalizes configured ACP agents", () => {
     const settings = normalizeBackgroundAgentSettings({
       defaultAgent: "acp:claude",
+      reviewAgent: "acp:claude",
       acpAgents: [
         {
           id: "claude",
           label: "Claude via ACP",
+          provider: "Anthropic",
           command: "claude-agent-acp",
           args: ["--debug"],
           env: { SECRET: "value" },
@@ -34,10 +37,12 @@ describe("ACP background agent config", () => {
 
     expect(settings).toEqual({
       defaultAgent: "acp:claude",
+      reviewAgent: "acp:claude",
       acpAgents: [
         {
           id: "claude",
           label: "Claude via ACP",
+          provider: "anthropic",
           command: "claude-agent-acp",
           args: ["--debug"],
           env: { SECRET: "value" },
@@ -68,6 +73,12 @@ describe("ACP background agent config", () => {
     expect(() =>
       normalizeBackgroundAgentSettings({ defaultAgent: "native:anthropic" }),
     ).toThrow(/Unsupported background default agent/);
+  });
+
+  it("rejects unsupported review agent values", () => {
+    expect(() =>
+      normalizeBackgroundAgentSettings({ reviewAgent: "anthropic" }),
+    ).toThrow(/Unsupported background review agent/);
   });
 
   it("rejects duplicate ACP agent ids", () => {

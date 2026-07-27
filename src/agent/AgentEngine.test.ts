@@ -4016,42 +4016,51 @@ describe("AgentEngine", () => {
       );
     });
 
-    it("keeps a running turn on the model resolved at its boundary", async () => {
-      const requests: StreamRequest[] = [];
-      let streamCount = 0;
-      const provider = makeMockProvider();
-      provider.getCapabilities = (model: string) => {
-        if (model !== TEST_MODEL) {
-          throw new Error(`Unknown model "${model}" for provider "mock"`);
-        }
-        return TEST_CAPABILITIES;
+    it("adopts a cross-provider model selection at the next request boundary", async () => {
+      const nextModel = "next-provider-model";
+      const firstRequests: StreamRequest[] = [];
+      const nextRequests: StreamRequest[] = [];
+      const firstProvider = makeMockProvider();
+      firstProvider.stream = async function* (request: StreamRequest) {
+        firstRequests.push(request);
+        await session.updateModelSelection(nextModel, "next");
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "call_read",
+              name: "read_file",
+              input: { path: "src/a.ts" },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
       };
-      provider.stream = async function* (request: StreamRequest) {
-        requests.push(request);
-        streamCount += 1;
-        if (streamCount === 1) {
-          session.model = "other-model";
-          yield {
-            type: "content_blocks",
-            blocks: [
-              {
-                type: "tool_use",
-                id: "call_read",
-                name: "read_file",
-                input: { path: "src/a.ts" },
-              },
-            ],
-          };
-          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
-          yield { type: "done" };
-          return;
-        }
-        yield* makeProviderStream({ text: "done" });
+      const nextProvider: ModelProvider = {
+        ...makeMockProvider(),
+        id: "next",
+        displayName: "Next",
+        listModels: () => [
+          {
+            id: nextModel,
+            displayName: "Next Model",
+            provider: "next",
+            capabilities: TEST_CAPABILITIES,
+          },
+        ],
+        stream: async function* (request: StreamRequest) {
+          nextRequests.push(request);
+          yield* makeProviderStream({ text: "done" });
+        },
       };
+      const registry = new ProviderRegistry();
+      registry.reconcile([firstProvider, nextProvider]);
 
       const session = await makeSession();
       session.addUserMessage("run one tool");
-      const engine = new AgentEngine(makeRegistry(provider));
+      const engine = new AgentEngine(registry);
       engine.setToolRuntime({
         listTools: () => [
           {
@@ -4068,17 +4077,96 @@ describe("AgentEngine", () => {
 
       const events = await collectEvents(engine.run(session));
 
-      expect(requests.map((request) => request.model)).toEqual([
-        TEST_MODEL,
+      expect(firstRequests.map((request) => request.model)).toEqual([
         TEST_MODEL,
       ]);
+      expect(nextRequests.map((request) => request.model)).toEqual([nextModel]);
       expect(
         events
-          .filter((event) => event.type === "api_request")
-          .map((event) => event.model),
-      ).toEqual([TEST_MODEL, TEST_MODEL]);
+          .filter((event) => event.type === "api_request_start")
+          .map((event) => [event.provider, event.model]),
+      ).toEqual([
+        ["mock", TEST_MODEL],
+        ["next", nextModel],
+      ]);
       expect(events.some((event) => event.type === "error")).toBe(false);
-      expect(session.model).toBe("other-model");
+      expect(session.model).toBe(nextModel);
+    });
+
+    it("does not let a stale provider fallback overwrite a newer selection", async () => {
+      const nextModel = "next-provider-model";
+      const firstProvider = makeMockProvider();
+      firstProvider.stream = async function* () {
+        await session.updateModelSelection(nextModel, "next");
+        yield {
+          type: "model_fallback",
+          requestedModel: TEST_MODEL,
+          effectiveModel: "mock-fallback",
+        };
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "call_read",
+              name: "read_file",
+              input: { path: "src/a.ts" },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+      const nextProvider: ModelProvider = {
+        ...makeMockProvider(),
+        id: "next",
+        displayName: "Next",
+        listModels: () => [
+          {
+            id: nextModel,
+            displayName: "Next Model",
+            provider: "next",
+            capabilities: TEST_CAPABILITIES,
+          },
+        ],
+      };
+      const registry = new ProviderRegistry();
+      registry.reconcile([firstProvider, nextProvider]);
+
+      const session = await makeSession();
+      session.addUserMessage("run one tool");
+      const engine = new AgentEngine(registry);
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "read_file",
+            description: "read",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: () => true,
+        executeTool: async () => ({
+          content: [{ type: "text", text: "file contents" }],
+        }),
+      });
+
+      const events = await collectEvents(engine.run(session));
+
+      expect(session.model).toBe(nextModel);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "warning",
+          message: expect.stringContaining(
+            "superseded by a newer model selection",
+          ),
+        }),
+      );
+      expect(
+        events.some(
+          (event) =>
+            event.type === "warning" && event.modelFallback !== undefined,
+        ),
+      ).toBe(false);
     });
 
     it("surfaces model fallback and records the effective model", async () => {

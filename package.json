@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.17.75",
+  "version": "1.17.86",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -208,6 +208,14 @@
       {
         "command": "agentlink.setupSemanticSearch",
         "title": "AgentLink: Set Up Semantic Search"
+      },
+      {
+        "command": "agentlink.popChatTab",
+        "title": "AgentLink: Pop Out Chat Tab"
+      },
+      {
+        "command": "agentlink.dockChatTab",
+        "title": "AgentLink: Dock Chat Tab"
       }
     ],
     "menus": {
@@ -333,6 +341,16 @@
           "maximum": 128,
           "default": 24,
           "description": "Maximum simultaneous streaming model requests per provider for background agents, maintenance work, and native web tools. Foreground session requests are always admitted immediately and never wait on this limit. Higher values improve background parallel throughput but can increase provider rate-limit errors and usage costs."
+        },
+        "agentlink.disabledProviders": {
+          "scope": "window",
+          "type": "array",
+          "default": [],
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "description": "Provider IDs to disable without clearing credentials. Disabled providers are removed from model selection and automatic routing in this window. Built-in IDs are anthropic and codex; configured OpenAI-compatible connection IDs are also supported."
         },
         "agentlink.webAccess.searchBackend": {
           "scope": "window",
@@ -697,11 +715,18 @@
           "pattern": "^(native:auto|acp:[A-Za-z0-9_.-]+)$",
           "description": "Default backend for spawn_background_agent. Use native:auto for AgentLink's built-in background routing, or acp:<id> to launch a configured ACP stdio agent from agentlink.background.acpAgents."
         },
+        "agentlink.background.reviewAgent": {
+          "scope": "resource",
+          "type": "string",
+          "default": "native:auto",
+          "pattern": "^(native:auto|acp:[A-Za-z0-9_.-]+)$",
+          "description": "Backend preference for adversarial review task classes (review_*). Use native:auto for AgentLink's built-in cross-provider review routing, or acp:<id> to use a provider-tagged ACP agent only when it differs from the foreground provider. An explicit model or provider on the spawn request takes precedence."
+        },
         "agentlink.background.acpAgents": {
           "scope": "resource",
           "type": "array",
           "default": [],
-          "description": "ACP-compatible stdio agent subprocesses that can be used as background-agent backends for read-only/review work. Reference an entry with agentlink.background.defaultAgent = acp:<id> or spawn_background_agent provider = acp:<id>.",
+          "description": "ACP-compatible stdio agent subprocesses that can be used as background-agent backends for read-only/review work. Reference an entry with agentlink.background.defaultAgent, agentlink.background.reviewAgent, or spawn_background_agent provider = acp:<id>.",
           "examples": [
             [
               {
@@ -730,6 +755,10 @@
               "label": {
                 "type": "string",
                 "description": "Human-readable label shown in routing/debug output. Defaults to id."
+              },
+              "provider": {
+                "type": "string",
+                "description": "Optional provider family represented by this ACP agent (for example anthropic or codex). When used as background.reviewAgent, matching foreground work falls through to native cross-provider review routing."
               },
               "command": {
                 "type": "string",
@@ -772,41 +801,6 @@
           "maximum": 16,
           "default": 8,
           "description": "Maximum number of background agents running at once. Launches beyond the limit are queued and start as slots free up. Also caps concurrency per root session and per provider."
-        },
-        "agentlink.questionDetection.llmEnabled": {
-          "scope": "window",
-          "type": "boolean",
-          "default": false,
-          "description": "Deprecated: use agentlink.questionDetection.mode instead. When true, mapped to mode=\"openai\".",
-          "deprecationMessage": "Use agentlink.questionDetection.mode instead."
-        },
-        "agentlink.questionDetection.baseUrl": {
-          "scope": "window",
-          "type": "string",
-          "default": "",
-          "description": "Deprecated: use agentlink.openaiCompatible.baseUrl instead.",
-          "deprecationMessage": "Use agentlink.openaiCompatible.baseUrl instead."
-        },
-        "agentlink.questionDetection.model": {
-          "scope": "window",
-          "type": "string",
-          "default": "",
-          "description": "Deprecated: use agentlink.openaiCompatible.model instead.",
-          "deprecationMessage": "Use agentlink.openaiCompatible.model instead."
-        },
-        "agentlink.questionDetection.apiKey": {
-          "scope": "window",
-          "type": "string",
-          "default": "",
-          "description": "Deprecated: use agentlink.openaiCompatible.apiKey instead.",
-          "deprecationMessage": "Use agentlink.openaiCompatible.apiKey instead."
-        },
-        "agentlink.questionDetection.timeoutMs": {
-          "scope": "window",
-          "type": "number",
-          "default": 0,
-          "description": "Deprecated: use agentlink.openaiCompatible.timeoutMs instead.",
-          "deprecationMessage": "Use agentlink.openaiCompatible.timeoutMs instead."
         },
         "agentlink.memory.mode": {
           "scope": "window",
@@ -897,12 +891,6 @@
           "default": "-worktrees",
           "description": "Suffix for the sibling worktree container used by start_worktree_agent when no worktreePath is provided. Default paths are <repo-parent>/<repo-name><suffix>/<sanitized-workstream-name>."
         },
-        "agentlink.agentModel": {
-          "scope": "resource",
-          "type": "string",
-          "default": "gpt-5.6-sol",
-          "description": "Legacy global fallback model for the built-in agent chat. Use agentlink.modeModelPreferences for mode-specific defaults."
-        },
         "agentlink.modeModelPreferences": {
           "scope": "resource",
           "type": "object",
@@ -915,7 +903,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Default model per chat mode, keyed by mode slug (e.g. code, architect, ask, debug, review). Manually selecting a model in a mode updates that mode's saved preference."
+          "description": "Default model per chat mode, keyed by mode slug (e.g. code, architect, ask, debug, review). The last model selected in each mode becomes that mode's startup model."
         },
         "agentlink.modeReasoningEffortPreferences": {
           "scope": "resource",
@@ -979,15 +967,6 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically condense the conversation context when the context window fills up."
-        },
-        "agentlink.autoCondenseThreshold": {
-          "scope": "window",
-          "type": "number",
-          "default": 0.9,
-          "minimum": 0.1,
-          "maximum": 1,
-          "deprecationMessage": "Use agentlink.modelCondenseThresholds instead.",
-          "description": "Legacy global auto-condense threshold used for migration. New per-model thresholds are stored in agentlink.modelCondenseThresholds."
         },
         "agentlink.modelCondenseThresholds": {
           "scope": "resource",
@@ -1089,6 +1068,7 @@
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/addon-search": "0.15.0",
+    "@xterm/addon-webgl": "0.18.0",
     "@xterm/xterm": "5.5.0",
     "apache-arrow": "18.1.0",
     "bmp-js": "^0.1.0",

@@ -145,6 +145,7 @@ export class RelaySnapshotProjector {
         defaultProjectId: checkpoint.catalog.defaultProjectId,
         repository: projectRepository(checkpoint, projectsById),
         sessions,
+        chatWorkspace: checkpoint.catalog.chatWorkspace ?? null,
         foreground,
       },
       background: projectBackground(checkpoint),
@@ -473,7 +474,13 @@ function projectBlock(
         },
       ];
     case "question_answer":
-      return [{ type: "question_answer", items: block.items }];
+      return [
+        {
+          type: "question_answer",
+          ...(block.toolCallId ? { toolCallId: block.toolCallId } : {}),
+          items: block.items,
+        },
+      ];
     case "pairing_status":
       return [];
   }

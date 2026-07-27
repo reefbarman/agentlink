@@ -123,6 +123,8 @@ export interface ProviderUsageCardData {
 /** A question posed by the agent via the ask_user tool */
 export interface QuestionRequest {
   id: string;
+  /** Provider ask_user tool-call ID when it differs from the UI request ID. */
+  toolCallId?: string;
   /** Visible explanation shown above structured questions. */
   context: string;
   questions: Question[];
@@ -396,10 +398,18 @@ export type ExtensionMessage =
   | { type: "agentSlashCommandsUpdate"; commands: SlashCommandInfo[] }
   | { type: "agentProviderUsage"; data: ProviderUsageCardData }
   | { type: "agentModeSwitchRequest"; mode: string; reason?: string }
-  | { type: "agentFormElicitationRequest"; request: McpFormElicitationRequest }
-  | { type: "agentFormElicitationCleared"; id: string }
-  | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
-  | { type: "agentUrlElicitationCleared"; id: string }
+  | {
+      type: "agentFormElicitationRequest";
+      sessionId?: string;
+      request: McpFormElicitationRequest;
+    }
+  | { type: "agentFormElicitationCleared"; sessionId?: string; id: string }
+  | {
+      type: "agentUrlElicitationRequest";
+      sessionId?: string;
+      request: McpUrlElicitationRequest;
+    }
+  | { type: "agentUrlElicitationCleared"; sessionId?: string; id: string }
   | {
       type: "agentMcpStatus";
       open?: boolean;
@@ -428,9 +438,10 @@ export type ExtensionMessage =
     }
   | {
       type: "showApproval";
+      sessionId?: string;
       request: import("../../approvals/webview/types").ApprovalRequest;
     }
-  | { type: "idle" }
+  | { type: "idle"; sessionId?: string; id: string }
   | {
       type: "regexSuggestion";
       requestId: string;
@@ -445,10 +456,12 @@ export type ExtensionMessage =
     }
   | ({
       type: "agentQuestionRequest";
+      sessionId?: string;
     } & QuestionRequest)
-  | { type: "agentQuestionCleared"; id: string }
+  | { type: "agentQuestionCleared"; sessionId?: string; id: string }
   | {
       type: "agentQuestionProgress";
+      sessionId?: string;
       id: string;
       step: number;
       answers: Record<string, string | string[] | number | boolean | undefined>;
@@ -728,9 +741,15 @@ export type ExtensionMessage =
       resultSummary?: string;
     }
   | ShowBgTranscriptMessage
-  | { type: "agentBtwLoading"; requestId: string; question: string }
+  | {
+      type: "agentBtwLoading";
+      sessionId: string;
+      requestId: string;
+      question: string;
+    }
   | {
       type: "agentBtwProgress";
+      sessionId: string;
       requestId: string;
       /** Full accumulated answer text so far. */
       answer: string;
@@ -742,6 +761,7 @@ export type ExtensionMessage =
     }
   | {
       type: "agentBtwResponse";
+      sessionId: string;
       requestId: string;
       question: string;
       answer: string;
@@ -754,11 +774,13 @@ export type ExtensionMessage =
     }
   | {
       type: "agentWorktreeSetupStarted";
+      sessionId: string;
       requestId: string;
       input: string;
     }
   | {
       type: "agentWorktreeSetupProgress";
+      sessionId: string;
       requestId: string;
       answer: string;
       tools: string[];
@@ -767,6 +789,7 @@ export type ExtensionMessage =
     }
   | {
       type: "agentWorktreeSetupAwaitingInput";
+      sessionId: string;
       requestId: string;
       answer: string;
       conversation: Array<{ role: "user" | "assistant"; text: string }>;
@@ -776,6 +799,7 @@ export type ExtensionMessage =
     }
   | {
       type: "agentWorktreeSetupReady";
+      sessionId: string;
       requestId: string;
       answer: string;
       config: WorktreeSetupConfig;
@@ -785,11 +809,13 @@ export type ExtensionMessage =
     }
   | {
       type: "agentWorktreeSetupLaunching";
+      sessionId: string;
       requestId: string;
       config: WorktreeSetupConfig;
     }
   | {
       type: "agentWorktreeSetupResult";
+      sessionId: string;
       requestId: string;
       phase: "opened" | "rejected" | "cancelled" | "error";
       message: string;
@@ -954,6 +980,8 @@ export type ContentBlock =
     }
   | {
       type: "question_answer";
+      /** Correlates live submissions with the eventual ask_user tool result. */
+      toolCallId?: string;
       /** Array of Q&A pairs from the ask_user tool */
       items: Array<{
         question: string;

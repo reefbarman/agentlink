@@ -1,4 +1,5 @@
 import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import type { ApprovalRequest } from "../approvals/webview/types.js";
 import type { CoreWebActivity, CoreWebCitation } from "../core/webAccess.js";
 import type {
   ChatMessage,
@@ -445,8 +446,11 @@ export interface AppState {
     source?: "vscode" | "browser";
     interjectionReady?: boolean;
   }>;
+  approvalRequest: ApprovalRequest | null;
   questionRequest: {
     id: string;
+    /** Correlates the UI request with the provider's ask_user tool call. */
+    toolCallId?: string;
     /** Visible explanation shown above structured questions. */
     context: string;
     questions: Question[];
@@ -468,6 +472,7 @@ export interface AppState {
 }
 
 export type AppAction =
+  | { type: "RESTORE_PROJECTION"; state: AppState }
   | { type: "SET_STATE"; state: ChatState }
   | {
       type: "SET_DEBUG_INFO";
@@ -592,14 +597,23 @@ export type AppAction =
       slashCommandLabel?: string;
       displayMedia?: DisplayMedia;
     }
+  | { type: "SET_APPROVAL"; request: ApprovalRequest }
+  | { type: "CLEAR_APPROVAL"; id: string }
   | {
       type: "SET_QUESTION";
       id: string;
+      toolCallId?: string;
       context: string;
       questions: Question[];
       backgroundTask?: string;
     }
-  | { type: "CLEAR_QUESTION" }
+  | {
+      type: "SUBMIT_QUESTION";
+      id: string;
+      answers: Record<string, string | string[] | number | boolean | undefined>;
+      notes: Record<string, string>;
+    }
+  | { type: "CLEAR_QUESTION"; id?: string }
   | {
       type: "SET_DETECTED_QUESTION";
       detectedQuestion: (DetectedQuestion & { messageId: string }) | null;
@@ -703,16 +717,6 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
     text
       .replace(/<system-reminder>[\s\S]*?<\/system-reminder>\n*/gi, "")
       .trim();
-
-  const getSummaryText = (content: unknown): string => {
-    if (typeof content === "string") return stripSystemReminderBlocks(content);
-    if (!Array.isArray(content)) return "";
-    const joined = (content as Array<{ type: string; text?: string }>)
-      .filter((b) => b.type === "text")
-      .map((b) => b.text ?? "")
-      .join("");
-    return stripSystemReminderBlocks(joined);
-  };
 
   // First pass: collect tool results keyed by tool_use_id
   const toolResults = new Map<string, string>();
@@ -832,7 +836,6 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
       };
     };
     if (m.isSummary) {
-      const summaryText = getSummaryText(m.content);
       const hint = m.uiHint?.condense;
       result.push({
         id: randomId(),
@@ -849,15 +852,6 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           condensing: hint?.condensing,
         },
       });
-      if (summaryText) {
-        result.push({
-          id: randomId(),
-          role: "assistant",
-          content: "",
-          timestamp: Date.now(),
-          blocks: [{ type: "text", text: summaryText }],
-        });
-      }
       continue;
     }
 
@@ -1014,7 +1008,11 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
             });
             const items = parseAskUserQuestionAnswerItems(toolResult);
             if (items.length > 0) {
-              blocks.push({ type: "question_answer", items });
+              blocks.push({
+                type: "question_answer",
+                toolCallId: toolId,
+                items,
+              });
             }
           } else if (toolName === "load_skill") {
             const parsed = parseLoadSkillResult(toolResult);
@@ -1292,6 +1290,26 @@ function isActiveTailBlock(block: ContentBlock, streaming: boolean): boolean {
   return streaming && block.type === "text";
 }
 
+function isEmptyAssistantShell(message: ChatMessage): boolean {
+  if (
+    message.role !== "assistant" ||
+    message.blocks.length > 0 ||
+    message.content.length > 0
+  ) {
+    return false;
+  }
+  const structuralKeys = new Set([
+    "id",
+    "role",
+    "content",
+    "timestamp",
+    "blocks",
+  ]);
+  return Object.entries(message).every(
+    ([key, value]) => structuralKeys.has(key) || value === undefined,
+  );
+}
+
 function attachFinalMarkerToolCall(
   marker: FinalMessageMarker | undefined | null,
   contentArr: Array<{
@@ -1523,6 +1541,10 @@ export function shouldDropSessionScopedEvent(
 
 export function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
+    case "RESTORE_PROJECTION":
+      // The session cache returns a projection owned by the active reducer.
+      return action.state;
+
     case "SET_STATE":
       return {
         ...state,
@@ -1851,6 +1873,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         ) {
           const nextBase = {
             ...b,
+            ...(action.toolName.trim() ? { name: action.toolName } : {}),
             inputJson:
               b.inputJson !== "" || action.input === undefined
                 ? b.inputJson
@@ -1907,14 +1930,27 @@ export function reducer(state: AppState, action: AppAction): AppState {
         msgs[targetIdx] = target;
       }
 
-      // When ask_user completes, add a question_answer summary block.
+      // When ask_user completes, reconcile the optimistic submitted-answer
+      // summary with the durable tool result instead of appending a duplicate.
       if (action.toolName === "ask_user") {
         const items = parseAskUserQuestionAnswerItems(action.result);
         if (items.length > 0) {
-          target.blocks = [
-            ...target.blocks,
-            { type: "question_answer" as const, items },
-          ];
+          const answerIdx = target.blocks.findIndex(
+            (block) =>
+              block.type === "question_answer" &&
+              block.toolCallId === action.toolCallId,
+          );
+          const answerBlock = {
+            type: "question_answer" as const,
+            toolCallId: action.toolCallId,
+            items,
+          };
+          target.blocks =
+            answerIdx >= 0
+              ? target.blocks.map((block, index) =>
+                  index === answerIdx ? answerBlock : block,
+                )
+              : [...target.blocks, answerBlock];
           msgs[targetIdx] = target;
         }
       }
@@ -1934,36 +1970,65 @@ export function reducer(state: AppState, action: AppAction): AppState {
         );
 
         if (sessionId) {
-          const alreadyAdded = target.blocks.some(
-            (b) => b.type === "bg_agent_result" && b.sessionId === sessionId,
-          );
-          if (!alreadyAdded) {
-            const bgResultBlock: ContentBlock = {
-              type: "bg_agent_result",
-              sessionId,
-              task: findBgTaskForSession(msgs, target.blocks, sessionId),
-              status: inferBgResultStatus(action.result),
-              resultText: action.result || undefined,
-              summary: undefined,
-            };
-            // On the live last message, insert before any still-active tail
-            // blocks so the running end of the transcript stays last.
-            let insertAt = target.blocks.length;
-            if (targetIdx === msgs.length - 1) {
-              while (
-                insertAt > 0 &&
-                isActiveTailBlock(target.blocks[insertAt - 1], state.streaming)
-              ) {
-                insertAt -= 1;
+          const existingResult = msgs
+            .flatMap((message) => message.blocks)
+            .find(
+              (
+                block,
+              ): block is Extract<ContentBlock, { type: "bg_agent_result" }> =>
+                block.type === "bg_agent_result" &&
+                block.sessionId === sessionId,
+            );
+          const bgResultBlock: ContentBlock = existingResult
+            ? {
+                ...existingResult,
+                resultText: action.result || existingResult.resultText,
               }
-            }
-            target.blocks = [
-              ...target.blocks.slice(0, insertAt),
-              bgResultBlock,
-              ...target.blocks.slice(insertAt),
-            ];
-            msgs[targetIdx] = target;
-          }
+            : {
+                type: "bg_agent_result",
+                sessionId,
+                task: findBgTaskForSession(msgs, target.blocks, sessionId),
+                status: inferBgResultStatus(action.result),
+                resultText: action.result || undefined,
+                summary: undefined,
+              };
+          const reconciledMessages = msgs
+            .map((message) => ({
+              ...message,
+              blocks: message.blocks.filter(
+                (block) =>
+                  !(
+                    block.type === "bg_agent_result" &&
+                    block.sessionId === sessionId
+                  ),
+              ),
+            }))
+            .filter(
+              (message, index, messages) =>
+                message.id === target.id ||
+                !isEmptyAssistantShell(message) ||
+                (state.streaming &&
+                  index === messages.length - 1 &&
+                  isEmptyAssistantShell(msgs[index])),
+            );
+          const reconciledTargetIndex = reconciledMessages.findIndex(
+            (message) => message.id === target.id,
+          );
+          const reconciledTarget = {
+            ...reconciledMessages[reconciledTargetIndex],
+            blocks: [...reconciledMessages[reconciledTargetIndex].blocks],
+          };
+          const toolIndex = reconciledTarget.blocks.findIndex(
+            (block) =>
+              block.type === "tool_call" && block.id === action.toolCallId,
+          );
+          reconciledTarget.blocks.splice(
+            toolIndex >= 0 ? toolIndex + 1 : reconciledTarget.blocks.length,
+            0,
+            bgResultBlock,
+          );
+          reconciledMessages[reconciledTargetIndex] = reconciledTarget;
+          return { ...state, messages: reconciledMessages };
         }
       }
 
@@ -2166,6 +2231,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
     case "CLEAR_INTERACTION_PROMPTS":
       return {
         ...state,
+        approvalRequest: null,
         questionRequest: null,
         detectedQuestion: null,
         messages: clearFinalMarkerContinueActions(state.messages),
@@ -2255,6 +2321,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         estimatedTotalUsed: 0,
         todos: [],
         messageQueue: [],
+        approvalRequest: null,
         questionRequest: null,
         detectedQuestion: null,
         dismissedDetectedQuestionIds: [],
@@ -2497,17 +2564,53 @@ export function reducer(state: AppState, action: AppAction): AppState {
       };
     }
 
+    case "SET_APPROVAL":
+      return { ...state, approvalRequest: action.request };
+
+    case "CLEAR_APPROVAL":
+      return state.approvalRequest?.id === action.id
+        ? { ...state, approvalRequest: null }
+        : state;
+
     case "SET_QUESTION": {
       const messages = addQuestionContextMessage(
         state.messages,
         action.id,
         action.context,
       );
+      let toolCallId = action.toolCallId;
+      if (!toolCallId) {
+        for (
+          let messageIdx = messages.length - 1;
+          messageIdx >= 0;
+          messageIdx -= 1
+        ) {
+          const toolCall = [...messages[messageIdx].blocks]
+            .reverse()
+            .find(
+              (block) =>
+                block.type === "tool_call" &&
+                normalizeProjectedToolName(block.name) === "ask_user" &&
+                !messages.some((message) =>
+                  message.blocks.some(
+                    (candidate) =>
+                      candidate.type === "question_answer" &&
+                      candidate.toolCallId === block.id,
+                  ),
+                ),
+            );
+          if (toolCall?.type === "tool_call") {
+            toolCallId = toolCall.id;
+            break;
+          }
+        }
+      }
       return {
         ...state,
         messages,
         questionRequest: {
           id: action.id,
+          ...(toolCallId ? { toolCallId } : {}),
           context: action.context,
           questions: action.questions,
           ...(action.backgroundTask
@@ -2517,8 +2620,60 @@ export function reducer(state: AppState, action: AppAction): AppState {
       };
     }
 
+    case "SUBMIT_QUESTION": {
+      const request = state.questionRequest;
+      if (!request || request.id !== action.id) return state;
+
+      const items = request.questions.map((question) => ({
+        question: question.question,
+        answer: normalizeAskUserAnswer(action.answers[question.id]),
+        ...(action.notes[question.id]?.trim()
+          ? { note: action.notes[question.id].trim() }
+          : {}),
+      }));
+      const toolCallId = request.toolCallId;
+      let targetIdx = -1;
+      if (toolCallId) {
+        for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+          if (
+            state.messages[index].blocks.some(
+              (block) => block.type === "tool_call" && block.id === toolCallId,
+            )
+          ) {
+            targetIdx = index;
+            break;
+          }
+        }
+      }
+      if (targetIdx < 0 || !toolCallId) {
+        return { ...state, questionRequest: null };
+      }
+
+      const messages = [...state.messages];
+      const target = { ...messages[targetIdx] };
+      const answerBlock: ContentBlock = {
+        type: "question_answer",
+        toolCallId,
+        items,
+      };
+      const existingIdx = target.blocks.findIndex(
+        (block) =>
+          block.type === "question_answer" && block.toolCallId === toolCallId,
+      );
+      target.blocks =
+        existingIdx >= 0
+          ? target.blocks.map((block, index) =>
+              index === existingIdx ? answerBlock : block,
+            )
+          : [...target.blocks, answerBlock];
+      messages[targetIdx] = target;
+      return { ...state, messages, questionRequest: null };
+    }
+
     case "CLEAR_QUESTION":
-      return { ...state, questionRequest: null };
+      return action.id && state.questionRequest?.id !== action.id
+        ? state
+        : { ...state, questionRequest: null };
 
     case "SET_DETECTED_QUESTION":
       return {
@@ -2806,6 +2961,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           ];
         }
       }
+      const sameSession = state.chatState.sessionId === action.sessionId;
       return {
         ...state,
         messages: restoredMessages,
@@ -2820,9 +2976,12 @@ export function reducer(state: AppState, action: AppAction): AppState {
         pendingFinalMarker: null,
         lastInputTokens: action.lastInputTokens ?? 0,
         lastOutputTokens: action.lastOutputTokens ?? 0,
+        lastCacheReadTokens: sameSession ? state.lastCacheReadTokens : 0,
+        estimatedTotalUsed: sameSession ? state.estimatedTotalUsed : 0,
         todos: Array.isArray(action.todos) ? action.todos : [],
-        messageQueue: [],
-        questionRequest: null,
+        messageQueue: sameSession ? state.messageQueue : [],
+        approvalRequest: sameSession ? state.approvalRequest : null,
+        questionRequest: sameSession ? state.questionRequest : null,
         detectedQuestion: null,
         dismissedDetectedQuestionIds: [],
         chatState: {
@@ -2865,22 +3024,74 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "BG_AGENT_DONE": {
-      // Insert a bg_agent_result notification at the current position in chat.
-      // If the last message is an assistant message, insert the block before
-      // any still-active tail blocks (running tools, open thinking, streaming
-      // text) so the live end of the transcript stays last.
-      // Otherwise, create a new assistant message for the notification.
+      // If get_background_result already completed for this session, keep the
+      // result directly after that tool call. Otherwise, insert before any
+      // still-active tail blocks so the live end of the transcript stays last.
+      const existingResult = state.messages
+        .flatMap((message) => message.blocks)
+        .find(
+          (
+            block,
+          ): block is Extract<ContentBlock, { type: "bg_agent_result" }> =>
+            block.type === "bg_agent_result" &&
+            block.sessionId === action.sessionId,
+        );
       const resultBlock: ContentBlock = {
         type: "bg_agent_result",
         sessionId: action.sessionId,
         task: action.task,
         status: action.status,
-        resultText: action.resultText,
-        summary: action.summary,
+        resultText: action.resultText ?? existingResult?.resultText,
+        summary: action.summary ?? existingResult?.summary,
       };
-      const lastMsg = state.messages[state.messages.length - 1];
+      const messagesWithoutPriorResult = state.messages
+        .map((message) => ({
+          ...message,
+          blocks: message.blocks.filter(
+            (block) =>
+              !(
+                block.type === "bg_agent_result" &&
+                block.sessionId === action.sessionId
+              ),
+          ),
+        }))
+        .filter(
+          (message, index, messages) =>
+            !isEmptyAssistantShell(message) ||
+            (state.streaming &&
+              index === messages.length - 1 &&
+              isEmptyAssistantShell(state.messages[index])),
+        );
+      for (
+        let messageIndex = messagesWithoutPriorResult.length - 1;
+        messageIndex >= 0;
+        messageIndex -= 1
+      ) {
+        const message = messagesWithoutPriorResult[messageIndex];
+        const toolIndex = message.blocks.findIndex(
+          (block) =>
+            block.type === "tool_call" &&
+            block.name === "get_background_result" &&
+            block.complete &&
+            getBgSessionIdFromToolInput(undefined, block.inputJson) ===
+              action.sessionId,
+        );
+        if (toolIndex < 0) continue;
+        const messages = [...messagesWithoutPriorResult];
+        messages[messageIndex] = {
+          ...message,
+          blocks: [
+            ...message.blocks.slice(0, toolIndex + 1),
+            resultBlock,
+            ...message.blocks.slice(toolIndex + 1),
+          ],
+        };
+        return { ...state, messages };
+      }
+      const lastMsg =
+        messagesWithoutPriorResult[messagesWithoutPriorResult.length - 1];
       if (lastMsg?.role === "assistant") {
-        const { msgs, last } = cloneLast(state.messages);
+        const { msgs, last } = cloneLast(messagesWithoutPriorResult);
         let insertAt = last.blocks.length;
         while (
           insertAt > 0 &&
@@ -2898,7 +3109,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         messages: [
-          ...state.messages,
+          ...messagesWithoutPriorResult,
           {
             id: randomId(),
             role: "assistant" as const,
@@ -2951,7 +3162,7 @@ export const initialState: AppState = {
   chatState: {
     sessionId: null,
     mode: "code",
-    model: "claude-sonnet-4-6",
+    model: "",
     streaming: false,
     reasoningEffort: "high",
     thinkingEnabled: true,
@@ -2977,6 +3188,7 @@ export const initialState: AppState = {
   availableModels: [],
   slashCommands: [],
   messageQueue: [],
+  approvalRequest: null,
   questionRequest: null,
   detectedQuestion: null,
   dismissedDetectedQuestionIds: [],

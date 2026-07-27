@@ -34,7 +34,7 @@ beforeEach(() => {
 });
 
 describe("WebviewAgentUiPublisher", () => {
-  it("preserves existing webview message shapes", () => {
+  it("session-addresses foreground approval and question messages", () => {
     const publishMessage = vi.fn();
     const publisher = new WebviewAgentUiPublisher(publishMessage);
 
@@ -59,11 +59,20 @@ describe("WebviewAgentUiPublisher", () => {
         },
       ],
     );
+    publisher.publishQuestionProgress("session-1", {
+      id: "question-1",
+      step: 1,
+      answers: { q1: "a" },
+      notes: {},
+      origin: "browser",
+    });
+    publisher.publishQuestionCleared("session-1", "question-1");
 
     expect(publishMessage.mock.calls).toEqual([
       [
         {
           type: "showApproval",
+          sessionId: "session-1",
           request: {
             kind: "write",
             id: "approval-1",
@@ -72,10 +81,11 @@ describe("WebviewAgentUiPublisher", () => {
           },
         },
       ],
-      [{ type: "idle" }],
+      [{ type: "idle", sessionId: "session-1", id: "approval-1" }],
       [
         {
           type: "agentQuestionRequest",
+          sessionId: "session-1",
           id: "question-1",
           context: "Pick the best option.",
           questions: [
@@ -89,10 +99,28 @@ describe("WebviewAgentUiPublisher", () => {
           ],
         },
       ],
+      [
+        {
+          type: "agentQuestionProgress",
+          sessionId: "session-1",
+          id: "question-1",
+          step: 1,
+          answers: { q1: "a" },
+          notes: {},
+          origin: "browser",
+        },
+      ],
+      [
+        {
+          type: "agentQuestionCleared",
+          sessionId: "session-1",
+          id: "question-1",
+        },
+      ],
     ]);
   });
 
-  it("does not let a mismatched approval clear hide the visible card", () => {
+  it("emits concurrent approval clears for the owning session and request", () => {
     const publishMessage = vi.fn();
     const publisher = new WebviewAgentUiPublisher(publishMessage);
 
@@ -104,11 +132,44 @@ describe("WebviewAgentUiPublisher", () => {
     });
     publisher.publishApprovalIdle("session-1", "approval-1");
 
-    expect(publishMessage).toHaveBeenCalledTimes(1);
-    expect(publishMessage).not.toHaveBeenCalledWith({ type: "idle" });
+    expect(publishMessage).toHaveBeenLastCalledWith({
+      type: "idle",
+      sessionId: "session-1",
+      id: "approval-1",
+    });
   });
 
-  it("includes background task attribution when set", () => {
+  it("keeps background fallback approvals globally visible", () => {
+    const publishMessage = vi.fn();
+    const publisher = new WebviewAgentUiPublisher(publishMessage);
+
+    publisher.publishApproval("session-bg", {
+      kind: "write",
+      id: "approval-bg",
+      filePath: "src/background.ts",
+      writeOperation: "modify",
+      backgroundTask: "Detached review",
+    });
+    publisher.publishApprovalIdle("session-bg", "approval-bg");
+
+    expect(publishMessage.mock.calls).toEqual([
+      [
+        {
+          type: "showApproval",
+          request: {
+            kind: "write",
+            id: "approval-bg",
+            filePath: "src/background.ts",
+            writeOperation: "modify",
+            backgroundTask: "Detached review",
+          },
+        },
+      ],
+      [{ type: "idle", id: "approval-bg" }],
+    ]);
+  });
+
+  it("keeps background fallback questions globally visible", () => {
     const publishMessage = vi.fn();
     const publisher = new WebviewAgentUiPublisher(publishMessage);
 
@@ -119,14 +180,37 @@ describe("WebviewAgentUiPublisher", () => {
       [],
       "review_pr",
     );
-
-    expect(publishMessage).toHaveBeenCalledWith({
-      type: "agentQuestionRequest",
+    publisher.publishQuestionProgress("session-bg", {
       id: "question-bg",
-      context: "Review needs input.",
-      questions: [],
-      backgroundTask: "review_pr",
+      step: 1,
+      answers: {},
+      notes: {},
+      origin: "browser",
     });
+    publisher.publishQuestionCleared("session-bg", "question-bg");
+
+    expect(publishMessage.mock.calls).toEqual([
+      [
+        {
+          type: "agentQuestionRequest",
+          id: "question-bg",
+          context: "Review needs input.",
+          questions: [],
+          backgroundTask: "review_pr",
+        },
+      ],
+      [
+        {
+          type: "agentQuestionProgress",
+          id: "question-bg",
+          step: 1,
+          answers: {},
+          notes: {},
+          origin: "browser",
+        },
+      ],
+      [{ type: "agentQuestionCleared", id: "question-bg" }],
+    ]);
   });
 });
 
@@ -299,6 +383,8 @@ describe("FanoutAgentUiPublisher", () => {
       "question-2",
       "Fanout needs input.",
       [],
+      undefined,
+      "tool-ask-2",
     );
     publisher.publishQuestionCleared("session-3", "question-2");
 
@@ -317,6 +403,7 @@ describe("FanoutAgentUiPublisher", () => {
         "Fanout needs input.",
         [],
         undefined,
+        "tool-ask-2",
       );
       expect(target.publishQuestionCleared).toHaveBeenCalledWith(
         "session-3",

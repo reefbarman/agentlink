@@ -108,11 +108,11 @@ describe("browser gateway action-surface inventory", () => {
     ).toBe(true);
   });
 
-  it("does not claim any protocol command is routed before Slice E lands", () => {
+  it("marks only implemented protocol commands as routed", () => {
     expect(
-      BROWSER_GATEWAY_PROTOCOL_COMMAND_ADOPTION.every(
-        (entry) => entry.status === "declared_only",
-      ),
-    ).toBe(true);
+      BROWSER_GATEWAY_PROTOCOL_COMMAND_ADOPTION.filter(
+        (entry) => entry.status === "routed",
+      ).map((entry) => entry.commandKind),
+    ).toEqual(["session.detail"]);
   });
 });

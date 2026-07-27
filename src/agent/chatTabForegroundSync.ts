@@ -19,6 +19,7 @@ export function createForegroundChatTabSync(
   let inFlight: Promise<void> | undefined;
   let dirty = false;
   let draining = false;
+  let boundForegroundSessionId: string | undefined;
 
   const run = async (): Promise<void> => {
     draining = true;
@@ -26,8 +27,13 @@ export function createForegroundChatTabSync(
       while (dirty) {
         dirty = false;
         const sessionId = host.getForegroundSessionId();
-        if (sessionId === undefined) continue;
+        if (sessionId === undefined) {
+          boundForegroundSessionId = undefined;
+          continue;
+        }
+        if (sessionId === boundForegroundSessionId) continue;
         await host.bindFocusedSession(sessionId);
+        boundForegroundSessionId = sessionId;
       }
     } finally {
       draining = false;

@@ -136,6 +136,7 @@ body {
 }
 
 .chat-tab-close,
+.chat-tab-pop-out,
 .chat-tab-new {
   display: flex;
   align-items: center;
@@ -149,12 +150,14 @@ body {
 }
 
 .chat-tab-close:hover:not(:disabled),
+.chat-tab-pop-out:hover:not(:disabled),
 .chat-tab-new:hover:not(:disabled) {
   background: var(--vscode-toolbar-hoverBackground);
   opacity: 1;
 }
 
 .chat-tab-close:disabled,
+.chat-tab-pop-out:disabled,
 .chat-tab-new:disabled {
   opacity: 0.25;
   cursor: default;
@@ -163,6 +166,45 @@ body {
 .chat-tab-new {
   flex-shrink: 0;
   border-left: 1px solid var(--vscode-panel-border);
+}
+
+.chat-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-editorGroupHeader-tabsBackground);
+}
+
+.chat-editor-actions > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-editor-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 2px;
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chat-editor-action:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
 }
 
 .chat-tab-failure {
@@ -2059,6 +2101,20 @@ body.chat-activity-shelf-resizing * {
   opacity: 1;
 }
 
+.tool-call-header-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
 .tool-call-chevron {
   font-size: 10px;
   opacity: 0.5;
@@ -2078,12 +2134,16 @@ body.chat-activity-shelf-resizing * {
 }
 
 .tool-call-summary {
+  color: color-mix(in srgb, currentColor 65%, transparent);
   font-size: 11px;
-  opacity: 0.65;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+.tool-call-summary .tool-file-link {
+  color: var(--vscode-textLink-foreground);
 }
 
 .tool-auto-approval-badge {
@@ -8080,6 +8140,13 @@ body.approval-resizing {
   white-space: nowrap;
   color: var(--vscode-descriptionForeground);
   font-weight: 500;
+}
+
+.bg-agent-result-model {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--vscode-descriptionForeground);
+  font-weight: 400;
 }
 
 .bg-result-content {

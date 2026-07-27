@@ -107,6 +107,14 @@ function makeSessionManagerStub() {
         projectAvailability: "available",
       },
     ]),
+    switchTo: vi.fn(),
+    hydratePersistedSession: vi.fn(),
+    loadPersistedSession: vi.fn(),
+    getSession: vi.fn<(sessionId: string) => unknown>(() => undefined),
+    getPendingQuestionRecovery: vi.fn<(sessionId: string) => unknown>(
+      () => null,
+    ),
+    getRevertRecoveryState: vi.fn<(sessionId: string) => unknown>(() => null),
     getForegroundSession: vi.fn(() => ({
       id: "session-1",
       title: "Test Session",
@@ -132,8 +140,13 @@ function makeSessionManagerStub() {
       { role: "assistant", content: [{ type: "text", text: "world" }] },
     ]),
     getBgSessionInfos: vi.fn(() => []),
-    getSessionApprovalMode: vi.fn<() => SessionApprovalMode>(() => ({
-      commandApprovalPolicy: "safe",
+    getSessionApprovalMode: vi.fn<
+      (
+        sessionId: string,
+        configured: "safe" | "sensitive",
+      ) => SessionApprovalMode
+    >((_sessionId, configured) => ({
+      commandApprovalPolicy: configured,
       approvalPolicy: "on-request",
       approvalReviewer: "user",
       executionPreset: "native-manual",
@@ -194,12 +207,15 @@ const themeSnapshotStub = {
 function makeService(
   hub: InMemoryAgentUiEventHub,
   sessionManager = makeSessionManagerStub(),
+  getAgentWriteApprovalState: (
+    sessionId?: string,
+  ) => "prompt" | "session" | "project" | "global" = () => "prompt",
 ): BrowserGatewayService {
   return new BrowserGatewayService(
     hub,
     sessionManager as never,
     () => themeSnapshotStub,
-    () => "prompt",
+    getAgentWriteApprovalState,
     () => true,
     () => "high",
     () => null,
@@ -318,6 +334,328 @@ describe("BrowserGatewayService", () => {
     hub.dispose();
   });
 
+  it("projects grouped chat tabs without changing the foreground session", async () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const getForegroundSession = sessionManager.getForegroundSession;
+    let workspaceListener: (() => void) | undefined;
+    let focusedTabId = "tab-1";
+    const service = makeService(hub, sessionManager);
+    service.setHasActiveClientsProbe(() => true);
+    service.setChatWorkspaceProvider(
+      () => ({
+        controllerEpoch: "controller-1",
+        focusedTabId,
+        tabs: [
+          {
+            tabId: "tab-1",
+            displayNumber: 1,
+            label: "T1",
+            sessionId: "session-1",
+            placement: "popped",
+            title: "Test Session",
+            status: "completed",
+            busy: false,
+          },
+          {
+            tabId: "tab-2",
+            displayNumber: 2,
+            label: "T2",
+            sessionId: null,
+            placement: "docked",
+            status: "idle",
+            busy: false,
+          },
+        ],
+      }),
+      (listener) => {
+        workspaceListener = listener;
+        return { dispose: vi.fn() };
+      },
+    );
+    const ownerChanges = vi.fn();
+    const ownerSubscription = service
+      .getOwnerProjectionSources()
+      .onDidChange(ownerChanges);
+    const snapshotChanges = vi.fn();
+    const snapshotSubscription = service.onDidChange(snapshotChanges);
+
+    expect(service.getSerializableSessionState().chatWorkspace).toEqual({
+      controllerEpoch: "controller-1",
+      focusedTabId: "tab-1",
+      tabs: [
+        expect.objectContaining({
+          tabId: "tab-1",
+          sessionId: "session-1",
+          placement: "popped",
+          mode: "code",
+          model: "claude-sonnet-4-6",
+          needsAttention: false,
+        }),
+        expect.objectContaining({
+          tabId: "tab-2",
+          sessionId: null,
+          placement: "docked",
+        }),
+      ],
+    });
+    expect(
+      service.getOwnerProjectionSources().capture().catalog.chatWorkspace,
+    ).toMatchObject({
+      controllerEpoch: "controller-1",
+      focusedTabId: "tab-1",
+      tabs: [
+        { tabId: "tab-1", sessionId: "session-1" },
+        { tabId: "tab-2", sessionId: null },
+      ],
+    });
+
+    focusedTabId = "tab-2";
+    workspaceListener?.();
+
+    expect(ownerChanges).toHaveBeenCalledWith("sessions");
+    await vi.waitFor(() => expect(snapshotChanges).toHaveBeenCalledTimes(1));
+    expect(
+      service.getSerializableSessionState().chatWorkspace?.focusedTabId,
+    ).toBe("tab-2");
+    expect(getForegroundSession).toHaveLastReturnedWith(
+      expect.objectContaining({ id: "session-1" }),
+    );
+    expect(sessionManager.switchTo).not.toHaveBeenCalled();
+
+    snapshotSubscription.dispose();
+    ownerSubscription.dispose();
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("reads detached tab detail without switching, hydrating, or leaking interactions", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const detachedMessages = [
+      { role: "user" as const, content: "detached prompt" },
+      {
+        role: "assistant" as const,
+        content: [
+          {
+            type: "tool_use" as const,
+            id: "todo-call",
+            name: "todo_write",
+            input: {
+              todos: [
+                {
+                  id: "detached-todo",
+                  content: "Inspect detached session",
+                  activeForm: "Inspecting detached session",
+                  status: "in_progress",
+                },
+              ],
+            },
+          },
+          { type: "text" as const, text: "detached reply" },
+        ],
+      },
+    ];
+    const detachedSession = {
+      id: "session-2",
+      title: "Detached Session",
+      mode: "debug",
+      model: "gpt-5.6",
+      status: "idle" as const,
+      reasoningEffort: "none" as const,
+      lastInputTokens: 41,
+      lastOutputTokens: 17,
+      lastCacheReadTokens: 9,
+      estimatedTotalUsed: 67,
+      runState: undefined,
+      projectScope: {
+        projectId: "project-b",
+        displayName: "Project B",
+      },
+      projectAvailability: "available" as const,
+      getAllMessages: vi.fn(() => detachedMessages),
+    };
+    sessionManager.getSession.mockImplementation((sessionId) =>
+      sessionId === detachedSession.id ? detachedSession : undefined,
+    );
+    sessionManager.getSessionInfos.mockReturnValue([
+      ...sessionManager.getSessionInfos(),
+      {
+        id: "session-2",
+        status: "idle",
+        interactiveExecutionPhase: "awaiting_input",
+        mode: "debug",
+        model: "gpt-5.6",
+        title: "Detached Session",
+        messageCount: 2,
+        totalInputTokens: 41,
+        totalOutputTokens: 17,
+        background: false,
+        createdAt: 3,
+        lastActiveAt: 4,
+        projectScope: {
+          schemaVersion: 1,
+          kind: "project",
+          projectId: "project-b",
+          workspaceFolderUri: "file:///workspace/b",
+          displayName: "Project B",
+          rootPath: "/workspace/b",
+        },
+        projectAvailability: "available",
+      },
+    ]);
+    sessionManager.getRevertRecoveryState.mockImplementation((sessionId) =>
+      sessionId === "session-2"
+        ? {
+            projectId: "project-b",
+            checkpointId: "checkpoint-2",
+            sessionRevision: "revision-2",
+            startedAt: 5,
+            reason: "workspace_reverted_session_save_failed",
+          }
+        : null,
+    );
+    const getAgentWriteApprovalState = vi.fn((sessionId?: string) =>
+      sessionId === "session-2" ? ("session" as const) : ("global" as const),
+    );
+    const service = makeService(
+      hub,
+      sessionManager,
+      getAgentWriteApprovalState,
+    );
+    const getConfiguredCommandApprovalPolicy = vi.fn(
+      (projectScope?: { projectId?: string }) =>
+        projectScope?.projectId === "project-b"
+          ? ("sensitive" as const)
+          : ("safe" as const),
+    );
+    service.setCommandApprovalPolicyGetters(
+      () => "safe",
+      getConfiguredCommandApprovalPolicy as never,
+    );
+    service.setChatWorkspaceProvider(
+      () => ({
+        controllerEpoch: "controller-1",
+        focusedTabId: "tab-1",
+        tabs: [
+          {
+            tabId: "tab-1",
+            displayNumber: 1,
+            label: "T1",
+            sessionId: "session-1",
+            placement: "docked",
+            status: "completed",
+            busy: false,
+          },
+          {
+            tabId: "tab-2",
+            displayNumber: 2,
+            label: "T2",
+            sessionId: "session-2",
+            placement: "popped",
+            status: "needs_input",
+            busy: false,
+          },
+        ],
+      }),
+      () => ({ dispose: vi.fn() }),
+    );
+    hub.publishApproval("session-1", {
+      kind: "write",
+      id: "approval-1",
+      filePath: "src/one.ts",
+      writeOperation: "modify",
+    });
+    hub.publishQuestionRequest(
+      "session-2",
+      "question-2",
+      "Choose for session two.",
+      [],
+    );
+
+    const detail = service.getSerializableSessionDetail({
+      controllerEpoch: "controller-1",
+      tabId: "tab-2",
+      sessionId: "session-2",
+    });
+
+    expect(detail).toMatchObject({
+      selection: {
+        controllerEpoch: "controller-1",
+        tabId: "tab-2",
+        sessionId: "session-2",
+      },
+      session: {
+        sessionId: "session-2",
+        title: "Detached Session",
+        originalPrompt: "detached prompt",
+        mode: "debug",
+        model: "gpt-5.6",
+        interactiveExecutionPhase: "awaiting_input",
+        thinkingEnabled: false,
+        reasoningEffort: "none",
+        agentWriteApproval: "session",
+        commandApprovalPolicy: "sensitive",
+        configuredCommandApprovalPolicy: "sensitive",
+        lastInputTokens: 41,
+        lastOutputTokens: 17,
+        lastCacheReadTokens: 9,
+        estimatedTotalUsed: 67,
+        messageQueue: [],
+        todos: [
+          expect.objectContaining({
+            id: "detached-todo",
+            status: "in_progress",
+          }),
+        ],
+      },
+      ui: {
+        approval: null,
+        question: expect.objectContaining({ id: "question-2" }),
+      },
+      revertRecoveryState: {
+        projectId: "project-b",
+        checkpointId: "checkpoint-2",
+      },
+    });
+    expect(detail?.session.projectedMessages).toEqual([
+      expect.objectContaining({ role: "user", content: "detached prompt" }),
+      expect.objectContaining({ role: "assistant" }),
+    ]);
+    expect(sessionManager.getForegroundSession()).toEqual(
+      expect.objectContaining({ id: "session-1" }),
+    );
+    expect(getAgentWriteApprovalState).toHaveBeenCalledWith("session-2");
+    expect(getConfiguredCommandApprovalPolicy).toHaveBeenCalledWith(
+      detachedSession.projectScope,
+    );
+    expect(sessionManager.getSessionApprovalMode).toHaveBeenCalledWith(
+      "session-2",
+      "sensitive",
+    );
+    expect(sessionManager.switchTo).not.toHaveBeenCalled();
+    expect(sessionManager.hydratePersistedSession).not.toHaveBeenCalled();
+    expect(sessionManager.loadPersistedSession).not.toHaveBeenCalled();
+
+    expect(
+      service.getSerializableSessionDetail({
+        controllerEpoch: "stale-controller",
+        tabId: "tab-2",
+        sessionId: "session-2",
+      }),
+    ).toBeNull();
+    expect(
+      service.getSerializableSessionDetail({
+        controllerEpoch: "controller-1",
+        tabId: "tab-1",
+        sessionId: "session-2",
+      }),
+    ).toBeNull();
+
+    service.dispose();
+    hub.dispose();
+  });
+
   it("captures owner projection sources from the same legacy state boundary", () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();
@@ -405,6 +743,58 @@ describe("BrowserGatewayService", () => {
     hub.dispose();
   });
 
+  it("mirrors background approvals globally without allowing cross-session clears", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const initialForeground = sessionManager.getForegroundSession();
+    let foregroundSessionId = "session-1";
+    sessionManager.getForegroundSession.mockImplementation(() => ({
+      ...initialForeground,
+      id: foregroundSessionId,
+      title: foregroundSessionId,
+    }));
+    const service = makeService(hub, sessionManager);
+    let sessionListener: (() => void) | undefined;
+    service.subscribeToSessionChanges((listener) => {
+      sessionListener = listener;
+      return { dispose: vi.fn() } as never;
+    });
+
+    hub.publishApproval("session-3", {
+      kind: "write",
+      id: "foreground-approval",
+      filePath: "src/foreground.ts",
+      writeOperation: "modify",
+    });
+    hub.publishApproval("session-2", {
+      kind: "write",
+      id: "global-approval",
+      filePath: "src/global.ts",
+      writeOperation: "modify",
+      backgroundTask: "Detached review",
+    });
+
+    expect(service.getSerializableState().approval?.id).toBe("global-approval");
+    expect(
+      service.getOwnerProjectionSources().capture().interaction?.requestId,
+    ).toBe("global-approval");
+
+    foregroundSessionId = "session-3";
+    sessionListener?.();
+    expect(service.getSerializableState().approval?.id).toBe("global-approval");
+
+    hub.publishApprovalIdle("session-1", "global-approval");
+    expect(service.getSerializableState().approval?.id).toBe("global-approval");
+
+    hub.publishApprovalIdle("session-2", "global-approval");
+    expect(service.getSerializableState().approval?.id).toBe(
+      "foreground-approval",
+    );
+
+    service.dispose();
+    hub.dispose();
+  });
+
   it("notifies owner projection demand while legacy publication is client-gated", () => {
     const hub = new InMemoryAgentUiEventHub();
     const service = makeService(hub);
@@ -449,6 +839,38 @@ describe("BrowserGatewayService", () => {
 
     ownerSubscription.dispose();
     legacySubscription.dispose();
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("does not advertise a missing approval card from runtime status alone", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const foreground = sessionManager.getForegroundSession();
+    if (!foreground) throw new Error("missing foreground session");
+    foreground.status = "awaiting_approval";
+    sessionManager.getForegroundSession.mockReturnValue(foreground);
+    const service = makeService(hub, sessionManager);
+
+    expect(service.getSerializableState().approval).toBeNull();
+    expect(service.getInstanceStatusSummary()).toEqual({
+      kind: "working",
+      label: "Waiting",
+      detail: "Awaiting interaction details",
+      sessionTitle: "Test Session",
+    });
+
+    hub.publishApproval("session-1", {
+      kind: "write",
+      id: "approval-1",
+      filePath: "src/file.ts",
+      writeOperation: "modify",
+    });
+    expect(service.getInstanceStatusSummary()).toMatchObject({
+      kind: "awaiting_approval",
+      label: "Approval",
+    });
+
     service.dispose();
     hub.dispose();
   });
@@ -1436,6 +1858,17 @@ describe("BrowserGatewayService", () => {
       writeOperation: "modify",
     });
     expect(service.getUiState().approval?.id).toBe("approval-2");
+
+    hub.publishApprovalIdle("session-2", "approval-other");
+    expect(service.getUiState().approval?.id).toBe("approval-2");
+    hub.publishApprovalIdle("session-1", "approval-2");
+    expect(service.getUiState().approval?.id).toBe("approval-2");
+    hub.publishApprovalIdle("session-2", "approval-2");
+    expect(service.getUiState().approval).toBeUndefined();
+
+    foregroundSessionId = "session-1";
+    sessionListener?.();
+    expect(service.getUiState().approval?.id).toBe("approval-1-late");
 
     service.dispose();
     hub.dispose();

@@ -72,6 +72,9 @@ function createHarness() {
       sessions.set(created.id, created);
       return created;
     }),
+    hydratePersistedSession: vi.fn(
+      async (id: string) => sessions.get(id) ?? null,
+    ),
     loadPersistedSession: vi.fn(async (id: string) => sessions.get(id) ?? null),
     stopSessionAndWait: vi.fn(async () => []),
     switchTo: vi.fn(),
@@ -113,7 +116,6 @@ describe("ChatTabHostCoordinator", () => {
       });
       const created = session("session-2");
       harness.sessions.set(created.id, created);
-      await harness.tabs.bindFocusedSession(created.id);
       return created;
     });
 
@@ -125,6 +127,11 @@ describe("ChatTabHostCoordinator", () => {
       session: { id: "session-2" },
     });
     expect(harness.tabs.getTab("tab-1")?.sessionId).toBe("session-1");
+    expect(harness.manager.createSession).toHaveBeenCalledWith("code", {
+      projectId: undefined,
+      foreground: false,
+    });
+    expect(harness.manager.switchTo).toHaveBeenCalledWith("session-2");
   });
 
   it("requires confirmation for a busy New Chat and preserves the stable tab", async () => {
@@ -167,6 +174,71 @@ describe("ChatTabHostCoordinator", () => {
     expect(harness.manager.stopSessionAndWait).toHaveBeenCalledWith(
       "session-1",
     );
+    expect(harness.manager.createSession).toHaveBeenCalledWith("code", {
+      projectId: undefined,
+      foreground: false,
+    });
+    expect(harness.manager.switchTo).toHaveBeenCalledWith("session-2");
+  });
+
+  it("does not promote a new tab session after focus moves during creation", async () => {
+    const harness = createHarness();
+    const first = session("session-1");
+    harness.sessions.set(first.id, first);
+    await harness.tabs.bindFocusedSession(first.id);
+    const initialAddress = harness.address();
+    let resolveCreation!: (created: AgentSession) => void;
+    harness.manager.createSession.mockImplementationOnce(
+      () =>
+        new Promise<AgentSession>((resolve) => {
+          resolveCreation = resolve;
+        }),
+    );
+
+    const creation = harness.coordinator.newTab(initialAddress, "code");
+    await vi.waitFor(() =>
+      expect(harness.manager.createSession).toHaveBeenCalledOnce(),
+    );
+    await harness.tabs.focusTab("tab-1");
+    const created = session("session-2");
+    harness.sessions.set(created.id, created);
+    resolveCreation(created);
+
+    await expect(creation).resolves.toMatchObject({
+      ok: true,
+      tab: { id: "tab-2", sessionId: "session-2" },
+    });
+    expect(harness.tabs.getFocusedTab()).toMatchObject({
+      id: "tab-1",
+      sessionId: "session-1",
+    });
+    expect(harness.manager.switchTo).not.toHaveBeenCalled();
+  });
+
+  it("replaces a browser-selected tab without changing VS Code focus", async () => {
+    const harness = createHarness();
+    const current = session("session-1");
+    harness.sessions.set(current.id, current);
+    await harness.tabs.bindFocusedSession(current.id);
+    const focusTab = vi.spyOn(harness.tabs, "focusTab");
+
+    const result = await harness.coordinator.newChat(
+      harness.address(),
+      "code",
+      { focus: false },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      tab: { id: "tab-1", sessionId: "session-2" },
+      session: { id: "session-2" },
+    });
+    expect(focusTab).not.toHaveBeenCalled();
+    expect(harness.manager.createSession).toHaveBeenCalledWith("code", {
+      projectId: undefined,
+      foreground: false,
+    });
+    expect(harness.manager.switchTo).not.toHaveBeenCalled();
   });
 
   it("switches to a surviving session before retiring a focused tab", async () => {
@@ -218,6 +290,37 @@ describe("ChatTabHostCoordinator", () => {
     expect(harness.tabs.getLayout().tabs).toHaveLength(2);
     expect(harness.manager.loadPersistedSession).not.toHaveBeenCalled();
     expect(harness.manager.switchTo).toHaveBeenCalledWith("session-2");
+  });
+
+  it("hydrates browser-selected history without changing VS Code focus", async () => {
+    const harness = createHarness();
+    const current = session("session-1");
+    const target = session("session-2");
+    harness.sessions.set(current.id, current);
+    await harness.tabs.bindFocusedSession(current.id);
+    harness.manager.hydratePersistedSession.mockImplementationOnce(async () => {
+      harness.sessions.set(target.id, target);
+      return target;
+    });
+    const focusTab = vi.spyOn(harness.tabs, "focusTab");
+
+    const result = await harness.coordinator.loadSession(
+      harness.address(),
+      target.id,
+      { focus: false },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      tab: { id: "tab-1", sessionId: target.id },
+      session: { id: target.id },
+    });
+    expect(harness.manager.hydratePersistedSession).toHaveBeenCalledWith(
+      target.id,
+    );
+    expect(harness.manager.loadPersistedSession).not.toHaveBeenCalled();
+    expect(focusTab).not.toHaveBeenCalled();
+    expect(harness.manager.switchTo).not.toHaveBeenCalled();
   });
 
   it("treats queued webview messages as busy before replacing history", async () => {

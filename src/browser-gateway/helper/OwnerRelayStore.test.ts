@@ -234,6 +234,47 @@ describe("OwnerRelayStore", () => {
     expect(store.getCheckpoint(ownerId, ownerGenerationId)).toBeNull();
   });
 
+  it("allows larger session details without relaxing ordinary detail limits", () => {
+    const store = new OwnerRelayStore({
+      helperGenerationId,
+      now: () => 1_000,
+      authenticatedDetailResponseBytes: 4,
+      authenticatedSessionDetailResponseBytes: 8,
+      authenticatedDetailStoreBytes: 8,
+    });
+    const handle = {
+      helperGenerationId,
+      ownerId,
+      ownerGenerationId,
+      handleId: "session-detail",
+      kind: "session" as const,
+      byteLength: 8,
+      expiresAt: 2_000,
+      mediaType: "application/json; charset=utf-8",
+    };
+
+    store.putDetail(handle, Buffer.from("12345678"));
+    expect(
+      store.getDetail({
+        handleId: handle.handleId,
+        ownerId,
+        ownerGenerationId,
+      })?.content,
+    ).toEqual(Buffer.from("12345678"));
+    expect(() =>
+      store.putDetail(
+        { ...handle, handleId: "message-detail", kind: "message" },
+        Buffer.from("12345678"),
+      ),
+    ).toThrow("browser_gateway_relay_detail_size_mismatch");
+    expect(() =>
+      store.putDetail(
+        { ...handle, handleId: "oversized-session", byteLength: 9 },
+        Buffer.from("123456789"),
+      ),
+    ).toThrow("browser_gateway_relay_detail_size_mismatch");
+  });
+
   it("binds bounded details to helper and owner generations and expires them", () => {
     let now = 1_000;
     const store = new OwnerRelayStore({

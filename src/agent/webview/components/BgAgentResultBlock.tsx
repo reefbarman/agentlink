@@ -6,6 +6,8 @@ interface BgAgentResultBlockProps {
   status: "completed" | "error" | "cancelled";
   resultText?: string;
   summary?: string;
+  resolvedModel?: string;
+  resolvedProvider?: string;
   onOpenTranscript?: (sessionId: string) => void;
 }
 
@@ -15,6 +17,8 @@ export function BgAgentResultBlock({
   status,
   resultText,
   summary,
+  resolvedModel,
+  resolvedProvider,
   onOpenTranscript,
 }: BgAgentResultBlockProps) {
   const statusClass =
@@ -50,6 +54,12 @@ export function BgAgentResultBlock({
         <span class="bg-agent-result-task">
           {task} — {statusText}
         </span>
+        {resolvedModel && (
+          <span class="bg-agent-result-model">
+            {resolvedProvider ? `${resolvedProvider} / ` : ""}
+            {resolvedModel}
+          </span>
+        )}
       </div>
 
       <div class="bg-result-content">

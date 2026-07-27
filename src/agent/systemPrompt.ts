@@ -39,6 +39,7 @@ import {
   buildMcpToolCatalogSection,
   type McpToolDisclosureCatalogEntry,
 } from "./mcpToolDisclosure.js";
+import { TODO_COMPACTION_GUIDANCE } from "./todoTool.js";
 
 export interface PromptArtifacts {
   systemPrompt: string;
@@ -144,6 +145,7 @@ Use \`todo_write\` for multi-step work when a visible task list will help. Once 
 - Keep exactly one item \`in_progress\` while actively working. Before moving to another item, update the list in the same transition: mark the finished item \`completed\` and the next item \`in_progress\`.
 - Mark completion promptly after the outcome is achieved and verified. Do not leave finished work pending/in-progress until the end, and do not mark future work complete prematurely.
 - Never silently drop an unfinished item. Remove it only if it is no longer part of the user's ask or has been explicitly superseded; otherwise keep it visible and accurate.
+- ${TODO_COMPACTION_GUIDANCE}
 - Treat stale status as bookkeeping to repair, not evidence that work must be repeated. After condensing, resuming, receiving new evidence, or noticing mismatch with the workspace, call \`todo_write\` to reconcile the complete list before continuing.
 - Before any final \`set_task_status\`, verify the TODO list matches the claimed outcome. Use \`completeTodos: true\` only when every remaining listed item was actually completed; for waiting, blocked, or cancelled outcomes, leave the exact unfinished work visible.
 
@@ -324,6 +326,30 @@ If any answer is no, ask first with \`ask_user\`: batch related questions, make 
 
 If the task is genuinely trivial and unambiguous, proceed directly — but state the interpreted goal and key assumptions visibly in the first response so the user can correct course immediately.`;
 
+const ARCHITECT_STANDARD_REVIEW_FLOW = `### Review & Iteration
+
+Architect mode is an **iterative loop**, not a one-shot plan dump. After presenting a plan or design:
+
+1. **Ask for feedback** — Use \`ask_user\` to ask the user for feedback on the plan and whether they'd like to revise it or switch to code mode to begin implementation. Present this as a clear choice (e.g. multiple choice: "Provide feedback / Looks good, switch to code mode"). Attach a \`modeSwitch\` map (e.g. \`{ "Looks good, switch to code mode": "code" }\`) so the user's choice both answers and changes mode in a single confirmation — do not also call \`switch_mode\` after this.
+2. **Critically evaluate feedback** — When the user provides review comments, do not blindly accept every point. Evaluate each piece of feedback on its own merits:
+   - Is the concern technically valid? Does it reflect an actual problem or a misunderstanding?
+   - Would the suggested change improve the design, or introduce unnecessary complexity?
+   - Does it conflict with constraints or decisions already established?
+   - If a point is incorrect or counterproductive, respectfully explain why and recommend keeping the original approach. Back up your reasoning with evidence from the codebase or sound engineering principles.
+3. **Revise and re-present** — Incorporate the feedback you agree with, update the plan file, and present the revised version. Then loop back to step 1.
+4. **Transition to implementation** — When the user is satisfied (chose the mapped "switch to code mode" option), the \`ask_user\` result already reflects \`modeSwitched: "code"\`; you do not need to call \`switch_mode\` again. If no \`modeSwitch\` map was attached and the user separately confirms, call \`switch_mode\` with \`mode: "code"\` to begin implementation.
+
+This loop continues until the user explicitly approves the plan or asks to move on. Do not rush to implementation — the value of architect mode is in getting the design right first.`;
+
+const ARCHITECT_APPROVE_FOR_ME_REVIEW_FLOW = `### Autonomous Review & Transition
+
+Approve for Me is enabled, so the architect review loop is autonomous:
+
+1. **Resolve genuine uncertainty** — Use \`ask_user\` only for unresolved requirements, constraints, or trade-offs that require the user's judgment. Do not ask the user to review or approve the plan, confirm proceeding, or choose whether to switch modes.
+2. **Review the plan** — Critically self-review the plan and use the background review agent where warranted. Incorporate valid findings before presenting it.
+3. **Present the result** — Summarize the final plan and include its file path. Do not pause for plan approval.
+4. **Transition immediately** — Call \`switch_mode\` with \`mode: "code"\` and a clear reason. The switch is reviewed automatically under Approve for Me; do not use \`ask_user\` or wait for user confirmation.`;
+
 /**
  * Mode-specific prompt augmentations.
  */
@@ -473,20 +499,7 @@ ${TASK_ALIGNMENT_SECTION}
   - In your response, include the plan file path and a concise summary of its contents.
   - Never provide time estimates — focus on what needs to be done, not how long it takes.
 
-### Review & Iteration
-
-Architect mode is an **iterative loop**, not a one-shot plan dump. After presenting a plan or design:
-
-1. **Ask for feedback** — Use \`ask_user\` to ask the user for feedback on the plan and whether they'd like to revise it or switch to code mode to begin implementation. Present this as a clear choice (e.g. multiple choice: "Provide feedback / Looks good, switch to code mode"). Attach a \`modeSwitch\` map (e.g. \`{ "Looks good, switch to code mode": "code" }\`) so the user's choice both answers and changes mode in a single confirmation — do not also call \`switch_mode\` after this.
-2. **Critically evaluate feedback** — When the user provides review comments, do not blindly accept every point. Evaluate each piece of feedback on its own merits:
-   - Is the concern technically valid? Does it reflect an actual problem or a misunderstanding?
-   - Would the suggested change improve the design, or introduce unnecessary complexity?
-   - Does it conflict with constraints or decisions already established?
-   - If a point is incorrect or counterproductive, respectfully explain why and recommend keeping the original approach. Back up your reasoning with evidence from the codebase or sound engineering principles.
-3. **Revise and re-present** — Incorporate the feedback you agree with, update the plan file, and present the revised version. Then loop back to step 1.
-4. **Transition to implementation** — When the user is satisfied (chose the mapped "switch to code mode" option), the \`ask_user\` result already reflects \`modeSwitched: "code"\`; you do not need to call \`switch_mode\` again. If no \`modeSwitch\` map was attached and the user separately confirms, call \`switch_mode\` with \`mode: "code"\` to begin implementation.
-
-This loop continues until the user explicitly approves the plan or asks to move on. Do not rush to implementation — the value of architect mode is in getting the design right first.
+${ARCHITECT_STANDARD_REVIEW_FLOW}
 
 ### Self-Review with Background Agents
 
@@ -992,6 +1005,7 @@ export async function buildModeInstructionBlock(
     mode,
     options?.agentMode,
     options?.promptProfile,
+    options?.approveForMe,
   ).trim();
   const modeRules = await loadModeRules(cwd, mode);
   const rulesSection = modeRules ? `\n\n### Mode Rules\n\n${modeRules}` : "";
@@ -999,14 +1013,10 @@ export async function buildModeInstructionBlock(
     mode === "architect"
       ? `\n\nPlans folder (\`./plans\`): ${fs.existsSync(path.join(cwd, "plans")) ? "exists" : "does not exist yet"}`
       : "";
-  const approveForMeSection =
-    mode === "architect" && options?.approveForMe
-      ? `\n\nApprove for Me is enabled: the architect review loop is autonomous — self-review the plan (including the background review agent where warranted), resolve genuine open questions with \`ask_user\` if any remain, then summarize the plan in your response and call \`switch_mode\` to \`code\` to begin implementation. Do not wait for the user to approve the plan.`
-      : "";
   return `<current_mode mode="${mode}">
 The session is now in **${mode}** mode. These instructions are authoritative until the next \`<current_mode>\` block.
 
-${modePrompt}${rulesSection}${plansSection}${approveForMeSection}
+${modePrompt}${rulesSection}${plansSection}
 </current_mode>`;
 }
 
@@ -1014,10 +1024,22 @@ function buildModePrompt(
   mode: string,
   agentMode?: AgentMode,
   promptProfile: PromptProfile = "compatibility",
+  approveForMe = false,
 ): string {
   const prompts =
     promptProfile === "reasoning" ? REASONING_MODE_PROMPTS : MODE_PROMPTS;
-  const builtInPrompt = prompts[mode];
+  const baseBuiltInPrompt = prompts[mode];
+  let builtInPrompt = baseBuiltInPrompt;
+  if (mode === "architect" && baseBuiltInPrompt && approveForMe) {
+    const autonomousPrompt = baseBuiltInPrompt.replace(
+      ARCHITECT_STANDARD_REVIEW_FLOW,
+      ARCHITECT_APPROVE_FOR_ME_REVIEW_FLOW,
+    );
+    builtInPrompt =
+      autonomousPrompt === baseBuiltInPrompt
+        ? `${baseBuiltInPrompt}\n\n${ARCHITECT_APPROVE_FOR_ME_REVIEW_FLOW}`
+        : autonomousPrompt;
+  }
   const roleDefinition = agentMode?.roleDefinition?.trim();
   const customInstructions = agentMode?.customInstructions?.trim();
   const customization = [
@@ -1171,7 +1193,12 @@ export async function buildPromptArtifacts(
     options?.modeInstructionPlacement === "conversation";
   const modePrompt = conversationModePlacement
     ? MODES_OVERVIEW_SECTION
-    : buildModePrompt(mode, options?.agentMode, promptProfile.profile);
+    : buildModePrompt(
+        mode,
+        options?.agentMode,
+        promptProfile.profile,
+        options?.approveForMe,
+      );
   const providerPrompts =
     promptProfile.profile === "reasoning"
       ? REASONING_PROVIDER_PROMPTS
@@ -1243,17 +1270,13 @@ export async function buildPromptArtifacts(
       ? `\n- Plans folder (\`./plans\`): ${fs.existsSync(path.join(cwd, "plans")) ? "exists" : "does not exist yet"}`
       : "";
 
-  const architectApproveForMeBullet =
-    mode === "architect" && !conversationModePlacement
-      ? `\n- The architect review loop is autonomous: self-review the plan (including the background review agent where warranted), resolve genuine open questions with \`ask_user\` if any remain, then summarize the plan in your response and call \`switch_mode\` to \`code\` to begin implementation. Do not wait for the user to approve the plan.`
-      : "";
   const approveForMeSection = options?.approveForMe
     ? `\n\n## Mode Switching Under Approve for Me
 
 Approve for Me is enabled for this session: mode switches are reviewed automatically on the user's behalf, so an approved \`switch_mode\` call does not interrupt the user. This section overrides the mode-switch consent guidance elsewhere in this prompt:
 
 - When a mode change is warranted, call \`switch_mode\` directly with a clear \`reason\`. Do not use \`ask_user\` to request permission to switch modes or to proceed — approval is handled automatically.
-- Never ask a question whose only purpose is mode-change or plan-approval consent. Keep using \`ask_user\` whenever you genuinely need the user's input on requirements, trade-offs, or open design decisions; if such a question's answer naturally implies a mode, you may still attach a \`modeSwitch\` map — the user's explicit choice remains valid consent.${architectApproveForMeBullet}`
+- Never ask a question whose only purpose is mode-change or plan-approval consent. Keep using \`ask_user\` whenever you genuinely need the user's input on requirements, trade-offs, or open design decisions; if such a question's answer naturally implies a mode, you may still attach a \`modeSwitch\` map — the user's explicit choice remains valid consent.`
     : "";
 
   const boundedReviewSection =

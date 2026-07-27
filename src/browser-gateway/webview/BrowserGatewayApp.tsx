@@ -122,6 +122,12 @@ import {
   type BrowserGatewayDataPlaneMode,
 } from "../browserGatewayDataPlaneMode";
 import type { BrowserGatewayInstanceStatusSummary } from "../protocol";
+import type {
+  BrowserGatewayChatTabStatus,
+  BrowserGatewayChatTabSummary,
+  BrowserGatewayChatWorkspaceSummary,
+} from "../dataPlane/protocol";
+import type { BrowserGatewayDetachedSessionDetail } from "../BrowserGatewayService";
 import {
   BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
   BROWSER_GATEWAY_ASK_AGENT_TAB_TITLE,
@@ -137,6 +143,10 @@ import {
   useRelayGatewayConnection,
 } from "./relay/useRelayGatewayConnection";
 import { useGatewaySnapshotConnection } from "./useGatewaySnapshotConnection";
+import {
+  requestDirectSessionDetail,
+  type BrowserGatewaySessionDetailRequest,
+} from "./sessionDetailTransport";
 
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
@@ -154,6 +164,7 @@ const SIDE_PANE_KEYBOARD_STEP = 32;
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
 const TOUCH_POINTER_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
 const DISCONNECTED_INSTANCE_RETENTION_MS = 3 * 60 * 1_000;
+const MAX_DETACHED_SESSION_DETAIL_CACHE_ENTRIES = 4;
 
 /**
  * Run `callback` after the browser has had a chance to paint the current
@@ -399,6 +410,8 @@ type BrowserGatewayInstanceOption = {
   disconnectedAt?: number;
 };
 
+type BrowserLogicalTabSelection = BrowserGatewaySessionDetailRequest;
+
 type AskAgentSessionResponse = {
   ok: true;
   ownerRegistration?: {
@@ -450,6 +463,7 @@ export type GatewaySnapshot = {
   session: {
     projects?: ProjectInfo[];
     defaultProjectId?: string | null;
+    chatWorkspace?: BrowserGatewayChatWorkspaceSummary | null;
     repository: {
       projectId: string;
       branch?: string;
@@ -534,6 +548,120 @@ export type GatewaySnapshot = {
   theme: BrowserGatewayThemeSnapshot;
   modelsVersion?: number;
 };
+
+function logicalTabDomId(instanceId: string, tabId: string): string {
+  return `logical-tab-${encodeURIComponent(instanceId)}-${encodeURIComponent(tabId)}`;
+}
+
+function instanceGroupColor(instanceId: string): string {
+  let hash = 0;
+  for (const character of instanceId) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+  return `hsl(${hash % 360} 55% 55%)`;
+}
+
+function logicalTabSelectionKey(selection: BrowserLogicalTabSelection): string {
+  return [
+    selection.instanceId,
+    selection.controllerEpoch,
+    selection.tabId,
+    selection.sessionId,
+  ].join("\u0000");
+}
+
+export function cacheDetachedSessionDetail(
+  cache: Map<string, BrowserGatewayDetachedSessionDetail>,
+  key: string,
+  detail: BrowserGatewayDetachedSessionDetail,
+  maxEntries = MAX_DETACHED_SESSION_DETAIL_CACHE_ENTRIES,
+): void {
+  cache.delete(key);
+  cache.set(key, detail);
+  while (cache.size > maxEntries) {
+    const oldestKey = cache.keys().next().value;
+    if (typeof oldestKey !== "string") return;
+    cache.delete(oldestKey);
+  }
+}
+
+export function pruneDetachedSessionDetailCache(
+  cache: Map<string, BrowserGatewayDetachedSessionDetail>,
+  instanceId: string,
+  workspace: BrowserGatewayChatWorkspaceSummary,
+): void {
+  const validKeys = new Set(
+    workspace.tabs.flatMap((tab) => {
+      const selection = logicalTabSelection(instanceId, workspace, tab);
+      return selection ? [logicalTabSelectionKey(selection)] : [];
+    }),
+  );
+  const instancePrefix = `${instanceId}\u0000`;
+  for (const key of cache.keys()) {
+    if (key.startsWith(instancePrefix) && !validKeys.has(key)) {
+      cache.delete(key);
+    }
+  }
+}
+
+function logicalTabSelection(
+  instanceId: string,
+  workspace: BrowserGatewayChatWorkspaceSummary,
+  tab: BrowserGatewayChatTabSummary,
+): BrowserLogicalTabSelection | null {
+  if (!tab.sessionId) return null;
+  return {
+    instanceId,
+    controllerEpoch: workspace.controllerEpoch,
+    tabId: tab.tabId,
+    sessionId: tab.sessionId,
+  };
+}
+
+function rebindLogicalTabSnapshot(
+  ownerSnapshot: GatewaySnapshot,
+  selection: BrowserLogicalTabSelection,
+): GatewaySnapshot {
+  const workspace = ownerSnapshot.session.chatWorkspace;
+  if (!workspace || workspace.controllerEpoch !== selection.controllerEpoch) {
+    return ownerSnapshot;
+  }
+  return {
+    ...ownerSnapshot,
+    session: {
+      ...ownerSnapshot.session,
+      chatWorkspace: {
+        ...workspace,
+        tabs: workspace.tabs.map((tab) =>
+          tab.tabId === selection.tabId
+            ? { ...tab, sessionId: selection.sessionId }
+            : tab,
+        ),
+      },
+    },
+  };
+}
+
+export function mergeDetachedSessionDetail(
+  ownerSnapshot: GatewaySnapshot,
+  detail: BrowserGatewayDetachedSessionDetail,
+): GatewaySnapshot {
+  return {
+    ...ownerSnapshot,
+    ui: {
+      ...ownerSnapshot.ui,
+      approval: detail.ui.approval,
+      question: detail.ui.question,
+      questionProgress: detail.ui.questionProgress,
+      formElicitation: detail.ui.formElicitation,
+      urlElicitation: detail.ui.urlElicitation,
+    },
+    session: {
+      ...ownerSnapshot.session,
+      foreground: detail.session,
+    },
+  };
+}
 
 function isGatewaySnapshot(value: unknown): value is GatewaySnapshot {
   return Boolean(
@@ -1035,6 +1163,21 @@ export function BrowserGatewayApp({
   const snapshotCacheRef = useRef<
     Map<string, { generation: number; snapshot: GatewaySnapshot }>
   >(new Map());
+  const [ownerSnapshotRevision, setOwnerSnapshotRevision] = useState(0);
+  const logicalSelectionByInstanceRef = useRef<
+    Map<string, BrowserLogicalTabSelection>
+  >(new Map());
+  const [selectedLogicalTab, setSelectedLogicalTab] =
+    useState<BrowserLogicalTabSelection | null>(null);
+  const selectedLogicalTabRef = useRef<BrowserLogicalTabSelection | null>(null);
+  const logicalSelectionGenerationRef = useRef(0);
+  const detachedDetailCacheRef = useRef<
+    Map<string, BrowserGatewayDetachedSessionDetail>
+  >(new Map());
+  const pendingRelaySendSelectionsRef = useRef<
+    Map<string, BrowserLogicalTabSelection>
+  >(new Map());
+  const detachedDetailRefreshIdRef = useRef(0);
   const snapshotOriginRef = useRef({
     tabId: initialSelectedTabId,
     generation: 0,
@@ -1077,6 +1220,13 @@ export function BrowserGatewayApp({
     const generation = selectedTabGenerationRef.current + 1;
     selectedTabGenerationRef.current = generation;
     selectedTabIdRef.current = tabId;
+    logicalSelectionGenerationRef.current += 1;
+    const logicalSelection =
+      tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+        ? null
+        : (logicalSelectionByInstanceRef.current.get(tabId) ?? null);
+    selectedLogicalTabRef.current = logicalSelection;
+    setSelectedLogicalTab(logicalSelection);
     snapshotOriginRef.current = { tabId, generation };
     // Switch to the lightweight loading state first so the tab change paints
     // immediately; mounting a cached transcript can block the main thread for
@@ -1166,6 +1316,7 @@ export function BrowserGatewayApp({
       const cached = snapshotCacheRef.current.get(tabId);
       if (!cached || generation >= cached.generation) {
         snapshotCacheRef.current.set(tabId, { generation, snapshot: next });
+        setOwnerSnapshotRevision((revision) => revision + 1);
       }
       if (
         selectedTabIdRef.current !== tabId ||
@@ -1174,7 +1325,15 @@ export function BrowserGatewayApp({
         return false;
       }
       snapshotOriginRef.current = { tabId, generation };
-      setSnapshot(next);
+      const logicalSelection = selectedLogicalTabRef.current;
+      if (
+        tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID ||
+        !logicalSelection ||
+        logicalSelection.instanceId !== tabId ||
+        logicalSelection.sessionId === next.session.foreground?.sessionId
+      ) {
+        setSnapshot(next);
+      }
       queueAcceptedRelaySourceEventPaint(
         true,
         sourceEventPaint,
@@ -1191,6 +1350,12 @@ export function BrowserGatewayApp({
     Record<string, { paths: string[]; media: ComposerMedia[] }>
   >({});
   const [sendStatus, setSendStatus] = useState<string>("");
+  const [detachedDetailRefresh, setDetachedDetailRefresh] = useState<{
+    id: number;
+    selection: BrowserLogicalTabSelection;
+  } | null>(null);
+  const [optimisticQueueInterjections, setOptimisticQueueInterjections] =
+    useState<Set<string>>(() => new Set());
   const [showFleetRequest, setShowFleetRequest] = useState(0);
   const [modeStatus, setModeStatus] = useState<string>("");
   const [status, setStatus] = useState("Connecting…");
@@ -1201,6 +1366,9 @@ export function BrowserGatewayApp({
   const [modes, setModes] = useState<ModeInfo[]>([]);
   const [models, setModels] = useState<WebviewModelInfo[]>([]);
   const pendingModelSelectionRef = useRef<Promise<boolean> | null>(null);
+  const pendingNewSessionRef = useRef<Promise<GatewaySnapshot | null> | null>(
+    null,
+  );
   const [askAgentCapabilities, setAskAgentCapabilities] = useState<
     AskAgentCapabilityStatus[]
   >([]);
@@ -1274,6 +1442,7 @@ export function BrowserGatewayApp({
     task: string;
     messages: ChatMessage[];
     streaming: boolean;
+    visible: boolean;
   } | null>(null);
   const [localDismissedApprovalId, setLocalDismissedApprovalId] = useState<
     string | null
@@ -1361,6 +1530,31 @@ export function BrowserGatewayApp({
     return () => window.removeEventListener("resize", syncSidePanePercent);
   }, []);
 
+  const refreshDetachedSelection = useCallback(
+    (selection: BrowserLogicalTabSelection): void => {
+      const ownerSnapshot = snapshotCacheRef.current.get(
+        selection.instanceId,
+      )?.snapshot;
+      if (
+        ownerSnapshot?.session.foreground?.sessionId === selection.sessionId
+      ) {
+        return;
+      }
+      const current = selectedLogicalTabRef.current;
+      if (
+        current &&
+        logicalTabSelectionKey(current) === logicalTabSelectionKey(selection)
+      ) {
+        detachedDetailRefreshIdRef.current += 1;
+        setDetachedDetailRefresh({
+          id: detachedDetailRefreshIdRef.current,
+          selection,
+        });
+      }
+    },
+    [],
+  );
+
   useGatewaySnapshotConnection({
     enabled: !relayClientEnabled,
     authToken,
@@ -1388,7 +1582,10 @@ export function BrowserGatewayApp({
     fetchInstances,
     observeConnection: observeGatewayConnection,
   });
-  const dispatchRelayCommand = useRelayGatewayConnection({
+  const {
+    dispatchCommand: dispatchRelayCommand,
+    requestSessionDetail: requestRelaySessionDetail,
+  } = useRelayGatewayConnection({
     enabled: relayClientEnabled,
     selectedTabId,
     selectedTabGeneration: selectedTabGenerationRef.current,
@@ -1397,6 +1594,17 @@ export function BrowserGatewayApp({
     onOperation: (operation) => {
       if (operation.state === "accepted") return;
       if (operation.kind === "session.send") {
+        const selection = pendingRelaySendSelectionsRef.current.get(
+          operation.operationId,
+        );
+        pendingRelaySendSelectionsRef.current.delete(operation.operationId);
+        if (
+          (operation.state === "completed" ||
+            operation.state === "uncertain") &&
+          selection
+        ) {
+          refreshDetachedSelection(selection);
+        }
         setSendStatus(
           operation.state === "completed"
             ? "Sent"
@@ -1417,6 +1625,174 @@ export function BrowserGatewayApp({
       }
     },
   });
+
+  useEffect(() => {
+    if (!detachedDetailRefresh) return;
+    const { selection } = detachedDetailRefresh;
+    const detailKey = logicalTabSelectionKey(selection);
+    const selectionGeneration = logicalSelectionGenerationRef.current;
+    const controller = new AbortController();
+    let cancelled = false;
+    void (async () => {
+      try {
+        const detail = relayClientEnabled
+          ? ((await requestRelaySessionDetail(selection))?.detail ?? null)
+          : await requestDirectSessionDetail({
+              authToken,
+              request: selection,
+              buildApiPathForInstance,
+              signal: controller.signal,
+            });
+        if (!detail || cancelled || controller.signal.aborted) return;
+        if (
+          selectedTabIdRef.current !== selection.instanceId ||
+          logicalSelectionGenerationRef.current !== selectionGeneration ||
+          !selectedLogicalTabRef.current ||
+          logicalTabSelectionKey(selectedLogicalTabRef.current) !== detailKey
+        ) {
+          return;
+        }
+        cacheDetachedSessionDetail(
+          detachedDetailCacheRef.current,
+          detailKey,
+          detail,
+        );
+        const latestOwner = snapshotCacheRef.current.get(
+          selection.instanceId,
+        )?.snapshot;
+        if (!latestOwner) return;
+        setSnapshot(mergeDetachedSessionDetail(latestOwner, detail));
+      } catch (error) {
+        if (cancelled || controller.signal.aborted) return;
+        setStatus(`Session detail unavailable: ${String(error)}`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [
+    authToken,
+    buildApiPathForInstance,
+    detachedDetailRefresh,
+    relayClientEnabled,
+    requestRelaySessionDetail,
+  ]);
+
+  useEffect(() => {
+    if (isAskAgentSelected) return;
+    const ownerSnapshot = snapshotCacheRef.current.get(selectedTabId)?.snapshot;
+    const workspace = ownerSnapshot?.session.chatWorkspace;
+    if (!ownerSnapshot || !workspace) return;
+    pruneDetachedSessionDetailCache(
+      detachedDetailCacheRef.current,
+      selectedTabId,
+      workspace,
+    );
+
+    const current = selectedLogicalTabRef.current;
+    const selectedTab = current
+      ? workspace.tabs.find(
+          (tab) =>
+            current.instanceId === selectedTabId &&
+            current.controllerEpoch === workspace.controllerEpoch &&
+            current.tabId === tab.tabId &&
+            current.sessionId === tab.sessionId,
+        )
+      : undefined;
+    if (!selectedTab) {
+      const preferred =
+        workspace.tabs.find((tab) => tab.tabId === workspace.focusedTabId) ??
+        workspace.tabs.find(
+          (tab) =>
+            tab.sessionId === ownerSnapshot.session.foreground?.sessionId,
+        ) ??
+        workspace.tabs[0];
+      if (!preferred) return;
+      const next = logicalTabSelection(selectedTabId, workspace, preferred);
+      if (!next) return;
+      logicalSelectionByInstanceRef.current.set(selectedTabId, next);
+      selectedLogicalTabRef.current = next;
+      logicalSelectionGenerationRef.current += 1;
+      setSelectedLogicalTab(next);
+      return;
+    }
+
+    const selection = current!;
+    logicalSelectionByInstanceRef.current.set(selectedTabId, selection);
+    if (ownerSnapshot.session.foreground?.sessionId === selection.sessionId) {
+      setSnapshot(ownerSnapshot);
+      return;
+    }
+
+    const detailKey = logicalTabSelectionKey(selection);
+    const cachedDetail = detachedDetailCacheRef.current.get(detailKey);
+    if (cachedDetail) {
+      setSnapshot(mergeDetachedSessionDetail(ownerSnapshot, cachedDetail));
+    } else {
+      setSnapshot(null);
+    }
+
+    const selectionGeneration = logicalSelectionGenerationRef.current;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const detail = relayClientEnabled
+            ? ((await requestRelaySessionDetail(selection))?.detail ?? null)
+            : await requestDirectSessionDetail({
+                authToken,
+                request: selection,
+                buildApiPathForInstance,
+                signal: controller.signal,
+              });
+          if (!detail || controller.signal.aborted) return;
+          if (
+            selectedTabIdRef.current !== selection.instanceId ||
+            logicalSelectionGenerationRef.current !== selectionGeneration ||
+            !selectedLogicalTabRef.current ||
+            logicalTabSelectionKey(selectedLogicalTabRef.current) !== detailKey
+          ) {
+            return;
+          }
+          cacheDetachedSessionDetail(
+            detachedDetailCacheRef.current,
+            detailKey,
+            detail,
+          );
+          const latestOwner = snapshotCacheRef.current.get(
+            selection.instanceId,
+          )?.snapshot;
+          if (!latestOwner) return;
+          setSnapshot(mergeDetachedSessionDetail(latestOwner, detail));
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          setStatus(`Session detail unavailable: ${String(error)}`);
+        }
+      })();
+    }, 150);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    authToken,
+    buildApiPathForInstance,
+    isAskAgentSelected,
+    ownerSnapshotRevision,
+    relayClientEnabled,
+    requestRelaySessionDetail,
+    selectedLogicalTab,
+    selectedTabId,
+  ]);
+
+  useEffect(() => {
+    if (!relayClientEnabled) {
+      pendingRelaySendSelectionsRef.current.clear();
+      return;
+    }
+    return () => pendingRelaySendSelectionsRef.current.clear();
+  }, [relayClientEnabled]);
 
   useEffect(() => {
     if (!relayClientEnabled) return;
@@ -1531,7 +1907,7 @@ export function BrowserGatewayApp({
     [background, transcriptView],
   );
   useEffect(() => {
-    if (!transcriptView || !openTranscriptBackground) return;
+    if (!transcriptView?.visible || !openTranscriptBackground) return;
     let cancelled = false;
     const sessionId = transcriptView.sessionId;
     void (async () => {
@@ -1557,15 +1933,21 @@ export function BrowserGatewayApp({
         };
         if (cancelled || !body.ok || !body.transcript) return;
         const converted = agentMessagesToChatMessages(body.transcript.messages);
-        setTranscriptView((current) =>
-          current?.sessionId === sessionId
-            ? {
-                ...current,
-                task: body.transcript!.task,
-                messages: converted,
-              }
-            : current,
-        );
+        setTranscriptView((current) => {
+          if (current?.sessionId !== sessionId) return current;
+          const stillRunning =
+            openTranscriptBackground.status === "streaming" ||
+            openTranscriptBackground.status === "tool_executing" ||
+            openTranscriptBackground.status === "awaiting_approval";
+          return {
+            ...current,
+            task: body.transcript!.task,
+            messages:
+              stillRunning && converted.length < current.messages.length
+                ? current.messages
+                : converted,
+          };
+        });
       } catch {
         // Keep the last transcript snapshot; a later background update can retry.
       }
@@ -1583,6 +1965,7 @@ export function BrowserGatewayApp({
     openTranscriptBackground?.status,
     openTranscriptBackground?.streamingText,
     transcriptView?.sessionId,
+    transcriptView?.visible,
   ]);
   useEffect(() => {
     const currentIds = new Set(
@@ -1647,7 +2030,6 @@ export function BrowserGatewayApp({
     visibleQuestion ||
     pendingFormElicitation ||
     pendingUrlElicitation ||
-    foreground?.status === "awaiting_approval" ||
     instanceOptions.some(
       (instance) => instance.status?.kind === "awaiting_approval",
     ),
@@ -1806,8 +2188,7 @@ export function BrowserGatewayApp({
       pendingApproval ||
       pendingQuestion ||
       pendingFormElicitation ||
-      pendingUrlElicitation ||
-      foreground?.status === "awaiting_approval"
+      pendingUrlElicitation
     ) {
       return {
         kind: "awaiting_approval",
@@ -1826,13 +2207,22 @@ export function BrowserGatewayApp({
     if (
       foreground?.streaming ||
       foreground?.status === "streaming" ||
-      foreground?.status === "tool_executing"
+      foreground?.status === "tool_executing" ||
+      foreground?.status === "awaiting_approval"
     ) {
       return {
         kind: "working",
         label:
-          foreground.status === "tool_executing" ? "Tool running" : "Working",
-        detail: foreground.statusOverride ?? foreground.status,
+          foreground.status === "tool_executing"
+            ? "Tool running"
+            : foreground.status === "awaiting_approval"
+              ? "Waiting"
+              : "Working",
+        detail:
+          foreground.statusOverride ??
+          (foreground.status === "awaiting_approval"
+            ? "Awaiting interaction details"
+            : foreground.status),
         sessionTitle: foreground.title,
       };
     }
@@ -1860,6 +2250,27 @@ export function BrowserGatewayApp({
       return deriveSelectedInstanceStatus();
     }
     return instance.status ?? { kind: "idle", label: "Idle" };
+  }
+
+  function getLogicalTabStatus(
+    status: BrowserGatewayChatTabStatus,
+  ): BrowserGatewayInstanceStatusSummary {
+    switch (status) {
+      case "streaming":
+        return { kind: "working", label: "Working" };
+      case "queued_for_provider":
+        return { kind: "working", label: "Provider queue" };
+      case "queued_for_workspace_write":
+        return { kind: "working", label: "Write queue" };
+      case "needs_input":
+        return { kind: "awaiting_approval", label: "Input" };
+      case "failed":
+        return { kind: "error", label: "Failed" };
+      case "completed":
+        return { kind: "idle", label: "Completed" };
+      case "idle":
+        return { kind: "idle", label: "Idle" };
+    }
   }
 
   function getInstanceStatusIcon(
@@ -3011,7 +3422,22 @@ export function BrowserGatewayApp({
     targetForeground?: GatewaySnapshot["session"]["foreground"],
     interject = false,
   ): Promise<boolean> {
+    let pendingNewSessionForeground:
+      | GatewaySnapshot["session"]["foreground"]
+      | null = null;
     if (isAskAgentSelected) {
+      const pendingNewSession = pendingNewSessionRef.current;
+      if (pendingNewSession) {
+        setSendStatus("Waiting for new session…");
+        pendingNewSessionForeground =
+          (await pendingNewSession)?.session.foreground ?? null;
+        if (!pendingNewSessionForeground) {
+          setSendStatus(
+            "Message not sent because the new session failed to start.",
+          );
+          return false;
+        }
+      }
       const pendingModelSelection = pendingModelSelectionRef.current;
       if (pendingModelSelection) {
         setSendStatus("Waiting for model switch…");
@@ -3022,7 +3448,9 @@ export function BrowserGatewayApp({
       }
     }
     const activeForeground =
-      targetForeground ?? (await ensureAskAgentForeground());
+      targetForeground ??
+      pendingNewSessionForeground ??
+      (await ensureAskAgentForeground());
     if (!activeForeground) {
       logAskAgentBrowserEvent("send.ignored", {
         reason: "missing_foreground",
@@ -3036,6 +3464,13 @@ export function BrowserGatewayApp({
       );
       return false;
     }
+    const selectedSendTarget = isAskAgentSelected
+      ? null
+      : selectedLogicalTabRef.current;
+    const detachedSendTarget =
+      selectedSendTarget?.sessionId === activeForeground.sessionId
+        ? selectedSendTarget
+        : null;
 
     const userMessageId = randomId();
     if (origin === "autoContinue") {
@@ -3150,6 +3585,7 @@ export function BrowserGatewayApp({
         return false;
       }
 
+      const actionOrigin = { ...snapshotOriginRef.current };
       setSendStatus("Sending…");
       logAskAgentBrowserEvent("send.start", {
         askAgentSelected: isAskAgentSelected,
@@ -3174,24 +3610,42 @@ export function BrowserGatewayApp({
         displayText === undefined &&
         slashCommandLabel === undefined;
       if (relayEligible) {
-        const relay = await dispatchRelayCommand({
-          kind: "session.send",
-          sessionId: activeForeground.sessionId,
-          text: trimmed,
-          detailHandles: [],
-        });
-        if (relay.handled) {
-          setSendStatus(
-            relay.operation.state === "accepted"
-              ? "Sending…"
-              : relay.operation.state === "completed"
-                ? "Sent"
-                : `Send ${relay.operation.state}: ${relay.operation.message ?? "unknown status"}`,
+        const relayOperationId = randomId();
+        if (detachedSendTarget) {
+          pendingRelaySendSelectionsRef.current.set(
+            relayOperationId,
+            detachedSendTarget,
           );
-          return (
-            relay.operation.state === "accepted" ||
-            relay.operation.state === "completed"
+        }
+        let retainPendingRelaySend = false;
+        try {
+          const relay = await dispatchRelayCommand(
+            {
+              kind: "session.send",
+              sessionId: activeForeground.sessionId,
+              text: trimmed,
+              detailHandles: [],
+            },
+            relayOperationId,
           );
+          if (relay.handled) {
+            retainPendingRelaySend = relay.operation.state === "accepted";
+            setSendStatus(
+              relay.operation.state === "accepted"
+                ? "Sending…"
+                : relay.operation.state === "completed"
+                  ? "Sent"
+                  : `Send ${relay.operation.state}: ${relay.operation.message ?? "unknown status"}`,
+            );
+            return (
+              relay.operation.state === "accepted" ||
+              relay.operation.state === "completed"
+            );
+          }
+        } finally {
+          if (detachedSendTarget && !retainPendingRelaySend) {
+            pendingRelaySendSelectionsRef.current.delete(relayOperationId);
+          }
         }
       }
       const sendPath = isAskAgentSelected
@@ -3232,7 +3686,14 @@ export function BrowserGatewayApp({
         snapshot?: GatewaySnapshot;
       };
       if (!relayClientEnabled && body.ok && body.snapshot) {
-        setSnapshot(body.snapshot);
+        commitSnapshot(
+          body.snapshot,
+          actionOrigin.tabId,
+          actionOrigin.generation,
+        );
+      }
+      if (body.ok && detachedSendTarget) {
+        refreshDetachedSelection(detachedSendTarget);
       }
       logAskAgentBrowserEvent("send.response", {
         askAgentSelected: isAskAgentSelected,
@@ -3295,6 +3756,7 @@ export function BrowserGatewayApp({
   const handleStop = (): void => {
     if (!foreground?.sessionId) return;
     const sessionId = foreground.sessionId;
+    const actionOrigin = { ...snapshotOriginRef.current };
     setSendStatus("Stopping…");
     void (async () => {
       try {
@@ -3334,7 +3796,11 @@ export function BrowserGatewayApp({
           snapshot?: GatewaySnapshot;
         };
         if (!relayClientEnabled && body.ok && body.snapshot) {
-          setSnapshot(body.snapshot);
+          commitSnapshot(
+            body.snapshot,
+            actionOrigin.tabId,
+            actionOrigin.generation,
+          );
         }
         setSendStatus(
           body.ok
@@ -3394,6 +3860,39 @@ export function BrowserGatewayApp({
     }
   };
 
+  const handleLogicalTabSelect = (
+    instanceId: string,
+    workspace: BrowserGatewayChatWorkspaceSummary,
+    tab: BrowserGatewayChatTabSummary,
+  ): void => {
+    const next = logicalTabSelection(instanceId, workspace, tab);
+    if (!next) return;
+    const previous = selectedLogicalTabRef.current;
+    if (
+      previous &&
+      selectedTabIdRef.current === instanceId &&
+      logicalTabSelectionKey(previous) === logicalTabSelectionKey(next)
+    ) {
+      return;
+    }
+    logicalSelectionByInstanceRef.current.set(instanceId, next);
+    if (selectedTabIdRef.current !== instanceId) {
+      selectTab(instanceId);
+      return;
+    }
+    logicalSelectionGenerationRef.current += 1;
+    selectedLogicalTabRef.current = next;
+    setSelectedLogicalTab(next);
+    setSnapshot(null);
+    setLocalDismissedApprovalId(null);
+    setLocalDismissedQuestionId(null);
+    setQuestionContextMode(null);
+    setQuestionAttachments({});
+    setSelectedDiffId(null);
+    setTranscriptView(null);
+    forwardedFollowUpRef.current = "";
+  };
+
   const handleSetReasoningEffort = (effort: ReasoningEffort): void => {
     if (!foreground || thinkingPending) {
       logAskAgentBrowserEvent("thinking.ignored", {
@@ -3404,6 +3903,7 @@ export function BrowserGatewayApp({
       return;
     }
     void (async () => {
+      const actionOrigin = { ...snapshotOriginRef.current };
       setPendingReasoningEffort(effort);
       setThinkingPending(true);
       const pendingTimeout = window.setTimeout(() => {
@@ -3431,7 +3931,10 @@ export function BrowserGatewayApp({
               "Content-Type": "application/json",
               Authorization: `Bearer ${authToken}`,
             },
-            body: JSON.stringify(selectionRequest.body),
+            body: JSON.stringify({
+              ...selectionRequest.body,
+              sessionId: isAskAgentSelected ? undefined : foreground.sessionId,
+            }),
           },
         );
         const body = (await response.json()) as {
@@ -3440,7 +3943,15 @@ export function BrowserGatewayApp({
           snapshot?: GatewaySnapshot;
         };
         if (body.ok && body.snapshot) {
-          setSnapshot(body.snapshot);
+          if (isAskAgentSelected) {
+            setSnapshot(body.snapshot);
+          } else {
+            commitSnapshot(
+              body.snapshot,
+              actionOrigin.tabId,
+              actionOrigin.generation,
+            );
+          }
         }
         logAskAgentBrowserEvent("thinking.response", {
           askAgentSelected: isAskAgentSelected,
@@ -3503,8 +4014,12 @@ export function BrowserGatewayApp({
 
   async function createNewSession(
     projectId?: string,
+    stopRunning = false,
   ): Promise<GatewaySnapshot | null> {
     try {
+      const selection = isAskAgentSelected
+        ? null
+        : selectedLogicalTabRef.current;
       const response = await fetch(
         isAskAgentSelected
           ? "/api/ask-agent/session/new"
@@ -3521,28 +4036,88 @@ export function BrowserGatewayApp({
             projectId: isAskAgentSelected
               ? undefined
               : (projectId ?? snapshot?.session.defaultProjectId),
+            selection: selection
+              ? {
+                  controllerEpoch: selection.controllerEpoch,
+                  tabId: selection.tabId,
+                  sessionId: selection.sessionId,
+                }
+              : undefined,
+            stopRunning,
           }),
         },
       );
       const body = (await response.json()) as {
         ok?: boolean;
         snapshot?: GatewaySnapshot;
+        reason?: string;
+        controllerEpoch?: string;
+        tabId?: string;
+        sessionId?: string;
       };
-      if (!body.ok) return null;
+      if (
+        !body.ok &&
+        body.reason === "confirmation_required" &&
+        !stopRunning &&
+        window.confirm(
+          "This chat is still running or queued. Stop it and start a new chat?",
+        )
+      ) {
+        return createNewSession(projectId, true);
+      }
+      if (!body.ok) {
+        setSendStatus(
+          `Unable to start a new chat: ${body.reason ?? response.status}`,
+        );
+        return null;
+      }
       if (body.snapshot) {
         setSnapshot(body.snapshot);
+      } else if (
+        selection &&
+        body.controllerEpoch &&
+        body.tabId &&
+        body.sessionId
+      ) {
+        const next = {
+          instanceId: selection.instanceId,
+          controllerEpoch: body.controllerEpoch,
+          tabId: body.tabId,
+          sessionId: body.sessionId,
+        };
+        logicalSelectionByInstanceRef.current.set(selection.instanceId, next);
+        selectedLogicalTabRef.current = next;
+        logicalSelectionGenerationRef.current += 1;
+        const cached = snapshotCacheRef.current.get(selection.instanceId);
+        if (cached) {
+          snapshotCacheRef.current.set(selection.instanceId, {
+            ...cached,
+            snapshot: rebindLogicalTabSnapshot(cached.snapshot, next),
+          });
+          setOwnerSnapshotRevision((revision) => revision + 1);
+        }
+        setSelectedLogicalTab(next);
+        setSnapshot(null);
       }
       setShowHistory(false);
       setShowMcpStatus(false);
       void fetchSessions();
       return body.snapshot ?? null;
-    } catch {
+    } catch (error) {
+      setSendStatus(`Unable to start a new chat: ${String(error)}`);
       return null;
     }
   }
 
   const handleNewSession = (): void => {
-    void createNewSession();
+    if (pendingNewSessionRef.current) return;
+    const pending = createNewSession();
+    pendingNewSessionRef.current = pending;
+    void pending.finally(() => {
+      if (pendingNewSessionRef.current === pending) {
+        pendingNewSessionRef.current = null;
+      }
+    });
   };
 
   const handleShowHistory = (): void => {
@@ -3564,29 +4139,12 @@ export function BrowserGatewayApp({
     }
   };
 
-  const handleLoadSession = (sessionId: string): void => {
+  const handleLoadSession = (sessionId: string, stopRunning = false): void => {
     void (async () => {
       try {
-        if (relayClientEnabled) {
-          const relay = await dispatchRelayCommand({
-            kind: "session.select",
-            sessionId,
-          });
-          if (relay.handled) {
-            if (
-              relay.operation.state === "failed" ||
-              relay.operation.state === "uncertain"
-            ) {
-              setSessionHistoryError(
-                `Failed to load session: ${relay.operation.message ?? relay.operation.state}`,
-              );
-              return;
-            }
-            setShowHistory(false);
-            setShowMcpStatus(false);
-            return;
-          }
-        }
+        const selection = isAskAgentSelected
+          ? null
+          : selectedLogicalTabRef.current;
         const response = await fetch(
           isAskAgentSelected
             ? "/api/ask-agent/session/load"
@@ -3605,6 +4163,14 @@ export function BrowserGatewayApp({
                 : snapshot?.session.sessions.find(
                     (session) => session.id === sessionId,
                   )?.project?.projectId,
+              selection: selection
+                ? {
+                    controllerEpoch: selection.controllerEpoch,
+                    tabId: selection.tabId,
+                    sessionId: selection.sessionId,
+                  }
+                : undefined,
+              stopRunning,
             }),
           },
         );
@@ -3612,15 +4178,55 @@ export function BrowserGatewayApp({
           ok?: boolean;
           error?: string;
           snapshot?: GatewaySnapshot;
+          reason?: string;
+          controllerEpoch?: string;
+          tabId?: string;
+          sessionId?: string;
         };
+        if (
+          !body.ok &&
+          body.reason === "confirmation_required" &&
+          !stopRunning &&
+          window.confirm(
+            "This chat is still running or queued. Stop it and load the selected session?",
+          )
+        ) {
+          handleLoadSession(sessionId, true);
+          return;
+        }
         if (!response.ok || body.ok === false) {
           setSessionHistoryError(
-            `Failed to load session: ${body.error ?? response.status}`,
+            `Failed to load session: ${body.error ?? body.reason ?? response.status}`,
           );
           return;
         }
         if (!relayClientEnabled && body.snapshot) {
           setSnapshot(body.snapshot);
+        } else if (
+          selection &&
+          body.controllerEpoch &&
+          body.tabId &&
+          body.sessionId
+        ) {
+          const next = {
+            instanceId: selection.instanceId,
+            controllerEpoch: body.controllerEpoch,
+            tabId: body.tabId,
+            sessionId: body.sessionId,
+          };
+          logicalSelectionByInstanceRef.current.set(selection.instanceId, next);
+          selectedLogicalTabRef.current = next;
+          logicalSelectionGenerationRef.current += 1;
+          const cached = snapshotCacheRef.current.get(selection.instanceId);
+          if (cached) {
+            snapshotCacheRef.current.set(selection.instanceId, {
+              ...cached,
+              snapshot: rebindLogicalTabSnapshot(cached.snapshot, next),
+            });
+            setOwnerSnapshotRevision((revision) => revision + 1);
+          }
+          setSelectedLogicalTab(next);
+          setSnapshot(null);
         }
         setShowHistory(false);
         setShowMcpStatus(false);
@@ -3780,6 +4386,7 @@ export function BrowserGatewayApp({
     const selection = (previousSelection ?? Promise.resolve(true)).then(
       async (): Promise<boolean> => {
         try {
+          const actionOrigin = { ...snapshotOriginRef.current };
           setModeStatus("Switching model…");
           logAskAgentBrowserEvent("model.start", {
             askAgentSelected: isAskAgentSelected,
@@ -3806,6 +4413,9 @@ export function BrowserGatewayApp({
                 instanceId: isAskAgentSelected
                   ? associatedInstanceId
                   : undefined,
+                sessionId: isAskAgentSelected
+                  ? undefined
+                  : foreground?.sessionId,
               }),
             },
           );
@@ -3815,7 +4425,15 @@ export function BrowserGatewayApp({
             snapshot?: GatewaySnapshot;
           };
           if (body.ok && body.snapshot) {
-            setSnapshot(body.snapshot);
+            if (isAskAgentSelected) {
+              setSnapshot(body.snapshot);
+            } else {
+              commitSnapshot(
+                body.snapshot,
+                actionOrigin.tabId,
+                actionOrigin.generation,
+              );
+            }
           }
           logAskAgentBrowserEvent("model.response", {
             askAgentSelected: isAskAgentSelected,
@@ -3866,7 +4484,10 @@ export function BrowserGatewayApp({
             "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
           },
-          body: JSON.stringify(selectionRequest.body),
+          body: JSON.stringify({
+            ...selectionRequest.body,
+            sessionId: foreground?.sessionId,
+          }),
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
       } catch (error) {
@@ -3889,7 +4510,10 @@ export function BrowserGatewayApp({
             "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
           },
-          body: JSON.stringify(selectionRequest.body),
+          body: JSON.stringify({
+            ...selectionRequest.body,
+            sessionId: foreground?.sessionId,
+          }),
         });
         const body = (await response.json()) as {
           ok?: boolean;
@@ -4442,6 +5066,19 @@ export function BrowserGatewayApp({
   };
 
   const handleOpenBgTranscript = (sessionId: string): void => {
+    if (transcriptView?.sessionId === sessionId) {
+      setTranscriptView((current) =>
+        current ? { ...current, visible: true } : current,
+      );
+      const bgInfo = background.find((session) => session.id === sessionId);
+      if (
+        bgInfo?.status === "streaming" ||
+        bgInfo?.status === "tool_executing" ||
+        bgInfo?.status === "awaiting_approval"
+      ) {
+        return;
+      }
+    }
     void (async () => {
       try {
         const response = await fetch(
@@ -4477,6 +5114,7 @@ export function BrowserGatewayApp({
           task: body.transcript.task,
           messages: converted,
           streaming: true,
+          visible: true,
         });
         const assistantBlocks = converted
           .filter((message) => message.role === "assistant")
@@ -5122,6 +5760,24 @@ export function BrowserGatewayApp({
         const queueId = String(data.queueId ?? "").trim();
         if (!sessionId || !queueId) return;
         const isSteer = command === "agentSteerQueuedMessage";
+        const optimisticKey = `${sessionId}:${queueId}`;
+        const clearOptimisticInterjection = () => {
+          if (isSteer) return;
+          setOptimisticQueueInterjections((previous) => {
+            if (!previous.has(optimisticKey)) return previous;
+            const next = new Set(previous);
+            next.delete(optimisticKey);
+            return next;
+          });
+        };
+        if (!isSteer) {
+          setOptimisticQueueInterjections((previous) => {
+            const next = new Set(previous);
+            next.add(optimisticKey);
+            return next;
+          });
+        }
+        const origin = { ...snapshotOriginRef.current };
         setSendStatus(isSteer ? "Steering…" : "Interjecting…");
         void fetch(
           buildApiPath(isSteer ? "/api/queue/steer" : "/api/queue/interject"),
@@ -5163,8 +5819,9 @@ export function BrowserGatewayApp({
               snapshot?: GatewaySnapshot;
             };
             if (body.ok && body.snapshot) {
-              setSnapshot(body.snapshot);
+              commitSnapshot(body.snapshot, origin.tabId, origin.generation);
             }
+            clearOptimisticInterjection();
             setSendStatus(
               body.ok
                 ? isSteer
@@ -5174,6 +5831,7 @@ export function BrowserGatewayApp({
             );
           })
           .catch((err) => {
+            clearOptimisticInterjection();
             setSendStatus(
               `${isSteer ? "Steer" : "Interject"} error: ${String(err)}`,
             );
@@ -5230,45 +5888,134 @@ export function BrowserGatewayApp({
         </button>
         {instanceOptions.map((instance) => {
           const instanceStatus = getInstanceStatus(instance);
-          const active = instance.instanceId === selectedInstanceId;
+          const ownerSnapshot = snapshotCacheRef.current.get(
+            instance.instanceId,
+          )?.snapshot;
+          const workspace = ownerSnapshot?.session.chatWorkspace;
+          const activeInstance = instance.instanceId === selectedInstanceId;
+          if (!workspace || workspace.tabs.length === 0) {
+            return (
+              <button
+                key={instance.instanceId}
+                aria-controls="browser-instance-panel"
+                aria-selected={activeInstance}
+                class={`instance-tab instance-tab-${instanceStatus.kind}${activeInstance ? " active" : ""}`}
+                id={`instance-tab-${instance.instanceId}`}
+                onClick={() => selectTab(instance.instanceId)}
+                onPointerCancel={(e) =>
+                  handleInstancePointerCancel(e as unknown as PointerEvent)
+                }
+                onPointerDown={(e) =>
+                  handleInstancePointerDown(
+                    e as unknown as PointerEvent,
+                    instance.instanceId,
+                  )
+                }
+                onPointerUp={(e) =>
+                  handleInstancePointerUp(
+                    e as unknown as PointerEvent,
+                    instance.instanceId,
+                  )
+                }
+                role="tab"
+                title={`${instance.workspaceName} · ${instanceStatus.label}${instanceStatus.detail ? ` · ${instanceStatus.detail}` : ""}`}
+                type="button"
+              >
+                <span class="instance-tab-main">
+                  <i class="codicon codicon-window" />
+                  <span class="instance-tab-name">
+                    {instance.workspaceName}
+                  </span>
+                </span>
+                <span class="instance-tab-status">
+                  <i
+                    class={`codicon codicon-${getInstanceStatusIcon(instanceStatus.kind)}${instanceStatus.kind === "working" ? " codicon-modifier-spin" : ""}`}
+                  />
+                  <span>{instanceStatus.label}</span>
+                </span>
+              </button>
+            );
+          }
           return (
-            <button
+            <section
               key={instance.instanceId}
-              aria-controls="browser-instance-panel"
-              aria-selected={active}
-              class={`instance-tab instance-tab-${instanceStatus.kind}${active ? " active" : ""}`}
-              id={`instance-tab-${instance.instanceId}`}
-              onClick={() => selectTab(instance.instanceId)}
-              onPointerCancel={(e) =>
-                handleInstancePointerCancel(e as unknown as PointerEvent)
+              class={`browser-instance-group${activeInstance ? " active" : ""}`}
+              role="presentation"
+              style={
+                {
+                  "--instance-group-color": instanceGroupColor(
+                    instance.instanceId,
+                  ),
+                } as unknown as JSX.CSSProperties
               }
-              onPointerDown={(e) =>
-                handleInstancePointerDown(
-                  e as unknown as PointerEvent,
-                  instance.instanceId,
-                )
-              }
-              onPointerUp={(e) =>
-                handleInstancePointerUp(
-                  e as unknown as PointerEvent,
-                  instance.instanceId,
-                )
-              }
-              role="tab"
-              title={`${instance.workspaceName} · ${instanceStatus.label}${instanceStatus.detail ? ` · ${instanceStatus.detail}` : ""}`}
-              type="button"
             >
-              <span class="instance-tab-main">
+              <div class="browser-instance-group-label">
                 <i class="codicon codicon-window" />
-                <span class="instance-tab-name">{instance.workspaceName}</span>
-              </span>
-              <span class="instance-tab-status">
-                <i
-                  class={`codicon codicon-${getInstanceStatusIcon(instanceStatus.kind)}${instanceStatus.kind === "working" ? " codicon-modifier-spin" : ""}`}
-                />
-                <span>{instanceStatus.label}</span>
-              </span>
-            </button>
+                <span>{instance.workspaceName}</span>
+                {instance.disconnectedAt !== undefined && (
+                  <i
+                    aria-label="Disconnected"
+                    class="codicon codicon-debug-disconnect"
+                  />
+                )}
+              </div>
+              <div class="browser-logical-tabs" role="presentation">
+                {workspace.tabs.map((tab) => {
+                  const selection = logicalTabSelection(
+                    instance.instanceId,
+                    workspace,
+                    tab,
+                  );
+                  const active = Boolean(
+                    activeInstance &&
+                    selection &&
+                    selectedLogicalTab &&
+                    logicalTabSelectionKey(selection) ===
+                      logicalTabSelectionKey(selectedLogicalTab),
+                  );
+                  const tabStatus = getLogicalTabStatus(tab.status);
+                  return (
+                    <button
+                      key={tab.tabId}
+                      aria-controls="browser-instance-panel"
+                      aria-selected={active}
+                      class={`instance-tab logical-tab instance-tab-${tabStatus.kind}${active ? " active" : ""}`}
+                      disabled={!selection}
+                      id={logicalTabDomId(instance.instanceId, tab.tabId)}
+                      onClick={() =>
+                        handleLogicalTabSelect(
+                          instance.instanceId,
+                          workspace,
+                          tab,
+                        )
+                      }
+                      role="tab"
+                      title={`${tab.label} · ${tab.title ?? "Empty chat"} · ${tab.placement} · ${tabStatus.label}`}
+                      type="button"
+                    >
+                      <span class="instance-tab-main">
+                        <span class="logical-tab-label">{tab.label}</span>
+                        <span class="instance-tab-name">
+                          {tab.title ?? "Empty chat"}
+                        </span>
+                        {tab.placement === "popped" && (
+                          <i
+                            aria-label="Popped out"
+                            class="codicon codicon-opened-editors"
+                          />
+                        )}
+                      </span>
+                      <span class="instance-tab-status">
+                        <i
+                          class={`codicon codicon-${getInstanceStatusIcon(tabStatus.kind)}${tabStatus.kind === "working" ? " codicon-modifier-spin" : ""}`}
+                        />
+                        <span>{tabStatus.label}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
           );
         })}
       </div>
@@ -5277,7 +6024,14 @@ export function BrowserGatewayApp({
 
       <main
         ref={browserLayoutRef}
-        aria-labelledby={`instance-tab-${selectedTabId}`}
+        aria-labelledby={
+          selectedLogicalTab
+            ? logicalTabDomId(
+                selectedLogicalTab.instanceId,
+                selectedLogicalTab.tabId,
+              )
+            : `instance-tab-${selectedTabId}`
+        }
         class={`browser-layout${sidePaneResizing ? " browser-layout-resizing" : ""}${isAskAgentSelected ? " browser-layout-chat-only" : ""}`}
         id="browser-instance-panel"
         role="tabpanel"
@@ -5320,7 +6074,7 @@ export function BrowserGatewayApp({
         <section class="browser-main">
           <PaneCard fill className="chat-pane-card">
             <div class="pane-body browser-chat-pane chat-container">
-              {transcriptView && (
+              {transcriptView?.visible && (
                 <TranscriptView
                   task={transcriptView.task}
                   sessionId={transcriptView.sessionId}
@@ -5335,7 +6089,11 @@ export function BrowserGatewayApp({
                   runtimeStatus={background.find(
                     (session) => session.id === transcriptView.sessionId,
                   )}
-                  onClose={() => setTranscriptView(null)}
+                  onClose={() =>
+                    setTranscriptView((current) =>
+                      current ? { ...current, visible: false } : current,
+                    )
+                  }
                 />
               )}
               <ChatHeader
@@ -6095,7 +6853,13 @@ export function BrowserGatewayApp({
                   foreground.messageQueue.length > 0 &&
                   !mobileReviewOpen && (
                     <MessageQueuePanel
-                      queue={foreground.messageQueue}
+                      queue={foreground.messageQueue.map((item) =>
+                        optimisticQueueInterjections.has(
+                          `${foreground.sessionId}:${item.id}`,
+                        )
+                          ? { ...item, interjectionReady: true }
+                          : item,
+                      )}
                       onSteer={(item) => {
                         browserVscodeApi.postMessage({
                           command: "agentSteerQueuedMessage",

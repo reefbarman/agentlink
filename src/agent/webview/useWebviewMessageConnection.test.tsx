@@ -24,6 +24,7 @@ function Harness({
   onInactiveSessionMessage,
   onMessage,
   replayMessageRef,
+  flushDeltasRef,
 }: {
   postMessage: (message: unknown) => void;
   sessionIdRef: TestRef<string | null>;
@@ -35,12 +36,14 @@ function Harness({
   ) => void;
   onMessage: (msg: ExtensionMessage, controls: WebviewMessageControls) => void;
   replayMessageRef?: TestRef<(message: ExtensionMessage) => void>;
+  flushDeltasRef?: TestRef<() => void>;
 }) {
   const replayMessage = useWebviewMessageConnection({
     vscodeApi: { postMessage },
     sessionIdRef,
     streamingRef,
     openSessionIdsRef,
+    flushDeltasRef,
     dispatchDelta,
     onInactiveSessionMessage,
     onMessage,
@@ -73,6 +76,7 @@ describe("useWebviewMessageConnection", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -167,6 +171,135 @@ describe("useWebviewMessageConnection", () => {
         partialJson: '{"path":',
       },
     ]);
+  });
+
+  it("flushes through a timer when animation frames are suspended", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        animationFrames.push(callback);
+        animationFrameId += 1;
+        return animationFrameId;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const dispatchDelta = vi.fn<(action: StreamingDeltaAction) => void>();
+    render(
+      <Harness
+        postMessage={vi.fn()}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: true }}
+        dispatchDelta={dispatchDelta}
+        onMessage={(msg, controls) => {
+          if (msg.type === "agentTextDelta") {
+            controls.appendTextDelta(msg.text);
+          }
+        }}
+      />,
+    );
+
+    sendMessage({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "hidden stream",
+    });
+    expect(dispatchDelta).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(100);
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
+    expect(dispatchDelta).toHaveBeenCalledWith({
+      type: "TEXT_DELTA",
+      text: "hidden stream",
+    });
+  });
+
+  it("flushes immediately when buffered deltas reach the memory ceiling", () => {
+    const dispatchDelta = vi.fn<(action: StreamingDeltaAction) => void>();
+    render(
+      <Harness
+        postMessage={vi.fn()}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: true }}
+        dispatchDelta={dispatchDelta}
+        onMessage={(msg, controls) => {
+          if (msg.type === "agentTextDelta") {
+            controls.appendTextDelta(msg.text);
+          }
+        }}
+      />,
+    );
+
+    const text = "x".repeat(256 * 1024);
+    sendMessage({ type: "agentTextDelta", sessionId: "session-1", text });
+
+    expect(dispatchDelta).toHaveBeenCalledWith({ type: "TEXT_DELTA", text });
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+  });
+
+  it("flushes pending deltas when webview visibility changes", () => {
+    const dispatchDelta = vi.fn<(action: StreamingDeltaAction) => void>();
+    render(
+      <Harness
+        postMessage={vi.fn()}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: true }}
+        dispatchDelta={dispatchDelta}
+        onMessage={(msg, controls) => {
+          if (msg.type === "agentTextDelta") {
+            controls.appendTextDelta(msg.text);
+          }
+        }}
+      />,
+    );
+
+    sendMessage({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "before visibility change",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    expect(dispatchDelta).toHaveBeenCalledTimes(1);
+    expect(dispatchDelta).toHaveBeenCalledWith({
+      type: "TEXT_DELTA",
+      text: "before visibility change",
+    });
+    animationFrames.shift()?.(0);
+    expect(dispatchDelta).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes pending deltas synchronously before a projection swap", () => {
+    const dispatchDelta = vi.fn<(action: StreamingDeltaAction) => void>();
+    const flushDeltasRef = { current: () => {} };
+    render(
+      <Harness
+        postMessage={vi.fn()}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: true }}
+        flushDeltasRef={flushDeltasRef}
+        dispatchDelta={dispatchDelta}
+        onMessage={(msg, controls) => {
+          if (msg.type === "agentTextDelta") {
+            controls.appendTextDelta(msg.text);
+          }
+        }}
+      />,
+    );
+
+    sendMessage({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "before swap",
+    });
+    flushDeltasRef.current();
+
+    expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(dispatchDelta).toHaveBeenCalledWith({
+      type: "TEXT_DELTA",
+      text: "before swap",
+    });
   });
 
   it("rejects session-mismatched events before routing them", () => {
@@ -399,6 +532,46 @@ describe("useWebviewMessageConnection", () => {
       currentSessionId: "session-1",
       streaming: false,
     });
+  });
+
+  it("cancels pending delta schedulers during teardown", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        animationFrames.push(callback);
+        animationFrameId += 1;
+        return animationFrameId;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const pendingTimersBefore = vi.getTimerCount();
+    const { unmount } = render(
+      <Harness
+        postMessage={vi.fn()}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: true }}
+        dispatchDelta={vi.fn()}
+        onMessage={(msg, controls) => {
+          if (msg.type === "agentTextDelta") {
+            controls.appendTextDelta(msg.text);
+          }
+        }}
+      />,
+    );
+    sendMessage({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "pending",
+    });
+
+    expect(vi.getTimerCount()).toBe(pendingTimersBefore + 1);
+    unmount();
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(pendingTimersBefore);
   });
 
   it("cancels a pending delta frame during teardown", () => {

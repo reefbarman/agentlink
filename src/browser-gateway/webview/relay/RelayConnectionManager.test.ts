@@ -420,6 +420,294 @@ describe("RelayConnectionManager", () => {
     manager.close();
   });
 
+  it("fetches detached detail when terminal completion arrives before the command response", async () => {
+    const sources: EventSourceFixture[] = [];
+    const commandResponse = deferredResponse();
+    const detailContent = new TextEncoder().encode(
+      JSON.stringify({ session: { sessionId: "session-2" } }),
+    );
+    let commandRequest:
+      | {
+          operationId: string;
+          command: {
+            kind: string;
+            instanceId: string;
+            controllerEpoch: string;
+            tabId: string;
+            sessionId: string;
+          };
+        }
+      | undefined;
+    const fetch = vi.fn(
+      async (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        const path = String(input);
+        if (path.endsWith("/subscription")) {
+          return jsonResponse(subscription(), 202);
+        }
+        if (path.endsWith("/commands")) {
+          commandRequest = JSON.parse(String(init?.body));
+          return await commandResponse.promise;
+        }
+        if (path.startsWith("/api/relay/details?")) {
+          return new Response(detailContent, {
+            status: 200,
+            headers: { "Content-Type": "application/json; charset=utf-8" },
+          });
+        }
+        throw new Error(`unexpected request: ${path}`);
+      },
+    );
+    const manager = new RelayConnectionManager({
+      store: new RelayOwnerStore(),
+      eventSourceFactory: (url) => {
+        const source = new EventSourceFixture(url);
+        sources.push(source);
+        return source;
+      },
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      now: () => 1_000,
+    });
+
+    manager.selectOwner({ ownerId, ownerGenerationId });
+    manager.start();
+    sources[0]!.emit("hello", hello());
+    await flushPromises();
+
+    const detailPromise = manager.requestSessionDetail({
+      instanceId: "instance-1",
+      controllerEpoch: "controller-1",
+      tabId: "tab-2",
+      sessionId: "session-2",
+    });
+    await vi.waitFor(() => expect(commandRequest).toBeDefined());
+    const operationId = commandRequest!.operationId;
+    const detailHandle = {
+      helperGenerationId,
+      ownerId,
+      ownerGenerationId,
+      handleId: "session-detail-1",
+      kind: "session",
+      byteLength: detailContent.byteLength,
+      expiresAt: 2_000,
+      mediaType: "application/json; charset=utf-8",
+    } as const;
+    sources[0]!.emit("relay.operation", {
+      protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
+      helperGenerationId,
+      subscriptionId: "subscription-1",
+      ownerId,
+      ownerGenerationId,
+      operation: {
+        operationId,
+        kind: "session.detail",
+        state: "completed",
+        detailHandle,
+      },
+    });
+    commandResponse.resolve(
+      jsonResponse(
+        {
+          ok: true,
+          ownerId,
+          ownerGenerationId,
+          operation: {
+            operationId,
+            kind: "session.detail",
+            state: "accepted",
+          },
+        },
+        202,
+      ),
+    );
+
+    await expect(detailPromise).resolves.toEqual({
+      operationId,
+      handle: detailHandle,
+      content: detailContent,
+    });
+    expect(commandRequest?.command).toEqual({
+      kind: "session.detail",
+      instanceId: "instance-1",
+      controllerEpoch: "controller-1",
+      tabId: "tab-2",
+      sessionId: "session-2",
+    });
+    expect(
+      fetch.mock.calls.filter(([path]) =>
+        String(path).startsWith("/api/relay/details?"),
+      ),
+    ).toHaveLength(1);
+    manager.close();
+  });
+
+  it("reports a caller-addressed send completion before its command response", async () => {
+    const sources: EventSourceFixture[] = [];
+    const commandResponse = deferredResponse();
+    const operations: Array<{
+      operationId: string;
+      kind: string;
+      state: string;
+    }> = [];
+    let commandRequest: { operationId: string } | undefined;
+    const fetch = vi.fn(
+      async (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        const path = String(input);
+        if (path.endsWith("/subscription")) {
+          return jsonResponse(subscription(), 202);
+        }
+        if (path.endsWith("/commands")) {
+          commandRequest = JSON.parse(String(init?.body));
+          return await commandResponse.promise;
+        }
+        throw new Error(`unexpected request: ${path}`);
+      },
+    );
+    const manager = new RelayConnectionManager({
+      store: new RelayOwnerStore(),
+      eventSourceFactory: (url) => {
+        const source = new EventSourceFixture(url);
+        sources.push(source);
+        return source;
+      },
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      onOperation: (operation) => operations.push(operation),
+    });
+
+    manager.selectOwner({ ownerId, ownerGenerationId });
+    manager.start();
+    sources[0]!.emit("hello", hello());
+    await flushPromises();
+
+    const sendPromise = manager.sendCommand({
+      operationId: "browser-send-1",
+      command: {
+        kind: "session.send",
+        sessionId: "session-2",
+        text: "hello",
+        detailHandles: [],
+      },
+    });
+    await vi.waitFor(() => expect(commandRequest).toBeDefined());
+    expect(commandRequest?.operationId).toBe("browser-send-1");
+
+    sources[0]!.emit("relay.operation", {
+      protocolVersion: BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION,
+      helperGenerationId,
+      subscriptionId: "subscription-1",
+      ownerId,
+      ownerGenerationId,
+      operation: {
+        operationId: "browser-send-1",
+        kind: "session.send",
+        state: "completed",
+      },
+    });
+    expect(operations.at(-1)).toMatchObject({
+      operationId: "browser-send-1",
+      kind: "session.send",
+      state: "completed",
+    });
+
+    commandResponse.resolve(
+      jsonResponse(
+        {
+          ok: true,
+          ownerId,
+          ownerGenerationId,
+          operation: {
+            operationId: "browser-send-1",
+            kind: "session.send",
+            state: "accepted",
+          },
+        },
+        202,
+      ),
+    );
+    await expect(sendPromise).resolves.toMatchObject({
+      operationId: "browser-send-1",
+      kind: "session.send",
+      state: "accepted",
+    });
+    manager.close();
+  });
+
+  it("rejects detached detail when the owner generation changes in flight", async () => {
+    const sources: EventSourceFixture[] = [];
+    const commandResponse = deferredResponse();
+    let operationId = "";
+    const fetch = vi.fn(
+      async (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        const path = String(input);
+        if (path.endsWith("/subscription")) {
+          const generation = JSON.parse(String(init?.body)).ownerGenerationId;
+          return jsonResponse(
+            { ...subscription(), ownerGenerationId: generation },
+            202,
+          );
+        }
+        if (path.endsWith("/commands")) {
+          operationId = JSON.parse(String(init?.body)).operationId;
+          return await commandResponse.promise;
+        }
+        throw new Error(`unexpected request: ${path}`);
+      },
+    );
+    const manager = new RelayConnectionManager({
+      store: new RelayOwnerStore(),
+      eventSourceFactory: (url) => {
+        const source = new EventSourceFixture(url);
+        sources.push(source);
+        return source;
+      },
+      fetch: fetch as unknown as typeof globalThis.fetch,
+    });
+
+    manager.selectOwner({ ownerId, ownerGenerationId });
+    manager.start();
+    sources[0]!.emit("hello", hello());
+    await flushPromises();
+    const detailPromise = manager.requestSessionDetail({
+      instanceId: "instance-1",
+      controllerEpoch: "controller-1",
+      tabId: "tab-2",
+      sessionId: "session-2",
+    });
+    await vi.waitFor(() => expect(operationId).not.toBe(""));
+    manager.selectOwner({ ownerId, ownerGenerationId: "generation-2" });
+    commandResponse.resolve(
+      jsonResponse(
+        {
+          ok: true,
+          ownerId,
+          ownerGenerationId,
+          operation: {
+            operationId,
+            kind: "session.detail",
+            state: "accepted",
+          },
+        },
+        202,
+      ),
+    );
+
+    await expect(detailPromise).rejects.toThrow("owner_generation_changed");
+    expect(
+      fetch.mock.calls.filter(([path]) =>
+        String(path).startsWith("/api/relay/details?"),
+      ),
+    ).toHaveLength(0);
+    manager.close();
+  });
+
   it("resolves operations when the selected owner generation rolls over", async () => {
     const sources: EventSourceFixture[] = [];
     const operations: Array<{ state: string; message?: string }> = [];

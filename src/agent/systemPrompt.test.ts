@@ -135,7 +135,40 @@ describe("conversation mode placement", () => {
     expect(block).toContain('<current_mode mode="architect">');
     expect(block).toContain("You are in **Architect mode**");
     expect(block).toContain("Plans folder");
+    expect(block).toContain("### Review & Iteration");
+    expect(block).toContain("Use `ask_user` to ask the user for feedback");
     expect(block).toContain("</current_mode>");
+
+    const autonomousBlock = await buildModeInstructionBlock(
+      "architect",
+      tmpDir,
+      { approveForMe: true },
+    );
+    expect(autonomousBlock).toContain("### Autonomous Review & Transition");
+    expect(autonomousBlock).toContain(
+      "Do not ask the user to review or approve the plan",
+    );
+    expect(autonomousBlock).toContain('Call `switch_mode` with `mode: "code"`');
+    expect(autonomousBlock).not.toContain("### Review & Iteration");
+    expect(autonomousBlock).not.toContain(
+      "Use `ask_user` to ask the user for feedback",
+    );
+    expect(autonomousBlock).not.toContain("Looks good, switch to code mode");
+
+    const reasoningAutonomousBlock = await buildModeInstructionBlock(
+      "architect",
+      tmpDir,
+      { approveForMe: true, promptProfile: "reasoning" },
+    );
+    expect(reasoningAutonomousBlock).toContain(
+      "### Autonomous Review & Transition",
+    );
+    expect(reasoningAutonomousBlock).toContain(
+      "Do not ask the user to review or approve the plan",
+    );
+    expect(reasoningAutonomousBlock).toContain(
+      'Call `switch_mode` with `mode: "code"`',
+    );
 
     const codeBlock = await buildModeInstructionBlock("code", tmpDir);
     expect(codeBlock).toContain("You are in **Code mode**");
@@ -264,6 +297,10 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain(
       "Before any final `set_task_status`, verify the TODO list matches the claimed outcome",
     );
+    expect(result).toContain("When the top-level list exceeds 10 items");
+    expect(result).toContain(
+      "keep every unfinished item and the 3 most recent ordinary completed items",
+    );
   });
 
   it("includes code mode section for 'code' mode", async () => {
@@ -384,12 +421,20 @@ describe("buildSystemPrompt", () => {
     expect(result).not.toContain("architect review loop is autonomous");
   });
 
-  it("tells architect mode not to wait for plan approval under Approve for Me", async () => {
+  it("replaces architect's user-consent loop under Approve for Me", async () => {
     const result = await buildSystemPrompt("architect", tmpDir, {
       approveForMe: true,
     });
-    expect(result).toContain("The architect review loop is autonomous");
-    expect(result).toContain("Do not wait for the user to approve the plan");
+    expect(result).toContain("### Autonomous Review & Transition");
+    expect(result).toContain("the architect review loop is autonomous");
+    expect(result).toContain(
+      "Do not ask the user to review or approve the plan",
+    );
+    expect(result).toContain("Do not pause for plan approval");
+    expect(result).toContain('Call `switch_mode` with `mode: "code"`');
+    expect(result).not.toContain("### Review & Iteration");
+    expect(result).not.toContain("Use `ask_user` to ask the user for feedback");
+    expect(result).not.toContain("Looks good, switch to code mode");
   });
 
   it("includes global technical judgment guidance", async () => {

@@ -11,6 +11,7 @@ export type AgentUiEvent =
   | {
       type: "agentQuestionRequest";
       id: string;
+      toolCallId?: string;
       /** Visible explanation shown above structured questions. */
       context: string;
       questions: Question[];
@@ -31,6 +32,8 @@ export type AgentUiEvent =
   | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
   | { type: "agentUrlElicitationCleared"; id: string };
 
+type WebviewAgentUiMessage = AgentUiEvent & { sessionId?: string };
+
 export interface SessionUiEvent {
   sessionId: string;
   event: AgentUiEvent;
@@ -45,6 +48,7 @@ export interface AgentUiPublisher {
     context: string,
     questions: Question[],
     backgroundTask?: string,
+    toolCallId?: string,
   ): void;
   publishQuestionCleared(sessionId: string, id: string): void;
   publishQuestionProgress(
@@ -91,6 +95,7 @@ export class FanoutAgentUiPublisher implements AgentUiPublisher {
     context: string,
     questions: Question[],
     backgroundTask?: string,
+    toolCallId?: string,
   ): void {
     this.publish((publisher) =>
       publisher.publishQuestionRequest(
@@ -99,6 +104,7 @@ export class FanoutAgentUiPublisher implements AgentUiPublisher {
         context,
         questions,
         backgroundTask,
+        toolCallId,
       ),
     );
   }
@@ -160,72 +166,115 @@ export class FanoutAgentUiPublisher implements AgentUiPublisher {
 }
 
 export class WebviewAgentUiPublisher implements AgentUiPublisher {
-  private visibleApprovalId: string | undefined;
+  private readonly globalApprovalIds = new Set<string>();
+  private readonly globalQuestionIds = new Set<string>();
 
   constructor(
-    private readonly publishMessage: (
-      message: AgentUiEvent | { type: "idle" },
-    ) => void,
+    private readonly publishMessage: (message: WebviewAgentUiMessage) => void,
   ) {}
 
-  publishApproval(_sessionId: string, request: ApprovalRequest): void {
-    this.visibleApprovalId = request.id;
-    this.publishMessage({ type: "showApproval", request });
+  publishApproval(sessionId: string, request: ApprovalRequest): void {
+    if (request.backgroundTask) this.globalApprovalIds.add(request.id);
+    else this.globalApprovalIds.delete(request.id);
+    this.publishMessage({
+      type: "showApproval",
+      ...this.approvalSessionAddress(sessionId, request.id),
+      request,
+    });
   }
 
-  publishApprovalIdle(_sessionId: string, id: string): void {
-    if (this.visibleApprovalId !== id) return;
-    this.visibleApprovalId = undefined;
-    this.publishMessage({ type: "idle" });
+  publishApprovalIdle(sessionId: string, id: string): void {
+    this.publishMessage({
+      type: "idle",
+      ...this.approvalSessionAddress(sessionId, id),
+      id,
+    });
+    this.globalApprovalIds.delete(id);
   }
 
   publishQuestionRequest(
-    _sessionId: string,
+    sessionId: string,
     id: string,
     context: string,
     questions: Question[],
     backgroundTask?: string,
+    toolCallId?: string,
   ): void {
+    if (backgroundTask) this.globalQuestionIds.add(id);
+    else this.globalQuestionIds.delete(id);
     this.publishMessage({
       type: "agentQuestionRequest",
+      ...this.questionSessionAddress(sessionId, id),
       id,
+      ...(toolCallId ? { toolCallId } : {}),
       context,
       questions,
       ...(backgroundTask ? { backgroundTask } : {}),
     });
   }
 
-  publishQuestionCleared(_sessionId: string, id: string): void {
-    this.publishMessage({ type: "agentQuestionCleared", id });
+  publishQuestionCleared(sessionId: string, id: string): void {
+    this.publishMessage({
+      type: "agentQuestionCleared",
+      ...this.questionSessionAddress(sessionId, id),
+      id,
+    });
+    this.globalQuestionIds.delete(id);
   }
 
   publishQuestionProgress(
-    _sessionId: string,
+    sessionId: string,
     progress: Parameters<AgentUiPublisher["publishQuestionProgress"]>[1],
   ): void {
-    this.publishMessage({ type: "agentQuestionProgress", ...progress });
+    this.publishMessage({
+      type: "agentQuestionProgress",
+      ...this.questionSessionAddress(sessionId, progress.id),
+      ...progress,
+    });
+  }
+
+  private approvalSessionAddress(
+    sessionId: string,
+    approvalId: string,
+  ): { sessionId?: string } {
+    return this.globalApprovalIds.has(approvalId) ? {} : { sessionId };
+  }
+
+  private questionSessionAddress(
+    sessionId: string,
+    questionId: string,
+  ): { sessionId?: string } {
+    return this.globalQuestionIds.has(questionId) ? {} : { sessionId };
   }
 
   publishFormElicitationRequest(
-    _sessionId: string,
+    sessionId: string,
     request: McpFormElicitationRequest,
   ): void {
-    this.publishMessage({ type: "agentFormElicitationRequest", request });
+    this.publishMessage({
+      type: "agentFormElicitationRequest",
+      sessionId,
+      request,
+    });
   }
 
-  publishFormElicitationCleared(_sessionId: string, id: string): void {
-    this.publishMessage({ type: "agentFormElicitationCleared", id });
+  publishFormElicitationCleared(sessionId: string, id: string): void {
+    this.publishMessage({ type: "agentFormElicitationCleared", sessionId, id });
   }
 
   publishUrlElicitationRequest(
-    _sessionId: string,
+    sessionId: string,
     request: McpUrlElicitationRequest,
   ): void {
-    this.publishMessage({ type: "agentUrlElicitationRequest", request });
+    this.publishMessage({
+      type: "agentUrlElicitationRequest",
+      sessionId,
+      request,
+    });
   }
 
-  publishUrlElicitationCleared(_sessionId: string, id: string): void {
-    this.publishMessage({ type: "agentUrlElicitationCleared", id });
+  publishUrlElicitationCleared(sessionId: string, id: string): void {
+    this.publishMessage({ type: "agentUrlElicitationCleared", sessionId, id });
   }
 }
 
@@ -260,10 +309,12 @@ export class InMemoryAgentUiEventHub
     context: string,
     questions: Question[],
     backgroundTask?: string,
+    toolCallId?: string,
   ): void {
     this.publish(sessionId, {
       type: "agentQuestionRequest",
       id,
+      ...(toolCallId ? { toolCallId } : {}),
       context,
       questions,
       ...(backgroundTask ? { backgroundTask } : {}),

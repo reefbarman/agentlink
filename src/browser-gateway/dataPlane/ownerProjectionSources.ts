@@ -53,11 +53,42 @@ export interface BrowserGatewayOwnerSessionSource {
   updatedAt: number;
 }
 
+export interface BrowserGatewayOwnerChatTabSource {
+  tabId: string;
+  displayNumber: number;
+  label: string;
+  sessionId: string | null;
+  placement: "docked" | "popped";
+  title?: string;
+  status:
+    | "idle"
+    | "streaming"
+    | "queued_for_provider"
+    | "queued_for_workspace_write"
+    | "needs_input"
+    | "failed"
+    | "completed";
+  busy: boolean;
+  needsAttention?: boolean;
+  mode?: string;
+  model?: string;
+  interactiveExecutionPhase?: import("../../agent/types.js").InteractiveExecutionPhase;
+  estimatedTokens?: number;
+  maximumTokens?: number;
+}
+
+export interface BrowserGatewayOwnerChatWorkspaceSource {
+  controllerEpoch: string;
+  focusedTabId: string;
+  tabs: readonly BrowserGatewayOwnerChatTabSource[];
+}
+
 export interface BrowserGatewayOwnerCatalogSource {
   projects: readonly BrowserGatewayOwnerProjectSource[];
   sessions: readonly BrowserGatewayOwnerSessionSource[];
   defaultProjectId: string | null;
   foregroundSessionId: string | null;
+  chatWorkspace?: BrowserGatewayOwnerChatWorkspaceSource | null;
 }
 
 export interface BrowserGatewayOwnerQueueSource {

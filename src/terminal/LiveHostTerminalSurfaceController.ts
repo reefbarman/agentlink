@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { mkdir } from "node:fs/promises";
 import { basename } from "node:path";
 
@@ -70,11 +71,24 @@ interface ManagedSurfaceTerminal {
   cleaned: boolean;
   renderPaused: boolean;
   resyncRequested: boolean;
+  pending: PendingRenderQueue;
 }
 
-const MAX_SANDBOX_PENDING_RENDER_BATCHES = 256;
+/**
+ * Ceilings for output held back while the renderer catches up. A renderer that
+ * keeps acknowledging drains this queue and never resyncs; one that stops
+ * acknowledging entirely (throttled or occluded webview) overflows it and falls
+ * back to a replay-based resync.
+ */
+const MAX_QUEUED_RENDER_BYTES = 4 * 1024 * 1024;
+const MAX_QUEUED_RENDER_BATCHES = 1024;
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
+
+interface PendingRenderQueue {
+  batches: HostTerminalRenderBatch[];
+  byteLength: number;
+}
 
 interface ManagedSandboxSurfaceTerminal {
   terminalId: string;
@@ -84,10 +98,24 @@ interface ManagedSandboxSurfaceTerminal {
   deliveryQueue: Promise<void>;
   snapshot: SandboxTerminalSessionSnapshot;
   submitting: boolean;
-  pendingRenderBatches: number;
   renderDeliveryGeneration: number;
   renderPaused: boolean;
   resyncRequested: boolean;
+  pending: PendingRenderQueue;
+}
+
+function createPendingRenderQueue(): PendingRenderQueue {
+  return { batches: [], byteLength: 0 };
+}
+
+function renderBatchWriteBytes(batch: HostTerminalRenderBatch): number {
+  let bytes = 0;
+  for (const operation of batch.operations) {
+    if (operation.type === "write") {
+      bytes += Buffer.byteLength(operation.data, "utf8");
+    }
+  }
+  return bytes;
 }
 
 export interface LiveHostTerminalSurfaceControllerOptions {
@@ -108,6 +136,11 @@ export interface LiveHostTerminalSurfaceControllerOptions {
   runtimeWatermarks?: {
     high: number;
     low: number;
+  };
+  /** Ceilings for output held back while the renderer catches up. */
+  renderQueueLimits?: {
+    maxBytes: number;
+    maxBatches: number;
   };
   ensureRuntimeRoot?(): Promise<void>;
   materializeBootstrap?: typeof materializeHostShellBootstrap;
@@ -217,6 +250,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     this.interactionGenerations.delete(connection.rendererEpoch);
     for (const terminal of this.terminals.values()) {
       terminal.renderPaused = false;
+      this.clearPendingRenderQueue(terminal);
       const detached = terminal.runtime.detachRenderer(
         terminal.terminalInstanceId,
         connection.rendererEpoch,
@@ -227,6 +261,8 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     }
     for (const terminal of this.sandboxTerminals.values()) {
       terminal.renderDeliveryGeneration += 1;
+      terminal.renderPaused = false;
+      this.clearPendingRenderQueue(terminal);
       terminal.runtime.detachRenderer(
         terminal.terminalInstanceId,
         connection.rendererEpoch,
@@ -257,6 +293,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       this.readyConnections.delete(connection);
       for (const terminal of this.terminals.values()) {
         terminal.renderPaused = false;
+        this.clearPendingRenderQueue(terminal);
         const detached = terminal.runtime.detachRenderer(
           terminal.terminalInstanceId,
           connection.rendererEpoch,
@@ -267,6 +304,8 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       }
       for (const terminal of this.sandboxTerminals.values()) {
         terminal.renderDeliveryGeneration += 1;
+        terminal.renderPaused = false;
+        this.clearPendingRenderQueue(terminal);
         terminal.runtime.detachRenderer(
           terminal.terminalInstanceId,
           connection.rendererEpoch,
@@ -581,7 +620,10 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
           request.sequence,
         );
         if (sandboxTerminal.renderPaused && acknowledgment.shouldResume) {
-          this.requestSandboxResync(sandboxTerminal, connection);
+          // The renderer caught up: resume delivering the queued tail in order
+          // rather than resetting it and replaying from retention.
+          sandboxTerminal.renderPaused = false;
+          this.scheduleSandboxDelivery(sandboxTerminal);
         }
         return;
       }
@@ -595,7 +637,8 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       if (acknowledged.shouldResume) {
         terminal.service.resumeOutput(request.terminalId);
         if (terminal.renderPaused) {
-          this.requestHostTerminalResync(terminal, connection);
+          terminal.renderPaused = false;
+          this.scheduleHostDelivery(terminal);
         }
       }
     }
@@ -651,12 +694,16 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     for (const terminal of this.terminals.values()) {
       terminal.renderPaused = false;
       terminal.resyncRequested = false;
+      // The bootstrap replay carries the authoritative tail, so anything still
+      // queued for the previous renderer would duplicate it.
+      this.clearPendingRenderQueue(terminal);
       terminal.service.resumeOutput(terminal.terminalId);
       replay.push(terminal.runtime.attachRenderer(connection.rendererEpoch));
     }
     for (const terminal of this.sandboxTerminals.values()) {
       terminal.renderPaused = false;
       terminal.resyncRequested = false;
+      this.clearPendingRenderQueue(terminal);
       replay.push(terminal.runtime.attachRenderer(connection.rendererEpoch));
     }
     await this.post(connection, {
@@ -821,10 +868,10 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       deliveryQueue: Promise.resolve(),
       snapshot,
       submitting: false,
-      pendingRenderBatches: 0,
       renderDeliveryGeneration: 0,
       renderPaused: false,
       resyncRequested: false,
+      pending: createPendingRenderQueue(),
     };
     if (reconstruct && !this.isNativeAgentTerminal(terminal)) {
       const initialRender = [
@@ -1073,6 +1120,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     terminal.renderPaused = false;
     terminal.resyncRequested = true;
     terminal.renderDeliveryGeneration += 1;
+    this.clearPendingRenderQueue(terminal);
     terminal.runtime.detachRenderer(
       terminal.terminalInstanceId,
       connection.rendererEpoch,
@@ -1088,59 +1136,46 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     batch: HostTerminalRenderBatch,
   ): void {
     const connection = this.currentReadyConnection();
-    if (!connection || terminal.resyncRequested || terminal.renderPaused)
-      return;
-    const deliveryGeneration = terminal.renderDeliveryGeneration;
-    terminal.pendingRenderBatches += 1;
-    if (terminal.pendingRenderBatches > MAX_SANDBOX_PENDING_RENDER_BATCHES) {
-      terminal.pendingRenderBatches -= 1;
+    if (!connection || terminal.resyncRequested) return;
+    terminal.pending.batches.push(batch);
+    terminal.pending.byteLength += renderBatchWriteBytes(batch);
+    if (this.isPendingRenderQueueOverflowing(terminal.pending)) {
+      this.clearPendingRenderQueue(terminal);
       this.requestSandboxResync(terminal, connection);
       return;
     }
-    terminal.deliveryQueue = terminal.deliveryQueue
-      .then(async () => {
-        if (deliveryGeneration !== terminal.renderDeliveryGeneration) return;
+    this.scheduleSandboxDelivery(terminal);
+  }
+
+  private scheduleSandboxDelivery(
+    terminal: ManagedSandboxSurfaceTerminal,
+  ): void {
+    const deliveryGeneration = terminal.renderDeliveryGeneration;
+    terminal.deliveryQueue = terminal.deliveryQueue.then(async () => {
+      while (
+        terminal.pending.batches.length > 0 &&
+        !terminal.renderPaused &&
+        !terminal.resyncRequested &&
+        deliveryGeneration === terminal.renderDeliveryGeneration
+      ) {
         const connection = this.currentReadyConnection();
         if (!connection) return;
-        if (terminal.renderPaused) {
-          terminal.runtime.discardUndeliveredBatch(
-            terminal.terminalInstanceId,
-            connection.rendererEpoch,
-            batch.sequence,
-          );
-          return;
-        }
-        const delivered = await this.post(connection, batch);
-        if (!delivered) {
-          this.readyConnections.delete(connection);
-          for (const candidate of this.terminals.values()) {
-            const detached = candidate.runtime.detachRenderer(
-              candidate.terminalInstanceId,
-              connection.rendererEpoch,
-            );
-            if (detached.shouldResume) {
-              candidate.service.resumeOutput(candidate.terminalId);
-            }
-          }
-          for (const candidate of this.sandboxTerminals.values()) {
-            candidate.renderDeliveryGeneration += 1;
-            candidate.runtime.detachRenderer(
-              candidate.terminalInstanceId,
-              connection.rendererEpoch,
-            );
-          }
-          return;
-        }
+        const batch = terminal.pending.batches[0];
         const delivery = terminal.runtime.markBatchDelivered(
           terminal.terminalInstanceId,
           connection.rendererEpoch,
           batch.sequence,
         );
         if (delivery.shouldPause) terminal.renderPaused = true;
-      })
-      .finally(() => {
-        terminal.pendingRenderBatches -= 1;
-      });
+        const delivered = await this.post(connection, batch);
+        if (!delivered) {
+          this.handleFailedDelivery(connection);
+          return;
+        }
+        terminal.pending.batches.shift();
+        terminal.pending.byteLength -= renderBatchWriteBytes(batch);
+      }
+    });
   }
 
   private async postSandboxLifecycle(
@@ -1275,6 +1310,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
         cleaned: false,
         renderPaused: false,
         resyncRequested: false,
+        pending: createPendingRenderQueue(),
       };
       managed.serviceSubscription = service.onEvent((event) =>
         this.handleServiceEvent(managed!, event),
@@ -1359,49 +1395,107 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     batch: HostTerminalRenderBatch,
   ): void {
     const connection = this.currentReadyConnection();
-    if (!connection || terminal.resyncRequested || terminal.renderPaused)
+    if (!connection || terminal.resyncRequested) return;
+    terminal.pending.batches.push(batch);
+    terminal.pending.byteLength += renderBatchWriteBytes(batch);
+    if (this.isPendingRenderQueueOverflowing(terminal.pending)) {
+      // The renderer has stopped acknowledging altogether. Drop the queue and
+      // fall back to replay-based resync rather than buffering without bound.
+      this.clearPendingRenderQueue(terminal);
+      this.requestHostTerminalResync(terminal, connection);
       return;
+    }
+    this.scheduleHostDelivery(terminal);
+  }
+
+  /**
+   * Delivers queued batches in sequence order, stopping while the renderer is
+   * behind. Output waits in the queue instead of being dropped, so a renderer
+   * that keeps acknowledging never has to reset and replay.
+   */
+  private scheduleHostDelivery(terminal: ManagedSurfaceTerminal): void {
     terminal.deliveryQueue = terminal.deliveryQueue.then(async () => {
-      if (terminal.resyncRequested) return;
-      const connection = this.currentReadyConnection();
-      if (!connection) return;
-      if (terminal.renderPaused) {
-        terminal.runtime.discardUndeliveredBatch(
+      while (
+        terminal.pending.batches.length > 0 &&
+        !terminal.renderPaused &&
+        !terminal.resyncRequested
+      ) {
+        const connection = this.currentReadyConnection();
+        if (!connection) return;
+        const batch = terminal.pending.batches[0];
+        // Record the delivery before awaiting the post: the renderer can
+        // acknowledge as soon as it receives the batch, and an acknowledgment
+        // that arrived first would be rejected as out of order and stall the
+        // queue.
+        const delivery = terminal.runtime.markBatchDelivered(
           terminal.terminalInstanceId,
           connection.rendererEpoch,
           batch.sequence,
         );
-        return;
-      }
-      const delivered = await this.post(connection, batch);
-      if (!delivered) {
-        this.readyConnections.delete(connection);
-        for (const candidate of this.terminals.values()) {
-          candidate.renderPaused = false;
-          const detached = candidate.runtime.detachRenderer(
-            candidate.terminalInstanceId,
-            connection.rendererEpoch,
-          );
-          if (detached.shouldResume) {
-            candidate.service.resumeOutput(candidate.terminalId);
-          }
+        if (delivery.shouldPause) {
+          // Never pause the PTY on renderer backpressure: a throttled or hidden
+          // renderer (screen lock marks the window occluded and clamps webview
+          // timers) would otherwise freeze the child process mid-write. Hold
+          // further batches in the queue and resume delivering them once
+          // acknowledgements prove xterm has caught up. This is set before the
+          // post so it stays in step with the runtime's own backpressure state
+          // for any acknowledgment that arrives while the post is in flight.
+          terminal.renderPaused = true;
         }
-        return;
-      }
-      const delivery = terminal.runtime.markBatchDelivered(
-        terminal.terminalInstanceId,
-        connection.rendererEpoch,
-        batch.sequence,
-      );
-      if (delivery.shouldPause) {
-        // Never pause the PTY on renderer backpressure: a throttled or hidden
-        // renderer (screen lock marks the window occluded and clamps webview
-        // timers) would otherwise freeze the child process mid-write. Stop
-        // sending new render batches, keep draining into replay retention, and
-        // resync once acknowledgements prove xterm has caught up.
-        terminal.renderPaused = true;
+        const delivered = await this.post(connection, batch);
+        if (!delivered) {
+          this.handleFailedDelivery(connection);
+          return;
+        }
+        terminal.pending.batches.shift();
+        terminal.pending.byteLength -= renderBatchWriteBytes(batch);
       }
     });
+  }
+
+  /** Revokes the renderer after a post failure so nothing is delivered into a
+   * connection the webview can no longer receive on. */
+  private handleFailedDelivery(
+    connection: HostTerminalSurfaceConnection,
+  ): void {
+    this.readyConnections.delete(connection);
+    for (const candidate of this.terminals.values()) {
+      candidate.renderPaused = false;
+      this.clearPendingRenderQueue(candidate);
+      const detached = candidate.runtime.detachRenderer(
+        candidate.terminalInstanceId,
+        connection.rendererEpoch,
+      );
+      if (detached.shouldResume) {
+        candidate.service.resumeOutput(candidate.terminalId);
+      }
+    }
+    for (const candidate of this.sandboxTerminals.values()) {
+      candidate.renderDeliveryGeneration += 1;
+      candidate.renderPaused = false;
+      this.clearPendingRenderQueue(candidate);
+      candidate.runtime.detachRenderer(
+        candidate.terminalInstanceId,
+        connection.rendererEpoch,
+      );
+    }
+  }
+
+  private isPendingRenderQueueOverflowing(
+    pending: PendingRenderQueue,
+  ): boolean {
+    const limits = this.options.renderQueueLimits;
+    return (
+      pending.byteLength > (limits?.maxBytes ?? MAX_QUEUED_RENDER_BYTES) ||
+      pending.batches.length > (limits?.maxBatches ?? MAX_QUEUED_RENDER_BATCHES)
+    );
+  }
+
+  private clearPendingRenderQueue(terminal: {
+    pending: PendingRenderQueue;
+  }): void {
+    terminal.pending.batches = [];
+    terminal.pending.byteLength = 0;
   }
 
   private requestHostTerminalResync(
@@ -1411,6 +1505,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     if (terminal.resyncRequested) return;
     terminal.renderPaused = false;
     terminal.resyncRequested = true;
+    this.clearPendingRenderQueue(terminal);
     const detached = terminal.runtime.detachRenderer(
       terminal.terminalInstanceId,
       connection.rendererEpoch,

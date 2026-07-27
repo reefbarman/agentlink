@@ -66,6 +66,36 @@ class FakeProvider implements ModelProvider {
 }
 
 describe("ProviderRegistry.refreshIndex", () => {
+  it("disables providers without removing their registration", async () => {
+    const registry = new ProviderRegistry();
+    const first = new FakeProvider();
+    const second = new FakeProvider();
+    Object.defineProperty(second, "id", { value: "second" });
+    second.visible = ["second-a"];
+    second.routable = ["second-a"];
+    registry.reconcile([first, second]);
+
+    registry.setDisabledProviders(["fake"]);
+
+    expect(registry.listProviders()).toEqual([first, second]);
+    expect(registry.listAllModels().map((model) => model.id)).toEqual([
+      "second-a",
+    ]);
+    expect(registry.tryResolveProvider("fake-a")).toBeUndefined();
+    expect(registry.resolveAvailableModel("fake-a")).toBeUndefined();
+    expect(registry.getProvider("fake")).toBe(first);
+    expect(registry.isProviderEnabled("fake")).toBe(false);
+    expect(await registry.getAuthStatus()).toMatchObject({
+      fake: false,
+      second: true,
+    });
+
+    registry.setDisabledProviders([]);
+
+    expect(registry.isProviderEnabled("fake")).toBe(true);
+    expect(registry.tryResolveProvider("fake-a")).toBe(first);
+  });
+
   it("routes newly added models and keeps routing-floor IDs resolvable", () => {
     const registry = new ProviderRegistry();
     const provider = new FakeProvider();

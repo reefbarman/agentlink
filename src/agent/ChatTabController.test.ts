@@ -218,7 +218,7 @@ describe("ChatTabController", () => {
     ]);
   });
 
-  it("creates stable monotonically numbered tabs without duplicating an open session", async () => {
+  it("creates stable numbered tabs without duplicating an open session", async () => {
     const workspace = createWorkspaceState();
     const controller = new ChatTabController(workspace.state, {
       createId: createIds("tab-1", "tab-2", "unused"),
@@ -236,6 +236,25 @@ describe("ChatTabController", () => {
     expect(existing.id).toBe("tab-1");
     expect(controller.getLayout().tabs).toHaveLength(2);
     expect(controller.getFocusedTabId()).toBe("tab-1");
+  });
+
+  it("reuses the lowest display number after a tab closes", async () => {
+    const workspace = createWorkspaceState();
+    const controller = new ChatTabController(workspace.state, {
+      createId: createIds("tab-1", "tab-2", "tab-3"),
+    });
+    await controller.bindFocusedSession("session-1");
+    const second = await controller.createTab("session-2");
+
+    await expect(controller.closeTab(second.id)).resolves.toBe(true);
+    const replacement = await controller.createTab("session-3");
+
+    expect(replacement).toMatchObject({
+      id: "tab-3",
+      displayNumber: 2,
+      sessionId: "session-3",
+    });
+    expect(controller.getLayout().nextDisplayNumber).toBe(3);
   });
 
   it("replaces a tab session with conflict guards and increments terminal generation", async () => {
@@ -310,15 +329,69 @@ describe("ChatTabController", () => {
       createId: createIds("tab-1", "tab-2"),
     });
 
-    await expect(controller.setPlacement("tab-1", "popped")).resolves.toBe(
-      false,
-    );
+    expect(controller.canSetPlacement("tab-1", "docked", "popped")).toEqual({
+      ok: false,
+      reason: "last_docked",
+    });
+    await expect(
+      controller.setPlacement("tab-1", "docked", "popped"),
+    ).resolves.toEqual({ ok: false, reason: "last_docked" });
     const second = await controller.createTab();
-    await expect(controller.setPlacement(second.id, "popped")).resolves.toBe(
-      true,
-    );
+    expect(controller.canSetPlacement(second.id, "docked", "popped")).toEqual({
+      ok: true,
+      tab: expect.objectContaining({ id: second.id, placement: "docked" }),
+    });
+    await expect(
+      controller.setPlacement(second.id, "docked", "popped"),
+    ).resolves.toEqual({
+      ok: true,
+      tab: expect.objectContaining({ id: second.id, placement: "popped" }),
+    });
     expect(controller.getFocusedTabId()).toBe("tab-1");
     expect(controller.getTab(second.id)?.placement).toBe("popped");
+  });
+
+  it("rejects stale placement and rolls back when persistence fails", async () => {
+    const workspace = createWorkspaceState();
+    const controller = new ChatTabController(workspace.state, {
+      createId: createIds("tab-1", "tab-2"),
+    });
+    const second = await controller.createTab();
+
+    await expect(
+      controller.setPlacement(second.id, "popped", "docked"),
+    ).resolves.toEqual({ ok: false, reason: "conflict" });
+    workspace.update.mockRejectedValueOnce(new Error("persist failed"));
+    await expect(
+      controller.setPlacement(second.id, "docked", "popped"),
+    ).rejects.toThrow("persist failed");
+
+    expect(controller.getTab(second.id)?.placement).toBe("docked");
+    expect(controller.getFocusedTabId()).toBe(second.id);
+  });
+
+  it("does not roll back a newer layout after placement persistence fails", async () => {
+    let rejectFirstWrite: ((error: Error) => void) | undefined;
+    const workspace = createWorkspaceState();
+    const controller = new ChatTabController(workspace.state, {
+      createId: createIds("tab-1", "tab-2", "tab-3"),
+    });
+    const second = await controller.createTab();
+    workspace.update.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectFirstWrite = reject;
+        }),
+    );
+    const placement = controller.setPlacement(second.id, "docked", "popped");
+    const thirdPromise = controller.createTab();
+    await vi.waitFor(() => expect(rejectFirstWrite).toBeTypeOf("function"));
+    rejectFirstWrite!(new Error("persist failed"));
+
+    await expect(placement).rejects.toThrow("persist failed");
+    const third = await thirdPromise;
+    expect(controller.getTab(second.id)?.placement).toBe("popped");
+    expect(controller.getTab(third.id)).toBeDefined();
   });
 
   it("closes only when another docked tab remains", async () => {
@@ -330,7 +403,7 @@ describe("ChatTabController", () => {
     await expect(controller.closeTab("tab-1")).resolves.toBe(false);
     const second = await controller.createTab();
     const third = await controller.createTab();
-    await controller.setPlacement(second.id, "popped");
+    await controller.setPlacement(second.id, "docked", "popped");
     const retired = vi.fn();
     controller.onWillRetireTerminalGeneration(retired);
 

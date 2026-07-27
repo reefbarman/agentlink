@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  callOpenAiCompatibleChat,
+  getOpenAiCompatibleEndpoint,
+} from "./openaiCompatibleClient";
 
 const workspaceConfig: Record<string, unknown> = {};
 
@@ -11,11 +15,6 @@ vi.mock("vscode", () => ({
     }),
   },
 }));
-
-import {
-  callOpenAiCompatibleChat,
-  getOpenAiCompatibleEndpoint,
-} from "./openaiCompatibleClient";
 
 function buildChatResponse(content: string): Response {
   return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
@@ -53,23 +52,14 @@ describe("getOpenAiCompatibleEndpoint", () => {
     expect(endpoint.apiKey).toBe("sk-abc");
   });
 
-  it("falls back to legacy questionDetection.* keys when new keys are unset", () => {
-    workspaceConfig["questionDetection.baseUrl"] = "http://legacy.example/v1";
-    workspaceConfig["questionDetection.model"] = "legacy-model";
-    workspaceConfig["questionDetection.apiKey"] = "sk-legacy";
-    workspaceConfig["questionDetection.timeoutMs"] = 9999;
-    expect(getOpenAiCompatibleEndpoint()).toEqual({
-      baseUrl: "http://legacy.example/v1",
-      model: "legacy-model",
-      apiKey: "sk-legacy",
-      timeoutMs: 9999,
-    });
+  it("uses the configured timeout when positive", () => {
+    workspaceConfig["openaiCompatible.timeoutMs"] = 9999;
+    expect(getOpenAiCompatibleEndpoint().timeoutMs).toBe(9999);
   });
 
-  it("new keys take precedence over legacy", () => {
-    workspaceConfig["openaiCompatible.baseUrl"] = "http://new.example/v1";
-    workspaceConfig["questionDetection.baseUrl"] = "http://legacy.example/v1";
-    expect(getOpenAiCompatibleEndpoint().baseUrl).toBe("http://new.example/v1");
+  it("falls back to the default timeout when configured with a nonpositive value", () => {
+    workspaceConfig["openaiCompatible.timeoutMs"] = 0;
+    expect(getOpenAiCompatibleEndpoint().timeoutMs).toBe(5000);
   });
 });
 

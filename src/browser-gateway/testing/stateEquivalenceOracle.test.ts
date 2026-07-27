@@ -213,6 +213,7 @@ function createLegacySnapshot(
     session: {
       projects: readSet.catalog.projects.map((project) => ({ ...project })),
       defaultProjectId: readSet.catalog.defaultProjectId,
+      chatWorkspace: null,
       sessions: readSet.catalog.sessions.map((session) => ({
         id: session.sessionId,
         project: session.projectId
@@ -486,6 +487,26 @@ describe("browser gateway state equivalence oracle", () => {
       backgroundTask: "Review parity",
       step: 1,
       totalSteps: 1,
+      payload: {
+        approval: null,
+        question: {
+          id: "question-1",
+          context: "Continue?",
+          questions: [
+            { id: "continue", type: "yes_no", question: "Continue?" },
+          ],
+          backgroundTask: "Review parity",
+        },
+        questionProgress: {
+          id: "question-1",
+          step: 0,
+          answers: {},
+          notes: {},
+          origin: "browser",
+        },
+        formElicitation: null,
+        urlElicitation: null,
+      },
     };
     legacy.ui.question = {
       id: "question-1",
@@ -587,6 +608,17 @@ describe("browser gateway state equivalence oracle", () => {
     harness.readSet.interaction = {
       requestId: "question-without-total",
       kind: "question",
+      payload: {
+        approval: null,
+        question: {
+          id: "question-without-total",
+          context: "Continue?",
+          questions: [],
+        },
+        questionProgress: null,
+        formElicitation: null,
+        urlElicitation: null,
+      },
     };
     harness.legacy.ui.question = {
       id: "question-without-total",
@@ -602,6 +634,18 @@ describe("browser gateway state equivalence oracle", () => {
       kind: "approval",
       step: 2,
       totalSteps: 3,
+      payload: {
+        approval: {
+          kind: "write",
+          id: "approval-with-step",
+          filePath: "src/example.ts",
+          writeOperation: "modify",
+        },
+        question: null,
+        questionProgress: null,
+        formElicitation: null,
+        urlElicitation: null,
+      },
     };
     harness.legacy.ui.question = null;
     harness.legacy.ui.approval = {

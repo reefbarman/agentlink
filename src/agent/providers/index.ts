@@ -64,6 +64,7 @@ export {
 export class ProviderRegistry {
   private providers = new Map<string, ModelProvider>();
   private modelIndex = new Map<string, string>(); // modelId → providerId
+  private disabledProviders = new Set<string>();
   readonly requestScheduler: ModelRequestScheduler;
 
   constructor(requestScheduler = new ModelRequestScheduler()) {
@@ -102,11 +103,23 @@ export class ProviderRegistry {
     return [...this.providers.values()];
   }
 
+  setDisabledProviders(providerIds: Iterable<string>): void {
+    this.disabledProviders = new Set(
+      [...providerIds].map((id) => id.trim()).filter(Boolean),
+    );
+    this.rebuildIndex();
+  }
+
+  isProviderEnabled(providerId: string): boolean {
+    return !this.disabledProviders.has(providerId);
+  }
+
   private buildIndex(
     providers: ReadonlyMap<string, ModelProvider>,
   ): Map<string, string> {
     const index = new Map<string, string>();
     for (const provider of providers.values()) {
+      if (!this.isProviderEnabled(provider.id)) continue;
       const addModel = (modelId: string): void => {
         const existingProviderId = index.get(modelId);
         if (existingProviderId) {
@@ -210,6 +223,7 @@ export class ProviderRegistry {
 
       let migration: { model: string; provider: ModelProvider } | undefined;
       for (const provider of this.providers.values()) {
+        if (!this.isProviderEnabled(provider.id)) continue;
         const migrated = provider.getModelMigration?.(candidate)?.trim();
         if (!migrated) continue;
         if (
@@ -243,6 +257,7 @@ export class ProviderRegistry {
   listAllModels(): ModelInfo[] {
     const models: ModelInfo[] = [];
     for (const provider of this.providers.values()) {
+      if (!this.isProviderEnabled(provider.id)) continue;
       models.push(...provider.listModels());
     }
     return models;
@@ -254,6 +269,7 @@ export class ProviderRegistry {
   async getAuthStatus(): Promise<Record<string, boolean>> {
     const entries = await Promise.all(
       Array.from(this.providers.entries()).map(async ([id, p]) => {
+        if (!this.isProviderEnabled(id)) return [id, false] as const;
         const authed = await p.isAuthenticated();
         return [id, authed] as const;
       }),

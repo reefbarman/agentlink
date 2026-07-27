@@ -11,7 +11,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { TerminalRendererCallbacks } from "./terminalWebviewController.js";
 import {
+  attachWebglRenderer,
   computeStickyBlockId,
+  createXtermRenderer,
   detectTerminalHttpLinks,
   interceptTerminalInputTransfer,
   registerReplayResponseSuppression,
@@ -74,6 +76,23 @@ function callbacks(
     onPaste: vi.fn(),
     onStickyBlockChanged,
   };
+}
+
+/** jsdom has no matchMedia, which xterm needs to open onto an element. */
+function stubMatchMedia(): void {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({
+      matches: false,
+      media: "",
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(() => true),
+    })),
+  );
 }
 
 describe("detectTerminalHttpLinks", () => {
@@ -219,19 +238,7 @@ describe("xtermRendererFactory", () => {
   });
 
   it("forwards Up and Down arrow key sequences from xterm", () => {
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({
-        matches: false,
-        media: "",
-        onchange: null,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        dispatchEvent: vi.fn(() => true),
-      })),
-    );
+    stubMatchMedia();
     const rendererCallbacks = callbacks();
     const renderer = xtermRendererFactory.create(
       { scrollback: 1000 },
@@ -271,6 +278,56 @@ describe("xtermRendererFactory", () => {
     );
     renderer.dispose();
     container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it("attaches the GPU renderer on open and disposes it with the terminal", () => {
+    stubMatchMedia();
+    const gpu = { dispose: vi.fn() };
+    const attachGpuRenderer = vi.fn(() => gpu);
+    const renderer = createXtermRenderer(
+      { scrollback: 1000 },
+      callbacks(),
+      attachGpuRenderer,
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    expect(attachGpuRenderer).not.toHaveBeenCalled();
+    renderer.open(container);
+    // The GPU renderer can only attach once the terminal owns an element.
+    expect(attachGpuRenderer).toHaveBeenCalledTimes(1);
+
+    renderer.dispose();
+    expect(gpu.dispose).toHaveBeenCalledTimes(1);
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps rendering when GPU acceleration is unavailable", async () => {
+    stubMatchMedia();
+    // jsdom provides no WebGL context, so this exercises the real fallback.
+    const terminal = new Terminal();
+    const container = document.createElement("div");
+    document.body.append(container);
+    terminal.open(container);
+    expect(attachWebglRenderer(terminal)).toBeUndefined();
+
+    const renderer = createXtermRenderer(
+      { scrollback: 1000 },
+      callbacks(),
+      attachWebglRenderer,
+    );
+    const rendererContainer = document.createElement("div");
+    document.body.append(rendererContainer);
+    renderer.open(rendererContainer);
+    await renderer.write("still rendered");
+
+    expect(rendererContainer.querySelector(".xterm")).not.toBeNull();
+    renderer.dispose();
+    terminal.dispose();
+    container.remove();
+    rendererContainer.remove();
     vi.unstubAllGlobals();
   });
 

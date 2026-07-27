@@ -3645,6 +3645,44 @@ describe("dispatchToolCall", () => {
       expect(askUserTool?.input_schema.required).toEqual(["questions"]);
     });
 
+    it("forwards the provider tool-call ID through the production runtime", async () => {
+      const onQuestion = vi.fn().mockResolvedValue({
+        answers: { choice: "Provider fix" },
+        notes: {},
+      });
+      const runtime = createAgentToolRuntime({ ...mockCtx, onQuestion });
+
+      await runtime.executeTool({
+        name: "ask_user",
+        input: {
+          context: "Choose the implementation path.",
+          questions: [
+            {
+              id: "choice",
+              type: "multiple_choice",
+              question: "How should we proceed?",
+              options: ["Provider fix", "UI-only fix"],
+              recommended: "Provider fix",
+            },
+          ],
+        },
+        context: {
+          sessionId: "test-session",
+          mode: "code",
+          toolCallId: "toolu-live-ask",
+        },
+      });
+
+      expect(onQuestion).toHaveBeenCalledWith(
+        "Choose the implementation path.",
+        [expect.objectContaining({ id: "choice" })],
+        "test-session",
+        undefined,
+        undefined,
+        "toolu-live-ask",
+      );
+    });
+
     it("forwards pending recovery context through the production runtime", async () => {
       const onQuestion = vi.fn().mockResolvedValue({
         answers: { choice: "Provider fix" },

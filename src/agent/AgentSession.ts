@@ -122,6 +122,8 @@ export class AgentSession {
   /** Full mode definition (for tool filtering). Falls back to built-in 'code'. */
   agentMode: AgentMode;
   model: string;
+  private _modelSelectionRevision = 0;
+  private pendingModelSelectionUpdate: Promise<void> = Promise.resolve();
   /** Frozen evidence describing the prompt profile rendered for this session. */
   promptProfile: Readonly<PromptProfileResolution>;
   private promptProfileOverrides: Readonly<Record<string, PromptProfile>>;
@@ -533,6 +535,64 @@ export class AgentSession {
       );
     }
     return rootPath;
+  }
+
+  get modelSelectionRevision(): number {
+    return this._modelSelectionRevision;
+  }
+
+  async waitForModelSelectionUpdate(): Promise<void> {
+    while (true) {
+      const revision = this._modelSelectionRevision;
+      await this.pendingModelSelectionUpdate;
+      if (revision === this._modelSelectionRevision) return;
+    }
+  }
+
+  updateModelSelection(
+    model: string,
+    providerId: string | undefined,
+    opts?: {
+      devMode?: boolean;
+      workspaceFolders?: WorkspaceFolderInfo[];
+    },
+  ): Promise<void> {
+    this._modelSelectionRevision += 1;
+    const previousUpdate = this.pendingModelSelectionUpdate;
+    const update = previousUpdate.then(async () => {
+      const providerChanged = providerId !== this.providerId;
+      const workspaceFolders = opts?.workspaceFolders ?? this.workspaceFolders;
+      const artifacts =
+        providerChanged && this.projectAvailability === "available"
+          ? await buildPromptArtifacts(this.mode, this.requireProjectRoot(), {
+              devMode: opts?.devMode,
+              activeFilePath: this.activeFilePath,
+              providerId,
+              model,
+              isBackground: this.background,
+              workspaceFolders,
+              mcpToolCatalog: this.mcpToolDisclosure?.catalog,
+              agentMode: this.agentMode,
+              approveForMe: this.approveForMe,
+              modeInstructionPlacement: this.modeInstructionPlacement,
+            })
+          : undefined;
+
+      this.model = model;
+      this.providerId = providerId;
+      this.workspaceFolders = workspaceFolders;
+      if (artifacts) {
+        this.systemPrompt = artifacts.systemPrompt;
+        this.contextBreakdown = { prompt: artifacts.promptBreakdown };
+        this.activeFileContext = artifacts.activeFileContext;
+        this.setAdvertisedSkills(artifacts.skills);
+        this.setAdvertisedRules(artifacts.advertisedRules);
+      }
+      this.resetProviderResponseState();
+      this.lastActiveAt = Date.now();
+    });
+    this.pendingModelSelectionUpdate = update.catch(() => undefined);
+    return update;
   }
 
   /**

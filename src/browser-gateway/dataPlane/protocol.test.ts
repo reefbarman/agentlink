@@ -9,6 +9,8 @@ import {
   type BrowserGatewayOwnerCheckpoint,
   type BrowserGatewayOwnerCommandKind,
   type BrowserGatewayOwnerEventKind,
+  parseBrowserGatewayChatTabSelection,
+  parseBrowserGatewayDetailHandle,
   parseBrowserGatewayOwnerCheckpoint,
   parseBrowserGatewayOwnerCommand,
   parseBrowserGatewayOwnerCommandAck,
@@ -133,6 +135,28 @@ function checkpoint(
       ],
       defaultProjectId: "project-1",
       foregroundSessionId: "session-1",
+      chatWorkspace: {
+        controllerEpoch: "controller-1",
+        focusedTabId: "tab-1",
+        tabs: [
+          {
+            tabId: "tab-1",
+            displayNumber: 1,
+            label: "T1",
+            sessionId: "session-1",
+            placement: "popped",
+            title: "Data plane",
+            status: "queued_for_provider",
+            busy: true,
+            needsAttention: true,
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            interactiveExecutionPhase: "queued_for_provider",
+            estimatedTokens: 100,
+            maximumTokens: 10_000,
+          },
+        ],
+      },
     },
     transcript: {
       messages: [
@@ -322,6 +346,13 @@ const payloadByKind = {
 function command(kind: BrowserGatewayOwnerCommandKind) {
   const bodies = {
     "session.select": { kind, sessionId: "session-1" },
+    "session.detail": {
+      kind,
+      instanceId: "instance-1",
+      controllerEpoch: "controller-1",
+      tabId: "tab-2",
+      sessionId: "session-2",
+    },
     "session.send": {
       kind,
       sessionId: "session-1",
@@ -369,6 +400,39 @@ function expectProtocolError(
 }
 
 describe("browser gateway data-plane limits", () => {
+  it("allows larger bounded session details without relaxing ordinary detail limits", () => {
+    const betweenLimits =
+      BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes + 1;
+    expect(
+      parseBrowserGatewayDetailHandle({
+        ...detailHandle,
+        kind: "session",
+        byteLength: betweenLimits,
+      }),
+    ).toMatchObject({ kind: "session", byteLength: betweenLimits });
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayDetailHandle({
+          ...detailHandle,
+          byteLength: betweenLimits,
+        }),
+      "resource_limit",
+      "$.byteLength",
+    );
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayDetailHandle({
+          ...detailHandle,
+          kind: "session",
+          byteLength:
+            BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes +
+            1,
+        }),
+      "resource_limit",
+      "$.byteLength",
+    );
+  });
+
   it("locks every parent-plan limit and assigns one enforcing owner", () => {
     expect(BROWSER_GATEWAY_DATA_PLANE_LIMITS).toEqual({
       ownerEventPayloadBytes: 262_144,
@@ -384,6 +448,7 @@ describe("browser gateway data-plane limits", () => {
       selectedOwnerCheckpointUserTurns: 20,
       selectedOwnerCheckpointMessages: 200,
       authenticatedDetailResponseBytes: 8_388_608,
+      authenticatedSessionDetailResponseBytes: 33_554_432,
       authenticatedDetailStoreBytes: 33_554_432,
       retainedReplayBytesPerOwnerGeneration: 524_288,
       retainedReplayEventsPerOwnerGeneration: 64,
@@ -437,6 +502,21 @@ describe("browser gateway owner protocol", () => {
           workspaceRevision: "workspace-revision-1",
         },
       },
+      catalog: {
+        chatWorkspace: {
+          controllerEpoch: "controller-1",
+          focusedTabId: "tab-1",
+          tabs: [
+            {
+              tabId: "tab-1",
+              sessionId: "session-1",
+              placement: "popped",
+              status: "queued_for_provider",
+              needsAttention: true,
+            },
+          ],
+        },
+      },
       transcript: { hasEarlier: true },
     });
 
@@ -451,6 +531,55 @@ describe("browser gateway owner protocol", () => {
         events: [],
       }),
     ).toMatchObject({ firstSequence: 0, lastSequence: 0 });
+  });
+
+  it("parses strict composite browser tab selections", () => {
+    expect(
+      parseBrowserGatewayChatTabSelection({
+        instanceId: "instance-1",
+        tabId: "tab-2",
+        sessionId: "session-2",
+      }),
+    ).toEqual({
+      instanceId: "instance-1",
+      tabId: "tab-2",
+      sessionId: "session-2",
+    });
+    expect(
+      parseBrowserGatewayChatTabSelection({
+        instanceId: "instance-1",
+        tabId: "tab-3",
+        sessionId: null,
+      }),
+    ).toEqual({
+      instanceId: "instance-1",
+      tabId: "tab-3",
+      sessionId: null,
+    });
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayChatTabSelection({
+          instanceId: "instance-1",
+          tabId: "tab-2",
+          sessionId: "session-2",
+          ownerId: "must-not-cross-boundary",
+        }),
+      "unknown_field",
+      "$.ownerId",
+    );
+  });
+
+  it("rejects malformed grouped chat workspace summaries", () => {
+    const value = checkpoint();
+    value.catalog.chatWorkspace!.tabs[0] = {
+      ...value.catalog.chatWorkspace!.tabs[0],
+      status: "waiting_forever" as "streaming",
+    };
+    expectProtocolError(
+      () => parseBrowserGatewayOwnerCheckpoint(value),
+      "invalid_value",
+      "$.catalog.chatWorkspace.tabs[0].status",
+    );
   });
 
   it("keeps context health optional for legacy checkpoints", () => {
@@ -693,6 +822,7 @@ describe("browser gateway owner protocol", () => {
         {
           type: "question_answer",
           blockId: "question-1",
+          toolCallId: "tool-ask-1",
           items: [
             {
               question: "Proceed?",
@@ -1190,6 +1320,52 @@ describe("browser gateway owner protocol", () => {
       idempotency: BROWSER_GATEWAY_COMMAND_IDEMPOTENCY[kind],
       command: { kind },
     });
+  });
+
+  it("parses a complete detached session detail address and rejects stale identity shapes", () => {
+    expect(
+      parseBrowserGatewayOwnerCommand(command("session.detail")),
+    ).toMatchObject({
+      idempotency: "idempotent",
+      command: {
+        kind: "session.detail",
+        instanceId: "instance-1",
+        controllerEpoch: "controller-1",
+        tabId: "tab-2",
+        sessionId: "session-2",
+      },
+    });
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerCommand({
+          ...command("session.detail"),
+          command: {
+            kind: "session.detail",
+            instanceId: "instance-1",
+            controllerEpoch: "",
+            tabId: "tab-2",
+            sessionId: "session-2",
+          },
+        }),
+      "invalid_value",
+      "$.command.controllerEpoch",
+    );
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayOwnerCommand({
+          ...command("session.detail"),
+          command: {
+            kind: "session.detail",
+            instanceId: "instance-1",
+            controllerEpoch: "controller-1",
+            tabId: "tab-2",
+            sessionId: "session-2",
+            foreground: true,
+          },
+        }),
+      "unknown_field",
+      "$.command.foreground",
+    );
   });
 
   it("enforces declared deadline classes at their exact boundaries", () => {

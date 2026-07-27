@@ -299,6 +299,58 @@ describe("one-shot Guardian action review", () => {
     expect(Buffer.byteLength(userContent as string)).toBeLessThan(12_000);
   });
 
+  it("bounds oversized user objectives without falling back to human approval", async () => {
+    const { provider, complete, sessionModel } = makeProvider();
+    const reviewer = createActionApprovalReviewer({
+      resolveContext: () => ({ provider, sessionModel }),
+    });
+    const input = modeSwitchInput();
+    input.userObjective = `Implement the approved plan. ${"界".repeat(2_000)} trailing text`;
+
+    const outcome = await reviewer.review(input);
+
+    expect(outcome).toMatchObject({
+      disposition: "reviewed",
+      result: { outcome: "allow", status: "reviewed" },
+    });
+    const request = complete.mock.calls[0]?.[0];
+    const userContent = request?.messages[0]?.content;
+    expect(typeof userContent).toBe("string");
+    const reviewData = JSON.parse(
+      (userContent as string).split("\n")[1] ?? "null",
+    ) as {
+      userObjective: string;
+      action: { userObjective: string };
+    };
+    expect(
+      Buffer.byteLength(reviewData.userObjective, "utf8"),
+    ).toBeLessThanOrEqual(ACTION_REVIEW_EVIDENCE_LIMITS.maxUserObjectiveBytes);
+    expect(reviewData.action.userObjective).toBe(reviewData.userObjective);
+    expect(reviewData.userObjective).toMatch(/…$/);
+
+    const changedSuffix = modeSwitchInput();
+    changedSuffix.userObjective = `${input.userObjective} changed after review`;
+    const driftedApproval = createOneShotActionApproval(outcome);
+    expect(
+      driftedApproval?.consume({
+        sessionId: input.sessionId,
+        sessionActive: true,
+        policy,
+        action: changedSuffix,
+      }),
+    ).toEqual({ valid: false, reason: "action-drift" });
+
+    const approval = createOneShotActionApproval(outcome);
+    expect(
+      approval?.consume({
+        sessionId: input.sessionId,
+        sessionActive: true,
+        policy,
+        action: input,
+      }),
+    ).toEqual({ valid: true });
+  });
+
   it("creates authority only for a reviewed allow and consumes it once", async () => {
     const { provider, sessionModel } = makeProvider();
     const reviewer = createActionApprovalReviewer({

@@ -52,6 +52,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { agentLinkFetch } from "../../util/httpDispatcher.js";
 import { createAnthropicClientFromResolvedCredential } from "../../agent/clientFactory.js";
+import { TODO_COMPACTION_GUIDANCE } from "../../agent/todoTool.js";
 import { getCodexEndpointConfig } from "../../core/model/providers/codex/openaiClient.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "../browserGatewayModelProviderIds.js";
 import { surfaceMessagesToCoreModelMessages } from "../../core/surfaceModelMessages.js";
@@ -308,8 +309,7 @@ export const ASK_AGENT_SAFE_PROJECTLESS_TOOLS: CoreModelToolDefinition[] = [
   },
   {
     name: "todo_write",
-    description:
-      "Create and manage a structured task list for the current Ask Agent turn. Replaces the whole visible todo list. This is session UI state only and performs no workspace, shell, or editor side effects.",
+    description: `Create and manage a structured task list for the current Ask Agent turn. Replaces the whole visible todo list. This is session UI state only and performs no workspace, shell, or editor side effects. ${TODO_COMPACTION_GUIDANCE}`,
     input_schema: {
       type: "object",
       properties: {

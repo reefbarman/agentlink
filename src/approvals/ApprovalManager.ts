@@ -38,6 +38,7 @@ interface SessionState {
   networkRules: NetworkRule[];
   pathRules: PathRule[];
   writeRules: PathRule[];
+  builtInToolApprovals: string[];
   mcpToolApprovals: string[];
   mcpServerApprovals: string[];
   lastActivity: number;
@@ -165,6 +166,22 @@ export class ApprovalManager {
     });
   }
 
+  // --- Built-in tool approvals (persisted, session-scoped) ---
+
+  isBuiltInToolApproved(sessionId: string, toolName: string): boolean {
+    return this.getSession(sessionId).builtInToolApprovals.includes(toolName);
+  }
+
+  approveBuiltInTool(sessionId: string, toolName: string): void {
+    this.touchSession(sessionId);
+    const session = this.sessions.get(sessionId)!;
+    if (session.builtInToolApprovals.includes(toolName)) return;
+    session.builtInToolApprovals.push(toolName);
+    session.lastActivity = Date.now();
+    this.persistSessions();
+    this._onDidChange.fire();
+  }
+
   // --- MCP tool approvals (persisted, session-scoped) ---
 
   /** True if this tool (or its server) has been approved for this session. */
@@ -175,6 +192,11 @@ export class ApprovalManager {
       session.mcpToolApprovals.includes(toolName) ||
       session.mcpServerApprovals.includes(server)
     );
+  }
+
+  /** True if every tool from this server has been approved for this session. */
+  isMcpServerApproved(sessionId: string, serverName: string): boolean {
+    return this.getSession(sessionId).mcpServerApprovals.includes(serverName);
   }
 
   /** Approve a single tool for the rest of this session. */
@@ -504,6 +526,12 @@ export class ApprovalManager {
         ...(destination.writeRules ?? []),
         ...(source.writeRules ?? []),
       ]);
+      destination.builtInToolApprovals = [
+        ...new Set([
+          ...destination.builtInToolApprovals,
+          ...source.builtInToolApprovals,
+        ]),
+      ];
       destination.mcpToolApprovals = [
         ...new Set([
           ...destination.mcpToolApprovals,
@@ -593,6 +621,12 @@ export class ApprovalManager {
         destination?.writeRules ?? [],
         source.writeRules,
       );
+      const builtInToolApprovals = [
+        ...new Set([
+          ...(destination?.builtInToolApprovals ?? []),
+          ...source.builtInToolApprovals,
+        ]),
+      ];
       const mcpToolApprovals = [
         ...new Set([
           ...(destination?.mcpToolApprovals ?? []),
@@ -614,6 +648,10 @@ export class ApprovalManager {
         !rulesEqual(pathRules, destination?.pathRules ?? []) ||
         !rulesEqual(writeRules, destination?.writeRules ?? []) ||
         !stringSetsEqual(
+          builtInToolApprovals,
+          destination?.builtInToolApprovals ?? [],
+        ) ||
+        !stringSetsEqual(
           mcpToolApprovals,
           destination?.mcpToolApprovals ?? [],
         ) ||
@@ -633,6 +671,7 @@ export class ApprovalManager {
           networkRules,
           pathRules,
           writeRules,
+          builtInToolApprovals,
           mcpToolApprovals,
           mcpServerApprovals,
           lastActivity: now,
@@ -1516,6 +1555,7 @@ export class ApprovalManager {
       networkRules: [...(session.networkRules ?? [])],
       pathRules: [...(session.pathRules ?? [])],
       writeRules: [...(session.writeRules ?? [])],
+      builtInToolApprovals: [...(session.builtInToolApprovals ?? [])],
       mcpToolApprovals: [...(session.mcpToolApprovals ?? [])],
       mcpServerApprovals: [...(session.mcpServerApprovals ?? [])],
       lastActivity: session.lastActivity || Date.now(),
@@ -1529,6 +1569,7 @@ export class ApprovalManager {
       networkRules: session.networkRules.map((rule) => ({ ...rule })),
       pathRules: session.pathRules.map((rule) => ({ ...rule })),
       writeRules: session.writeRules.map((rule) => ({ ...rule })),
+      builtInToolApprovals: [...session.builtInToolApprovals],
       mcpToolApprovals: [...session.mcpToolApprovals],
       mcpServerApprovals: [...session.mcpServerApprovals],
     };
@@ -1541,6 +1582,7 @@ export class ApprovalManager {
     networkRules: [],
     pathRules: [],
     writeRules: [],
+    builtInToolApprovals: [],
     mcpToolApprovals: [],
     mcpServerApprovals: [],
     lastActivity: 0,
@@ -1554,6 +1596,7 @@ export class ApprovalManager {
       networkRules: [],
       pathRules: [],
       writeRules: [],
+      builtInToolApprovals: [],
       mcpToolApprovals: [],
       mcpServerApprovals: [],
       lastActivity: Date.now(),
@@ -1627,6 +1670,7 @@ function mergeConcurrentSessionState(
     networkRules: [],
     pathRules: [],
     writeRules: [],
+    builtInToolApprovals: [],
     mcpToolApprovals: [],
     mcpServerApprovals: [],
     lastActivity: 0,
@@ -1660,6 +1704,12 @@ function mergeConcurrentSessionState(
       local.writeRules,
       remote.writeRules,
     ),
+    builtInToolApprovals: [
+      ...new Set([
+        ...remote.builtInToolApprovals,
+        ...local.builtInToolApprovals,
+      ]),
+    ],
     mcpToolApprovals: [
       ...new Set([...remote.mcpToolApprovals, ...local.mcpToolApprovals]),
     ],

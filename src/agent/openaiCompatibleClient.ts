@@ -7,44 +7,17 @@ export interface OpenAiCompatibleEndpoint {
   timeoutMs: number;
 }
 
-/**
- * Reads `agentlink.openaiCompatible.*` for the shared endpoint used by
- * helper-model features (question detection, bg summarization, future
- * summarizers). Falls back to the legacy `agentlink.questionDetection.*`
- * keys for one release so users who set them before the rename don't break.
- */
+/** Reads the shared `agentlink.openaiCompatible.*` helper-model endpoint. */
 export function getOpenAiCompatibleEndpoint(): OpenAiCompatibleEndpoint {
   const cfg = vscode.workspace.getConfiguration("agentlink");
-
-  const legacyBaseUrl = cfg.get<string>("questionDetection.baseUrl", "");
-  const legacyModel = cfg.get<string>("questionDetection.model", "");
-  const legacyApiKey = cfg.get<string>("questionDetection.apiKey", "");
-  const legacyTimeoutMs = cfg.get<number | undefined>(
-    "questionDetection.timeoutMs",
-    undefined as unknown as number,
-  );
-
   const baseUrl = (
     cfg.get<string>("openaiCompatible.baseUrl", "") ||
-    legacyBaseUrl ||
     "http://127.0.0.1:1234/v1"
   ).replace(/\/+$/, "");
-
-  const model = (
-    cfg.get<string>("openaiCompatible.model", "") || legacyModel
-  ).trim();
-
-  const apiKey = (
-    cfg.get<string>("openaiCompatible.apiKey", "") || legacyApiKey
-  ).trim();
-
-  const timeoutCandidate = cfg.get<number>("openaiCompatible.timeoutMs", 0);
-  const timeoutMs =
-    timeoutCandidate > 0
-      ? timeoutCandidate
-      : typeof legacyTimeoutMs === "number" && legacyTimeoutMs > 0
-        ? legacyTimeoutMs
-        : 5000;
+  const model = cfg.get<string>("openaiCompatible.model", "").trim();
+  const apiKey = cfg.get<string>("openaiCompatible.apiKey", "").trim();
+  const timeoutCandidate = cfg.get<number>("openaiCompatible.timeoutMs", 5000);
+  const timeoutMs = timeoutCandidate > 0 ? timeoutCandidate : 5000;
 
   return { baseUrl, model, apiKey, timeoutMs };
 }

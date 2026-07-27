@@ -2110,6 +2110,31 @@ describe("BrowserGatewayHelper proxy routing", () => {
         session: { foreground: { sessionId: body.session.sessionId } },
       },
     });
+
+    const staleSessionSend = await fetch(`${helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({
+        id: "ask-user-stale-session",
+        sessionId: newSessionId,
+        text: "Do not route this message",
+      }),
+    });
+    expect(staleSessionSend.status).toBe(409);
+    await expect(staleSessionSend.json()).resolves.toEqual({
+      error: "ask_agent_session_mismatch",
+      activeSessionId: body.session.sessionId,
+    });
+
+    const selectedAfterStaleSend = await fetch(
+      `${helperBase}/api/ask-agent/session`,
+      { headers: { Cookie: cookie } },
+    );
+    await expect(selectedAfterStaleSend.json()).resolves.toMatchObject({
+      snapshot: {
+        session: { foreground: { sessionId: body.session.sessionId } },
+      },
+    });
     await expect(askAgentHistoryStore.read()).resolves.toMatchObject({
       activeSessionId: body.session.sessionId,
       sessions: expect.arrayContaining([
@@ -2215,6 +2240,16 @@ describe("BrowserGatewayHelper proxy routing", () => {
         },
       },
     });
+
+    const restoreOriginalSessionResponse = await fetch(
+      `${helperBase}/api/ask-agent/session/load`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: cookie },
+        body: JSON.stringify({ sessionId: body.session.sessionId }),
+      },
+    );
+    expect(restoreOriginalSessionResponse.ok).toBe(true);
 
     const credentialResponse = await fetch(
       `${helperBase}/internal/model-auth/credentials`,

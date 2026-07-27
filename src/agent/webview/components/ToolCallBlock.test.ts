@@ -36,6 +36,154 @@ describe("ToolCallBlock", () => {
     expect(screen.getAllByText(/src\/agent\/AgentEngine\.ts/)).toHaveLength(2);
   });
 
+  it("renders completed ACP-native tools with generic input and result details", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "acp-bash",
+          name: "Bash",
+          inputJson: JSON.stringify({ command: "npm test" }),
+          result: "102 tests passed",
+          complete: true,
+        },
+      }),
+    );
+
+    const header = screen.getByRole("button", { name: "Bash" });
+    expect(header.querySelector(".codicon-check")).toBeTruthy();
+    expect(header.querySelector(".codicon-modifier-spin")).toBeNull();
+
+    fireEvent.click(header);
+
+    expect(screen.getByText("Input")).toBeTruthy();
+    expect(screen.getByText("Result")).toBeTruthy();
+    expect(screen.getAllByText(/npm test/)).toHaveLength(2);
+    expect(screen.getByText("102 tests passed")).toBeTruthy();
+  });
+
+  it("renders failed ACP-native tools as errors instead of running", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "acp-read",
+          name: "Read",
+          inputJson: JSON.stringify({ file_path: "src/index.ts" }),
+          result: JSON.stringify({ status: "failed", output: "not found" }),
+          complete: true,
+        },
+      }),
+    );
+
+    const header = screen.getByRole("button", { name: "Read" });
+    expect(header.querySelector(".codicon-error")).toBeTruthy();
+    expect(header.querySelector(".codicon-modifier-spin")).toBeNull();
+  });
+
+  it("opens a collapsed summary file link without toggling the tool details", () => {
+    const onOpenFile = vi.fn();
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "summary-path",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "/tmp/tool-result.txt" }),
+          result: JSON.stringify({ total_lines: 12 }),
+          complete: true,
+        },
+        onOpenFile,
+      }),
+    );
+
+    const fileLink = screen.getByRole("link", { name: "/tmp/tool-result.txt" });
+    expect(fileLink.closest("button")).toBeNull();
+
+    fireEvent.click(fileLink);
+
+    expect(onOpenFile).toHaveBeenCalledWith("/tmp/tool-result.txt", undefined);
+    expect(screen.queryByText("Input")).toBeNull();
+  });
+
+  it("linkifies file paths embedded in ACP-native summary text", () => {
+    const onOpenFile = vi.fn();
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "acp-summary-path",
+          name: "Read:",
+          inputJson: JSON.stringify({
+            description:
+              "Inspect /Users/tristan/workspace/agentlink/src/agent/ChatViewProvider.ts:42",
+          }),
+          result: "file contents",
+          complete: true,
+        },
+        onOpenFile,
+      }),
+    );
+
+    const fileLink = screen.getByRole("link", {
+      name: "/Users/tristan/workspace/agentlink/src/agent/ChatViewProvider.ts:42",
+    });
+    expect(fileLink.closest(".tool-call-summary")).toBeTruthy();
+
+    fireEvent.click(fileLink);
+
+    expect(onOpenFile).toHaveBeenCalledWith(
+      "/Users/tristan/workspace/agentlink/src/agent/ChatViewProvider.ts",
+      42,
+    );
+    expect(screen.queryByText("Input")).toBeNull();
+  });
+
+  it("leaves ACP-native summary paths as plain text without file navigation", () => {
+    const path =
+      "/Users/tristan/workspace/agentlink/src/agent/ChatViewProvider.ts";
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "acp-summary-without-navigation",
+          name: "Read:",
+          inputJson: JSON.stringify({ description: path }),
+          result: "file contents",
+          complete: true,
+        },
+      }),
+    );
+
+    expect(screen.getByText(path)).toBeTruthy();
+    expect(screen.queryByRole("link", { name: path })).toBeNull();
+  });
+
+  it("keeps a summary path whole when it crosses the truncation boundary", () => {
+    const onOpenFile = vi.fn();
+    const path =
+      "/Users/tristan/workspace/agentlink/src/agent/ChatViewProvider.ts";
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "acp-long-summary-path",
+          name: "Read:",
+          inputJson: JSON.stringify({
+            description: `${"Inspect approval handling carefully ".repeat(2)}${path} before editing`,
+          }),
+          result: "file contents",
+          complete: true,
+        },
+        onOpenFile,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: path }));
+
+    expect(onOpenFile).toHaveBeenCalledWith(path, undefined);
+  });
+
   it("opens file paths from expanded JSON input and results", () => {
     const onOpenFile = vi.fn();
     render(
@@ -55,9 +203,7 @@ describe("ToolCallBlock", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /custom_tool/i }));
-    fireEvent.click(
-      screen.getByRole("link", { name: "src/agent/AgentEngine.ts" }),
-    );
+    fireEvent.click(screen.getByTitle("Open src/agent/AgentEngine.ts"));
     fireEvent.click(
       screen.getByRole("link", {
         name: "src/agent/ChatViewProvider.ts:42",
@@ -93,11 +239,12 @@ describe("ToolCallBlock", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /custom_tool/i }));
-    fireEvent.click(
-      screen.getByRole("link", {
-        name: "src/agent/webview/App.tsx:2337",
-      }),
-    );
+    const expandedResult = screen.getByText("Result").parentElement;
+    const fileLink =
+      expandedResult?.querySelector<HTMLAnchorElement>(".tool-file-link");
+    expect(fileLink?.textContent).toBe("src/agent/webview/App.tsx:2337");
+
+    fireEvent.click(fileLink as HTMLAnchorElement);
 
     expect(onOpenFile).toHaveBeenCalledWith("src/agent/webview/App.tsx", 2337);
   });

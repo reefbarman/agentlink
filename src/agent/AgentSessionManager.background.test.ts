@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => {
         followUp?: string;
       } | null = null;
       let assistantText = "background result";
+      const messages: any[] = [];
       let pendingInterjectionCount = 0;
       const interjectionListeners = new Set<() => void>();
       const mockSession = {
@@ -84,10 +85,15 @@ const mocks = vi.hoisted(() => {
           mockSession.mode = mode;
         }),
         appendAssistantTurn: vi.fn((content: any[]) => {
-          assistantText = content
+          messages.push({ role: "assistant", content });
+          const text = content
             .filter((block) => block?.type === "text")
             .map((block) => block.text)
             .join("");
+          if (text) assistantText = text;
+        }),
+        appendToolResults: vi.fn((content: any[]) => {
+          messages.push({ role: "user", content });
         }),
         appendRuntimeError: vi.fn(),
         consumePendingInterjection: vi.fn(() => {
@@ -107,7 +113,7 @@ const mocks = vi.hoisted(() => {
           return pending;
         }),
         autoTitle: vi.fn(),
-        getAllMessages: vi.fn(() => []),
+        getAllMessages: vi.fn(() => messages),
         createAbortController: vi.fn(() => new AbortController()),
         abort: vi.fn(),
         get isAborted() {
@@ -771,6 +777,401 @@ describe("AgentSessionManager background agents", () => {
     releaseParent?.();
   });
 
+  it("exposes in-flight ACP output in background transcript snapshots", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    let releaseRunner!: () => void;
+    const runnerBlocked = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    let outputEmitted!: () => void;
+    const emitted = new Promise<void>((resolve) => {
+      outputEmitted = resolve;
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Partial ACP output" },
+          },
+        });
+        outputEmitted();
+        await runnerBlocked;
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "end_turn" },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    const parent = await mgr.createSession("code");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "external review",
+        message: "review this",
+        provider: "acp:claude",
+      },
+      parent.id,
+    );
+    await emitted;
+
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Partial ACP output" }],
+      },
+    ]);
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    expect(session.appendAssistantTurn).not.toHaveBeenCalled();
+
+    releaseRunner();
+    await mgr.waitForBackground(spawned.sessionId);
+    expect(session.appendAssistantTurn).toHaveBeenCalledOnce();
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Partial ACP output" }],
+      },
+    ]);
+  });
+
+  it("projects and persists ACP tool lifecycle updates without renaming tools", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    let releaseRunner!: () => void;
+    const runnerBlocked = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    let startEmitted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      startEmitted = resolve;
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "bash-1",
+            title: "Bash",
+            status: "in_progress",
+            rawInput: { command: "npm test" },
+          },
+        });
+        startEmitted();
+        await runnerBlocked;
+        const completed = {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "bash-1",
+          status: "completed",
+          rawOutput: "initial output",
+        };
+        request.onEvent({ type: "update", update: completed });
+        request.onEvent({ type: "update", update: completed });
+        request.onEvent({
+          type: "update",
+          update: {
+            ...completed,
+            rawOutput: "initial output\nlate output",
+          },
+        });
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "end_turn" },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.setToolContext(toolCtx);
+    const events: any[] = [];
+    mgr.onEvent = (sessionId, event) => {
+      events.push({ sessionId, ...event });
+    };
+
+    const spawned = await mgr.spawnBackground({
+      task: "run tests",
+      message: "run tests",
+      provider: "acp:claude",
+    });
+    await started;
+
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-1",
+            name: "Bash",
+            input: { command: "npm test" },
+          },
+        ],
+      },
+    ]);
+    expect(
+      events.filter(
+        (event) =>
+          event.sessionId === spawned.sessionId && event.type === "tool_start",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        toolCallId: "bash-1",
+        toolName: "Bash",
+        input: { command: "npm test" },
+      }),
+    ]);
+
+    releaseRunner();
+    await mgr.waitForBackground(spawned.sessionId);
+
+    const resultEvents = events.filter(
+      (event) =>
+        event.sessionId === spawned.sessionId && event.type === "tool_result",
+    );
+    expect(resultEvents).toHaveLength(2);
+    expect(resultEvents[0]).toMatchObject({
+      toolCallId: "bash-1",
+      toolName: "Bash",
+      input: { command: "npm test" },
+      result: [{ type: "text", text: "initial output" }],
+    });
+    expect(resultEvents[1]).toMatchObject({
+      toolCallId: "bash-1",
+      toolName: "Bash",
+      result: [{ type: "text", text: "initial output\nlate output" }],
+    });
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-1",
+            name: "Bash",
+            input: { command: "npm test" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "bash-1",
+            content: [{ type: "text", text: "initial output\nlate output" }],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("finalizes ACP tools when cancellation resolves the runner normally", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    let releaseRunner!: () => void;
+    const runnerBlocked = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    let startEmitted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      startEmitted = resolve;
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "bash-cancelled",
+            title: "Bash",
+            status: "in_progress",
+            rawInput: { command: "sleep 60" },
+          },
+        });
+        startEmitted();
+        await runnerBlocked;
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.setToolContext(toolCtx);
+    const events: any[] = [];
+    mgr.onEvent = (sessionId, event) => {
+      events.push({ sessionId, ...event });
+    };
+
+    const spawned = await mgr.spawnBackground({
+      task: "cancel command",
+      message: "run command",
+      provider: "acp:claude",
+    });
+    await started;
+    expect(mgr.killBackground(spawned.sessionId, "stop").killed).toBe(true);
+    releaseRunner();
+    const resultEvents = await waitFor(
+      () =>
+        events.filter(
+          (event) =>
+            event.sessionId === spawned.sessionId &&
+            event.type === "tool_result",
+        ),
+      (matching) => matching.length > 0,
+    );
+
+    expect(resultEvents).toEqual([
+      expect.objectContaining({
+        toolCallId: "bash-cancelled",
+        toolName: "Bash",
+        result: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "failed",
+              output: "ACP background agent cancelled.",
+            }),
+          },
+        ],
+      }),
+    ]);
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-cancelled",
+            name: "Bash",
+            input: { command: "sleep 60" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          expect.objectContaining({
+            type: "tool_result",
+            tool_use_id: "bash-cancelled",
+            is_error: true,
+          }),
+        ],
+      },
+    ]);
+  });
+
+  it("publishes ACP completion only after terminal metadata is durable", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "ACP result" },
+          },
+        });
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "end_turn" },
+        });
+      }),
+    };
+    let releaseTerminalSave: () => void = () => {};
+    const terminalSaveBlocked = new Promise<void>((resolve) => {
+      releaseTerminalSave = resolve;
+    });
+    let notifyTerminalSaveStarted: () => void = () => {};
+    const terminalSaveStarted = new Promise<void>((resolve) => {
+      notifyTerminalSaveStarted = resolve;
+    });
+    const saveSession = vi.fn(async ({ session: record }: any) => {
+      if (
+        record.summary.background &&
+        record.metadata.fleet?.lifecycle === "completed"
+      ) {
+        notifyTerminalSaveStarted();
+        await terminalSaveBlocked;
+      }
+      return { ok: true, revision: String(saveSession.mock.calls.length) };
+    });
+    const store = {
+      list: vi.fn(() => []),
+      listAll: vi.fn(() => []),
+      saveSession,
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    const parent = await mgr.createSession("code");
+    mgr.setToolContext(toolCtx);
+    let doneLifecycle: string | undefined;
+    let notifyDone: () => void = () => {};
+    const done = new Promise<void>((resolve) => {
+      notifyDone = resolve;
+    });
+    mgr.onEvent = (sessionId, event) => {
+      if (event.type !== "done") return;
+      doneLifecycle = mgr.getSession(sessionId)?.fleetMetadata?.lifecycle;
+      notifyDone();
+    };
+
+    await mgr.spawnBackground(
+      {
+        task: "external review",
+        message: "review this",
+        provider: "acp:claude",
+      },
+      parent.id,
+    );
+    await terminalSaveStarted;
+
+    expect(doneLifecycle).toBeUndefined();
+    releaseTerminalSave();
+    await done;
+    expect(doneLifecycle).toBe("completed");
+  });
+
   it("runs explicit ACP provider without native route resolution", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
@@ -848,13 +1249,35 @@ describe("AgentSessionManager background agents", () => {
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
   });
 
-  it("rejects restrictive skill authority at the ACP boundary", async () => {
+  it("routes only opposite-provider review tasks through the configured ACP reviewer", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
-      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+      reviewAgent: "acp:claude",
+      acpAgents: [
+        {
+          id: "claude",
+          provider: "anthropic",
+          command: "claude-agent-acp",
+        },
+      ],
     });
-    const acpBackgroundRunner = { run: vi.fn() };
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Adversarial ACP review" },
+          },
+        });
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "end_turn" },
+        });
+      }),
+    };
     const mgr = new AgentSessionManager(
-      config,
+      { ...config, model: "gpt-5.6-sol" },
+
       "/tmp",
       undefined,
       false,
@@ -864,24 +1287,28 @@ describe("AgentSessionManager background agents", () => {
       { host: { config: configHost, acpBackgroundRunner } },
     );
     const parent = await mgr.createSession("code");
+    parent.providerId = "codex";
     mgr.setToolContext(toolCtx);
 
-    await expect(
-      mgr.spawnBackground(
-        {
-          task: "external review",
-          message: "review this",
-          provider: "acp:claude",
-        },
-        parent.id,
-        {
-          schemaVersion: 1,
-          sources: [],
-          allowedTools: ["read_file"],
-        },
-      ),
-    ).rejects.toThrow(/cannot inherit active skill tool restrictions/);
-    expect(acpBackgroundRunner.run).not.toHaveBeenCalled();
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "adversarial review",
+        message: "review this",
+        taskClass: "review_code",
+      },
+      parent.id,
+    );
+    const result = await mgr.waitForBackground(spawned.sessionId);
+
+    expect(result).toBe("Adversarial ACP review");
+    expect(spawned).toMatchObject({
+      resolvedProvider: "acp",
+      resolvedModel: "acp:claude",
+      taskClass: "review_code",
+      routingReason: "configured adversarial review ACP agent (acp:claude)",
+    });
+    expect(acpBackgroundRunner.run).toHaveBeenCalledOnce();
+    expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
   });
 
   it("preserves ACP message and tool images for the caller", async () => {
@@ -956,28 +1383,51 @@ describe("AgentSessionManager background agents", () => {
     await mgr.waitForBackground(spawned.sessionId);
 
     const session = (mgr as any).sessions.get(spawned.sessionId);
-    const assistantContent = session.appendAssistantTurn.mock.calls[0]?.[0];
-    expect(assistantContent).toEqual([
-      { type: "text", text: "Here are the images." },
+    expect(session.getAllMessages()).toEqual([
       {
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: "image/png",
-          data: "YWJjZA==",
-        },
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "generate-1",
+            name: "ACP tool",
+            input: {},
+          },
+        ],
       },
       {
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: "image/webp",
-          data: "RUZH",
-        },
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "generate-1",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/webp",
+                  data: "RUZH",
+                },
+              },
+            ],
+          },
+        ],
       },
-    ]);
-    session.getAllMessages.mockReturnValue([
-      { role: "assistant", content: assistantContent },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Here are the images." },
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: "YWJjZA==",
+            },
+          },
+        ],
+      },
     ]);
     await expect(
       mgr.waitForAuthorizedBackgroundContent(parent.id, spawned.sessionId),
@@ -2710,67 +3160,50 @@ describe("AgentSessionManager background agents", () => {
     ).rejects.toThrow(/maximum fleet depth reached/);
   });
 
-  it("carries immutable parent skill authority into native descendants", async () => {
+  it("keeps each foreground root authorized for only its own descendants after focus changes", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
-    mgr.setToolContext({
-      ...toolCtx,
-      onSpawnBackground: (callerSessionId, request, skillAuthority) =>
-        mgr.spawnBackground(request, callerSessionId, skillAuthority),
-    });
-    await mgr.createSession("code");
-    const parent = await mgr.spawnBackground({
-      task: "parent",
-      message: "coordinate",
-      mode: "code",
-    });
-    const parentRuntime = mocks.setToolRuntime.mock.calls.at(-1)?.[0];
-    const skillAuthority = {
-      schemaVersion: 1 as const,
-      sources: [
-        {
-          catalogRevision: "parent-catalog",
-          activations: [
-            {
-              id: "project:agentlink:.agentlink/skills/parent-review",
-              name: "parent-review",
-              revision: "skill-revision",
-            },
-          ],
-          policyRevision: "parent-policy",
-        },
-      ],
-      allowedTools: ["read_file"],
-    };
-
-    const result = await parentRuntime.executeTool({
-      name: "spawn_background_agent",
-      input: {
-        task: "child",
-        message: "inspect",
-        mode: "review",
-        permissionProfile: "review-only",
-      },
-      context: { sessionId: parent.sessionId, skillAuthority },
-    });
-    const childId = JSON.parse(result.content[0].text).sessionId;
-    await waitFor(
-      () => mocks.runArgs.mock.calls.length,
-      (calls) => calls >= 2,
+    mgr.setToolContext(toolCtx);
+    const firstForeground = await mgr.createSession("code");
+    const firstChild = await mgr.spawnBackground(
+      { task: "first child", message: "work" },
+      firstForeground.id,
     );
-    const child = (mgr as any).sessions.get(childId);
-    const childRunOptions = mocks.runArgs.mock.calls.find(
-      ([session]) => session.id === childId,
-    )?.[1];
+    const secondForeground = await mgr.createSession("code");
+    const secondChild = await mgr.spawnBackground(
+      { task: "second child", message: "work" },
+      secondForeground.id,
+    );
 
-    expect(child.fleetMetadata.skillAuthority).toEqual(skillAuthority);
-    expect(child.fleetMetadata.skillAuthority).not.toBe(skillAuthority);
-    expect(childRunOptions.inheritedSkillAuthority).toEqual(skillAuthority);
-    expect(Object.isFrozen(childRunOptions.inheritedSkillAuthority)).toBe(true);
     expect(
-      Object.isFrozen(
-        childRunOptions.inheritedSkillAuthority.sources[0].activations,
+      mgr.getAuthorizedBackgroundStatus(
+        firstForeground.id,
+        firstChild.sessionId,
       ),
-    ).toBe(true);
+    ).not.toEqual(
+      expect.objectContaining({ resultState: "authorization_lost" }),
+    );
+    expect(
+      mgr.getAuthorizedBackgroundStatus(
+        secondForeground.id,
+        firstChild.sessionId,
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        status: "error",
+        resultState: "authorization_lost",
+      }),
+    );
+    expect(
+      mgr.getAuthorizedBackgroundStatus(
+        firstForeground.id,
+        secondChild.sessionId,
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        status: "error",
+        resultState: "authorization_lost",
+      }),
+    );
   });
 
   it("prevents background agents from managing sibling subtrees", async () => {
@@ -3351,6 +3784,71 @@ describe("AgentSessionManager background agents", () => {
     });
   });
 
+  it("publishes native completion only after terminal metadata is durable", async () => {
+    let releaseTerminalSave: () => void = () => {};
+    const terminalSaveBlocked = new Promise<void>((resolve) => {
+      releaseTerminalSave = resolve;
+    });
+    let notifyTerminalSaveStarted: () => void = () => {};
+    const terminalSaveStarted = new Promise<void>((resolve) => {
+      notifyTerminalSaveStarted = resolve;
+    });
+    let terminalSavePending = false;
+    const saveSession = vi.fn(async ({ session: record }: any) => {
+      if (
+        record.summary.background &&
+        record.metadata.fleet?.lifecycle === "completed"
+      ) {
+        terminalSavePending = true;
+        notifyTerminalSaveStarted();
+        await terminalSaveBlocked;
+        terminalSavePending = false;
+      }
+      return { ok: true, revision: String(saveSession.mock.calls.length) };
+    });
+    const store = {
+      list: vi.fn(() => []),
+      listAll: vi.fn(() => []),
+      saveSession,
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    let doneLifecycle: string | undefined;
+    let projectedWhileTerminalSavePending = false;
+    mgr.onDidChangeSessions(() => {
+      if (terminalSavePending) projectedWhileTerminalSavePending = true;
+    });
+    let notifyDone: () => void = () => {};
+    const done = new Promise<void>((resolve) => {
+      notifyDone = resolve;
+    });
+    mgr.onEvent = (sessionId, event) => {
+      if (event.type !== "done") return;
+      doneLifecycle = mgr.getSession(sessionId)?.fleetMetadata?.lifecycle;
+      notifyDone();
+    };
+
+    await mgr.spawnBackground({
+      task: "review task",
+      message: "review thoroughly",
+      expectedResult: "text",
+    });
+    await terminalSaveStarted;
+
+    expect(doneLifecycle).toBeUndefined();
+    expect(projectedWhileTerminalSavePending).toBe(false);
+    releaseTerminalSave();
+    await done;
+    expect(doneLifecycle).toBe("completed");
+  });
+
   it("records durable native fleet identity and completion", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
@@ -3674,8 +4172,8 @@ describe("AgentSessionManager background agents", () => {
       messageCount: 1,
       totalInputTokens: 0,
       totalOutputTokens: 0,
-      createdAt: now - 2,
-      lastActiveAt: now,
+      createdAt: now - 3,
+      lastActiveAt: now - 2,
       background: false,
     };
     const childSummary = {
@@ -3772,23 +4270,183 @@ describe("AgentSessionManager background agents", () => {
         },
       ],
     );
+
+    foreground!.lastActiveAt = now;
+    expect(
+      mgr.getBackgroundCompletionsForParent(foregroundSummary.id),
+    ).toHaveLength(1);
   });
 
-  it("only restores background sessions from the current foreground tree", async () => {
+  it("keeps unannounced reload interruptions recoverable across activations", async () => {
     const now = Date.now();
-    const summaries = ["current-bg", "historical-bg"].map((id) => ({
+    const summary = {
       schemaVersion: 1,
-      id,
-      mode: "agent",
-      model: "gpt-5.4-pro",
-      title: id,
+      id: "unannounced-interruption",
+      mode: "review",
+      model: "claude-sonnet-4-6",
+      title: "Unannounced interrupted review",
       messageCount: 1,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      createdAt: now,
-      lastActiveAt: now,
+      totalInputTokens: 20,
+      totalOutputTokens: 10,
+      createdAt: now - 3_000,
+      lastActiveAt: now - 2_000,
       background: true,
-    }));
+    };
+    const store = {
+      identity: {
+        ownerId: "test-owner",
+        surface: "test",
+        startedAt: now,
+      },
+      list: vi.fn(() => []),
+      listAll: vi.fn(() => [summary]),
+      readSession: vi.fn().mockResolvedValue({
+        ok: true,
+        revision: "1",
+        value: {
+          summary,
+          messages: [{ role: "user", content: "review" }],
+          metadata: {
+            mode: summary.mode,
+            model: summary.model,
+            totalInputTokens: 20,
+            totalOutputTokens: 10,
+            fleet: {
+              schemaVersion: 1,
+              placement: "background",
+              parentSessionId: "foreground-1",
+              rootSessionId: "foreground-1",
+              task: summary.title,
+              depth: 1,
+              backend: "native",
+              resolvedMode: "review",
+              resolvedModel: summary.model,
+              resolvedProvider: "anthropic",
+              taskClass: "review_code",
+              routingReason: "persisted",
+              fallbackUsed: false,
+              lifecycle: "interrupted",
+              resultState: "interrupted",
+              terminalReason: "extension_reloaded_during_run",
+              completedAt: now - 1_000,
+              reloadInterruptionRecordedAt: now - 1_000,
+              partialResult: "recoverable partial output",
+            },
+          },
+        },
+      }),
+      saveSession: vi.fn().mockResolvedValue({ ok: true, revision: "2" }),
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    await mgr.restorePersistedBackgroundSessions("foreground-1");
+
+    expect(mgr.getBackgroundCompletionsForParent("foreground-1")).toEqual([
+      expect.objectContaining({
+        sessionId: summary.id,
+        status: "error",
+      }),
+    ]);
+    expect(store.saveSession).not.toHaveBeenCalled();
+  });
+
+  it("does not replay legacy reload interruptions", async () => {
+    const now = Date.now();
+    const summary = {
+      schemaVersion: 1,
+      id: "old-interruption",
+      mode: "review",
+      model: "claude-sonnet-4-6",
+      title: "Old interrupted review",
+      messageCount: 1,
+      totalInputTokens: 20,
+      totalOutputTokens: 10,
+      createdAt: now - 3_000,
+      lastActiveAt: now - 2_000,
+      background: true,
+    };
+    const saveSession = vi.fn().mockResolvedValue({ ok: true, revision: "2" });
+    const store = {
+      identity: {
+        ownerId: "test-owner",
+        surface: "test",
+        startedAt: now,
+      },
+      list: vi.fn(() => []),
+      listAll: vi.fn(() => [summary]),
+      readSession: vi.fn().mockResolvedValue({
+        ok: true,
+        revision: "1",
+        value: {
+          summary,
+          messages: [{ role: "user", content: "review" }],
+          metadata: {
+            mode: summary.mode,
+            model: summary.model,
+            totalInputTokens: 20,
+            totalOutputTokens: 10,
+            fleet: {
+              schemaVersion: 1,
+              placement: "background",
+              parentSessionId: "foreground-1",
+              rootSessionId: "foreground-1",
+              task: summary.title,
+              depth: 1,
+              backend: "native",
+              resolvedMode: "review",
+              resolvedModel: summary.model,
+              resolvedProvider: "anthropic",
+              taskClass: "review_code",
+              routingReason: "persisted",
+              fallbackUsed: false,
+              lifecycle: "interrupted",
+              resultState: "interrupted",
+              terminalReason: "extension_reloaded_during_run",
+              completedAt: now - 1_000,
+              partialResult: "stale partial output",
+            },
+          },
+        },
+      }),
+      saveSession,
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    await mgr.restorePersistedBackgroundSessions("foreground-1");
+
+    expect(mgr.getBackgroundCompletionsForParent("foreground-1")).toEqual([]);
+    expect(saveSession).not.toHaveBeenCalled();
+  });
+
+  it("restores background trees for all open tabs while preserving single-root pruning", async () => {
+    const now = Date.now();
+    const summaries = ["current-bg", "second-tab-bg", "historical-bg"].map(
+      (id) => ({
+        schemaVersion: 1,
+        id,
+        mode: "agent",
+        model: "gpt-5.4-pro",
+        title: id,
+        messageCount: 1,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        createdAt: now,
+        lastActiveAt: now,
+        background: true,
+      }),
+    );
     const store = {
       list: vi.fn(() => []),
       listAll: vi.fn(() => summaries),
@@ -3810,9 +4468,17 @@ describe("AgentSessionManager background agents", () => {
                 placement: "background",
                 task: summary.title,
                 rootSessionId:
-                  id === "current-bg" ? "foreground-1" : "foreground-old",
+                  id === "current-bg"
+                    ? "foreground-1"
+                    : id === "second-tab-bg"
+                      ? "foreground-2"
+                      : "foreground-old",
                 parentSessionId:
-                  id === "current-bg" ? "foreground-1" : "foreground-old",
+                  id === "current-bg"
+                    ? "foreground-1"
+                    : id === "second-tab-bg"
+                      ? "foreground-2"
+                      : "foreground-old",
                 depth: 1,
                 lifecycle: "completed",
               },
@@ -3829,17 +4495,28 @@ describe("AgentSessionManager background agents", () => {
       store,
     );
 
-    const restored =
-      await mgr.restorePersistedBackgroundSessions("foreground-1");
+    const restored = await mgr.restorePersistedBackgroundSessions(
+      new Set(["foreground-1", "foreground-2"]),
+    );
 
-    expect(restored.map((session) => session.id)).toEqual(["current-bg"]);
+    expect(restored.map((session) => session.id)).toEqual([
+      "current-bg",
+      "second-tab-bg",
+    ]);
     expect(mgr.getBgSessionInfos().map((session) => session.id)).toEqual([
       "current-bg",
+      "second-tab-bg",
     ]);
 
     await mgr.restorePersistedBackgroundSessions("foreground-old");
 
     expect(mgr.getBackgroundStatus("current-bg")).toEqual(
+      expect.objectContaining({
+        status: "error",
+        partialOutput: "Session not found",
+      }),
+    );
+    expect(mgr.getBackgroundStatus("second-tab-bg")).toEqual(
       expect.objectContaining({
         status: "error",
         partialOutput: "Session not found",

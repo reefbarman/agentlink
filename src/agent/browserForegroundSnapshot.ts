@@ -73,6 +73,9 @@ export function createBrowserForegroundSnapshot(
     questionRequest: state.questionRequest
       ? {
           id: state.questionRequest.id,
+          ...(state.questionRequest.toolCallId
+            ? { toolCallId: state.questionRequest.toolCallId }
+            : {}),
           context: state.questionRequest.context,
           questions: state.questionRequest.questions.map((question) => ({
             ...question,

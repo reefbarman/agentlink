@@ -5508,6 +5508,7 @@ export class BrowserGatewayHelper {
       "Output: Ask Agent chat display only (no files will be written)",
       "",
       "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before images are returned to chat.",
+      "Generate for Session authorizes later display-only generate_image calls in this Ask Agent chat.",
     ]
       .filter((line): line is string => line !== undefined)
       .join("\n");
@@ -5517,6 +5518,11 @@ export class BrowserGatewayHelper {
       filePath: `Generate ${params.count} image${params.count === 1 ? "" : "s"}?`,
       writeOperation: "modify",
       detail,
+      writeChoices: [
+        { label: "Generate", value: "accept", isPrimary: true },
+        { label: "Generate for Session", value: "accept-session" },
+        { label: "Deny", value: "reject", isDanger: true },
+      ],
     };
     const decisionPromise = this.askAgentController.requestApproval(
       request,
@@ -5555,14 +5561,16 @@ export class BrowserGatewayHelper {
         credential.method === "oauth"
           ? `ChatGPT/Codex OAuth quota (${credential.accountLabel ?? "active account"})`
           : "OpenAI API key billing";
-      const approval = await this.requestAskAgentGenerateImageApproval({
-        ...input,
-        billing,
-        signal,
-      });
+      const approval = this.askAgentSessionStore.isGenerateImageApproved()
+        ? ({ decision: "accept" } as DecisionMessage)
+        : await this.requestAskAgentGenerateImageApproval({
+            ...input,
+            billing,
+            signal,
+          });
       const approved =
         approval.decision === "accept" ||
-        approval.decision.startsWith("accept-");
+        approval.decision === "accept-session";
       if (!approved) {
         const content = JSON.stringify({
           status: "rejected_by_user",
@@ -5580,6 +5588,10 @@ export class BrowserGatewayHelper {
             true,
           ),
         };
+      }
+      if (approval.decision === "accept-session") {
+        this.askAgentSessionStore.approveGenerateImageForSession();
+        await this.persistAskAgentHistory();
       }
       const result = await generateCodexImages({
         auth: credential,
@@ -6813,16 +6825,34 @@ export class BrowserGatewayHelper {
       }
       const requestedSessionId =
         typeof body.sessionId === "string" ? body.sessionId.trim() : "";
-      if (requestedSessionId) {
-        if (!this.askAgentSessionStore.loadSession(requestedSessionId)) {
-          this.logAskAgentEvent("ask-agent.send", {
-            sessionId: requestedSessionId,
-            ok: false,
-            error: "ask_agent_session_not_found",
-          });
-          writeJson(res, 404, { error: "ask_agent_session_not_found" });
-          return;
-        }
+      if (
+        requestedSessionId &&
+        !this.askAgentSessionStore.hasSession(requestedSessionId)
+      ) {
+        this.logAskAgentEvent("ask-agent.send", {
+          sessionId: requestedSessionId,
+          ok: false,
+          error: "ask_agent_session_not_found",
+        });
+        writeJson(res, 404, { error: "ask_agent_session_not_found" });
+        return;
+      }
+      if (
+        requestedSessionId &&
+        requestedSessionId !== this.askAgentSessionStore.getActiveSessionId()
+      ) {
+        const activeSessionId = this.askAgentSessionStore.getActiveSessionId();
+        this.logAskAgentEvent("ask-agent.send", {
+          sessionId: requestedSessionId,
+          activeSessionId,
+          ok: false,
+          error: "ask_agent_session_mismatch",
+        });
+        writeJson(res, 409, {
+          error: "ask_agent_session_mismatch",
+          activeSessionId,
+        });
+        return;
       }
       if (Array.isArray(body.attachments) && body.attachments.length > 0) {
         this.logAskAgentEvent("ask-agent.send", {
@@ -6839,6 +6869,23 @@ export class BrowserGatewayHelper {
 
       const now = Date.now();
       const theme = await this.resolveInitialTheme(null);
+      if (
+        requestedSessionId &&
+        requestedSessionId !== this.askAgentSessionStore.getActiveSessionId()
+      ) {
+        const activeSessionId = this.askAgentSessionStore.getActiveSessionId();
+        this.logAskAgentEvent("ask-agent.send", {
+          sessionId: requestedSessionId,
+          activeSessionId,
+          ok: false,
+          error: "ask_agent_session_mismatch",
+        });
+        writeJson(res, 409, {
+          error: "ask_agent_session_mismatch",
+          activeSessionId,
+        });
+        return;
+      }
       const activeSessionId = this.askAgentSessionStore.getActiveSessionId();
       const priorUserTexts =
         this.askAgentSessionStore.getActiveUserMessageTexts();
@@ -6897,6 +6944,24 @@ export class BrowserGatewayHelper {
       }
       if (!duplicateUserMessage && modelContext) {
         await this.pinAskAgentModelOwner(modelContext);
+        if (
+          requestedSessionId &&
+          requestedSessionId !== this.askAgentSessionStore.getActiveSessionId()
+        ) {
+          const currentSessionId =
+            this.askAgentSessionStore.getActiveSessionId();
+          this.logAskAgentEvent("ask-agent.send", {
+            sessionId: requestedSessionId,
+            activeSessionId: currentSessionId,
+            ok: false,
+            error: "ask_agent_session_mismatch",
+          });
+          writeJson(res, 409, {
+            error: "ask_agent_session_mismatch",
+            activeSessionId: currentSessionId,
+          });
+          return;
+        }
         this.askAgentSessionStore.appendUserMessage({
           id: typeof body.id === "string" ? body.id : undefined,
           text: body.text,

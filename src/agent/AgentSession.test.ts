@@ -1396,6 +1396,37 @@ describe("AgentSession", () => {
     });
   });
 
+  describe("updateModelSelection", () => {
+    it("publishes a cross-provider selection after its prompt rebuild completes", async () => {
+      const session = await makeSession({ providerId: "anthropic" });
+      let resolveArtifacts!: (
+        artifacts: ReturnType<typeof makePromptArtifacts>,
+      ) => void;
+      mockedBuildPromptArtifacts.mockClear();
+      mockedBuildPromptArtifacts.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveArtifacts = resolve;
+          }),
+      );
+
+      const update = session.updateModelSelection("codex-model", "codex");
+      await Promise.resolve();
+
+      expect(session.model).toBe(testConfig.model);
+      expect(session.providerId).toBe("anthropic");
+      expect(session.modelSelectionRevision).toBe(1);
+
+      resolveArtifacts(makePromptArtifacts("codex prompt"));
+      await update;
+      await session.waitForModelSelectionUpdate();
+
+      expect(session.model).toBe("codex-model");
+      expect(session.providerId).toBe("codex");
+      expect(session.systemPrompt).toBe("codex prompt");
+    });
+  });
+
   describe("rebuildSystemPrompt", () => {
     it("updates profile state and refreshes conversation mode instructions", async () => {
       const session = await makeSession({ providerId: "codex" });

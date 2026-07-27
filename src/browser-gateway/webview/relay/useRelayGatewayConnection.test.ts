@@ -15,6 +15,7 @@ import {
   commitRelayCheckpoint,
   createRelaySourceEventPaintMarker,
   createRelaySourceEventPaintQueue,
+  parseRelaySessionDetail,
   queueAcceptedRelaySourceEventPaint,
   type RelayGatewayConnectionOptions,
   type RelaySourceEventPaintMarker,
@@ -157,6 +158,86 @@ function createHarness(payload: unknown) {
   const catalog = { current: [owner()] as readonly RelayCatalogOwner[] };
   return { catalog, commits, content, handle, latest };
 }
+
+describe("parseRelaySessionDetail", () => {
+  const request = {
+    instanceId: "instance-1",
+    controllerEpoch: "controller-1",
+    tabId: "tab-2",
+    sessionId: "session-2",
+  };
+  const detail = {
+    selection: {
+      controllerEpoch: request.controllerEpoch,
+      tabId: request.tabId,
+      sessionId: request.sessionId,
+    },
+    session: { sessionId: request.sessionId },
+    ui: {
+      approval: null,
+      question: null,
+      questionProgress: null,
+      formElicitation: null,
+      urlElicitation: null,
+    },
+    revertRecoveryState: null,
+  };
+
+  it("parses identity-bound detached session detail", () => {
+    expect(
+      parseRelaySessionDetail(
+        new TextEncoder().encode(JSON.stringify(detail)),
+        request,
+      ),
+    ).toEqual(detail);
+  });
+
+  it("rejects malformed JSON and incomplete detached detail", () => {
+    expect(() =>
+      parseRelaySessionDetail(new TextEncoder().encode("{"), request),
+    ).toThrow("relay_session_detail_json_invalid");
+    expect(() =>
+      parseRelaySessionDetail(
+        new TextEncoder().encode(
+          JSON.stringify({ selection: detail.selection }),
+        ),
+        request,
+      ),
+    ).toThrow("relay_session_detail_payload_invalid");
+  });
+
+  it.each([
+    ["controller epoch", { controllerEpoch: "controller-stale" }],
+    ["tab", { tabId: "tab-stale" }],
+    ["selection session", { sessionId: "session-stale" }],
+  ])("rejects a mismatched %s", (_label, selection) => {
+    expect(() =>
+      parseRelaySessionDetail(
+        new TextEncoder().encode(
+          JSON.stringify({
+            ...detail,
+            selection: { ...detail.selection, ...selection },
+          }),
+        ),
+        request,
+      ),
+    ).toThrow("relay_session_detail_identity_mismatch");
+  });
+
+  it("rejects a mismatched session payload identity", () => {
+    expect(() =>
+      parseRelaySessionDetail(
+        new TextEncoder().encode(
+          JSON.stringify({
+            ...detail,
+            session: { sessionId: "session-stale" },
+          }),
+        ),
+        request,
+      ),
+    ).toThrow("relay_session_detail_identity_mismatch");
+  });
+});
 
 describe("commitRelayCheckpoint", () => {
   it("classifies only the Phase 3 source-event paint categories with priority", () => {
