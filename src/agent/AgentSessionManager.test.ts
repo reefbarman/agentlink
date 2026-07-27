@@ -24,13 +24,37 @@ import {
 } from "../core/workspaceProjects.js";
 
 const mocks = vi.hoisted(() => {
-  const createSession = vi.fn(
-    async (opts: any): Promise<any> => ({
+  let skillCatalogProjection: any;
+  let advertisedSkills: any[] = [];
+  const resolveTestPromptProfile = (session: {
+    model: string;
+    providerId?: string;
+    promptProfileOverrides?: Readonly<
+      Record<string, "compatibility" | "reasoning">
+    >;
+  }) => {
+    const override = session.promptProfileOverrides?.[session.model];
+    return {
+      profile: override ?? "compatibility",
+      source: override ? "exact-model-override" : "compatibility-default",
+      policyRevision: "prompt-profile-policy-v1",
+      ...(session.providerId ? { providerId: session.providerId } : {}),
+      modelId: session.model,
+    };
+  };
+  const createSession = vi.fn(async (opts: any): Promise<any> => {
+    const promptProfileOverrides =
+      opts.projectScope?.projectId === "projectless" &&
+      opts.projectScope?.workspaceFolderUri === "agentlink://projectless"
+        ? undefined
+        : opts.config.promptProfileOverrides;
+    const session: any = {
       id: "session-1",
       mode: opts.mode,
       agentMode: opts.agentMode,
       model: opts.config.model,
       providerId: opts.providerId,
+      promptProfileOverrides,
       projectScope: opts.projectScope,
       projectAvailability: opts.projectAvailability ?? "available",
       activeFilePath: opts.activeFilePath,
@@ -41,6 +65,10 @@ const mocks = vi.hoisted(() => {
       thinkingBudget: opts.config.thinkingBudget,
       title: "New Chat",
       background: Boolean(opts.background),
+      modeInstructionPlacement:
+        opts.background || opts.isBackground || opts.lightweight
+          ? "system"
+          : "conversation",
       status: "idle",
       messageCount: 0,
       totalInputTokens: 0,
@@ -58,6 +86,9 @@ const mocks = vi.hoisted(() => {
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),
       getAllMessages: vi.fn(() => []),
+      getActiveSkillAllowedTools: vi.fn(() => undefined),
+      getAdvertisedSkills: vi.fn(() => advertisedSkills),
+      getSkillCatalogProjection: vi.fn(() => skillCatalogProjection),
       restoreFromStore: vi.fn(),
       rebuildSystemPrompt: vi.fn(async () => {}),
       refreshModeInstructionAnchor: vi.fn(async () => {}),
@@ -72,12 +103,18 @@ const mocks = vi.hoisted(() => {
       setMode: vi.fn(async function (this: { mode: string }, mode: string) {
         this.mode = mode;
       }),
-    }),
-  );
+    };
+    session.promptProfile = resolveTestPromptProfile(session);
+    return session;
+  });
 
   return {
     createSession,
     getConfiguration: vi.fn(),
+    setSkillCatalog(projection: any, skills: any[]) {
+      skillCatalogProjection = projection;
+      advertisedSkills = skills;
+    },
   };
 });
 
@@ -153,10 +190,92 @@ const makeConfig = (): AgentConfig => ({
 describe("AgentSessionManager host injection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.setSkillCatalog(undefined, []);
     mocks.getConfiguration.mockReturnValue({
       get: () => undefined,
       inspect: () => undefined,
     });
+  });
+
+  it("publishes committed skill catalog fallback updates without blocking sessions", async () => {
+    const update = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(() => {
+        throw new Error("retrieval unavailable");
+      });
+    const remove = vi.fn(async () => undefined);
+    const skill = {
+      id: "project:agentlink:.agentlink/skills/omitted",
+      name: "omitted",
+      description: "Omitted skill metadata",
+      revision: "skill-revision",
+      invocation: "auto",
+      recommendations: ["related"],
+      enabled: true,
+    };
+    const projection = (revision: string) => ({
+      revision,
+      omissions: [
+        {
+          id: skill.id,
+          name: skill.name,
+          revision: skill.revision,
+          reason: "budget",
+        },
+      ],
+    });
+    mocks.setSkillCatalog(projection("catalog-create"), [skill]);
+    const log = vi.fn();
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      log,
+      undefined,
+      { skillCatalogFallbackProvider: { update, remove } },
+    );
+
+    const session = await mgr.createSession("code");
+    await flushPromises();
+    expect(update).toHaveBeenLastCalledWith({
+      publisherId: session.id,
+      projectId: session.projectScope.projectId,
+      catalogRevision: "catalog-create",
+      observedAt: expect.any(String),
+      entries: [
+        {
+          id: skill.id,
+          name: skill.name,
+          description: skill.description,
+          revision: skill.revision,
+          invocation: "auto",
+          recommendations: ["related"],
+        },
+      ],
+    });
+
+    mocks.setSkillCatalog(projection("catalog-rebuild"), [skill]);
+    await mgr.rebuildSystemPrompts();
+    await flushPromises();
+    expect(update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ catalogRevision: "catalog-rebuild" }),
+    );
+
+    mocks.setSkillCatalog(projection("catalog-mode"), [skill]);
+    await expect(mgr.switchSessionMode(session.id, "ask")).resolves.toBe(
+      session,
+    );
+    await flushPromises();
+    expect(update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ catalogRevision: "catalog-mode" }),
+    );
+    expect(log).toHaveBeenCalledWith(
+      `[skills] Failed to update retrieval fallback for session ${session.id}: Error: retrieval unavailable`,
+    );
   });
 
   it("captures a root-tab terminal provider and clears the window-global fallback", async () => {
@@ -547,7 +666,12 @@ describe("AgentSessionManager host injection", () => {
       complete: vi.fn(),
     } as any);
     const mgr = new AgentSessionManager(
-      makeConfig(),
+      {
+        ...makeConfig(),
+        promptProfileOverrides: {
+          "openrouter-moonshotai-kimi-k3": "reasoning",
+        },
+      },
       "/",
       undefined,
       false,
@@ -576,6 +700,11 @@ describe("AgentSessionManager host injection", () => {
     expect(isProjectlessSessionScope(session.projectScope)).toBe(true);
     expect(session.agentMode.slug).toBe("ask");
     expect(session.model).toBe("openrouter-moonshotai-kimi-k3");
+    expect(session.promptProfile).toMatchObject({
+      profile: "compatibility",
+      source: "compatibility-default",
+      modelId: "openrouter-moonshotai-kimi-k3",
+    });
     expect(resolveModelForMode).toHaveBeenCalledWith(
       "ask",
       makeConfig().model,
@@ -729,6 +858,19 @@ describe("AgentSessionManager host injection", () => {
   });
 
   it("resolves execution settings from each session project scope", async () => {
+    const defaultCreateSession = mocks.createSession.getMockImplementation();
+    if (!defaultCreateSession) {
+      throw new Error("Missing session fixture factory");
+    }
+    mocks.createSession
+      .mockImplementationOnce(async (opts: any) => ({
+        ...(await defaultCreateSession(opts)),
+        id: "session-a",
+      }))
+      .mockImplementationOnce(async (opts: any) => ({
+        ...(await defaultCreateSession(opts)),
+        id: "session-b",
+      }));
     const projects = [
       {
         id: "project-a",
@@ -798,6 +940,7 @@ describe("AgentSessionManager host injection", () => {
               codexStatefulResponses: scope.projectId !== "project-b",
               codexStoreResponses: scope.projectId === "project-b",
               codexProMode: scope.projectId === "project-b",
+              disabledSkillIds: [`disabled-${scope.projectId}`],
             }),
             resolveModelForMode,
             resolveReasoningEffortForMode: resolveReasoningEffortForMode as any,
@@ -866,6 +1009,29 @@ describe("AgentSessionManager host injection", () => {
     expect(getCondenseThresholdForModel).toHaveBeenLastCalledWith(
       "project-b-model",
       sessionB.projectScope,
+    );
+
+    vi.mocked(sessionA.rebuildSystemPrompt).mockClear();
+    vi.mocked(sessionB.rebuildSystemPrompt).mockClear();
+    await mgr.rebuildSystemPrompts("project-a");
+    expect(sessionA.rebuildSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disabledSkillIds: ["disabled-project-a"],
+      }),
+    );
+    expect(sessionB.rebuildSystemPrompt).not.toHaveBeenCalled();
+
+    vi.mocked(sessionA.rebuildSystemPrompt).mockRejectedValueOnce(
+      new Error("project-a prompt failed"),
+    );
+    await expect(mgr.rebuildSystemPrompts()).rejects.toThrow(
+      "project-a prompt failed",
+    );
+    expect(sessionA.rebuildSystemPrompt).toHaveBeenCalledTimes(2);
+    expect(sessionB.rebuildSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disabledSkillIds: ["disabled-project-b"],
+      }),
     );
   });
 
@@ -1081,6 +1247,7 @@ describe("AgentSessionManager host injection", () => {
       ok: false as const,
       reason: "not_found" as const,
     }));
+
     const mgr = new AgentSessionManager(
       makeConfig(),
       "/tmp",
@@ -1102,6 +1269,26 @@ describe("AgentSessionManager host injection", () => {
   });
 
   it("restores independent approval dimensions and derives missing dimensions from legacy policy", async () => {
+    const activeSkillState = {
+      schemaVersion: 1 as const,
+      catalogRevision: "catalog-revision",
+      activations: [
+        {
+          id: "project:agentlink:.agentlink/skills/review",
+          name: "review",
+          revision: "skill-revision",
+        },
+      ],
+      policy: {
+        schemaVersion: 1 as const,
+        revision: "policy-revision",
+        skillIds: ["project:agentlink:.agentlink/skills/review"],
+        dependencies: [],
+        recommendations: [],
+        requestedTools: [],
+        allowedTools: ["read_file"],
+      },
+    };
     const summary = {
       schemaVersion: 1,
       id: "session-1",
@@ -1129,6 +1316,8 @@ describe("AgentSessionManager host injection", () => {
           executionPreset: "workspace-write" as const,
           totalInputTokens: 0,
           totalOutputTokens: 0,
+          loadedSkills: ["review"],
+          activeSkillState,
           checkpointState: { baseCommit: null, checkpoints: [] },
         },
       },
@@ -1146,8 +1335,14 @@ describe("AgentSessionManager host injection", () => {
       store,
     );
 
-    await mgr.loadPersistedSession(summary.id);
+    const restored = await mgr.loadPersistedSession(summary.id);
 
+    expect(restored?.restoreFromStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        loadedSkills: ["review"],
+        activeSkillState,
+      }),
+    );
     expect(mgr.getSessionApprovalMode(summary.id)).toEqual({
       commandApprovalPolicy: "safe",
       approvalPolicy: "on-request",
@@ -1264,6 +1459,8 @@ describe("AgentSessionManager host injection", () => {
       consumePendingModeResume: vi.fn(() => null),
       autoTitle: vi.fn(),
       getAllMessages: vi.fn(() => []),
+      getAdvertisedSkills: vi.fn(() => []),
+      getSkillCatalogProjection: vi.fn(() => undefined),
       restoreFromStore: vi.fn(),
       rebuildSystemPrompt: vi.fn(async () => {}),
       updateModelSelection: vi.fn(async function (
@@ -1283,7 +1480,22 @@ describe("AgentSessionManager host injection", () => {
       .mockImplementationOnce(createEmptySession)
       .mockImplementationOnce(createEmptySession);
 
-    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const remove = vi.fn(async () => undefined);
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        skillCatalogFallbackProvider: {
+          update: vi.fn(async () => undefined),
+          remove,
+        },
+      },
+    );
 
     const first = await mgr.createForegroundSession("code");
     const second = await mgr.createForegroundSession("code");
@@ -1295,6 +1507,14 @@ describe("AgentSessionManager host injection", () => {
     expect(mgr.getSessionInfos().map((session) => session.id)).toEqual([
       third.id,
     ]);
+    expect(remove).toHaveBeenCalledWith({
+      publisherId: first.id,
+      projectId: first.projectScope.projectId,
+    });
+    expect(remove).toHaveBeenCalledWith({
+      publisherId: second.id,
+      projectId: second.projectScope.projectId,
+    });
   });
 
   it("filters empty persisted foreground sessions from visible history", () => {
@@ -1515,6 +1735,216 @@ describe("AgentSessionManager host injection", () => {
     expect(session.providerId).toBe("test");
     await expect(mgr.setModel("model-retired")).resolves.toBe("model-current");
     expect(mgr.getConfig().model).toBe("model-current");
+  });
+
+  it("rebuilds on same-provider model/profile changes and skips identical resolutions", async () => {
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: "test",
+      displayName: "Test",
+      condenseModel: "model-a",
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => ({
+        supportsThinking: false,
+        supportsCaching: false,
+        supportsImages: false,
+        supportsToolUse: true,
+        contextWindow: 200_000,
+        maxOutputTokens: 8_192,
+      })),
+      listModels: vi.fn(() =>
+        ["model-a", "model-b"].map((id) => ({
+          id,
+          displayName: id,
+          provider: "test",
+          capabilities: {
+            supportsThinking: false,
+            supportsCaching: false,
+            supportsImages: false,
+            supportsToolUse: true,
+            contextWindow: 200_000,
+            maxOutputTokens: 8_192,
+          },
+        })),
+      ),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as any);
+    const promptProfileOverrides = { "model-b": "reasoning" as const };
+    const mgr = new AgentSessionManager(
+      { ...makeConfig(), model: "model-a", promptProfileOverrides },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          providers,
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            getCondenseThresholdForModel: () => 0.9,
+            getBgSummaryMode: () => "heuristic",
+            getBackgroundAgentSettings: () => ({}),
+          },
+        },
+      },
+    );
+
+    const session = await mgr.createSession("code");
+    expect(session.promptProfile).toMatchObject({
+      profile: "compatibility",
+      modelId: "model-a",
+    });
+    vi.mocked(session.rebuildSystemPrompt).mockClear();
+
+    await expect(mgr.setModel("model-b")).resolves.toBe("model-b");
+    expect(session.providerId).toBe("test");
+    expect(session.promptProfile).toEqual({
+      profile: "reasoning",
+      source: "exact-model-override",
+      policyRevision: "prompt-profile-policy-v1",
+      providerId: "test",
+      modelId: "model-b",
+    });
+    expect(session.rebuildSystemPrompt).toHaveBeenCalledTimes(1);
+    expect(session.rebuildSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ promptProfileOverrides }),
+    );
+
+    await expect(mgr.setModel("model-b")).resolves.toBe("model-b");
+    expect(session.rebuildSystemPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires runtime fallback reconciliation through the production engine boundary", async () => {
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: "test",
+      displayName: "Test",
+      condenseModel: "model-a",
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => ({
+        supportsThinking: false,
+        supportsCaching: false,
+        supportsImages: false,
+        supportsToolUse: true,
+        contextWindow: 200_000,
+        maxOutputTokens: 8_192,
+      })),
+      listModels: vi.fn(() =>
+        ["model-a", "model-b"].map((id) => ({
+          id,
+          displayName: id,
+          provider: "test",
+          capabilities: {
+            supportsThinking: false,
+            supportsCaching: false,
+            supportsImages: false,
+            supportsToolUse: true,
+            contextWindow: 200_000,
+            maxOutputTokens: 8_192,
+          },
+        })),
+      ),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as any);
+    let reconciledBeforeWarning = false;
+    const engine = {
+      setToolRuntime: vi.fn(),
+      run: vi.fn(async function* (session: any, opts: any) {
+        await opts.onModelFallback({
+          requestedModel: "model-a",
+          effectiveModel: "model-b",
+        });
+        reconciledBeforeWarning =
+          session.model === "model-b" &&
+          session.providerId === "test" &&
+          session.promptProfile.profile === "reasoning" &&
+          session.promptProfile.modelId === "model-b";
+        yield {
+          type: "warning",
+          message: "model-a is unavailable. Switched to model-b.",
+          modelFallback: {
+            requestedModel: "model-a",
+            effectiveModel: "model-b",
+          },
+        };
+        yield {
+          type: "done",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        };
+      }),
+    };
+    const promptProfileOverrides = { "model-b": "reasoning" as const };
+    const mgr = new AgentSessionManager(
+      { ...makeConfig(), model: "model-a", promptProfileOverrides },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          providers,
+          createEngine: vi.fn(() => engine as never),
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            getCondenseThresholdForModel: () => 0.9,
+            getBgSummaryMode: () => "heuristic",
+            getBackgroundAgentSettings: () => ({}),
+          },
+        },
+      },
+    );
+    const session = await mgr.createSession("code");
+    vi.mocked(session.rebuildSystemPrompt).mockClear();
+
+    await mgr.sendMessage(session.id, "trigger fallback", session.mode);
+
+    expect(reconciledBeforeWarning).toBe(true);
+    expect(session.rebuildSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ promptProfileOverrides }),
+    );
+    expect(session.promptProfile).toMatchObject({
+      profile: "reasoning",
+      providerId: "test",
+      modelId: "model-b",
+    });
+  });
+
+  it("rolls back model identity when prompt reconciliation fails", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    const previous = {
+      configModel: mgr.getConfig().model,
+      configThreshold: mgr.getConfig().autoCondenseThreshold,
+      model: session.model,
+      providerId: session.providerId,
+      threshold: session.autoCondenseThreshold,
+      promptProfile: session.promptProfile,
+    };
+    vi.mocked(session.rebuildSystemPrompt).mockRejectedValueOnce(
+      new Error("prompt rebuild failed"),
+    );
+
+    await expect(mgr.setModel("gpt-5.4")).rejects.toThrow(
+      "prompt rebuild failed",
+    );
+
+    expect(mgr.getConfig().model).toBe(previous.configModel);
+    expect(mgr.getConfig().autoCondenseThreshold).toBe(
+      previous.configThreshold,
+    );
+    expect(session.model).toBe(previous.model);
+    expect(session.providerId).toBe(previous.providerId);
+    expect(session.autoCondenseThreshold).toBe(previous.threshold);
+    expect(session.promptProfile).toBe(previous.promptProfile);
   });
 
   it("restores the configured reasoning effort when modes change", async () => {
@@ -2402,10 +2832,79 @@ describe("AgentSessionManager manual condense", () => {
   });
 
   it("does not start an agent turn after a successful manual condense", async () => {
-    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
-    const session = await mgr.createSession("code");
+    const providers = new ProviderRegistry();
+    providers.register({
+      id: "test",
+      displayName: "Test",
+      condenseModel: makeConfig().model,
+      isAuthenticated: vi.fn(async () => true),
+      getCapabilities: vi.fn(() => ({
+        supportsThinking: false,
+        supportsCaching: false,
+        supportsImages: false,
+        supportsToolUse: true,
+        contextWindow: 200_000,
+        maxOutputTokens: 8_192,
+        hostedWeb: {
+          search: { supported: true },
+          fetch: { supported: false },
+        },
+      })),
+      listModels: vi.fn(() => [
+        {
+          id: makeConfig().model,
+          displayName: "Test model",
+          provider: "test",
+          capabilities: {
+            supportsThinking: false,
+            supportsCaching: false,
+            supportsImages: false,
+            supportsToolUse: true,
+            contextWindow: 200_000,
+            maxOutputTokens: 8_192,
+          },
+        },
+      ]),
+      stream: vi.fn(),
+      complete: vi.fn(),
+    } as any);
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          providers,
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            getCondenseThresholdForModel: () => 0.9,
+            getBgSummaryMode: () => "heuristic",
+            getBackgroundAgentSettings: () => ({}),
+            getWebAccessSettings: () => ({
+              searchBackend: "native",
+              fetchBackend: "disabled",
+            }),
+          },
+        },
+      },
+    );
+    mgr.setToolContext({
+      approvalManager: { bindSessionProject: vi.fn() } as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: { fsPath: "/tmp" } as any,
+    });
+    const session = await mgr.createSession("ask");
     session.status = "idle";
-    (session as any).loadedSkills = new Set<string>();
+    (session as any).loadedSkills = new Set(["web-writer"]);
+    vi.mocked(session.getActiveSkillAllowedTools).mockReturnValue([
+      "web_search",
+      "write_file",
+    ]);
     (session as any).createAbortController = vi.fn(() => new AbortController());
     (mgr as any).foregroundId = session.id;
     const todos = [
@@ -2436,6 +2935,7 @@ describe("AgentSessionManager manual condense", () => {
     mgr.onEvent = onEvent;
 
     const engine = {
+      setToolRuntime: vi.fn(),
       condenseSession: vi.fn(async function* () {
         yield { type: "condense_start", isAutomatic: false };
         yield {
@@ -2467,10 +2967,40 @@ describe("AgentSessionManager manual condense", () => {
       session,
       false,
       undefined,
-      expect.objectContaining({ todos }),
+      expect.objectContaining({
+        todos,
+        toolNames: expect.arrayContaining([
+          "web_search",
+          "write_file",
+          "find_native_tools",
+          "call_native_tool",
+          "todo_write",
+        ]),
+      }),
       session.model,
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name: "web_search" }),
+          expect.objectContaining({ name: "write_file" }),
+          expect.objectContaining({ name: "find_native_tools" }),
+          expect.objectContaining({ name: "call_native_tool" }),
+          expect.objectContaining({ name: "todo_write" }),
+        ]),
+      }),
     );
+    const condenseOptions = (
+      engine.condenseSession.mock.calls as unknown[][]
+    )[0]?.[5] as { tools?: Array<{ name: string }> } | undefined;
+    expect(
+      condenseOptions?.tools?.some((tool) => tool.name === "read_file"),
+    ).toBe(false);
+    expect(
+      condenseOptions?.tools?.some(
+        (tool) => tool.name === "get_call_hierarchy",
+      ),
+    ).toBe(false);
+    expect(engine.setToolRuntime).toHaveBeenCalledOnce();
     expect(engine.run).not.toHaveBeenCalled();
     expect(onEvent).toHaveBeenCalledWith(
       session.id,
@@ -6134,20 +6664,105 @@ describe("AgentSessionManager memory candidate nudges", () => {
     (session as any).autoTitle = vi.fn();
 
     (mgr as any).checkpointManager = { createCheckpoint: vi.fn() };
-    (mgr as any).host.createEngine = vi.fn(() => ({
-      run: vi.fn(async function* () {
-        yield {
-          type: "done",
-          totalInputTokens: 0,
-          totalOutputTokens: 0,
-          totalCacheReadTokens: 0,
-          totalCacheCreationTokens: 0,
-        };
-      }),
-    }));
+    const run = vi.fn(async function* (
+      _session: unknown,
+      _options?: { automaticMemoryContext?: unknown },
+    ) {
+      yield {
+        type: "done",
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCacheReadTokens: 0,
+        totalCacheCreationTokens: 0,
+      };
+    });
+    (mgr as any).host.createEngine = vi.fn(() => ({ run }));
     mgr.onEvent = vi.fn();
-    return { mgr, session };
+    return { mgr, session, messages, run };
   }
+
+  it("prepares bounded automatic recall from the latest user text and fails open", async () => {
+    const { mgr, session, messages } = await makeSendHarness();
+    messages.push({ role: "user", content: "older unrelated context" });
+    messages.push({ role: "user", content: "use the focused test preference" });
+    const recallAutomatically = vi.fn(async () => ({
+      result: {
+        mode: "lexical-only" as const,
+        memories: [
+          {
+            record: {} as never,
+            score: 1,
+            rendering:
+              '<memory-evidence authority="low" instruction="false">\nStatement: Use focused tests.\n</memory-evidence>',
+            authority: "low-authority-evidence" as const,
+            canAuthorizeTools: false as const,
+          },
+        ],
+      },
+      health: { status: "ready" as const },
+    }));
+
+    const snapshot = await (mgr as any).prepareAutomaticMemoryContext(session, {
+      memoryToolProvider: { recallAutomatically },
+    });
+
+    expect(recallAutomatically).toHaveBeenCalledOnce();
+    expect(recallAutomatically).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          query: expect.stringContaining("use the focused test preference"),
+          scope: "all",
+          limit: 8,
+        }),
+        context: expect.objectContaining({
+          sessionId: session.id,
+          projectId: session.projectScope.projectId,
+          isBackground: false,
+        }),
+      }),
+    );
+    expect(snapshot).toMatchObject({
+      memoryCount: 1,
+      estimatedTokens: expect.any(Number),
+      scopes: ["project", "global"],
+      authority: "low-authority-evidence",
+      canAuthorizeTools: false,
+    });
+    expect(Object.isFrozen(snapshot)).toBe(true);
+
+    recallAutomatically.mockRejectedValueOnce(new Error("memory unavailable"));
+    await expect(
+      (mgr as any).prepareAutomaticMemoryContext(session, {
+        memoryToolProvider: { recallAutomatically },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("retrieves automatic memory once per send or retry and passes the snapshot to the engine", async () => {
+    const { mgr, session, run } = await makeSendHarness();
+    const snapshot = Object.freeze({
+      rendering:
+        '<memory-evidence authority="low" instruction="false">memory</memory-evidence>',
+      estimatedTokens: 20,
+      memoryCount: 1,
+      query: "remember",
+      scopes: ["project", "global"] as const,
+      authority: "low-authority-evidence" as const,
+      canAuthorizeTools: false as const,
+    });
+    const prepareAutomaticMemoryContext = vi
+      .spyOn(mgr as any, "prepareAutomaticMemoryContext")
+      .mockResolvedValue(snapshot);
+
+    await mgr.sendMessage(session.id, "use my preference", session.mode);
+    await mgr.retrySession(session.id);
+
+    expect(prepareAutomaticMemoryContext).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenCalledTimes(2);
+    for (const [, options] of run.mock.calls) {
+      expect(options).toMatchObject({ automaticMemoryContext: snapshot });
+    }
+  });
 
   it("stores a model-facing memory reminder while preserving display text", async () => {
     const { mgr, session } = await makeSendHarness();

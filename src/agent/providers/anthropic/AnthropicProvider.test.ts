@@ -129,16 +129,19 @@ describe("AnthropicProvider capabilities", () => {
     };
 
     const events: ProviderStreamEvent[] = [];
+    const attempts: string[] = [];
     for await (const event of testProvider.stream({
       model: "claude-opus-4-8",
       systemPrompt: "system",
       messages: [{ role: "user", content: "hello" }],
       maxTokens: 64,
       reasoningEffort: "high",
+      onProviderRequestAttempt: ({ model }) => attempts.push(model),
     })) {
       events.push(event);
     }
 
+    expect(attempts).toEqual(["claude-opus-4-8"]);
     expect(events.some((event) => event.type === "thinking_start")).toBe(false);
     expect(events.some((event) => event.type === "thinking_end")).toBe(false);
     expect(events).toContainEqual({ type: "content_blocks", blocks: [] });
@@ -417,6 +420,7 @@ describe("AnthropicProvider capabilities", () => {
       messages: { create },
     };
     const controller = new AbortController();
+    const attempts: string[] = [];
 
     await testProvider.complete({
       model: "claude-opus-4-8",
@@ -425,10 +429,13 @@ describe("AnthropicProvider capabilities", () => {
       maxTokens: 64,
       reasoningEffort: "none",
       signal: controller.signal,
+      onProviderRequestAttempt: ({ model }) => attempts.push(model),
     });
 
+    expect(attempts).toEqual(["claude-opus-4-8"]);
     expect(create).toHaveBeenCalledWith(expect.any(Object), {
       signal: controller.signal,
+      maxRetries: 0,
     });
   });
 
@@ -453,6 +460,7 @@ describe("AnthropicProvider capabilities", () => {
 
     expect(create).toHaveBeenCalledWith(
       expect.not.objectContaining({ temperature: expect.anything() }),
+      { maxRetries: 0 },
     );
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -460,6 +468,7 @@ describe("AnthropicProvider capabilities", () => {
         thinking: { type: "adaptive", display: "summarized" },
         output_config: { effort: "high" },
       }),
+      { maxRetries: 0 },
     );
   });
 });
@@ -708,6 +717,7 @@ describe("AnthropicProvider dynamic model capabilities", () => {
         thinking: { type: "adaptive", display: "summarized" },
         output_config: { effort: "high" },
       }),
+      { maxRetries: 0 },
     );
   });
 });

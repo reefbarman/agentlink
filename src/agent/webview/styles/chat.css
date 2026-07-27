@@ -698,6 +698,417 @@ body.chat-activity-shelf-resizing * {
   user-select: none !important;
 }
 
+.memory-panel {
+  display: flex;
+  min-height: 0;
+  margin: 4px 12px 8px;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 7px;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  font-size: 12px;
+}
+
+.memory-panel-header,
+.memory-panel-toolbar,
+.memory-panel-stats,
+.memory-panel-footer,
+.memory-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.memory-panel-header {
+  justify-content: space-between;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  background: color-mix(
+    in srgb,
+    var(--vscode-sideBar-background, var(--vscode-editor-background)) 86%,
+    var(--vscode-foreground) 14%
+  );
+}
+
+.memory-panel-header > div,
+.memory-panel-detail,
+.memory-panel-activity li {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.memory-panel-header span,
+.memory-panel-detail span,
+.memory-panel small,
+.memory-panel-stats,
+.memory-panel-records > p,
+.memory-panel-footer > span {
+  color: var(--vscode-descriptionForeground);
+}
+
+.memory-panel-icon-button,
+.memory-panel button,
+.memory-panel select,
+.memory-panel input {
+  box-sizing: border-box;
+  min-height: 28px;
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
+  border-radius: 4px;
+  background: var(--vscode-input-background, transparent);
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+  font: inherit;
+}
+
+.memory-panel button {
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.memory-panel button:hover:not(:disabled),
+.memory-panel button.active,
+.memory-panel-records > button.selected {
+  border-color: var(--vscode-focusBorder, #4ec9b0);
+  background: color-mix(
+    in srgb,
+    var(--vscode-focusBorder, #4ec9b0) 12%,
+    transparent
+  );
+}
+
+.memory-panel button:focus-visible,
+.memory-panel input:focus-visible,
+.memory-panel select:focus-visible,
+.memory-panel summary:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, #4ec9b0);
+  outline-offset: 1px;
+}
+
+.memory-panel button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.memory-panel-icon-button {
+  width: 28px;
+  padding: 0;
+  flex: 0 0 28px;
+  font-size: 18px;
+  line-height: 20px;
+}
+
+.memory-panel-toolbar {
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.memory-panel-toolbar > input {
+  min-width: 150px;
+  padding: 4px 7px;
+  flex: 1 1 180px;
+}
+
+.memory-panel-toolbar > select {
+  min-width: 110px;
+  padding: 3px 6px;
+}
+
+.memory-panel-stats {
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  font-size: 11px;
+}
+
+.memory-panel-content {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(180px, 2fr) minmax(160px, 1fr);
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.memory-panel-records {
+  min-height: 0;
+  max-height: 220px;
+  padding: 6px;
+  overflow: auto;
+  border-right: 1px solid var(--vscode-panel-border);
+}
+
+.memory-panel-records > button {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  margin: 0 0 5px;
+  padding: 7px 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  text-align: left;
+}
+
+.memory-panel-records > button > span {
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  text-transform: capitalize;
+}
+
+.memory-panel-records > button > strong {
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+
+.memory-panel-detail {
+  padding: 10px;
+  overflow-wrap: anywhere;
+}
+
+.memory-panel-actions {
+  margin-top: 5px;
+}
+
+.memory-panel-error {
+  padding: 7px 12px;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--vscode-errorForeground) 45%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--vscode-errorForeground) 10%,
+    transparent
+  );
+  color: var(--vscode-errorForeground);
+}
+
+.memory-panel-activity {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.memory-panel-activity > summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.memory-panel-activity ul {
+  display: flex;
+  margin: 7px 0 0;
+  padding: 0;
+  flex-direction: column;
+  gap: 5px;
+  list-style: none;
+}
+
+.memory-panel-activity li {
+  position: relative;
+  min-height: 28px;
+  padding-right: 56px;
+}
+
+.memory-panel-activity li > button {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+.memory-panel-footer {
+  flex-wrap: wrap;
+  padding: 8px 12px;
+}
+
+.memory-panel-footer > span {
+  flex: 1 1 220px;
+  font-size: 11px;
+}
+
+@media (max-width: 560px) {
+  .memory-panel-content {
+    grid-template-columns: 1fr;
+  }
+
+  .memory-panel-records {
+    max-height: 170px;
+    border-right: 0;
+    border-bottom: 1px solid var(--vscode-panel-border);
+  }
+
+  .memory-panel-toolbar > input,
+  .memory-panel-toolbar > select {
+    min-width: 100%;
+  }
+}
+
+.context-health-panel {
+  margin: 4px 12px 8px;
+  border: 1px solid
+    color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+  border-radius: 6px;
+  background: color-mix(
+    in srgb,
+    var(--vscode-editor-background) 90%,
+    var(--vscode-foreground)
+  );
+}
+
+.context-health-panel > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 5px 8px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.context-health-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.context-health-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  color: var(--vscode-foreground);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.context-health-summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+}
+
+.context-health-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(
+    in srgb,
+    var(--vscode-editor-background) 82%,
+    var(--vscode-foreground)
+  );
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.context-health-chip-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-health-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.context-health-ready {
+  color: var(--vscode-testing-iconPassed, #4ec9b0);
+}
+
+.context-health-working {
+  color: var(--vscode-progressBar-background, #4ec9b0);
+}
+
+.context-health-degraded {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.context-health-unavailable {
+  color: var(--vscode-editorError-foreground, #f14c4c);
+}
+
+.context-health-disabled,
+.context-health-not_measured {
+  color: var(--vscode-descriptionForeground);
+}
+
+.context-health-chevron {
+  flex: 0 0 auto;
+  color: var(--vscode-descriptionForeground);
+  transition: transform 120ms ease;
+}
+
+.context-health-panel[open] .context-health-chevron {
+  transform: rotate(180deg);
+}
+
+.context-health-body {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  border-top: 1px solid
+    color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+  background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+}
+
+.context-health-section {
+  min-width: 0;
+  padding: 8px;
+  background: var(--vscode-editor-background);
+}
+
+.context-health-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 5px;
+  font-size: 11px;
+}
+
+.context-health-state {
+  font-size: 10px;
+  font-weight: 500;
+  text-align: right;
+}
+
+.context-health-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+}
+
+.context-health-metrics strong {
+  color: var(--vscode-foreground);
+  font-weight: 500;
+}
+
+.context-health-reason {
+  margin: 6px 0 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+@media (max-width: 560px) {
+  .context-health-chip
+    > :not(.context-health-dot):not(.context-health-chip-status) {
+    display: none;
+  }
+
+  .context-health-body {
+    grid-template-columns: 1fr;
+  }
+}
+
 .chat-message-list {
   min-width: 0;
 }

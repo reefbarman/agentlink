@@ -59,7 +59,7 @@ function result(
     message: [
       `Command rejected: it appears to write to protected instructions or memory (${protectedPath}).`,
       ``,
-      `Use propose_memory for durable memory/instruction changes, or write_file/apply_diff for an explicit user-reviewed diff.`,
+      `Use manage_memory for low-authority memory, propose_memory for reviewed authoritative configuration, or write_file/apply_diff for an explicit user-reviewed diff.`,
       `force=true cannot bypass protected memory/instruction write detection.`,
     ].join("\n"),
   };

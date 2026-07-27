@@ -1,6 +1,7 @@
 import type { CoreReasoningEffort } from "../../../modelCatalog.js";
 import type {
   CoreModelMessage,
+  CoreModelProviderRequestAttempt,
   CoreModelStopReason,
   CoreModelStreamEvent,
   CoreModelToolDefinition,
@@ -127,9 +128,11 @@ export async function executeAnthropicResolvedCompletion(args: {
   signal?: AbortSignal;
   onTextDelta?: (delta: string) => void;
   onStreamEvent?: (event: CoreModelStreamEvent) => void;
+  onProviderRequestAttempt?: (attempt: CoreModelProviderRequestAttempt) => void;
   onTransportActivity?: (activity: CoreModelTransportActivity) => void;
 }): Promise<AnthropicCompletionResult> {
   const request = buildAnthropicStreamRequest(args);
+  args.onProviderRequestAttempt?.({ model: args.model });
   const stream = args.client.messages.stream(request, {
     signal: args.signal,
     maxRetries: 0,

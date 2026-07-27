@@ -29,6 +29,14 @@ export type AskAgentRouteHandler =
   | "questionProgress"
   | "memory"
   | "memoryClear"
+  | "autonomousMemoryHealth"
+  | "autonomousMemoryActivity"
+  | "autonomousMemoryQuery"
+  | "autonomousMemoryDetail"
+  | "autonomousMemoryManage"
+  | "autonomousMemoryClear"
+  | "autonomousMemoryExport"
+  | "autonomousMemoryImport"
   | "log"
   | "model"
   | "memoryProposal"
@@ -107,6 +115,46 @@ export const ASK_AGENT_ROUTES = [
     method: "POST",
     path: "/api/ask-agent/memory/clear",
     handler: "memoryClear",
+  },
+  {
+    method: "GET",
+    path: "/api/ask-agent/autonomous-memory/health",
+    handler: "autonomousMemoryHealth",
+  },
+  {
+    method: "GET",
+    path: "/api/ask-agent/autonomous-memory/activity",
+    handler: "autonomousMemoryActivity",
+  },
+  {
+    method: "POST",
+    path: "/api/ask-agent/autonomous-memory/query",
+    handler: "autonomousMemoryQuery",
+  },
+  {
+    method: "POST",
+    path: "/api/ask-agent/autonomous-memory/detail",
+    handler: "autonomousMemoryDetail",
+  },
+  {
+    method: "POST",
+    path: "/api/ask-agent/autonomous-memory/manage",
+    handler: "autonomousMemoryManage",
+  },
+  {
+    method: "POST",
+    path: "/api/ask-agent/autonomous-memory/clear",
+    handler: "autonomousMemoryClear",
+  },
+  {
+    method: "POST",
+    path: "/api/ask-agent/autonomous-memory/export",
+    handler: "autonomousMemoryExport",
+  },
+  {
+    method: "POST",
+    path: "/api/ask-agent/autonomous-memory/import",
+    handler: "autonomousMemoryImport",
   },
   { method: "POST", path: "/api/ask-agent/log", handler: "log" },
   { method: "POST", path: "/api/ask-agent/model", handler: "model" },

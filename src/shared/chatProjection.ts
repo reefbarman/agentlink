@@ -14,8 +14,10 @@ import type {
 } from "../agent/webview/types.js";
 
 import type { ComposeChildStatus, ComposeTrace } from "./composeTypes.js";
+import type { ContextHealthSnapshot } from "./contextHealth.js";
 import type { DetectedQuestion } from "./questionDetection.js";
 import { randomId } from "./randomId.js";
+import { getToolCapabilityMetadata } from "../core/tools/toolCapabilities.js";
 import type {
   BackgroundCompletionResult,
   McpApprovalPromotionMeta,
@@ -234,6 +236,38 @@ export function normalizeProjectedToolName(toolName: string): string {
   return BUILTIN_TOOL_NAMES.has(suffix) ? suffix : toolName;
 }
 
+function projectedToolIdentity(
+  name: string | undefined,
+  input: unknown,
+): { name: string; input: unknown } {
+  const normalizedName = normalizeProjectedToolName(name ?? "");
+  if (
+    normalizedName !== "call_native_tool" ||
+    !input ||
+    typeof input !== "object" ||
+    Array.isArray(input)
+  ) {
+    return { name: normalizedName, input };
+  }
+  const wrapper = input as Record<string, unknown>;
+  if (
+    typeof wrapper.name !== "string" ||
+    !wrapper.input ||
+    typeof wrapper.input !== "object" ||
+    Array.isArray(wrapper.input)
+  ) {
+    return { name: normalizedName, input };
+  }
+  const canonicalName = normalizeProjectedToolName(wrapper.name);
+  if (getToolCapabilityMetadata(canonicalName)?.disclosure !== "eligible") {
+    return { name: normalizedName, input };
+  }
+  return {
+    name: canonicalName,
+    input: wrapper.input,
+  };
+}
+
 type QuestionAnswerItem = Extract<
   ContentBlock,
   { type: "question_answer" }
@@ -393,6 +427,7 @@ export interface AppState {
   systemPrompt: string | null;
   /** Running token estimate from the engine — updated between API calls. */
   estimatedTotalUsed: number;
+  contextHealth: ContextHealthSnapshot | null;
   loadedInstructions: LoadedInstructionDebugInfo[] | null;
   todos: TodoItem[];
   modes: ModeInfo[];
@@ -931,7 +966,9 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           });
         } else if (block.type === "tool_use") {
           const toolId = block.id ?? randomId();
-          const toolName = normalizeProjectedToolName(block.name ?? "");
+          const projectedTool = projectedToolIdentity(block.name, block.input);
+          const toolName = projectedTool.name;
+          const toolInput = projectedTool.input;
           const toolResult = toolResults.get(toolId) ?? "";
           const resultImages = toolResultImages.get(toolId);
           const resultDocuments = toolResultDocuments.get(toolId);
@@ -944,13 +981,13 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           const resultDocumentProps = resultDocuments
             ? { resultDocuments }
             : {};
-          const inputJson = JSON.stringify(block.input ?? {});
+          const inputJson = JSON.stringify(toolInput ?? {});
           if (toolName === "set_task_status" && toolId === finalMarkerToolId) {
             continue;
           }
           const askUserContext =
             toolName === "ask_user"
-              ? getAskUserContextFromInput(block.input)
+              ? getAskUserContextFromInput(toolInput)
               : "";
           if (askUserContext) {
             blocks.push({ type: "text", text: askUserContext });
@@ -1524,6 +1561,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
         },
         streaming: action.state.streaming,
         thinkingEnabled: action.state.thinkingEnabled ?? state.thinkingEnabled,
+        contextHealth: Object.hasOwn(action.state, "contextHealth")
+          ? (action.state.contextHealth ?? null)
+          : state.contextHealth,
         revertRecoveryNotice: Object.hasOwn(
           action.state,
           "revertRecoveryNotice",
@@ -3167,6 +3207,7 @@ export const initialState: AppState = {
   lastOutputTokens: 0,
   lastCacheReadTokens: 0,
   estimatedTotalUsed: 0,
+  contextHealth: null,
   debugInfo: null,
   systemPrompt: null,
   loadedInstructions: null,

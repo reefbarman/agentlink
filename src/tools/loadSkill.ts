@@ -5,8 +5,11 @@ import type { ToolResult } from "../shared/types.js";
 import { loadAdvertisedFile } from "./loadAdvertisedFile.js";
 
 interface AllowedSkill {
+  id: string;
   name: string;
+  revision: string;
   skillPath: string;
+  realSkillPath: string;
 }
 
 export async function handleLoadSkill(
@@ -24,6 +27,12 @@ export async function handleLoadSkill(
     advertisedFiles: advertisedSkills.map((skill) => ({
       name: skill.name,
       filePath: skill.skillPath,
+      resultFields: {
+        skill_id: skill.id,
+        revision: skill.revision,
+      },
+      expectedRealPath: skill.realSkillPath,
+      expectedSha256: skill.revision,
     })),
     kind: "skill",
     pathProperty: "skillPath",

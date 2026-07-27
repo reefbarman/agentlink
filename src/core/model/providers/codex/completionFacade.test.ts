@@ -69,6 +69,7 @@ describe("executeCodexResolvedCompletion", () => {
       },
     } satisfies CodexResponsesClient;
     const signal = new AbortController().signal;
+    const attempts: string[] = [];
 
     const result = await executeCodexResolvedCompletion({
       client,
@@ -88,9 +89,11 @@ describe("executeCodexResolvedCompletion", () => {
       ],
       signal,
       onTextDelta: (delta) => deltas.push(delta),
+      onProviderRequestAttempt: ({ model }) => attempts.push(model),
     });
 
     expect(deltas).toEqual([" Hello", " "]);
+    expect(attempts).toEqual(["gpt-5.3-codex"]);
     expect(result).toMatchObject({
       text: "Hello",
       toolCalls: [{ id: "call_1", name: "demo_tool", input: { value: 42 } }],

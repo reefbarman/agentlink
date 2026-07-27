@@ -1,0 +1,1830 @@
+import { randomUUID } from "node:crypto";
+import * as fs from "node:fs/promises";
+
+import { connect, Index, makeArrowTable } from "@lancedb/lancedb";
+import type { Connection, Table } from "@lancedb/lancedb";
+import type { Schema } from "apache-arrow";
+
+import type {
+  RetrievalAbortPublicationOutcome,
+  RetrievalActiveSource,
+  RetrievalAggregateMetrics,
+  RetrievalChunkRecord,
+  RetrievalDeleteScopeOutcome,
+  RetrievalDeleteScopeRequest,
+  RetrievalDeleteSourceOutcome,
+  RetrievalDeleteSourceRequest,
+  RetrievalFingerprint,
+  RetrievalFingerprintDisposition,
+  RetrievalHealthSnapshot,
+  RetrievalLexicalReadiness,
+  RetrievalMigrationOutcome,
+  RetrievalOptimizeOutcome,
+  RetrievalPublicationBatchOutcome,
+  RetrievalPublicationOutcome,
+  RetrievalPublicationPreparation,
+  RetrievalPublicationRequest,
+  RetrievalQuery,
+  RetrievalQueryFilter,
+  RetrievalQueryResult,
+  RetrievalRelationRecord,
+  RetrievalRepairOutcome,
+  RetrievalRepository,
+  RetrievalSnapshot,
+  RetrievalSnapshotOutcome,
+  RetrievalSourceDocument,
+  RetrievalSourceRevision,
+  RetrievalStructuralSnapshot,
+  RetrievalStructuralSnapshotRequest,
+} from "../../core/retrieval/contracts.js";
+import { classifyRetrievalFingerprint } from "../../core/retrieval/fingerprint.js";
+import {
+  diversifyRetrievalCandidates,
+  normalizeRetrievalPath,
+} from "../../core/retrieval/ranking.js";
+import {
+  InMemoryRetrievalRepository,
+  type InMemoryRetrievalRepositoryOptions,
+} from "../../core/retrieval/InMemoryRetrievalRepository.js";
+import {
+  RETRIEVAL_TABLES,
+  retrievalChunkSchema,
+  retrievalMetadataSchema,
+  retrievalPublicationSchema,
+  retrievalRelationSchema,
+  retrievalSnapshotSchema,
+  retrievalSourceSchema,
+} from "./lanceDbSchemas.js";
+import { withRetrievalStoreLock } from "./retrievalStoreLock.js";
+
+const FINGERPRINT_KEY = "fingerprint";
+const METRICS_KEY = "aggregate_metrics";
+const NATIVE_CAPABILITIES_KEY = "native_capabilities";
+const RETRIEVAL_STORE_MARKER = ".agentlink-retrieval-store";
+const DEFAULT_VECTOR_DIMENSIONS = 1;
+const MINIMUM_NATIVE_CANDIDATES = 100;
+const MAXIMUM_NATIVE_CANDIDATES = 1_000;
+const LEXICAL_INDEX_NAME = "retrieval_search_text_fts";
+const SOURCE_INDEX_NAME = "retrieval_source_id_btree";
+const GENERATION_INDEX_NAME = "retrieval_generation_btree";
+const WRITE_BATCH_SIZE = 256;
+const REQUIRED_RETRIEVAL_TABLES = [
+  RETRIEVAL_TABLES.sources,
+  RETRIEVAL_TABLES.chunks,
+  RETRIEVAL_TABLES.relations,
+  RETRIEVAL_TABLES.publications,
+  RETRIEVAL_TABLES.metadata,
+  RETRIEVAL_TABLES.snapshots,
+] as const;
+
+const EMPTY_METRICS: RetrievalAggregateMetrics = {
+  sourcesScanned: 0,
+  sourcesPublished: 0,
+  sourcesDeleted: 0,
+  recordsAdded: 0,
+  recordsRemoved: 0,
+  queries: 0,
+  lexicalQueries: 0,
+  vectorQueries: 0,
+  hybridQueries: 0,
+  recoveries: 0,
+  snapshotsCreated: 0,
+  snapshotsRestored: 0,
+  repairs: 0,
+  optimizations: 0,
+};
+
+interface SourceRow {
+  source_id: string;
+  revision_id: string;
+  generation: string | null;
+  deleted: boolean;
+  payload_json: string;
+}
+
+interface ChunkRow {
+  chunk_id: string;
+  source_id: string;
+  revision_id: string;
+  generation: string;
+  search_text: string;
+  embedding: readonly number[] | null;
+  payload_json: string;
+}
+
+interface RelationRow {
+  relation_id: string;
+  source_id: string;
+  revision_id: string;
+  generation: string;
+  payload_json: string;
+}
+
+interface PublicationRow {
+  publication_id: string;
+  source_id: string;
+  revision_id: string;
+  generation: string;
+  payload_json: string;
+}
+
+interface MetadataRow {
+  key: string;
+  value_json: string;
+}
+
+interface SnapshotRow {
+  snapshot_id: string;
+  created_at: string;
+  label: string | null;
+  source_count: number;
+  chunk_count: number;
+  relation_count: number;
+  payload_json: string;
+}
+
+interface DurableSnapshotState {
+  fingerprint: RetrievalFingerprint | null;
+  sources: SourceRow[];
+  chunks: ChunkRow[];
+  relations: RelationRow[];
+}
+
+interface NativeCapabilityStatus {
+  status: "ready" | "unavailable";
+  detail?: string;
+}
+
+interface NativeCapabilities {
+  lexical: NativeCapabilityStatus;
+  scalar: NativeCapabilityStatus;
+  vector: NativeCapabilityStatus;
+}
+
+interface DurableState extends DurableSnapshotState {
+  publications: PublicationRow[];
+  metadata: MetadataRow[];
+  snapshots: SnapshotRow[];
+  metrics: RetrievalAggregateMetrics;
+  nativeCapabilities: NativeCapabilities;
+}
+
+interface RetrievalTables {
+  sources: Table;
+  chunks: Table;
+  relations: Table;
+  publications: Table;
+  metadata: Table;
+  snapshots: Table;
+}
+
+export interface LanceDbRetrievalIndexOperations {
+  createLexical(table: Table): Promise<void>;
+  createScalar(table: Table): Promise<void>;
+  validateVector(table: Table, dimensions: number): Promise<void>;
+}
+
+export interface LanceDbRetrievalRepositoryOptions extends Omit<
+  InMemoryRetrievalRepositoryOptions,
+  "fingerprint"
+> {
+  root: string;
+  embeddingDimensions?: number;
+  indexOperations?: LanceDbRetrievalIndexOperations;
+}
+
+export class LanceDbRetrievalRepository implements RetrievalRepository {
+  private readonly root: string;
+  private readonly options: LanceDbRetrievalRepositoryOptions;
+  private connection: Connection | undefined;
+  private tables: RetrievalTables | undefined;
+  private dimensions: number | undefined;
+  private aggregate: RetrievalAggregateMetrics = clone(EMPTY_METRICS);
+  private inspectedFingerprint: RetrievalFingerprint | undefined;
+  private readonly staleSourceIds = new Set<string>();
+  private closePromise: Promise<void> | undefined;
+  private closing = false;
+
+  constructor(options: LanceDbRetrievalRepositoryOptions) {
+    this.root = options.root;
+    this.options = options;
+    this.dimensions = options.embeddingDimensions;
+  }
+
+  async inspectFingerprint(
+    expected: RetrievalFingerprint,
+  ): Promise<RetrievalFingerprintDisposition> {
+    this.inspectedFingerprint = clone(expected);
+    return this.withState(expected.embedding?.dimensions, async (state) =>
+      classifyRetrievalFingerprint(state.fingerprint, expected),
+    );
+  }
+
+  async migrate(
+    expected: RetrievalFingerprint,
+  ): Promise<RetrievalMigrationOutcome> {
+    this.inspectedFingerprint = clone(expected);
+    return this.withState(
+      expected.embedding?.dimensions,
+      async (state, tables) => {
+        const disposition = classifyRetrievalFingerprint(
+          state.fingerprint,
+          expected,
+        );
+        if (disposition === "compatible") {
+          if (hasUnavailableNativeCapability(state.nativeCapabilities)) {
+            await this.refreshNativeIndexes(state, tables);
+            await this.persistMetadata(state, tables);
+          }
+          await this.writeStoreMarker();
+          return {
+            status: "up_to_date",
+            fromVersion: state.fingerprint?.schemaVersion ?? null,
+            toVersion: expected.schemaVersion,
+          };
+        }
+        if (disposition === "rebuild_required") {
+          return {
+            status: "rebuild_required",
+            fromVersion: state.fingerprint?.schemaVersion ?? null,
+            toVersion: expected.schemaVersion,
+          };
+        }
+        state.fingerprint = clone(expected);
+        await this.refreshNativeIndexes(state, tables);
+        await this.persistMetadata(state, tables);
+        await this.writeStoreMarker();
+        return {
+          status: "migrated",
+          fromVersion: null,
+          toVersion: expected.schemaVersion,
+        };
+      },
+    );
+  }
+
+  async preparePublication(
+    request: RetrievalPublicationRequest,
+  ): Promise<RetrievalPublicationPreparation> {
+    return this.withState(undefined, async (state, tables) => {
+      const engine = await this.buildEngine(state);
+      const preparation = await engine.preparePublication(request);
+      state.publications.push(publicationRow(request));
+      state.metrics.sourcesScanned += 1;
+      await writeRows(
+        tables.publications,
+        state.publications,
+        retrievalPublicationSchema(),
+      );
+      await this.persistMetadata(state, tables);
+      return preparation;
+    });
+  }
+
+  async commitPublication(
+    publicationId: string,
+  ): Promise<RetrievalPublicationOutcome> {
+    return this.withState(undefined, async (state, tables) => {
+      const engine = await this.buildEngine(state);
+      const outcome = await engine.commitPublication(publicationId);
+      const publication = state.publications.find(
+        (row) => row.publication_id === publicationId,
+      );
+      if (!publication) return outcome;
+      const request = parseJson<RetrievalPublicationRequest>(
+        publication.payload_json,
+      );
+
+      if (outcome.status === "published") {
+        const nextChunks = deduplicateChunks([
+          ...state.chunks,
+          ...request.chunks.map((chunk) =>
+            chunkRow(chunk, request.source, request.relations),
+          ),
+        ]);
+        const nextRelations = deduplicateRelations([
+          ...state.relations,
+          ...request.relations.map(relationRow),
+        ]);
+        await writeRows(
+          tables.chunks,
+          nextChunks,
+          retrievalChunkSchema(this.requireDimensions()),
+        );
+        await writeRows(
+          tables.relations,
+          nextRelations,
+          retrievalRelationSchema(),
+        );
+
+        state.sources = [
+          ...state.sources.filter((row) => row.source_id !== request.source.id),
+          sourceRow(request.source, request.generation),
+        ];
+        await writeRows(tables.sources, state.sources, retrievalSourceSchema());
+
+        state.chunks = nextChunks.filter((row) =>
+          isActiveGeneration(row, state.sources),
+        );
+        state.relations = nextRelations.filter((row) =>
+          isActiveGeneration(row, state.sources),
+        );
+        await writeRows(
+          tables.chunks,
+          state.chunks,
+          retrievalChunkSchema(this.requireDimensions()),
+        );
+        await writeRows(
+          tables.relations,
+          state.relations,
+          retrievalRelationSchema(),
+        );
+        await this.refreshNativeIndexes(state, tables);
+        this.staleSourceIds.delete(request.source.id);
+        state.metrics.sourcesPublished += 1;
+        state.metrics.recordsAdded += outcome.recordsAdded;
+        state.metrics.recordsRemoved += outcome.recordsRemoved;
+      }
+
+      state.publications = state.publications.filter(
+        (row) => row.publication_id !== publicationId,
+      );
+      await writeRows(
+        tables.publications,
+        state.publications,
+        retrievalPublicationSchema(),
+      );
+      await this.persistMetadata(state, tables);
+      return outcome;
+    });
+  }
+
+  async commitPublicationBatch(
+    publicationIds: string[],
+  ): Promise<RetrievalPublicationBatchOutcome> {
+    if (new Set(publicationIds).size !== publicationIds.length) {
+      throw new Error("Publication IDs must be unique");
+    }
+    if (publicationIds.some((publicationId) => !publicationId)) {
+      throw new Error("Publication IDs cannot be empty");
+    }
+    if (publicationIds.length === 0) {
+      return {
+        status: "published",
+        publications: [],
+        recordsAdded: 0,
+        recordsRemoved: 0,
+      };
+    }
+
+    return this.withState(undefined, async (state, tables) => {
+      const engine = await this.buildEngine(state);
+      const publications: RetrievalPublicationOutcome[] = [];
+      const requests: RetrievalPublicationRequest[] = [];
+      for (const publicationId of publicationIds) {
+        const outcome = await engine.commitPublication(publicationId);
+        publications.push(outcome);
+        if (outcome.status !== "published") {
+          return {
+            status: "rejected",
+            publications,
+            recordsAdded: 0,
+            recordsRemoved: 0,
+          };
+        }
+        const row = state.publications.find(
+          (candidate) => candidate.publication_id === publicationId,
+        );
+        if (!row) {
+          return {
+            status: "rejected",
+            publications: [
+              ...publications.slice(0, -1),
+              {
+                publicationId,
+                status: "not_found",
+                recordsAdded: 0,
+                recordsRemoved: 0,
+              },
+            ],
+            recordsAdded: 0,
+            recordsRemoved: 0,
+          };
+        }
+        requests.push(parseJson<RetrievalPublicationRequest>(row.payload_json));
+      }
+
+      let nextSources = state.sources;
+      let nextChunks = state.chunks;
+      let nextRelations = state.relations;
+      for (const request of requests) {
+        nextChunks = deduplicateChunks([
+          ...nextChunks,
+          ...request.chunks.map((chunk) =>
+            chunkRow(chunk, request.source, request.relations),
+          ),
+        ]);
+        nextRelations = deduplicateRelations([
+          ...nextRelations,
+          ...request.relations.map(relationRow),
+        ]);
+        nextSources = [
+          ...nextSources.filter((row) => row.source_id !== request.source.id),
+          sourceRow(request.source, request.generation),
+        ];
+        nextChunks = nextChunks.filter((row) =>
+          isActiveGeneration(row, nextSources),
+        );
+        nextRelations = nextRelations.filter((row) =>
+          isActiveGeneration(row, nextSources),
+        );
+      }
+
+      state.sources = nextSources;
+      state.chunks = nextChunks;
+      state.relations = nextRelations;
+      state.publications = state.publications.filter(
+        (row) => !publicationIds.includes(row.publication_id),
+      );
+      await writeRows(
+        tables.chunks,
+        state.chunks,
+        retrievalChunkSchema(this.requireDimensions()),
+      );
+      await writeRows(
+        tables.relations,
+        state.relations,
+        retrievalRelationSchema(),
+      );
+      // Sources are the visibility boundary: staged chunks remain hidden until
+      // every source generation becomes active in this single table rewrite.
+      await writeRows(tables.sources, state.sources, retrievalSourceSchema());
+      await writeRows(
+        tables.publications,
+        state.publications,
+        retrievalPublicationSchema(),
+      );
+      await this.refreshNativeIndexes(state, tables);
+      const recordsAdded = publications.reduce(
+        (total, publication) => total + publication.recordsAdded,
+        0,
+      );
+      const recordsRemoved = publications.reduce(
+        (total, publication) => total + publication.recordsRemoved,
+        0,
+      );
+      for (const request of requests) {
+        this.staleSourceIds.delete(request.source.id);
+      }
+      state.metrics.sourcesPublished += publications.length;
+      state.metrics.recordsAdded += recordsAdded;
+      state.metrics.recordsRemoved += recordsRemoved;
+      await this.persistMetadata(state, tables);
+      return {
+        status: "published",
+        publications,
+        recordsAdded,
+        recordsRemoved,
+      };
+    });
+  }
+
+  async abortPublication(
+    publicationId: string,
+  ): Promise<RetrievalAbortPublicationOutcome> {
+    return this.withState(undefined, async (state, tables) => {
+      const before = state.publications.length;
+      state.publications = state.publications.filter(
+        (row) => row.publication_id !== publicationId,
+      );
+      if (state.publications.length === before) {
+        return { publicationId, status: "not_found" };
+      }
+      await writeRows(
+        tables.publications,
+        state.publications,
+        retrievalPublicationSchema(),
+      );
+      return { publicationId, status: "aborted" };
+    });
+  }
+
+  async inspectSource(sourceId: string): Promise<RetrievalActiveSource | null> {
+    return this.withState(undefined, async (state) => {
+      const row = activeSourceRows(state.sources).find(
+        (source) => source.source_id === sourceId,
+      );
+      return row?.generation
+        ? {
+            source: parseJson<RetrievalSourceDocument>(row.payload_json),
+            generation: row.generation,
+          }
+        : null;
+    });
+  }
+
+  async listSources(
+    filters?: RetrievalQueryFilter,
+  ): Promise<RetrievalActiveSource[]> {
+    return this.withState(undefined, async (state) =>
+      activeSourceRows(state.sources)
+        .flatMap((row) => {
+          if (!row.generation) return [];
+          const source = parseJson<RetrievalSourceDocument>(row.payload_json);
+          return matchesSourceFilter(source, filters)
+            ? [{ source, generation: row.generation }]
+            : [];
+        })
+        .sort((left, right) => left.source.id.localeCompare(right.source.id)),
+    );
+  }
+
+  async structuralSnapshot(
+    request: RetrievalStructuralSnapshotRequest,
+  ): Promise<RetrievalStructuralSnapshot> {
+    if (this.closing) throw new Error("retrieval_store_closed");
+    if (!(await this.hasStoreMarker())) return missingStructuralSnapshot();
+
+    return withRetrievalStoreLock(this.root, async () => {
+      if (this.closing) throw new Error("retrieval_store_closed");
+      if (!(await this.hasStoreMarker())) return missingStructuralSnapshot();
+
+      const connection = await connect(this.root, {
+        readConsistencyInterval: 0,
+      });
+      let sourcesTable: Table | undefined;
+      let relationsTable: Table | undefined;
+      let metadataTable: Table | undefined;
+      try {
+        const names = new Set(await connection.tableNames());
+        if (
+          !names.has(RETRIEVAL_TABLES.sources) ||
+          !names.has(RETRIEVAL_TABLES.relations) ||
+          !names.has(RETRIEVAL_TABLES.metadata)
+        ) {
+          return missingStructuralSnapshot();
+        }
+
+        [sourcesTable, relationsTable, metadataTable] = await Promise.all([
+          connection.openTable(RETRIEVAL_TABLES.sources),
+          connection.openTable(RETRIEVAL_TABLES.relations),
+          connection.openTable(RETRIEVAL_TABLES.metadata),
+        ]);
+        const [sourceRows, relationRows, metadata] = await Promise.all([
+          readRows<SourceRow>(sourcesTable),
+          readRows<RelationRow>(relationsTable),
+          readRows<MetadataRow>(metadataTable),
+        ]);
+        const fingerprint = metadataValue<RetrievalFingerprint>(
+          metadata,
+          FINGERPRINT_KEY,
+        );
+        const fingerprintDisposition = classifyRetrievalFingerprint(
+          fingerprint,
+          request.expectedFingerprint,
+        );
+        if (fingerprintDisposition !== "compatible") {
+          return {
+            status:
+              fingerprintDisposition === "rebuild_required"
+                ? "rebuild_required"
+                : "missing",
+            fingerprintDisposition,
+            sources: [],
+            relations: [],
+          };
+        }
+        if (this.options.structuralAvailable === false) {
+          return {
+            status: "unavailable",
+            fingerprintDisposition,
+            sources: [],
+            relations: [],
+          };
+        }
+
+        const sources = activeSourceRows(sourceRows)
+          .flatMap((row) => {
+            if (!row.generation) return [];
+            const source = parseJson<RetrievalSourceDocument>(row.payload_json);
+            return matchesSourceFilter(source, request.filters)
+              ? [{ source, generation: row.generation }]
+              : [];
+          })
+          .sort((left, right) => left.source.id.localeCompare(right.source.id));
+        const active = new Map(
+          sources.map(({ source, generation }) => [
+            source.id,
+            { revisionId: source.revision.id, generation },
+          ]),
+        );
+        const relations = relationRows
+          .map((row) => parseJson<RetrievalRelationRecord>(row.payload_json))
+          .filter((relation) => {
+            const expected = active.get(relation.sourceId);
+            return (
+              expected?.revisionId === relation.revisionId &&
+              expected.generation === relation.generation
+            );
+          })
+          .sort((left, right) => left.id.localeCompare(right.id));
+        return {
+          status: "ready",
+          fingerprintDisposition,
+          sources,
+          relations,
+        };
+      } finally {
+        sourcesTable?.close();
+        relationsTable?.close();
+        metadataTable?.close();
+        connection.close();
+      }
+    });
+  }
+
+  async recoverPublications(): Promise<RetrievalRepairOutcome> {
+    return this.withState(undefined, async (state, tables) => {
+      const outcome = await this.repairState(state, tables, false);
+      state.metrics.recoveries += 1;
+      await this.persistMetadata(state, tables);
+      return outcome;
+    });
+  }
+
+  async deleteSource(
+    request: RetrievalDeleteSourceRequest,
+  ): Promise<RetrievalDeleteSourceOutcome> {
+    return this.withState(undefined, async (state, tables) => {
+      const engine = await this.buildEngine(state);
+      const outcome = await engine.deleteSource(request);
+      if (outcome.status !== "deleted") return outcome;
+      const current = activeSourceRows(state.sources).find(
+        (row) => row.source_id === request.sourceId,
+      );
+      if (!current) return outcome;
+      const source = parseJson<RetrievalSourceDocument>(current.payload_json);
+
+      state.sources = [
+        ...state.sources.filter((row) => row.source_id !== request.sourceId),
+        tombstoneRow(request.sourceId, source.revision),
+      ];
+      await writeRows(tables.sources, state.sources, retrievalSourceSchema());
+
+      state.chunks = state.chunks.filter(
+        (row) => row.source_id !== request.sourceId,
+      );
+      state.relations = state.relations.filter(
+        (row) => row.source_id !== request.sourceId,
+      );
+      await writeRows(
+        tables.chunks,
+        state.chunks,
+        retrievalChunkSchema(this.requireDimensions()),
+      );
+      await writeRows(
+        tables.relations,
+        state.relations,
+        retrievalRelationSchema(),
+      );
+      await this.refreshNativeIndexes(state, tables);
+      this.staleSourceIds.delete(request.sourceId);
+      state.metrics.sourcesDeleted += 1;
+      state.metrics.recordsRemoved += outcome.recordsRemoved;
+      await this.persistMetadata(state, tables);
+      return outcome;
+    });
+  }
+
+  async deleteScope(
+    request: RetrievalDeleteScopeRequest,
+  ): Promise<RetrievalDeleteScopeOutcome> {
+    return this.withState(undefined, async (state, tables) => {
+      const activeRows = activeSourceRows(state.sources).filter((row) =>
+        matchesDeleteScope(
+          parseJson<RetrievalSourceDocument>(row.payload_json),
+          request,
+        ),
+      );
+      const scopedSourceIds = new Set(activeRows.map((row) => row.source_id));
+      if (request.sourceIdPrefix) {
+        for (const row of state.sources) {
+          if (row.source_id.startsWith(request.sourceIdPrefix)) {
+            scopedSourceIds.add(row.source_id);
+          }
+        }
+      }
+      for (const row of state.publications) {
+        const publication = parseJson<RetrievalPublicationRequest>(
+          row.payload_json,
+        );
+        if (matchesDeleteScope(publication.source, request)) {
+          scopedSourceIds.add(publication.source.id);
+        }
+      }
+
+      const chunksRemoved = state.chunks.filter((row) =>
+        scopedSourceIds.has(row.source_id),
+      ).length;
+      const relationsRemoved = state.relations.filter((row) =>
+        scopedSourceIds.has(row.source_id),
+      ).length;
+      state.sources = state.sources.filter(
+        (row) => !scopedSourceIds.has(row.source_id),
+      );
+      state.chunks = state.chunks.filter(
+        (row) => !scopedSourceIds.has(row.source_id),
+      );
+      state.relations = state.relations.filter(
+        (row) => !scopedSourceIds.has(row.source_id),
+      );
+      state.publications = state.publications.filter(
+        (row) => !scopedSourceIds.has(row.source_id),
+      );
+      await Promise.all([
+        writeRows(tables.sources, state.sources, retrievalSourceSchema()),
+        writeRows(
+          tables.chunks,
+          state.chunks,
+          retrievalChunkSchema(this.requireDimensions()),
+        ),
+        writeRows(tables.relations, state.relations, retrievalRelationSchema()),
+        writeRows(
+          tables.publications,
+          state.publications,
+          retrievalPublicationSchema(),
+        ),
+      ]);
+      await this.refreshNativeIndexes(state, tables);
+      for (const sourceId of scopedSourceIds)
+        this.staleSourceIds.delete(sourceId);
+      const recordsRemoved =
+        activeRows.length + chunksRemoved + relationsRemoved;
+      state.metrics.sourcesDeleted += activeRows.length;
+      state.metrics.recordsRemoved += recordsRemoved;
+      await this.persistMetadata(state, tables);
+      return {
+        sourcesDeleted: activeRows.length,
+        recordsRemoved,
+      };
+    });
+  }
+
+  async query(request: RetrievalQuery): Promise<RetrievalQueryResult> {
+    return this.withState(undefined, async (state, tables) => {
+      const engine = await this.buildEngine(state);
+      const candidateLimit = Math.min(
+        MAXIMUM_NATIVE_CANDIDATES,
+        Math.max(MINIMUM_NATIVE_CANDIDATES, request.limit * 8),
+      );
+      const expandedRequest: RetrievalQuery = {
+        ...request,
+        limit: candidateLimit,
+        diversity: {
+          maxPerSource: candidateLimit,
+          collapseOverlaps: false,
+        },
+      };
+      let result = await engine.query(expandedRequest);
+      const nativeIds = await this.nativeCandidateIds(
+        request,
+        candidateLimit,
+        state,
+        tables,
+      );
+      if (nativeIds) {
+        result = {
+          ...result,
+          query: clone(request),
+          candidates: diversifyRetrievalCandidates(
+            result.candidates.filter((candidate) =>
+              nativeIds.has(candidate.chunk.id),
+            ),
+            request,
+          ),
+        };
+      } else {
+        result = {
+          ...result,
+          query: clone(request),
+          candidates: diversifyRetrievalCandidates(result.candidates, request),
+        };
+      }
+      state.metrics.queries += 1;
+      state.metrics[`${request.mode}Queries`] += 1;
+      if (request.freshness === "required") {
+        const observed = new Set(
+          result.freshness?.staleSources.map((source) => source.sourceId) ?? [],
+        );
+        for (const candidate of result.candidates) {
+          if (!observed.has(candidate.source.id)) {
+            this.staleSourceIds.delete(candidate.source.id);
+          }
+        }
+        for (const sourceId of observed) this.staleSourceIds.add(sourceId);
+        for (const sourceId of result.freshness?.deletedSourceIds ?? []) {
+          this.staleSourceIds.delete(sourceId);
+        }
+      }
+      await this.persistMetadata(state, tables);
+      return result;
+    });
+  }
+
+  async relations(sourceIds?: string[]): Promise<RetrievalRelationRecord[]> {
+    return this.withState(undefined, async (state) => {
+      const engine = await this.buildEngine(state);
+      return engine.relations(sourceIds);
+    });
+  }
+
+  async lexicalReadiness(): Promise<RetrievalLexicalReadiness> {
+    if (this.closing) throw new Error("retrieval_store_closed");
+    const configuredBlocker = this.configuredLexicalBlocker();
+    if (configuredBlocker) return configuredBlocker;
+    if (!(await this.hasStoreMarker())) {
+      return { status: "unavailable", reason: "missing_index" };
+    }
+
+    return withRetrievalStoreLock(this.root, async () => {
+      if (this.closing) throw new Error("retrieval_store_closed");
+      if (!(await this.hasStoreMarker())) {
+        return { status: "unavailable", reason: "missing_index" };
+      }
+
+      let connection: Connection | undefined;
+      let metadataTable: Table | undefined;
+      try {
+        connection = await connect(this.root, { readConsistencyInterval: 0 });
+        const names = new Set(await connection.tableNames());
+        if (
+          REQUIRED_RETRIEVAL_TABLES.some((tableName) => !names.has(tableName))
+        ) {
+          return { status: "unavailable", reason: "missing_index" };
+        }
+        metadataTable = await connection.openTable(RETRIEVAL_TABLES.metadata);
+        const metadata = await readRows<MetadataRow>(metadataTable);
+        const fingerprint = metadataValue<RetrievalFingerprint>(
+          metadata,
+          FINGERPRINT_KEY,
+        );
+        if (!fingerprint) {
+          return { status: "unavailable", reason: "missing_index" };
+        }
+        if (
+          this.inspectedFingerprint &&
+          classifyRetrievalFingerprint(
+            fingerprint,
+            this.inspectedFingerprint,
+          ) === "rebuild_required"
+        ) {
+          return { status: "unavailable", reason: "rebuild_required" };
+        }
+        const capabilities = metadataValue<NativeCapabilities>(
+          metadata,
+          NATIVE_CAPABILITIES_KEY,
+        );
+        if (!capabilities || capabilities.lexical.status !== "ready") {
+          return {
+            status: "unavailable",
+            reason: "lexical_index_unavailable",
+            ...(capabilities?.lexical.detail
+              ? { detail: capabilities.lexical.detail }
+              : {}),
+          };
+        }
+        return { status: "ready" };
+      } catch (error) {
+        return {
+          status: "unavailable",
+          reason: "store_unavailable",
+          detail: error instanceof Error ? error.message : String(error),
+        };
+      } finally {
+        metadataTable?.close();
+        connection?.close();
+      }
+    });
+  }
+
+  async health(): Promise<RetrievalHealthSnapshot> {
+    return this.withState(undefined, async (state) => {
+      const engine = await this.buildEngine(state);
+      const health = await engine.health();
+      const details = nativeHealthDetails(state.nativeCapabilities);
+      return {
+        ...health,
+        ...(Object.keys(details).length > 0 ? { details } : {}),
+        pendingPublications: state.publications.length,
+        sourceCount: activeSourceRows(state.sources).length,
+        chunkCount: state.chunks.filter((row) =>
+          isActiveGeneration(row, state.sources),
+        ).length,
+        relationCount: state.relations.filter((row) =>
+          isActiveGeneration(row, state.sources),
+        ).length,
+        staleSourceCount: this.staleSourceIds.size,
+      };
+    });
+  }
+
+  async createSnapshot(label?: string): Promise<RetrievalSnapshotOutcome> {
+    return this.withState(undefined, async (state, tables) => {
+      const descriptor: RetrievalSnapshot = {
+        id: this.options.createId?.() ?? `snapshot-${randomUUID()}`,
+        createdAt: this.options.now?.() ?? new Date().toISOString(),
+        ...(label ? { label } : {}),
+        sourceCount: activeSourceRows(state.sources).length,
+        chunkCount: state.chunks.filter((row) =>
+          isActiveGeneration(row, state.sources),
+        ).length,
+        relationCount: state.relations.filter((row) =>
+          isActiveGeneration(row, state.sources),
+        ).length,
+      };
+      const snapshotState: DurableSnapshotState = {
+        fingerprint: clone(state.fingerprint),
+        sources: clone(state.sources),
+        chunks: clone(state.chunks),
+        relations: clone(state.relations),
+      };
+      state.snapshots.push(snapshotRow(descriptor, snapshotState));
+      state.metrics.snapshotsCreated += 1;
+      await writeRows(
+        tables.snapshots,
+        state.snapshots,
+        retrievalSnapshotSchema(),
+      );
+      await this.persistMetadata(state, tables);
+      return { status: "created", snapshot: descriptor };
+    });
+  }
+
+  async restoreSnapshot(snapshotId: string): Promise<RetrievalSnapshotOutcome> {
+    return this.withState(undefined, async (state, tables) => {
+      const row = state.snapshots.find(
+        (snapshot) => snapshot.snapshot_id === snapshotId,
+      );
+      if (!row) return { status: "not_found" };
+      const snapshot = parseJson<DurableSnapshotState>(row.payload_json);
+
+      const stagedChunks = deduplicateChunks([
+        ...state.chunks,
+        ...snapshot.chunks,
+      ]);
+      const stagedRelations = deduplicateRelations([
+        ...state.relations,
+        ...snapshot.relations,
+      ]);
+      await writeRows(
+        tables.chunks,
+        stagedChunks,
+        retrievalChunkSchema(this.requireDimensions()),
+      );
+      await writeRows(
+        tables.relations,
+        stagedRelations,
+        retrievalRelationSchema(),
+      );
+      state.sources = clone(snapshot.sources);
+      await writeRows(tables.sources, state.sources, retrievalSourceSchema());
+
+      state.chunks = stagedChunks.filter((chunk) =>
+        isActiveGeneration(chunk, state.sources),
+      );
+      state.relations = stagedRelations.filter((relation) =>
+        isActiveGeneration(relation, state.sources),
+      );
+      state.publications = [];
+      state.fingerprint = clone(snapshot.fingerprint);
+      await writeRows(
+        tables.chunks,
+        state.chunks,
+        retrievalChunkSchema(this.requireDimensions()),
+      );
+      await writeRows(
+        tables.relations,
+        state.relations,
+        retrievalRelationSchema(),
+      );
+      await writeRows(
+        tables.publications,
+        state.publications,
+        retrievalPublicationSchema(),
+      );
+      await this.refreshNativeIndexes(state, tables);
+      this.staleSourceIds.clear();
+      state.metrics.snapshotsRestored += 1;
+      await this.persistMetadata(state, tables);
+      return {
+        status: "restored",
+        snapshot: snapshotDescriptor(row),
+      };
+    });
+  }
+
+  async repair(): Promise<RetrievalRepairOutcome> {
+    return this.withState(undefined, async (state, tables) => {
+      const outcome = await this.repairState(state, tables, true);
+      state.metrics.repairs += 1;
+      state.metrics.recordsRemoved +=
+        outcome.orphanedChunksRemoved + outcome.orphanedRelationsRemoved;
+      await this.persistMetadata(state, tables);
+      return outcome;
+    });
+  }
+
+  async optimize(): Promise<RetrievalOptimizeOutcome> {
+    return this.withState(undefined, async (state, tables) => {
+      let fragmentsRemoved = 0;
+      let bytesReclaimed = 0;
+      for (const table of Object.values(tables)) {
+        const stats = await table.optimize();
+        fragmentsRemoved += stats.compaction.fragmentsRemoved;
+        bytesReclaimed += stats.prune.bytesRemoved;
+      }
+      const recordsCompacted =
+        fragmentsRemoved > 0
+          ? activeSourceRows(state.sources).length +
+            state.chunks.filter((row) => isActiveGeneration(row, state.sources))
+              .length +
+            state.relations.filter((row) =>
+              isActiveGeneration(row, state.sources),
+            ).length
+          : 0;
+      state.metrics.optimizations += 1;
+      await this.persistMetadata(state, tables);
+      return {
+        status: "optimized",
+        recordsCompacted,
+        ...(bytesReclaimed > 0 ? { bytesReclaimed } : {}),
+      };
+    });
+  }
+
+  metrics(): RetrievalAggregateMetrics {
+    return clone(this.aggregate);
+  }
+
+  setEmbeddingAvailable(available: boolean): void {
+    this.options.embeddingAvailable = available;
+  }
+
+  setIndexAvailability(availability: {
+    lexical?: boolean;
+    scalar?: boolean;
+    vector?: boolean;
+    structural?: boolean;
+  }): void {
+    if (availability.lexical !== undefined) {
+      this.options.lexicalAvailable = availability.lexical;
+    }
+    if (availability.scalar !== undefined) {
+      this.options.scalarAvailable = availability.scalar;
+    }
+    if (availability.vector !== undefined) {
+      this.options.vectorIndexAvailable = availability.vector;
+    }
+    if (availability.structural !== undefined) {
+      this.options.structuralAvailable = availability.structural;
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.closing = true;
+    if (!this.tables && !this.connection) {
+      this.staleSourceIds.clear();
+      this.closePromise = Promise.resolve();
+      return this.closePromise;
+    }
+    this.closePromise = withRetrievalStoreLock(this.root, async () => {
+      for (const table of Object.values(this.tables ?? {})) table.close();
+      this.tables = undefined;
+      this.connection?.close();
+      this.connection = undefined;
+      this.staleSourceIds.clear();
+    });
+    return this.closePromise;
+  }
+
+  private async withState<T>(
+    dimensions: number | undefined,
+    operation: (state: DurableState, tables: RetrievalTables) => Promise<T>,
+  ): Promise<T> {
+    if (this.closing) throw new Error("retrieval_store_closed");
+    return withRetrievalStoreLock(this.root, async () => {
+      if (this.closing) throw new Error("retrieval_store_closed");
+      const tables = await this.ensureTables(dimensions);
+      const state = await readState(tables);
+      this.aggregate = clone(state.metrics);
+      const result = await operation(state, tables);
+      this.aggregate = clone(state.metrics);
+      return result;
+    });
+  }
+
+  private async ensureTables(
+    requestedDimensions: number | undefined,
+  ): Promise<RetrievalTables> {
+    if (requestedDimensions !== undefined) {
+      if (
+        this.dimensions !== undefined &&
+        this.dimensions !== requestedDimensions
+      ) {
+        throw new Error(
+          `Retrieval vector dimensions changed from ${this.dimensions} to ${requestedDimensions}`,
+        );
+      }
+      this.dimensions = requestedDimensions;
+    }
+    if (this.tables) return this.tables;
+
+    await fs.mkdir(this.root, { recursive: true });
+    this.connection = await connect(this.root, { readConsistencyInterval: 0 });
+    const names = new Set(await this.connection.tableNames());
+    if (this.dimensions === undefined && names.has(RETRIEVAL_TABLES.chunks)) {
+      const chunks = await this.connection.openTable(RETRIEVAL_TABLES.chunks);
+      try {
+        this.dimensions = vectorDimensions(await chunks.schema());
+      } finally {
+        chunks.close();
+      }
+    }
+    const dimensions = this.dimensions ?? DEFAULT_VECTOR_DIMENSIONS;
+    this.dimensions = dimensions;
+    const definitions = [
+      [RETRIEVAL_TABLES.sources, retrievalSourceSchema()],
+      [RETRIEVAL_TABLES.chunks, retrievalChunkSchema(dimensions)],
+      [RETRIEVAL_TABLES.relations, retrievalRelationSchema()],
+      [RETRIEVAL_TABLES.publications, retrievalPublicationSchema()],
+      [RETRIEVAL_TABLES.metadata, retrievalMetadataSchema()],
+      [RETRIEVAL_TABLES.snapshots, retrievalSnapshotSchema()],
+    ] as const;
+    for (const [name, schema] of definitions) {
+      if (!names.has(name)) {
+        await this.connection.createEmptyTable(name, schema, {
+          mode: "create",
+          existOk: true,
+        });
+      }
+    }
+    this.tables = {
+      sources: await this.connection.openTable(RETRIEVAL_TABLES.sources),
+      chunks: await this.connection.openTable(RETRIEVAL_TABLES.chunks),
+      relations: await this.connection.openTable(RETRIEVAL_TABLES.relations),
+      publications: await this.connection.openTable(
+        RETRIEVAL_TABLES.publications,
+      ),
+      metadata: await this.connection.openTable(RETRIEVAL_TABLES.metadata),
+      snapshots: await this.connection.openTable(RETRIEVAL_TABLES.snapshots),
+    };
+    return this.tables;
+  }
+
+  private requireDimensions(): number {
+    if (this.dimensions === undefined) {
+      throw new Error("Retrieval store has not been initialized");
+    }
+    return this.dimensions;
+  }
+
+  private async buildEngine(
+    state: DurableState,
+  ): Promise<InMemoryRetrievalRepository> {
+    const engine = new InMemoryRetrievalRepository({
+      ...this.options,
+      lexicalAvailable:
+        (this.options.lexicalAvailable ?? true) &&
+        state.nativeCapabilities.lexical.status === "ready",
+      scalarAvailable:
+        (this.options.scalarAvailable ?? true) &&
+        state.nativeCapabilities.scalar.status === "ready",
+      vectorIndexAvailable:
+        (this.options.vectorIndexAvailable ?? true) &&
+        state.nativeCapabilities.vector.status === "ready",
+      embeddingConfigured:
+        this.options.embeddingConfigured ??
+        Boolean(state.fingerprint?.embedding),
+      ...(state.fingerprint ? { fingerprint: clone(state.fingerprint) } : {}),
+    });
+    for (const row of activeSourceRows(state.sources)) {
+      const source = parseJson<RetrievalSourceDocument>(row.payload_json);
+      const chunks = state.chunks
+        .filter((chunk) => isRowForSource(chunk, row))
+        .map((chunk) => parseJson<RetrievalChunkRecord>(chunk.payload_json));
+      const relations = state.relations
+        .filter((relation) => isRowForSource(relation, row))
+        .map((relation) =>
+          parseJson<RetrievalRelationRecord>(relation.payload_json),
+        );
+      const request: RetrievalPublicationRequest = {
+        publicationId: `hydrate:${source.id}:${source.revision.id}`,
+        generation: row.generation!,
+        source,
+        chunks,
+        relations,
+        expectedChunkIds: chunks.map((chunk) => chunk.id),
+        expectedRelationIds: relations.map((relation) => relation.id),
+      };
+      await engine.preparePublication(request);
+      await engine.commitPublication(request.publicationId);
+    }
+    for (const row of state.sources.filter((source) => source.deleted)) {
+      const revision = parseJson<RetrievalSourceRevision>(row.payload_json);
+      const source: RetrievalSourceDocument = {
+        id: row.source_id,
+        namespace: "custom",
+        kind: "custom",
+        revision,
+        content: "",
+        metadata: {},
+      };
+      const request: RetrievalPublicationRequest = {
+        publicationId: `hydrate:tombstone:${row.source_id}:${revision.id}`,
+        generation: `hydrate:tombstone:${revision.id}`,
+        source,
+        chunks: [],
+        relations: [],
+        expectedChunkIds: [],
+        expectedRelationIds: [],
+      };
+      await engine.preparePublication(request);
+      await engine.commitPublication(request.publicationId);
+      await engine.deleteSource({
+        sourceId: source.id,
+        expectedRevisionId: revision.id,
+      });
+    }
+    for (const row of state.publications) {
+      await engine.preparePublication(
+        parseJson<RetrievalPublicationRequest>(row.payload_json),
+      );
+    }
+    if (this.inspectedFingerprint) {
+      await engine.inspectFingerprint(this.inspectedFingerprint);
+    }
+    return engine;
+  }
+
+  private async refreshNativeIndexes(
+    state: DurableState,
+    tables: RetrievalTables,
+  ): Promise<void> {
+    const operations = this.options.indexOperations ?? defaultIndexOperations;
+    state.nativeCapabilities.lexical = await runIndexOperation(() =>
+      operations.createLexical(tables.chunks),
+    );
+    state.nativeCapabilities.scalar = await runIndexOperation(() =>
+      operations.createScalar(tables.chunks),
+    );
+    state.nativeCapabilities.vector = await runIndexOperation(() =>
+      operations.validateVector(tables.chunks, this.requireDimensions()),
+    );
+  }
+
+  private async nativeCandidateIds(
+    request: RetrievalQuery,
+    limit: number,
+    state: DurableState,
+    tables: RetrievalTables,
+  ): Promise<Set<string> | undefined> {
+    const candidateIds = new Set<string>();
+    let usedNativeSearch = false;
+    if (
+      (request.mode === "lexical" || request.mode === "hybrid") &&
+      state.nativeCapabilities.lexical.status === "ready" &&
+      request.text.trim()
+    ) {
+      try {
+        const rows = await tables.chunks
+          .query()
+          .fullTextSearch(request.text, { columns: "search_text" })
+          .select(["chunk_id", "_score"])
+          .limit(limit)
+          .toArray();
+        for (const row of rows) candidateIds.add(String(row.chunk_id));
+        usedNativeSearch = true;
+      } catch {
+        // Preserve candidates from another successful hybrid search leg.
+      }
+    }
+    if (
+      (request.mode === "vector" || request.mode === "hybrid") &&
+      state.nativeCapabilities.vector.status === "ready" &&
+      request.embedding?.length
+    ) {
+      try {
+        const rows = await tables.chunks
+          .vectorSearch([...request.embedding])
+          .column("embedding")
+          .bypassVectorIndex()
+          .select(["chunk_id", "_distance"])
+          .limit(limit)
+          .toArray();
+        for (const row of rows) candidateIds.add(String(row.chunk_id));
+        usedNativeSearch = true;
+      } catch {
+        // Preserve candidates from another successful hybrid search leg.
+      }
+    }
+    return usedNativeSearch ? candidateIds : undefined;
+  }
+
+  private async repairState(
+    state: DurableState,
+    tables: RetrievalTables,
+    _explicitRepair: boolean,
+  ): Promise<RetrievalRepairOutcome> {
+    const abandonedPublications = state.publications.length;
+    const activeChunks = state.chunks.filter((row) =>
+      isActiveGeneration(row, state.sources),
+    );
+    const activeRelations = state.relations.filter((row) =>
+      isActiveGeneration(row, state.sources),
+    );
+    const orphanedChunksRemoved = state.chunks.length - activeChunks.length;
+    const orphanedRelationsRemoved =
+      state.relations.length - activeRelations.length;
+    state.publications = [];
+    state.chunks = activeChunks;
+    state.relations = activeRelations;
+    await writeRows(
+      tables.publications,
+      state.publications,
+      retrievalPublicationSchema(),
+    );
+    await writeRows(
+      tables.chunks,
+      state.chunks,
+      retrievalChunkSchema(this.requireDimensions()),
+    );
+    await writeRows(
+      tables.relations,
+      state.relations,
+      retrievalRelationSchema(),
+    );
+    await this.refreshNativeIndexes(state, tables);
+    const repaired =
+      abandonedPublications + orphanedChunksRemoved + orphanedRelationsRemoved >
+      0;
+    return {
+      status: repaired ? "repaired" : "clean",
+      abandonedPublications,
+      orphanedChunksRemoved,
+      orphanedRelationsRemoved,
+    };
+  }
+
+  private configuredLexicalBlocker(): RetrievalLexicalReadiness | undefined {
+    if (this.options.enabled === false) {
+      return { status: "unavailable", reason: "disabled" };
+    }
+    if (this.options.workspaceAvailable === false) {
+      return { status: "unavailable", reason: "no_workspace" };
+    }
+    if (this.options.storeAvailable === false) {
+      return { status: "unavailable", reason: "store_unavailable" };
+    }
+    if (this.options.repairRequired === true) {
+      return { status: "unavailable", reason: "repair_required" };
+    }
+    if (this.options.lexicalAvailable === false) {
+      return { status: "unavailable", reason: "lexical_index_unavailable" };
+    }
+    return undefined;
+  }
+
+  private async hasStoreMarker(): Promise<boolean> {
+    try {
+      await fs.access(`${this.root}/${RETRIEVAL_STORE_MARKER}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async writeStoreMarker(): Promise<void> {
+    await fs.writeFile(`${this.root}/${RETRIEVAL_STORE_MARKER}`, "1\n", {
+      mode: 0o600,
+    });
+  }
+
+  private async persistMetadata(
+    state: DurableState,
+    tables: RetrievalTables,
+  ): Promise<void> {
+    state.metadata = [
+      ...(state.fingerprint
+        ? [metadataRow(FINGERPRINT_KEY, state.fingerprint)]
+        : []),
+      metadataRow(METRICS_KEY, state.metrics),
+      metadataRow(NATIVE_CAPABILITIES_KEY, state.nativeCapabilities),
+    ];
+    await writeRows(tables.metadata, state.metadata, retrievalMetadataSchema());
+  }
+}
+
+function missingStructuralSnapshot(): RetrievalStructuralSnapshot {
+  return {
+    status: "missing",
+    fingerprintDisposition: "initialize",
+    sources: [],
+    relations: [],
+  };
+}
+
+async function readState(tables: RetrievalTables): Promise<DurableState> {
+  const [sources, chunks, relations, publications, metadata, snapshots] =
+    await Promise.all([
+      readRows<SourceRow>(tables.sources),
+      readRows<ChunkRow>(tables.chunks),
+      readRows<RelationRow>(tables.relations),
+      readRows<PublicationRow>(tables.publications),
+      readRows<MetadataRow>(tables.metadata),
+      readRows<SnapshotRow>(tables.snapshots),
+    ]);
+  const fingerprint = metadataValue<RetrievalFingerprint>(
+    metadata,
+    FINGERPRINT_KEY,
+  );
+  const metrics =
+    metadataValue<RetrievalAggregateMetrics>(metadata, METRICS_KEY) ??
+    clone(EMPTY_METRICS);
+  const nativeCapabilities =
+    metadataValue<NativeCapabilities>(metadata, NATIVE_CAPABILITIES_KEY) ??
+    defaultNativeCapabilities();
+  return {
+    fingerprint,
+    sources,
+    chunks,
+    relations,
+    publications,
+    metadata,
+    snapshots,
+    metrics,
+    nativeCapabilities,
+  };
+}
+
+async function readRows<T>(table: Table): Promise<T[]> {
+  return (await table.query().toArray()).map((row) => {
+    const value =
+      row !== null &&
+      typeof row === "object" &&
+      "toJSON" in row &&
+      typeof row.toJSON === "function"
+        ? row.toJSON()
+        : row;
+    return JSON.parse(JSON.stringify(value)) as T;
+  });
+}
+
+async function writeRows<T extends object>(
+  table: Table,
+  rows: T[],
+  schema: Schema,
+): Promise<void> {
+  if (rows.length === 0) {
+    if ((await table.countRows()) > 0) await table.delete("true");
+    return;
+  }
+  for (let offset = 0; offset < rows.length; offset += WRITE_BATCH_SIZE) {
+    const batch = rows.slice(offset, offset + WRITE_BATCH_SIZE);
+    await table.add(
+      makeArrowTable(batch as unknown as Record<string, unknown>[], { schema }),
+      { mode: offset === 0 ? "overwrite" : "append" },
+    );
+  }
+}
+
+function matchesSourceFilter(
+  source: RetrievalSourceDocument,
+  filter: RetrievalQueryFilter | undefined,
+): boolean {
+  if (!filter) return true;
+  if (filter.namespaces && !filter.namespaces.includes(source.namespace)) {
+    return false;
+  }
+  if (filter.sourceKinds && !filter.sourceKinds.includes(source.kind)) {
+    return false;
+  }
+  if (filter.sourceIds && !filter.sourceIds.includes(source.id)) return false;
+  if (filter.pathPrefix) {
+    const sourcePath = normalizeRetrievalPath(source.path ?? "");
+    const prefix = normalizeRetrievalPath(filter.pathPrefix);
+    if (sourcePath !== prefix && !sourcePath.startsWith(`${prefix}/`)) {
+      return false;
+    }
+  }
+  if (filter.metadata) {
+    for (const [key, value] of Object.entries(filter.metadata)) {
+      if (source.metadata[key] !== value) return false;
+    }
+  }
+  return true;
+}
+
+function matchesDeleteScope(
+  source: RetrievalSourceDocument,
+  request: RetrievalDeleteScopeRequest,
+): boolean {
+  if (request.namespaces && !request.namespaces.includes(source.namespace)) {
+    return false;
+  }
+  if (request.sourceIdPrefix && !source.id.startsWith(request.sourceIdPrefix)) {
+    return false;
+  }
+  return Object.entries(request.metadata ?? {}).every(
+    ([key, value]) => source.metadata[key] === value,
+  );
+}
+
+function activeSourceRows(rows: SourceRow[]): SourceRow[] {
+  return rows.filter((row) => !row.deleted && row.generation !== null);
+}
+
+function sourceRow(
+  source: RetrievalSourceDocument,
+  generation: string,
+): SourceRow {
+  return {
+    source_id: source.id,
+    revision_id: source.revision.id,
+    generation,
+    deleted: false,
+    payload_json: JSON.stringify(source),
+  };
+}
+
+function tombstoneRow(
+  sourceId: string,
+  revision: RetrievalSourceRevision,
+): SourceRow {
+  return {
+    source_id: sourceId,
+    revision_id: revision.id,
+    generation: null,
+    deleted: true,
+    payload_json: JSON.stringify(revision),
+  };
+}
+
+function chunkRow(
+  chunk: RetrievalChunkRecord,
+  source: RetrievalSourceDocument,
+  relations: RetrievalRelationRecord[],
+): ChunkRow {
+  const relationTerms = relations
+    .filter(
+      (relation) => relation.fromId === chunk.id || relation.toId === chunk.id,
+    )
+    .flatMap((relation) => [relation.kind, relation.fromId, relation.toId]);
+  return {
+    chunk_id: chunk.id,
+    source_id: chunk.sourceId,
+    revision_id: chunk.revisionId,
+    generation: chunk.generation,
+    search_text: [
+      source.id,
+      source.revision.id,
+      source.path,
+      source.title,
+      chunk.location?.path,
+      ...(chunk.location?.scope ?? []),
+      ...Object.values(source.metadata).map(String),
+      ...Object.values(chunk.metadata).map(String),
+      ...relationTerms,
+      source.content,
+      chunk.content,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join("\n"),
+    embedding: chunk.embedding,
+    payload_json: JSON.stringify(chunk),
+  };
+}
+
+function relationRow(relation: RetrievalRelationRecord): RelationRow {
+  return {
+    relation_id: relation.id,
+    source_id: relation.sourceId,
+    revision_id: relation.revisionId,
+    generation: relation.generation,
+    payload_json: JSON.stringify(relation),
+  };
+}
+
+function publicationRow(request: RetrievalPublicationRequest): PublicationRow {
+  return {
+    publication_id: request.publicationId,
+    source_id: request.source.id,
+    revision_id: request.source.revision.id,
+    generation: request.generation,
+    payload_json: JSON.stringify(request),
+  };
+}
+
+const defaultIndexOperations: LanceDbRetrievalIndexOperations = {
+  async createLexical(table) {
+    await table.createIndex("search_text", {
+      config: Index.fts({ withPosition: true, lowercase: true }),
+      name: LEXICAL_INDEX_NAME,
+      replace: true,
+      waitTimeoutSeconds: 30,
+    });
+  },
+  async createScalar(table) {
+    await table.createIndex("source_id", {
+      config: Index.btree(),
+      name: SOURCE_INDEX_NAME,
+      replace: true,
+      waitTimeoutSeconds: 30,
+    });
+    await table.createIndex("generation", {
+      config: Index.btree(),
+      name: GENERATION_INDEX_NAME,
+      replace: true,
+      waitTimeoutSeconds: 30,
+    });
+  },
+  async validateVector(table, dimensions) {
+    const schema = await table.schema();
+    const field = schema.fields.find(
+      (candidate) => candidate.name === "embedding",
+    );
+    if (
+      !field ||
+      vectorListSize(field.type) !== dimensions ||
+      !field.nullable
+    ) {
+      throw new Error(
+        `retrieval vector schema must be a nullable fixed-size list with ${dimensions} dimensions`,
+      );
+    }
+  },
+};
+
+async function runIndexOperation(
+  operation: () => Promise<void>,
+): Promise<NativeCapabilityStatus> {
+  try {
+    await operation();
+    return { status: "ready" };
+  } catch (error) {
+    return unavailableCapability(error);
+  }
+}
+
+function unavailableCapability(error: unknown): NativeCapabilityStatus {
+  return {
+    status: "unavailable",
+    detail: error instanceof Error ? error.message : String(error),
+  };
+}
+
+function vectorDimensions(schema: Schema): number {
+  const field = schema.fields.find(
+    (candidate) => candidate.name === "embedding",
+  );
+  const dimensions = field ? vectorListSize(field.type) : undefined;
+  if (dimensions === undefined) {
+    throw new Error("retrieval chunk table has no fixed-size embedding field");
+  }
+  return dimensions;
+}
+
+function vectorListSize(type: unknown): number | undefined {
+  if (
+    type === null ||
+    typeof type !== "object" ||
+    !("listSize" in type) ||
+    !Number.isInteger(type.listSize) ||
+    Number(type.listSize) <= 0
+  ) {
+    return undefined;
+  }
+  return Number(type.listSize);
+}
+
+function hasUnavailableNativeCapability(
+  capabilities: NativeCapabilities,
+): boolean {
+  return Object.values(capabilities).some(
+    (capability) => capability.status === "unavailable",
+  );
+}
+
+function defaultNativeCapabilities(): NativeCapabilities {
+  return {
+    lexical: {
+      status: "unavailable",
+      detail: "retrieval lexical index has not been initialized",
+    },
+    scalar: {
+      status: "unavailable",
+      detail: "retrieval scalar indexes have not been initialized",
+    },
+    vector: { status: "ready" },
+  };
+}
+
+function nativeHealthDetails(
+  capabilities: NativeCapabilities,
+): NonNullable<RetrievalHealthSnapshot["details"]> {
+  const details: NonNullable<RetrievalHealthSnapshot["details"]> = {};
+  if (capabilities.lexical.detail) {
+    details.lexical_index_unavailable = capabilities.lexical.detail;
+  }
+  if (capabilities.scalar.detail) {
+    details.scalar_index_unavailable = capabilities.scalar.detail;
+  }
+  if (capabilities.vector.detail) {
+    details.vector_index_unavailable = capabilities.vector.detail;
+  }
+  return details;
+}
+
+function metadataRow(key: string, value: unknown): MetadataRow {
+  return { key, value_json: JSON.stringify(value) };
+}
+
+function snapshotRow(
+  descriptor: RetrievalSnapshot,
+  state: DurableSnapshotState,
+): SnapshotRow {
+  return {
+    snapshot_id: descriptor.id,
+    created_at: descriptor.createdAt,
+    label: descriptor.label ?? null,
+    source_count: descriptor.sourceCount,
+    chunk_count: descriptor.chunkCount,
+    relation_count: descriptor.relationCount,
+    payload_json: JSON.stringify(state),
+  };
+}
+
+function snapshotDescriptor(row: SnapshotRow): RetrievalSnapshot {
+  return {
+    id: row.snapshot_id,
+    createdAt: row.created_at,
+    ...(row.label ? { label: row.label } : {}),
+    sourceCount: row.source_count,
+    chunkCount: row.chunk_count,
+    relationCount: row.relation_count,
+  };
+}
+
+function metadataValue<T>(rows: MetadataRow[], key: string): T | null {
+  const row = rows.find((candidate) => candidate.key === key);
+  return row ? parseJson<T>(row.value_json) : null;
+}
+
+function isActiveGeneration(
+  row: { source_id: string; revision_id: string; generation: string },
+  sources: SourceRow[],
+): boolean {
+  const source = sources.find(
+    (candidate) => !candidate.deleted && candidate.source_id === row.source_id,
+  );
+  return source ? isRowForSource(row, source) : false;
+}
+
+function isRowForSource(
+  row: { source_id: string; revision_id: string; generation: string },
+  source: SourceRow,
+): boolean {
+  return (
+    row.source_id === source.source_id &&
+    row.revision_id === source.revision_id &&
+    row.generation === source.generation
+  );
+}
+
+function deduplicateChunks(rows: ChunkRow[]): ChunkRow[] {
+  return deduplicateRows(
+    rows,
+    (row) => `${row.source_id}\u0000${row.generation}\u0000${row.chunk_id}`,
+  );
+}
+
+function deduplicateRelations(rows: RelationRow[]): RelationRow[] {
+  return deduplicateRows(
+    rows,
+    (row) => `${row.source_id}\u0000${row.generation}\u0000${row.relation_id}`,
+  );
+}
+
+function deduplicateRows<T>(rows: T[], key: (row: T) => string): T[] {
+  const unique = new Map<string, T>();
+  for (const row of rows) unique.set(key(row), row);
+  return [...unique.values()];
+}
+
+function parseJson<T>(value: string): T {
+  return JSON.parse(value) as T;
+}
+
+function clone<T>(value: T): T {
+  return structuredClone(value);
+}

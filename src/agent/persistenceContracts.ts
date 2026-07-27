@@ -1,4 +1,8 @@
 import type {
+  PendingQuestionRecoveryContext,
+  SkillAuthoritySnapshot,
+} from "../core/tools/types.js";
+import type {
   TerminalApprovalPolicy,
   TerminalApprovalReviewer,
   TerminalCommandApprovalPolicySnapshot,
@@ -10,11 +14,11 @@ import type { BackgroundResultState } from "../core/capabilities/background.js";
 import type { Checkpoint } from "./CheckpointManager.js";
 import type { CoreModelToolResultBlock } from "../core/modelRuntime.js";
 import type { FleetResultEnvelope } from "./FleetWorkflows.js";
-import type { PendingQuestionRecoveryContext } from "../core/tools/types.js";
 import type { Question } from "./webview/types.js";
 import type { ReasoningEffort } from "./providers/types.js";
 import type { SessionProjectScope } from "../core/workspaceProjects.js";
 import type { SessionSummary } from "./SessionStore.js";
+import type { SkillCapabilityPolicySnapshot } from "./skillLoader.js";
 
 export type PersistenceRevision = string;
 
@@ -188,6 +192,8 @@ export interface PersistedFleetMetadata {
   worktreeBranch?: string;
   childSessionId?: string;
   structuredResult?: FleetResultEnvelope;
+  /** Immutable inherited skill ceiling; provenance only grants further restriction. */
+  skillAuthority?: SkillAuthoritySnapshot;
   eventSequence?: number;
   events?: Array<{
     id: string;
@@ -218,6 +224,17 @@ export interface PersistedFleetMetadata {
   }>;
 }
 
+export interface PersistedActiveSkillState {
+  schemaVersion: 1;
+  catalogRevision: string;
+  activations: Array<{
+    id: string;
+    name: string;
+    revision: string;
+  }>;
+  policy: SkillCapabilityPolicySnapshot;
+}
+
 export interface PersistedSessionMetadata {
   /**
    * Authoritative durable project identity. Optional only while reading records
@@ -228,6 +245,8 @@ export interface PersistedSessionMetadata {
   activeContextResourceUri?: string;
   mode: string;
   model: string;
+  /** Rendered profile evidence for audit/debug only; current policy is recomputed on restore. */
+  promptProfile?: import("../core/promptProfile.js").PromptProfileResolution;
   /** Legacy bundled mode retained for backward compatibility and UI migration. */
   commandApprovalPolicy?: TerminalCommandApprovalPolicySnapshot;
   /** Independent Codex-style approval policy dimension. */
@@ -243,7 +262,10 @@ export interface PersistedSessionMetadata {
   lastInputTokens?: number;
   lastCacheReadTokens?: number;
   reasoningEffort?: ReasoningEffort;
+  /** Legacy display-only skill names retained for older records and condensation. */
   loadedSkills?: string[];
+  /** Exact current-turn skill authority, reauthorized as one batch on restore. */
+  activeSkillState?: PersistedActiveSkillState;
   checkpointState?: CheckpointState;
   revertPending?: RevertRecoveryState;
   runState?: PersistedSessionRunState;

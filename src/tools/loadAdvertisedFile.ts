@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
@@ -17,6 +18,9 @@ function normalizeExistingPath(filePath: string): string {
 export interface AllowedAdvertisedFile {
   name: string;
   filePath: string;
+  resultFields?: Record<string, unknown>;
+  expectedRealPath?: string;
+  expectedSha256?: string;
 }
 
 function createLegacyAdvertisedArtifactProvider(): AdvertisedArtifactProvider {
@@ -65,13 +69,34 @@ export async function loadAdvertisedFile(params: {
       );
     }
 
+    if (
+      allowed.expectedRealPath &&
+      artifactProvider.normalizeExistingPath(allowed.expectedRealPath) !==
+        normalizedAbsolutePath
+    ) {
+      return errorResult(
+        `${params.kind[0].toUpperCase()}${params.kind.slice(1)} changed after it was advertised; refresh the catalog before loading it`,
+        { path: params.path, status: "stale_advertised_artifact" },
+      );
+    }
+
     const raw = await artifactProvider.readTextFile(absolutePath);
+    if (
+      allowed.expectedSha256 &&
+      createHash("sha256").update(raw).digest("hex") !== allowed.expectedSha256
+    ) {
+      return errorResult(
+        `${params.kind[0].toUpperCase()}${params.kind.slice(1)} changed after it was advertised; refresh the catalog before loading it`,
+        { path: params.path, status: "stale_advertised_artifact" },
+      );
+    }
     const content = params.contentTransform?.(raw) ?? raw;
 
     return jsonResult(
       {
         [params.nameProperty]: allowed.name,
         [params.pathProperty]: absolutePath,
+        ...allowed.resultFields,
         content,
       },
       true,

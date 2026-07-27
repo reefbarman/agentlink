@@ -8,12 +8,14 @@ import {
 function response(options: {
   ok?: boolean;
   status?: number;
-  data?: Array<{ index?: number; embedding: number[] }>;
+  data?: Array<{ index?: number; embedding: unknown }>;
   text?: string;
+  headers?: HeadersInit;
 }): Response {
   return {
     ok: options.ok ?? false,
     status: options.status ?? 500,
+    headers: new Headers(options.headers),
     json: vi.fn(async () => ({ data: options.data ?? [] })),
     text: vi.fn(async () => options.text ?? "error"),
   } as unknown as Response;
@@ -32,9 +34,11 @@ function workerOptions(
   overrides: Partial<EmbeddingClientOptions> = {},
 ): EmbeddingClientOptions {
   return options({
-    shouldRetryStatus: (status) => status === 429,
-    retryDelayMs: (attempt, random) =>
-      Math.min(1000 * 2 ** attempt + random * 500, 30000),
+    retryFetchErrors: true,
+    shouldRetryStatus: (status) =>
+      status === 408 || status === 429 || (status >= 500 && status < 600),
+    retryDelayMs: (attempt, random, retryAfterMs) =>
+      Math.min(retryAfterMs ?? 1000 * 2 ** attempt + random * 500, 30_000),
     bisectOnBadRequest: true,
     sortByIndex: true,
     ...overrides,
@@ -85,6 +89,24 @@ describe("requestEmbeddings", () => {
         options({ fetch: fetchMock, sortByIndex: true }),
       ),
     ).resolves.toEqual([[1], [2]]);
+  });
+
+  it.each([
+    ["empty", []],
+    ["non-finite", [Number.NaN]],
+    ["non-number", [null]],
+  ])("rejects %s embedding vectors", async (_, embedding) => {
+    const fetchMock = vi.fn(async () =>
+      response({ ok: true, data: [{ index: 0, embedding }] }),
+    );
+
+    await expect(
+      requestEmbeddings(
+        ["first"],
+        "token",
+        workerOptions({ fetch: fetchMock }),
+      ),
+    ).rejects.toThrow("invalid embedding data");
   });
 
   it.each([
@@ -306,18 +328,85 @@ describe("requestEmbeddings", () => {
     expect(sleepMock).toHaveBeenCalledWith(1000);
   });
 
-  it("keeps thrown fetch errors terminal under the worker policy", async () => {
-    const fetchMock = vi.fn().mockRejectedValue(new TypeError("network down"));
+  it.each([408, 429, 500, 503, 599])(
+    "retries HTTP %s under the worker policy",
+    async (status) => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(response({ status }))
+        .mockResolvedValueOnce(
+          response({ ok: true, data: [{ index: 0, embedding: [1] }] }),
+        );
+      const sleepMock = vi.fn(async () => undefined);
+
+      await expect(
+        requestEmbeddings(
+          ["batch"],
+          "token",
+          workerOptions({
+            fetch: fetchMock,
+            sleep: sleepMock,
+            random: () => 0,
+          }),
+        ),
+      ).resolves.toEqual([[1]]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(sleepMock).toHaveBeenCalledWith(1000);
+    },
+  );
+
+  it("retries thrown fetch errors under the worker policy", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("network down"))
+      .mockResolvedValueOnce(
+        response({ ok: true, data: [{ index: 0, embedding: [1] }] }),
+      );
+    const sleepMock = vi.fn(async () => undefined);
 
     await expect(
       requestEmbeddings(
         ["batch"],
         "token",
-        workerOptions({ fetch: fetchMock }),
+        workerOptions({ fetch: fetchMock, sleep: sleepMock, random: () => 0 }),
       ),
-    ).rejects.toThrow("network down");
-    expect(fetchMock).toHaveBeenCalledOnce();
+    ).resolves.toEqual([[1]]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sleepMock).toHaveBeenCalledWith(1000);
   });
+
+  it.each([
+    ["numeric seconds", "2", undefined, 2_000],
+    ["HTTP date", "Thu, 01 Jan 1970 00:00:02 GMT", () => 500, 1_500],
+    ["bounded server delay", "120", undefined, 30_000],
+    ["malformed fallback", "later", undefined, 1_000],
+  ] as const)(
+    "honors %s Retry-After under the worker policy",
+    async (_label, retryAfter, now, expectedDelay) => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          response({ status: 429, headers: { "Retry-After": retryAfter } }),
+        )
+        .mockResolvedValueOnce(
+          response({ ok: true, data: [{ index: 0, embedding: [1] }] }),
+        );
+      const sleepMock = vi.fn(async () => undefined);
+
+      await requestEmbeddings(
+        ["batch"],
+        "token",
+        workerOptions({
+          fetch: fetchMock,
+          sleep: sleepMock,
+          random: () => 0,
+          now,
+        }),
+      );
+
+      expect(sleepMock).toHaveBeenCalledWith(expectedDelay);
+    },
+  );
 
   it("does not refresh or retry a terminal 401", async () => {
     const fetchMock = vi.fn(async () =>

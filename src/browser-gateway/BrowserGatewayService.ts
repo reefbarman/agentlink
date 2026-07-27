@@ -155,6 +155,7 @@ export interface BrowserGatewaySessionState {
         restoringSession: AppState["restoringSession"];
         revertRecoveryNotice: AppState["revertRecoveryNotice"];
         contextBudget?: ChatState["contextBudget"];
+        contextHealth: AppState["contextHealth"];
         condenseThreshold?: number;
         commandApprovalPolicy: CommandApprovalPolicy;
         approvalPolicy: NonNullable<ChatState["approvalPolicy"]>;
@@ -209,6 +210,7 @@ export interface BrowserGatewayWireSessionState {
     restoringSession: AppState["restoringSession"];
     revertRecoveryNotice: AppState["revertRecoveryNotice"];
     contextBudget?: ChatState["contextBudget"];
+    contextHealth: AppState["contextHealth"];
     condenseThreshold?: number;
     agentWriteApproval: "prompt" | "session" | "project" | "global";
     commandApprovalPolicy: CommandApprovalPolicy;
@@ -740,6 +742,9 @@ export class BrowserGatewayService implements vscode.Disposable {
         contextBudget: projectedMatchesForeground
           ? projected.contextBudget
           : undefined,
+        contextHealth: projectedMatchesForeground
+          ? projected.contextHealth
+          : null,
         condenseThreshold: projectedMatchesForeground
           ? projected.condenseThreshold
           : undefined,
@@ -850,6 +855,7 @@ export class BrowserGatewayService implements vscode.Disposable {
         statusOverride: projectedMatchesSession
           ? projected.statusOverride
           : null,
+        contextHealth: projectedMatchesSession ? projected.contextHealth : null,
         thinkingEnabled: projectedMatchesSession
           ? projected.thinkingEnabled
           : session.reasoningEffort !== "none",
@@ -975,6 +981,7 @@ export class BrowserGatewayService implements vscode.Disposable {
             restoringSession: sessionState.foreground.restoringSession,
             revertRecoveryNotice: sessionState.foreground.revertRecoveryNotice,
             contextBudget: sessionState.foreground.contextBudget,
+            contextHealth: sessionState.foreground.contextHealth,
             condenseThreshold: sessionState.foreground.condenseThreshold,
             agentWriteApproval: this.getAgentWriteApprovalState(
               sessionState.foreground.sessionId,
@@ -1188,6 +1195,13 @@ export class BrowserGatewayService implements vscode.Disposable {
             contextBudget: foreground.contextBudget
               ? { ...foreground.contextBudget }
               : undefined,
+            contextHealth: foreground.contextHealth
+              ? {
+                  memory: { ...foreground.contextHealth.memory },
+                  retrieval: { ...foreground.contextHealth.retrieval },
+                  index: { ...foreground.contextHealth.index },
+                }
+              : null,
             condenseThreshold: foreground.condenseThreshold,
             restoringSession: foreground.restoringSession,
             revertRecoveryNotice: foreground.revertRecoveryNotice
@@ -1410,8 +1424,20 @@ export class BrowserGatewayService implements vscode.Disposable {
           this.approvalSessionId === sessionId &&
           this.approval?.id === event.id
         ) {
+          const clearedBackgroundApproval = Boolean(
+            this.approval.backgroundTask,
+          );
           this.approval = undefined;
           this.approvalSessionId = undefined;
+          if (clearedBackgroundApproval && selectedSessionId) {
+            for (const selectedEvent of this.uiEventHub.getSnapshot(
+              selectedSessionId,
+            )) {
+              if (selectedEvent.event.type === "showApproval") {
+                this.applyEvent(selectedEvent, false);
+              }
+            }
+          }
         }
         break;
       case "agentQuestionRequest":

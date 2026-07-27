@@ -18,14 +18,17 @@ import {
   PARALLEL_SAFE_TOOLS,
   TOOL_CAPABILITIES,
 } from "../core/tools/toolCapabilities.js";
+import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisclosure.js";
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import { TODO_TOOL_NAME } from "./todoTool.js";
 import type { ToolDefinition } from "./providers/types.js";
 import type { ToolResult } from "../shared/types.js";
+import type { MemoryToolProvider } from "../core/capabilities/memory.js";
 import { getWorkspaceRoots, resolveAndValidatePath } from "../util/paths.js";
 import { handleLoadRule } from "../tools/loadRule.js";
 import { handleGetContext } from "../tools/context/getContext.js";
+import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
 import { handleGetModuleNeighbors } from "../tools/getModuleNeighbors.js";
 import { handleGetRepoMap } from "../tools/getRepoMap.js";
 
@@ -317,6 +320,170 @@ describe("tool usage telemetry project attribution", () => {
     expect(text).toContain("switch_mode");
   });
 
+  it("discovers only deferred tools from the frozen request snapshot", async () => {
+    const runtime = createAgentToolRuntime(mockCtx);
+    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
+      getAgentTools().find((tool) => tool.name === "read_file")!,
+      getAgentTools().find((tool) => tool.name === "get_call_hierarchy")!,
+      getAgentTools().find((tool) => tool.name === "manage_memory")!,
+    ]);
+
+    const result = await runtime.executeTool({
+      name: "find_native_tools",
+      input: { limit: 1, include_schemas: true, schema_limit: 1 },
+      context: {
+        sessionId: "test-session",
+        mode: "code",
+        availableToolNames: new Set(["find_native_tools", "call_native_tool"]),
+        nativeToolDisclosure,
+      },
+    });
+
+    expect(result.data).toMatchObject({
+      schemaVersion: 1,
+      total: 2,
+      limit: 1,
+      nextOffset: 1,
+      tools: [
+        {
+          name: "get_call_hierarchy",
+          disclosure: "eligible",
+          input_schema: expect.objectContaining({ type: "object" }),
+        },
+      ],
+    });
+    expect(JSON.stringify(result.data)).not.toContain("read_file");
+  });
+
+  it("invokes an exact deferred target with canonical validation and telemetry", async () => {
+    const record = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      toolUsageTelemetry: { record } as any,
+    });
+    const target = getAgentTools().find(
+      (tool) => tool.name === "get_call_hierarchy",
+    )!;
+    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([target]);
+    vi.mocked(handleGetCallHierarchy).mockClear();
+
+    const result = await runtime.executeTool({
+      name: "call_native_tool",
+      input: {
+        name: "get_call_hierarchy",
+        input: {
+          path: "src/file.ts",
+          line: 1,
+          column: 1,
+          direction: "both",
+        },
+      },
+      context: {
+        sessionId: "test-session",
+        mode: "code",
+        availableToolNames: new Set(["call_native_tool"]),
+        modeAllowedToolNames: new Set(["get_call_hierarchy"]),
+        nativeToolDisclosure,
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(handleGetCallHierarchy).toHaveBeenCalledOnce();
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "get_call_hierarchy",
+        params: expect.objectContaining({
+          path: "src/file.ts",
+          direction: "both",
+        }),
+      }),
+    );
+  });
+
+  it("rejects forged pre-resolved native calls outside the frozen snapshot", async () => {
+    const runtime = createAgentToolRuntime(mockCtx);
+    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
+      getAgentTools().find((tool) => tool.name === "get_call_hierarchy")!,
+    ]);
+    vi.mocked(handleGetCallHierarchy).mockClear();
+
+    const result = await runtime.executeTool({
+      name: "get_type_hierarchy",
+      input: {
+        path: "src/file.ts",
+        line: 1,
+        column: 1,
+        direction: "both",
+      },
+      context: {
+        sessionId: "test-session",
+        mode: "code",
+        availableToolNames: new Set(["call_native_tool"]),
+        providerToolName: "call_native_tool",
+        providerToolInput: {
+          name: "get_type_hierarchy",
+          input: {
+            path: "src/file.ts",
+            line: 1,
+            column: 1,
+            direction: "both",
+          },
+        },
+        nativeToolDisclosure,
+      },
+    });
+
+    expect(result).toMatchObject({
+      isError: true,
+      data: { status: "invalid_resolved_native_tool" },
+    });
+    expect(handleGetCallHierarchy).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown and invalid deferred targets before handler execution", async () => {
+    const runtime = createAgentToolRuntime(mockCtx);
+    const target = getAgentTools().find(
+      (tool) => tool.name === "get_call_hierarchy",
+    )!;
+    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([target]);
+    vi.mocked(handleGetCallHierarchy).mockClear();
+
+    const unknown = await runtime.executeTool({
+      name: "call_native_tool",
+      input: { name: "read_file", input: { path: "README.md" } },
+      context: {
+        sessionId: "test-session",
+        mode: "code",
+        availableToolNames: new Set(["call_native_tool"]),
+        nativeToolDisclosure,
+      },
+    });
+    const invalid = await runtime.executeTool({
+      name: "call_native_tool",
+      input: {
+        name: "get_call_hierarchy",
+        input: { path: "src/file.ts", line: 1 },
+      },
+      context: {
+        sessionId: "test-session",
+        mode: "code",
+        availableToolNames: new Set(["call_native_tool"]),
+        nativeToolDisclosure,
+      },
+    });
+
+    expect(unknown).toMatchObject({
+      isError: true,
+      data: { status: "native_tool_not_available" },
+    });
+    expect(invalid).toMatchObject({
+      isError: true,
+      data: { status: "invalid_native_tool_input" },
+    });
+    expect(handleGetCallHierarchy).not.toHaveBeenCalled();
+  });
+
   it("allows mode-permitted tools through the mode gate", async () => {
     const record = vi.fn();
     const runtime = createAgentToolRuntime({
@@ -355,6 +522,7 @@ const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
   "search_session_history",
   "read_session_excerpt",
   "diagnose_activity",
+  "recall_memory",
   "codebase_search",
   "get_diagnostics",
   "get_hover",
@@ -374,6 +542,7 @@ const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
   "get_terminal_output",
   "ask_user",
   "find_mcp_tools",
+  "find_native_tools",
   "list_mcp_resources",
   "read_mcp_resource",
   "list_mcp_prompts",
@@ -395,6 +564,48 @@ describe("READ_ONLY_TOOLS", () => {
     expect([...implemented].sort()).toEqual(
       Object.keys(TOOL_CAPABILITIES).sort(),
     );
+  });
+
+  it("classifies alternate definition, availability, and execution seams explicitly", () => {
+    expect(TOOL_CAPABILITIES.todo_write).toMatchObject({
+      availability: { kind: "session-control" },
+      definitionSource: "engine-inline",
+      executionRoute: "engine-inline",
+      telemetryOwner: "engine",
+      disclosure: "essential",
+    });
+    expect(TOOL_CAPABILITIES.find_native_tools).toMatchObject({
+      availability: { kind: "native-bridge" },
+      definitionSource: "registry-schema",
+      executionRoute: "runtime-dispatch",
+      telemetryOwner: "runtime",
+      disclosure: "essential",
+    });
+    expect(TOOL_CAPABILITIES.call_native_tool).toMatchObject({
+      availability: { kind: "native-bridge" },
+      definitionSource: "registry-schema",
+      executionRoute: "runtime-dispatch",
+      telemetryOwner: "runtime",
+      disclosure: "essential",
+    });
+    expect(TOOL_CAPABILITIES.call_mcp_tool).toMatchObject({
+      availability: { kind: "mcp-bridge" },
+      definitionSource: "adapter-definition",
+      executionRoute: "runtime-dispatch",
+      telemetryOwner: "runtime",
+    });
+    expect(TOOL_CAPABILITIES.load_skill).toMatchObject({
+      availability: { kind: "artifact-loader" },
+      disclosure: "essential",
+    });
+    expect(TOOL_CAPABILITIES.get_code_actions).toMatchObject({
+      availability: { kind: "benchmark-only" },
+      disclosure: "eligible",
+    });
+    expect(TOOL_CAPABILITIES.show_notification).toMatchObject({
+      availability: { kind: "dormant" },
+      disclosure: "dormant",
+    });
   });
 
   it("matches the core parallel-safe metadata", () => {
@@ -766,7 +977,46 @@ describe("getAgentTools", () => {
     expect(names).toContain("search_session_history");
     expect(names).toContain("read_session_excerpt");
     expect(names).toContain("diagnose_activity");
+    expect(names).toContain("manage_memory");
+    expect(names).toContain("recall_memory");
     expect(names).toContain("set_task_status");
+  });
+
+  it("applies the autonomous memory mode and background-profile matrix", () => {
+    const byMode = new Map(
+      BUILT_IN_MODES.map((mode) => [
+        mode.slug,
+        new Set(getAgentTools(mode).map((tool) => tool.name)),
+      ]),
+    );
+    for (const mode of BUILT_IN_MODES) {
+      expect(byMode.get(mode.slug)?.has("recall_memory"), mode.slug).toBe(true);
+    }
+    for (const mode of ["code", "architect", "debug"]) {
+      expect(byMode.get(mode)?.has("manage_memory"), mode).toBe(true);
+    }
+    for (const mode of ["ask", "review"]) {
+      expect(byMode.get(mode)?.has("manage_memory"), mode).toBe(false);
+    }
+
+    for (const profile of ["review", "readonly-research"]) {
+      const names = getAgentTools(undefined, undefined, true, profile).map(
+        (tool) => tool.name,
+      );
+      expect(names).toContain("recall_memory");
+      expect(names).not.toContain("manage_memory");
+    }
+    expect(TOOL_CAPABILITIES.manage_memory).toMatchObject({
+      cluster: "memory",
+      sideEffect: "write",
+      requiresApproval: "never",
+    });
+    expect(TOOL_CAPABILITIES.recall_memory).toMatchObject({
+      cluster: "memory",
+      sideEffect: "read",
+      requiresApproval: "never",
+      parallelSafe: true,
+    });
   });
 
   it("exposes per-block occurrence and replace-all controls for apply_diff", () => {
@@ -1557,6 +1807,7 @@ describe("spawn_background_agent tool", () => {
           },
         ],
       }),
+      undefined,
     );
   });
 
@@ -1627,36 +1878,40 @@ describe("spawn_background_agent tool", () => {
       { ...mockCtx, onSpawnBackground },
     );
 
-    expect(onSpawnBackground).toHaveBeenCalledWith("test-session", {
-      task: "Review patch",
-      message: "Review the recent changes",
-      mode: "review",
-      model: "claude-sonnet-4-6",
-      provider: "anthropic",
-      taskClass: "review_code",
-      modelTier: "deep_reasoning",
-      ownedPaths: ["src/agent"],
-      forbiddenPaths: ["src/server"],
-      permissionProfile: "workspace-safe",
-      worktree: undefined,
-      reviewScope: {
-        kind: "working_tree",
-        include: ["unstaged", "untracked"],
-        paths: ["src/agent"],
+    expect(onSpawnBackground).toHaveBeenCalledWith(
+      "test-session",
+      {
+        task: "Review patch",
+        message: "Review the recent changes",
+        mode: "review",
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+        taskClass: "review_code",
+        modelTier: "deep_reasoning",
+        ownedPaths: ["src/agent"],
+        forbiddenPaths: ["src/server"],
+        permissionProfile: "workspace-safe",
+        worktree: undefined,
+        reviewScope: {
+          kind: "working_tree",
+          include: ["unstaged", "untracked"],
+          paths: ["src/agent"],
+        },
+        expectedResult: "patch",
+        budget: {
+          maxTokens: 20_000,
+          maxToolCalls: 50,
+          maxApiTurns: undefined,
+          maxElapsedMs: undefined,
+          maxEstimatedCostUsd: undefined,
+          estimatedCostPerMillionTokens: undefined,
+          warningThresholdRatio: undefined,
+          scope: "session",
+        },
+        goalId: undefined,
       },
-      expectedResult: "patch",
-      budget: {
-        maxTokens: 20_000,
-        maxToolCalls: 50,
-        maxApiTurns: undefined,
-        maxElapsedMs: undefined,
-        maxEstimatedCostUsd: undefined,
-        estimatedCostPerMillionTokens: undefined,
-        warningThresholdRatio: undefined,
-        scope: "session",
-      },
-      goalId: undefined,
-    });
+      undefined,
+    );
 
     const text = (result.content[0] as { type: string; text: string }).text;
     expect(JSON.parse(text)).toMatchObject({
@@ -1665,6 +1920,47 @@ describe("spawn_background_agent tool", () => {
       taskClass: "review_code",
       fallbackUsed: false,
     });
+  });
+
+  it("forwards exact skill authority outside the model-controlled spawn request", async () => {
+    const onSpawnBackground = vi.fn().mockResolvedValue({
+      sessionId: "bg-authority",
+      resolvedMode: "review",
+      resolvedModel: "model",
+      resolvedProvider: "provider",
+      taskClass: "general",
+      routingReason: "test",
+      fallbackUsed: false,
+    });
+    const skillAuthority = {
+      schemaVersion: 1 as const,
+      sources: [
+        {
+          catalogRevision: "catalog-revision",
+          activations: [
+            {
+              id: "project:agentlink:.agentlink/skills/review",
+              name: "review",
+              revision: "skill-revision",
+            },
+          ],
+          policyRevision: "policy-revision",
+        },
+      ],
+      allowedTools: ["read_file"],
+    };
+
+    await dispatchToolCall(
+      "spawn_background_agent",
+      { task: "Child", message: "Inspect" },
+      { ...mockCtx, onSpawnBackground, skillAuthority },
+    );
+
+    expect(onSpawnBackground).toHaveBeenCalledWith(
+      "test-session",
+      expect.not.objectContaining({ skillAuthority: expect.anything() }),
+      skillAuthority,
+    );
   });
 
   it("prefers backgroundAgentProvider over legacy spawn callback", async () => {
@@ -1941,6 +2237,92 @@ describe("spawn_background_agent tool", () => {
 });
 
 describe("dispatchToolCall", () => {
+  it("forwards autonomous memory requests through the production context seam without approval", async () => {
+    const onApprovalRequest = vi.fn();
+    const manage = vi.fn<MemoryToolProvider["manage"]>().mockResolvedValue({
+      result: {
+        disposition: "created",
+        relatedRecords: [],
+        auditEventId: "audit-distinctive",
+      },
+      health: {
+        status: "ready",
+        retrieval: "lexical-only",
+        crud: true,
+        dedupe: true,
+        conflict: true,
+        auditUndo: true,
+        recordCount: 1,
+        activeRecordCount: 1,
+        auditEventCount: 1,
+      },
+    });
+    const recall = vi.fn<MemoryToolProvider["recall"]>().mockResolvedValue({
+      result: { memories: [], mode: "lexical-only" },
+      health: {
+        status: "ready",
+        retrieval: "lexical-only",
+        crud: true,
+        dedupe: true,
+        conflict: true,
+        auditUndo: true,
+        recordCount: 1,
+        activeRecordCount: 1,
+        auditEventCount: 1,
+      },
+    });
+    const memoryToolProvider: MemoryToolProvider = { manage, recall };
+    const context: ToolDispatchContext = {
+      ...mockCtx,
+      sessionId: "session-distinctive",
+      onApprovalRequest,
+      isBackgroundSession: true,
+      memoryToolProvider,
+      projectScope: {
+        schemaVersion: 1,
+        kind: "project",
+        projectId: "project-distinctive",
+        workspaceFolderUri: "file:///workspace/distinctive",
+        displayName: "Distinctive Project",
+      },
+    };
+
+    const before = Date.now();
+    await dispatchToolCall(
+      "manage_memory",
+      {
+        operation: "remember",
+        scope: "project",
+        source_evidence: "Distinctive repository evidence",
+        kind: "project_fact",
+        statement: "The distinctive project uses npm.",
+      },
+      context,
+    );
+    const after = Date.now();
+
+    expect(manage).toHaveBeenCalledOnce();
+    expect(manage).toHaveBeenCalledWith({
+      input: {
+        operation: "remember",
+        scope: "project",
+        source_evidence: "Distinctive repository evidence",
+        kind: "project_fact",
+        statement: "The distinctive project uses npm.",
+      },
+      context: {
+        sessionId: "session-distinctive",
+        projectId: "project-distinctive",
+        isBackground: true,
+        observedAt: expect.any(String),
+      },
+    });
+    const observedAt = Date.parse(manage.mock.calls[0]![0].context.observedAt);
+    expect(observedAt).toBeGreaterThanOrEqual(before);
+    expect(observedAt).toBeLessThanOrEqual(after);
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+  });
+
   it("pins concurrent tool runtimes to their captured project roots", async () => {
     const { handleWriteFile } = await import("../tools/writeFile.js");
     vi.mocked(handleWriteFile).mockImplementationOnce(async (params) => {
@@ -2632,7 +3014,13 @@ describe("dispatchToolCall", () => {
   it("dispatches read_file to handleReadFile", async () => {
     const { handleReadFile } = await import("../tools/readFile.js");
     const advertisedSkills = [
-      { name: "helper", skillPath: "/outside/skills/helper/SKILL.md" },
+      {
+        id: "global:agentlink:helper",
+        name: "helper",
+        revision: "a".repeat(64),
+        skillPath: "/outside/skills/helper/SKILL.md",
+        realSkillPath: "/outside/skills/helper/SKILL.md",
+      },
     ];
     const result = await dispatchToolCall(
       "read_file",
@@ -2652,6 +3040,8 @@ describe("dispatchToolCall", () => {
         getDiagnosticsSummary: expect.any(Function),
       }),
       undefined,
+      undefined,
+      {},
     );
     expect(result.content[0]).toMatchObject({
       type: "text",
@@ -2700,9 +3090,13 @@ describe("dispatchToolCall", () => {
   });
 
   it("dispatches codebase_search through the semantic search provider", async () => {
-    const search = vi.fn().mockResolvedValue({
-      content: [{ type: "text" as const, text: "semantic results" }],
-    });
+    const payload = {
+      query: "auth flow",
+      semantic: true,
+      total_results: 1,
+      results: "semantic results",
+    };
+    const search = vi.fn().mockResolvedValue({ payload });
 
     const result = await dispatchToolCall(
       "codebase_search",
@@ -2721,10 +3115,46 @@ describe("dispatchToolCall", () => {
       limit: 3,
       exclude_globs: ["**/dist/**", "42"],
     });
-    expect(result.content[0]).toMatchObject({
+    expect(result.data).toEqual(payload);
+    expect(result.content[0]).toEqual({
       type: "text",
-      text: "semantic results",
+      text: JSON.stringify(payload, null, 2),
     });
+  });
+
+  it("preserves typed semantic provider errors at the tool boundary", async () => {
+    const search = vi.fn().mockResolvedValue({
+      payload: {
+        error: "distinctive semantic failure",
+        reason: "store_unavailable",
+      },
+      isError: true,
+      error: {
+        kind: "semantic_store_unavailable",
+        message: "distinctive semantic failure",
+      },
+    });
+
+    const result = await dispatchToolCall(
+      "codebase_search",
+      { query: "auth flow" },
+      { ...mockCtx, semanticSearchProvider: { search } },
+    );
+
+    expect(result).toMatchObject({
+      data: {
+        error: "distinctive semantic failure",
+        reason: "store_unavailable",
+      },
+      isError: true,
+      error: {
+        kind: "semantic_store_unavailable",
+        message: "distinctive semantic failure",
+      },
+    });
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual(
+      result.data,
+    );
   });
 
   it("returns explicit unavailable behavior for codebase_search without a provider", async () => {
@@ -2739,6 +3169,15 @@ describe("dispatchToolCall", () => {
       error: expect.stringContaining(
         "Semantic codebase search is unavailable in this runtime",
       ),
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      error: {
+        kind: "tool_error",
+        message: expect.stringContaining(
+          "Semantic codebase search is unavailable in this runtime",
+        ),
+      },
     });
   });
 

@@ -512,6 +512,7 @@ function snapshotToReadSet(
       lastInputTokens: foreground.lastInputTokens,
       lastOutputTokens: foreground.lastOutputTokens,
       lastCacheReadTokens: foreground.lastCacheReadTokens,
+      contextHealth: null,
       condenseThreshold: foreground.condenseThreshold,
       restoringSession: foreground.restoringSession,
       revertRecoveryNotice: foreground.revertRecoveryNotice,

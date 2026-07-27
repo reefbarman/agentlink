@@ -25,17 +25,13 @@ import {
   getContextDocumentSymbols,
   getContextGitStatus,
 } from "../../tools/context/getContext.js";
+import { hashContent } from "../../indexer/workerLib.js";
 import {
-  getStructuralCachePath,
-  hashContent,
-  loadCache,
-  loadStructuralCache,
-} from "../../indexer/workerLib.js";
-import {
-  getWorkspaceRootForPath,
+  getWorkspaceRoots,
   resolveAndValidatePath,
   tryGetFirstWorkspaceRoot,
 } from "../../util/paths.js";
+import { getCodeIndexWorkspaceRootForPath } from "../../indexer/codeIndexPaths.js";
 
 import type { ApprovalManager } from "../../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvider.js";
@@ -44,11 +40,14 @@ import {
   approveOutsideWorkspaceAccess,
   type GuardianOutsideReadOptions,
 } from "../../tools/pathAccessUI.js";
-import { getAlCollectionName } from "../../indexer/collectionName.js";
+import { getCodeWorkspaceScopeId } from "../../indexer/codeRetrievalIdentity.js";
+import { createCodeIndexFingerprint } from "../../indexer/retrievalFingerprint.js";
+import { projectStructuralRelations } from "../../indexer/structuralRelationProjection.js";
 import { isAgentlinkTmpArtifact } from "../../util/agentlinkTmpArtifacts.js";
-import { projectVisibleStructuralGraph } from "../../indexer/structuralGraph.js";
 import { resolveAndOpenDocument } from "../../tools/languageFeatures.js";
 import { semanticSearch } from "../../services/semanticSearch.js";
+import { LanceDbRetrievalRepository } from "../../storage/retrieval/LanceDbRetrievalRepository.js";
+import { getRetrievalStoreRoot } from "../../storage/retrieval/retrievalStorePaths.js";
 
 export function createVscodeWorkspaceFileProvider(): WorkspaceFileProvider {
   return {
@@ -87,21 +86,56 @@ export function createVscodeReadFileEnrichmentProvider(): ReadFileEnrichmentProv
 
 export function createVscodeSemanticSearchProvider(
   projectRoot?: string,
+  globalStorageUri?: vscode.Uri,
 ): SemanticSearchProvider {
   return {
-    search(params) {
+    async search(params) {
       const dirPath = params.path
         ? resolveAndValidatePath(params.path).absolutePath
         : (projectRoot ?? tryGetFirstWorkspaceRoot() ?? ".");
-      return semanticSearch(
+      const result = await semanticSearch(
         dirPath,
         params.query,
         params.limit,
         params.exclude_globs,
-        { includeAllWorkspaceRoots: false },
+        {
+          includeAllWorkspaceRoots: false,
+          ...(globalStorageUri
+            ? {
+                retrievalStoreRoot: getRetrievalStoreRoot(
+                  globalStorageUri.fsPath,
+                ),
+              }
+            : {}),
+        },
       );
+      return {
+        payload: readSemanticSearchPayload(result),
+        ...(result.isError ? { isError: true } : {}),
+        ...(result.error ? { error: result.error } : {}),
+      };
     },
   };
+}
+
+function readSemanticSearchPayload(result: {
+  data?: unknown;
+  content: Array<{ type: string; text?: string }>;
+}): Record<string, unknown> {
+  if (isRecord(result.data)) return result.data;
+  const text = result.content.find((entry) => entry.type === "text")?.text;
+  if (text === undefined) {
+    throw new Error("Semantic search returned no JSON payload");
+  }
+  const parsed = JSON.parse(text) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error("Semantic search returned a malformed JSON payload");
+  }
+  return parsed;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function createVscodeContextDocumentProvider(
@@ -161,40 +195,72 @@ export function createVscodeContextEnrichmentProvider(): ContextEnrichmentProvid
 
 export function createVscodeStructuralGraphProvider(
   globalStorageUri: vscode.Uri | undefined,
+  chunkGranularity: "standard" | "fine" = "fine",
 ): StructuralGraphProvider | undefined {
   if (!globalStorageUri) return undefined;
+
+  const getOwningWorkspaceRoot = (absolutePath: string) =>
+    getCodeIndexWorkspaceRootForPath(getWorkspaceRoots(), absolutePath);
 
   return {
     resolveWorkspaceRoot(inputPath) {
       if (!inputPath) return tryGetFirstWorkspaceRoot();
       const { absolutePath, inWorkspace } = resolveAndValidatePath(inputPath);
       if (!inWorkspace) return undefined;
-      return getWorkspaceRootForPath(absolutePath);
+      return getOwningWorkspaceRoot(absolutePath);
     },
     resolvePath(inputPath) {
       return resolveAndValidatePath(inputPath);
     },
-    getWorkspaceRootForPath,
-    loadGraph(workspaceRoot) {
-      const collectionName = getAlCollectionName(workspaceRoot);
-      const vectorCachePath = path.join(
+    getWorkspaceRootForPath: getOwningWorkspaceRoot,
+    async loadGraph(workspaceRoot) {
+      const indexName = getCodeWorkspaceScopeId(workspaceRoot);
+      const structuralCachePath = getRetrievalStoreRoot(
         globalStorageUri.fsPath,
-        "index-cache",
-        `${collectionName}.json`,
       );
-      const structuralCachePath = getStructuralCachePath(vectorCachePath);
-      const graphExists = fs.existsSync(structuralCachePath);
-      const graph = projectVisibleStructuralGraph(
-        loadStructuralCache(structuralCachePath, workspaceRoot),
-        loadCache(vectorCachePath),
-      );
-      return {
-        graph,
-        workspaceRoot,
-        collectionName,
-        structuralCachePath,
-        graphExists,
-      };
+      const storeExists = fs.existsSync(structuralCachePath);
+      if (!storeExists) {
+        return {
+          graph: projectStructuralRelations({
+            workspaceRoot,
+            indexName,
+            sources: [],
+            relations: [],
+          }),
+          workspaceRoot,
+          indexName,
+          structuralStorePath: structuralCachePath,
+          graphExists: false,
+        };
+      }
+
+      const repository = new LanceDbRetrievalRepository({
+        root: structuralCachePath,
+      });
+      try {
+        const snapshot = await repository.structuralSnapshot({
+          expectedFingerprint: createCodeIndexFingerprint(chunkGranularity),
+          filters: {
+            namespaces: ["code"],
+            sourceKinds: ["file"],
+            metadata: { scopeId: indexName },
+          },
+        });
+        return {
+          graph: projectStructuralRelations({
+            workspaceRoot,
+            indexName,
+            sources: snapshot.sources,
+            relations: snapshot.relations,
+          }),
+          workspaceRoot,
+          indexName,
+          structuralStorePath: structuralCachePath,
+          graphExists: snapshot.status === "ready",
+        };
+      } finally {
+        await repository.close();
+      }
     },
     getTargetFreshness(absolutePath, target) {
       if (!target) {

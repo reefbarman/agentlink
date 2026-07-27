@@ -13,6 +13,7 @@ describe("isForwardedBuiltinCommand", () => {
     "pair",
     "usage",
     "condense",
+    "context-doctor",
     "checkpoint",
     "revert",
   ])("forwards the VS Code command %s", (name) => {
@@ -21,6 +22,7 @@ describe("isForwardedBuiltinCommand", () => {
 
   it.each([
     "condense",
+    "context-doctor",
     "checkpoint",
     "revert",
     "mcp-config",

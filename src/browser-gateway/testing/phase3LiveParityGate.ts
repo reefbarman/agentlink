@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../../agent/webview/types.js";
+import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
 import type { BrowserGatewaySnapshotState } from "../BrowserGatewayService.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "../dataPlane/limits.js";
 import {
@@ -21,6 +22,21 @@ const identity = {
   ownerId: "phase3-live-owner",
   ownerGenerationId: "phase3-live-owner-generation",
 } satisfies BrowserGatewayDataPlaneIdentity;
+
+const PARITY_CONTEXT_HEALTH = {
+  memory: { status: "ready", retrieval: "hybrid", activeRecordCount: 7 },
+  retrieval: {
+    status: "degraded",
+    lexical: "ready",
+    vector: "unavailable",
+    structural: "ready",
+    sourceCount: 12,
+    chunkCount: 48,
+    staleSourceCount: 2,
+    reason: "Vector retrieval is unavailable.",
+  },
+  index: { status: "working", state: "indexing", current: 3, total: 10 },
+} satisfies ContextHealthSnapshot;
 
 const referenceMessageCount =
   BROWSER_GATEWAY_DATA_PLANE_LIMITS.selectedOwnerCheckpointMessages;
@@ -266,6 +282,7 @@ function createCheckpoint(
       streaming: true,
       estimatedTokens: 12_345,
       maximumTokens: 200_000,
+      contextHealth: structuredClone(PARITY_CONTEXT_HEALTH),
     },
     catalog: {
       projects: [
@@ -450,6 +467,9 @@ function createLegacySnapshot(
         lastOutputTokens: 0,
         lastCacheReadTokens: 0,
         estimatedTotalUsed: foreground.estimatedTokens ?? 0,
+        contextHealth: foreground.contextHealth
+          ? structuredClone(foreground.contextHealth)
+          : null,
         messageQueue: checkpoint.ui.queue.map((item) => ({
           id: item.itemId,
           text: item.summary,

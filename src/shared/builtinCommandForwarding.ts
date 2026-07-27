@@ -14,11 +14,13 @@ const FORWARDED_BUILTIN_COMMANDS: Record<
     "pair",
     "usage",
     "condense",
+    "context-doctor",
     "checkpoint",
     "revert",
   ]),
   browser: new Set([
     "condense",
+    "context-doctor",
     "checkpoint",
     "revert",
     "mcp-config",

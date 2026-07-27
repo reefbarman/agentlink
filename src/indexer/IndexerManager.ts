@@ -25,8 +25,15 @@ import {
   getSemanticReadinessMessage,
 } from "../shared/semanticReadiness.js";
 import { getWorkspaceRootForPath, getWorkspaceRoots } from "../util/paths.js";
-import { getAlCollectionName } from "./collectionName.js";
-import { DEFAULT_QDRANT_URL, normalizeQdrantUrl } from "./qdrantClient.js";
+import { classifyRetrievalFingerprint } from "../core/retrieval/fingerprint.js";
+import { getRetrievalStoreRoot } from "../storage/retrieval/retrievalStorePaths.js";
+import { getWorkspaceCacheKey } from "./workspaceCacheKey.js";
+import { getCodeWorkspaceScopeId } from "./codeRetrievalIdentity.js";
+import {
+  CODE_INDEX_REBUILD_REQUIRED_ERROR,
+  createCodeIndexFingerprint,
+} from "./retrievalFingerprint.js";
+import { loadIndexCache } from "./workerLib.js";
 import {
   DEFAULT_INDEX_EXCLUSIONS,
   IndexableFileDiscovery,
@@ -59,9 +66,6 @@ export interface IndexStatus {
 // --- Constants ---
 
 const WATCHER_DEBOUNCE_MS = 2000;
-const QDRANT_BACKGROUND_RETRY_DELAYS_MS = [
-  15_000, 30_000, 60_000, 120_000, 300_000,
-];
 
 export class IndexerManager implements vscode.Disposable {
   private worker: ChildProcess | null = null;
@@ -82,8 +86,6 @@ export class IndexerManager implements vscode.Disposable {
   private pendingAdded = new Set<string>();
   private pendingRemoved = new Set<string>();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private qdrantRetryTimer: ReturnType<typeof setTimeout> | null = null;
-  private qdrantRetryAttempt = 0;
   private readonly fileDiscovery: IndexableFileDiscovery;
 
   // Event emitter for status changes
@@ -100,10 +102,7 @@ export class IndexerManager implements vscode.Disposable {
 
   // --- Public API ---
 
-  async startIndexing(
-    force = false,
-    options?: { fromQdrantRetry?: boolean },
-  ): Promise<void> {
+  async startIndexing(force = false): Promise<void> {
     if (
       this.status.state === "indexing" ||
       this.status.state === "discovering"
@@ -113,9 +112,6 @@ export class IndexerManager implements vscode.Disposable {
     }
 
     this.cancelRequested = false;
-    if (!options?.fromQdrantRetry) {
-      this.clearQdrantRetry(true);
-    }
 
     try {
       const config = vscode.workspace.getConfiguration("agentlink");
@@ -123,8 +119,10 @@ export class IndexerManager implements vscode.Disposable {
         "semanticSearchEnabled",
         false,
       );
-      const qdrantUrl = config.get<string>("qdrantUrl", DEFAULT_QDRANT_URL);
       const workspaceRoots = this.getWorkspaceRoots();
+      const retrievalStoreRoot = getRetrievalStoreRoot(
+        this.globalStorageUri.fsPath,
+      );
 
       const embeddingBearerToken = await this.getEmbeddingBearerToken();
 
@@ -132,7 +130,6 @@ export class IndexerManager implements vscode.Disposable {
         const readinessReason = this.classifyPreflightReadinessReason({
           semanticEnabled,
           hasWorkspace: workspaceRoots.length > 0,
-          hasEmbeddingAuth: Boolean(embeddingBearerToken),
         });
         const message = getSemanticReadinessMessage(readinessReason);
         this.updateStatus({
@@ -148,23 +145,6 @@ export class IndexerManager implements vscode.Disposable {
         const readinessReason = this.classifyPreflightReadinessReason({
           semanticEnabled,
           hasWorkspace: false,
-          hasEmbeddingAuth: Boolean(embeddingBearerToken),
-        });
-        const message = getSemanticReadinessMessage(readinessReason);
-        this.updateStatus({
-          state: "error",
-          readinessReason,
-          readinessMessage: message,
-          error: message,
-        });
-        return;
-      }
-
-      if (!embeddingBearerToken) {
-        const readinessReason = this.classifyPreflightReadinessReason({
-          semanticEnabled,
-          hasWorkspace: true,
-          hasEmbeddingAuth: false,
         });
         const message = getSemanticReadinessMessage(readinessReason);
         this.updateStatus({
@@ -177,32 +157,6 @@ export class IndexerManager implements vscode.Disposable {
       }
 
       this.updateStatus({ state: "discovering", detail: undefined });
-
-      // Pre-flight: check Qdrant is reachable with retry + backoff
-      const qdrantReachable = await this.waitForQdrant(qdrantUrl);
-      if (!qdrantReachable) {
-        if (this.cancelRequested) {
-          this.updateStatus({ state: "idle" });
-        } else {
-          const readinessReason = this.classifyPreflightReadinessReason({
-            semanticEnabled,
-            hasWorkspace: true,
-            hasEmbeddingAuth: true,
-            qdrantReachable: false,
-          });
-          const message = getSemanticReadinessMessage(readinessReason, {
-            qdrantUrl,
-          });
-          this.updateStatus({
-            state: "error",
-            readinessReason,
-            readinessMessage: message,
-            error: message,
-          });
-          this.scheduleQdrantRetry(force, qdrantUrl);
-        }
-        return;
-      }
 
       const discoveredByRoot = new Map<string, string[]>();
       let totalFiles = 0;
@@ -237,8 +191,8 @@ export class IndexerManager implements vscode.Disposable {
         totalFilesInIndex: 0,
         chunksCreated: 0,
         totalChunksInIndex: 0,
-        pointsUpserted: 0,
-        pointsDeleted: 0,
+        recordsUpserted: 0,
+        recordsDeleted: 0,
         durationMs: 0,
         errors: [],
       };
@@ -248,8 +202,8 @@ export class IndexerManager implements vscode.Disposable {
       for (const workspaceRoot of workspaceRoots) {
         if (this.cancelRequested) break;
 
-        const collectionName = getAlCollectionName(workspaceRoot);
-        const cachePath = this.getCachePath(collectionName);
+        const indexName = getWorkspaceCacheKey(workspaceRoot);
+        const cachePath = this.getCachePath(indexName);
         const files = discoveredByRoot.get(workspaceRoot) ?? [];
         const folder = vscode.workspace.getWorkspaceFolder(
           vscode.Uri.file(workspaceRoot),
@@ -272,8 +226,9 @@ export class IndexerManager implements vscode.Disposable {
               type: "start",
               files,
               workspaceRoot,
-              collectionName,
-              qdrantUrl,
+              indexName,
+              workspaceScopeId: getCodeWorkspaceScopeId(workspaceRoot),
+              retrievalStoreRoot,
               embeddingBearerToken,
               cachePath,
               force,
@@ -305,7 +260,7 @@ export class IndexerManager implements vscode.Disposable {
       this.log(
         `Indexing complete across ${completedRoots}/${workspaceRoots.length} workspace folder(s): ` +
           `${aggregateStats.filesIndexed} files, ${aggregateStats.chunksCreated} chunks, ` +
-          `${aggregateStats.pointsUpserted} upserted, ${aggregateStats.pointsDeleted} deleted` +
+          `${aggregateStats.recordsUpserted} upserted, ${aggregateStats.recordsDeleted} deleted` +
           (aggregateStats.errors.length > 0
             ? ` — ${aggregateStats.errors.length} error(s)`
             : ""),
@@ -319,25 +274,14 @@ export class IndexerManager implements vscode.Disposable {
         !aggregateStats.cancelled
       ) {
         const message = `Indexing failed for all workspace folders: ${aggregateStats.errors.join("; ")}`;
-        const qdrantUnavailable = this.isQdrantUnavailableError(message);
         this.updateStatus({
           state: "error",
-          readinessReason: qdrantUnavailable
-            ? "qdrant_unavailable"
-            : "generic_error",
-          readinessMessage: qdrantUnavailable
-            ? getSemanticReadinessMessage("qdrant_unavailable", { qdrantUrl })
-            : getSemanticReadinessMessage("generic_error"),
-          error: qdrantUnavailable
-            ? getSemanticReadinessMessage("qdrant_unavailable", { qdrantUrl })
-            : message,
+          readinessReason: "generic_error",
+          readinessMessage: getSemanticReadinessMessage("generic_error"),
+          error: message,
         });
-        if (qdrantUnavailable) {
-          this.scheduleQdrantRetry(force, qdrantUrl);
-        }
         return;
       }
-      this.clearQdrantRetry(true);
       this.updateStatus({
         state: "idle",
         detail: undefined,
@@ -359,15 +303,15 @@ export class IndexerManager implements vscode.Disposable {
         readinessMessage: getSemanticReadinessMessage("generic_error"),
         error: message,
       });
+    } finally {
+      this.rearmPendingIncrementalUpdate();
     }
   }
 
   cancelIndexing(): void {
     this.cancelRequested = true;
-    this.clearQdrantRetry(true);
 
     if (this.status.state === "discovering") {
-      // Cancel during Qdrant check / file discovery — waitForQdrant checks this flag
       this.log("Cancel requested during discovery phase");
       this.updateStatus({ state: "idle" });
       return;
@@ -384,17 +328,22 @@ export class IndexerManager implements vscode.Disposable {
   }
 
   handleFileChange(uri: vscode.Uri): void {
+    this.resumeWatcherUpdatesAfterCancellation();
+    this.pendingRemoved.delete(uri.fsPath);
     this.pendingAdded.add(uri.fsPath);
     this.scheduleIncrementalUpdate();
   }
 
   handleFileDelete(uri: vscode.Uri): void {
+    this.resumeWatcherUpdatesAfterCancellation();
     this.pendingRemoved.add(uri.fsPath);
     this.pendingAdded.delete(uri.fsPath);
     this.scheduleIncrementalUpdate();
   }
 
   handleFileCreate(uri: vscode.Uri): void {
+    this.resumeWatcherUpdatesAfterCancellation();
+    this.pendingRemoved.delete(uri.fsPath);
     this.pendingAdded.add(uri.fsPath);
     this.scheduleIncrementalUpdate();
   }
@@ -424,7 +373,6 @@ export class IndexerManager implements vscode.Disposable {
   dispose(): void {
     this.cancelRequested = true;
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
-    this.clearQdrantRetry(true);
     if (this.worker) {
       this.worker.kill();
       this.worker = null;
@@ -536,8 +484,8 @@ export class IndexerManager implements vscode.Disposable {
     target.totalFilesInIndex += source.totalFilesInIndex;
     target.chunksCreated += source.chunksCreated;
     target.totalChunksInIndex += source.totalChunksInIndex;
-    target.pointsUpserted += source.pointsUpserted;
-    target.pointsDeleted += source.pointsDeleted;
+    target.recordsUpserted += source.recordsUpserted;
+    target.recordsDeleted += source.recordsDeleted;
     target.errors.push(...source.errors);
     if (source.cancelled) target.cancelled = true;
   }
@@ -574,7 +522,7 @@ export class IndexerManager implements vscode.Disposable {
 
         this.log(
           `Indexing complete: ${msg.stats.filesIndexed} files, ${msg.stats.chunksCreated} chunks, ` +
-            `${msg.stats.pointsUpserted} upserted, ${msg.stats.pointsDeleted} deleted ` +
+            `${msg.stats.recordsUpserted} upserted, ${msg.stats.recordsDeleted} deleted ` +
             `(${msg.stats.durationMs}ms)` +
             (msg.stats.errors.length > 0
               ? ` — ${msg.stats.errors.length} error(s)`
@@ -647,14 +595,71 @@ export class IndexerManager implements vscode.Disposable {
     }
   }
 
+  private resumeWatcherUpdatesAfterCancellation(): void {
+    if (
+      this.status.state !== "indexing" &&
+      this.status.state !== "discovering"
+    ) {
+      this.cancelRequested = false;
+    }
+  }
+
   private scheduleIncrementalUpdate(): void {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.debounceTimer = setTimeout(() => {
-      this.flushIncrementalUpdate();
+      this.debounceTimer = null;
+      void this.flushIncrementalUpdate();
     }, WATCHER_DEBOUNCE_MS);
   }
 
+  private rearmPendingIncrementalUpdate(): void {
+    if (
+      this.cancelRequested ||
+      this.status.state !== "idle" ||
+      (this.pendingAdded.size === 0 && this.pendingRemoved.size === 0) ||
+      this.pendingChangesRequireFullReindex()
+    ) {
+      return;
+    }
+    this.scheduleIncrementalUpdate();
+  }
+
+  private pendingChangesRequireFullReindex(): boolean {
+    const config = vscode.workspace.getConfiguration("agentlink");
+    const granularity = config.get<"standard" | "fine">(
+      "chunkGranularity",
+      "fine",
+    );
+    const roots = new Set<string>();
+    for (const filePath of [...this.pendingAdded, ...this.pendingRemoved]) {
+      const workspaceRoot = getWorkspaceRootForPath(filePath);
+      if (workspaceRoot) roots.add(workspaceRoot);
+    }
+    return [...roots].some((workspaceRoot) =>
+      this.cacheRequiresFullReindex(
+        this.getCachePath(getWorkspaceCacheKey(workspaceRoot)),
+        granularity,
+      ),
+    );
+  }
+
+  private restoreIncrementalClaim(
+    added: Iterable<string>,
+    removed: Iterable<string>,
+  ): void {
+    for (const filePath of added) {
+      if (!this.pendingRemoved.has(filePath)) this.pendingAdded.add(filePath);
+    }
+    for (const filePath of removed) {
+      if (!this.pendingAdded.has(filePath)) this.pendingRemoved.add(filePath);
+    }
+  }
+
   private async flushIncrementalUpdate(): Promise<void> {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
     if (
       this.status.state === "indexing" ||
       this.status.state === "discovering"
@@ -662,127 +667,144 @@ export class IndexerManager implements vscode.Disposable {
       return;
     }
 
-    const config = vscode.workspace.getConfiguration("agentlink");
-    const exclusions = this.getIndexExclusions(config);
-    const changesByRoot = new Map<
-      string,
-      { added: string[]; removed: string[] }
-    >();
+    const claimedAdded = this.pendingAdded;
+    const claimedRemoved = this.pendingRemoved;
+    this.pendingAdded = new Set<string>();
+    this.pendingRemoved = new Set<string>();
+    if (claimedAdded.size === 0 && claimedRemoved.size === 0) return;
 
-    for (const filePath of this.pendingAdded) {
-      const workspaceRoot = getWorkspaceRootForPath(filePath);
-      if (!workspaceRoot) continue;
-      const entry = changesByRoot.get(workspaceRoot) ?? {
-        added: [],
-        removed: [],
-      };
-      entry.added.push(filePath);
-      changesByRoot.set(workspaceRoot, entry);
-    }
+    let retryAdded = new Set<string>();
+    let retryRemoved = new Set<string>();
+    let filteringComplete = false;
+    let restoredClaim = false;
+    try {
+      const config = vscode.workspace.getConfiguration("agentlink");
+      const exclusions = this.getIndexExclusions(config);
+      const changesByRoot = new Map<
+        string,
+        { added: string[]; removed: string[] }
+      >();
 
-    for (const filePath of this.pendingRemoved) {
-      const workspaceRoot = getWorkspaceRootForPath(filePath);
-      if (!workspaceRoot) continue;
-      const entry = changesByRoot.get(workspaceRoot) ?? {
-        added: [],
-        removed: [],
-      };
-      entry.removed.push(filePath);
-      changesByRoot.set(workspaceRoot, entry);
-    }
+      for (const filePath of claimedAdded) {
+        const workspaceRoot = getWorkspaceRootForPath(filePath);
+        if (!workspaceRoot) continue;
+        const entry = changesByRoot.get(workspaceRoot) ?? {
+          added: [],
+          removed: [],
+        };
+        entry.added.push(filePath);
+        changesByRoot.set(workspaceRoot, entry);
+      }
 
-    if (changesByRoot.size === 0) {
-      this.pendingAdded.clear();
-      this.pendingRemoved.clear();
-      return;
-    }
+      for (const filePath of claimedRemoved) {
+        const workspaceRoot = getWorkspaceRootForPath(filePath);
+        if (!workspaceRoot) continue;
+        const entry = changesByRoot.get(workspaceRoot) ?? {
+          added: [],
+          removed: [],
+        };
+        entry.removed.push(filePath);
+        changesByRoot.set(workspaceRoot, entry);
+      }
 
-    const filteredChanges: Array<{
-      workspaceRoot: string;
-      added: string[];
-      removed: string[];
-    }> = [];
-
-    for (const [workspaceRoot, changes] of changesByRoot) {
-      const added = await this.fileDiscovery.filterIndexableFiles(
-        changes.added,
-        workspaceRoot,
-        exclusions,
-      );
-      const removed =
-        await this.fileDiscovery.filterExplicitlyIncludedRemovedPaths(
-          changes.removed,
+      const filteredChanges: Array<{
+        workspaceRoot: string;
+        added: string[];
+        removed: string[];
+      }> = [];
+      for (const [workspaceRoot, changes] of changesByRoot) {
+        const added = await this.fileDiscovery.filterIndexableFiles(
+          changes.added,
           workspaceRoot,
           exclusions,
         );
-      if (added.length > 0 || removed.length > 0) {
-        filteredChanges.push({ workspaceRoot, added, removed });
+        const removed =
+          await this.fileDiscovery.filterExplicitlyIncludedRemovedPaths(
+            changes.removed,
+            workspaceRoot,
+            exclusions,
+          );
+        if (added.length > 0 || removed.length > 0) {
+          filteredChanges.push({ workspaceRoot, added, removed });
+          for (const filePath of added) retryAdded.add(filePath);
+          for (const filePath of removed) retryRemoved.add(filePath);
+        }
       }
-    }
+      filteringComplete = true;
+      if (filteredChanges.length === 0) return;
 
-    if (filteredChanges.length === 0) {
-      this.pendingAdded.clear();
-      this.pendingRemoved.clear();
-      return;
-    }
+      const retrievalStoreRoot = getRetrievalStoreRoot(
+        this.globalStorageUri.fsPath,
+      );
+      const embeddingBearerToken = await this.getEmbeddingBearerToken();
 
-    this.pendingAdded.clear();
-    this.pendingRemoved.clear();
+      const totalAdded = filteredChanges.reduce(
+        (sum, changes) => sum + changes.added.length,
+        0,
+      );
+      const totalRemoved = filteredChanges.reduce(
+        (sum, changes) => sum + changes.removed.length,
+        0,
+      );
+      this.log(
+        `Incremental update: ${totalAdded} added/changed, ${totalRemoved} removed across ${filteredChanges.length} workspace folder(s)`,
+      );
+      this.updateStatus({ state: "indexing" });
 
-    const qdrantUrl = config.get<string>("qdrantUrl", DEFAULT_QDRANT_URL);
-    const embeddingBearerToken = await this.getEmbeddingBearerToken();
-    if (!embeddingBearerToken) return;
+      const granularity = config.get<"standard" | "fine">(
+        "chunkGranularity",
+        "fine",
+      );
+      if (
+        filteredChanges.some(({ workspaceRoot }) =>
+          this.cacheRequiresFullReindex(
+            this.getCachePath(getWorkspaceCacheKey(workspaceRoot)),
+            granularity,
+          ),
+        )
+      ) {
+        this.restoreIncrementalClaim(retryAdded, retryRemoved);
+        restoredClaim = true;
+        this.updateStatus({ state: "idle" });
+        await this.startIndexing(false);
+        return;
+      }
+      const aggregateStats: IndexStats = {
+        filesIndexed: 0,
+        totalFilesInIndex: 0,
+        chunksCreated: 0,
+        totalChunksInIndex: 0,
+        recordsUpserted: 0,
+        recordsDeleted: 0,
+        durationMs: 0,
+        errors: [],
+      };
+      const startTime = Date.now();
 
-    const totalAdded = filteredChanges.reduce(
-      (sum, changes) => sum + changes.added.length,
-      0,
-    );
-    const totalRemoved = filteredChanges.reduce(
-      (sum, changes) => sum + changes.removed.length,
-      0,
-    );
-
-    this.log(
-      `Incremental update: ${totalAdded} added/changed, ${totalRemoved} removed across ${filteredChanges.length} workspace folder(s)`,
-    );
-    this.updateStatus({ state: "indexing" });
-
-    const granularity = config.get<"standard" | "fine">(
-      "chunkGranularity",
-      "fine",
-    );
-
-    const aggregateStats: IndexStats = {
-      filesIndexed: 0,
-      totalFilesInIndex: 0,
-      chunksCreated: 0,
-      totalChunksInIndex: 0,
-      pointsUpserted: 0,
-      pointsDeleted: 0,
-      durationMs: 0,
-      errors: [],
-    };
-    const startTime = Date.now();
-
-    try {
       for (const { workspaceRoot, added, removed } of filteredChanges) {
-        const collectionName = getAlCollectionName(workspaceRoot);
-        const cachePath = this.getCachePath(collectionName);
+        const indexName = getWorkspaceCacheKey(workspaceRoot);
+        const cachePath = this.getCachePath(indexName);
         const stats = await this.runWorkerJob({
           type: "incrementalUpdate",
           added,
           removed,
           workspaceRoot,
-          collectionName,
-          qdrantUrl,
+          indexName,
+          workspaceScopeId: getCodeWorkspaceScopeId(workspaceRoot),
+          retrievalStoreRoot,
           embeddingBearerToken,
           cachePath,
           granularity,
         });
         this.addStats(aggregateStats, stats);
+        if (stats.cancelled || stats.errors.length > 0) break;
       }
 
       aggregateStats.durationMs = Date.now() - startTime;
+      if (aggregateStats.cancelled || aggregateStats.errors.length > 0) {
+        this.restoreIncrementalClaim(retryAdded, retryRemoved);
+        restoredClaim = true;
+      }
       this.updateStatus({
         state: "idle",
         lastCompleted: {
@@ -796,14 +818,42 @@ export class IndexerManager implements vscode.Disposable {
         },
       });
     } catch (err) {
+      this.restoreIncrementalClaim(
+        filteringComplete ? retryAdded : claimedAdded,
+        filteringComplete ? retryRemoved : claimedRemoved,
+      );
+      restoredClaim = true;
       const message = err instanceof Error ? err.message : String(err);
+      if (message.includes(CODE_INDEX_REBUILD_REQUIRED_ERROR)) {
+        this.updateStatus({ state: "idle" });
+        await this.startIndexing(false);
+        return;
+      }
       this.updateStatus({
         state: "error",
         readinessReason: "generic_error",
         readinessMessage: getSemanticReadinessMessage("generic_error"),
         error: message,
       });
+    } finally {
+      if (!restoredClaim) this.rearmPendingIncrementalUpdate();
     }
+  }
+
+  private cacheRequiresFullReindex(
+    cachePath: string,
+    granularity: "standard" | "fine",
+  ): boolean {
+    const loaded = loadIndexCache(cachePath);
+    if (loaded.status === "corrupt") return false;
+    if (loaded.status === "missing") return true;
+    return (
+      (loaded.cache.granularity ?? "standard") !== granularity ||
+      classifyRetrievalFingerprint(
+        loaded.cache.fingerprint ?? null,
+        createCodeIndexFingerprint(granularity),
+      ) !== "compatible"
+    );
   }
 
   private getIndexExclusions(config: vscode.WorkspaceConfiguration): string[] {
@@ -844,103 +894,16 @@ export class IndexerManager implements vscode.Disposable {
     return getWorkspaceRoots();
   }
 
-  private getCachePath(collectionName: string): string {
+  private getCachePath(workspaceCacheKey: string): string {
     return path.join(
       this.globalStorageUri.fsPath,
       "index-cache",
-      `${collectionName}.json`,
+      `${workspaceCacheKey}.json`,
     );
   }
 
-  private isQdrantUnavailableError(message: string): boolean {
-    return (
-      /Qdrant/i.test(message) &&
-      /fetch failed|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|connection closed|connection refused|network|not reachable|503|502|504|5\d\d/i.test(
-        message,
-      )
-    );
-  }
-
-  private scheduleQdrantRetry(force: boolean, qdrantUrl: string): void {
-    if (this.qdrantRetryTimer) return;
-
-    const delay =
-      QDRANT_BACKGROUND_RETRY_DELAYS_MS[
-        Math.min(
-          this.qdrantRetryAttempt,
-          QDRANT_BACKGROUND_RETRY_DELAYS_MS.length - 1,
-        )
-      ];
-    const nextAttempt = this.qdrantRetryAttempt + 1;
-    this.qdrantRetryAttempt = nextAttempt;
-    const delaySeconds = Math.round(delay / 1000);
-
-    this.log(
-      `Qdrant unavailable at ${qdrantUrl}; retrying index start in ${delaySeconds}s (background retry ${nextAttempt})`,
-    );
-    this.updateStatus({
-      detail: `Will retry Qdrant connection automatically in ${delaySeconds}s.`,
-    });
-
-    this.qdrantRetryTimer = setTimeout(() => {
-      this.qdrantRetryTimer = null;
-      if (this.cancelRequested) return;
-      this.log(
-        `Retrying index start after Qdrant backoff (attempt ${this.qdrantRetryAttempt})`,
-      );
-      void this.startIndexing(force, { fromQdrantRetry: true });
-    }, delay);
-  }
-
-  private clearQdrantRetry(resetAttempt: boolean): void {
-    if (this.qdrantRetryTimer) {
-      clearTimeout(this.qdrantRetryTimer);
-      this.qdrantRetryTimer = null;
-    }
-    if (resetAttempt) {
-      this.qdrantRetryAttempt = 0;
-    }
-  }
-
-  /**
-   * Try to reach Qdrant with exponential backoff (1s, 2s, 4s, 8s).
-   * Updates status detail so the user sees retry progress in the sidebar.
-   * Returns false if all attempts fail or cancel is requested.
-   */
-  private async waitForQdrant(qdrantUrl: string): Promise<boolean> {
-    const baseUrl = normalizeQdrantUrl(qdrantUrl);
-    const delays = [0, 1000, 2000, 4000, 8000]; // initial + 4 retries
-
-    for (let i = 0; i < delays.length; i++) {
-      if (this.cancelRequested) return false;
-
-      if (delays[i] > 0) {
-        this.updateStatus({
-          ...this.status,
-          detail: `Qdrant not reachable, retrying (${i}/${delays.length - 1})...`,
-        });
-        await new Promise((r) => setTimeout(r, delays[i]));
-      }
-
-      if (this.cancelRequested) return false;
-
-      try {
-        const resp = await fetch(`${baseUrl}/healthz`, {
-          signal: AbortSignal.timeout(3000),
-        });
-        if (resp.ok) return true;
-      } catch {
-        this.log(
-          `Qdrant health check failed (attempt ${i + 1}/${delays.length})`,
-        );
-      }
-    }
-
-    return false;
-  }
-
-  private async getEmbeddingBearerToken(): Promise<string> {
+  private async getEmbeddingBearerToken(): Promise<string | undefined> {
     const auth = await openAiCodexAuthManager.resolveEmbeddingAuth();
-    return auth?.bearerToken || "";
+    return auth?.bearerToken || undefined;
   }
 }

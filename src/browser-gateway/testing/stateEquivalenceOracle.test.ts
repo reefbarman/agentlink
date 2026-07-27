@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatMessage } from "../../agent/webview/types.js";
+import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
 import type { BrowserGatewaySnapshotState } from "../BrowserGatewayService.js";
 import {
   BrowserGatewayOwnerProjectionAdapter,
@@ -22,6 +23,21 @@ const identity = {
   ownerId: "owner-1",
   ownerGenerationId: "owner-generation-1",
 };
+
+const PARITY_CONTEXT_HEALTH = {
+  memory: { status: "ready", retrieval: "hybrid", activeRecordCount: 7 },
+  retrieval: {
+    status: "degraded",
+    lexical: "ready",
+    vector: "unavailable",
+    structural: "ready",
+    sourceCount: 12,
+    chunkCount: 48,
+    staleSourceCount: 2,
+    reason: "Vector retrieval is unavailable.",
+  },
+  index: { status: "working", state: "indexing", current: 3, total: 10 },
+} satisfies ContextHealthSnapshot;
 
 class MutableProjectionSources implements BrowserGatewayOwnerProjectionSources {
   private readonly listeners = new Set<
@@ -96,6 +112,7 @@ function createReadSet(): BrowserGatewayOwnerProjectionReadSet {
       lastInputTokens: 11,
       lastOutputTokens: 22,
       lastCacheReadTokens: 33,
+      contextHealth: structuredClone(PARITY_CONTEXT_HEALTH),
       contextBudget: {
         contextWindow: 200_000,
         maxInputTokens: 180_000,
@@ -232,6 +249,9 @@ function createLegacySnapshot(
         lastOutputTokens: foreground.lastOutputTokens,
         lastCacheReadTokens: foreground.lastCacheReadTokens,
         estimatedTotalUsed: foreground.estimatedTokens ?? 0,
+        contextHealth: foreground.contextHealth
+          ? structuredClone(foreground.contextHealth)
+          : null,
         ...(foreground.contextBudget
           ? { contextBudget: { ...foreground.contextBudget } }
           : {}),
@@ -337,6 +357,9 @@ function syncLegacyForeground(
   target.lastOutputTokens = source.lastOutputTokens;
   target.lastCacheReadTokens = source.lastCacheReadTokens;
   target.estimatedTotalUsed = source.estimatedTokens ?? 0;
+  target.contextHealth = source.contextHealth
+    ? structuredClone(source.contextHealth)
+    : null;
   target.contextBudget = source.contextBudget
     ? { ...source.contextBudget }
     : undefined;
@@ -664,9 +687,19 @@ describe("browser gateway state equivalence oracle", () => {
       ...harness.legacy.session.foreground!.contextBudget!,
       hardBudget: 170_000,
     };
+    harness.legacy.session.foreground!.contextHealth = {
+      ...harness.legacy.session.foreground!.contextHealth!,
+      retrieval: {
+        ...harness.legacy.session.foreground!.contextHealth!.retrieval,
+        staleSourceCount: 3,
+      },
+    };
 
     expect(harness.compare().diffs).toEqual([
       expect.objectContaining({ path: "foreground.contextBudget.hardBudget" }),
+      expect.objectContaining({
+        path: "foreground.contextHealth.retrieval.staleSourceCount",
+      }),
       expect.objectContaining({ path: "foreground.thinkingEnabled" }),
     ]);
 

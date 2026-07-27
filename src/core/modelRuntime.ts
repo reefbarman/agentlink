@@ -191,6 +191,12 @@ export interface CoreModelTransportActivity {
   bytes?: number;
 }
 
+/** A physical provider transport request, emitted immediately before dispatch. */
+export interface CoreModelProviderRequestAttempt {
+  /** Effective wire model for this attempt, after provider-local fallback. */
+  model: string;
+}
+
 export interface CoreModelRequestBase {
   model: string;
   systemPrompt: string;
@@ -202,6 +208,11 @@ export interface CoreModelRequestBase {
   state?: CoreModelStateOptions;
   providerHints?: CoreModelProviderHints;
   signal?: AbortSignal;
+  /**
+   * Physical request-attempt hook. Providers invoke this immediately before
+   * every outbound model request, including retries and terminal failures.
+   */
+  onProviderRequestAttempt?: (attempt: CoreModelProviderRequestAttempt) => void;
   /**
    * Provider/transport liveness hook. This is deliberately below the semantic
    * stream-event layer so metadata, heartbeats, and body chunks keep long

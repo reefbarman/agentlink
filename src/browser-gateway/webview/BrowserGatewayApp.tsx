@@ -102,7 +102,15 @@ import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBa
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
+import { ContextHealthPanel } from "../../shared/ui/ContextHealthPanel";
+import { MemoryPanel } from "../../shared/ui/MemoryPanel";
 import { McpElicitationFormControls } from "../../shared/ui/McpElicitationFormControls";
+import type {
+  ManageMemoryToolInput,
+  MemoryInspectionQueryRequest,
+  MemoryPanelSnapshot,
+} from "../../core/capabilities/memory";
+import type { MemoryArchiveV1 } from "../../core/memory/contracts";
 
 import type {
   BgSessionInfo,
@@ -297,6 +305,50 @@ type AskAgentDerivedMemoryStatus = {
   }>;
 };
 
+type AskAgentAutonomousMemoryHealth = {
+  status: "ready" | "degraded" | "unavailable";
+  retrieval: "lexical-only" | "hybrid" | "unavailable";
+  crud: boolean;
+  auditUndo: boolean;
+  recordCount: number;
+  activeRecordCount: number;
+  auditEventCount: number;
+  reason?: string;
+};
+
+type AskAgentAutonomousMemoryDisposition =
+  | "created"
+  | "updated"
+  | "same-fact"
+  | "superseded"
+  | "contested"
+  | "forgotten"
+  | "restored"
+  | "undone"
+  | "rejected-sensitive"
+  | "rejected-quota"
+  | "not-found"
+  | "stale-revision";
+
+type AskAgentAutonomousMemoryEvent = {
+  id: string;
+  operation:
+    | "remember"
+    | "update"
+    | "supersede"
+    | "forget"
+    | "restore"
+    | "undo";
+  disposition: string;
+  occurredAt: string;
+  changes: Array<{
+    recordId: string;
+    before: { statement: string } | null;
+    after: { statement: string } | null;
+  }>;
+  undoneAuditEventId?: string;
+};
+
 type AskAgentMemoryCandidateNudge = {
   id: string;
   sessionId: string;
@@ -311,6 +363,21 @@ type AskAgentMemoryCandidateNudge = {
 };
 
 type AskAgentMemoryClearConfirmation = "idle" | "confirming";
+
+function autonomousMemoryChanged(
+  disposition: AskAgentAutonomousMemoryDisposition | undefined,
+): boolean {
+  return (
+    disposition === "created" ||
+    disposition === "updated" ||
+    disposition === "same-fact" ||
+    disposition === "superseded" ||
+    disposition === "contested" ||
+    disposition === "forgotten" ||
+    disposition === "restored" ||
+    disposition === "undone"
+  );
+}
 
 type AskAgentProjectHandoff = {
   id: string;
@@ -455,6 +522,7 @@ export type GatewaySnapshot = {
         softThresholdBudget: number;
         hardBudget: number;
       };
+      contextHealth: AppState["contextHealth"];
       condenseThreshold?: number;
       agentWriteApproval: "prompt" | "session" | "project" | "global";
       commandApprovalPolicy: CommandApprovalPolicy;
@@ -1031,8 +1099,12 @@ function buildAskAgentTranscriptMarkdown(params: {
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
-function downloadTextFile(filename: string, text: string): void {
-  const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+function downloadTextFile(
+  filename: string,
+  text: string,
+  mimeType = "text/markdown;charset=utf-8",
+): void {
+  const blob = new Blob([text], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -1327,6 +1399,26 @@ export function BrowserGatewayApp({
   const [askAgentMemoryPending, setAskAgentMemoryPending] = useState(false);
   const [askAgentMemoryClearConfirmation, setAskAgentMemoryClearConfirmation] =
     useState<AskAgentMemoryClearConfirmation>("idle");
+  const [askAgentAutonomousMemoryHealth, setAskAgentAutonomousMemoryHealth] =
+    useState<AskAgentAutonomousMemoryHealth | null>(null);
+  const [askAgentAutonomousMemoryEvents, setAskAgentAutonomousMemoryEvents] =
+    useState<AskAgentAutonomousMemoryEvent[]>([]);
+  const [askAgentAutonomousMemoryError, setAskAgentAutonomousMemoryError] =
+    useState<string | null>(null);
+  const [askAgentAutonomousMemoryPending, setAskAgentAutonomousMemoryPending] =
+    useState(false);
+  const [askAgentAutonomousMemoryUndoId, setAskAgentAutonomousMemoryUndoId] =
+    useState<string | null>(null);
+  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
+  const [memoryPanelSnapshot, setMemoryPanelSnapshot] =
+    useState<MemoryPanelSnapshot | null>(null);
+  const [memoryPanelPending, setMemoryPanelPending] = useState(false);
+  const [memoryPanelError, setMemoryPanelError] = useState<string | null>(null);
+  const memoryPanelQueryRef = useRef<MemoryInspectionQueryRequest>({
+    scope: "global",
+    limit: 100,
+  });
+  const memoryPanelRequestGenerationRef = useRef(0);
   const [showAskAgentHandoff, setShowAskAgentHandoff] = useState(false);
   const [showAskAgentReadGrants, setShowAskAgentReadGrants] = useState(false);
   const [askAgentReadGrantPath, setAskAgentReadGrantPath] = useState("");
@@ -2607,12 +2699,300 @@ export function BrowserGatewayApp({
     }
   }
 
-  async function proposeAskAgentMemoryCandidate(
+  async function fetchAskAgentAutonomousMemory(): Promise<void> {
+    if (!isAskAgentSelected) return;
+    setAskAgentAutonomousMemoryPending(true);
+    setAskAgentAutonomousMemoryError(null);
+    try {
+      const headers = { Authorization: `Bearer ${authToken}` };
+      const [healthResponse, activityResponse] = await Promise.all([
+        fetch("/api/ask-agent/autonomous-memory/health", {
+          credentials: "same-origin",
+          headers,
+        }),
+        fetch("/api/ask-agent/autonomous-memory/activity", {
+          credentials: "same-origin",
+          headers,
+        }),
+      ]);
+      const healthBody = (await healthResponse.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        health?: AskAgentAutonomousMemoryHealth;
+      };
+      const activityBody = (await activityResponse
+        .json()
+        .catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        events?: AskAgentAutonomousMemoryEvent[];
+        health?: AskAgentAutonomousMemoryHealth;
+      };
+      if (!healthResponse.ok || !healthBody.ok || !healthBody.health) {
+        throw new Error(healthBody.error ?? String(healthResponse.status));
+      }
+      if (!activityResponse.ok || !activityBody.ok || !activityBody.events) {
+        throw new Error(activityBody.error ?? String(activityResponse.status));
+      }
+      setAskAgentAutonomousMemoryHealth(
+        activityBody.health ?? healthBody.health,
+      );
+      setAskAgentAutonomousMemoryEvents(activityBody.events);
+    } catch (err) {
+      setAskAgentAutonomousMemoryError(
+        `Autonomous memory status error: ${String(err)}`,
+      );
+    } finally {
+      setAskAgentAutonomousMemoryPending(false);
+    }
+  }
+
+  async function fetchMemoryPanel(
+    request: MemoryInspectionQueryRequest = memoryPanelQueryRef.current,
+    selectedId?: string,
+  ): Promise<void> {
+    if (!isAskAgentSelected) return;
+    const generation = ++memoryPanelRequestGenerationRef.current;
+    memoryPanelQueryRef.current = request;
+    setMemoryPanelPending(true);
+    setMemoryPanelError(null);
+    try {
+      const { scope: _scope, projectId: _projectId, ...query } = request;
+      const headers = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      };
+      const [queryResponse, activityResponse, detailResponse] =
+        await Promise.all([
+          fetch("/api/ask-agent/autonomous-memory/query", {
+            method: "POST",
+            credentials: "same-origin",
+            headers,
+            body: JSON.stringify(query),
+          }),
+          fetch("/api/ask-agent/autonomous-memory/activity", {
+            credentials: "same-origin",
+            headers: { Authorization: `Bearer ${authToken}` },
+          }),
+          selectedId
+            ? fetch("/api/ask-agent/autonomous-memory/detail", {
+                method: "POST",
+                credentials: "same-origin",
+                headers,
+                body: JSON.stringify({ recordId: selectedId }),
+              })
+            : Promise.resolve(undefined),
+        ]);
+      const queryBody = (await queryResponse.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        result?: MemoryPanelSnapshot extends {
+          records: infer R;
+          total: infer T;
+        }
+          ? { records: R; total: T }
+          : never;
+        health?: MemoryPanelSnapshot["health"];
+      };
+      const activityBody = (await activityResponse
+        .json()
+        .catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        events?: MemoryPanelSnapshot["events"];
+      };
+      const detailBody = detailResponse
+        ? ((await detailResponse.json().catch(() => ({}))) as {
+            ok?: boolean;
+            error?: string;
+            detail?: MemoryPanelSnapshot["selected"];
+          })
+        : undefined;
+      if (
+        !queryResponse.ok ||
+        !queryBody.ok ||
+        !queryBody.result ||
+        !queryBody.health ||
+        !activityResponse.ok ||
+        !activityBody.ok ||
+        !activityBody.events ||
+        (detailResponse && (!detailResponse.ok || !detailBody?.ok))
+      ) {
+        throw new Error(
+          queryBody.error ??
+            activityBody.error ??
+            detailBody?.error ??
+            "memory_unavailable",
+        );
+      }
+      if (generation !== memoryPanelRequestGenerationRef.current) return;
+      setMemoryPanelSnapshot({
+        records: queryBody.result.records,
+        total: queryBody.result.total,
+        events: activityBody.events,
+        selected: detailBody?.detail,
+        health: queryBody.health,
+      });
+    } catch {
+      if (generation === memoryPanelRequestGenerationRef.current) {
+        setMemoryPanelError("Autonomous memory is unavailable.");
+      }
+    } finally {
+      if (generation === memoryPanelRequestGenerationRef.current) {
+        setMemoryPanelPending(false);
+      }
+    }
+  }
+
+  async function selectMemoryPanelRecord(recordId: string): Promise<void> {
+    const generation = ++memoryPanelRequestGenerationRef.current;
+    setMemoryPanelPending(true);
+    setMemoryPanelError(null);
+    try {
+      const response = await fetch("/api/ask-agent/autonomous-memory/detail", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ recordId }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        detail?: MemoryPanelSnapshot["selected"];
+      };
+      if (!response.ok || !body.ok) {
+        throw new Error(body.error ?? "memory_detail_unavailable");
+      }
+      if (generation !== memoryPanelRequestGenerationRef.current) return;
+      setMemoryPanelSnapshot((current) =>
+        current ? { ...current, selected: body.detail } : current,
+      );
+    } catch {
+      if (generation === memoryPanelRequestGenerationRef.current) {
+        setMemoryPanelError("The selected memory record is unavailable.");
+      }
+    } finally {
+      if (generation === memoryPanelRequestGenerationRef.current) {
+        setMemoryPanelPending(false);
+      }
+    }
+  }
+
+  async function mutateMemoryPanel(
+    path: "manage" | "clear" | "import",
+    body: object,
+    selectedId?: string,
+  ): Promise<void> {
+    const generation = ++memoryPanelRequestGenerationRef.current;
+    setMemoryPanelPending(true);
+    setMemoryPanelError(null);
+    try {
+      const response = await fetch(`/api/ask-agent/autonomous-memory/${path}`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify(body),
+      });
+      const result = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+      };
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error ?? "memory_mutation_failed");
+      }
+      await fetchMemoryPanel(memoryPanelQueryRef.current, selectedId);
+      await fetchAskAgentAutonomousMemory();
+    } catch {
+      if (generation === memoryPanelRequestGenerationRef.current) {
+        setMemoryPanelError("Autonomous memory update failed.");
+        setMemoryPanelPending(false);
+      }
+    }
+  }
+
+  async function exportMemoryPanel(): Promise<void> {
+    setMemoryPanelPending(true);
+    setMemoryPanelError(null);
+    try {
+      const response = await fetch("/api/ask-agent/autonomous-memory/export", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        archive?: MemoryArchiveV1;
+      };
+      if (!response.ok || !body.ok || !body.archive) {
+        throw new Error(body.error ?? "memory_export_failed");
+      }
+      downloadTextFile(
+        `agentlink-memory-global-${new Date().toISOString().slice(0, 10)}.json`,
+        `${JSON.stringify(body.archive, null, 2)}\n`,
+        "application/json;charset=utf-8",
+      );
+    } catch {
+      setMemoryPanelError("Could not export autonomous memory.");
+    } finally {
+      setMemoryPanelPending(false);
+    }
+  }
+
+  async function undoAskAgentAutonomousMemory(
+    event: AskAgentAutonomousMemoryEvent,
+  ): Promise<void> {
+    setAskAgentAutonomousMemoryUndoId(event.id);
+    setAskAgentAutonomousMemoryError(null);
+    try {
+      const response = await fetch("/api/ask-agent/autonomous-memory/manage", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          operation: "undo",
+          source_evidence: "Browser user selected undo from memory activity.",
+          undo_audit_event_id: event.id,
+        }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        result?: { disposition?: AskAgentAutonomousMemoryDisposition };
+      };
+      if (!response.ok || !body.ok || !body.result?.disposition) {
+        throw new Error(body.error ?? String(response.status));
+      }
+      if (body.result.disposition !== "undone") {
+        setAskAgentAutonomousMemoryError(
+          `Autonomous memory was not changed (${body.result.disposition}).`,
+        );
+      } else {
+        setSendStatus("Autonomous memory change undone with audit history.");
+      }
+      await fetchAskAgentAutonomousMemory();
+    } catch {
+      setAskAgentAutonomousMemoryError("Autonomous memory undo failed.");
+    } finally {
+      setAskAgentAutonomousMemoryUndoId(null);
+    }
+  }
+
+  async function rememberAskAgentMemoryCandidate(
     nudge: AskAgentMemoryCandidateNudge,
   ): Promise<void> {
-    setSendStatus("Preparing memory proposal…");
+    setSendStatus("Remembering…");
     try {
-      const response = await fetch("/api/ask-agent/memory/proposal", {
+      const response = await fetch("/api/ask-agent/autonomous-memory/manage", {
         method: "POST",
         credentials: "same-origin",
         headers: {
@@ -2621,34 +3001,42 @@ export function BrowserGatewayApp({
         },
         body: JSON.stringify({
           nudgeId: nudge.id,
-          tier: nudge.suggestedTier,
-          scope: nudge.suggestedScope,
-          operation: "add",
-          title: nudge.title,
-          rationale: nudge.rationale,
-          content: nudge.content,
+          operation: "remember",
+          source_evidence: nudge.rationale,
+          kind: nudge.kind === "workflow" ? "workflow_hint" : nudge.kind,
+          statement: nudge.content,
         }),
       });
       const body = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
         error?: string;
+        result?: { disposition?: AskAgentAutonomousMemoryDisposition };
         snapshot?: GatewaySnapshot;
       };
-      if (!response.ok || !body.ok || !body.snapshot) {
-        setSendStatus(
-          `Memory proposal failed: ${body.error ?? response.status}`,
-        );
+      if (
+        !response.ok ||
+        !body.ok ||
+        !body.snapshot ||
+        !body.result?.disposition
+      ) {
+        setSendStatus(`Memory failed: ${body.error ?? response.status}`);
         return;
       }
       setSnapshot(body.snapshot);
-      setSendStatus("Review the memory proposal before it is saved.");
-      logAskAgentBrowserEvent("memory.nudge.propose", {
-        ok: true,
+      const changed = autonomousMemoryChanged(body.result.disposition);
+      setSendStatus(
+        changed
+          ? "Remembered with audit history."
+          : `Memory not changed (${body.result.disposition}).`,
+      );
+      logAskAgentBrowserEvent("memory.nudge.remember", {
+        ok: changed,
         kind: nudge.kind,
+        disposition: body.result.disposition,
       });
     } catch (err) {
-      setSendStatus(`Memory proposal error: ${String(err)}`);
-      logAskAgentBrowserEvent("memory.nudge.propose", {
+      setSendStatus(`Memory error: ${String(err)}`);
+      logAskAgentBrowserEvent("memory.nudge.remember", {
         ok: false,
         error: String(err),
       });
@@ -3154,37 +3542,47 @@ export function BrowserGatewayApp({
           setSendStatus("Add what to remember after /remember.");
           return false;
         }
-        setSendStatus("Preparing memory proposal…");
-        const response = await fetch("/api/ask-agent/memory/proposal", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${authToken}`,
+        setSendStatus("Remembering…");
+        const response = await fetch(
+          "/api/ask-agent/autonomous-memory/manage",
+          {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              operation: "remember",
+              source_evidence: "User invoked /remember in Browser Ask Agent.",
+              kind: "preference",
+              statement: rememberContent,
+            }),
           },
-          body: JSON.stringify({
-            tier: "memory",
-            scope: "global",
-            operation: "add",
-            title: "Remember from Ask Agent",
-            rationale: "User invoked /remember in Browser Ask Agent.",
-            content: rememberContent,
-          }),
-        });
+        );
         const body = (await response.json()) as {
           ok?: boolean;
           error?: string;
+          result?: { disposition?: AskAgentAutonomousMemoryDisposition };
           snapshot?: GatewaySnapshot;
         };
-        if (body.ok && body.snapshot) {
+        if (
+          response.ok &&
+          body.ok &&
+          body.snapshot &&
+          body.result?.disposition
+        ) {
           setSnapshot(body.snapshot);
-          setSendStatus("Review the memory proposal before it is saved.");
-        } else {
+          const changed = autonomousMemoryChanged(body.result.disposition);
           setSendStatus(
-            `Memory proposal failed: ${body.error ?? response.status}`,
+            changed
+              ? "Remembered with audit history."
+              : `Memory not changed (${body.result.disposition}).`,
           );
+          return changed;
         }
-        return Boolean(body.ok);
+        setSendStatus(`Memory failed: ${body.error ?? response.status}`);
+        return false;
       }
 
       const actionOrigin = { ...snapshotOriginRef.current };
@@ -3735,6 +4133,7 @@ export function BrowserGatewayApp({
     if (next) {
       setShowHistory(false);
       void fetchAskAgentMemory();
+      void fetchAskAgentAutonomousMemory();
     } else {
       setAskAgentMemoryClearConfirmation("idle");
     }
@@ -4763,6 +5162,11 @@ export function BrowserGatewayApp({
     _args: string,
   ): void => {
     switch (name) {
+      case "memory":
+        setMemoryPanelOpen(true);
+        setShowAskAgentMemory(false);
+        void fetchMemoryPanel({ scope: "global", limit: 100 });
+        break;
       case "mcp":
         setShowMcpStatus(true);
         void refreshAskAgentMcpStatus({ view: "status" });
@@ -4800,6 +5204,17 @@ export function BrowserGatewayApp({
       }
       case "fleet":
         setShowFleetRequest((request) => request + 1);
+        return;
+      case "memory":
+        if (isAskAgentSelected) {
+          setMemoryPanelOpen(true);
+          setShowAskAgentMemory(false);
+          void fetchMemoryPanel({ scope: "global", limit: 100 });
+        } else {
+          setModeStatus(
+            "Open /memory in VS Code for project-scoped autonomous memory.",
+          );
+        }
         return;
       case "mcp":
         setShowMcpStatus(true);
@@ -5739,15 +6154,15 @@ export function BrowserGatewayApp({
               />
               {showAskAgentMemory && (
                 <section
-                  aria-label="Ask Agent derived memory"
+                  aria-label="Ask Agent memory"
                   class="ask-agent-memory-panel"
                 >
                   <div class="ask-agent-memory-panel-header">
                     <div>
-                      <strong>Derived Ask Agent memory</strong>
+                      <strong>Ask Agent memory</strong>
                       <span>
-                        Local summaries used for recall. Raw transcripts and
-                        durable memory are separate.
+                        Derived conversation summaries and durable low-authority
+                        memory are stored and managed separately.
                       </span>
                     </div>
                     <button
@@ -5761,6 +6176,15 @@ export function BrowserGatewayApp({
                     >
                       <i class="codicon codicon-close" />
                     </button>
+                  </div>
+                  <div class="ask-agent-memory-panel-header">
+                    <div>
+                      <strong>Derived Ask Agent memory</strong>
+                      <span>
+                        Local summaries used for recall. Raw transcripts and
+                        durable memory are separate.
+                      </span>
+                    </div>
                   </div>
                   {askAgentMemoryError && (
                     <div class="session-history-error" role="alert">
@@ -5817,7 +6241,7 @@ export function BrowserGatewayApp({
                       onClick={() => void fetchAskAgentMemory()}
                       type="button"
                     >
-                      Refresh
+                      Refresh summaries
                     </button>
                     {askAgentMemoryClearConfirmation === "confirming" ? (
                       <>
@@ -5858,6 +6282,114 @@ export function BrowserGatewayApp({
                         Clear summaries…
                       </button>
                     )}
+                  </div>
+                  <div class="ask-agent-memory-panel-header">
+                    <div>
+                      <strong>Autonomous memory</strong>
+                      <span>
+                        Global low-authority memory with audit and undo history.
+                        It cannot authorize tools or override instructions.
+                      </span>
+                    </div>
+                  </div>
+                  {askAgentAutonomousMemoryError && (
+                    <div class="session-history-error" role="alert">
+                      <i class="codicon codicon-warning" />
+                      <span>{askAgentAutonomousMemoryError}</span>
+                    </div>
+                  )}
+                  <div class="ask-agent-memory-stats" role="status">
+                    <div>
+                      <span>Status</span>
+                      <strong>
+                        {askAgentAutonomousMemoryHealth?.status ?? "—"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Active records</span>
+                      <strong>
+                        {askAgentAutonomousMemoryHealth?.activeRecordCount ??
+                          "—"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Audit events</span>
+                      <strong>
+                        {askAgentAutonomousMemoryHealth?.auditEventCount ?? "—"}
+                      </strong>
+                    </div>
+                  </div>
+                  {askAgentAutonomousMemoryEvents.length ? (
+                    <div class="ask-agent-memory-recent">
+                      <span class="review-section-label">
+                        Recent global activity
+                      </span>
+                      <ul>
+                        {askAgentAutonomousMemoryEvents.map((event) => {
+                          const undone = askAgentAutonomousMemoryEvents.some(
+                            (candidate) =>
+                              candidate.undoneAuditEventId === event.id,
+                          );
+                          const reversible =
+                            event.operation !== "undo" &&
+                            event.changes.length > 0 &&
+                            !event.disposition.startsWith("rejected-") &&
+                            event.disposition !== "not-found" &&
+                            event.disposition !== "stale-revision" &&
+                            !undone;
+                          const statement =
+                            event.changes[0]?.after?.statement ??
+                            event.changes[0]?.before?.statement;
+                          return (
+                            <li key={event.id}>
+                              <span>
+                                {event.operation} · {event.disposition}
+                              </span>
+                              {statement && <small>{statement}</small>}
+                              <small>
+                                {formatTimestamp(
+                                  new Date(event.occurredAt).getTime(),
+                                )}
+                              </small>
+                              {reversible && (
+                                <div class="ask-agent-memory-actions">
+                                  <button
+                                    class="secondary"
+                                    disabled={
+                                      askAgentAutonomousMemoryUndoId !== null
+                                    }
+                                    onClick={() =>
+                                      void undoAskAgentAutonomousMemory(event)
+                                    }
+                                    type="button"
+                                  >
+                                    {askAgentAutonomousMemoryUndoId === event.id
+                                      ? "Undoing…"
+                                      : "Undo"}
+                                  </button>
+                                </div>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ) : (
+                    <p class="ask-agent-memory-empty">
+                      {askAgentAutonomousMemoryHealth?.status === "unavailable"
+                        ? `Autonomous memory unavailable (${askAgentAutonomousMemoryHealth.reason ?? "disabled"}).`
+                        : "No autonomous memory activity yet."}
+                    </p>
+                  )}
+                  <div class="ask-agent-memory-actions">
+                    <button
+                      class="secondary"
+                      disabled={askAgentAutonomousMemoryPending}
+                      onClick={() => void fetchAskAgentAutonomousMemory()}
+                      type="button"
+                    >
+                      Refresh autonomous memory
+                    </button>
                   </div>
                 </section>
               )}
@@ -6088,20 +6620,20 @@ export function BrowserGatewayApp({
                     <strong>Possible durable memory</strong>
                     <span>
                       Ask Agent noticed a possible{" "}
-                      {askAgentMemoryCandidateNudge.kind}. Review creates an
-                      approval card; nothing is saved unless you accept it.
+                      {askAgentMemoryCandidateNudge.kind}. Save it as
+                      low-authority memory with audit and undo history.
                     </span>
                     <code>{askAgentMemoryCandidateNudge.matchedPhrase}</code>
                     <div class="ask-agent-memory-candidate-actions">
                       <button
                         type="button"
                         onClick={() =>
-                          void proposeAskAgentMemoryCandidate(
+                          void rememberAskAgentMemoryCandidate(
                             askAgentMemoryCandidateNudge,
                           )
                         }
                       >
-                        Review memory proposal
+                        Remember
                       </button>
                       <button
                         class="secondary"
@@ -6370,6 +6902,33 @@ export function BrowserGatewayApp({
                     condenseThreshold={foreground.condenseThreshold}
                     defaultMaxTokens={DEFAULT_MAX_TOKENS}
                     className="browser-context-row"
+                  />
+                )}
+                {!isAskAgentSelected &&
+                  !mobileReviewOpen &&
+                  foreground?.contextHealth && (
+                    <ContextHealthPanel health={foreground.contextHealth} />
+                  )}
+                {!mobileReviewOpen && isAskAgentSelected && memoryPanelOpen && (
+                  <MemoryPanel
+                    snapshot={memoryPanelSnapshot}
+                    scope="global"
+                    availableScopes={["global"]}
+                    loading={memoryPanelPending}
+                    error={memoryPanelError}
+                    onClose={() => setMemoryPanelOpen(false)}
+                    onQuery={(request) => fetchMemoryPanel(request)}
+                    onDetail={selectMemoryPanelRecord}
+                    onManage={(input: ManageMemoryToolInput) =>
+                      mutateMemoryPanel("manage", input, input.target_id)
+                    }
+                    onClear={() =>
+                      mutateMemoryPanel("clear", { confirm: true })
+                    }
+                    onExport={exportMemoryPanel}
+                    onImport={(archive: MemoryArchiveV1) =>
+                      mutateMemoryPanel("import", { archive })
+                    }
                   />
                 )}
                 {!mobileReviewOpen &&

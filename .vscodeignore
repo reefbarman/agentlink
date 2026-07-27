@@ -47,6 +47,7 @@
 !dist/monaco-ts.worker.js.map
 !dist/codicon.css
 !dist/codicon.ttf
+!dist/node_modules/**
 !dist/sandbox-runtime/**
 !package.json
 !README.md

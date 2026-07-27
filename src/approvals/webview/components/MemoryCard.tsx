@@ -9,7 +9,7 @@ import { useCallback, useMemo, useState } from "preact/hooks";
 import { ApprovalLayout } from "./ApprovalLayout.js";
 import type { RefObject } from "preact";
 
-const TIERS: MemoryTier[] = ["instructions", "skill", "command", "memory"];
+const TIERS: MemoryTier[] = ["instructions", "skill", "command"];
 const SCOPES: MemoryScope[] = ["project", "global"];
 
 interface MemoryCardProps {
@@ -32,7 +32,11 @@ function tierLabel(tier: MemoryTier): string {
 }
 
 export function MemoryCard({ request, submit, followUpRef }: MemoryCardProps) {
-  const [tier, setTier] = useState<MemoryTier>(request.memoryTier ?? "memory");
+  const [tier, setTier] = useState<MemoryTier>(
+    request.memoryTier && request.memoryTier !== "memory"
+      ? request.memoryTier
+      : "instructions",
+  );
   const [scope, setScope] = useState<MemoryScope>(
     request.memoryScope ?? "project",
   );

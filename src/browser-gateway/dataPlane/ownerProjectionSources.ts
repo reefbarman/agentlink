@@ -16,6 +16,7 @@ import type {
 import type { BrowserGatewayOwnerInteractionPayload } from "./interactionPayload.js";
 import type { BrowserGatewayRepositoryInfo } from "../BrowserGatewayRepositoryObserver.js";
 import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy.js";
+import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
 import type { ReasoningEffort } from "../../agent/providers/types.js";
 
 export type BrowserGatewayOwnerProjectionSourceKind =
@@ -114,6 +115,7 @@ export interface BrowserGatewayOwnerForegroundSource {
   lastOutputTokens: number;
   lastCacheReadTokens: number;
   contextBudget?: ChatState["contextBudget"];
+  contextHealth: ContextHealthSnapshot | null;
   condenseThreshold?: number;
   restoringSession: boolean;
   revertRecoveryNotice: RevertRecoveryNotice | null;

@@ -168,11 +168,11 @@ describe("StatusBarManager retained approval and error behavior", () => {
   it("preserves an indexer error across an alert and hides when cleared", () => {
     const manager = new StatusBarManager();
     const primary = mocks.items[0];
-    manager.setError("Indexing: Qdrant unavailable");
+    manager.setError("Indexing: retrieval store unavailable");
 
     expect(primary).toMatchObject({
       text: "$(link) AgentLink — Error",
-      tooltip: "Indexing: Qdrant unavailable",
+      tooltip: "Indexing: retrieval store unavailable",
       command: "agentLink.statusView.focus",
       backgroundColor: { id: "statusBarItem.errorBackground" },
     });
@@ -183,7 +183,7 @@ describe("StatusBarManager retained approval and error behavior", () => {
     alert.dispose();
     expect(primary).toMatchObject({
       text: "$(link) AgentLink — Error",
-      tooltip: "Indexing: Qdrant unavailable",
+      tooltip: "Indexing: retrieval store unavailable",
       backgroundColor: { id: "statusBarItem.errorBackground" },
     });
 

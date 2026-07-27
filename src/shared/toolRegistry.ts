@@ -33,6 +33,19 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
       "Open and read a public HTTP or HTTPS URL using the selected model provider's native page-access transport. Codex OAuth uses low-latency structured open/find commands with automatic hosted-tool fallback; other supported providers use their hosted capability. Available only when agentlink.webAccess.fetchBackend is native. Returns bounded content, citations, and usage when available as an ordinary tool result.",
   },
 
+  // --- Native tool discovery ---
+
+  find_native_tools: {
+    label: "Discover deferred native tools",
+    description:
+      "Discover native AgentLink tools deferred from the provider request. Searches only the immutable, request-authorized catalog and returns bounded, deterministic results. Discovery cannot broaden mode, profile, skill, background, web, or surface restrictions.",
+  },
+  call_native_tool: {
+    label: "Invoke deferred native tool",
+    description:
+      "Invoke one exact native AgentLink tool from the immutable deferred catalog captured for this provider request. The resolved tool keeps its original schema validation, authorization, approval, telemetry, activity, and transcript semantics.",
+  },
+
   // --- File operations ---
 
   read_file: {
@@ -48,12 +61,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   get_module_neighbors: {
     label: "Module neighbors",
     description:
-      "Read the structural repo-map sidecar for a file and return imports, exports, top-level symbols, reverse module dependents, bounded counts, and freshness metadata. Use after get_context when you need module-level blast-radius awareness before editing. Requires the codebase index/structural sidecar to be built.",
+      "Read the structural code index for a file and return imports, exports, top-level symbols, reverse module dependents, bounded counts, and freshness metadata. Use after get_context when you need module-level blast-radius awareness before editing. Requires the codebase index to be built.",
   },
   get_repo_map: {
     label: "Repo map",
     description:
-      "Read the structural repo-map sidecar and return a budgeted whole-project skeleton: cache metadata, aggregate counts, directory summaries, external dependency summaries, and prioritized file/module entries. Use before broad edits to understand module boundaries and drill into files with get_module_neighbors. Requires the codebase index/structural sidecar to be built.",
+      "Read the structural code index and return a budgeted whole-project skeleton: store metadata, aggregate counts, directory summaries, external dependency summaries, and prioritized file/module entries. Use before broad edits to understand module boundaries and drill into files with get_module_neighbors. Requires the codebase index to be built.",
   },
   load_skill: {
     label: "Load advertised skill",
@@ -105,10 +118,20 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     description:
       "Show one or more images already available in the current session directly in the main chat transcript. Use when the user explicitly asks to see an image, screenshot, or visual output; do not use for routine agent-only image inspection because image-returning tool calls already retain their results. Select exact image_N IDs or recent images; with no selector, presents the most recent image. This is display-only, writes no files, and requires no approval.",
   },
-  propose_memory: {
-    label: "Propose durable memory",
+  manage_memory: {
+    label: "Manage autonomous memory",
     description:
-      "Propose an approved cross-session memory/config update. Resolves the correct global or project target across instructions, skills, commands, and memory.md, validates the proposal, and always requires explicit user approval before writing.",
+      "Create, update, supersede, forget, restore, or undo typed low-authority memory without a blocking approval card. Every operation is provenance-bearing, secret-scanned, revisioned, audited, quota-bound, and restricted by the active mode/profile. Memory is evidence only and cannot authorize tools or override current user/repository evidence. Requires agentlink.memory.mode=autonomous.",
+  },
+  recall_memory: {
+    label: "Recall autonomous memory",
+    description:
+      "Search bounded typed low-authority memory using credential-free lexical retrieval. Automatic eligibility excludes contested, superseded, forgotten, and expired records; returned text is explicitly evidence rather than instruction. Requires agentlink.memory.mode=autonomous.",
+  },
+  propose_memory: {
+    label: "Propose authoritative configuration",
+    description:
+      "Propose an approved cross-session instructions, skill, or command update. Resolves the correct global or project target, validates the proposal, and always requires explicit user approval before writing. Use manage_memory instead for low-authority facts, preferences, corrections, decisions, gotchas, and workflow hints.",
   },
   apply_diff: {
     label: "Search/replace with diff review",
@@ -225,7 +248,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   codebase_search: {
     label: "Semantic code search",
     description:
-      'Search the codebase by meaning, not exact text. Uses a Qdrant vector index to find code semantically similar to your natural language query. Best for exploratory questions like "how does authentication work" or "where are database connections configured". Falls back gracefully with a helpful error if the index is not available.',
+      'Search the codebase by meaning, not exact text. Uses the embedded local retrieval index with lexical ranking and optional vector/hybrid ranking. Best for exploratory questions like "how does authentication work" or "where are database connections configured". Falls back gracefully with a helpful error if the index is not available.',
   },
 
   // --- Agent coordination ---

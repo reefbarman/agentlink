@@ -1,5 +1,8 @@
-import type { CoreModelStreamEvent } from "../../../modelRuntime.js";
-import type { CoreModelTransportActivity } from "../../../modelRuntime.js";
+import type {
+  CoreModelProviderRequestAttempt,
+  CoreModelStreamEvent,
+  CoreModelTransportActivity,
+} from "../../../modelRuntime.js";
 import { withAgentLinkHttpActivity } from "../../../../util/httpDispatcher.js";
 import {
   parseCodexResponseStreamEvents,
@@ -35,6 +38,7 @@ export async function* executeCodexResponsesStream(args: {
   client: CodexResponsesClient;
   body: CodexRequestBody;
   signal?: AbortSignal;
+  onProviderRequestAttempt?: (attempt: CoreModelProviderRequestAttempt) => void;
   onTransportActivity?: (activity: CoreModelTransportActivity) => void;
   /** Mutable parser state for this stream attempt. Do not reuse across retries. */
   parserState?: CodexStreamParserState;
@@ -42,6 +46,10 @@ export async function* executeCodexResponsesStream(args: {
 }): AsyncGenerator<CoreModelStreamEvent> {
   let stream: unknown;
   try {
+    if (typeof args.body.model !== "string") {
+      throw new Error("Codex Responses request model is required");
+    }
+    args.onProviderRequestAttempt?.({ model: args.body.model });
     stream = await withAgentLinkHttpActivity(args.onTransportActivity, () =>
       args.client.responses.create(args.body, {
         signal: args.signal,

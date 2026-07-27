@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { getAlCollectionName } from "./collectionName.js";
+import { getWorkspaceCacheKey } from "./workspaceCacheKey.js";
 
-describe("getAlCollectionName", () => {
+describe("getWorkspaceCacheKey", () => {
   it.each([
     ["/Users/tristan/workspace/agentlink", "al-03569b57254f2ce2"],
     ["/Users/tristan/workspace/agentlink/", "al-bc899bf6e6d84e4a"],
@@ -12,7 +12,7 @@ describe("getAlCollectionName", () => {
   ])(
     "preserves the raw workspace path contract for %s",
     (workspacePath, expected) => {
-      expect(getAlCollectionName(workspacePath)).toBe(expected);
+      expect(getWorkspaceCacheKey(workspacePath)).toBe(expected);
     },
   );
 });

@@ -8,18 +8,22 @@ export const STRUCTURAL_GRAPH_CACHE_VERSION = 1;
 export interface StructuralGraphCache {
   version: typeof STRUCTURAL_GRAPH_CACHE_VERSION;
   workspaceRoot: string;
-  collectionName?: string;
+  indexName?: string;
   generatedAt: string;
   files: Record<string, StructuralFileEntry>;
 }
 
 export interface StructuralFileEntry {
   relPath: string;
+  /** Workspace-scoped retrieval source identity for persisted relation projection. */
+  sourceId?: string;
   hash: string;
   indexedAt: string;
   size?: number;
   mtimeMs?: number;
   language?: string;
+  /** Structural extraction contract used to build this entry. */
+  extractorVersion?: number;
   /** Durable replacement generation for protocol-created entries. */
   generation?: string;
   /** Protocol-created entries are visible only when current. */

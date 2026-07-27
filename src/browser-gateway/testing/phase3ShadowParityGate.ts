@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../../agent/webview/types.js";
+import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
 import type { BrowserGatewaySnapshotState } from "../BrowserGatewayService.js";
 import {
   isBrowserGatewayOwnerPublicationEnabled,
@@ -26,6 +27,21 @@ const initialIdentity = {
   ownerId: "phase3-owner",
   ownerGenerationId: "phase3-owner-1",
 };
+
+const PARITY_CONTEXT_HEALTH = {
+  memory: { status: "ready", retrieval: "hybrid", activeRecordCount: 7 },
+  retrieval: {
+    status: "degraded",
+    lexical: "ready",
+    vector: "unavailable",
+    structural: "ready",
+    sourceCount: 12,
+    chunkCount: 48,
+    staleSourceCount: 2,
+    reason: "Vector retrieval is unavailable.",
+  },
+  index: { status: "working", state: "indexing", current: 3, total: 10 },
+} satisfies ContextHealthSnapshot;
 
 export interface Phase3ShadowParityStage {
   readonly name: string;
@@ -397,6 +413,7 @@ function createReadSet(): BrowserGatewayOwnerProjectionReadSet {
       lastInputTokens: 11,
       lastOutputTokens: 22,
       lastCacheReadTokens: 33,
+      contextHealth: structuredClone(PARITY_CONTEXT_HEALTH),
       contextBudget: {
         contextWindow: 200_000,
         maxInputTokens: 180_000,
@@ -533,6 +550,9 @@ function createLegacySnapshot(
         lastOutputTokens: foreground.lastOutputTokens,
         lastCacheReadTokens: foreground.lastCacheReadTokens,
         estimatedTotalUsed: foreground.estimatedTokens ?? 0,
+        contextHealth: foreground.contextHealth
+          ? structuredClone(foreground.contextHealth)
+          : null,
         ...(foreground.contextBudget
           ? { contextBudget: { ...foreground.contextBudget } }
           : {}),
@@ -592,6 +612,9 @@ function syncLegacyForeground(
   target.status = source.status;
   target.streaming = source.streaming;
   target.projectedMessages = structuredClone(source.messages) as ChatMessage[];
+  target.contextHealth = source.contextHealth
+    ? structuredClone(source.contextHealth)
+    : null;
   target.messageQueue = source.queue.map((item) => ({
     id: item.id,
     text: item.text,

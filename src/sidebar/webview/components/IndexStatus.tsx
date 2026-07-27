@@ -1,6 +1,7 @@
-import type { SidebarState, PostCommand } from "../types.js";
-import type { SemanticReadinessReason } from "../../../shared/semanticReadiness.js";
+import type { PostCommand, SidebarState } from "../types.js";
+
 import { CollapsibleSection } from "./common/CollapsibleSection.js";
+import type { SemanticReadinessReason } from "../../../shared/semanticReadiness.js";
 
 interface Props {
   state: SidebarState;
@@ -208,7 +209,7 @@ function ReadinessActions({
     );
   }
 
-  if (readinessReason === "qdrant_unavailable") {
+  if (readinessReason === "store_unavailable") {
     return (
       <div class="index-remediation">
         <p class="help-text index-remediation-text">{message}</p>

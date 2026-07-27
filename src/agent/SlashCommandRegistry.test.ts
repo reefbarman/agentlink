@@ -38,6 +38,24 @@ afterEach(() => {
 });
 
 describe("SlashCommandRegistry", () => {
+  it("exposes /context-doctor as a read-only built-in command", async () => {
+    const registry = new SlashCommandRegistry(tmpDir, "code");
+    await registry.reload();
+
+    expect(
+      registry.getAll().find((cmd) => cmd.name === "context-doctor"),
+    ).toMatchObject({
+      description: "Show a read-only context allocation and retention report",
+      source: "builtin",
+      builtin: true,
+    });
+    expect(
+      (await loadAskAgentSlashCommands("ask")).some(
+        (command) => command.name === "context-doctor",
+      ),
+    ).toBe(false);
+  });
+
   it("exposes /fleet as a built-in panel command", async () => {
     const registry = new SlashCommandRegistry(tmpDir, "code");
     await registry.reload();
@@ -51,6 +69,28 @@ describe("SlashCommandRegistry", () => {
     );
   });
 
+  it("exposes /memory as a built-in panel command in both catalogs", async () => {
+    const registry = new SlashCommandRegistry(tmpDir, "code");
+    await registry.reload();
+
+    expect(
+      registry.getAll().find((cmd) => cmd.name === "memory"),
+    ).toMatchObject({
+      description: "Inspect and manage autonomous low-authority memory",
+      source: "builtin",
+      builtin: true,
+    });
+    expect(
+      (await loadAskAgentSlashCommands("ask")).find(
+        (command) => command.name === "memory",
+      ),
+    ).toMatchObject({
+      description: "Inspect and manage autonomous low-authority memory",
+      source: "builtin",
+      builtin: true,
+    });
+  });
+
   it("exposes /remember as a prompt command", async () => {
     const registry = new SlashCommandRegistry(tmpDir, "code");
     await registry.reload();
@@ -60,8 +100,10 @@ describe("SlashCommandRegistry", () => {
       source: "builtin",
       builtin: false,
     });
-    expect(command?.body).toContain("propose_memory");
-    expect(command?.body).toContain("highest appropriate tier");
+    expect(command?.body).toContain("manage_memory");
+    expect(command?.body).toContain(
+      "use propose_memory only for reviewed authoritative",
+    );
   });
 
   it("exposes bundled skills as slash commands", async () => {
@@ -103,6 +145,83 @@ describe("SlashCommandRegistry", () => {
     });
     expect(command?.body).toContain("load_skill");
     expect(command?.body).toContain(JSON.stringify(skillPath));
+  });
+
+  it("omits skills disabled by exact canonical ID", async () => {
+    writeSkill(
+      path.join(tmpDir, ".agentlink", "skills"),
+      "disabled-helper",
+      "name: disabled-helper\ndescription: Disabled helper",
+    );
+
+    const registry = new SlashCommandRegistry(tmpDir, "code", [
+      "project:agentlink:.agentlink/skills/disabled-helper",
+    ]);
+    await registry.reload();
+
+    expect(
+      registry
+        .getAll()
+        .some((command) => command.name === "skill:disabled-helper"),
+    ).toBe(false);
+  });
+
+  it("keeps canonical commands distinct when skill short names collide", async () => {
+    const agentsSkillPath = writeSkill(
+      path.join(tmpDir, ".agents", "skills"),
+      "shared",
+      "name: shared\ndescription: Agents shared skill",
+    );
+    const agentlinkSkillPath = writeSkill(
+      path.join(tmpDir, ".agentlink", "skills"),
+      "shared",
+      "name: shared\ndescription: AgentLink shared skill",
+    );
+    const commandDir = path.join(tmpDir, ".agentlink", "commands", "skill");
+    fs.mkdirSync(commandDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(commandDir, "shared.md"),
+      "---\ndescription: Explicit shared alias\n---\nexplicit shared body",
+    );
+
+    const registry = new SlashCommandRegistry(tmpDir, "code");
+    await registry.reload();
+
+    const collided = registry
+      .getSkillCommands()
+      .filter((command) => command.skillId?.endsWith("/shared"));
+    expect(collided).toHaveLength(2);
+    expect(collided).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "skill:project:agents:.agents/skills/shared",
+          displayName: "project:agents:.agents/skills/shared",
+          description: "Agents shared skill",
+          skillPath: agentsSkillPath,
+          skillId: "project:agents:.agents/skills/shared",
+          skillRevision: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+        expect.objectContaining({
+          name: "skill:project:agentlink:.agentlink/skills/shared",
+          displayName: "project:agentlink:.agentlink/skills/shared",
+          description: "AgentLink shared skill",
+          skillPath: agentlinkSkillPath,
+          skillId: "project:agentlink:.agentlink/skills/shared",
+          skillRevision: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      ]),
+    );
+    expect(new Set(collided.map((command) => command.name)).size).toBe(2);
+    expect(new Set(collided.map((command) => command.displayName)).size).toBe(
+      2,
+    );
+    expect(
+      registry.getAll().find((command) => command.name === "skill:shared"),
+    ).toMatchObject({
+      description: "Explicit shared alias",
+      source: "agentlink",
+      body: "explicit shared body",
+    });
   });
 
   it("lets explicit slash commands override generated skill commands", async () => {
@@ -195,6 +314,8 @@ describe("SlashCommandRegistry", () => {
     expect(names).toContain("mcp");
     expect(names).toContain("mcp-config");
     expect(names).toContain("mcp-refresh");
+    expect(names).toContain("memory");
+    expect(commands.find((cmd) => cmd.name === "memory")?.builtin).toBe(true);
     expect(commands.find((cmd) => cmd.name === "mcp")?.builtin).toBe(true);
     expect(commands.find((cmd) => cmd.name === "mcp-config")?.builtin).toBe(
       true,
@@ -228,6 +349,7 @@ describe("SlashCommandRegistry", () => {
     expect(globalSkillCommand?.body).not.toContain("---");
     expect(globalSkillCommand?.body).not.toContain("load_skill");
     const rememberCommand = commands.find((cmd) => cmd.name === "remember");
+    expect(rememberCommand?.body).toContain("manage_memory");
     expect(rememberCommand?.body).toContain("propose_memory");
     expect(rememberCommand?.body).not.toContain(
       "Override durable memory prompt",

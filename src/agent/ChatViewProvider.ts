@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import { isCoreReasoningEffort } from "../core/modelCatalog.js";
@@ -64,6 +65,7 @@ import type { ComposeTrace } from "../shared/composeTypes.js";
 import type {
   BrowserGatewayThemeSnapshot,
   BackgroundCompletionResult,
+  CondenseMetadata,
   McpApprovalPromotionMeta,
   RequestContextBreakdown,
   RevertRecoveryNotice,
@@ -97,6 +99,7 @@ import {
   type ResolvedAttachments,
 } from "./attachmentResolver.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
+import { getSkillDiscoveryRoots } from "./skillLoader.js";
 import { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
 import { McpClientHub, type McpServerInfo } from "./McpClientHub.js";
 import {
@@ -200,6 +203,28 @@ import {
   type SessionProjectScope,
 } from "../core/workspaceProjects.js";
 import { normalizeUserQuestionAttachments } from "../core/capabilities/sessionControl.js";
+import type {
+  ManageMemoryToolInput,
+  MemoryInspectionProvider,
+  MemoryInspectionQueryRequest,
+  MemoryPanelSnapshot,
+  MemoryToolScope,
+} from "../core/capabilities/memory.js";
+import type {
+  MemoryArchiveV1,
+  MemoryRecordDetail,
+} from "../core/memory/contracts.js";
+import { buildContextDoctorReport } from "./contextDoctor.js";
+import {
+  INITIAL_CONTEXT_HEALTH,
+  projectIndexHealth,
+  projectMemoryHealth,
+  projectRetrievalHealth,
+  type ContextHealthSnapshot,
+  type ContextIndexHealthInput,
+} from "../shared/contextHealth.js";
+import type { MemoryHealthSnapshot } from "../core/memory/contracts.js";
+import type { RetrievalHealthSnapshot } from "../core/retrieval/contracts.js";
 import {
   extractWorktreeSetupConfig,
   parseWorktreeSlashCommand,
@@ -537,6 +562,16 @@ export type ExtensionToWebview =
       configSnapshot?: McpConfigSnapshot;
     }
   | { type: "agentMcpConfigMutationResult"; result: McpConfigMutationResult }
+  | {
+      type: "agentMemoryPanelUpdate";
+      requestId?: string;
+      open?: boolean;
+      scope: MemoryToolScope;
+      availableScopes: MemoryToolScope[];
+      snapshot?: MemoryPanelSnapshot;
+      selected?: MemoryRecordDetail | null;
+      error?: string;
+    }
   | { type: "showApproval"; sessionId?: string; request: ApprovalRequest }
   | { type: "idle"; sessionId?: string; id: string }
   | {
@@ -578,24 +613,7 @@ export type ExtensionToWebview =
       summary: string;
       durationMs: number;
       validationWarnings?: string[];
-      metadata?: {
-        inputMessageCount: number;
-        sourceUserMessageCount: number;
-        hadPriorSummaryInInput: boolean;
-
-        sourceHash: string;
-        providerId: string;
-        condenseModel: string;
-        modelCandidates: string[];
-        selectedModel: string;
-        latestUserMessage: string;
-        currentTask: string;
-        pendingTasks: string[];
-        canonicalUserMessages: string[];
-        requestMessageCount: number;
-        effectiveHistoryMessageCount: number;
-        effectiveHistoryRoles: string[];
-      };
+      metadata?: CondenseMetadata;
     }
   | {
       type: "agentCondenseError";
@@ -970,6 +988,7 @@ export interface ChatState {
     softThresholdBudget: number;
     hardBudget: number;
   };
+  contextHealth?: ContextHealthSnapshot | null;
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
   commandApprovalPolicy?: CommandApprovalPolicy;
   approvalPolicy?: SessionApprovalMode["approvalPolicy"];
@@ -1106,6 +1125,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private askAgentMcpHub: McpClientHub;
   private fileWatchers: vscode.Disposable[] = [];
   private readonly watchedCustomizationProjectIds = new Set<string>();
+  private skillRefreshTail: Promise<void> = Promise.resolve();
+  private slashCatalogGlobalGeneration = 0;
+  private readonly slashCatalogProjectGenerations = new Map<string, number>();
+  private globalSkillWatchersInitialized = false;
   private mainGlobalMcpWatchersInitialized = false;
   private askAgentMcpWatchersInitialized = false;
   private cwd: string = "";
@@ -1203,6 +1226,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private approvalStatePublishPending = false;
   private toolCallTracker: AgentToolCallTracker | undefined;
   private contextJumpTracker: ContextJumpTracker | undefined;
+  private contextHealth: ContextHealthSnapshot = {
+    memory: { ...INITIAL_CONTEXT_HEALTH.memory },
+    retrieval: { ...INITIAL_CONTEXT_HEALTH.retrieval },
+    index: { ...INITIAL_CONTEXT_HEALTH.index },
+  };
+  private contextHealthGeneration = 0;
+  private memoryHealthProvider:
+    | { health(): Promise<MemoryHealthSnapshot> }
+    | undefined;
+  private memoryInspectionProvider: MemoryInspectionProvider | undefined;
+  private retrievalHealthProvider:
+    | { health(): Promise<RetrievalHealthSnapshot> }
+    | undefined;
   private anthropicProvider: ModelProvider | undefined;
   private openAiCompatibleAuthKeyResolver:
     | ((providerId: string) => string | undefined)
@@ -1755,6 +1791,219 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.contextJumpTracker = new ContextJumpTracker((record) =>
       telemetry.record(record),
     );
+  }
+
+  setContextHealthSources(sources: {
+    memory: { health(): Promise<MemoryHealthSnapshot> };
+    memoryInspection?: MemoryInspectionProvider;
+    retrieval: { health(): Promise<RetrievalHealthSnapshot> };
+    semanticIndexEnabled: boolean;
+    indexStatus?: ContextIndexHealthInput | null;
+  }): void {
+    this.memoryHealthProvider = sources.memory;
+    this.memoryInspectionProvider = sources.memoryInspection;
+    this.retrievalHealthProvider = sources.retrieval;
+    this.contextHealth = {
+      ...this.contextHealth,
+      index: projectIndexHealth(
+        sources.indexStatus ?? null,
+        sources.semanticIndexEnabled,
+      ),
+    };
+    this.sendInitialState();
+    void this.refreshContextHealth();
+  }
+
+  updateContextIndexHealth(
+    status: ContextIndexHealthInput | null,
+    enabled: boolean,
+  ): void {
+    this.contextHealth = {
+      ...this.contextHealth,
+      index: projectIndexHealth(status, enabled),
+    };
+    this.sendInitialState();
+  }
+
+  private getMemoryPanelContext(scope: MemoryToolScope): {
+    scope: MemoryToolScope;
+    projectId?: string;
+  } {
+    if (scope === "global") return { scope };
+    const projectScope = this.getCurrentProjectScope();
+    if (!projectScope || isProjectlessSessionScope(projectScope)) {
+      throw new Error("project_scope_unavailable");
+    }
+    return { scope, projectId: projectScope.projectId };
+  }
+
+  private getMemoryPanelAvailableScopes(): MemoryToolScope[] {
+    const projectScope = this.getCurrentProjectScope();
+    return projectScope && !isProjectlessSessionScope(projectScope)
+      ? ["global", "project"]
+      : ["global"];
+  }
+
+  private async postMemoryPanelSnapshot(
+    request: MemoryInspectionQueryRequest,
+    options: { requestId?: string; open?: boolean; selectedId?: string } = {},
+  ): Promise<void> {
+    const provider = this.memoryInspectionProvider;
+    const scope = request.scope === "project" ? "project" : "global";
+    const availableScopes = this.getMemoryPanelAvailableScopes();
+    if (!provider) {
+      this.postMessage({
+        type: "agentMemoryPanelUpdate",
+        requestId: options.requestId,
+        open: options.open,
+        scope,
+        availableScopes,
+        error: "Autonomous memory is unavailable.",
+      });
+      return;
+    }
+
+    try {
+      const context = this.getMemoryPanelContext(scope);
+      const scopedRequest: MemoryInspectionQueryRequest = {
+        ...request,
+        ...context,
+        limit: Math.min(Math.max(Math.trunc(request.limit ?? 100), 1), 200),
+      };
+      const [query, activity, selected] = await Promise.all([
+        provider.query(scopedRequest),
+        provider.activity({ ...context, limit: 50 }),
+        options.selectedId
+          ? provider.detail({ recordId: options.selectedId, ...context })
+          : Promise.resolve(undefined),
+      ]);
+      this.postMessage({
+        type: "agentMemoryPanelUpdate",
+        requestId: options.requestId,
+        open: options.open,
+        scope,
+        availableScopes,
+        snapshot: {
+          records: query.result.records,
+          total: query.result.total,
+          events: activity.events,
+          selected: selected?.detail,
+          health: query.health,
+        },
+      });
+    } catch {
+      this.postMessage({
+        type: "agentMemoryPanelUpdate",
+        requestId: options.requestId,
+        open: options.open,
+        scope,
+        availableScopes,
+        error:
+          scope === "project"
+            ? "Project memory is unavailable for the current session."
+            : "Autonomous memory is unavailable.",
+      });
+    }
+  }
+
+  private async postMemoryPanelDetail(
+    recordId: string,
+    scope: MemoryToolScope,
+    requestId?: string,
+  ): Promise<void> {
+    const provider = this.memoryInspectionProvider;
+    if (!provider) return;
+    try {
+      const result = await provider.detail({
+        recordId,
+        ...this.getMemoryPanelContext(scope),
+      });
+      this.postMessage({
+        type: "agentMemoryPanelUpdate",
+        requestId,
+        scope,
+        availableScopes: this.getMemoryPanelAvailableScopes(),
+        selected: result.detail,
+      });
+    } catch {
+      this.postMessage({
+        type: "agentMemoryPanelUpdate",
+        requestId,
+        scope,
+        availableScopes: this.getMemoryPanelAvailableScopes(),
+        error: "The selected memory record is unavailable.",
+      });
+    }
+  }
+
+  private postMemoryPanelMutationError(
+    scope: MemoryToolScope,
+    requestId: string | undefined,
+  ): void {
+    this.postMessage({
+      type: "agentMemoryPanelUpdate",
+      requestId,
+      scope,
+      availableScopes: this.getMemoryPanelAvailableScopes(),
+      error: "The memory operation could not be completed.",
+    });
+  }
+
+  private async exportMemoryArchive(scope: MemoryToolScope): Promise<void> {
+    const provider = this.memoryInspectionProvider;
+    if (!provider) return;
+    try {
+      const exported = await provider.exportArchive(
+        this.getMemoryPanelContext(scope),
+      );
+      const destination = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file(
+          path.join(os.homedir(), `agentlink-memory-${scope}.json`),
+        ),
+        filters: { JSON: ["json"] },
+        saveLabel: "Export memory archive",
+      });
+      if (!destination) return;
+      await fs.promises.writeFile(
+        destination.fsPath,
+        `${JSON.stringify(exported.archive, null, 2)}\n`,
+        "utf8",
+      );
+    } catch {
+      void vscode.window.showErrorMessage(
+        "Could not export autonomous memory.",
+      );
+    }
+  }
+
+  async refreshContextHealth(): Promise<void> {
+    const memory = this.memoryHealthProvider;
+    const retrieval = this.retrievalHealthProvider;
+    if (!memory || !retrieval) return;
+
+    const generation = ++this.contextHealthGeneration;
+    const [memoryHealth, retrievalHealth] = await Promise.all([
+      memory.health().then(projectMemoryHealth, () => ({
+        status: "unavailable" as const,
+        retrieval: "unavailable" as const,
+        reason: "Autonomous memory is unavailable.",
+      })),
+      retrieval.health().then(projectRetrievalHealth, () => ({
+        status: "unavailable" as const,
+        lexical: "unavailable" as const,
+        vector: "unavailable" as const,
+        structural: "unavailable" as const,
+        reason: "The retrieval store is unavailable.",
+      })),
+    ]);
+    if (generation !== this.contextHealthGeneration) return;
+
+    this.contextHealth = {
+      memory: memoryHealth,
+      retrieval: retrievalHealth,
+      index: this.contextHealth.index,
+    };
+    this.sendInitialState();
   }
 
   setBrowserGatewayAdminClient(
@@ -3561,6 +3810,54 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.pendingUrlElicitations.clear();
   }
 
+  public runContextDoctor(sessionId?: string): {
+    ok: boolean;
+    error?: string;
+  } {
+    const manager = this.sessionManager;
+    const foreground = manager?.getForegroundSession();
+    if (!manager || !foreground)
+      return { ok: false, error: "no_active_session" };
+    if (sessionId !== undefined && sessionId !== foreground.id) {
+      return { ok: false, error: "session_not_foreground" };
+    }
+    if (isProjectlessSessionScope(foreground.projectScope)) {
+      return { ok: false, error: "workspace_session_required" };
+    }
+    if (
+      foreground.status === "queued" ||
+      foreground.status === "streaming" ||
+      foreground.status === "tool_executing" ||
+      foreground.status === "awaiting_approval"
+    ) {
+      return { ok: false, error: "session_busy" };
+    }
+
+    const report = buildContextDoctorReport({
+      model: foreground.model,
+      mode: foreground.mode,
+      lastInputTokens: foreground.lastInputTokens,
+      lastOutputTokens: foreground.lastOutputTokens,
+      lastCacheReadTokens: foreground.lastCacheReadTokens,
+      contextBreakdown: foreground.contextBreakdown,
+      toolResultContextAttributions: foreground.toolResultContextAttributions,
+      omittedToolResultContextAttributions:
+        foreground.omittedToolResultContextAttributions,
+      messages: foreground.getAllMessages(),
+    });
+    foreground.appendAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: report.markdown }],
+      diagnosticOnly: true,
+    });
+    manager.saveSession(foreground.id);
+    this.postSessionLoaded(foreground, {
+      checkpoints: this.getSessionCheckpoints(foreground.id),
+      tailTurns: 0,
+    });
+    return { ok: true };
+  }
+
   public async submitBrowserSend(input: {
     text: string;
     id?: string;
@@ -3597,6 +3894,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const displayText = input.displayText;
     const isSlashCommand = input.isSlashCommand === true;
     const slashCommandLabel = input.slashCommandLabel;
+    const isContextDoctorCommand =
+      text?.trim() === "/context-doctor" &&
+      attachments.length === 0 &&
+      images.length === 0 &&
+      documents.length === 0;
 
     if (
       !text?.trim() &&
@@ -3611,6 +3913,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!mgr) return { ok: false };
     let effectiveSessionId =
       await this.resolveForegroundSessionTransition(sessionId);
+
+    if (isContextDoctorCommand) {
+      const effectiveSession = effectiveSessionId
+        ? mgr.getSession(effectiveSessionId)
+        : undefined;
+      if (!effectiveSession) return { ok: false, error: "no_active_session" };
+      if (
+        input.projectId !== undefined &&
+        effectiveSession.projectScope.projectId !== input.projectId
+      ) {
+        return { ok: false, error: "project_state_mismatch" };
+      }
+      return this.runContextDoctor(effectiveSessionId);
+    }
 
     if (!effectiveSessionId || !mgr.getSession(effectiveSessionId)) {
       const newSession = await mgr.createSession(mode, {
@@ -5553,7 +5869,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const configPattern = new vscode.RelativePattern(
       cwd,
-      "{.agents,.claude,.agentlink}/{commands/**,skills/**,modes.json,mcp.json}",
+      "{.agents,.claude,.agentlink}/{commands/**,modes.json,mcp.json}",
     );
     const configWatcher =
       vscode.workspace.createFileSystemWatcher(configPattern);
@@ -5575,6 +5891,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     configWatcher.onDidCreate(reloadConfig);
     configWatcher.onDidDelete(reloadConfig);
     this.fileWatchers.push(configWatcher);
+
+    const refreshSkills = () => {
+      void this.refreshSkillConfiguration(scope.projectId);
+    };
+    const repositoryRoot = getSkillDiscoveryRoots(cwd)[0] ?? cwd;
+    const repositorySkillWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(
+        repositoryRoot,
+        "**/{.agents,.claude,.agentlink}/{skills/**,skills-*/**}",
+      ),
+    );
+    repositorySkillWatcher.onDidChange(refreshSkills);
+    repositorySkillWatcher.onDidCreate(refreshSkills);
+    repositorySkillWatcher.onDidDelete(refreshSkills);
+    this.fileWatchers.push(repositorySkillWatcher);
+    if (!this.globalSkillWatchersInitialized) {
+      this.globalSkillWatchersInitialized = true;
+      const refreshGlobalSkills = () => {
+        void this.refreshSkillConfiguration();
+      };
+      const home = os.homedir();
+      for (const namespace of [".agents", ".claude", ".agentlink"]) {
+        const globalSkillWatcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(
+            path.join(home, namespace),
+            "{skills/**,skills-*/**}",
+          ),
+        );
+        globalSkillWatcher.onDidChange(refreshGlobalSkills);
+        globalSkillWatcher.onDidCreate(refreshGlobalSkills);
+        globalSkillWatcher.onDidDelete(refreshGlobalSkills);
+        this.fileWatchers.push(globalSkillWatcher);
+      }
+    }
 
     if (!this.mainGlobalMcpWatchersInitialized) {
       this.mainGlobalMcpWatchersInitialized = true;
@@ -5635,17 +5985,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.fileWatchers.push(instructionWatcher);
   }
 
-  private async rebuildSessionSystemPrompts(projectId?: string): Promise<void> {
-    if (!this.sessionManager) return;
-    const foreground = this.sessionManager.getForegroundSession();
-    if (projectId && foreground?.projectScope.projectId !== projectId) return;
+  public refreshSkillConfiguration(projectId?: string): Promise<void> {
+    const refresh = this.skillRefreshTail
+      .catch(() => undefined)
+      .then(async () => {
+        if (!(await this.rebuildSessionSystemPrompts(projectId))) return;
+        if (projectId) {
+          this.slashCatalogProjectGenerations.set(
+            projectId,
+            (this.slashCatalogProjectGenerations.get(projectId) ?? 0) + 1,
+          );
+          this.projectCustomizationRegistry.invalidate(projectId);
+        } else {
+          this.slashCatalogGlobalGeneration += 1;
+          this.projectCustomizationRegistry.clear();
+        }
+        const selection = this.getCustomizationSelection();
+        if (!projectId || selection?.scope.projectId === projectId) {
+          await this.sendSlashCommands();
+        }
+      });
+    this.skillRefreshTail = refresh;
+    return refresh;
+  }
+
+  private async rebuildSessionSystemPrompts(
+    projectId?: string,
+  ): Promise<boolean> {
+    if (!this.sessionManager) return true;
     try {
-      await this.sessionManager.rebuildSystemPrompts();
+      await this.sessionManager.rebuildSystemPrompts(projectId);
       this.log(
         "[instructions] Rebuilt system prompt after instruction file change",
       );
+      return true;
     } catch (err) {
       this.log(`[instructions] Failed to rebuild system prompt: ${err}`);
+      return false;
     }
   }
 
@@ -5684,6 +6060,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async sendSlashCommands(): Promise<void> {
     const selection = this.getCustomizationSelection();
+    const globalGeneration = this.slashCatalogGlobalGeneration;
+    const projectGeneration = selection
+      ? (this.slashCatalogProjectGenerations.get(selection.scope.projectId) ??
+        0)
+      : 0;
     if (!selection) {
       this.postMessage({
         type: "agentSlashCommandsUpdate",
@@ -5694,8 +6075,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const selectionKey = this.getCustomizationSelectionKey(selection);
     const commands = await this.getCurrentSlashCommands(selection);
     if (
+      globalGeneration !== this.slashCatalogGlobalGeneration ||
+      projectGeneration !==
+        (this.slashCatalogProjectGenerations.get(selection.scope.projectId) ??
+          0) ||
       selectionKey !==
-      this.getCustomizationSelectionKey(this.getCustomizationSelection())
+        this.getCustomizationSelectionKey(this.getCustomizationSelection())
     ) {
       return;
     }
@@ -5955,7 +6340,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       type: "agentSessionList",
       sessions: this.getWebviewSessionSummaries(),
     });
-    connection.postMessage(this.buildSessionLoadedMessage(session));
+    connection.postMessage(
+      this.buildSessionLoadedMessage(session, {
+        checkpoints: this.getSessionCheckpoints(session.id),
+      }),
+    );
     connection.postMessage({
       type: "stateUpdate",
       state: this.buildChatState(session),
@@ -6072,14 +6461,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private rejectChatTabAction(
     command: string,
     reason: ChatTabActionRejection["reason"],
+    address?: ChatTabActionAddress,
   ): void {
     const snapshot = this.getChatWorkspaceViewSnapshot();
     if (!snapshot) return;
     this.log(`[chat-tabs] rejected command=${command} reason=${reason}`);
-    this.postMessage({
-      type: "chatTabActionRejected",
-      rejection: { command, reason, snapshot },
-    });
+    this.postChatTabActionMessage(
+      {
+        type: "chatTabActionRejected",
+        rejection: { command, reason, snapshot },
+      },
+      address,
+    );
   }
 
   private async handleChatTabPlacementAction(
@@ -6090,12 +6483,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const controller = this.chatTabController;
     const host = this.chatTabPanelHost;
     if (!address || !controller || !host) {
-      this.rejectChatTabAction(command, "invalid_address");
+      this.rejectChatTabAction(
+        command,
+        "invalid_address",
+        address ?? undefined,
+      );
       return;
     }
     const validation = controller.validateAction(address);
     if (!validation.ok) {
-      this.rejectChatTabAction(command, validation.reason);
+      this.rejectChatTabAction(command, validation.reason, address);
       return;
     }
 
@@ -6108,10 +6505,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const snapshot = this.getChatWorkspaceViewSnapshot();
     if (!snapshot) return;
     this.log(`[chat-tabs] failed command=${command} reason=placement_failed`);
-    this.postMessage({
-      type: "chatTabActionFailed",
-      failure: { command, reason: "placement_failed", snapshot },
-    });
+    this.postChatTabActionMessage(
+      {
+        type: "chatTabActionFailed",
+        failure: { command, reason: "placement_failed", snapshot },
+      },
+      address,
+    );
   }
 
   private async handleChatTabAction(
@@ -6121,7 +6521,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const address = parseChatTabActionAddress(msg);
     const coordinator = this.chatTabHostCoordinator;
     if (!address || !coordinator) {
-      this.rejectChatTabAction(command, "invalid_address");
+      this.rejectChatTabAction(
+        command,
+        "invalid_address",
+        address ?? undefined,
+      );
       return;
     }
 
@@ -6156,22 +6560,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                   : null;
 
     if (!result) {
-      this.rejectChatTabAction(command, "invalid_address");
+      this.rejectChatTabAction(command, "invalid_address", address);
       return;
     }
     if (!result.ok) {
       if (result.reason === "confirmation_required") {
-        this.postMessage({
-          type: "chatTabActionConfirmationRequested",
-          request: {
-            command,
-            action: result.action,
-            address,
-            mode,
-            projectId,
-            targetSessionId: result.targetSessionId,
+        this.postChatTabActionMessage(
+          {
+            type: "chatTabActionConfirmationRequested",
+            request: {
+              command,
+              action: result.action,
+              address,
+              mode,
+              projectId,
+              targetSessionId: result.targetSessionId,
+            },
           },
-        });
+          address,
+        );
         return;
       }
       if (
@@ -6180,7 +6587,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         result.reason === "stale_session" ||
         result.reason === "invalid_address"
       ) {
-        this.rejectChatTabAction(command, result.reason);
+        this.rejectChatTabAction(command, result.reason, address);
         return;
       }
       const snapshot = this.getChatWorkspaceViewSnapshot();
@@ -6589,6 +6996,182 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               interrupted: false,
             },
           });
+        }
+        break;
+      }
+
+      case "agentMemoryQuery": {
+        const request =
+          (msg.request as Partial<MemoryInspectionQueryRequest> | undefined) ??
+          {};
+        const scope = request.scope;
+        if (scope !== "global" && scope !== "project") break;
+        await this.postMemoryPanelSnapshot(
+          {
+            scope,
+            ...(typeof request.query === "string"
+              ? { query: request.query.slice(0, 1_000) }
+              : {}),
+            ...(Array.isArray(request.kinds) ? { kinds: request.kinds } : {}),
+            ...(Array.isArray(request.statuses)
+              ? { statuses: request.statuses }
+              : {}),
+            ...(Array.isArray(request.sources)
+              ? { sources: request.sources }
+              : {}),
+            limit:
+              typeof request.limit === "number" &&
+              Number.isFinite(request.limit)
+                ? request.limit
+                : 100,
+          },
+          {
+            requestId:
+              typeof msg.requestId === "string" ? msg.requestId : undefined,
+            open: msg.open === true,
+          },
+        );
+        break;
+      }
+
+      case "agentMemoryDetail": {
+        const recordId =
+          typeof msg.recordId === "string" ? msg.recordId.trim() : "";
+        const scope = msg.scope;
+        if (
+          !recordId ||
+          recordId.length > 200 ||
+          (scope !== "global" && scope !== "project")
+        ) {
+          break;
+        }
+        await this.postMemoryPanelDetail(
+          recordId,
+          scope,
+          typeof msg.requestId === "string" ? msg.requestId : undefined,
+        );
+        break;
+      }
+
+      case "agentMemoryManage": {
+        const provider = this.memoryInspectionProvider;
+        const input = msg.input as ManageMemoryToolInput | undefined;
+        const request = msg.request as
+          | Partial<MemoryInspectionQueryRequest>
+          | undefined;
+        const requestId =
+          typeof msg.requestId === "string" ? msg.requestId : undefined;
+        if (
+          !input ||
+          (input.scope !== "global" && input.scope !== "project") ||
+          request?.scope !== input.scope
+        ) {
+          break;
+        }
+        if (!provider) {
+          this.postMemoryPanelMutationError(input.scope, requestId);
+          break;
+        }
+        try {
+          const context = this.getMemoryPanelContext(input.scope);
+          const result = await provider.manageAsUser(input, {
+            projectId: context.projectId,
+            observedAt: new Date().toISOString(),
+            evidence: input.source_evidence,
+          });
+          await this.refreshContextHealth();
+          await this.postMemoryPanelSnapshot(
+            { ...request, ...context },
+            {
+              requestId,
+              selectedId: result.result.record?.id ?? input.target_id,
+            },
+          );
+        } catch {
+          this.postMemoryPanelMutationError(input.scope, requestId);
+        }
+        break;
+      }
+
+      case "agentMemoryClear": {
+        const provider = this.memoryInspectionProvider;
+        const scope = msg.scope;
+        const request = msg.request as
+          | Partial<MemoryInspectionQueryRequest>
+          | undefined;
+        const requestId =
+          typeof msg.requestId === "string" ? msg.requestId : undefined;
+        if (
+          msg.confirm !== true ||
+          (scope !== "global" && scope !== "project") ||
+          request?.scope !== scope
+        ) {
+          break;
+        }
+        if (!provider) {
+          this.postMemoryPanelMutationError(scope, requestId);
+          break;
+        }
+        try {
+          const context = this.getMemoryPanelContext(scope);
+          await provider.clearScope({
+            ...context,
+            observedAt: new Date().toISOString(),
+            evidence: `VS Code user confirmed clearing ${scope} autonomous memory.`,
+          });
+          await this.refreshContextHealth();
+          await this.postMemoryPanelSnapshot(
+            { ...request, ...context },
+            { requestId },
+          );
+        } catch {
+          this.postMemoryPanelMutationError(scope, requestId);
+        }
+        break;
+      }
+
+      case "agentMemoryExport": {
+        const scope = msg.scope;
+        if (scope === "global" || scope === "project") {
+          await this.exportMemoryArchive(scope);
+        }
+        break;
+      }
+
+      case "agentMemoryImport": {
+        const provider = this.memoryInspectionProvider;
+        const scope = msg.scope;
+        const request = msg.request as
+          | Partial<MemoryInspectionQueryRequest>
+          | undefined;
+        const requestId =
+          typeof msg.requestId === "string" ? msg.requestId : undefined;
+        if (
+          (scope !== "global" && scope !== "project") ||
+          request?.scope !== scope ||
+          !msg.archive ||
+          typeof msg.archive !== "object"
+        ) {
+          break;
+        }
+        if (!provider) {
+          this.postMemoryPanelMutationError(scope, requestId);
+          break;
+        }
+        try {
+          const context = this.getMemoryPanelContext(scope);
+          await provider.importArchive(msg.archive as MemoryArchiveV1, {
+            ...context,
+            observedAt: new Date().toISOString(),
+            evidence: `VS Code user imported an autonomous-memory archive into ${scope} scope.`,
+          });
+          await this.refreshContextHealth();
+          await this.postMemoryPanelSnapshot(
+            { ...request, ...context },
+            { requestId },
+          );
+        } catch {
+          this.postMemoryPanelMutationError(scope, requestId);
         }
         break;
       }
@@ -7261,7 +7844,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             selection.scope.projectId,
           );
         }
-        const commands = await this.getCurrentSlashCommands(selection);
+        await this.refreshSkillConfiguration(selection?.scope.projectId);
+        const commands = await this.getCurrentSlashCommands(
+          this.getCustomizationSelection(sourceSession),
+        );
         if (context?.connection) {
           context.connection.postMessage({
             type: "agentSlashCommandsUpdate",
@@ -7290,6 +7876,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             totalCacheCreationTokens: sourceSession.totalCacheCreationTokens,
           });
           this.drainBrowserQueuedMessage(sourceSession.id);
+        } else if (name === "context-doctor") {
+          const result = this.runContextDoctor(sourceSession?.id);
+          if (!result.ok) {
+            vscode.window.showInformationMessage(
+              result.error === "session_busy"
+                ? "Context Doctor is unavailable while the session is running."
+                : result.error === "workspace_session_required"
+                  ? "Context Doctor requires a workspace session."
+                  : "No active workspace session is available for Context Doctor.",
+            );
+          }
         } else if (name === "checkpoint") {
           if (!sourceSession) break;
           const checkpoint =
@@ -7355,6 +7952,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ];
           this.outputChannel.appendLine(lines.join("\n"));
           this.outputChannel.show(true);
+        } else if (name === "memory") {
+          await this.postMemoryPanelSnapshot(
+            { scope: "global", limit: 100 },
+            { open: true },
+          );
         } else if (name === "mcp") {
           const projectScope = sourceSession?.projectScope;
           await this.postMcpManagerSnapshot({
@@ -8770,6 +9372,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (isBackground) {
           this.sendBgSessionsUpdateThrottled();
         }
+        if (!isBackground && event.toolName === "manage_memory") {
+          void this.refreshContextHealth();
+        }
         const annotation = getApprovalResultAnnotation(resultText);
         if (annotation) {
           this.postMessage({
@@ -8780,6 +9385,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         break;
       }
+
+      case "request_context_attribution":
+        this.contextJumpTracker?.onRequestContextAttribution(sessionId, {
+          requestId: event.requestId,
+          requestKind: event.requestKind,
+          model: event.model,
+          estimatedInputTokens: event.estimatedInputTokens,
+          toolResultAttributions: event.toolResultContextAttributions,
+          omittedToolResultAttributions:
+            event.omittedToolResultContextAttributions,
+          pinnedMemoryTokens: event.pinnedMemoryTokens,
+          retrievedMemoryTokens: event.retrievedMemoryTokens,
+          contextLedger: event.contextLedger,
+        });
+        break;
 
       case "api_request":
         this.log(
@@ -8827,6 +9447,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             ?.getCapabilities(event.model).contextWindow,
           accumulatedEstimatedTokens: event.accumulatedEstimatedTokens,
           accumulatedBySource: event.accumulatedEstimatedTokensBySource,
+          toolResultAttributions: event.toolResultContextAttributions,
+          omittedToolResultAttributions:
+            event.omittedToolResultContextAttributions,
+          pinnedMemoryTokens: event.pinnedMemoryTokens,
+          retrievedMemoryTokens: event.retrievedMemoryTokens,
           systemPromptTokens: event.contextBreakdown?.prompt.estimatedTokens,
           toolDefinitionTokens: event.contextBreakdown?.tools?.estimatedTokens,
         });
@@ -9103,24 +9728,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       newInputTokens: number;
       summary: string;
       validationWarnings?: string[];
-      metadata?: {
-        inputMessageCount: number;
-        sourceUserMessageCount: number;
-        hadPriorSummaryInInput: boolean;
-
-        sourceHash: string;
-        providerId: string;
-        condenseModel: string;
-        modelCandidates: string[];
-        selectedModel: string;
-        latestUserMessage: string;
-        currentTask: string;
-        pendingTasks: string[];
-        canonicalUserMessages: string[];
-        requestMessageCount: number;
-        effectiveHistoryMessageCount: number;
-        effectiveHistoryRoles: string[];
-      };
+      metadata?: CondenseMetadata;
     },
   ): Promise<void> {
     const projectRoot = this.requireSessionArtifactRoot(sessionId);
@@ -9155,62 +9763,82 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
     if (event.metadata) {
+      const metadata = event.metadata;
       summaryLines.push(``);
       summaryLines.push(`## Metadata`);
       summaryLines.push(``);
-      summaryLines.push(`- providerId: ${event.metadata.providerId}`);
-      summaryLines.push(`- condenseModel: ${event.metadata.condenseModel}`);
-      summaryLines.push(
-        `- modelCandidates: ${event.metadata.modelCandidates.join(" | ")}`,
-      );
-      summaryLines.push(`- selectedModel: ${event.metadata.selectedModel}`);
-      summaryLines.push(
-        `- inputMessageCount: ${event.metadata.inputMessageCount}`,
-      );
-      summaryLines.push(
-        `- sourceUserMessageCount: ${event.metadata.sourceUserMessageCount}`,
-      );
-      summaryLines.push(
-        `- requestMessageCount: ${event.metadata.requestMessageCount}`,
-      );
-      summaryLines.push(
-        `- effectiveHistoryMessageCount: ${event.metadata.effectiveHistoryMessageCount}`,
-      );
-      summaryLines.push(
-        `- effectiveHistoryRoles: ${event.metadata.effectiveHistoryRoles.join(" | ")}`,
-      );
-      summaryLines.push(
-        `- hadPriorSummaryInInput: ${event.metadata.hadPriorSummaryInInput}`,
-      );
-      summaryLines.push(`- sourceHash: ${event.metadata.sourceHash}`);
-      summaryLines.push(``);
-      summaryLines.push(`## Resume Anchor Inputs`);
-      summaryLines.push(``);
-      summaryLines.push(
-        `- latestUserMessage: ${event.metadata.latestUserMessage}`,
-      );
-      summaryLines.push(`- currentTask: ${event.metadata.currentTask}`);
-
-      summaryLines.push(``);
-      summaryLines.push(`### Pending Tasks`);
-      summaryLines.push(``);
-      if (event.metadata.pendingTasks.length > 0) {
-        for (const task of event.metadata.pendingTasks) {
-          summaryLines.push(`- ${task}`);
-        }
-      } else {
-        summaryLines.push(`- None`);
+      if ("providerId" in metadata) {
+        summaryLines.push(`- providerId: ${metadata.providerId}`);
+        summaryLines.push(`- condenseModel: ${metadata.condenseModel}`);
+        summaryLines.push(
+          `- modelCandidates: ${metadata.modelCandidates.join(" | ")}`,
+        );
+        summaryLines.push(`- selectedModel: ${metadata.selectedModel}`);
+        summaryLines.push(`- inputMessageCount: ${metadata.inputMessageCount}`);
+        summaryLines.push(
+          `- sourceUserMessageCount: ${metadata.sourceUserMessageCount}`,
+        );
+        summaryLines.push(
+          `- requestMessageCount: ${metadata.requestMessageCount}`,
+        );
+        summaryLines.push(
+          `- effectiveHistoryMessageCount: ${metadata.effectiveHistoryMessageCount}`,
+        );
+        summaryLines.push(
+          `- effectiveHistoryRoles: ${metadata.effectiveHistoryRoles.join(" | ")}`,
+        );
+        summaryLines.push(
+          `- hadPriorSummaryInInput: ${metadata.hadPriorSummaryInInput}`,
+        );
+        summaryLines.push(`- sourceHash: ${metadata.sourceHash}`);
       }
+      if (metadata.postCondenseProjection) {
+        const projection = metadata.postCondenseProjection;
+        summaryLines.push(``);
+        summaryLines.push(`## Post-Condense Projection`);
+        summaryLines.push(``);
+        summaryLines.push(
+          `- estimatedInputTokens: ${projection.estimatedInputTokens}`,
+          `- promptTokens: ${projection.promptTokens}`,
+          `- historyTokens: ${projection.historyTokens}`,
+          `- modeInstructionTokens: ${projection.modeInstructionTokens}`,
+          `- toolTokens: ${projection.toolTokens}`,
+          `- nativeToolTokens: ${projection.nativeToolTokens}`,
+          `- mcpToolTokens: ${projection.mcpToolTokens}`,
+          `- pinnedMemoryTokens: ${projection.pinnedMemoryTokens}`,
+          `- retrievedMemoryTokens: ${projection.retrievedMemoryTokens}`,
+          `- outputReservationTokens: ${projection.outputReservationTokens}`,
+          `- safetyBufferTokens: ${projection.safetyBufferTokens}`,
+        );
+      }
+      if ("providerId" in metadata) {
+        summaryLines.push(``);
+        summaryLines.push(`## Resume Anchor Inputs`);
+        summaryLines.push(``);
+        summaryLines.push(`- latestUserMessage: ${metadata.latestUserMessage}`);
+        summaryLines.push(`- currentTask: ${metadata.currentTask}`);
 
-      summaryLines.push(``);
-      summaryLines.push(`### Canonical User Messages`);
-      summaryLines.push(``);
-      if (event.metadata.canonicalUserMessages.length > 0) {
-        for (const message of event.metadata.canonicalUserMessages) {
-          summaryLines.push(`- ${message}`);
+        summaryLines.push(``);
+        summaryLines.push(`### Pending Tasks`);
+        summaryLines.push(``);
+        if (metadata.pendingTasks.length > 0) {
+          for (const task of metadata.pendingTasks) {
+            summaryLines.push(`- ${task}`);
+          }
+        } else {
+          summaryLines.push(`- None`);
         }
-      } else {
-        summaryLines.push(`- None`);
+
+        summaryLines.push(``);
+        summaryLines.push(`### Canonical User Messages`);
+        summaryLines.push(``);
+        if (metadata.canonicalUserMessages.length > 0) {
+          for (const message of metadata.canonicalUserMessages) {
+            summaryLines.push(`- ${message}`);
+          }
+        } else {
+          summaryLines.push(`- None`);
+        }
       }
     }
     fs.writeFileSync(
@@ -9540,8 +10168,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     rawArgs: string,
     sessionId: string,
   ): Promise<void> {
-    for (const requestId of this.pendingWorktreeSetups.keys()) {
-      this.cancelWorktreeSetup(requestId);
+    for (const [requestId, setup] of this.pendingWorktreeSetups) {
+      if (setup.sessionId === sessionId) this.cancelWorktreeSetup(requestId);
     }
 
     const requestId = randomUUID();
@@ -10211,8 +10839,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         session?.status !== "awaiting_approval",
       condenseThreshold,
       contextBudget,
+      contextHealth: this.contextHealth,
       reasoningEffort: session?.reasoningEffort ?? "high",
       thinkingEnabled: (session?.reasoningEffort ?? "high") !== "none",
+      // Use the selected session's ID so write approval state remains isolated.
       agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
         session?.id ?? "agent",
       ),
@@ -10478,6 +11108,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.projectExtensionMessage(msg);
     this.sendOrQueueWebviewMessage(msg);
     this.postMessageToEditorPanes(msg);
+  }
+
+  private postChatTabActionMessage(
+    msg: ExtensionToWebview,
+    address?: ChatTabActionAddress,
+  ): void {
+    this.postMessage(msg);
+    if (!address) return;
+    const postToEditorPanes = this.chatTabPanelHost?.postMessage?.bind(
+      this.chatTabPanelHost,
+    );
+    postToEditorPanes?.(
+      msg,
+      (candidate) =>
+        candidate.controllerEpoch === address.controllerEpoch &&
+        candidate.tabId === address.tabId &&
+        candidate.sessionId === address.sessionId,
+    );
   }
 
   private postMessageToEditorPanes(msg: ExtensionToWebview): void {

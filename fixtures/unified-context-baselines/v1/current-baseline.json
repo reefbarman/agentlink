@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "fixtureRevision": "unified-context-v1",
+  "capturedAt": "2026-07-25",
+  "privacy": "aggregates-only",
+  "toolTelemetry": {
+    "periodStart": "2026-06-17T07:13:54.896Z",
+    "periodEnd": "2026-07-25T06:11:36.005Z",
+    "totalCalls": 115418,
+    "knownTools": 64,
+    "knownToolsWithZeroCalls": 13,
+    "unknownHistoricalTools": ["start_worktree_agent", "web_url_read"],
+    "topCalls": {
+      "get_context": 25061,
+      "execute_command": 17286,
+      "search_files": 16352,
+      "read_file": 12419,
+      "apply_diff": 12118
+    },
+    "feedbackRecords": 67
+  },
+  "contextTelemetry": {
+    "events": 522,
+    "condenses": 144,
+    "postCondenseFirstRequests": 144,
+    "contextJumps": 234,
+    "postCondenseEstimateGapTokens": {
+      "p50": 13050,
+      "p90": 15538,
+      "max": 19999
+    },
+    "largestAttributedSourcesTokens": {
+      "tool:read_file": 1996911,
+      "tool:get_context": 1868229,
+      "unattributed": 1608012,
+      "tool:searxng__web_url_read": 775208,
+      "tool:search_files": 542480
+    }
+  },
+  "codeRetrieval": {
+    "backend": "legacy-qdrant",
+    "backendFingerprint": "legacy-runtime-fingerprint-unavailable",
+    "profile": "compatibility",
+    "capturedQueries": [
+      {
+        "queryId": "code-cart-total",
+        "rankedPaths": [
+          "fixtures/agent-eval-workspace/pristine-small-ts-bugfix/test/cart.test.js",
+          "fixtures/agent-eval-workspace/pristine-small-ts-bugfix/src/cart.js"
+        ]
+      },
+      {
+        "queryId": "code-money-invoice",
+        "rankedPaths": [
+          "fixtures/agent-eval-workspace/pristine-multi-file-refactor/src/invoices.js",
+          "fixtures/agent-eval-workspace/pristine-multi-file-refactor/src/orders.js",
+          "fixtures/agent-eval-workspace/pristine-multi-file-refactor/test/orders.test.js",
+          "fixtures/agent-eval-workspace/pristine-multi-file-refactor/src/money.js"
+        ]
+      }
+    ],
+    "rawSimilarityScoresCommitted": false
+  }
+}

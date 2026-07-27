@@ -13,7 +13,10 @@ import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.j
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 import { resolveAndValidatePath } from "../util/paths.js";
-import { semanticFileList } from "../services/semanticSearch.js";
+import {
+  semanticFileList,
+  type SemanticQueryOptions,
+} from "../services/semanticSearch.js";
 import {
   errorResult,
   handleToolError,
@@ -26,6 +29,7 @@ const MAX_ENTRIES = 500;
 export interface ListFilesProviders {
   workspaceFileProvider: WorkspaceFileProvider;
   pathAccessProvider: PathAccessProvider;
+  semanticQueryOptions?: SemanticQueryOptions;
 }
 
 function createLegacyListFilesProviders(
@@ -101,6 +105,7 @@ export async function handleListFiles(
     if (params.query) {
       const result = await semanticFileList(dirPath, params.query, undefined, {
         includeAllWorkspaceRoots: !params.path,
+        ...providers.semanticQueryOptions,
       });
       if (result?.error) {
         return {
@@ -129,6 +134,7 @@ export async function handleListFiles(
                   .map((f) => `${f.path} (score: ${f.score.toFixed(4)})`)
                   .join("\n"),
                 count: files.length,
+                ...(result?.freshness ? { freshness: result.freshness } : {}),
               },
               null,
               2,

@@ -140,9 +140,9 @@ afterEach(() => {
 });
 
 describe("handleProposeMemory", () => {
-  it("appends dated project memory after approval", async () => {
+  it("rejects legacy low-authority memory proposals before review", async () => {
     const { handleProposeMemory } = await import("./proposeMemory.js");
-    const { panel, requests } = approvingPanel();
+    const { panel } = approvingPanel();
 
     const result = await handleProposeMemory(
       {
@@ -156,43 +156,25 @@ describe("handleProposeMemory", () => {
       panel as never,
     );
 
-    const target = path.join(tmpDir, ".agentlink", "memory.md");
-    expect(fs.readFileSync(target, "utf-8")).toMatch(
-      /Run `npm test` after production code changes\.\n<!-- added \d{4}-\d{2}-\d{2} -->\n/,
-    );
-    expect(requests[0]).toMatchObject({
-      tier: "memory",
-      scope: "project",
-      targetPath: target,
-      id: "diff-request-1",
-    });
-    expect(requests[0]).not.toHaveProperty("content");
-    expect(diffWaitForUserDecision).not.toHaveBeenCalled();
-    expect(diffOpen).toHaveBeenCalledWith(
-      target,
-      ".agentlink/memory.md",
-      expect.stringMatching(/Run `npm test` after production code changes\./),
-    );
     expect(text(result)).toMatchObject({
-      status: "accepted",
-      path: ".agentlink/memory.md",
-      tier: "memory",
-      scope: "project",
+      error:
+        "Low-authority memory must use manage_memory, not an approval proposal",
     });
+    expect(panel.enqueueMemoryApproval).not.toHaveBeenCalled();
+    expect(diffOpen).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(tmpDir, ".agentlink", "memory.md"))).toBe(
+      false,
+    );
   });
 
   it("returns current content when update replacement cannot be found", async () => {
     const { handleProposeMemory } = await import("./proposeMemory.js");
-    fs.mkdirSync(path.join(tmpDir, ".agentlink"), { recursive: true });
-    fs.writeFileSync(
-      path.join(tmpDir, ".agentlink", "memory.md"),
-      "- Existing\n",
-    );
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "- Existing\n");
     const { panel } = approvingPanel();
 
     const result = await handleProposeMemory(
       {
-        tier: "memory",
+        tier: "instructions",
         scope: "project",
         operation: "update",
         title: "Update memory",
@@ -247,7 +229,7 @@ describe("handleProposeMemory", () => {
 
     const result = await handleProposeMemory(
       {
-        tier: "memory",
+        tier: "instructions",
         scope: "project",
         operation: "add",
         title: "Retarget to skill",
@@ -269,7 +251,7 @@ describe("handleProposeMemory", () => {
     ).toBe(false);
   });
 
-  it("rejects and reverts when the memory diff tab is closed", async () => {
+  it("rejects and reverts when the proposal diff tab is closed", async () => {
     const { TabInputTextDiff } = await import("vscode");
     const { handleProposeMemory } = await import("./proposeMemory.js");
     let closeListener: ((event: { closed: unknown[] }) => void) | undefined;
@@ -281,7 +263,7 @@ describe("handleProposeMemory", () => {
     const panel = {
       cancelApproval: vi.fn(),
       enqueueMemoryApproval: vi.fn((request: { id: string }) => {
-        const target = path.join(tmpDir, ".agentlink", "memory.md");
+        const target = path.join(tmpDir, "AGENTS.md");
         const DiffInput = TabInputTextDiff as unknown as {
           new (filePath: string): unknown;
         };
@@ -299,7 +281,7 @@ describe("handleProposeMemory", () => {
 
     const result = await handleProposeMemory(
       {
-        tier: "memory",
+        tier: "instructions",
         scope: "project",
         operation: "add",
         title: "Remember preference",
@@ -311,18 +293,18 @@ describe("handleProposeMemory", () => {
 
     expect(text(result)).toMatchObject({
       status: "rejected_by_user",
-      path: ".agentlink/memory.md",
+      path: "AGENTS.md",
     });
     expect(panel.cancelApproval).toHaveBeenCalledWith("diff-request-1");
     expect(diffRevertChanges).toHaveBeenCalled();
     expect(diffSaveChanges).not.toHaveBeenCalled();
   });
 
-  it("re-approves retargeted memory against the new target content", async () => {
+  it("re-approves retargeted instructions against the new target content", async () => {
     const { handleProposeMemory } = await import("./proposeMemory.js");
     fs.mkdirSync(path.join(tmpHome, ".agentlink"), { recursive: true });
     fs.writeFileSync(
-      path.join(tmpHome, ".agentlink", "memory.md"),
+      path.join(tmpHome, ".agentlink", "CLAUDE.md"),
       "- Existing global\n",
     );
     const panel = {
@@ -334,10 +316,10 @@ describe("handleProposeMemory", () => {
 
     await handleProposeMemory(
       {
-        tier: "memory",
+        tier: "instructions",
         scope: "project",
         operation: "add",
-        title: "Retarget memory",
+        title: "Retarget instructions",
         rationale: "User preference.",
         content: "- New global preference",
       },
@@ -349,12 +331,12 @@ describe("handleProposeMemory", () => {
       "content",
     );
     expect(diffOpen).toHaveBeenCalledWith(
-      path.join(tmpHome, ".agentlink", "memory.md"),
-      "~/.agentlink/memory.md",
+      path.join(tmpHome, ".agentlink", "CLAUDE.md"),
+      "~/.agentlink/CLAUDE.md",
       expect.stringContaining("- Existing global\n\n- New global preference"),
     );
     expect(
-      fs.readFileSync(path.join(tmpHome, ".agentlink", "memory.md"), "utf-8"),
+      fs.readFileSync(path.join(tmpHome, ".agentlink", "CLAUDE.md"), "utf-8"),
     ).toContain("- Existing global\n\n- New global preference");
   });
 
@@ -481,7 +463,7 @@ describe("handleProposeMemory", () => {
 
     await handleProposeMemory(
       {
-        tier: "memory",
+        tier: "instructions",
         scope: "project",
         operation: "add",
         title: "Remember command",

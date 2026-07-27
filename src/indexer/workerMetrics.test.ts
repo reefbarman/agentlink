@@ -10,10 +10,10 @@ describe("index worker metrics", () => {
   it("records operation counts, cache bytes, read concurrency, retained content, and heap samples", () => {
     const metrics = createIndexWorkerMetrics();
 
-    metrics.recordOperation("qdrant.ensureCollection");
-    metrics.recordOperation("qdrant.deletePoints");
-    metrics.recordOperation("qdrant.deletePoints");
-    metrics.recordOperation("cache.writeVector", 120);
+    metrics.recordOperation("retrieval.ensureIndex");
+    metrics.recordOperation("retrieval.deleteRecords");
+    metrics.recordOperation("retrieval.deleteRecords");
+    metrics.recordOperation("cache.writeRetrieval", 120);
     metrics.recordOperation("cache.writeStructural", 80);
     metrics.readStarted();
     metrics.readStarted();
@@ -28,20 +28,40 @@ describe("index worker metrics", () => {
 
     expect(metrics.snapshot()).toEqual({
       operations: {
-        "qdrant.ensureCollection": 1,
-        "qdrant.deleteCollection": 0,
-        "qdrant.deletePoints": 2,
-        "qdrant.upsertPoints": 0,
-        "qdrant.setPointVisibility": 0,
-        "cache.writeVector": 1,
+        "retrieval.ensureIndex": 1,
+        "retrieval.deleteIndex": 0,
+        "retrieval.deleteRecords": 2,
+        "retrieval.upsertRecords": 0,
+        "retrieval.setRecordVisibility": 0,
+        "cache.writeRetrieval": 1,
         "cache.writeStructural": 1,
       },
       cacheWriteBytes: 200,
-      cacheWriteBytesByKind: { vector: 120, structural: 80 },
+      cacheWriteBytesByKind: { retrieval: 120, structural: 80 },
       phaseDurationsMs: {},
+      chunkingFallbacks: {
+        tree_sitter_not_initialized: 0,
+        tree_sitter_grammar_unavailable: 0,
+        tree_sitter_parser_failure: 0,
+        tree_sitter_extractor_unavailable: 0,
+        tree_sitter_no_chunks: 0,
+      },
       maxActiveReads: 2,
       maxRetainedContentBytes: 650,
       maxHeapUsedBytes: 1_000,
+    });
+  });
+
+  it("records typed chunking fallback reasons", () => {
+    const metrics = createIndexWorkerMetrics();
+
+    metrics.recordChunkingFallback("tree_sitter_extractor_unavailable");
+    metrics.recordChunkingFallback("tree_sitter_extractor_unavailable");
+    metrics.recordChunkingFallback("tree_sitter_parser_failure");
+
+    expect(metrics.snapshot().chunkingFallbacks).toMatchObject({
+      tree_sitter_extractor_unavailable: 2,
+      tree_sitter_parser_failure: 1,
     });
   });
 

@@ -12,6 +12,8 @@ import type {
 import type {
   AgentToolRuntime,
   PendingQuestionRecoveryContext,
+  SkillAuthoritySnapshot,
+  SkillLoadActivation,
 } from "../core/tools/types.js";
 import {
   normalizeCoreWebAccessSettings,
@@ -24,6 +26,10 @@ import {
   continueNativeWebProviderStream,
 } from "../core/nativeWebTools.js";
 import { runWatchedProviderStream } from "../core/providerStreamWatchdog.js";
+import {
+  normalizePromptProfileOverrides,
+  resolvePromptProfile,
+} from "../core/promptProfile.js";
 import type {
   BackgroundAgentBudgetUsage,
   BackgroundAgentResultContent,
@@ -31,6 +37,7 @@ import type {
   BackgroundResultState,
 } from "../core/capabilities/background.js";
 import type { NativeWebToolExecutionRequest } from "../core/capabilities/web.js";
+import type { AutomaticMemoryContext } from "../core/capabilities/memory.js";
 import type {
   PendingQuestionRecoveryState,
   PersistDurability,
@@ -56,7 +63,12 @@ import { AgentSession } from "./AgentSession.js";
 import type { WorkspaceFolderInfo } from "./systemPrompt.js";
 import { AgentEngine, toolResultToContent } from "./AgentEngine.js";
 import type { AgentEvent } from "./types.js";
-import { BUILT_IN_MODES, resolveMode, type AgentMode } from "./modes.js";
+import {
+  BUILT_IN_MODES,
+  buildUnionAgentMode,
+  resolveMode,
+  type AgentMode,
+} from "./modes.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
 import type { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
 import {
@@ -64,6 +76,7 @@ import {
   type ContentBlock,
   type DocumentBlock,
   type ImageBlock,
+  type ModelProvider,
   type ReasoningEffort,
 } from "./providers/types.js";
 import type { Question } from "./webview/types.js";
@@ -77,6 +90,7 @@ import {
   type QuestionResponse,
 } from "./toolAdapter.js";
 import { getToolCapabilityMetadata } from "../core/tools/toolCapabilities.js";
+import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisclosure.js";
 import type { SessionStore, SessionSummary } from "./SessionStore.js";
 import type {
   BackgroundCompletionResult,
@@ -173,6 +187,7 @@ import type { WorktreeAgentLaunchRequest } from "../core/capabilities/worktree.j
 import type { ToolResult } from "../shared/types.js";
 import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";
 import { canonicalizePath, isPathWithinRoot } from "../util/paths.js";
+import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import type {
   WorkspaceMutationDomain,
   WorkspaceMutationLease,
@@ -184,6 +199,10 @@ const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_BACKGROUND_HANDOFF_IMAGES = 8;
 const MAX_BACKGROUND_PARTIAL_RESULT_CHARS = 40 * 1024;
 const MAX_ACP_OUTPUT_IMAGES = 8;
+const AUTOMATIC_MEMORY_MAX_RECORDS = 8;
+const AUTOMATIC_MEMORY_MAX_CHARS = 6_000;
+const AUTOMATIC_MEMORY_QUERY_MAX_CHARS = 6_000;
+const AUTOMATIC_MEMORY_QUERY_USER_TURNS = 3;
 
 interface AcpToolCallState {
   toolCallId: string;
@@ -618,6 +637,9 @@ export class AgentSessionManager {
   private readonly projectCatalog: ProjectScopeResolver;
   private readonly projectCustomizationRegistry: ProjectCustomizationRegistry;
   private readonly projectMcpHubRegistry: ProjectMcpHubRegistry | undefined;
+  private readonly skillCatalogFallbackProvider:
+    | NonNullable<AgentSessionManagerOptions["skillCatalogFallbackProvider"]>
+    | undefined;
   private readonly legacyProjectScope: SessionProjectScope | undefined;
   private readonly executionUnavailableReason: string | undefined;
   private readonly terminalProviderForSession:
@@ -890,6 +912,7 @@ export class AgentSessionManager {
     this.projectCustomizationRegistry =
       opts?.projectCustomizationRegistry ?? new ProjectCustomizationRegistry();
     this.projectMcpHubRegistry = opts?.projectMcpHubRegistry;
+    this.skillCatalogFallbackProvider = opts?.skillCatalogFallbackProvider;
     this.executionUnavailableReason = opts?.executionUnavailableReason;
     this.terminalProviderForSession = opts?.terminalProviderForSession;
     this.browserPreferredProjectId = opts?.browserPreferredProjectId;
@@ -994,6 +1017,69 @@ export class AgentSessionManager {
       throw new Error("Session factory returned a mismatched project scope.");
     }
     return session;
+  }
+
+  private updateSkillCatalogFallback(session: AgentSession): void {
+    const provider = this.skillCatalogFallbackProvider;
+    if (!provider || this.sessions.get(session.id) !== session) return;
+    const projection = session.getSkillCatalogProjection();
+    if (!projection) {
+      this.removeSkillCatalogFallback(session);
+      return;
+    }
+    const canonical = new Map(
+      session
+        .getAdvertisedSkills()
+        .map((skill) => [`${skill.id}\u0000${skill.revision}`, skill]),
+    );
+    const entries = projection.omissions.flatMap((omission) => {
+      const skill = canonical.get(`${omission.id}\u0000${omission.revision}`);
+      if (!skill?.enabled) return [];
+      return [
+        {
+          id: skill.id,
+          name: skill.name,
+          description: skill.description,
+          revision: skill.revision,
+          ...(skill.invocation ? { invocation: skill.invocation } : {}),
+          ...(skill.recommendations.length > 0
+            ? { recommendations: [...skill.recommendations] }
+            : {}),
+        },
+      ];
+    });
+    void Promise.resolve()
+      .then(() =>
+        provider.update({
+          publisherId: session.id,
+          projectId: session.projectScope.projectId,
+          catalogRevision: projection.revision,
+          observedAt: new Date().toISOString(),
+          entries,
+        }),
+      )
+      .catch((error) => {
+        this.log?.(
+          `[skills] Failed to update retrieval fallback for session ${session.id}: ${String(error)}`,
+        );
+      });
+  }
+
+  private removeSkillCatalogFallback(session: AgentSession): void {
+    const provider = this.skillCatalogFallbackProvider;
+    if (!provider) return;
+    void Promise.resolve()
+      .then(() =>
+        provider.remove({
+          publisherId: session.id,
+          projectId: session.projectScope.projectId,
+        }),
+      )
+      .catch((error) => {
+        this.log?.(
+          `[skills] Failed to remove retrieval fallback for session ${session.id}: ${String(error)}`,
+        );
+      });
   }
 
   private async createRestoredSession(args: {
@@ -1382,9 +1468,17 @@ export class AgentSessionManager {
             }
           : {}),
         onFileRead: (filePath: string) => session.trackFileRead(filePath),
-        getAdvertisedSkills: () => session.getAdvertisedSkills(),
+        getAdvertisedSkills: () =>
+          session.getAdvertisedSkills().map((skill) => ({
+            id: skill.id,
+            name: skill.name,
+            revision: skill.revision,
+            skillPath: skill.skillPath,
+            realSkillPath: skill.provenance.realSkillPath,
+          })),
         getAdvertisedRules: () => session.getAdvertisedRules(),
-        onSkillLoad: (skillName: string) => session.trackLoadedSkill(skillName),
+        onSkillLoad: (activation: SkillLoadActivation) =>
+          session.trackLoadedSkill(activation),
         onRespondToBackgroundQuestion: (
           request: BackgroundQuestionAnswerRequest,
         ) => this.respondToBackgroundQuestion(request),
@@ -1575,6 +1669,22 @@ export class AgentSessionManager {
     this.releaseWorkspaceMutationLease(preparedTurn.mutationLeaseHolder);
   }
 
+  private async resolveWebAccessPolicy(
+    session: AgentSession,
+    provider: ModelProvider | undefined,
+    settings = normalizeCoreWebAccessSettings(
+      this.host.config.getWebAccessSettings?.(),
+    ),
+  ): Promise<CoreResolvedWebAccessPolicy> {
+    const capabilities = provider?.getRequestCapabilities
+      ? await provider.getRequestCapabilities(session.model)
+      : provider?.getCapabilities(session.model);
+    return resolveCoreWebAccessPolicy({
+      settings,
+      providerCapabilities: capabilities?.hostedWeb,
+    });
+  }
+
   private async prepareTurnExecution(
     session: AgentSession,
     options: {
@@ -1623,17 +1733,16 @@ export class AgentSessionManager {
           `[model] migrated retired model "${retiredModel}" to "${session.model}" before request execution`,
         );
       }
+      await this.reconcileSessionPromptProfile(session);
       const provider =
         modelResolution?.provider ??
         this.host.providers.tryResolveProvider(session.model);
-      const capabilities = provider?.getRequestCapabilities
-        ? await provider.getRequestCapabilities(session.model)
-        : provider?.getCapabilities(session.model);
       const mcpTools = this.cloneMcpToolDefinitions(context);
-      const policy = resolveCoreWebAccessPolicy({
+      const policy = await this.resolveWebAccessPolicy(
+        session,
+        provider,
         settings,
-        providerCapabilities: capabilities?.hostedWeb,
-      });
+      );
 
       const serverNames = new Set(
         mcpTools
@@ -1769,6 +1878,90 @@ export class AgentSessionManager {
     }
   }
 
+  private async prepareAutomaticMemoryContext(
+    session: AgentSession,
+    context: Readonly<ToolDispatchContext> | undefined,
+  ): Promise<Readonly<AutomaticMemoryContext> | undefined> {
+    const provider =
+      context?.memoryToolProvider ?? this.toolCtx?.memoryToolProvider;
+    if (!provider?.recallAutomatically) return undefined;
+
+    const userTexts = session
+      .getAllMessages()
+      .filter(
+        (message): message is AgentMessage & { content: string } =>
+          message.role === "user" && typeof message.content === "string",
+      )
+      .slice(-AUTOMATIC_MEMORY_QUERY_USER_TURNS)
+      .map((message) => message.content.trim())
+      .filter(Boolean);
+    if (userTexts.length === 0) return undefined;
+    const query = userTexts
+      .join("\n\n")
+      .slice(-AUTOMATIC_MEMORY_QUERY_MAX_CHARS);
+    const projectId = isProjectlessSessionScope(session.projectScope)
+      ? undefined
+      : session.projectScope.projectId;
+
+    try {
+      const { result, health } = await provider.recallAutomatically({
+        input: {
+          query,
+          scope: "all",
+          limit: AUTOMATIC_MEMORY_MAX_RECORDS,
+        },
+        context: {
+          sessionId: session.id,
+          projectId,
+          isBackground: session.background,
+          observedAt: new Date().toISOString(),
+        },
+      });
+      if (health.status === "unavailable" || result.memories.length === 0) {
+        return undefined;
+      }
+
+      const evidence: string[] = [];
+      let renderedChars = 0;
+      for (const memory of result.memories) {
+        if (
+          memory.authority !== "low-authority-evidence" ||
+          memory.canAuthorizeTools !== false
+        ) {
+          continue;
+        }
+        const separatorChars = evidence.length > 0 ? 2 : 0;
+        if (
+          renderedChars + separatorChars + memory.rendering.length >
+          AUTOMATIC_MEMORY_MAX_CHARS
+        ) {
+          continue;
+        }
+        evidence.push(memory.rendering);
+        renderedChars += separatorChars + memory.rendering.length;
+      }
+      if (evidence.length === 0) return undefined;
+
+      const rendering = evidence.join("\n\n");
+      return deepFreeze({
+        rendering,
+        estimatedTokens: estimateTokensFromChars(rendering.length),
+        memoryCount: evidence.length,
+        query,
+        scopes: projectId
+          ? (["project", "global"] as const)
+          : (["global"] as const),
+        authority: "low-authority-evidence" as const,
+        canAuthorizeTools: false as const,
+      });
+    } catch (error) {
+      this.log?.(
+        `[memory] automatic recall unavailable for session ${session.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return undefined;
+    }
+  }
+
   private async prepareInteractiveTurnExecution(
     session: AgentSession,
   ): Promise<PreparedTurnExecution> {
@@ -1804,8 +1997,18 @@ export class AgentSessionManager {
       .filter((folderPath) => folderPath && folderPath !== projectRoot);
   }
 
-  private acpOutputImageCount(state: AcpOutputState): number {
-    return state.directImages.length;
+  private acpOutputImageCount(
+    state: AcpOutputState,
+    excludingToolCallId?: string,
+  ): number {
+    let count = state.directImages.length;
+    for (const toolCall of state.toolCalls.values()) {
+      if (toolCall.toolCallId === excludingToolCallId) continue;
+      count += (toolCall.content ?? []).filter(
+        (item) => item.type === "content" && item.content.type === "image",
+      ).length;
+    }
+    return count;
   }
 
   private stringifyAcpValue(value: unknown): string {
@@ -1826,6 +2029,11 @@ export class AgentSessionManager {
     const rawOutput = this.stringifyAcpValue(toolCall.rawOutput);
     if (rawOutput) content.push({ type: "text", text: rawOutput });
 
+    const availableImages = Math.max(
+      0,
+      MAX_ACP_OUTPUT_IMAGES -
+        this.acpOutputImageCount(output, toolCall.toolCallId),
+    );
     let imageCount = 0;
     for (const item of toolCall.content ?? []) {
       if (item.type === "content") {
@@ -1833,7 +2041,7 @@ export class AgentSessionManager {
         if (converted.warning) output.warnings.add(converted.warning);
         if (converted.content?.type === "image") {
           imageCount += 1;
-          if (imageCount <= MAX_ACP_OUTPUT_IMAGES) {
+          if (imageCount <= availableImages) {
             content.push({
               type: "image",
               data: converted.content.source.data,
@@ -1851,7 +2059,7 @@ export class AgentSessionManager {
         content.push({ type: "text", text: this.stringifyAcpValue(item) });
       }
     }
-    if (imageCount > MAX_ACP_OUTPUT_IMAGES) {
+    if (imageCount > availableImages) {
       output.warnings.add(
         `[ACP images truncated: showing at most ${MAX_ACP_OUTPUT_IMAGES} images]`,
       );
@@ -2558,6 +2766,9 @@ export class AgentSessionManager {
     }
     if (session && event.type === "warning" && event.modelFallback) {
       session.model = event.modelFallback.effectiveModel;
+      session.providerId = this.host.providers.tryResolveProvider(
+        event.modelFallback.effectiveModel,
+      )?.id;
       this.applyThresholdToSession(session);
       const backgroundMeta = this.bgMeta.get(sessionId);
       if (backgroundMeta) {
@@ -2826,6 +3037,56 @@ export class AgentSessionManager {
     }
   }
 
+  private async reconcileRuntimeModelFallback(
+    session: AgentSession,
+    effectiveModel: string,
+  ): Promise<void> {
+    session.model = effectiveModel;
+    this.applyThresholdToSession(session);
+    await this.reconcileSessionPromptProfile(session);
+  }
+
+  private async reconcileSessionPromptProfile(
+    session: AgentSession,
+  ): Promise<void> {
+    const projectless = isProjectlessSessionScope(session.projectScope);
+    const config = this.buildConfigForModel(
+      session.model,
+      projectless ? undefined : session.projectScope,
+    );
+    const providerId = this.host.providers.tryResolveProvider(
+      session.model,
+    )?.id;
+    const expected = resolvePromptProfile({
+      providerId,
+      modelId: session.model,
+      overrides: normalizePromptProfileOverrides(config.promptProfileOverrides),
+    });
+
+    if (
+      providerId === session.providerId &&
+      isDeepStrictEqual(expected, session.promptProfile)
+    ) {
+      return;
+    }
+
+    session.providerId = providerId;
+    await session.rebuildSystemPrompt({
+      devMode: this.devMode,
+      workspaceFolders: this.getWorkspaceFolders(),
+      disabledSkillIds: config.disabledSkillIds,
+      promptProfileOverrides: config.promptProfileOverrides,
+    });
+    session.promptProfile = expected;
+    if (session.contextBreakdown?.prompt) {
+      session.contextBreakdown.prompt.profile = expected.profile;
+      session.contextBreakdown.prompt.profileSource = expected.source;
+      session.contextBreakdown.prompt.profilePolicyRevision =
+        expected.policyRevision;
+    }
+    this.updateSkillCatalogFallback(session);
+  }
+
   private getModelForMode(
     mode: string,
     scope?: Readonly<SessionProjectScope>,
@@ -3050,6 +3311,7 @@ export class AgentSessionManager {
       this.getReasoningEffortForMode(mode, settingsScope),
     );
     this.sessions.set(session.id, session);
+    this.updateSkillCatalogFallback(session);
     if (!isProjectlessSessionScope(projectScope)) {
       this.getCheckpointManagerForSession(session);
     }
@@ -3066,19 +3328,38 @@ export class AgentSessionManager {
     return session;
   }
 
-  /**
-   * Rebuild the system prompt for all active foreground sessions.
-   * Called when instruction files (AGENTS.md, CLAUDE.md, etc.) change on disk.
-   */
+  /** Rebuild stored prompts for matching executable foreground sessions. */
   async rebuildSystemPrompts(projectId?: string): Promise<void> {
-    const fg = this.getForegroundSession();
-    if (!fg || (projectId && fg.projectScope.projectId !== projectId)) return;
-    this.requireSessionExecution(fg);
-    this.refreshMcpToolDisclosure(fg);
-    await fg.rebuildSystemPrompt({
-      devMode: this.devMode,
-      workspaceFolders: this.getWorkspaceFolders(),
-    });
+    const sessions = Array.from(this.sessions.values()).filter(
+      (session) =>
+        !session.background &&
+        !isProjectlessSessionScope(session.projectScope) &&
+        (!projectId || session.projectScope.projectId === projectId),
+    );
+    let firstError: unknown;
+    for (const session of sessions) {
+      try {
+        this.requireSessionExecution(session);
+        this.refreshMcpToolDisclosure(session);
+        const config = this.buildConfigForModel(
+          session.model,
+          session.projectScope,
+        );
+        await session.rebuildSystemPrompt({
+          devMode: this.devMode,
+          workspaceFolders: this.getWorkspaceFolders(),
+          disabledSkillIds: config.disabledSkillIds,
+          promptProfileOverrides: config.promptProfileOverrides,
+        });
+        this.updateSkillCatalogFallback(session);
+      } catch (error) {
+        firstError ??= error;
+        this.log?.(
+          `[skills] Failed to rebuild system prompt for session ${session.id}: ${String(error)}`,
+        );
+      }
+    }
+    if (firstError !== undefined) throw firstError;
   }
 
   /** Update one session's model without changing foreground ownership. */
@@ -3087,28 +3368,49 @@ export class AgentSessionManager {
     if (!session) throw new Error(`Session ${sessionId} not found.`);
     const projectless = isProjectlessSessionScope(session.projectScope);
     if (!projectless) this.requireSessionExecution(session);
+
     const requestedModel = model;
     const resolution = this.host.providers.resolveAvailableModel(model);
     if (!resolution && this.host.providers.listProviders().length > 0) {
       throw new Error(`Model "${model}" is not available.`);
     }
     model = resolution?.model ?? model;
-    if (this.foregroundId === session.id) {
-      this.updateConfig({
-        model,
-        autoCondenseThreshold: this.getCondenseThresholdForModel(
-          model,
-          projectless ? undefined : session.projectScope,
-        ),
+
+    const previousConfigModel = this.config.model;
+    const previousConfigThreshold = this.config.autoCondenseThreshold;
+    const previousSessionModel = session.model;
+    const previousProviderId = session.providerId;
+    const previousSessionThreshold = session.autoCondenseThreshold;
+    const foreground = this.foregroundId === session.id;
+    const threshold = this.getCondenseThresholdForModel(
+      model,
+      projectless ? undefined : session.projectScope,
+    );
+
+    if (foreground) {
+      this.updateConfig({ model, autoCondenseThreshold: threshold });
+    }
+    try {
+      const providerId = this.host.providers.tryResolveProvider(model)?.id;
+      await session.updateModelSelection(model, providerId, {
+        devMode: this.devMode,
+        workspaceFolders: this.getWorkspaceFolders(),
       });
+      session.autoCondenseThreshold = threshold;
+      await this.reconcileSessionPromptProfile(session);
+    } catch (error) {
+      if (foreground) {
+        this.updateConfig({
+          model: previousConfigModel,
+          autoCondenseThreshold: previousConfigThreshold,
+        });
+      }
+      session.model = previousSessionModel;
+      session.providerId = previousProviderId;
+      session.autoCondenseThreshold = previousSessionThreshold;
+      throw error;
     }
 
-    const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
-    await session.updateModelSelection(model, newProviderId, {
-      devMode: this.devMode,
-      workspaceFolders: this.getWorkspaceFolders(),
-    });
-    this.applyThresholdToSession(session);
     await this.maybeAutoCondenseSession(session.id);
     this.saveSession(session.id);
     this.notifySessionsChanged();
@@ -3253,6 +3555,7 @@ export class AgentSessionManager {
         await session.refreshModeInstructionAnchor();
       })
       .then(() => {
+        this.updateSkillCatalogFallback(session);
         this.log?.(
           `[approval] rebuilt system prompt for ${session.id} (Approve for Me ${approveForMe ? "on" : "off"})`,
         );
@@ -3333,6 +3636,7 @@ export class AgentSessionManager {
     }
 
     this.sessions.delete(session.id);
+    this.removeSkillCatalogFallback(session);
     this.sessionApprovalModes.delete(session.id);
     this.retainedCommandReviewDenials.clearSession(session.id);
     this.sessionRevisions.delete(session.id);
@@ -3404,6 +3708,7 @@ export class AgentSessionManager {
       projectScope: session.projectScope,
       activeContextResourceUri: session.activeContextResourceUri,
       getLoadedSkills: () => session.getLoadedSkills?.() ?? [],
+      getActiveSkillState: () => session.getActiveSkillState?.(),
       getAllMessages: () => session.getAllMessages(),
       checkpoints: this.checkpoints.get(session.id) ?? [],
     });
@@ -3567,6 +3872,7 @@ export class AgentSessionManager {
         activeContextResourceUri: session.activeContextResourceUri,
         mode: session.mode,
         model: session.model,
+        promptProfile: session.promptProfile,
         ...this.getSessionApprovalMode(session.id),
         totalInputTokens: session.totalInputTokens,
         totalOutputTokens: session.totalOutputTokens,
@@ -3576,6 +3882,7 @@ export class AgentSessionManager {
         lastCacheReadTokens: session.lastCacheReadTokens,
         reasoningEffort: session.reasoningEffort,
         loadedSkills: session.getLoadedSkills?.() ?? [],
+        activeSkillState: session.getActiveSkillState?.(),
         runState: session.runState
           ? {
               ...structuredClone(session.runState),
@@ -3779,6 +4086,8 @@ export class AgentSessionManager {
         webAccessPolicy: preparedTurn.policy,
         mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
         mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+        onModelFallback: ({ effectiveModel }) =>
+          this.reconcileRuntimeModelFallback(session, effectiveModel),
       })) {
         switch (event.type) {
           case "text_delta":
@@ -3961,6 +4270,8 @@ export class AgentSessionManager {
         webAccessPolicy: preparedTurn.policy,
         mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
         mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+        onModelFallback: ({ effectiveModel }) =>
+          this.reconcileRuntimeModelFallback(session, effectiveModel),
       })) {
         switch (event.type) {
           case "text_delta":
@@ -4198,6 +4509,11 @@ export class AgentSessionManager {
             }
           }
 
+          const automaticMemoryContext =
+            await this.prepareAutomaticMemoryContext(
+              session,
+              preparedTurn.context,
+            );
           session.status = "streaming";
           if (!session.background) {
             session.runState = { phase: "running", startedAt: Date.now() };
@@ -4249,6 +4565,7 @@ export class AgentSessionManager {
               runAbortGeneration = session.abortGeneration;
 
               for await (const event of engine.run(session, {
+                automaticMemoryContext,
                 webAccessPolicy: preparedTurn.policy,
                 mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
                 mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
@@ -4258,6 +4575,8 @@ export class AgentSessionManager {
                   this.clearInterruptedRunProgress(session),
                 onProviderAdmissionPhase: (phase) =>
                   this.setInteractiveExecutionPhase(session.id, phase),
+                onModelFallback: ({ effectiveModel }) =>
+                  this.reconcileRuntimeModelFallback(session, effectiveModel),
               })) {
                 if (
                   session.isAborted ||
@@ -4818,6 +5137,10 @@ export class AgentSessionManager {
         preparedTurn,
       );
 
+      const automaticMemoryContext = await this.prepareAutomaticMemoryContext(
+        session,
+        preparedTurn.context,
+      );
       session.status = "streaming";
       if (!session.background) {
         session.runState = { phase: "running", startedAt: Date.now() };
@@ -4845,6 +5168,7 @@ export class AgentSessionManager {
         while (true) {
           let naturalDone = false;
           for await (const event of engine.run(session, {
+            automaticMemoryContext,
             webAccessPolicy: preparedTurn.policy,
             mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
             mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
@@ -4854,6 +5178,8 @@ export class AgentSessionManager {
               this.clearInterruptedRunProgress(session),
             onProviderAdmissionPhase: (phase) =>
               this.setInteractiveExecutionPhase(session.id, phase),
+            onModelFallback: ({ effectiveModel }) =>
+              this.reconcileRuntimeModelFallback(session, effectiveModel),
           })) {
             if (event.type === "done") {
               // Defer done — a queued mode-switch resume may continue this turn.
@@ -4954,6 +5280,7 @@ export class AgentSessionManager {
     if (!agentMode) return null;
 
     const model = this.getModelForMode(mode, session.projectScope);
+    const config = this.buildConfigForModel(model, session.projectScope);
     const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
 
     session.model = model;
@@ -4964,7 +5291,12 @@ export class AgentSessionManager {
     );
     this.applyThresholdToSession(session);
     this.refreshMcpToolDisclosure(session);
-    await session.setMode(mode, { ...opts, agentMode });
+    await session.setMode(mode, {
+      ...opts,
+      agentMode,
+      promptProfileOverrides: config.promptProfileOverrides,
+    });
+    this.updateSkillCatalogFallback(session);
 
     if (!session.background && this.foregroundId === session.id) {
       this.updateConfig({
@@ -5038,36 +5370,67 @@ export class AgentSessionManager {
    * Manually condense the foreground session's context.
    * Emits condense or condense_error events via onEvent.
    */
-  private buildPreservedContext(
+  private buildCondenseContext(
     session: AgentSession,
     context: Readonly<ToolDispatchContext> | undefined,
+    nativeWebToolKinds: CoreResolvedWebAccessPolicy["enabledKinds"],
   ): {
-    toolNames: string[];
-    mcpServerNames: string[];
-    activeSkills: string[];
-    todos: TodoItem[];
+    preservedContext: {
+      toolNames: string[];
+      mcpServerNames: string[];
+      activeSkills: string[];
+      todos: TodoItem[];
+    };
+    tools: ReturnType<typeof getAgentTools> | undefined;
   } {
     this.refreshMcpToolDisclosure(session, context);
     const connectedMcpToolDefs = context?.mcpHub?.getToolDefs() ?? [];
     const providerMcpToolDefs =
       session.mcpToolDisclosure?.inlineTools ?? connectedMcpToolDefs;
-    const rawTools = context
+    const advertisedMode =
+      session.modeInstructionPlacement === "conversation"
+        ? buildUnionAgentMode([...BUILT_IN_MODES, session.agentMode])
+        : session.agentMode;
+    const authorizedTools = context
       ? [
-          ...getAgentTools(session.agentMode, providerMcpToolDefs, false),
+          ...getAgentTools(
+            advertisedMode,
+            providerMcpToolDefs,
+            false,
+            undefined,
+            session.getActiveSkillAllowedTools(),
+            connectedMcpToolDefs,
+            undefined,
+            nativeWebToolKinds,
+          ),
           todoTool,
         ]
       : undefined;
+    const inlineToolNames = authorizedTools
+      ? new Set(
+          createNativeToolDisclosureSnapshot(authorizedTools).inlineTools.map(
+            (tool) => tool.name,
+          ),
+        )
+      : undefined;
+    const tools =
+      authorizedTools && inlineToolNames
+        ? authorizedTools.filter((tool) => inlineToolNames.has(tool.name))
+        : undefined;
     return {
-      toolNames: rawTools?.map((t) => t.name) ?? [],
-      mcpServerNames: [
-        ...new Set(
-          connectedMcpToolDefs
-            .map((t) => parseMcpToolName(t.name)?.serverName ?? "")
-            .filter((name) => name.length > 0),
-        ),
-      ],
-      activeSkills: [...session.loadedSkills],
-      todos: getLatestTodoState(session.getAllMessages()),
+      preservedContext: {
+        toolNames: tools?.map((tool) => tool.name) ?? [],
+        mcpServerNames: [
+          ...new Set(
+            connectedMcpToolDefs
+              .map((tool) => parseMcpToolName(tool.name)?.serverName ?? "")
+              .filter((name) => name.length > 0),
+          ),
+        ],
+        activeSkills: [...session.loadedSkills],
+        todos: getLatestTodoState(session.getAllMessages()),
+      },
+      tools,
     };
   }
 
@@ -5080,9 +5443,15 @@ export class AgentSessionManager {
       this.requireSessionExecution(session);
     }
     const requestToolContext = this.bindEngineToSession(engine, session);
-    const preservedContext = this.buildPreservedContext(
+    const provider = this.host.providers.tryResolveProvider(session.model);
+    const webAccessPolicy = await this.resolveWebAccessPolicy(
+      session,
+      provider,
+    );
+    const { preservedContext, tools } = this.buildCondenseContext(
       session,
       requestToolContext,
+      webAccessPolicy.enabledKinds,
     );
     const signal = session.createAbortController().signal;
     session.status = "streaming";
@@ -5099,6 +5468,7 @@ export class AgentSessionManager {
           signal,
           onProviderAdmissionPhase: (phase) =>
             this.setInteractiveExecutionPhase(session.id, phase),
+          tools,
         },
       )) {
         this.recordAndEmitEvent(session.id, event);
@@ -5827,7 +6197,9 @@ export class AgentSessionManager {
       }
       if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
       this.foregroundId = sessionId;
-      await this.restorePersistedBackgroundSessions(sessionId);
+      await this.restorePersistedBackgroundSessions(
+        this.getRestoredBackgroundRootSessionIds(sessionId),
+      );
       this.notifySessionsChanged();
       return existing;
     }
@@ -5840,7 +6212,9 @@ export class AgentSessionManager {
     if (!session) return null;
     if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
     this.foregroundId = sessionId;
-    await this.restorePersistedBackgroundSessions(sessionId);
+    await this.restorePersistedBackgroundSessions(
+      this.getRestoredBackgroundRootSessionIds(sessionId),
+    );
     this.notifySessionsChanged();
     return session;
   }
@@ -5902,6 +6276,7 @@ export class AgentSessionManager {
       lastCacheReadTokens: 0,
       reasoningEffort: metadata.reasoningEffort,
       loadedSkills: metadata.loadedSkills ?? [],
+      activeSkillState: metadata.activeSkillState,
       runState: interruptedRunRecovery.runState,
       messages: interruptedRunRecovery.messages,
       modeInstructionAnchors: readResult.value.modeInstructionAnchors,
@@ -5911,6 +6286,7 @@ export class AgentSessionManager {
     const raced = this.sessions.get(sessionId);
     if (raced) return raced;
     this.sessions.set(sessionId, session);
+    this.updateSkillCatalogFallback(session);
     this.syncSessionApproveForMe(session);
     if (interruptedRunRecovery.changed) {
       await this.saveSessionNow(session.id);
@@ -5941,6 +6317,19 @@ export class AgentSessionManager {
     return session;
   }
 
+  private getRestoredBackgroundRootSessionIds(
+    selectedSessionId: string,
+  ): ReadonlySet<string> {
+    const rootSessionIds = new Set([selectedSessionId]);
+    for (const restoredSessionId of this.restoredBackgroundSessionIds) {
+      const fleet = this.sessions.get(restoredSessionId)?.fleetMetadata;
+      if (fleet?.rootSessionId) rootSessionIds.add(fleet.rootSessionId);
+      else if (fleet?.parentSessionId)
+        rootSessionIds.add(fleet.parentSessionId);
+    }
+    return rootSessionIds;
+  }
+
   /** Remove inactive restored trees outside the selected foreground/tab roots. */
   private pruneRestoredBackgroundSessions(
     rootSessionIds?: ReadonlySet<string>,
@@ -5961,6 +6350,7 @@ export class AgentSessionManager {
         continue;
       }
       this.sessions.delete(sessionId);
+      this.removeSkillCatalogFallback(session);
       this.sessionRevisions.delete(sessionId);
       this.sessionSaveQueues.delete(sessionId);
       this.pendingDeferredSaves.delete(sessionId);
@@ -6032,6 +6422,7 @@ export class AgentSessionManager {
         lastCacheReadTokens: 0,
         reasoningEffort: metadata.reasoningEffort,
         loadedSkills: metadata.loadedSkills ?? [],
+        activeSkillState: metadata.activeSkillState,
         messages,
         fleetMetadata: metadata.fleet,
       });
@@ -6105,6 +6496,7 @@ export class AgentSessionManager {
         }
       }
       this.sessions.set(session.id, session);
+      this.updateSkillCatalogFallback(session);
       this.syncSessionApproveForMe(session);
       this.restoredBackgroundSessionIds.add(session.id);
       this.sessionRevisions.set(session.id, readResult.revision);
@@ -6166,8 +6558,10 @@ export class AgentSessionManager {
     this.sessionPersistDurationsMs.delete(sessionId);
     this.sessionApprovalModes.delete(sessionId);
     this.retainedCommandReviewDenials.clearSession(sessionId);
-    if (this.sessions.has(sessionId)) {
+    const removedSession = this.sessions.get(sessionId);
+    if (removedSession) {
       this.sessions.delete(sessionId);
+      this.removeSkillCatalogFallback(removedSession);
       if (this.foregroundId === sessionId) {
         this.foregroundId = null;
       }
@@ -6895,10 +7289,14 @@ export class AgentSessionManager {
   async spawnBackground(
     request: SpawnBackgroundRequest,
     parentSessionId?: string,
+    inheritedSkillAuthority?: Readonly<SkillAuthoritySnapshot>,
   ): Promise<SpawnBackgroundResult> {
     if (!this.toolCtx) {
       throw new Error("No tool context — cannot spawn background agent");
     }
+    const inheritedSkillAuthoritySnapshot = inheritedSkillAuthority
+      ? deepFreeze(structuredClone(inheritedSkillAuthority))
+      : undefined;
 
     const legacyWorktree = (
       request as SpawnBackgroundRequest & { worktree?: unknown }
@@ -6995,6 +7393,11 @@ export class AgentSessionManager {
     );
 
     if (backendRoute.backend === "acp") {
+      if (inheritedSkillAuthoritySnapshot?.allowedTools) {
+        throw new Error(
+          "ACP background agents cannot inherit active skill tool restrictions; use a native background agent",
+        );
+      }
       this.ensureParentWriterCanSpawnSharedChild(
         parent,
         backendRoute.agent.readonlyOnly,
@@ -7039,6 +7442,7 @@ export class AgentSessionManager {
       session.addUserMessage(executionMessage);
       session.createAbortController();
       this.sessions.set(session.id, session);
+      this.updateSkillCatalogFallback(session);
       if (parentSessionId) {
         this.inheritSharedBackgroundApprovalState(parentSessionId, session.id);
         this.bgParents.set(session.id, { sessionId: parentSessionId, task });
@@ -7078,6 +7482,9 @@ export class AgentSessionManager {
         budget: request.budget,
         goalId: request.goalId,
         workflowId: request.workflowId,
+        skillAuthority: inheritedSkillAuthoritySnapshot
+          ? structuredClone(inheritedSkillAuthoritySnapshot)
+          : undefined,
       });
       this.appendFleetEvent(session, "queued", "Agent admitted to the fleet");
       this.saveSession(session.id);
@@ -7262,8 +7669,7 @@ export class AgentSessionManager {
               fallbackMsg,
             );
             this.cancelOwnedChildrenOnCompletion(session.id);
-            this.finalizeFleetMetadata(session, resolution);
-            await this.saveSessionNow(session.id);
+            await this.finalizeFleetMetadata(session, resolution);
             this.bgFinalResults.set(session.id, resolution.resultText);
             if (terminalDoneEvent) {
               this.recordAndEmitEvent(session.id, terminalDoneEvent);
@@ -7362,6 +7768,7 @@ export class AgentSessionManager {
     // (not briefly "idle"/done).
     session.status = "queued";
     this.sessions.set(session.id, session);
+    this.updateSkillCatalogFallback(session);
     if (parentSessionId) {
       this.inheritSharedBackgroundApprovalState(parentSessionId, session.id);
       this.bgParents.set(session.id, {
@@ -7403,6 +7810,9 @@ export class AgentSessionManager {
       budget: effectiveBudget,
       goalId: request.goalId,
       workflowId: request.workflowId,
+      skillAuthority: inheritedSkillAuthoritySnapshot
+        ? structuredClone(inheritedSkillAuthoritySnapshot)
+        : undefined,
     });
     this.appendFleetEvent(session, "queued", "Agent admitted to the fleet");
     this.saveSession(session.id);
@@ -7450,6 +7860,10 @@ export class AgentSessionManager {
     } else {
       session.addUserMessage(executionMessage);
     }
+    const automaticMemoryContext = await this.prepareAutomaticMemoryContext(
+      session,
+      preparedTurn.context,
+    );
 
     // Fire-and-forget — runs concurrently alongside the foreground session.
     // Reviews receive an automatic bounded budget unless the caller supplies
@@ -7491,12 +7905,16 @@ export class AgentSessionManager {
         await this.ensurePreparedTurnMutationLease(session, preparedTurn);
         for await (const event of bgEngine.run(session, {
           isBackground: true,
+          automaticMemoryContext,
           toolProfile: effectiveToolProfile,
           maxToolCalls: getEngineHardLimit(engineBudget?.maxToolCalls),
           maxApiTurns: getEngineHardLimit(engineBudget?.maxApiTurns),
           webAccessPolicy: preparedTurn.policy,
           mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
           mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+          inheritedSkillAuthority: inheritedSkillAuthoritySnapshot,
+          onModelFallback: ({ effectiveModel }) =>
+            this.reconcileRuntimeModelFallback(session, effectiveModel),
         })) {
           this.noteBackgroundAgentEvent(session.id, event);
           if (event.type === "text_delta") {
@@ -7610,8 +8028,7 @@ export class AgentSessionManager {
         : "(background agent completed without output)";
       const resolution = this.resolveBackgroundResult(session, fallbackMsg);
       this.cancelOwnedChildrenOnCompletion(session.id);
-      this.finalizeFleetMetadata(session, resolution);
-      await this.saveSessionNow(session.id);
+      await this.finalizeFleetMetadata(session, resolution);
 
       // Store and publish the result only after its terminal fleet metadata is durable.
       this.bgFinalResults.set(session.id, resolution.resultText);
@@ -7654,6 +8071,7 @@ export class AgentSessionManager {
   async startFleetWorkflow(
     request: FleetWorkflowRequest,
     parentSessionId?: string,
+    inheritedSkillAuthority?: Readonly<SkillAuthoritySnapshot>,
   ): Promise<{
     workflowId: string;
     goalId?: string;
@@ -7666,6 +8084,7 @@ export class AgentSessionManager {
         await this.spawnBackground(
           { ...delegation, workflowId: plan.workflowId },
           parentSessionId,
+          inheritedSkillAuthority,
         ),
       );
     }
@@ -8644,6 +9063,7 @@ export class AgentSessionManager {
         goalId: fleet.goalId,
       },
       fleet.parentSessionId,
+      fleet.skillAuthority,
     );
   }
 
@@ -8814,11 +9234,12 @@ export class AgentSessionManager {
     session: AgentSession,
     type: NonNullable<PersistedFleetMetadata["events"]>[number]["type"],
     summary: string,
-  ): void {
+    options?: { deferPublish?: boolean },
+  ): NonNullable<PersistedFleetMetadata["events"]>[number] | undefined {
     const fleet = session.fleetMetadata;
-    if (!fleet) return;
+    if (!fleet) return undefined;
     const existing = fleet.events?.at(-1);
-    if (existing?.type === type && !existing.readAt) return;
+    if (existing?.type === type && !existing.readAt) return undefined;
     const sequence = (fleet.eventSequence ?? 0) + 1;
     fleet.eventSequence = sequence;
     const event = {
@@ -8829,10 +9250,20 @@ export class AgentSessionManager {
       summary: summary.slice(0, 240),
     };
     fleet.events = [...(fleet.events ?? []).slice(-99), event];
-    this.saveSession(session.id);
-    this.onFleetEvent?.(session.id, event);
+    if (!options?.deferPublish) {
+      this.saveSession(session.id);
+      this.publishFleetEvent(session.id, event);
+    }
+    return event;
+  }
+
+  private publishFleetEvent(
+    sessionId: string,
+    event: NonNullable<PersistedFleetMetadata["events"]>[number],
+  ): void {
+    this.onFleetEvent?.(sessionId, event);
     for (const listener of this.fleetEventListeners) {
-      listener(session.id, event);
+      listener(sessionId, event);
     }
     this.notifySessionsChanged();
   }
@@ -8903,7 +9334,7 @@ export class AgentSessionManager {
     };
   }
 
-  private finalizeFleetMetadata(
+  private async finalizeFleetMetadata(
     session: AgentSession,
     resolution: {
       resultText: string;
@@ -8911,7 +9342,7 @@ export class AgentSessionManager {
       resultState: BackgroundResultState;
       partialResult?: string;
     },
-  ): void {
+  ): Promise<void> {
     const fleet = session.fleetMetadata;
     if (!fleet) return;
     this.bgBudgetWrapUps.delete(session.id);
@@ -8934,6 +9365,9 @@ export class AgentSessionManager {
           : undefined,
       };
     }
+    let terminalEvent:
+      | NonNullable<PersistedFleetMetadata["events"]>[number]
+      | undefined;
     if (resolution.resultState === "completed") {
       fleet.lifecycle = "completed";
       fleet.terminalReason = undefined;
@@ -8941,30 +9375,53 @@ export class AgentSessionManager {
       session.status = "idle";
       this.bgErrors.delete(session.id);
       this.bgAgentRetryable.delete(session.id);
-      this.appendFleetEvent(session, "completed", "Agent completed");
+      terminalEvent = this.appendFleetEvent(
+        session,
+        "completed",
+        "Agent completed",
+        { deferPublish: true },
+      );
     } else if (resolution.resultState === "cancelled") {
       fleet.lifecycle = "cancelled";
       fleet.terminalReason ??= "cancelled_by_user";
-      this.appendFleetEvent(session, "cancelled", "Agent cancelled");
+      terminalEvent = this.appendFleetEvent(
+        session,
+        "cancelled",
+        "Agent cancelled",
+        { deferPublish: true },
+      );
     } else if (resolution.resultState === "budget_exhausted") {
       fleet.lifecycle = "budget_exhausted";
-      this.appendFleetEvent(
+      terminalEvent = this.appendFleetEvent(
         session,
         "failed",
         fleet.terminalReason ?? "budget_exhausted",
+        { deferPublish: true },
       );
     } else if (resolution.resultState === "interrupted") {
       fleet.lifecycle = "interrupted";
       fleet.terminalReason ??= "background_agent_interrupted";
-      this.appendFleetEvent(session, "failed", fleet.terminalReason);
+      terminalEvent = this.appendFleetEvent(
+        session,
+        "failed",
+        fleet.terminalReason,
+        { deferPublish: true },
+      );
     } else {
       fleet.lifecycle = "failed";
       fleet.terminalReason =
         resolution.resultState === "incomplete_expected_result"
           ? "incomplete_expected_result"
           : (this.bgErrors.get(session.id) ?? "agent_error");
-      this.appendFleetEvent(session, "failed", fleet.terminalReason);
+      terminalEvent = this.appendFleetEvent(
+        session,
+        "failed",
+        fleet.terminalReason,
+        { deferPublish: true },
+      );
     }
+    await this.saveSessionNow(session.id);
+    if (terminalEvent) this.publishFleetEvent(session.id, terminalEvent);
   }
 
   private resolveBackgroundResult(

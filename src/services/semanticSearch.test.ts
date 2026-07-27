@@ -1,14 +1,18 @@
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import * as vscode from "vscode";
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   rerankResults,
   rrfMerge,
   semanticFileList,
+  semanticFileQuery,
   semanticSearch,
 } from "./semanticSearch.js";
 
-import { EMBEDDING_MODEL } from "../indexer/embeddingConfig.js";
+import { createHash } from "crypto";
 
 vi.mock("vscode", () => ({
   Uri: {
@@ -18,7 +22,6 @@ vi.mock("vscode", () => ({
     getConfiguration: vi.fn(() => ({
       get: vi.fn((key: string, fallback?: unknown) => {
         if (key === "semanticSearchEnabled") return true;
-        if (key === "qdrantUrl") return "http://localhost:6333";
         return fallback;
       }),
     })),
@@ -39,16 +42,36 @@ const {
   fetchMock,
   execRipgrepSearch,
   getRipgrepBinPath,
+  readFileMock,
+  statMock,
+  retrievalQuery,
+  closeRetrievalRepository,
 } = vi.hoisted(() => ({
   resolveEmbeddingAuth: vi.fn(),
   fetchMock: vi.fn(),
   execRipgrepSearch: vi.fn(),
   getRipgrepBinPath: vi.fn(),
+  readFileMock: vi.fn(),
+  statMock: vi.fn(),
+  retrievalQuery: vi.fn(),
+  closeRetrievalRepository: vi.fn(),
+}));
+
+vi.mock("fs/promises", () => ({
+  readFile: readFileMock,
+  stat: statMock,
 }));
 
 vi.mock("../agent/providers/index.js", () => ({
   openAiCodexAuthManager: {
     resolveEmbeddingAuth,
+  },
+}));
+
+vi.mock("../storage/retrieval/LanceDbRetrievalRepository.js", () => ({
+  LanceDbRetrievalRepository: class {
+    query = retrievalQuery;
+    close = closeRetrievalRepository;
   },
 }));
 
@@ -65,6 +88,10 @@ vi.mock("../util/ripgrep.js", async () => {
 });
 
 global.fetch = fetchMock as typeof fetch;
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
 
 // --- rrfMerge ---
 
@@ -290,88 +317,300 @@ describe("rerankResults", () => {
   });
 });
 
-describe("semantic search auth", () => {
+describe("semantic retrieval service", () => {
+  let retrievalStoreRoot: string;
+
   beforeEach(() => {
     vi.useRealTimers();
+    retrievalStoreRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "semantic-retrieval-store-"),
+    );
     resolveEmbeddingAuth.mockReset();
-
+    resolveEmbeddingAuth.mockResolvedValue(null);
     fetchMock.mockReset();
     execRipgrepSearch.mockReset();
     getRipgrepBinPath.mockReset();
-  });
-
-  it("returns a helpful error when no OpenAI auth is configured", async () => {
-    resolveEmbeddingAuth.mockResolvedValue(null);
-
-    const result = await semanticFileList("/workspace", "oauth test");
-
-    expect(result).toEqual({
-      files: [],
-      error:
-        "OpenAI API key not configured for embeddings. Semantic search and indexing require an API key (set OPENAI_API_KEY or run 'AgentLink: Set OpenAI API Key for Embeddings'). Model chat can still use OpenAI/Codex OAuth.",
-      reason: "missing_embeddings_auth",
-      readiness_message:
-        "OpenAI API key not configured for embeddings. Semantic search and indexing require an API key (set OPENAI_API_KEY or run 'AgentLink: Set OpenAI API Key for Embeddings'). Model chat can still use OpenAI/Codex OAuth.",
-      next_steps: [
-        "Run 'AgentLink: Set OpenAI API Key for Embeddings'.",
-        "Or run 'AgentLink: Set Up Semantic Search' and choose API-key setup.",
-      ],
+    readFileMock.mockReset();
+    statMock.mockReset();
+    retrievalQuery.mockReset();
+    closeRetrievalRepository.mockReset();
+    closeRetrievalRepository.mockResolvedValue(undefined);
+    statMock.mockResolvedValue({
+      isFile: () => true,
+      dev: 1,
+      ino: 1,
+      size: 100,
+      mtimeMs: 1,
+      ctimeMs: 1,
     });
   });
+
+  afterEach(() => {
+    fs.rmSync(retrievalStoreRoot, { recursive: true, force: true });
+  });
+
+  function candidate(options: {
+    workspacePath?: string;
+    file: string;
+    indexedContent: string;
+    liveContent?: string;
+    startLine?: number;
+    endLine?: number;
+    score?: number;
+  }) {
+    const workspacePath = options.workspacePath ?? "/workspace";
+    const revision = sha256(options.indexedContent);
+    const scopeId = `scope:${workspacePath}`;
+    const sourceId = `source:${workspacePath}:${options.file}`;
+    return {
+      source: {
+        id: sourceId,
+        namespace: "code" as const,
+        kind: "file" as const,
+        revision: {
+          id: revision,
+          contentHash: revision,
+          observedAt: "2026-07-25T00:00:00.000Z",
+        },
+        path: options.file,
+        content: options.indexedContent,
+        metadata: { scopeId },
+      },
+      chunk: {
+        id: `chunk:${sourceId}:${options.startLine ?? 1}`,
+        sourceId,
+        revisionId: revision,
+        generation: "generation:test",
+        content: options.indexedContent,
+        embedding: null,
+        location: {
+          path: options.file,
+          startLine: options.startLine ?? 1,
+          endLine: options.endLine ?? 1,
+        },
+        metadata: { scopeId },
+      },
+      scores: {
+        exact: 0,
+        lexical: options.score ?? 0.8,
+        vector: 0,
+        path: 0,
+        source: 0,
+        recency: 0,
+        final: options.score ?? 0.8,
+      },
+      liveContent: options.liveContent ?? options.indexedContent,
+    };
+  }
+
+  function queryResult(
+    candidates: ReturnType<typeof candidate>[],
+    mode = "lexical",
+  ) {
+    return {
+      query: { text: "test", mode, limit: 10 },
+      candidates: candidates.map(
+        ({ liveContent: _liveContent, ...entry }) => entry,
+      ),
+      mode,
+    };
+  }
+
+  function payload(result: Awaited<ReturnType<typeof semanticSearch>>) {
+    const block = result.content[0];
+    if (!block || block.type !== "text")
+      throw new Error("Expected text result");
+    return JSON.parse(block.text) as Record<string, unknown>;
+  }
 
   it("returns structured readiness fields when semantic search is disabled", async () => {
     const getConfigurationMock = vscode.workspace
       .getConfiguration as ReturnType<typeof vi.fn>;
     const originalImpl = getConfigurationMock.getMockImplementation();
-
     getConfigurationMock.mockImplementation(() => ({
-      get: vi.fn((key: string, fallback?: unknown) => {
-        if (key === "semanticSearchEnabled") return false;
-        if (key === "qdrantUrl") return "http://localhost:6333";
-        return fallback;
-      }),
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "semanticSearchEnabled" ? false : fallback,
+      ),
     }));
 
     try {
-      const result = await semanticSearch("/workspace", "disabled", 5);
-      const first = result.content[0];
-      expect(first?.type).toBe("text");
-      if (!first || first.type !== "text") {
-        throw new Error("Expected text response");
-      }
-
-      const payload = JSON.parse(first.text);
-      expect(payload.reason).toBe("disabled");
-      expect(payload.readiness_message).toContain(
-        "Semantic search is not enabled",
+      const result = await semanticSearch(
+        "/workspace",
+        "disabled",
+        5,
+        undefined,
+        {
+          retrievalStoreRoot,
+        },
       );
-      expect(Array.isArray(payload.next_steps)).toBe(true);
+      expect(payload(result).reason).toBe("disabled");
+      expect(retrievalQuery).not.toHaveBeenCalled();
     } finally {
-      if (originalImpl) {
-        getConfigurationMock.mockImplementation(originalImpl);
-      }
+      if (originalImpl) getConfigurationMock.mockImplementation(originalImpl);
     }
   });
 
-  it("returns structured readiness fields when embeddings auth is missing", async () => {
-    resolveEmbeddingAuth.mockResolvedValue(null);
+  it("queries LanceDB lexically without embedding credentials", async () => {
+    const hit = candidate({
+      file: "src/current.ts",
+      indexedContent: "export function lexicalSearch() {}",
+    });
+    readFileMock.mockResolvedValue(hit.liveContent);
+    retrievalQuery.mockResolvedValue(queryResult([hit]));
 
-    const result = await semanticSearch("/workspace", "missing auth", 5);
-    const first = result.content[0];
-    expect(first?.type).toBe("text");
-    if (!first || first.type !== "text") {
-      throw new Error("Expected text response");
-    }
-
-    const payload = JSON.parse(first.text);
-    expect(payload.reason).toBe("missing_embeddings_auth");
-    expect(payload.readiness_message).toContain(
-      "OpenAI API key not configured",
+    const result = await semanticSearch(
+      "/workspace",
+      "lexical search",
+      5,
+      undefined,
+      { retrievalStoreRoot },
     );
-    expect(Array.isArray(payload.next_steps)).toBe(true);
+
+    expect(payload(result)).toMatchObject({
+      semantic: true,
+      total_results: 1,
+    });
+    expect(String(payload(result).results)).toContain("src/current.ts");
+    expect(retrievalQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "lexical search",
+        mode: "lexical",
+        filters: expect.objectContaining({
+          namespaces: ["code"],
+          sourceKinds: ["file"],
+          metadata: expect.objectContaining({ scopeId: expect.any(String) }),
+        }),
+      }),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(closeRetrievalRepository).toHaveBeenCalledTimes(1);
   });
 
-  it("fans out unscoped search across all workspace roots and prefixes results", async () => {
+  it("uses hybrid retrieval when an embedding is available", async () => {
+    resolveEmbeddingAuth.mockResolvedValue({
+      method: "oauth",
+      bearerToken: "oauth-token",
+      canRefresh: true,
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
+    });
+    const hit = candidate({
+      file: "src/hybrid.ts",
+      indexedContent: "export function hybridSearch() {}",
+    });
+    readFileMock.mockResolvedValue(hit.liveContent);
+    retrievalQuery.mockResolvedValue(queryResult([hit], "hybrid"));
+
+    await semanticSearch("/workspace", "hybrid search", 5, undefined, {
+      retrievalStoreRoot,
+    });
+
+    expect(retrievalQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        embedding: [0.1, 0.2],
+        mode: "hybrid",
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
+      Authorization: "Bearer oauth-token",
+    });
+  });
+
+  it("uses a stable source id for exact-file semantic lookup", async () => {
+    const content = "line one\nline two";
+    const hit = candidate({
+      file: "src/current.ts",
+      indexedContent: content,
+      startLine: 2,
+      endLine: 2,
+    });
+    retrievalQuery.mockResolvedValue(queryResult([hit]));
+
+    await expect(
+      semanticFileQuery(
+        "src/current.ts",
+        "line two",
+        "/workspace",
+        sha256(content),
+        { retrievalStoreRoot },
+      ),
+    ).resolves.toEqual({ status: "current", startLine: 2, endLine: 2 });
+
+    const request = retrievalQuery.mock.calls[0][0];
+    expect(request.filters.sourceIds).toEqual([
+      expect.stringContaining("src/current.ts"),
+    ]);
+    expect(request.filters.pathPrefix).toBeUndefined();
+  });
+
+  it("suppresses stale and deleted sources while hydrating current snippets", async () => {
+    const current = candidate({
+      file: "src/current.ts",
+      indexedContent: "current live line",
+    });
+    const changed = candidate({
+      file: "src/changed.ts",
+      indexedContent: "old changed content",
+      liveContent: "new changed content",
+      score: 0.9,
+    });
+    const deleted = candidate({
+      file: "src/deleted.ts",
+      indexedContent: "deleted content",
+      score: 0.7,
+    });
+    retrievalQuery.mockResolvedValue(queryResult([changed, current, deleted]));
+    readFileMock.mockImplementation(async (filePath: string) => {
+      if (filePath === "/workspace/src/current.ts") return current.liveContent;
+      if (filePath === "/workspace/src/changed.ts") return changed.liveContent;
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
+
+    const result = await semanticSearch(
+      "/workspace",
+      "current changed deleted",
+      10,
+      undefined,
+      { retrievalStoreRoot },
+    );
+    const resultPayload = payload(result);
+
+    expect(resultPayload.total_results).toBe(1);
+    expect(String(resultPayload.results)).toContain("current live line");
+    expect(String(resultPayload.results)).not.toContain("old changed content");
+    expect(resultPayload.freshness).toEqual({
+      stale_sources: ["src/changed.ts"],
+      deleted_sources: ["src/deleted.ts"],
+      unverified_sources: [],
+    });
+  });
+
+  it("deduplicates ranked file results and preserves freshness", async () => {
+    const first = candidate({
+      file: "src/current.ts",
+      indexedContent: "current source",
+      score: 0.9,
+    });
+    const second = candidate({
+      file: "src/current.ts",
+      indexedContent: "current source",
+      startLine: 2,
+      score: 0.8,
+    });
+    readFileMock.mockResolvedValue("current source");
+    retrievalQuery.mockResolvedValue(queryResult([first, second]));
+
+    const result = await semanticFileList("/workspace", "current", 10, {
+      retrievalStoreRoot,
+    });
+    expect(result?.files).toHaveLength(1);
+    expect(result?.files[0]?.path).toBe("src/current.ts");
+    expect(result?.files[0]?.score).toBeCloseTo(0.94);
+  });
+
+  it("fans out across workspace roots without mixing scope filters", async () => {
     const workspace = vscode.workspace as unknown as {
       workspaceFolders: Array<{ name: string; uri: { fsPath: string } }>;
     };
@@ -380,63 +619,23 @@ describe("semantic search auth", () => {
       { name: "api", uri: { fsPath: "/workspace/api" } },
       { name: "web", uri: { fsPath: "/workspace/web" } },
     ];
-
-    resolveEmbeddingAuth.mockResolvedValue({
-      method: "oauth",
-      bearerToken: "oauth-token",
-      canRefresh: true,
+    const api = candidate({
+      workspacePath: "/workspace/api",
+      file: "src/server.ts",
+      indexedContent: "api current content",
     });
-
-    const collectionResponses = [
-      [
-        {
-          id: "api-hit",
-          score: 0.8,
-          payload: {
-            filePath: "src/server.ts",
-            codeChunk: "api code",
-            startLine: 1,
-            endLine: 2,
-          },
-        },
-      ],
-      [
-        {
-          id: "web-hit",
-          score: 0.9,
-          payload: {
-            filePath: "src/App.tsx",
-            codeChunk: "web code",
-            startLine: 3,
-            endLine: 4,
-          },
-        },
-      ],
-    ];
-    const pointsByCollection = new Map<string, unknown[]>();
-
-    fetchMock.mockImplementation(async (url: string) => {
-      if (url === "https://api.openai.com/v1/embeddings") {
-        return {
-          ok: true,
-          json: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
-        };
-      }
-
-      const collection = url.match(/\/collections\/([^/]+)\//)?.[1] ?? url;
-      if (!pointsByCollection.has(collection)) {
-        pointsByCollection.set(
-          collection,
-          collectionResponses[pointsByCollection.size] ?? [],
-        );
-      }
-      return {
-        ok: true,
-        json: async () => ({
-          result: { points: pointsByCollection.get(collection) ?? [] },
-        }),
-      };
+    const web = candidate({
+      workspacePath: "/workspace/web",
+      file: "src/App.tsx",
+      indexedContent: "web current content",
+      score: 0.9,
     });
+    readFileMock.mockImplementation(async (filePath: string) =>
+      filePath.includes("/api/") ? api.liveContent : web.liveContent,
+    );
+    retrievalQuery
+      .mockResolvedValueOnce(queryResult([api]))
+      .mockResolvedValueOnce(queryResult([web]));
 
     try {
       const result = await semanticSearch(
@@ -444,252 +643,22 @@ describe("semantic search auth", () => {
         "workspace search",
         5,
         undefined,
-        { includeAllWorkspaceRoots: true },
+        { includeAllWorkspaceRoots: true, retrievalStoreRoot },
       );
-
-      const first = result.content[0];
-      expect(first?.type).toBe("text");
-      if (!first || first.type !== "text") {
-        throw new Error("Expected text response");
-      }
-      const payload = JSON.parse(first.text);
-      expect(payload.results).toContain("web/src/App.tsx");
-      expect(payload.results).toContain("api/src/server.ts");
-      expect(payload.results.indexOf("web/src/App.tsx")).toBeLessThan(
-        payload.results.indexOf("api/src/server.ts"),
+      const resultPayload = payload(result);
+      expect(String(resultPayload.results)).toContain("api/src/server.ts");
+      expect(String(resultPayload.results)).toContain("web/src/App.tsx");
+      const scopeIds = retrievalQuery.mock.calls.map(
+        ([request]) => request.filters.metadata.scopeId,
       );
-
-      const qdrantCalls = fetchMock.mock.calls.filter(([url]) =>
-        String(url).includes("/collections/al-"),
-      );
-      expect(qdrantCalls).toHaveLength(4);
-      const collections = new Set(
-        qdrantCalls.map(
-          ([url]) => String(url).match(/\/collections\/([^/]+)\//)?.[1],
-        ),
-      );
-      expect(collections.size).toBe(2);
-      const requestBodies = qdrantCalls.map(([, init]) =>
-        JSON.parse(String(init?.body)),
-      );
-      expect(
-        requestBodies.every(
-          (body) => !JSON.stringify(body.filter).includes("pathSegments"),
-        ),
-      ).toBe(true);
-      expect(
-        requestBodies.every((body) =>
-          body.filter.must_not.some(
-            (condition: unknown) =>
-              JSON.stringify(condition) ===
-              JSON.stringify({
-                key: "indexVisible",
-                match: { value: false },
-              }),
-          ),
-        ),
-      ).toBe(true);
+      expect(new Set(scopeIds).size).toBe(2);
     } finally {
       workspace.workspaceFolders = originalFolders;
     }
   });
 
-  it("uses the resolved bearer token for embeddings", async () => {
-    resolveEmbeddingAuth.mockResolvedValue({
-      method: "oauth",
-      bearerToken: "oauth-token",
-      canRefresh: true,
-    });
-
-    fetchMock
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ result: [] }),
-      });
-
-    await semanticSearch("/workspace", "oauth embeddings", 5);
-
-    expect(fetchMock).toHaveBeenCalled();
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      "https://api.openai.com/v1/embeddings",
-    );
-    expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
-      Authorization: "Bearer oauth-token",
-    });
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
-      model: EMBEDDING_MODEL,
-      input: "oauth embeddings",
-    });
-  });
-
-  it("preserves the missing embedding data error", async () => {
-    resolveEmbeddingAuth.mockResolvedValue({
-      method: "oauth",
-      bearerToken: "oauth-token",
-      canRefresh: true,
-    });
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ data: [] }),
-    });
-
-    const result = await semanticSearch("/workspace", "missing embedding", 5);
-
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: JSON.stringify({
-          error: "OpenAI API returned no embedding data",
-        }),
-      },
-    ]);
-  });
-
-  it("retries transient 500 embedding failures", async () => {
-    vi.useFakeTimers();
-    resolveEmbeddingAuth.mockResolvedValue({
-      method: "oauth",
-      bearerToken: "oauth-token",
-      canRefresh: true,
-    });
-
-    fetchMock
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-        text: async () => "internal_error",
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-        text: async () => "internal_error",
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ result: [] }),
-      });
-
-    const searchPromise = semanticSearch("/workspace", "retry embeddings", 5);
-    await vi.runAllTimersAsync();
-    await searchPromise;
-
-    const embeddingCalls = fetchMock.mock.calls.filter(
-      ([url]) => url === "https://api.openai.com/v1/embeddings",
-    );
-    expect(embeddingCalls).toHaveLength(3);
-    expect(embeddingCalls[0]?.[1]?.headers).toMatchObject({
-      Authorization: "Bearer oauth-token",
-    });
-    expect(embeddingCalls[2]?.[1]?.headers).toMatchObject({
-      Authorization: "Bearer oauth-token",
-    });
-  });
-
-  it("does not retry 401 embedding failures", async () => {
-    resolveEmbeddingAuth.mockResolvedValue({
-      method: "apiKey",
-      bearerToken: "api-key-token",
-      canRefresh: false,
-    });
-
-    fetchMock.mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-      text: async () => "unauthorized",
-    });
-
-    const result = await semanticSearch("/workspace", "refresh embeddings", 5);
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
-      Authorization: "Bearer api-key-token",
-    });
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: JSON.stringify({
-          error: "OpenAI API error (401): unauthorized",
-        }),
-      },
-    ]);
-  });
-
-  it("does not retry 401s when auth cannot be refreshed", async () => {
-    resolveEmbeddingAuth.mockResolvedValue({
-      method: "apiKey",
-      bearerToken: "api-key-token",
-      canRefresh: false,
-    });
-
-    fetchMock.mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-      text: async () => "unauthorized",
-    });
-
-    const result = await semanticSearch(
-      "/workspace",
-      "api key unauthorized",
-      5,
-    );
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(getRipgrepBinPath).not.toHaveBeenCalled();
-    expect(execRipgrepSearch).not.toHaveBeenCalled();
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: JSON.stringify({
-          error: "OpenAI API error (401): unauthorized",
-        }),
-      },
-    ]);
-  });
-
-  it("retries thrown fetch errors before succeeding", async () => {
-    vi.useFakeTimers();
-    resolveEmbeddingAuth.mockResolvedValue({
-      method: "oauth",
-      bearerToken: "oauth-token",
-      canRefresh: true,
-    });
-
-    fetchMock
-      .mockRejectedValueOnce(new TypeError("network down"))
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ result: [] }),
-      });
-
-    const searchPromise = semanticSearch("/workspace", "network retry", 5);
-    await vi.runAllTimersAsync();
-    await searchPromise;
-
-    const embeddingCalls = fetchMock.mock.calls.filter(
-      ([url]) => url === "https://api.openai.com/v1/embeddings",
-    );
-    expect(embeddingCalls).toHaveLength(2);
-  });
-
-  it("falls back to keyword search when embeddings keep returning 500s", async () => {
-    vi.useFakeTimers();
-    resolveEmbeddingAuth.mockResolvedValue({
-      method: "oauth",
-      bearerToken: "oauth-token",
-      canRefresh: true,
-    });
+  it("falls back to bounded ripgrep when the local retrieval store is missing", async () => {
+    const missingRoot = path.join(retrievalStoreRoot, "missing");
     getRipgrepBinPath.mockResolvedValue("rg");
     execRipgrepSearch.mockResolvedValue(
       [
@@ -707,74 +676,24 @@ describe("semantic search auth", () => {
           },
         }),
         JSON.stringify({
-          type: "context",
-          data: {
-            path: { text: "/workspace/src/searchFiles.ts" },
-            lines: { text: "  return keywordFallback;" },
-            line_number: 13,
-          },
-        }),
-        JSON.stringify({
           type: "end",
           data: { path: { text: "/workspace/src/searchFiles.ts" } },
         }),
       ].join("\n"),
     );
 
-    fetchMock.mockResolvedValue({
-      ok: false,
-      status: 500,
-      text: async () => "internal_error",
-    });
+    const result = await semanticSearch(
+      "/workspace",
+      "search files",
+      5,
+      undefined,
+      { retrievalStoreRoot: missingRoot },
+    );
+    const resultPayload = payload(result);
 
-    const searchPromise = semanticSearch("/workspace", "search files", 5);
-    await vi.runAllTimersAsync();
-    const result = await searchPromise;
-
-    const firstBlock = result.content[0];
-    expect(firstBlock?.type).toBe("text");
-    if (!firstBlock || firstBlock.type !== "text") {
-      throw new Error("Expected text response");
-    }
-
-    const payload = JSON.parse(firstBlock.text);
-    expect(payload.semantic).toBe(false);
-    expect(payload.warning).toContain("temporarily unavailable");
-    expect(payload.warning).toContain("HTTP 500");
-    expect(payload.results).toContain("src/searchFiles.ts");
-    expect(payload.results).toContain("12 | function searchFiles() {");
-    expect(getRipgrepBinPath).toHaveBeenCalledTimes(1);
+    expect(resultPayload.semantic).toBe(false);
+    expect(String(resultPayload.warning)).toContain("temporarily unavailable");
+    expect(String(resultPayload.results)).toContain("src/searchFiles.ts");
     expect(execRipgrepSearch).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves the original error when fallback search also fails", async () => {
-    vi.useFakeTimers();
-    resolveEmbeddingAuth.mockResolvedValue({
-      method: "oauth",
-      bearerToken: "oauth-token",
-      canRefresh: true,
-    });
-    getRipgrepBinPath.mockResolvedValue("rg");
-    execRipgrepSearch.mockRejectedValue(new Error("ripgrep unavailable"));
-
-    fetchMock.mockResolvedValue({
-      ok: false,
-      status: 500,
-      text: async () => "internal_error",
-    });
-
-    const searchPromise = semanticSearch("/workspace", "search files", 5);
-    await vi.runAllTimersAsync();
-    const result = await searchPromise;
-
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: JSON.stringify({
-          error: "OpenAI API error (500): internal_error",
-          fallback_error: "ripgrep unavailable",
-        }),
-      },
-    ]);
   });
 });

@@ -8,6 +8,7 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 
 - `modeModelPreferences` — startup model per mode slug; the last model selected in each mode becomes that mode's default
 - `modeReasoningEffortPreferences` — default thinking level per mode slug
+- `modelPromptProfiles` — exact model-ID overrides for `compatibility` or compact `reasoning` prompts; unknown and invalid models fail closed to compatibility, and automatic reasoning selection remains evaluation-gated
 - `agentMaxTokens` — max output tokens per response
 - `thinkingBudget`, `showThinking` — extended-thinking budget and UI visibility
 - `defaultMode` — mode for new sessions
@@ -18,6 +19,10 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 
 - `autoCondense` — condense automatically when context fills
 - `modelCondenseThresholds` — per-model thresholds (1M+ context models default 0.7, others 0.9)
+
+## Autonomous memory
+
+- `memory.mode` — dogfood typed autonomous low-authority memory (`autonomous`) or disable its tools (`off`, the default). Autonomous writes are scope-bound, secret-scanned, quota-bound, revisioned, auditable, and treated as evidence rather than instructions; authoritative instructions, skills, and commands retain reviewed proposal flow. `/memory` opens the no-model inspection/audit/undo/import/export manager. VS Code exposes global and current-project scopes; projectless Browser Ask Agent exposes global scope only.
 
 ## Approvals and safety
 
@@ -58,7 +63,8 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 
 ## Semantic codebase search
 
-- `semanticSearchEnabled`, `qdrantUrl`, `autoIndex`, `indexExclusions`, `chunkGranularity`
+- `semanticSearchEnabled`, `autoIndex`, `indexExclusions`, `chunkGranularity`
+- The embedded local LanceDB retrieval store supports lexical indexing/search without credentials; optional OpenAI embedding auth adds vector and hybrid ranking. Current production retrieval does not require Qdrant; legacy Qdrant indexes require a rebuild rather than in-place migration.
 
 ## OpenAI-compatible connections and helper endpoint
 

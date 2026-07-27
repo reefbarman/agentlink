@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { BrowserGatewayCoreOwnerLeaseRegistration } from "../protocol.js";
 import { BrowserGatewayHelperLeaseClient } from "./BrowserGatewayHelperLeaseClient.js";
 import { createDeferred } from "../testing/SseFaultPeer.js";
 
@@ -122,6 +123,61 @@ describe("BrowserGatewayHelperLeaseClient", () => {
     expect(calls[2]?.body).toContain('"ownerId":"owner-1"');
     expect(calls[2]?.body).toContain('"ownerKind":"vscode"');
     expect(calls[3]?.body).toContain('"ownerGenerationId":"generation-1"');
+  });
+
+  it("forwards the latest memory runtime descriptor on owner heartbeat", async () => {
+    const heartbeatBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname === "/internal/core-owners/heartbeat") {
+        heartbeatBodies.push(
+          JSON.parse(String(init?.body)) as Record<string, unknown>,
+        );
+      }
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    const coreOwner: BrowserGatewayCoreOwnerLeaseRegistration = {
+      ownerId: "owner-memory",
+      ownerKind: "vscode" as const,
+      displayName: "VS Code — Memory",
+      scope: {
+        kind: "workspace" as const,
+        workspaceId: "workspace-memory",
+        displayName: "Memory",
+      },
+      ownerGenerationId: "generation-memory",
+      memoryRuntime: {
+        mode: "off" as const,
+        retrievalStoreRoot: "/shared/retrieval-store",
+      },
+    };
+    const client = new BrowserGatewayHelperLeaseClient({
+      helperUrl: "http://127.0.0.1:47137",
+      clientId: "client-memory",
+      clientSharedSecret: "secret-memory",
+      coreOwner,
+      log: vi.fn(),
+      renewIntervalMs: 60_000,
+    });
+
+    await client.start();
+    coreOwner.memoryRuntime!.mode = "autonomous";
+    await client.refresh();
+    await client.stop();
+
+    expect(heartbeatBodies).toHaveLength(2);
+    expect(heartbeatBodies[0]).toMatchObject({
+      memoryRuntime: {
+        mode: "off",
+        retrievalStoreRoot: "/shared/retrieval-store",
+      },
+    });
+    expect(heartbeatBodies[1]).toMatchObject({
+      memoryRuntime: {
+        mode: "autonomous",
+        retrievalStoreRoot: "/shared/retrieval-store",
+      },
+    });
   });
 
   it("renews and releases a collision-assigned effective owner identity", async () => {

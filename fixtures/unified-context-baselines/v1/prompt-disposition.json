@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "fixtureRevision": "unified-context-v1",
+  "sections": [
+    {
+      "label": "base",
+      "currentConcern": "identity, communication, general workflow, authority, approvals, tool mechanics, task/status discipline, and supervision",
+      "disposition": "split",
+      "target": "reasoning profile keeps goals, authority, and invariants; runtime mechanics require composition-boundary enforcement before prose removal",
+      "stage": 9
+    },
+    {
+      "label": "modes overview",
+      "currentConcern": "mode identity and conversation-placement contract",
+      "disposition": "keep",
+      "target": "versioned prompt identity with mode block carried in conversation",
+      "stage": 8
+    },
+    {
+      "label": "mode:*",
+      "currentConcern": "mode-specific role and workflow guidance",
+      "disposition": "profile",
+      "target": "compatibility/reasoning profile variants with runtime capability policy",
+      "stage": 9
+    },
+    {
+      "label": "approve for me",
+      "currentConcern": "host-owned mode-switch review behavior",
+      "disposition": "keep",
+      "target": "frozen effective capability-policy snapshot plus runtime enforcement",
+      "stage": 8
+    },
+    {
+      "label": "provider:*",
+      "currentConcern": "provider-specific interaction and tool-selection guidance",
+      "disposition": "profile",
+      "target": "model-aware profile resolver with compatibility fallback",
+      "stage": 9
+    },
+    {
+      "label": "system info",
+      "currentConcern": "workspace, host, model, branch, and plans guidance",
+      "disposition": "keep",
+      "target": "versioned prompt artifact with normalized host facts",
+      "stage": 8
+    },
+    {
+      "label": "dev feedback",
+      "currentConcern": "development-only feedback workflow",
+      "disposition": "keep",
+      "target": "development profile only",
+      "stage": 9
+    },
+    {
+      "label": "custom instructions",
+      "currentConcern": "reviewed authoritative user/project instructions",
+      "disposition": "keep",
+      "target": "file-backed authoritative sources with provenance",
+      "stage": 8
+    },
+    {
+      "label": "rule catalog (deferred)",
+      "currentConcern": "reviewed path-scoped instructions deferred by catalog",
+      "disposition": "keep",
+      "target": "canonical catalog identity/revision and bounded discovery",
+      "stage": 8
+    },
+    {
+      "label": "memory",
+      "currentConcern": "legacy global/project memory.md injection",
+      "disposition": "replace",
+      "target": "tiny pinned profile plus bounded provider-safe low-authority recall; disable only after parity proof",
+      "stage": 7
+    },
+    {
+      "label": "mode rules",
+      "currentConcern": "mode-specific reviewed rules",
+      "disposition": "keep",
+      "target": "canonical authoritative catalog and versioned prompt identity",
+      "stage": 8
+    },
+    {
+      "label": "skills toc",
+      "currentConcern": "skill discovery metadata, activation, and allowed-tools",
+      "disposition": "replace",
+      "target": "canonical identity/revision catalog with deterministic policy composition and budgeting",
+      "stage": 8
+    },
+    {
+      "label": "mcp tool catalog",
+      "currentConcern": "deferred external tool discovery",
+      "disposition": "keep",
+      "target": "unified bounded catalog while preserving MCP approval and execution semantics",
+      "stage": 10
+    },
+    {
+      "label": "background agent",
+      "currentConcern": "delegation/supervision behavior",
+      "disposition": "split",
+      "target": "shared runtime contracts plus surface-specific capability policy",
+      "stage": 9
+    },
+    {
+      "label": "native tool definitions",
+      "currentConcern": "large inline provider tool floor",
+      "disposition": "replace",
+      "target": "essential direct set plus bounded advanced native-tool discovery",
+      "stage": 10
+    }
+  ]
+}

@@ -8,11 +8,24 @@ import type {
   StructuralSymbol,
 } from "./structuralGraph.js";
 
+import { inferCodeLanguage } from "./chunkQuality.js";
+import { resolveContainedCodeIndexPath } from "./codeIndexPaths.js";
+
+export const STRUCTURAL_EXTRACTOR_VERSION = 2;
+
 export interface StructuralExtractorMetrics {
   lineLookupComparisons: number;
   relativeSpecifiers: number;
   resolutionCandidateChecks: number;
   resolvedRelativeSpecifiers: number;
+}
+
+export interface StructuralSymbolHint {
+  name: string;
+  kind: string;
+  exported?: boolean;
+  line: number;
+  scope?: readonly string[];
 }
 
 export interface ExtractStructuralFileOptions {
@@ -24,6 +37,7 @@ export interface ExtractStructuralFileOptions {
   indexedAt?: string;
   size?: number;
   mtimeMs?: number;
+  symbolHints?: readonly StructuralSymbolHint[];
   metrics?: StructuralExtractorMetrics;
 }
 
@@ -51,20 +65,50 @@ const INDEX_EXTENSIONS = [
 export function extractStructuralFile(
   options: ExtractStructuralFileOptions,
 ): StructuralFileEntry {
-  const language = getLanguage(options.absPath);
-  const lines = options.content.split("\n");
+  const identity = resolveContainedCodeIndexPath(
+    options.workspaceRoot,
+    options.absPath,
+  );
+  if (
+    !identity ||
+    identity.portableRelativePath !== normalizeRelPath(options.relPath)
+  ) {
+    throw new Error("Path does not match its canonical workspace identity");
+  }
+  const canonicalOptions = {
+    ...options,
+    absPath: identity.absolutePath,
+    relPath: identity.relativePath,
+  };
+  const language = getLanguage(canonicalOptions.absPath);
+  const lines = canonicalOptions.content.split("\n");
   const lineStarts = buildLineStarts(lines);
-  const imports = extractImports(options.content, lines, lineStarts, options);
-  const exports = extractExports(lines, options);
-  const symbols = extractSymbols(lines, exports);
+  const imports = extractImports(
+    canonicalOptions.content,
+    lines,
+    lineStarts,
+    canonicalOptions,
+  );
+  const exports = extractExports(lines, canonicalOptions);
+  const symbols = dedupeSymbols([
+    ...extractSymbols(lines, exports),
+    ...(shouldUseTreeSitterSymbolHints(canonicalOptions.absPath)
+      ? normalizeStructuralSymbolHints(canonicalOptions.symbolHints ?? [])
+      : []),
+  ]);
 
   return {
-    relPath: normalizeRelPath(options.relPath),
-    hash: options.hash,
-    indexedAt: options.indexedAt ?? new Date().toISOString(),
-    ...(options.size !== undefined ? { size: options.size } : {}),
-    ...(options.mtimeMs !== undefined ? { mtimeMs: options.mtimeMs } : {}),
+    relPath: identity.portableRelativePath,
+    hash: canonicalOptions.hash,
+    indexedAt: canonicalOptions.indexedAt ?? new Date().toISOString(),
+    ...(canonicalOptions.size !== undefined
+      ? { size: canonicalOptions.size }
+      : {}),
+    ...(canonicalOptions.mtimeMs !== undefined
+      ? { mtimeMs: canonicalOptions.mtimeMs }
+      : {}),
     ...(language ? { language } : {}),
+    extractorVersion: STRUCTURAL_EXTRACTOR_VERSION,
     imports,
     exports,
     symbols,
@@ -145,6 +189,25 @@ function extractImports(
   });
 
   return dedupeImports(imports);
+}
+
+export function normalizeStructuralSymbolHints(
+  symbolHints: readonly StructuralSymbolHint[],
+): StructuralSymbol[] {
+  const normalized = new Map<string, StructuralSymbol>();
+  for (const hint of symbolHints) {
+    const kind = toStructuralSymbolKind(hint.kind);
+    const key = `${kind}:${hint.name}:${hint.scope?.join(">") ?? ""}`;
+    const existing = normalized.get(key);
+    if (existing && existing.line <= hint.line) continue;
+    normalized.set(key, {
+      name: hint.name,
+      kind,
+      ...(hint.exported !== undefined ? { exported: hint.exported } : {}),
+      line: hint.line,
+    });
+  }
+  return [...normalized.values()];
 }
 
 export function buildLineStarts(lines: string[]): number[] {
@@ -363,18 +426,26 @@ function resolveSpecifier(
     options.absPath,
   )) {
     if (options.metrics) options.metrics.resolutionCandidateChecks++;
-    if (isFile(candidate)) {
+    const resolved = resolveFileWithinWorkspace(
+      candidate,
+      options.workspaceRoot,
+    );
+    if (resolved) {
       if (options.metrics) options.metrics.resolvedRelativeSpecifiers++;
-      return toWorkspaceRelPath(candidate, options.workspaceRoot);
+      return resolved;
     }
   }
 
   for (const indexFile of INDEX_EXTENSIONS) {
     const candidate = path.join(candidateBase, indexFile);
     if (options.metrics) options.metrics.resolutionCandidateChecks++;
-    if (isFile(candidate)) {
+    const resolved = resolveFileWithinWorkspace(
+      candidate,
+      options.workspaceRoot,
+    );
+    if (resolved) {
       if (options.metrics) options.metrics.resolvedRelativeSpecifiers++;
-      return toWorkspaceRelPath(candidate, options.workspaceRoot);
+      return resolved;
     }
   }
 
@@ -423,16 +494,19 @@ function isRelativeSpecifier(specifier: string): boolean {
   return specifier.startsWith("./") || specifier.startsWith("../");
 }
 
-function isFile(candidate: string): boolean {
+function resolveFileWithinWorkspace(
+  candidate: string,
+  workspaceRoot: string,
+): string | undefined {
+  const identity = resolveContainedCodeIndexPath(workspaceRoot, candidate);
+  if (!identity) return undefined;
   try {
-    return fs.statSync(candidate).isFile();
+    return fs.statSync(identity.absolutePath).isFile()
+      ? identity.portableRelativePath
+      : undefined;
   } catch {
-    return false;
+    return undefined;
   }
-}
-
-function toWorkspaceRelPath(absPath: string, workspaceRoot: string): string {
-  return normalizeRelPath(path.relative(workspaceRoot, absPath));
 }
 
 function normalizeRelPath(relPath: string): string {
@@ -440,22 +514,42 @@ function normalizeRelPath(relPath: string): string {
 }
 
 function getLanguage(absPath: string): string | undefined {
-  const ext = path.extname(absPath).toLowerCase();
-  switch (ext) {
-    case ".ts":
-      return "typescript";
-    case ".tsx":
-      return "typescriptreact";
-    case ".js":
-    case ".mjs":
-    case ".cjs":
-      return "javascript";
-    case ".jsx":
-      return "javascriptreact";
-    case ".json":
-      return "json";
+  return inferCodeLanguage(absPath);
+}
+
+export function shouldUseTreeSitterSymbolHints(filePath: string): boolean {
+  const language = getLanguage(filePath);
+  return (
+    language !== "typescript" &&
+    language !== "typescriptreact" &&
+    language !== "javascript" &&
+    language !== "javascriptreact"
+  );
+}
+
+function toStructuralSymbolKind(kind: string): StructuralSymbol["kind"] {
+  switch (kind) {
+    case "function":
+    case "method":
+    case "constructor":
+      return "function";
+    case "class":
+    case "struct":
+      return "class";
+    case "interface":
+    case "trait":
+      return "interface";
+    case "type":
+      return "type";
+    case "enum":
+      return "enum";
+    case "constant":
+    case "static":
+      return "const";
+    case "variable":
+      return "var";
     default:
-      return undefined;
+      return "unknown";
   }
 }
 

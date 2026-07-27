@@ -31,6 +31,16 @@ const commands: SlashCommandInfo[] = [
     builtin: false,
     body: "Use smoke skill",
   },
+  {
+    name: "skill:project:agentlink:.agentlink/skills/shared",
+    displayName: "project:agentlink:.agentlink/skills/shared",
+    description: "Run canonical shared skill",
+    source: "skill",
+    builtin: false,
+    body: "Use canonical shared skill",
+    skillId: "project:agentlink:.agentlink/skills/shared",
+    skillRevision: "revision-a",
+  },
 ];
 
 describe("slashCommandInput", () => {
@@ -57,6 +67,66 @@ describe("slashCommandInput", () => {
       command: commands[2],
       args: "arg",
       displayText: "/smoke arg",
+    });
+  });
+
+  it("prefers an exact command name over an earlier display alias", () => {
+    const alias = {
+      name: "skill:global:agentlink:mcp",
+      displayName: "mcp",
+      description: "Skill alias",
+      source: "skill" as const,
+      builtin: false,
+    };
+
+    expect(
+      parseMatchedSlashCommand("/mcp", [
+        alias,
+        commands[0]!,
+        {
+          name: "mcp",
+          description: "Open MCP status",
+          source: "builtin",
+          builtin: true,
+        },
+      ]),
+    ).toMatchObject({
+      command: { name: "mcp", source: "builtin" },
+      displayText: "/mcp",
+    });
+  });
+
+  it("matches and selects a collided skill by canonical command identity", () => {
+    const command = commands[3];
+    expect(
+      parseMatchedSlashCommand(
+        "/skill:project:agentlink:.agentlink/skills/shared arg",
+        commands,
+      ),
+    ).toMatchObject({
+      command,
+      args: "arg",
+      displayText: "/project:agentlink:.agentlink/skills/shared arg",
+    });
+    expect(
+      parseMatchedSlashCommand(
+        "/project:agentlink:.agentlink/skills/shared arg",
+        commands,
+      ),
+    ).toMatchObject({
+      command,
+      args: "arg",
+      displayText: "/project:agentlink:.agentlink/skills/shared arg",
+    });
+    expect(
+      getSlashCommandSelectionState(
+        "/project:agent",
+        0,
+        command.displayName ?? command.name,
+      ),
+    ).toEqual({
+      args: "",
+      replacementText: "/project:agentlink:.agentlink/skills/shared ",
     });
   });
 

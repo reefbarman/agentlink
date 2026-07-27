@@ -17,11 +17,18 @@
  * IMPORTANT: This file MUST NOT import "vscode".
  */
 
-import * as path from "path";
 import * as fs from "fs";
-import { Parser, Language, Query } from "web-tree-sitter";
-import type { Chunk, ChunkGranularity } from "./types.js";
+import * as path from "path";
+
+import type {
+  Chunk,
+  ChunkGranularity,
+  IndexChunkingFallbackReason,
+} from "./types.js";
+import { Language, Parser, Query } from "web-tree-sitter";
+
 import { LANGUAGE_QUERIES } from "./queries.js";
+import { finalizeCodeChunks } from "./chunkQuality.js";
 
 // --- Constants ---
 
@@ -214,7 +221,8 @@ function getNodeScopeName(node: ASTNode): string | null {
   const t = node.type;
   if (t.includes("class")) return `class ${name}`;
   if (t.includes("interface")) return `interface ${name}`;
-  if (t.includes("function") || t.includes("method")) return `function ${name}`;
+  if (t.includes("method")) return `method ${name}`;
+  if (t.includes("function")) return `function ${name}`;
   if (t.includes("enum")) return `enum ${name}`;
   if (t.includes("struct")) return `struct ${name}`;
   if (t.includes("trait")) return `trait ${name}`;
@@ -276,15 +284,206 @@ function getOrCreateQuery(
  * Returns undefined if the node is at the top level.
  */
 function findParentScope(node: ASTNode): string | undefined {
-  let current = node.parent;
-  while (current && current.parent !== null) {
-    const inner = unwrapNode(current as ASTNode);
-    if (isContainerType(inner.type)) {
-      return getNodeScopeName(current as ASTNode) ?? undefined;
-    }
-    current = current.parent;
+  return buildScopeBreadcrumb(node).at(-1);
+}
+
+interface CapturedDefinition {
+  node: ASTNode;
+  kind: string;
+}
+
+function enrichChunksWithDefinitions(
+  chunks: Chunk[],
+  definitions: CapturedDefinition[],
+  grammarName: string,
+): Chunk[] {
+  return finalizeCodeChunks(
+    chunks.map((chunk) => {
+      const definition = selectChunkDefinition(chunk, definitions);
+      if (!definition) return chunk;
+      const scope = buildScopeBreadcrumb(definition.node, true);
+      const symbol = describeSymbol(definition.node, definition.kind);
+      return {
+        ...chunk,
+        scope,
+        ...(symbol.name ? { symbolName: symbol.name } : {}),
+        symbolKind: symbol.kind,
+        exported: isExportedDefinition(definition.node, grammarName),
+      };
+    }),
+  );
+}
+
+function collectDefinitions(
+  root: ASTNode,
+  query: Query | null,
+  extractable: Set<string> | undefined,
+): CapturedDefinition[] {
+  if (query) {
+    const seen = new Set<string>();
+    return query
+      .captures(root)
+      .filter((capture) => capture.name.startsWith("definition."))
+      .flatMap((capture) => {
+        const key = `${capture.node.startIndex}-${capture.node.endIndex}`;
+        if (seen.has(key)) return [];
+        seen.add(key);
+        return [
+          {
+            node: capture.node as ASTNode,
+            kind: capture.name.slice("definition.".length),
+          },
+        ];
+      });
   }
-  return undefined;
+
+  if (!extractable) return [];
+  const definitions: CapturedDefinition[] = [];
+  const visit = (node: ASTNode) => {
+    if (extractable.has(node.type)) {
+      definitions.push({ node, kind: inferSymbolKind(node) });
+    }
+    for (const child of node.namedChildren) visit(child as ASTNode);
+  };
+  visit(root);
+  return definitions;
+}
+
+function selectChunkDefinition(
+  chunk: Chunk,
+  definitions: CapturedDefinition[],
+): CapturedDefinition | undefined {
+  const startRow = chunk.startLine - 1;
+  const endRow = chunk.endLine - 1;
+  const exact = definitions.filter(
+    ({ node }) =>
+      node.startPosition.row === startRow && node.endPosition.row === endRow,
+  );
+  if (exact.length > 0) return smallestDefinition(exact);
+
+  const contained = definitions.filter(
+    ({ node }) =>
+      node.startPosition.row >= startRow && node.endPosition.row <= endRow,
+  );
+  if (contained.length > 0) return smallestDefinition(contained);
+
+  const enclosing = definitions.filter(
+    ({ node }) =>
+      node.startPosition.row <= startRow && node.endPosition.row >= endRow,
+  );
+  return smallestDefinition(enclosing);
+}
+
+function smallestDefinition(
+  definitions: CapturedDefinition[],
+): CapturedDefinition | undefined {
+  return definitions
+    .slice()
+    .sort(
+      (left, right) =>
+        left.node.endIndex -
+        left.node.startIndex -
+        (right.node.endIndex - right.node.startIndex),
+    )[0];
+}
+
+function buildScopeBreadcrumb(node: ASTNode, includeSelf = false): string[] {
+  const scopes: string[] = [];
+  let current: ASTNode | null = includeSelf
+    ? node
+    : (node.parent as ASTNode | null);
+  while (current && current.parent !== null) {
+    const inner = unwrapNode(current);
+    if ((current === node && includeSelf) || isContainerType(inner.type)) {
+      const scope = getNodeScopeName(current);
+      if (scope && scopes[0] !== scope) scopes.unshift(scope);
+    }
+    current = current.parent as ASTNode | null;
+  }
+  return scopes;
+}
+
+function describeSymbol(
+  node: ASTNode,
+  captureKind: string,
+): { name?: string; kind: string } {
+  const inner = unwrapNode(node);
+  const name = inner.childForFieldName("name")?.text;
+  const kind = captureKind === "export" ? inferSymbolKind(inner) : captureKind;
+  return { ...(name ? { name } : {}), kind };
+}
+
+function inferSymbolKind(node: ASTNode): string {
+  const type = unwrapNode(node).type;
+  if (type.includes("method")) return "method";
+  if (type.includes("function")) return "function";
+  if (type.includes("class")) return "class";
+  if (type.includes("interface")) return "interface";
+  if (type.includes("enum")) return "enum";
+  if (type.includes("struct")) return "struct";
+  if (type.includes("trait")) return "trait";
+  if (type.includes("module") || type.includes("namespace")) return "module";
+  if (type.includes("type")) return "type";
+  if (type.includes("const")) return "constant";
+  if (type.includes("var") || type.includes("lexical")) return "variable";
+  return type;
+}
+
+function isExportedDefinition(node: ASTNode, grammarName: string): boolean {
+  if (hasExportStatementAncestor(node)) return true;
+
+  const inner = unwrapNode(node);
+  if (grammarName === "rust") {
+    return /^pub\b/.test(inner.text.trimStart());
+  }
+  if (grammarName === "go") {
+    const name = describeSymbol(node, inferSymbolKind(inner)).name;
+    return name !== undefined && /^[A-Z]/.test(name);
+  }
+  if (
+    grammarName === "java" ||
+    grammarName === "c_sharp" ||
+    grammarName === "cpp" ||
+    grammarName === "php"
+  ) {
+    return (
+      /^public\b/.test(inner.text.trimStart()) &&
+      !hasEnclosingTypeDeclaration(node)
+    );
+  }
+  return false;
+}
+
+function hasExportStatementAncestor(node: ASTNode): boolean {
+  if (node.type === "export_statement") return true;
+
+  let current = node.parent as ASTNode | null;
+  while (
+    current &&
+    (current.type === "decorated_definition" ||
+      current.type === "template_declaration")
+  ) {
+    current = current.parent as ASTNode | null;
+  }
+  return current?.type === "export_statement";
+}
+
+function hasEnclosingTypeDeclaration(node: ASTNode): boolean {
+  let current = node.parent as ASTNode | null;
+  while (current?.parent) {
+    const type = unwrapNode(current).type;
+    if (
+      type.includes("class") ||
+      type.includes("interface") ||
+      type.includes("struct") ||
+      type.includes("enum") ||
+      type.includes("trait")
+    ) {
+      return true;
+    }
+    current = current.parent as ASTNode | null;
+  }
+  return false;
 }
 
 // --- Public API ---
@@ -319,51 +518,103 @@ export function isTreeSitterSupported(filePath: string): boolean {
   return ext in LANG_MAP;
 }
 
+export interface TreeSitterSymbolHint {
+  name: string;
+  kind: string;
+  exported: boolean;
+  line: number;
+  scope: string[];
+}
+
+export interface TreeSitterChunkingResult {
+  chunks: Chunk[];
+  symbols: TreeSitterSymbolHint[];
+  fallbackReason?: IndexChunkingFallbackReason;
+}
+
 /**
- * Chunk a file using tree-sitter AST analysis.
- * Returns an empty array for unsupported languages, parse failures, etc.
+ * Chunk a file using tree-sitter AST analysis while preserving why callers
+ * should use the line chunker when AST extraction is unavailable.
  */
-export async function treeSitterChunkFile(
+export async function treeSitterChunkFileDetailed(
   content: string,
   filePath: string,
   relPath: string,
-): Promise<Chunk[]> {
-  if (!content || content.trim().length === 0) return [];
-  if (!initialized || !parser) return [];
+): Promise<TreeSitterChunkingResult> {
+  if (!content || content.trim().length === 0) {
+    return { chunks: [], symbols: [] };
+  }
+  if (!initialized || !parser) {
+    return {
+      chunks: [],
+      symbols: [],
+      fallbackReason: "tree_sitter_not_initialized",
+    };
+  }
 
   const ext = path.extname(filePath).toLowerCase();
   const grammarName = LANG_MAP[ext];
-  if (!grammarName) return [];
+  if (!grammarName) {
+    return {
+      chunks: [],
+      symbols: [],
+      fallbackReason: "tree_sitter_extractor_unavailable",
+    };
+  }
 
   const lines = content.split("\n");
-
-  // Small files → single chunk (skip AST overhead)
-  if (lines.length <= SMALL_FILE_THRESHOLD) {
-    const trimmed = content.trim();
-    if (trimmed.length < MIN_CHUNK_CHARS) return [];
-    return [
-      {
-        content: trimmed,
-        filePath,
-        relPath,
-        startLine: 1,
-        endLine: lines.length,
-        embeddingContent: buildContextHeader() + trimmed,
-      },
-    ];
+  const trimmed = content.trim();
+  const smallFileChunks =
+    lines.length <= SMALL_FILE_THRESHOLD && trimmed.length >= MIN_CHUNK_CHARS
+      ? finalizeCodeChunks([
+          {
+            content: trimmed,
+            filePath,
+            relPath,
+            startLine: 1,
+            endLine: lines.length,
+          },
+        ])
+      : null;
+  if (lines.length <= SMALL_FILE_THRESHOLD && !smallFileChunks) {
+    return { chunks: [], symbols: [], fallbackReason: "tree_sitter_no_chunks" };
   }
 
   try {
     const language = await loadLanguage(grammarName);
-    if (!language) return [];
+    if (!language) {
+      return smallFileChunks
+        ? { chunks: smallFileChunks, symbols: [] }
+        : {
+            chunks: [],
+            symbols: [],
+            fallbackReason: "tree_sitter_grammar_unavailable",
+          };
+    }
 
     parser.setLanguage(language);
     const tree = parser.parse(content);
-    if (!tree) return [];
+    if (!tree) {
+      return smallFileChunks
+        ? { chunks: smallFileChunks, symbols: [] }
+        : {
+            chunks: [],
+            symbols: [],
+            fallbackReason: "tree_sitter_parser_failure",
+          };
+    }
 
     try {
       // Try query-based extraction first (finds nodes at any depth)
       const query = getOrCreateQuery(language, grammarName);
+      const extractable = EXTRACTABLE_TYPES[grammarName];
+      const definitions = collectDefinitions(tree.rootNode, query, extractable);
+      const symbols = structuralSymbolHintsFromDefinitions(
+        definitions,
+        grammarName,
+      );
+      if (smallFileChunks) return { chunks: smallFileChunks, symbols };
+
       let chunks: Chunk[];
       if (query) {
         chunks = extractChunksWithQueries(
@@ -375,8 +626,13 @@ export async function treeSitterChunkFile(
         );
       } else {
         // Fallback: top-level walk with EXTRACTABLE_TYPES
-        const extractable = EXTRACTABLE_TYPES[grammarName];
-        if (!extractable) return [];
+        if (!extractable) {
+          return {
+            chunks: [],
+            symbols,
+            fallbackReason: "tree_sitter_extractor_unavailable",
+          };
+        }
         chunks = extractChunks(tree, extractable, lines, filePath, relPath);
       }
 
@@ -391,13 +647,66 @@ export async function treeSitterChunkFile(
         });
       }
 
-      return chunks;
+      const enriched = enrichChunksWithDefinitions(
+        chunks,
+        definitions,
+        grammarName,
+      );
+      return enriched.length > 0
+        ? { chunks: enriched, symbols }
+        : {
+            chunks: [],
+            symbols,
+            fallbackReason: "tree_sitter_no_chunks",
+          };
     } finally {
       tree.delete();
     }
   } catch {
-    return [];
+    return smallFileChunks
+      ? { chunks: smallFileChunks, symbols: [] }
+      : {
+          chunks: [],
+          symbols: [],
+          fallbackReason: "tree_sitter_parser_failure",
+        };
   }
+}
+
+function structuralSymbolHintsFromDefinitions(
+  definitions: CapturedDefinition[],
+  grammarName: string,
+): TreeSitterSymbolHint[] {
+  const symbols = new Map<string, TreeSitterSymbolHint>();
+  for (const definition of definitions) {
+    const symbol = describeSymbol(definition.node, definition.kind);
+    if (!symbol.name) continue;
+    const scope = buildScopeBreadcrumb(definition.node, true);
+    const key = `${symbol.kind}:${symbol.name}:${scope.join(">")}`;
+    const line = definition.node.startPosition.row + 1;
+    const existing = symbols.get(key);
+    if (existing && existing.line <= line) continue;
+    symbols.set(key, {
+      name: symbol.name,
+      kind: symbol.kind,
+      exported: isExportedDefinition(definition.node, grammarName),
+      line,
+      scope,
+    });
+  }
+  return [...symbols.values()];
+}
+
+/**
+ * Chunk a file using tree-sitter AST analysis.
+ * Returns an empty array when callers should use the line chunker.
+ */
+export async function treeSitterChunkFile(
+  content: string,
+  filePath: string,
+  relPath: string,
+): Promise<Chunk[]> {
+  return (await treeSitterChunkFileDetailed(content, filePath, relPath)).chunks;
 }
 
 // --- Internals ---

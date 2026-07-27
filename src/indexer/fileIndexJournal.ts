@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 import type { FileIndexJournalIntent } from "./fileIndexState.js";
+import { requireCanonicalPortableCodeIndexPath } from "./codeIndexPaths.js";
 import { writeAtomicJsonFile } from "./atomicJsonFile.js";
 
 export const FILE_INDEX_JOURNAL_VERSION = 1;
@@ -64,7 +65,10 @@ export function writeFileIndexJournal(
       `Refusing to replace corrupt file index journal: ${existing.error}`,
     );
   }
-  writeAtomicJsonFile(journalPath, validateFileIndexJournal(journal));
+  writeAtomicJsonFile(
+    journalPath,
+    serializeFileIndexJournal(validateFileIndexJournal(journal)),
+  );
 }
 
 /** Replace all prior ownership after the remote collection is confirmed absent. */
@@ -91,10 +95,10 @@ export function validateFileIndexJournal(value: unknown): FileIndexJournal {
   );
   requireUnique(
     operations.flatMap((operation) => [
-      ...operation.oldPointIds,
-      ...operation.intendedBatches.flatMap((batch) => batch.pointIds),
+      ...operation.oldRecordIds,
+      ...operation.intendedBatches.flatMap((batch) => batch.recordIds),
     ]),
-    "Journal point IDs must have one owner",
+    "Journal record IDs must have one owner",
   );
 
   return { version: FILE_INDEX_JOURNAL_VERSION, operations };
@@ -110,29 +114,28 @@ function validateIntent(value: unknown): FileIndexJournalIntent {
   if (kind !== "remove" && kind !== "replace") {
     throw new Error("Invalid file index journal operation kind");
   }
-  if (!Array.isArray(value.oldPointIds)) {
-    throw new Error("Journal old point IDs must be an array");
-  }
+  const oldRecordIds = resolveStringArrayAlias(
+    value,
+    "oldRecordIds",
+    "oldPointIds",
+    "old record IDs",
+  );
   if (!Array.isArray(value.intendedBatches)) {
     throw new Error("Journal intended batches must be an array");
   }
-
-  const oldPointIds = value.oldPointIds.map((pointId) =>
-    requireNonEmptyString(pointId, "old point ID"),
-  );
-  requireUnique(oldPointIds, "Journal old point IDs must be unique");
+  requireUnique(oldRecordIds, "Journal old record IDs must be unique");
 
   const intendedBatches = value.intendedBatches.map((batch) => {
     if (!isRecord(batch) || !Number.isSafeInteger(batch.batch)) {
-      throw new Error("Invalid journal point batch");
-    }
-    if (!Array.isArray(batch.pointIds)) {
-      throw new Error("Journal batch point IDs must be an array");
+      throw new Error("Invalid journal record batch");
     }
     return {
       batch: batch.batch as number,
-      pointIds: batch.pointIds.map((pointId) =>
-        requireNonEmptyString(pointId, "intended point ID"),
+      recordIds: resolveStringArrayAlias(
+        batch,
+        "recordIds",
+        "pointIds",
+        "batch record IDs",
       ),
     };
   });
@@ -141,10 +144,13 @@ function validateIntent(value: unknown): FileIndexJournalIntent {
     "Journal batch numbers must be unique",
   );
 
-  const intendedPointIds = intendedBatches.flatMap((batch) => batch.pointIds);
-  requireUnique(intendedPointIds, "Journal intended point IDs must be unique");
-  if (intendedPointIds.some((pointId) => oldPointIds.includes(pointId))) {
-    throw new Error("Journal intended point IDs cannot reuse old point IDs");
+  const intendedRecordIds = intendedBatches.flatMap((batch) => batch.recordIds);
+  requireUnique(
+    intendedRecordIds,
+    "Journal intended record IDs must be unique",
+  );
+  if (intendedRecordIds.some((recordId) => oldRecordIds.includes(recordId))) {
+    throw new Error("Journal intended record IDs cannot reuse old record IDs");
   }
 
   if (kind === "remove") {
@@ -155,9 +161,9 @@ function validateIntent(value: unknown): FileIndexJournalIntent {
     }
   } else {
     requireNonEmptyString(value.targetHash, "target hash");
-    if (intendedBatches.length === 0 || intendedPointIds.length === 0) {
+    if (intendedBatches.length === 0 || intendedRecordIds.length === 0) {
       throw new Error(
-        "Replacement journal operations require intended point IDs",
+        "Replacement journal operations require intended record IDs",
       );
     }
   }
@@ -168,27 +174,65 @@ function validateIntent(value: unknown): FileIndexJournalIntent {
     kind,
     generation,
     targetHash: kind === "replace" ? (value.targetHash as string) : null,
-    oldPointIds,
+    oldRecordIds,
     intendedBatches,
   };
 }
 
+function serializeFileIndexJournal(journal: FileIndexJournal): unknown {
+  return {
+    version: journal.version,
+    operations: journal.operations.map((operation) => ({
+      ...operation,
+      oldPointIds: [...operation.oldRecordIds],
+      intendedBatches: operation.intendedBatches.map((batch) => ({
+        ...batch,
+        pointIds: [...batch.recordIds],
+      })),
+    })),
+  };
+}
+
+function resolveStringArrayAlias(
+  value: Record<string, unknown>,
+  canonicalKey: string,
+  legacyKey: string,
+  label: string,
+): string[] {
+  const canonical = value[canonicalKey];
+  const legacy = value[legacyKey];
+  const normalize = (candidate: unknown): string[] | null =>
+    Array.isArray(candidate)
+      ? candidate.map((entry) => requireNonEmptyString(entry, label))
+      : null;
+  const canonicalValues =
+    canonical === undefined ? undefined : normalize(canonical);
+  const legacyValues = legacy === undefined ? undefined : normalize(legacy);
+  if (
+    (canonical !== undefined && !canonicalValues) ||
+    (legacy !== undefined && !legacyValues) ||
+    (canonicalValues === undefined && legacyValues === undefined)
+  ) {
+    throw new Error(`Journal ${label} must be an array`);
+  }
+  if (
+    canonicalValues &&
+    legacyValues &&
+    (canonicalValues.length !== legacyValues.length ||
+      canonicalValues.some((entry, index) => entry !== legacyValues[index]))
+  ) {
+    throw new Error(`Journal ${label} aliases conflict`);
+  }
+  return [...(canonicalValues ?? legacyValues ?? [])];
+}
+
 function requireCanonicalRelativePath(value: unknown): string {
   const file = requireNonEmptyString(value, "file");
-  if (
-    file.includes("\\") ||
-    /^[A-Za-z]:/.test(file) ||
-    file.endsWith("/") ||
-    path.posix.isAbsolute(file) ||
-    path.win32.isAbsolute(file) ||
-    path.posix.normalize(file) !== file ||
-    file === "." ||
-    file === ".." ||
-    file.startsWith("../")
-  ) {
+  try {
+    return requireCanonicalPortableCodeIndexPath(file);
+  } catch {
     throw new Error("Journal file must be a canonical workspace-relative path");
   }
-  return file;
 }
 
 function requireNonEmptyString(value: unknown, label: string): string {

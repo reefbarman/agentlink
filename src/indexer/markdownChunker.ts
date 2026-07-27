@@ -9,7 +9,10 @@
  */
 
 import * as path from "path";
+
 import type { Chunk, ChunkGranularity } from "./types.js";
+
+import { finalizeCodeChunks } from "./chunkQuality.js";
 
 // --- Constants ---
 
@@ -57,8 +60,6 @@ export function markdownChunkFile(
     const sectionContent = section.lines.join("\n").trim();
     if (sectionContent.length < MIN_CHUNK_CHARS) continue;
 
-    const headingContext = section.heading ? `// ${section.heading}\n` : "";
-
     if (
       sectionContent.length <= EFFECTIVE_MAX &&
       currentGranularity !== "fine"
@@ -70,7 +71,7 @@ export function markdownChunkFile(
         relPath,
         startLine: section.startLine,
         endLine: section.startLine + section.lines.length - 1,
-        embeddingContent: headingContext + sectionContent,
+        scope: section.headingScope,
       });
     } else {
       // Split oversized section at paragraph boundaries
@@ -79,19 +80,19 @@ export function markdownChunkFile(
         section.startLine,
         filePath,
         relPath,
-        headingContext,
+        section.headingScope,
       );
       chunks.push(...subChunks);
     }
   }
 
-  return chunks;
+  return finalizeCodeChunks(chunks, { language: "markdown" });
 }
 
 // --- Internals ---
 
 interface MarkdownSection {
-  heading: string | null; // e.g. "## Installation" or null for pre-heading content
+  headingScope: string[];
   lines: string[];
   startLine: number; // 1-based
 }
@@ -99,7 +100,8 @@ interface MarkdownSection {
 function splitAtHeadings(lines: string[]): MarkdownSection[] {
   const sections: MarkdownSection[] = [];
   let currentLines: string[] = [];
-  let currentHeading: string | null = null;
+  let currentHeadingScope: string[] = [];
+  let headingStack: string[] = [];
   let currentStart = 1;
 
   for (let i = 0; i < lines.length; i++) {
@@ -108,12 +110,14 @@ function splitAtHeadings(lines: string[]): MarkdownSection[] {
       // Flush previous section
       if (currentLines.length > 0) {
         sections.push({
-          heading: currentHeading,
+          headingScope: currentHeadingScope,
           lines: currentLines,
           startLine: currentStart,
         });
       }
-      currentHeading = lines[i]; // Keep the full heading line (e.g. "## Installation")
+      const level = match[1].length;
+      headingStack = [...headingStack.slice(0, level - 1), lines[i]];
+      currentHeadingScope = [...headingStack];
       currentLines = [lines[i]];
       currentStart = i + 1; // 1-based
     } else {
@@ -124,7 +128,7 @@ function splitAtHeadings(lines: string[]): MarkdownSection[] {
   // Flush last section
   if (currentLines.length > 0) {
     sections.push({
-      heading: currentHeading,
+      headingScope: currentHeadingScope,
       lines: currentLines,
       startLine: currentStart,
     });
@@ -138,7 +142,7 @@ function splitAtParagraphs(
   baseStartLine: number,
   filePath: string,
   relPath: string,
-  headingContext: string,
+  headingScope: string[],
 ): Chunk[] {
   const chunks: Chunk[] = [];
   let accum: string[] = [];
@@ -153,7 +157,7 @@ function splitAtParagraphs(
         relPath,
         startLine: baseStartLine + accumStart,
         endLine: baseStartLine + endIdx,
-        embeddingContent: headingContext + text,
+        scope: headingScope,
       });
     }
     accum = [];

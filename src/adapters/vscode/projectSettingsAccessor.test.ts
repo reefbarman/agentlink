@@ -3,6 +3,7 @@ import {
   PROJECT_SCOPED_AGENTLINK_SETTINGS,
   WINDOW_SCOPED_AGENTLINK_SETTINGS,
   createProjectSettingsAccessor,
+  getAffectedProjectSettingIds,
 } from "./projectSettingsAccessor.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -52,6 +53,48 @@ describe("ProjectSettingsAccessor", () => {
     expect(get).toHaveBeenCalledWith("modeModelPreferences", {});
   });
 
+  it("attributes project-scoped setting changes by workspace-folder URI", () => {
+    const projects = [
+      {
+        id: "project-a",
+        name: "Project A",
+        uri: "file:///workspace/a",
+        rootPath: "/workspace/a",
+        availability: { status: "available" as const },
+      },
+      {
+        id: "project-b",
+        name: "Project B",
+        uri: "file:///workspace/b",
+        rootPath: "/workspace/b",
+        availability: { status: "available" as const },
+      },
+    ];
+    const affectsConfiguration = vi.fn(
+      (_section: string, resource?: unknown) =>
+        (resource as { value?: string } | undefined)?.value ===
+        "file:///workspace/b",
+    );
+
+    expect(
+      getAffectedProjectSettingIds(
+        { affectsConfiguration },
+        "skills.disabledIds",
+        projects,
+      ),
+    ).toEqual(["project-b"]);
+    expect(affectsConfiguration).toHaveBeenNthCalledWith(
+      1,
+      "agentlink.skills.disabledIds",
+      { value: "file:///workspace/a" },
+    );
+    expect(affectsConfiguration).toHaveBeenNthCalledWith(
+      2,
+      "agentlink.skills.disabledIds",
+      { value: "file:///workspace/b" },
+    );
+  });
+
   it("classifies every contributed setting exactly once with matching manifest scopes", () => {
     const classifications = [
       ...PROJECT_SCOPED_AGENTLINK_SETTINGS,
@@ -67,7 +110,11 @@ describe("ProjectSettingsAccessor", () => {
     };
     const properties = manifest.contributes.configuration.properties;
 
-    expect(classifications).toHaveLength(52);
+    expect(classifications).toHaveLength(54);
+    expect(PROJECT_SCOPED_AGENTLINK_SETTINGS).toContain("modelPromptProfiles");
+    expect(PROJECT_SCOPED_AGENTLINK_SETTINGS).toContain("skills.disabledIds");
+    expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain("disabledProviders");
+    expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain("memory.mode");
     expect(MACHINE_SCOPED_AGENTLINK_SETTINGS).toContain(
       "terminal.environmentPolicy",
     );
@@ -86,6 +133,7 @@ describe("ProjectSettingsAccessor", () => {
     expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain(
       "webAccess.nativeSearchMode",
     );
+    expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain("memory.mode");
     for (const removedSetting of [
       "webAccess.strategy",
       "webAccess.searchEnabled",

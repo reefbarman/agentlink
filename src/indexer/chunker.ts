@@ -1,5 +1,7 @@
 import type { Chunk, ChunkGranularity } from "./types.js";
 
+import { finalizeCodeChunks } from "./chunkQuality.js";
+
 // --- Constants ---
 
 const TARGET_WINDOW = 20;
@@ -26,7 +28,7 @@ const BOUNDARY_TOKENS =
  * Chunk a file's content into ~80-line windows with smart boundary detection.
  * Returns an empty array for empty content.
  */
-export function chunkFile(
+function buildChunks(
   content: string,
   filePath: string,
   relPath: string,
@@ -97,6 +99,14 @@ export function chunkFile(
   }
 
   return chunks;
+}
+
+export function chunkFile(
+  content: string,
+  filePath: string,
+  relPath: string,
+): Chunk[] {
+  return finalizeCodeChunks(buildChunks(content, filePath, relPath));
 }
 
 // --- Internals ---

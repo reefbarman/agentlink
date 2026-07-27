@@ -1,3 +1,7 @@
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+
 import { buildRepoMapPayload, handleGetRepoMap } from "./getRepoMap.js";
 import { describe, expect, it } from "vitest";
 
@@ -27,12 +31,12 @@ function makeProvider(
     getWorkspaceRootForPath() {
       return "/workspace";
     },
-    loadGraph(workspaceRoot) {
+    async loadGraph(workspaceRoot) {
       return {
         graph,
         workspaceRoot,
-        collectionName: "al-test",
-        structuralCachePath: "/cache/al-test.structural.json",
+        indexName: "al-test",
+        structuralStorePath: "/cache/al-test.structural.json",
         graphExists: true,
       };
     },
@@ -46,7 +50,7 @@ function makeGraph(): StructuralGraphCache {
   return {
     version: 1,
     workspaceRoot: "/workspace",
-    collectionName: "al-test",
+    indexName: "al-test",
     generatedAt: "2026-01-01T00:00:00.000Z",
     files: {
       "src/api/server.ts": {
@@ -160,6 +164,35 @@ describe("handleGetRepoMap", () => {
     });
   });
 
+  it("maps canonical scopes through a symlinked workspace root", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "repo-map-root-"));
+    try {
+      const physicalRoot = path.join(directory, "physical");
+      const workspaceRoot = path.join(directory, "workspace-link");
+      const scope = path.join(physicalRoot, "src", "core");
+      fs.mkdirSync(scope, { recursive: true });
+      fs.symlinkSync(physicalRoot, workspaceRoot, "dir");
+      const provider = makeProvider();
+      provider.resolveWorkspaceRoot = () => workspaceRoot;
+      provider.resolvePath = () => ({
+        absolutePath: fs.realpathSync(scope),
+        inWorkspace: true,
+      });
+
+      const result = await handleGetRepoMap(
+        { path: path.join(workspaceRoot, "src", "core") },
+        provider,
+      );
+
+      expect(parseTextResult(result)).toMatchObject({
+        scope: { path: "src/core", matched_files: 2 },
+        totals: { files: 2 },
+      });
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("builds a repo map from an injected structural graph provider", async () => {
     const result = await handleGetRepoMap(
       { path: "src/core", max_chars: 20_000 },
@@ -171,8 +204,8 @@ describe("handleGetRepoMap", () => {
     expect(parseTextResult(result)).toMatchObject({
       workspace_root: "/workspace",
       cache: {
-        collection_name: "al-test",
-        structural_cache_path: "/cache/al-test.structural.json",
+        index_name: "al-test",
+        structural_store_path: "/cache/al-test.structural.json",
       },
       scope: { path: "src/core", matched_files: 2 },
       totals: { files: 2, imports: 1, internal_imports: 1 },
@@ -185,16 +218,16 @@ describe("buildRepoMapPayload", () => {
     const payload = buildRepoMapPayload({
       graph: makeGraph(),
       workspaceRoot: "/workspace",
-      collectionName: "al-test",
-      structuralCachePath: "/cache/al-test.structural.json",
+      indexName: "al-test",
+      structuralStorePath: "/cache/al-test.structural.json",
       maxChars: 20_000,
     });
 
     expect(payload).toMatchObject({
       workspace_root: "/workspace",
       cache: {
-        collection_name: "al-test",
-        structural_cache_path: "/cache/al-test.structural.json",
+        index_name: "al-test",
+        structural_store_path: "/cache/al-test.structural.json",
       },
       freshness: {
         graph: {
@@ -297,6 +330,6 @@ describe("buildRepoMapPayload", () => {
       scope: { path: "src/missing", matched_files: 0 },
       totals: { files: 0 },
     });
-    expect(payload.note).toContain("Structural sidecar cache is missing");
+    expect(payload.note).toContain("Structural index is unavailable");
   });
 });

@@ -1277,6 +1277,7 @@ describe("AgentSessionManager background agents", () => {
     };
     const mgr = new AgentSessionManager(
       { ...config, model: "gpt-5.6-sol" },
+
       "/tmp",
       undefined,
       false,
@@ -2904,6 +2905,7 @@ describe("AgentSessionManager background agents", () => {
       session.id,
       "review task",
       pendingQuestionRecovery,
+      undefined,
     );
   });
 
@@ -3113,8 +3115,8 @@ describe("AgentSessionManager background agents", () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext({
       ...toolCtx,
-      onSpawnBackground: (callerSessionId, request) =>
-        mgr.spawnBackground(request, callerSessionId),
+      onSpawnBackground: (callerSessionId, request, skillAuthority) =>
+        mgr.spawnBackground(request, callerSessionId, skillAuthority),
       onGetBackgroundStatus: (callerSessionId, sessionId) =>
         mgr.getAuthorizedBackgroundStatus(callerSessionId, sessionId),
       onGetBackgroundResult: (callerSessionId, sessionId) =>

@@ -190,6 +190,7 @@ function projectedForeground(overrides: Record<string, unknown> = {}) {
     loadedInstructions: null,
     restoringSession: false,
     revertRecoveryNotice: null,
+    contextHealth: null,
     ...overrides,
   };
 }
@@ -664,7 +665,39 @@ describe("BrowserGatewayService", () => {
         interactiveExecutionPhase: "queued_for_provider",
       },
     ]);
-    const service = makeService(hub, sessionManager);
+    const contextHealth = {
+      memory: {
+        status: "ready" as const,
+        retrieval: "hybrid" as const,
+        activeRecordCount: 7,
+      },
+      retrieval: {
+        status: "degraded" as const,
+        lexical: "ready" as const,
+        vector: "unavailable" as const,
+        structural: "ready" as const,
+        sourceCount: 12,
+        chunkCount: 48,
+        staleSourceCount: 2,
+        reason: "Vector retrieval is unavailable.",
+      },
+      index: {
+        status: "working" as const,
+        state: "indexing" as const,
+        current: 3,
+        total: 10,
+      },
+    };
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => themeSnapshotStub,
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => projectedForeground({ contextHealth }) as never,
+      () => [],
+    );
     const readSet = service.getOwnerProjectionSources().capture();
 
     expect(readSet.catalog).toMatchObject({
@@ -684,9 +717,9 @@ describe("BrowserGatewayService", () => {
       originalPrompt: "hello",
       status: "idle",
       interactiveExecutionPhase: "queued_for_provider",
+      contextHealth,
       messages: [
-        expect.objectContaining({ role: "user", content: "hello" }),
-        expect.objectContaining({ role: "assistant" }),
+        expect.objectContaining({ role: "assistant", content: "hello" }),
       ],
       earlierCursor: null,
       hasEarlier: false,
@@ -727,6 +760,12 @@ describe("BrowserGatewayService", () => {
       return { dispose: vi.fn() } as never;
     });
 
+    hub.publishApproval("session-3", {
+      kind: "write",
+      id: "foreground-approval",
+      filePath: "src/foreground.ts",
+      writeOperation: "modify",
+    });
     hub.publishApproval("session-2", {
       kind: "write",
       id: "global-approval",
@@ -748,7 +787,9 @@ describe("BrowserGatewayService", () => {
     expect(service.getSerializableState().approval?.id).toBe("global-approval");
 
     hub.publishApprovalIdle("session-2", "global-approval");
-    expect(service.getSerializableState().approval).toBeNull();
+    expect(service.getSerializableState().approval?.id).toBe(
+      "foreground-approval",
+    );
 
     service.dispose();
     hub.dispose();
@@ -1037,6 +1078,7 @@ describe("BrowserGatewayService", () => {
           softThresholdBudget: 150000,
           hardBudget: 180000,
         },
+        contextHealth: null,
         condenseThreshold: 0.8,
       }),
       () => [],
@@ -1258,6 +1300,7 @@ describe("BrowserGatewayService", () => {
         loadedInstructions: null,
         restoringSession: false,
         revertRecoveryNotice: null,
+        contextHealth: null,
         contextBudget: {
           contextWindow: 200000,
           maxInputTokens: 191808,
@@ -1343,6 +1386,7 @@ describe("BrowserGatewayService", () => {
         loadedInstructions: null,
         restoringSession: false,
         revertRecoveryNotice: null,
+        contextHealth: null,
       }),
       () => [],
     );
@@ -1396,6 +1440,7 @@ describe("BrowserGatewayService", () => {
         loadedInstructions: null,
         restoringSession: false,
         revertRecoveryNotice: null,
+        contextHealth: null,
       }),
       () => [],
     );
@@ -1452,6 +1497,7 @@ describe("BrowserGatewayService", () => {
         loadedInstructions: null,
         restoringSession: false,
         revertRecoveryNotice: null,
+        contextHealth: null,
       }),
       () => [],
     );

@@ -101,6 +101,9 @@ export class RelaySnapshotProjector {
             ...(checkpoint.foreground.contextBudget
               ? { contextBudget: { ...checkpoint.foreground.contextBudget } }
               : {}),
+            contextHealth: checkpoint.foreground.contextHealth
+              ? structuredClone(checkpoint.foreground.contextHealth)
+              : null,
             ...(checkpoint.foreground.condenseThreshold !== undefined
               ? {
                   condenseThreshold: checkpoint.foreground.condenseThreshold,

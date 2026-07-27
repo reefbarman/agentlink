@@ -9,6 +9,7 @@ import type {
   BrowserGatewayModelCredentialGrantRequest,
   BrowserGatewayModelCredentialGrantResponse,
   BrowserGatewayOpenAiCompatibleRuntimeProfiles,
+  BrowserGatewayPromptProfileResolutions,
 } from "../protocol.js";
 import type {
   CoreModelAuthLease,
@@ -121,6 +122,7 @@ export class BrowserGatewayHelperModelAuthLeaseClient implements CoreModelAuthPr
     helperGenerationId: string;
     models: CoreModelCatalogEntry[];
     openAiCompatibleRuntimeProfiles?: BrowserGatewayOpenAiCompatibleRuntimeProfiles;
+    promptProfileResolutions?: BrowserGatewayPromptProfileResolutions;
   }): Promise<BrowserGatewayModelCatalogPublishResponse> {
     const body: BrowserGatewayModelCatalogPublishRequest = {
       publishedByOwnerId: this.options.grantedByOwnerId,
@@ -128,6 +130,7 @@ export class BrowserGatewayHelperModelAuthLeaseClient implements CoreModelAuthPr
       helperGenerationId: request.helperGenerationId,
       models: request.models,
       openAiCompatibleRuntimeProfiles: request.openAiCompatibleRuntimeProfiles,
+      promptProfileResolutions: request.promptProfileResolutions,
     };
     return await this.postJson<BrowserGatewayModelCatalogPublishResponse>(
       "/internal/model-catalog",

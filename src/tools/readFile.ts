@@ -2,6 +2,7 @@ import type { Dirent } from "fs";
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { createHash } from "crypto";
 
 import type {
   ReadFileEnrichmentProvider,
@@ -25,7 +26,10 @@ import { Semaphore } from "../util/Semaphore.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 
 import { type ToolResult } from "../shared/types.js";
-import { semanticFileQuery } from "../services/semanticSearch.js";
+import {
+  semanticFileQuery,
+  type SemanticQueryOptions,
+} from "../services/semanticSearch.js";
 import { convertBmpToPng } from "./bmpToPng.js";
 import { convertPpmToPng } from "./ppmToPng.js";
 import {
@@ -663,6 +667,7 @@ export async function handleReadFile(
   enrichmentProvider = createLegacyReadFileEnrichmentProvider(),
   signal?: AbortSignal,
   guardian?: GuardianOutsideReadOptions,
+  semanticQueryOptions: SemanticQueryOptions = {},
 ): Promise<ToolResult> {
   const release = await readSemaphore.acquire();
   let released = false;
@@ -863,7 +868,7 @@ export async function handleReadFile(
 
     // Semantic offset: when query is provided and no explicit/manual anchor,
     // use the index to jump to the most relevant section of the file.
-    let semanticHit: { startLine: number; endLine: number } | null = null;
+    let semanticLookup: Awaited<ReturnType<typeof semanticFileQuery>> = null;
     let semanticMatchSkippedForRedaction = false;
     const semanticLookupRequested = Boolean(
       params.query && params.offset == null && !anchorHit,
@@ -875,30 +880,45 @@ export async function handleReadFile(
         const wsRoot = getWorkspaceRootForPath(filePath);
         if (wsRoot) {
           const relPath = path.relative(wsRoot, filePath);
-          semanticHit = await semanticFileQuery(relPath, params.query, wsRoot);
+          semanticLookup = await semanticFileQuery(
+            relPath,
+            params.query,
+            wsRoot,
+            createHash("sha256").update(raw).digest("hex"),
+            semanticQueryOptions,
+          );
         }
       }
     }
 
+    const semanticHit =
+      semanticLookup?.status === "current" ? semanticLookup : null;
     const semanticMatchMetadata = semanticHit
       ? {
           query: params.query,
           startLine: semanticHit.startLine,
           endLine: semanticHit.endLine,
         }
-      : semanticMatchSkippedForRedaction
+      : semanticLookup
         ? {
             query: params.query,
-            status: "not_run_structured_redaction",
+            status: semanticLookup.status,
+            fallback: "default_offset",
+            hint: "The indexed match is not current; use live file anchors or exact search.",
           }
-        : semanticLookupRequested
+        : semanticMatchSkippedForRedaction
           ? {
               query: params.query,
-              status: "not_found",
-              fallback: "default_offset",
-              hint: "Use anchor or anchor_regex to locate exact text in this file.",
+              status: "not_run_structured_redaction",
             }
-          : undefined;
+          : semanticLookupRequested
+            ? {
+                query: params.query,
+                status: "not_found",
+                fallback: "default_offset",
+                hint: "Use anchor or anchor_regex to locate exact text in this file.",
+              }
+            : undefined;
 
     const baseOffset = anchorHit
       ? anchorHit.line

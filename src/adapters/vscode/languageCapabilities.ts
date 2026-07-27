@@ -457,7 +457,7 @@ export function createVscodeCodeActionsProvider(
                 status: "rejected",
                 action: action.title,
                 reason:
-                  "Code action includes an executable command while targeting a protected instructions/memory file. Command side effects cannot be preflighted; use write_file/apply_diff with explicit user approval or propose_memory instead.",
+                  "Code action includes an executable command while targeting a protected instructions/memory path. Command side effects cannot be preflighted; use manage_memory for low-authority memory or write_file/apply_diff/propose_memory with explicit user approval for authoritative configuration.",
                 protected_files: [getRelativePath(cachedTargetPath)],
               }),
             },
@@ -476,7 +476,7 @@ export function createVscodeCodeActionsProvider(
                   status: "rejected",
                   action: action.title,
                   reason:
-                    "Code action edits a protected instructions/memory file. Use write_file/apply_diff with explicit user approval or propose_memory instead.",
+                    "Code action edits a protected instructions/memory path. Use manage_memory for low-authority memory or write_file/apply_diff/propose_memory with explicit user approval for authoritative configuration.",
                   protected_files: editFiles
                     .filter((filePath) => anyMemoryProtectedPath([filePath]))
                     .map((filePath) => getRelativePath(filePath)),

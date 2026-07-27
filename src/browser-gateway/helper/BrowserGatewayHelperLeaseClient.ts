@@ -40,6 +40,10 @@ export class BrowserGatewayHelperLeaseClient implements vscode.Disposable {
     this.scheduleRenewal(lifecycleGeneration);
   }
 
+  async refresh(): Promise<void> {
+    await this.renewLease();
+  }
+
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
@@ -222,6 +226,8 @@ export class BrowserGatewayHelperLeaseClient implements vscode.Disposable {
         body: JSON.stringify({
           ownerId: this.effectiveOwnerId ?? owner.ownerId,
           ownerGenerationId: owner.ownerGenerationId,
+          capabilities: owner.capabilities,
+          memoryRuntime: owner.memoryRuntime,
         }),
         signal,
       }),

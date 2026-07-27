@@ -17,12 +17,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AgentEngine,
   buildSessionTranscriptSnapshot,
+  measureToolResultContentForAttribution,
+  toolResultToContent,
   truncateToolText,
 } from "./AgentEngine.js";
 import { AgentSession } from "./AgentSession.js";
 import { ProviderRegistry } from "./providers/index.js";
+import type { SkillEntry } from "./skillLoader.js";
 import { AgentToolCallTracker } from "./AgentToolCallTracker.js";
-import type { AgentToolExecutionRequest } from "../core/tools/types.js";
+import { todoTool } from "./todoTool.js";
+import type {
+  AgentToolExecutionRequest,
+  SkillAuthoritySnapshot,
+} from "../core/tools/types.js";
 import type { CoreModelContentBlock } from "../core/modelRuntime.js";
 import { CORE_NATIVE_WEB_MAX_PAUSE_TURNS } from "../core/nativeWebTools.js";
 import {
@@ -36,11 +43,21 @@ const mocks = vi.hoisted(() => ({
   mockBuildSystemPrompt: vi.fn().mockResolvedValue("mock system prompt"),
   mockBuildPromptArtifacts: vi.fn().mockResolvedValue({
     systemPrompt: "mock system prompt",
+    promptProfile: {
+      profile: "compatibility",
+      source: "compatibility-default",
+      policyRevision: "prompt-profile-policy-v1",
+      providerId: "mock",
+      modelId: "claude-sonnet-4-6",
+    },
     skills: [],
     promptBreakdown: {
       sections: [{ label: "test", chars: 18, estimatedTokens: 5 }],
       totalChars: 18,
       estimatedTokens: 5,
+      profile: "compatibility",
+      profileSource: "compatibility-default",
+      profilePolicyRevision: "prompt-profile-policy-v1",
     },
   }),
   mockSummarizeConversation: vi.fn(),
@@ -161,7 +178,8 @@ function makeMockProvider(
         },
       ];
     },
-    async *stream(_request: StreamRequest) {
+    async *stream(request: StreamRequest) {
+      request.onProviderRequestAttempt?.({ model: request.model });
       for (const event of events) {
         yield event;
       }
@@ -189,6 +207,38 @@ async function makeSession(
     config,
     cwd: "/test",
   });
+}
+
+function makeSkillEntry(
+  name: string,
+  revision: string,
+  allowedTools: string[],
+): SkillEntry {
+  const skillDirectory = `/test/.agentlink/skills/${name}`;
+  const skillPath = `${skillDirectory}/SKILL.md`;
+  return {
+    id: `project:agentlink:.agentlink/skills/${name}`,
+    name,
+    description: `${name} skill`,
+    revision,
+    sourceChars: 128,
+    provenance: {
+      scope: "project",
+      namespace: "agentlink",
+      sourceRoot: "/test/.agentlink/skills",
+      skillDirectory,
+      realSkillPath: skillPath,
+      priority: 1,
+    },
+    skillPath,
+    allowedTools,
+    restrictions: { allowedTools },
+    permissions: { requestedTools: [] },
+    dependencies: [],
+    recommendations: [],
+    resolvedDependencies: [],
+    enabled: true,
+  };
 }
 
 function setEngineToolContext(
@@ -444,6 +494,316 @@ describe("AgentEngine", () => {
   });
 
   describe("parallel tool dispatch", () => {
+    it("applies a loaded skill only after the current batch boundary", async () => {
+      const broad = makeSkillEntry("broad", "a".repeat(64), [
+        "load_skill",
+        "read_file",
+        "search_files",
+      ]);
+      const narrow = makeSkillEntry("narrow", "b".repeat(64), ["read_file"]);
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCount += 1;
+        if (streamCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "before-read",
+                name: "read_file",
+                input: { path: "src/a.ts" },
+              },
+              {
+                type: "tool_use",
+                id: "load-skill",
+                name: "load_skill",
+                input: { path: narrow.skillPath },
+              },
+              {
+                type: "tool_use",
+                id: "after-search",
+                name: "search_files",
+                input: { regex: "AgentEngine", path: "src" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const dispatchedPolicies: Array<{
+        name: string;
+        allowedTools: readonly string[] | undefined;
+      }> = [];
+      const session = await makeSession();
+      session.addUserMessage("load the skill and inspect files");
+      session.setAdvertisedSkills([broad, narrow]);
+      expect(
+        session.trackLoadedSkill({
+          id: broad.id,
+          name: broad.name,
+          revision: broad.revision,
+          skillPath: broad.skillPath,
+        }),
+      ).toBe(true);
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "load_skill",
+            description: "load skill",
+            input_schema: { type: "object" },
+          },
+          {
+            name: "read_file",
+            description: "read file",
+            input_schema: { type: "object" },
+          },
+          {
+            name: "search_files",
+            description: "search files",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: () => false,
+        executeTool: async (request) => {
+          dispatchedPolicies.push({
+            name: request.name,
+            allowedTools: request.context.skillAllowedTools
+              ? [...request.context.skillAllowedTools]
+              : undefined,
+          });
+          if (request.name === "load_skill") {
+            request.context.onSkillLoad?.({
+              id: narrow.id,
+              name: narrow.name,
+              revision: narrow.revision,
+              skillPath: narrow.skillPath,
+            });
+          }
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+      });
+
+      await collectEvents(engine.run(session));
+
+      expect(dispatchedPolicies).toEqual([
+        { name: "read_file", allowedTools: broad.allowedTools },
+        { name: "load_skill", allowedTools: broad.allowedTools },
+        { name: "search_files", allowedTools: broad.allowedTools },
+      ]);
+      expect(session.getActiveSkillAllowedTools()).toEqual(["read_file"]);
+    });
+
+    it("preserves the request skill policy when session policy changes during streaming", async () => {
+      const broad = makeSkillEntry("broad", "a".repeat(64), [
+        "read_file",
+        "search_files",
+      ]);
+      const narrow = makeSkillEntry("narrow", "b".repeat(64), ["read_file"]);
+      const session = await makeSession();
+      session.addUserMessage("search under the current skill policy");
+      session.setAdvertisedSkills([broad, narrow]);
+      expect(
+        session.trackLoadedSkill({
+          id: broad.id,
+          name: broad.name,
+          revision: broad.revision,
+          skillPath: broad.skillPath,
+        }),
+      ).toBe(true);
+
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCount += 1;
+        if (streamCount === 1) {
+          expect(
+            session.trackLoadedSkill({
+              id: narrow.id,
+              name: narrow.name,
+              revision: narrow.revision,
+              skillPath: narrow.skillPath,
+            }),
+          ).toBe(true);
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "request-search",
+                name: "search_files",
+                input: { regex: "AgentEngine", path: "src" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      let dispatchedPolicy: readonly string[] | undefined;
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "read_file",
+            description: "read file",
+            input_schema: { type: "object" },
+          },
+          {
+            name: "search_files",
+            description: "search files",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: () => false,
+        executeTool: async (request) => {
+          dispatchedPolicy = request.context.skillAllowedTools
+            ? [...request.context.skillAllowedTools]
+            : undefined;
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+      });
+
+      await collectEvents(engine.run(session));
+
+      expect(dispatchedPolicy).toEqual(broad.allowedTools);
+      expect(session.getActiveSkillAllowedTools()).toEqual(["read_file"]);
+    });
+
+    it("intersects inherited skill authority with child skill restrictions", async () => {
+      const childSkill = makeSkillEntry("child-broad", "b".repeat(64), [
+        "read_file",
+        "search_files",
+      ]);
+      const inheritedSkillAuthority: SkillAuthoritySnapshot = {
+        schemaVersion: 1,
+        sources: [
+          {
+            catalogRevision: "parent-catalog",
+            activations: [
+              {
+                id: "project:agentlink:.agentlink/skills/parent-narrow",
+                name: "parent-narrow",
+                revision: "a".repeat(64),
+              },
+            ],
+            policyRevision: "parent-policy",
+          },
+        ],
+        allowedTools: ["read_file"],
+      };
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCount += 1;
+        if (streamCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "request-read",
+                name: "read_file",
+                input: { path: "src/a.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("read under inherited authority");
+      session.setAdvertisedSkills([childSkill]);
+      session.setSkillCatalogProjection({
+        schemaVersion: 1,
+        revision: "child-catalog",
+        budgetChars: 1_024,
+        renderedChars: 0,
+        discoveredCount: 1,
+        enabledCount: 1,
+        advertisedCount: 1,
+        truncatedCount: 0,
+        omittedCount: 0,
+        sourceChars: 0,
+        deferredChars: 0,
+        retrievalFallbackRequired: false,
+        advertised: [],
+        omissions: [],
+        catalogXml: "",
+      });
+      expect(
+        session.trackLoadedSkill({
+          id: childSkill.id,
+          name: childSkill.name,
+          revision: childSkill.revision,
+          skillPath: childSkill.skillPath,
+        }),
+      ).toBe(true);
+
+      const listedPolicies: Array<readonly string[] | undefined> = [];
+      let dispatchedAuthority: Readonly<SkillAuthoritySnapshot> | undefined;
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: (request) => {
+          listedPolicies.push(request.skillAllowedTools);
+          return [
+            {
+              name: "read_file",
+              description: "read file",
+              input_schema: { type: "object" },
+            },
+          ];
+        },
+        isParallelSafe: () => false,
+        executeTool: async (request) => {
+          dispatchedAuthority = request.context.skillAuthority;
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+      });
+
+      await collectEvents(engine.run(session, { inheritedSkillAuthority }));
+
+      expect(
+        listedPolicies.every((policy) => policy?.join() === "read_file"),
+      ).toBe(true);
+      expect(dispatchedAuthority).toMatchObject({
+        schemaVersion: 1,
+        allowedTools: ["read_file"],
+        sources: [
+          inheritedSkillAuthority.sources[0],
+          {
+            catalogRevision: "child-catalog",
+            activations: [
+              {
+                id: childSkill.id,
+                name: childSkill.name,
+                revision: childSkill.revision,
+              },
+            ],
+            policyRevision: session.getActiveSkillPolicy().revision,
+          },
+        ],
+      });
+      expect(Object.isFrozen(dispatchedAuthority)).toBe(true);
+      expect(Object.isFrozen(dispatchedAuthority?.sources)).toBe(true);
+      expect(
+        Object.isFrozen(dispatchedAuthority?.sources[1]?.activations),
+      ).toBe(true);
+    });
+
     it("runs adjacent safe calls concurrently without crossing ordered barriers", async () => {
       const toolCalls = [
         { id: "read-before-a", name: "read", input: {} },
@@ -2268,6 +2628,107 @@ describe("AgentEngine", () => {
       expect(secondAlpha?.input_schema).toBe(secondSchema);
     });
 
+    it("preserves provider bridge replay while executing and rendering the canonical native tool", async () => {
+      const streamCalls: StreamRequest[] = [];
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      const bridgeInput = {
+        name: "get_call_hierarchy",
+        input: {
+          path: "src/file.ts",
+          line: 1,
+          column: 1,
+          direction: "both",
+        },
+      };
+      provider.stream = async function* (request: StreamRequest) {
+        streamCalls.push(request);
+        streamCount += 1;
+        if (streamCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "native-call-1",
+                name: "call_native_tool",
+                input: bridgeInput,
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("inspect the call graph");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const executeTool = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "hierarchy" }],
+      }));
+      const toolCtx: ToolDispatchContext = {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      };
+      setEngineToolContext(engine, toolCtx, executeTool);
+
+      const events = await collectEvents(engine.run(session));
+
+      const providerToolNames = streamCalls[0]?.tools?.map((tool) => tool.name);
+      expect(providerToolNames).toContain("call_native_tool");
+      expect(providerToolNames).toContain("find_native_tools");
+      expect(providerToolNames).not.toContain("get_call_hierarchy");
+      expect(executeTool).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "get_call_hierarchy",
+          input: bridgeInput.input,
+          context: expect.objectContaining({
+            providerToolName: "call_native_tool",
+            providerToolInput: bridgeInput,
+          }),
+        }),
+      );
+      expect(
+        events.filter(
+          (event): event is Extract<AgentEvent, { type: "tool_start" }> =>
+            event.type === "tool_start",
+        ),
+      ).toEqual([
+        expect.objectContaining({
+          toolCallId: "native-call-1",
+          toolName: "get_call_hierarchy",
+          input: bridgeInput.input,
+        }),
+      ]);
+      expect(
+        events.find(
+          (event): event is Extract<AgentEvent, { type: "tool_result" }> =>
+            event.type === "tool_result" &&
+            event.toolCallId === "native-call-1",
+        ),
+      ).toMatchObject({ toolName: "get_call_hierarchy" });
+
+      const storedToolUse = session
+        .getAllMessages()
+        .flatMap((message) =>
+          Array.isArray(message.content) ? message.content : [],
+        )
+        .find(
+          (block) => block.type === "tool_use" && block.id === "native-call-1",
+        );
+      expect(storedToolUse).toEqual({
+        type: "tool_use",
+        id: "native-call-1",
+        name: "call_native_tool",
+        input: bridgeInput,
+      });
+    });
+
     it("reuses cached provider tools when definitions are structurally unchanged", async () => {
       const streamCalls: StreamRequest[] = [];
       let streamCount = 0;
@@ -2534,6 +2995,27 @@ describe("AgentEngine", () => {
   });
 
   describe("token accounting", () => {
+    it("measures canonical mixed-media size separately from provider token pressure", () => {
+      const content = toolResultToContent(
+        {
+          content: [
+            { type: "text", text: "😀 caption" },
+            { type: "image", data: "YWJj", mimeType: "image/png" },
+          ],
+        },
+        "call-media",
+        "call_mcp_tool",
+      );
+      expect(Array.isArray(content)).toBe(true);
+      const measurement = measureToolResultContentForAttribution(content);
+
+      expect(measurement.retainedContent).toBe(JSON.stringify(content));
+      expect([...measurement.retainedContent].length).toBeLessThan(
+        Buffer.byteLength(measurement.retainedContent, "utf8"),
+      );
+      expect(measurement.estimatedTokens).toBe(262);
+    });
+
     it("reports api_request inputTokens as uncached + cache_read + cache_creation", async () => {
       const provider = makeMockProvider(
         makeProviderStream({
@@ -2578,6 +3060,591 @@ describe("AgentEngine", () => {
       });
     });
 
+    it("reuses automatic memory request-locally across tool turns without persisting it", async () => {
+      const requests: StreamRequest[] = [];
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        request.onProviderRequestAttempt?.({ model: request.model });
+        streamCount += 1;
+        if (streamCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call-read-memory",
+                name: "read_file",
+                input: { path: "src/memory.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("earlier stable question");
+      session.appendAssistantTurn([
+        { type: "text", text: "earlier stable answer" },
+      ]);
+      session.addUserMessage("follow the project preference");
+      const canonicalBefore = structuredClone(session.getAllMessages());
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "read_file",
+            description: "read",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: () => true,
+        executeTool: async () => ({
+          content: [{ type: "text", text: "file contents" }],
+        }),
+      });
+      const automaticMemoryContext = Object.freeze({
+        rendering:
+          '<memory-evidence authority="low" instruction="false">\nStatement: Use focused tests.\n</memory-evidence>',
+        estimatedTokens: 27,
+        memoryCount: 1,
+        query: "project preference",
+        scopes: ["project", "global"] as const,
+        authority: "low-authority-evidence" as const,
+        canAuthorizeTools: false as const,
+      });
+
+      const events = await collectEvents(
+        engine.run(session, { automaticMemoryContext }),
+      );
+
+      expect(requests).toHaveLength(2);
+      for (const request of requests) {
+        const stableQuestionIndex = request.messages.findIndex(
+          (message) => message.content === "earlier stable question",
+        );
+        expect(stableQuestionIndex).toBeGreaterThanOrEqual(0);
+        expect(request.messages[stableQuestionIndex + 1]).toEqual({
+          role: "assistant",
+          content: [{ type: "text", text: "earlier stable answer" }],
+        });
+        const currentUserIndex = request.messages.findIndex(
+          (message) => message.content === "follow the project preference",
+        );
+        expect(currentUserIndex).toBeGreaterThan(0);
+        expect(request.messages[currentUserIndex - 1]).toEqual({
+          role: "user",
+          content: automaticMemoryContext.rendering,
+        });
+      }
+      expect(requests[1]!.messages.slice(0, 3)).toEqual(
+        requests[0]!.messages.slice(0, 3),
+      );
+      const secondRequestToolUseIndex = requests[1]!.messages.findIndex(
+        (message) =>
+          message.role === "assistant" &&
+          Array.isArray(message.content) &&
+          message.content.some((block) => block.type === "tool_use"),
+      );
+      expect(secondRequestToolUseIndex).toBeGreaterThan(0);
+      expect(requests[1]!.messages[secondRequestToolUseIndex + 1]).toEqual(
+        expect.objectContaining({ role: "user" }),
+      );
+      expect(canonicalBefore).not.toContainEqual(
+        expect.objectContaining({ content: automaticMemoryContext.rendering }),
+      );
+      expect(session.getAllMessages()).not.toContainEqual(
+        expect.objectContaining({ content: automaticMemoryContext.rendering }),
+      );
+      const attributions = events.filter(
+        (
+          event,
+        ): event is Extract<
+          AgentEvent,
+          { type: "request_context_attribution" }
+        > => event.type === "request_context_attribution",
+      );
+      const apiRequests = events.filter(
+        (event): event is Extract<AgentEvent, { type: "api_request" }> =>
+          event.type === "api_request",
+      );
+      expect(attributions.map((event) => event.retrievedMemoryTokens)).toEqual([
+        27, 27,
+      ]);
+      expect(
+        attributions.map(
+          (event) =>
+            event.contextLedger?.layers.find(
+              (layer) => layer.layer === "retrieved_context",
+            )?.allocatedTokens,
+        ),
+      ).toEqual([27, 27]);
+      expect(apiRequests.map((event) => event.retrievedMemoryTokens)).toEqual([
+        27, 27,
+      ]);
+      expect(session.contextBreakdown.contextLedger).toEqual(
+        apiRequests.at(-1)?.contextBreakdown?.contextLedger,
+      );
+    });
+
+    it("retains large exact tool results by content and references only successful artifacts", async () => {
+      const largeResult = "same large result\n".repeat(500);
+      const changedResult = "changed large result\n".repeat(500);
+      const smallResult = "small result";
+      const calls = [
+        { id: "call-first", path: "same.ts" },
+        { id: "call-repeat", path: "same.ts" },
+        { id: "call-changed", path: "changed.ts" },
+        { id: "call-small", path: "small.ts" },
+        { id: "call-media", path: "image.ts" },
+      ];
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        request.onProviderRequestAttempt?.({ model: request.model });
+        const call = calls[streamCount++];
+        if (call) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: call.id,
+                name: "read_file",
+                input: { path: call.path },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+      mocks.mockMkdir.mockResolvedValue(undefined);
+      mocks.mockWriteFile.mockResolvedValue(undefined);
+
+      const session = await makeSession();
+      session.addUserMessage("read repeatedly");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "read_file",
+            description: "read",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: () => true,
+        executeTool: async ({ context }) => {
+          if (context.toolCallId === "call-changed") {
+            return { content: [{ type: "text", text: changedResult }] };
+          }
+          if (context.toolCallId === "call-small") {
+            return { content: [{ type: "text", text: smallResult }] };
+          }
+          if (context.toolCallId === "call-media") {
+            return {
+              content: [
+                { type: "text", text: largeResult },
+                {
+                  type: "image",
+                  data: "YWJj",
+                  mimeType: "image/png",
+                },
+              ],
+            };
+          }
+          return { content: [{ type: "text", text: largeResult }] };
+        },
+      });
+
+      const events = await collectEvents(engine.run(session));
+      const emittedResults = events.filter(
+        (event): event is Extract<AgentEvent, { type: "tool_result" }> =>
+          event.type === "tool_result" && event.parentCallId === undefined,
+      );
+      const storedResults = session
+        .getAllMessages()
+        .flatMap((message) =>
+          Array.isArray(message.content) ? message.content : [],
+        )
+        .filter((block) => block.type === "tool_result");
+
+      expect(storedResults).toHaveLength(5);
+      expect(storedResults[0]?.content).toBe(largeResult);
+      expect(storedResults[1]?.content).toMatch(
+        /^\[Unchanged large tool result; exact content retained from read_file call call-first\.\]/,
+      );
+      expect(storedResults[1]?.content).toContain(
+        "Full output: /tmp/agentlink-results/retained/",
+      );
+      expect(storedResults[1]?.content).toMatch(/SHA-256: [a-f0-9]{64}/);
+      expect(storedResults[2]?.content).toBe(changedResult);
+      expect(storedResults[3]?.content).toBe(smallResult);
+      expect(Array.isArray(storedResults[4]?.content)).toBe(true);
+      // Completion events remain responsive and carry the full UI result. The
+      // ordered retained history form is finalized only before canonical commit.
+      expect(emittedResults.map((event) => event.historyContent)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      expect(emittedResults[1]?.result).toEqual([
+        { type: "text", text: largeResult },
+      ]);
+      expect(mocks.mockWriteFile).toHaveBeenCalledTimes(2);
+      expect(mocks.mockWriteFile).toHaveBeenNthCalledWith(
+        1,
+        expect.stringMatching(
+          /^\/tmp\/agentlink-results\/retained\/[a-f0-9-]+\/[a-f0-9]{64}\.txt$/,
+        ),
+        largeResult,
+        { encoding: "utf-8", mode: 0o600 },
+      );
+      expect(mocks.mockWriteFile).toHaveBeenNthCalledWith(
+        2,
+        expect.stringMatching(
+          /^\/tmp\/agentlink-results\/retained\/[a-f0-9-]+\/[a-f0-9]{64}\.txt$/,
+        ),
+        changedResult,
+        { encoding: "utf-8", mode: 0o600 },
+      );
+      for (let index = 0; index < calls.length; index += 1) {
+        const assistantIndex = index * 2 + 1;
+        expect(session.getAllMessages()[assistantIndex]?.role).toBe(
+          "assistant",
+        );
+        expect(session.getAllMessages()[assistantIndex + 1]?.role).toBe("user");
+      }
+    });
+
+    it("chooses the first model-ordered parallel result as the retained source", async () => {
+      const largeResult = "parallel exact result\n".repeat(500);
+      let releaseFirst!: () => void;
+      const firstCanFinish = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const provider = makeMockProvider();
+      let streamCount = 0;
+      provider.stream = async function* (request: StreamRequest) {
+        request.onProviderRequestAttempt?.({ model: request.model });
+        if (streamCount++ === 0) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call-model-first",
+                name: "read_file",
+                input: { path: "first.ts" },
+              },
+              {
+                type: "tool_use",
+                id: "call-finishes-first",
+                name: "read_file",
+                input: { path: "second.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+      mocks.mockMkdir.mockResolvedValue(undefined);
+      mocks.mockWriteFile.mockResolvedValue(undefined);
+
+      const completionOrder: string[] = [];
+      const session = await makeSession();
+      session.addUserMessage("read in parallel");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "read_file",
+            description: "read",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: () => true,
+        executeTool: async ({ context }) => {
+          if (context.toolCallId === "call-model-first") {
+            await firstCanFinish;
+            completionOrder.push("call-model-first");
+          } else {
+            completionOrder.push("call-finishes-first");
+            releaseFirst();
+          }
+          return { content: [{ type: "text", text: largeResult }] };
+        },
+      });
+
+      const events = await collectEvents(engine.run(session));
+      const storedResults = session
+        .getAllMessages()
+        .flatMap((message) =>
+          Array.isArray(message.content) ? message.content : [],
+        )
+        .filter((block) => block.type === "tool_result");
+
+      expect(completionOrder).toEqual([
+        "call-finishes-first",
+        "call-model-first",
+      ]);
+      expect(
+        events
+          .filter(
+            (event): event is Extract<AgentEvent, { type: "tool_result" }> =>
+              event.type === "tool_result" && event.parentCallId === undefined,
+          )
+          .map((event) => event.toolCallId),
+      ).toEqual(["call-finishes-first", "call-model-first"]);
+      expect(storedResults[0]?.content).toBe(largeResult);
+      expect(storedResults[1]?.content).toContain(
+        "retained from read_file call call-model-first",
+      );
+      expect(mocks.mockWriteFile).toHaveBeenCalledTimes(1);
+    });
+
+    it("never deduplicates when retained artifact writes fail", async () => {
+      const largeResult = "unavailable artifact\n".repeat(500);
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        request.onProviderRequestAttempt?.({ model: request.model });
+        if (streamCount < 2) {
+          const id = streamCount++ === 0 ? "call-first" : "call-repeat";
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id,
+                name: "read_file",
+                input: { path: "same.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+      mocks.mockMkdir.mockResolvedValue(undefined);
+      mocks.mockWriteFile.mockRejectedValue(new Error("disk unavailable"));
+
+      const session = await makeSession();
+      session.addUserMessage("read repeatedly");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "read_file",
+            description: "read",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: () => true,
+        executeTool: async () => ({
+          content: [{ type: "text", text: largeResult }],
+        }),
+      });
+
+      await collectEvents(engine.run(session));
+      const storedResults = session
+        .getAllMessages()
+        .flatMap((message) =>
+          Array.isArray(message.content) ? message.content : [],
+        )
+        .filter((block) => block.type === "tool_result");
+
+      expect(storedResults.map((block) => block.content)).toEqual([
+        largeResult,
+        largeResult,
+      ]);
+      expect(mocks.mockWriteFile).toHaveBeenCalledTimes(2);
+    });
+
+    it("clears retained-result deduplication after successful condensation", async () => {
+      const largeResult = "pre-condense result\n".repeat(500);
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        request.onProviderRequestAttempt?.({ model: request.model });
+        if (streamCount < 2) {
+          const id = streamCount++ === 0 ? "call-before" : "call-after";
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id,
+                name: "read_file",
+                input: { path: "same.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+      mocks.mockMkdir.mockResolvedValue(undefined);
+      mocks.mockWriteFile.mockResolvedValue(undefined);
+
+      const session = await makeSession({
+        ...testConfig,
+        autoCondenseThreshold: 0.01,
+      });
+      session.addUserMessage("read across condensation");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const condenseSpy = vi
+        .spyOn(engine, "condenseSession")
+        .mockImplementation(async function* () {
+          yield { type: "condense_start", isAutomatic: true };
+          yield {
+            type: "condense",
+            summary: "summary",
+            prevInputTokens: 20,
+            newInputTokens: 10,
+          };
+          return true;
+        });
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "read_file",
+            description: "read",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: () => true,
+        executeTool: async () => ({
+          content: [{ type: "text", text: largeResult }],
+        }),
+      });
+
+      await collectEvents(engine.run(session));
+      const storedResults = session
+        .getAllMessages()
+        .flatMap((message) =>
+          Array.isArray(message.content) ? message.content : [],
+        )
+        .filter((block) => block.type === "tool_result");
+
+      expect(condenseSpy).toHaveBeenCalled();
+      expect(storedResults.map((block) => block.content)).toEqual([
+        largeResult,
+        largeResult,
+      ]);
+      expect(mocks.mockWriteFile).toHaveBeenCalledTimes(2);
+    });
+
+    it("carries exact tool-result attribution through the next api_request", async () => {
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        streamCount += 1;
+        request.onProviderRequestAttempt?.({ model: request.model });
+        if (streamCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call-read",
+                name: "read_file",
+                input: { path: "src/a.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("read the file");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "read_file",
+            description: "read",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: () => true,
+        executeTool: async () => ({
+          content: [{ type: "text", text: "😀".repeat(400) }],
+        }),
+      });
+
+      const events = await collectEvents(engine.run(session));
+      const apiRequests = events.filter(
+        (event): event is Extract<AgentEvent, { type: "api_request" }> =>
+          event.type === "api_request",
+      );
+
+      const requestAttributions = events.filter(
+        (
+          event,
+        ): event is Extract<
+          AgentEvent,
+          { type: "request_context_attribution" }
+        > => event.type === "request_context_attribution",
+      );
+      expect(apiRequests).toHaveLength(2);
+      expect(requestAttributions).toHaveLength(2);
+      expect(requestAttributions[1]).toMatchObject({
+        requestKind: "agent",
+        model: TEST_MODEL,
+        toolResultContextAttributions: [
+          {
+            toolCallId: "call-read",
+            toolName: "read_file",
+            chars: 400,
+            bytes: 1_600,
+            estimatedTokens: 200,
+          },
+        ],
+        omittedToolResultContextAttributions: 0,
+        pinnedMemoryTokens: 0,
+        retrievedMemoryTokens: 0,
+      });
+      expect(apiRequests[1]).toMatchObject({
+        accumulatedEstimatedTokens: 200,
+        accumulatedEstimatedTokensBySource: { "tool:read_file": 200 },
+        toolResultContextAttributions: [
+          {
+            toolCallId: "call-read",
+            toolName: "read_file",
+            chars: 400,
+            bytes: 1_600,
+            estimatedTokens: 200,
+          },
+        ],
+        omittedToolResultContextAttributions: 0,
+        pinnedMemoryTokens: 0,
+        retrievedMemoryTokens: 0,
+      });
+      expect(session.toolResultContextAttributions).toEqual([]);
+      expect(session.omittedToolResultContextAttributions).toBe(0);
+    });
+
     it("emits gated hot-path timing logs when a logger is configured", async () => {
       const provider = makeMockProvider();
       const session = await makeSession();
@@ -2591,7 +3658,9 @@ describe("AgentEngine", () => {
 
       expect(logs).toEqual(
         expect.arrayContaining([
-          expect.stringMatching(/^\[perf\] tool setup \d+ms tools=0 mcp=0$/),
+          expect.stringMatching(
+            /^\[perf\] tool setup \d+ms tools=0 deferred=0 mcp=0$/,
+          ),
           expect.stringMatching(/^\[perf\] getMessages \d+ms messages=1$/),
           expect.stringMatching(
             /^\[perf\] message assembly \d+ms apiMessages=2$/,
@@ -3225,6 +4294,85 @@ describe("AgentEngine", () => {
       });
     });
 
+    it("awaits fallback prompt reconciliation before the next provider request", async () => {
+      const requests: StreamRequest[] = [];
+      const ordering: string[] = [];
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.listModels = () =>
+        ["gpt-5.6-luna", "gpt-5.4-mini"].map((id) => ({
+          id,
+          displayName: id,
+          provider: provider.id,
+          capabilities: TEST_CAPABILITIES,
+        }));
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        streamCount += 1;
+        if (streamCount === 1) {
+          yield {
+            type: "model_fallback",
+            requestedModel: "gpt-5.6-luna",
+            effectiveModel: "gpt-5.4-mini",
+          };
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "fallback-tool",
+                name: "read_file",
+                input: { path: "README.md" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        ordering.push("second-request");
+        yield* makeProviderStream({ text: "done" });
+      };
+      const session = await makeSession();
+      session.model = "gpt-5.6-luna";
+      session.systemPrompt = "requested prompt";
+      session.addUserMessage("read the file");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "read_file",
+            description: "read",
+            input_schema: { type: "object" },
+          },
+        ],
+        isParallelSafe: () => true,
+        executeTool: async () => ({
+          content: [{ type: "text", text: "file contents" }],
+        }),
+      });
+
+      await collectEvents(
+        engine.run(session, {
+          onModelFallback: async ({ effectiveModel }) => {
+            await Promise.resolve();
+            ordering.push(`reconciled:${effectiveModel}`);
+            session.systemPrompt = "fallback prompt";
+          },
+        }),
+      );
+
+      expect(ordering).toEqual(["reconciled:gpt-5.4-mini", "second-request"]);
+      expect(requests.map((request) => request.model)).toEqual([
+        "gpt-5.6-luna",
+        "gpt-5.4-mini",
+      ]);
+      expect(requests.map((request) => request.systemPrompt)).toEqual([
+        "requested prompt",
+        "fallback prompt",
+      ]);
+    });
+
     it("retries codex once without previous_response_id when the remote state cannot be resolved", async () => {
       const streamCalls: StreamRequest[] = [];
       const provider: ModelProvider = {
@@ -3686,8 +4834,9 @@ describe("AgentEngine", () => {
     it("auto-retries 503 upstream connect errors with backoff", async () => {
       let attempts = 0;
       const provider = makeMockProvider();
-      provider.stream = async function* () {
+      provider.stream = async function* (request: StreamRequest) {
         attempts += 1;
+        request.onProviderRequestAttempt?.({ model: request.model });
         if (attempts <= 2) {
           yield* [];
           throw new Error(
@@ -3714,6 +4863,25 @@ describe("AgentEngine", () => {
         const warnings = events.filter((e) => e.type === "warning");
 
         expect(attempts).toBe(3);
+        const requestAttributions = events.filter(
+          (
+            event,
+          ): event is Extract<
+            AgentEvent,
+            { type: "request_context_attribution" }
+          > => event.type === "request_context_attribution",
+        );
+        expect(requestAttributions).toHaveLength(3);
+        expect(
+          new Set(requestAttributions.map((event) => event.requestId)).size,
+        ).toBe(3);
+        for (const attribution of requestAttributions) {
+          expect(attribution).toMatchObject({
+            requestKind: "agent",
+            model: TEST_MODEL,
+            estimatedInputTokens: expect.any(Number),
+          });
+        }
         expect(warnings).toHaveLength(2);
         expect(warnings[0]?.message).toContain("retrying request in 0.5s");
         expect(warnings[1]?.message).toContain("retrying request in 1s");
@@ -4445,12 +5613,164 @@ describe("AgentEngine", () => {
   });
 
   describe("condenseSession", () => {
-    it("clears stale token accounting after successful condense", async () => {
-      mocks.mockSummarizeConversation.mockResolvedValue({
-        messages: [{ role: "user", content: "summary", isSummary: true }],
-        summary: "summary",
+    it("projects the complete first post-condense provider ledger", async () => {
+      const originalTask = "original task ".repeat(200);
+      const summary = "condensed summary ".repeat(80);
+      const retainedFirstMessage: AgentMessage = {
+        role: "user",
+        content: originalTask,
+        media: {
+          images: [
+            {
+              name: "context.png",
+              mimeType: "image/png",
+              base64: "retained-image-data",
+            },
+          ],
+          documents: [],
+        },
+      };
+      mocks.mockSummarizeConversation.mockResolvedValueOnce({
+        messages: [
+          retainedFirstMessage,
+          { role: "user", content: summary, isSummary: true },
+        ],
+        summary,
         prevInputTokens: 180_000,
-        newInputTokens: 12_000,
+        newInputTokens: 1,
+        metadata: {
+          inputMessageCount: 2,
+          sourceUserMessageCount: 1,
+          hadPriorSummaryInInput: false,
+          sourceHash: "source-hash",
+          providerId: "mock",
+          condenseModel: "mock-fast",
+          modelCandidates: ["mock-fast"],
+          selectedModel: "mock-fast",
+          latestUserMessage: originalTask,
+          currentTask: originalTask,
+          pendingTasks: [],
+          canonicalUserMessages: [originalTask],
+          requestMessageCount: 2,
+          effectiveHistoryMessageCount: 2,
+          effectiveHistoryRoles: ["user", "user:summary"],
+        },
+      });
+      const runtimeTools: ToolDefinition[] = [
+        {
+          name: "read_file",
+          description: "Read a project file",
+          input_schema: {
+            type: "object",
+            properties: { path: { type: "string" } },
+          },
+        },
+        {
+          name: "linear__get_issue",
+          description: "Fetch a Linear issue",
+          input_schema: {
+            type: "object",
+            properties: { id: { type: "string" } },
+          },
+        },
+      ];
+      const providerTools = [...runtimeTools, todoTool];
+      const session = await makeSession();
+      session.addUserMessage(originalTask, {
+        images: retainedFirstMessage.media?.images,
+      });
+      const provider = makeMockProvider();
+      const providerRequests: StreamRequest[] = [];
+      provider.stream = async function* (request) {
+        providerRequests.push(request);
+        request.onProviderRequestAttempt?.({ model: request.model });
+        yield* makeProviderStream();
+      };
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(
+        engine.condenseSession(
+          session,
+          true,
+          undefined,
+          undefined,
+          session.model,
+          { tools: providerTools },
+        ),
+      );
+      const condense = events.find(
+        (event): event is Extract<AgentEvent, { type: "condense" }> =>
+          event.type === "condense",
+      );
+      const projection = condense?.metadata?.postCondenseProjection;
+
+      expect(projection).toBeDefined();
+      expect(projection?.historyTokens).toBeGreaterThan(1);
+      expect(projection?.toolTokens).toBeGreaterThan(0);
+      expect(projection?.nativeToolTokens).toBeGreaterThan(0);
+      expect(projection?.mcpToolTokens).toBeGreaterThan(0);
+      expect(projection?.pinnedMemoryTokens).toBe(0);
+      expect(projection?.retrievedMemoryTokens).toBe(0);
+      expect(projection?.outputReservationTokens).toBe(8192);
+      expect(projection?.safetyBufferTokens).toBe(9590);
+      expect(projection?.estimatedInputTokens).toBeLessThan(
+        (projection?.estimatedInputTokens ?? 0) +
+          (projection?.outputReservationTokens ?? 0) +
+          (projection?.safetyBufferTokens ?? 0),
+      );
+      expect(condense?.newInputTokens).toBe(projection?.estimatedInputTokens);
+      expect(session.lastInputTokens).toBe(projection?.estimatedInputTokens);
+      expect(
+        session.getAllMessages()[1]?.uiHint?.condense?.newInputTokens,
+      ).toBe(projection?.estimatedInputTokens);
+      expect(session.getMessages()[0]?.content).toBe(originalTask);
+
+      engine.setToolRuntime({
+        listTools: () => runtimeTools,
+        executeTool: vi.fn(),
+        isParallelSafe: () => true,
+      });
+      const requestEvents = await collectEvents(engine.run(session));
+      const requestAttribution = requestEvents.find(
+        (
+          event,
+        ): event is Extract<
+          AgentEvent,
+          { type: "request_context_attribution" }
+        > => event.type === "request_context_attribution",
+      );
+      expect(requestAttribution?.estimatedInputTokens).toBe(
+        projection?.estimatedInputTokens,
+      );
+      expect(providerRequests).toHaveLength(1);
+      expect(providerRequests[0]?.tools?.map((tool) => tool.name)).toEqual(
+        providerTools.map((tool) => tool.name),
+      );
+      const retainedImageMessage = providerRequests[0]?.messages.find(
+        (message) =>
+          Array.isArray(message.content) &&
+          message.content.some(
+            (block) =>
+              block.type === "image" &&
+              block.source.data === "retained-image-data",
+          ),
+      );
+      expect(retainedImageMessage).toBeDefined();
+    });
+
+    it("clears stale token accounting after successful condense", async () => {
+      mocks.mockSummarizeConversation.mockImplementation(async (options) => {
+        options.onProviderRequest?.({
+          requestId: "condense-request-1",
+          model: "mock-fast",
+          estimatedInputTokens: 11_000,
+        });
+        return {
+          messages: [{ role: "user", content: "summary", isSummary: true }],
+          summary: "summary",
+          prevInputTokens: 180_000,
+          newInputTokens: 12_000,
+        };
       });
 
       const session = await makeSession();
@@ -4459,16 +5779,44 @@ describe("AgentEngine", () => {
       session.lastOutputTokens = 5_000;
       session.lastCacheReadTokens = 100_000;
       session.addEstimatedTokens(120_000);
+      session.addToolResultContextAttribution(
+        "stale-call",
+        "read_file",
+        "stale result",
+      );
 
       const engine = new AgentEngine(makeRegistry());
       const events = await collectEvents(engine.condenseSession(session, true));
 
-      expect(events.some((e) => e.type === "condense")).toBe(true);
-      expect(session.lastInputTokens).toBe(12_000);
+      expect(events).toContainEqual({
+        type: "request_context_attribution",
+        requestId: "condense-request-1",
+        requestKind: "condense",
+        model: "mock-fast",
+        estimatedInputTokens: 11_000,
+        toolResultContextAttributions: [],
+        omittedToolResultContextAttributions: 0,
+        pinnedMemoryTokens: 0,
+        retrievedMemoryTokens: 0,
+      });
+      const condense = events.find(
+        (event): event is Extract<AgentEvent, { type: "condense" }> =>
+          event.type === "condense",
+      );
+      expect(condense).toBeDefined();
+      expect(condense?.newInputTokens).not.toBe(12_000);
+      expect(condense?.metadata?.postCondenseProjection).toBeDefined();
+      expect(
+        condense?.metadata?.postCondenseProjection?.estimatedInputTokens,
+      ).toBe(condense?.newInputTokens);
+      expect(session.lastInputTokens).toBe(condense?.newInputTokens);
       expect(session.lastOutputTokens).toBe(0);
       expect(session.lastCacheReadTokens).toBe(0);
       expect(session.estimatedAccumulatedTokens).toBe(0);
-      expect(session.estimatedInputUsed).toBe(12_000);
+      expect(session.estimatedAccumulationBySource).toEqual({});
+      expect(session.toolResultContextAttributions).toEqual([]);
+      expect(session.omittedToolResultContextAttributions).toBe(0);
+      expect(session.estimatedInputUsed).toBe(condense?.newInputTokens);
     });
 
     it("queues foreground condense on a saturated provider and releases its permit", async () => {

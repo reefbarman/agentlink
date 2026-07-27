@@ -15,12 +15,12 @@ async function makeHome(): Promise<string> {
 }
 
 describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
-  it("requires approval before writing durable memory", async () => {
+  it("requires approval before writing authoritative instructions", async () => {
     const homeDir = await makeHome();
     const bridge = new BrowserGatewayAskAgentMemoryProposalBridge({ homeDir });
 
     const approval = await bridge.propose({
-      tier: "memory",
+      tier: "instructions",
       scope: "global",
       operation: "add",
       title: "Remember preference",
@@ -28,15 +28,15 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
       content: "User prefers concise answers.",
     });
 
-    const memoryPath = path.join(homeDir, ".agentlink", "memory.md");
-    await expect(fs.readFile(memoryPath, "utf-8")).rejects.toMatchObject({
+    const instructionsPath = path.join(homeDir, ".agentlink", "CLAUDE.md");
+    await expect(fs.readFile(instructionsPath, "utf-8")).rejects.toMatchObject({
       code: "ENOENT",
     });
     expect(bridge.getPendingApproval()).toMatchObject({
       id: approval.id,
       kind: "memory",
       memoryScope: "global",
-      memoryTier: "memory",
+      memoryTier: "instructions",
     });
 
     const result = await bridge.submitDecision({
@@ -48,9 +48,9 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
 
     expect(result).toMatchObject({
       status: "accepted",
-      path: "~/.agentlink/memory.md",
+      path: "~/.agentlink/CLAUDE.md",
     });
-    await expect(fs.readFile(memoryPath, "utf-8")).resolves.toContain(
+    await expect(fs.readFile(instructionsPath, "utf-8")).resolves.toContain(
       "User prefers concise answers.",
     );
     expect(bridge.getPendingApproval()).toBeNull();
@@ -62,7 +62,7 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
     const homeDir = await makeHome();
     const bridge = new BrowserGatewayAskAgentMemoryProposalBridge({ homeDir });
     const approval = await bridge.propose({
-      tier: "memory",
+      tier: "instructions",
       scope: "global",
       operation: "add",
       title: "Remember preference",
@@ -82,7 +82,7 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
       rejectionReason: "Not durable",
     });
     await expect(
-      fs.readFile(path.join(homeDir, ".agentlink", "memory.md"), "utf-8"),
+      fs.readFile(path.join(homeDir, ".agentlink", "CLAUDE.md"), "utf-8"),
     ).rejects.toMatchObject({ code: "ENOENT" });
 
     await fs.rm(homeDir, { recursive: true, force: true });
@@ -92,16 +92,16 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
     const homeDir = await makeHome();
     const bridge = new BrowserGatewayAskAgentMemoryProposalBridge({ homeDir });
     const approval = await bridge.propose({
-      tier: "memory",
+      tier: "instructions",
       scope: "global",
       operation: "add",
       title: "Remember preference",
       rationale: "User asked Ask Agent to remember it.",
       content: "User prefers final summaries with validation notes.",
     });
-    const memoryPath = path.join(homeDir, ".agentlink", "memory.md");
-    await fs.mkdir(path.dirname(memoryPath), { recursive: true });
-    await fs.writeFile(memoryPath, "Existing durable entry.\n", "utf-8");
+    const instructionsPath = path.join(homeDir, ".agentlink", "CLAUDE.md");
+    await fs.mkdir(path.dirname(instructionsPath), { recursive: true });
+    await fs.writeFile(instructionsPath, "Existing durable entry.\n", "utf-8");
 
     await bridge.submitDecision({
       type: "decision",
@@ -109,7 +109,7 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
       decision: "accept",
     });
 
-    const written = await fs.readFile(memoryPath, "utf-8");
+    const written = await fs.readFile(instructionsPath, "utf-8");
     expect(written).toContain("Existing durable entry.");
     expect(written).toContain(
       "User prefers final summaries with validation notes.",
@@ -121,11 +121,11 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
   it("fails stale replace approvals when current target content changed", async () => {
     const homeDir = await makeHome();
     const bridge = new BrowserGatewayAskAgentMemoryProposalBridge({ homeDir });
-    const memoryPath = path.join(homeDir, ".agentlink", "memory.md");
-    await fs.mkdir(path.dirname(memoryPath), { recursive: true });
-    await fs.writeFile(memoryPath, "Old preference.\n", "utf-8");
+    const instructionsPath = path.join(homeDir, ".agentlink", "CLAUDE.md");
+    await fs.mkdir(path.dirname(instructionsPath), { recursive: true });
+    await fs.writeFile(instructionsPath, "Old preference.\n", "utf-8");
     const approval = await bridge.propose({
-      tier: "memory",
+      tier: "instructions",
       scope: "global",
       operation: "update",
       title: "Update preference",
@@ -133,7 +133,11 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
       content: "New preference.",
       replaces: "Old preference.",
     });
-    await fs.writeFile(memoryPath, "Different current content.\n", "utf-8");
+    await fs.writeFile(
+      instructionsPath,
+      "Different current content.\n",
+      "utf-8",
+    );
 
     await expect(
       bridge.submitDecision({
@@ -142,7 +146,7 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
         decision: "accept",
       }),
     ).rejects.toThrow("Could not find replaces text in target file");
-    await expect(fs.readFile(memoryPath, "utf-8")).resolves.toBe(
+    await expect(fs.readFile(instructionsPath, "utf-8")).resolves.toBe(
       "Different current content.\n",
     );
 
@@ -153,14 +157,14 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
     const homeDir = await makeHome();
     const bridge = new BrowserGatewayAskAgentMemoryProposalBridge({ homeDir });
     const approval = await bridge.propose({
-      tier: "memory",
+      tier: "instructions",
       scope: "global",
       operation: "add",
       title: "Save reusable command",
       rationale: "User asked Ask Agent to remember it as a command.",
       content: "Draft a concise checklist-based smoke-test note.",
     });
-    const memoryPath = path.join(homeDir, ".agentlink", "memory.md");
+    const instructionsPath = path.join(homeDir, ".agentlink", "CLAUDE.md");
     const commandPath = path.join(
       homeDir,
       ".agentlink",
@@ -179,7 +183,7 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
       memoryName: "smoke-note",
     });
 
-    await expect(fs.readFile(memoryPath, "utf-8")).rejects.toMatchObject({
+    await expect(fs.readFile(instructionsPath, "utf-8")).rejects.toMatchObject({
       code: "ENOENT",
     });
     await expect(fs.readFile(commandPath, "utf-8")).resolves.toBe(
@@ -189,13 +193,63 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
     await fs.rm(homeDir, { recursive: true, force: true });
   });
 
-  it("blocks project-scoped durable memory from projectless Ask Agent", async () => {
+  it("rejects low-authority memory proposals in favor of autonomous management", async () => {
     const homeDir = await makeHome();
     const bridge = new BrowserGatewayAskAgentMemoryProposalBridge({ homeDir });
 
     await expect(
       bridge.propose({
         tier: "memory",
+        scope: "global",
+        operation: "add",
+        title: "Remember preference",
+        rationale: "Low-authority memory does not require approval.",
+        content: "User prefers concise answers.",
+      }),
+    ).rejects.toThrow(
+      "Low-authority memory must use autonomous memory management",
+    );
+    expect(bridge.getPendingApproval()).toBeNull();
+
+    await fs.rm(homeDir, { recursive: true, force: true });
+  });
+
+  it("rejects retargeting authoritative approval to low-authority memory", async () => {
+    const homeDir = await makeHome();
+    const bridge = new BrowserGatewayAskAgentMemoryProposalBridge({ homeDir });
+    const approval = await bridge.propose({
+      tier: "instructions",
+      scope: "global",
+      operation: "add",
+      title: "Add instruction",
+      rationale: "Authoritative configuration requires review.",
+      content: "Use focused validation.",
+    });
+
+    await expect(
+      bridge.submitDecision({
+        type: "decision",
+        id: approval.id,
+        decision: "accept",
+        memoryTier: "memory",
+      }),
+    ).rejects.toThrow(
+      "Low-authority memory must use autonomous memory management",
+    );
+    await expect(
+      fs.readFile(path.join(homeDir, ".agentlink", "memory.md"), "utf-8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    await fs.rm(homeDir, { recursive: true, force: true });
+  });
+
+  it("blocks project-scoped authoritative configuration from projectless Ask Agent", async () => {
+    const homeDir = await makeHome();
+    const bridge = new BrowserGatewayAskAgentMemoryProposalBridge({ homeDir });
+
+    await expect(
+      bridge.propose({
+        tier: "instructions",
         scope: "project",
         operation: "add",
         title: "Remember project detail",
@@ -211,7 +265,7 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
     const homeDir = await makeHome();
     const bridge = new BrowserGatewayAskAgentMemoryProposalBridge({ homeDir });
     const approval = await bridge.propose({
-      tier: "memory",
+      tier: "instructions",
       scope: "global",
       operation: "add",
       title: "Remember preference",
@@ -229,7 +283,7 @@ describe("BrowserGatewayAskAgentMemoryProposalBridge", () => {
       }),
     ).rejects.toThrow("Project-scoped durable memory is unavailable here");
     await expect(
-      fs.readFile(path.join(homeDir, ".agentlink", "memory.md"), "utf-8"),
+      fs.readFile(path.join(homeDir, ".agentlink", "CLAUDE.md"), "utf-8"),
     ).rejects.toMatchObject({ code: "ENOENT" });
 
     await fs.rm(homeDir, { recursive: true, force: true });

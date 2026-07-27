@@ -1,3 +1,5 @@
+import type { RetrievalFingerprint } from "../core/retrieval/contracts.js";
+
 // Shared IPC protocol types between extension host and child process.
 // IMPORTANT: No `vscode` imports — this must be usable from both sides.
 
@@ -12,10 +14,11 @@ export interface StartIndexMessage {
   /** Absolute file paths to index */
   files: string[];
   workspaceRoot: string;
-  /** Qdrant collection name, e.g. "al-{hash16}" */
-  collectionName: string;
-  qdrantUrl: string;
-  embeddingBearerToken: string;
+  /** Stable workspace partition used by caches and structural projections. */
+  indexName: string;
+  workspaceScopeId: string;
+  retrievalStoreRoot: string;
+  embeddingBearerToken: string | undefined;
   /** Filesystem path for the hash cache JSON file */
   cachePath: string;
   /** If true, delete collection and re-index from scratch */
@@ -41,9 +44,10 @@ export interface IncrementalUpdateMessage {
   /** Deleted file paths (absolute) */
   removed: string[];
   workspaceRoot: string;
-  collectionName: string;
-  qdrantUrl: string;
-  embeddingBearerToken: string;
+  indexName: string;
+  workspaceScopeId: string;
+  retrievalStoreRoot: string;
+  embeddingBearerToken: string | undefined;
   cachePath: string;
   /** Chunk granularity level */
   granularity: ChunkGranularity;
@@ -74,11 +78,19 @@ export interface ProgressMessage {
   detail?: string;
 }
 
+export type IndexChunkingFallbackReason =
+  | "tree_sitter_not_initialized"
+  | "tree_sitter_grammar_unavailable"
+  | "tree_sitter_parser_failure"
+  | "tree_sitter_extractor_unavailable"
+  | "tree_sitter_no_chunks";
+
 export interface IndexWorkerMetricsSnapshot {
   operations: Record<string, number>;
   cacheWriteBytes: number;
-  cacheWriteBytesByKind: Record<"vector" | "structural", number>;
+  cacheWriteBytesByKind: Record<"retrieval" | "structural", number>;
   phaseDurationsMs: Record<string, number>;
+  chunkingFallbacks: Record<IndexChunkingFallbackReason, number>;
   maxActiveReads: number;
   maxRetainedContentBytes: number;
   maxHeapUsedBytes: number;
@@ -89,10 +101,10 @@ export interface IndexStats {
   /** Total files in the index (cache) after this run */
   totalFilesInIndex: number;
   chunksCreated: number;
-  /** Total chunks (points) across all cached files */
+  /** Total retrieval chunks across all cached files */
   totalChunksInIndex: number;
-  pointsUpserted: number;
-  pointsDeleted: number;
+  recordsUpserted: number;
+  recordsDeleted: number;
   durationMs: number;
   errors: string[];
   /** True if this run was cancelled before completing */
@@ -136,8 +148,8 @@ export type WorkerToExtensionMessage =
 export interface CachedFileEntry {
   /** SHA-256 hex digest of file content */
   hash: string;
-  /** Qdrant point IDs for this file's chunks */
-  pointIds: string[];
+  /** Retrieval record IDs owned by this file revision. */
+  recordIds: string[];
   /** ISO timestamp of when this file was last indexed */
   indexedAt: string;
   /** File modification time (ms) — used for fast stat-based skip */
@@ -146,7 +158,7 @@ export interface CachedFileEntry {
   size?: number;
   /** Durable replacement generation for protocol-created entries. */
   generation?: string;
-  /** New points remain hidden until journal cleanup and publication complete. */
+  /** New records remain hidden until journal cleanup and publication complete. */
   visibility?: "pending" | "current";
 }
 
@@ -156,6 +168,8 @@ export interface IndexCache {
   files: Record<string, CachedFileEntry>;
   /** Granularity used when this cache was built */
   granularity?: ChunkGranularity;
+  /** Complete retrieval identity. Missing on legacy caches and rebuilt before reuse. */
+  fingerprint?: RetrievalFingerprint;
 }
 
 // ============================================================
@@ -172,6 +186,12 @@ export interface Chunk {
   startLine: number;
   /** 1-based end line */
   endLine: number;
+  /** Full semantic scope from outermost container to the chunk symbol/heading. */
+  scope?: string[];
+  symbolName?: string;
+  symbolKind?: string;
+  exported?: boolean;
+  language?: string;
   /**
    * Context-enriched text sent to the embedding model.
    * Includes file path header and optional parent scope.

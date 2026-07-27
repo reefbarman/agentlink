@@ -36,6 +36,26 @@ describe("ContextUsageTelemetry", () => {
     });
 
     telemetry.record({
+      kind: "request_context_attribution",
+      sessionId: "s1",
+      requestId: "request-1",
+      requestKind: "condense",
+      model: "claude-test",
+      estimatedInputTokens: 42_000,
+      toolResultAttributions: [
+        {
+          toolCallId: "call-1",
+          toolName: "read_file",
+          chars: 400,
+          bytes: 800,
+          estimatedTokens: 100,
+        },
+      ],
+      omittedToolResultAttributions: 2,
+      pinnedMemoryTokens: 300,
+      retrievedMemoryTokens: 700,
+    });
+    telemetry.record({
       kind: "condense",
       sessionId: "s1",
       model: "claude-test",
@@ -62,10 +82,29 @@ describe("ContextUsageTelemetry", () => {
       extensionVersion: string;
       event: { kind: string };
     }>;
-    expect(records).toHaveLength(2);
+    expect(records).toHaveLength(3);
     expect(records[0].type).toBe("context_usage_event");
     expect(records[0].extensionVersion).toBe("1.2.3");
+    expect(records[0]).toMatchObject({
+      event: {
+        kind: "request_context_attribution",
+        requestId: "request-1",
+        requestKind: "condense",
+        estimatedInputTokens: 42_000,
+        toolResultAttributions: [
+          {
+            toolCallId: "call-1",
+            bytes: 800,
+            estimatedTokens: 100,
+          },
+        ],
+        omittedToolResultAttributions: 2,
+        pinnedMemoryTokens: 300,
+        retrievedMemoryTokens: 700,
+      },
+    });
     expect(records.map((r) => r.event.kind)).toEqual([
+      "request_context_attribution",
       "condense",
       "context_jump",
     ]);

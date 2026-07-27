@@ -90,9 +90,9 @@ export function parseMatchedSlashCommand(
     return null;
   }
 
-  const command = slashCommands.find(
-    (candidate) => candidate.name === name || candidate.displayName === name,
-  );
+  const command =
+    slashCommands.find((candidate) => candidate.name === name) ??
+    slashCommands.find((candidate) => candidate.displayName === name);
   if (!command) {
     return null;
   }

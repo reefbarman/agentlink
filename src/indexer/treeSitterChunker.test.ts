@@ -1,11 +1,19 @@
-import { describe, it, expect, beforeAll, afterEach } from "vitest";
 import * as path from "path";
+
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+// For tests, we need a single directory containing both tree-sitter.wasm and
+// all grammar .wasm files. We'll create a temp dir with symlinks.
+import { existsSync, mkdtempSync, readdirSync, symlinkSync } from "fs";
 import {
   initTreeSitter,
   isTreeSitterSupported,
-  treeSitterChunkFile,
   setChunkGranularity,
+  treeSitterChunkFile,
+  treeSitterChunkFileDetailed,
 } from "./treeSitterChunker.js";
+
+import { MAX_CODE_INDEX_CHUNK_CHARS } from "./chunkQuality.js";
+import { tmpdir } from "os";
 
 // WASM files live in two places during tests:
 // - Core parser: node_modules/web-tree-sitter/web-tree-sitter.wasm
@@ -14,11 +22,6 @@ import {
 
 const CORE_WASM = path.resolve("node_modules/web-tree-sitter");
 const GRAMMAR_DIR = path.resolve("node_modules/@vscode/tree-sitter-wasm/wasm");
-
-// For tests, we need a single directory containing both tree-sitter.wasm and
-// all grammar .wasm files. We'll create a temp dir with symlinks.
-import { mkdtempSync, symlinkSync, readdirSync, existsSync } from "fs";
-import { tmpdir } from "os";
 
 let wasmDir: string;
 
@@ -338,6 +341,144 @@ export default hello;
     }
   });
 
+  it("adds full scope and canonical symbol metadata to class methods", async () => {
+    const lines = ["export class SearchService {"];
+    lines.push("  search() {");
+    for (let index = 0; index < 20; index++) {
+      lines.push(`    const value${index} = ${index};`);
+    }
+    lines.push("    return value0;");
+    lines.push("  }");
+    lines.push("}");
+    while (lines.length <= 30) lines.push("// padding for parser metadata");
+
+    const chunks = await treeSitterChunkFile(
+      lines.join("\n"),
+      "/workspace/src/services/search.ts",
+      "src/services/search.ts",
+    );
+    const method = chunks.find(
+      (chunk) => chunk.symbolName === "search" && chunk.symbolKind === "method",
+    );
+
+    expect(method).toMatchObject({
+      scope: ["class SearchService", "method search"],
+      exported: false,
+      language: "typescript",
+    });
+    expect(method!.embeddingContent).toContain(
+      "// src/services/search.ts\n// class SearchService > method search\n",
+    );
+    expect(method!.embeddingContent).not.toContain("/workspace/");
+    expect(
+      chunks.some(
+        (chunk) =>
+          chunk.symbolName === "SearchService" &&
+          chunk.symbolKind === "class" &&
+          chunk.exported === true,
+      ),
+    ).toBe(true);
+  });
+
+  it("hard-splits a giant line on the small-file fast path", async () => {
+    const content = `export const minified = "${"x".repeat(MAX_CODE_INDEX_CHUNK_CHARS * 2 + 1)}";`;
+    const chunks = await treeSitterChunkFile(
+      content,
+      "/workspace/src/minified.ts",
+      "src/minified.ts",
+    );
+
+    expect(chunks.length).toBeGreaterThan(2);
+    expect(chunks.map((chunk) => chunk.content).join("")).toBe(content);
+    expect(
+      chunks.every(
+        (chunk) =>
+          chunk.content.length <= MAX_CODE_INDEX_CHUNK_CHARS &&
+          chunk.startLine === 1 &&
+          chunk.endLine === 1 &&
+          chunk.language === "typescript" &&
+          chunk.embeddingContent?.startsWith("// src/minified.ts\n"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps small-file chunking stable while exposing all Python symbols", async () => {
+    const content = [
+      "def first():",
+      "    return 1",
+      "",
+      "class Worker:",
+      "    def run(self):",
+      "        return first()",
+    ].join("\n");
+
+    const result = await treeSitterChunkFileDetailed(
+      content,
+      "/workspace/small.py",
+      "small.py",
+    );
+
+    expect(result.chunks).toHaveLength(1);
+    expect(result.chunks[0]).toMatchObject({
+      content,
+      language: "python",
+      startLine: 1,
+      endLine: 6,
+    });
+    expect(result.symbols).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "first", kind: "function", line: 1 }),
+        expect.objectContaining({ name: "Worker", kind: "class", line: 4 }),
+        expect.objectContaining({
+          name: "run",
+          kind: "function",
+          line: 5,
+          scope: ["class Worker", "function run"],
+        }),
+      ]),
+    );
+  });
+
+  it("does not classify nested public Java members as module exports", async () => {
+    const content = [
+      "public class Worker {",
+      "    public int count = 0;",
+      "",
+      "    public Worker() {}",
+      "",
+      "    public void run() {",
+      "        count++;",
+      "    }",
+      "}",
+    ].join("\n");
+
+    const result = await treeSitterChunkFileDetailed(
+      content,
+      "/workspace/Worker.java",
+      "Worker.java",
+    );
+
+    expect(result.symbols).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Worker",
+          kind: "class",
+          exported: true,
+        }),
+        expect.objectContaining({
+          name: "Worker",
+          kind: "constructor",
+          exported: false,
+        }),
+        expect.objectContaining({
+          name: "run",
+          kind: "method",
+          exported: false,
+        }),
+      ]),
+    );
+  });
+
   it("handles Python files", async () => {
     const lines: string[] = [];
     lines.push("import os");
@@ -380,22 +521,27 @@ export default hello;
     expect(funcChunk!.embeddingContent).toBeDefined();
   });
 
-  it("returns empty for supported language without extractable types (fallback signal)", async () => {
-    // PowerShell is supported but has no EXTRACTABLE_TYPES → returns empty → caller uses line-based
+  it("classifies intentional line fallback for a language without an extractor", async () => {
     const lines: string[] = [];
     for (let i = 0; i < 40; i++) {
       lines.push(`Write-Host "line ${i}"`);
     }
     const content = lines.join("\n");
 
-    const chunks = await treeSitterChunkFile(
+    const result = await treeSitterChunkFileDetailed(
       content,
       "/workspace/script.ps1",
       "script.ps1",
     );
 
-    // No extractable types for powershell → empty array signals fallback
-    expect(chunks).toEqual([]);
+    expect(result).toEqual({
+      chunks: [],
+      symbols: [],
+      fallbackReason: "tree_sitter_extractor_unavailable",
+    });
+    expect(
+      await treeSitterChunkFile(content, "/workspace/script.ps1", "script.ps1"),
+    ).toEqual([]);
   });
 
   it("preserves correct 1-based line numbers", async () => {

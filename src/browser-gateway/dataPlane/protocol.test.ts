@@ -75,6 +75,29 @@ function checkpoint(
         softThresholdBudget: 144_000,
         hardBudget: 175_904,
       },
+      contextHealth: {
+        memory: {
+          status: "ready",
+          retrieval: "hybrid",
+          activeRecordCount: 7,
+        },
+        retrieval: {
+          status: "degraded",
+          lexical: "ready",
+          vector: "unavailable",
+          structural: "ready",
+          sourceCount: 12,
+          chunkCount: 48,
+          staleSourceCount: 2,
+          reason: "Vector retrieval is unavailable.",
+        },
+        index: {
+          status: "working",
+          state: "indexing",
+          current: 3,
+          total: 10,
+        },
+      },
       condenseThreshold: 0.8,
       agentWriteApproval: "session",
       commandApprovalPolicy: "approve-for-me",
@@ -466,6 +489,11 @@ describe("browser gateway owner protocol", () => {
         reasoningEffort: "medium",
         lastInputTokens: 11,
         contextBudget: { hardBudget: 175_904 },
+        contextHealth: {
+          memory: { status: "ready", activeRecordCount: 7 },
+          retrieval: { status: "degraded", sourceCount: 12 },
+          index: { status: "working", current: 3, total: 10 },
+        },
         agentWriteApproval: "session",
         commandApprovalPolicy: "approve-for-me",
         configuredCommandApprovalPolicy: "sensitive",
@@ -552,6 +580,66 @@ describe("browser gateway owner protocol", () => {
       "invalid_value",
       "$.catalog.chatWorkspace.tabs[0].status",
     );
+  });
+
+  it("keeps context health optional for legacy checkpoints", () => {
+    const legacyForeground = { ...checkpoint().foreground! };
+    delete legacyForeground.contextHealth;
+
+    expect(() =>
+      parseBrowserGatewayOwnerCheckpoint(
+        checkpoint({ foreground: legacyForeground }),
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects malformed nested context health", () => {
+    for (const [contextHealth, path] of [
+      [
+        {
+          ...checkpoint().foreground!.contextHealth!,
+          memory: {
+            ...checkpoint().foreground!.contextHealth!.memory,
+            status: "secret_backend_state",
+          },
+        },
+        "$.foreground.contextHealth.memory.status",
+      ],
+      [
+        {
+          ...checkpoint().foreground!.contextHealth!,
+          retrieval: {
+            ...checkpoint().foreground!.contextHealth!.retrieval,
+            sourceCount: -1,
+          },
+        },
+        "$.foreground.contextHealth.retrieval.sourceCount",
+      ],
+      [
+        {
+          ...checkpoint().foreground!.contextHealth!,
+          index: {
+            ...checkpoint().foreground!.contextHealth!.index,
+            rawError: "/Users/test/private-store",
+          },
+        },
+        "$.foreground.contextHealth.index.rawError",
+      ],
+    ] as const) {
+      expectProtocolError(
+        () =>
+          parseBrowserGatewayOwnerCheckpoint(
+            checkpoint({
+              foreground: {
+                ...checkpoint().foreground!,
+                contextHealth: contextHealth as never,
+              },
+            }),
+          ),
+        path.endsWith("rawError") ? "unknown_field" : "invalid_value",
+        path,
+      );
+    }
   });
 
   it("rejects invalid foreground correctness fields", () => {

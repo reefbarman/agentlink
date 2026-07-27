@@ -413,6 +413,14 @@ function classifyAskAgentRoute(
     case "questionProgress":
     case "memory":
     case "memoryClear":
+    case "autonomousMemoryHealth":
+    case "autonomousMemoryActivity":
+    case "autonomousMemoryQuery":
+    case "autonomousMemoryDetail":
+    case "autonomousMemoryManage":
+    case "autonomousMemoryClear":
+    case "autonomousMemoryExport":
+    case "autonomousMemoryImport":
     case "log":
     case "model":
     case "memoryProposal":

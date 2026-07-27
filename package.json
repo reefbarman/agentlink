@@ -498,13 +498,7 @@
           "scope": "resource",
           "type": "boolean",
           "default": false,
-          "description": "Enable semantic codebase search via Qdrant vector index. Requires Qdrant running and an OpenAI API key for embeddings."
-        },
-        "agentlink.qdrantUrl": {
-          "scope": "resource",
-          "type": "string",
-          "default": "http://localhost:6333",
-          "description": "Qdrant vector database URL for semantic codebase search"
+          "description": "Enable embedded local codebase retrieval. Lexical search works without embedding credentials; OpenAI embedding auth adds vector and hybrid ranking."
         },
         "agentlink.openaiCompatible.connections": {
           "scope": "machine",
@@ -808,6 +802,20 @@
           "default": 8,
           "description": "Maximum number of background agents running at once. Launches beyond the limit are queued and start as slots free up. Also caps concurrency per root session and per provider."
         },
+        "agentlink.memory.mode": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "off",
+            "autonomous"
+          ],
+          "enumDescriptions": [
+            "Disable typed autonomous memory tools while the feature is in dogfood.",
+            "Enable non-blocking, audited low-authority memory management and lexical recall. Authoritative instructions, skills, and commands still require reviewed proposals."
+          ],
+          "default": "off",
+          "description": "Dogfood control for typed autonomous low-authority memory. Memory records are secret-scanned, quota-bound, revisioned, auditable, and treated as evidence rather than instructions."
+        },
         "agentlink.autoIndex": {
           "scope": "resource",
           "type": "boolean",
@@ -915,6 +923,19 @@
           },
           "description": "Default thinking level per chat mode, keyed by mode slug. Manually selecting a thinking level in a mode updates that mode's saved preference."
         },
+        "agentlink.modelPromptProfiles": {
+          "scope": "resource",
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string",
+            "enum": [
+              "compatibility",
+              "reasoning"
+            ]
+          },
+          "description": "Exact model-ID prompt profile overrides. Compatibility preserves the full provider prompt; reasoning selects the independently authored compact prompt. Unknown models and invalid entries fail closed to compatibility."
+        },
         "agentlink.agentMaxTokens": {
           "scope": "resource",
           "type": "number",
@@ -997,6 +1018,16 @@
           "type": "boolean",
           "default": false,
           "description": "Use GPT-5.6 Pro reasoning mode on public OpenAI API-key requests. Pro mode prioritizes reliability over latency and token usage and is not sent to the ChatGPT/Codex OAuth backend or other models."
+        },
+        "agentlink.skills.disabledIds": {
+          "scope": "resource",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "uniqueItems": true,
+          "description": "Exact canonical skill IDs to disable for this workspace folder. Disabled skills and skills whose required dependencies become unavailable are omitted from prompt and slash-command advertisement. Use /skills to inspect detected skill identities."
         }
       }
     }
@@ -1004,7 +1035,8 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "package": "vsce package",
+    "package": "node scripts/package-vsix.mjs",
+    "package:retrieval-runtime": "node scripts/package-retrieval-runtime.mjs",
     "package:sandbox-runtime": "node scripts/package-sandbox-runtime.mjs",
     "release": "bash scripts/release.sh",
     "audit:assistant-runtime": "node scripts/audit-assistant-runtime.mjs",
@@ -1016,7 +1048,7 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "bash -c 'e=0; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; tsc -p src/terminal/webview/tsconfig.json --noEmit || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
-    "test": "vitest run && node --test scripts/browser-gateway-bundle-report.test.mjs",
+    "test": "vitest run && node --test scripts/browser-gateway-bundle-report.test.mjs scripts/package-retrieval-runtime.test.mjs scripts/report-context-jumps.test.mjs scripts/verify-retrieval-package.test.mjs",
     "test:watch": "vitest",
     "test:browser-gateway-security-gate": "node scripts/run-browser-gateway-security-gate.mjs",
     "test:browser-gateway-phase0-gate": "npm run test:browser-gateway-security-gate && BROWSER_GATEWAY_RUN_LOAD_GATE=1 vitest run src/browser-gateway/testing/stateEquivalenceOracle.test.ts src/browser-gateway/testing/ownerDataPlaneLoadFixture.test.ts",
@@ -1030,6 +1062,7 @@
     "@agentclientprotocol/sdk": "^1.1.0",
     "@anthropic-ai/sdk": "^0.111.0",
     "@jitl/quickjs-wasmfile-release-asyncify": "0.32.0",
+    "@lancedb/lancedb": "0.22.3",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@vscode/codicons": "^0.0.45",
     "@vscode/tree-sitter-wasm": "^0.3.1",
@@ -1037,6 +1070,7 @@
     "@xterm/addon-search": "0.15.0",
     "@xterm/addon-webgl": "0.18.0",
     "@xterm/xterm": "5.5.0",
+    "apache-arrow": "18.1.0",
     "bmp-js": "^0.1.0",
     "diff": "^9.0.0",
     "dompurify": "^3.4.11",
@@ -1055,6 +1089,7 @@
     "vega-embed": "^7.1.0",
     "vega-lite": "^6.4.3",
     "web-tree-sitter": "^0.26.10",
+    "yaml": "2.8.1",
     "zod": "^4.4.3",
     "zod-to-json-schema": "^3.25.2"
   },

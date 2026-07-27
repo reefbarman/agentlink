@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "fixtureRevision": "unified-context-v1",
+  "controllingPlan": "plans/unified-prompt-memory-context-architecture-plan.md",
+  "profiles": ["compatibility", "reasoning"],
+  "providerModelCohorts": [
+    {
+      "id": "anthropic-flagship",
+      "providerId": "anthropic",
+      "model": "claude-opus-4-8"
+    },
+    {
+      "id": "codex-flagship",
+      "providerId": "codex",
+      "model": "gpt-5.6-sol"
+    },
+    {
+      "id": "openai-compatible",
+      "providerId": "openai-compatible",
+      "model": "openai-compatible-eval"
+    },
+    {
+      "id": "gemini-flagship",
+      "providerId": "gemini",
+      "model": "gemini-2.5-pro"
+    }
+  ],
+  "modes": ["code", "architect", "ask", "debug", "review"],
+  "promptMatrix": {
+    "taskClasses": [
+      "small-bugfix",
+      "multi-file-refactor",
+      "architecture-plan",
+      "tool-contract-docs"
+    ],
+    "workspaceInstructionCohorts": ["none", "small", "large"],
+    "mcpCohorts": ["none", "small-inline", "large-deferred"],
+    "cacheCohorts": ["cold-first-turn", "warm-cached-turn"],
+    "minimumSamplesPerModelModeTaskCohort": 5,
+    "maximumTaskSuccessRegressionPercentagePoints": 2,
+    "allowSafetyApprovalOrStateRegression": false,
+    "requireCompositionBoundaryTestBeforeRemovingRuntimeMechanic": true
+  },
+  "postCondense": {
+    "sessionShapes": [
+      "compact-conversation",
+      "tool-result-heavy",
+      "multi-tool-batch",
+      "resumed-after-condense"
+    ],
+    "minimumSamplesPerModelModeSessionShape": 5,
+    "estimateGapP90MaxTokens": 2000,
+    "triggerTimingAbsoluteToleranceTokens": 2000
+  },
+  "implicitSkillActivation": {
+    "cohorts": [
+      {
+        "id": "explicit-domain-language",
+        "precisionFloor": 0.95,
+        "recallFloor": 0.9
+      },
+      {
+        "id": "ambiguous-domain-language",
+        "precisionFloor": 0.9,
+        "recallFloor": 0.85
+      },
+      {
+        "id": "negative-neighbor-tasks",
+        "precisionFloor": 0.95,
+        "recallFloor": 0.85
+      }
+    ],
+    "explicitIdentityAndRevisionAccuracyFloor": 1,
+    "minimumPositiveCasesPerCohort": 20,
+    "minimumNegativeCasesPerCohort": 20,
+    "maximumUnnecessaryLoadRate": 0.05
+  },
+  "nativeToolDiscovery": {
+    "maximumTaskFailureRateAttributableToDiscovery": 0.05,
+    "maximumMedianAdditionalRoundTrips": 1,
+    "maximumP95AdditionalRoundTrips": 2,
+    "minimumExecutableOrDiscoverableCoverage": 1,
+    "minimumDisclosedAndAuthorizedAccuracy": 1
+  },
+  "context": {
+    "combinedReasoningPromptAndNativeToolFloorMaxTokens": 18000,
+    "ordinaryTurnRecalledMemoryMaxTokens": 1500,
+    "omitMemoryBelowRetrievalThreshold": true
+  },
+  "retrieval": {
+    "minimumQualityVersusQdrantBaseline": 1,
+    "requireImprovedExactPathIdentifierDiversity": true,
+    "compareRawBackendScores": false,
+    "requireStaleSourceSuppression": true
+  },
+  "memory": {
+    "allowContestedSupersededOrExpiredAutomaticReturn": false,
+    "conflictOutcome": "grounded-current-or-contested",
+    "allowContradictionBlending": false,
+    "requireLexicalOnlyCrudRecallDedupeConflictAuditUndo": true,
+    "requireExplicitLexicalOnlyHealth": true
+  },
+  "packaging": {
+    "requireAllSupportedTargetsBeforeQdrantRemoval": true
+  }
+}

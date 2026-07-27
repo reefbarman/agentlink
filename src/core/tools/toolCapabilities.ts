@@ -5,6 +5,28 @@ export type ToolSideEffect =
   | "control"
   | "external";
 export type ToolApprovalRequirement = "never" | "policy" | "always";
+export type NativeToolAvailabilityKind =
+  | "mode-group"
+  | "native-bridge"
+  | "artifact-loader"
+  | "mcp-bridge"
+  | "session-control"
+  | "foreground-control"
+  | "background-control"
+  | "benchmark-only"
+  | "dev-only"
+  | "dormant";
+export type NativeToolDefinitionSource =
+  | "registry-schema"
+  | "adapter-definition"
+  | "engine-inline";
+export type NativeToolExecutionRoute = "runtime-dispatch" | "engine-inline";
+export type NativeToolTelemetryOwner = "runtime" | "engine";
+export type NativeToolDisclosureClass =
+  | "essential"
+  | "eligible"
+  | "hidden"
+  | "dormant";
 
 export interface ToolCapabilityMetadata {
   name: string;
@@ -30,7 +52,76 @@ export interface ToolCapabilityMetadata {
   /** ToolResult.data/error fields are authoritative on every return path. */
   canonicalResult?: boolean;
   devOnly?: boolean;
+  /** Primary runtime gate. Secondary mode/profile/skill gates can only narrow it. */
+  availability: Readonly<{ kind: NativeToolAvailabilityKind }>;
+  /** Current owner of the provider-facing definition and input schema. */
+  definitionSource: NativeToolDefinitionSource;
+  /** Current execution seam. Canonicalization must not bypass this route. */
+  executionRoute: NativeToolExecutionRoute;
+  /** Prevents contract migrations from double-recording or dropping usage. */
+  telemetryOwner: NativeToolTelemetryOwner;
+  /** Stage 10 eligibility only; it does not itself alter provider disclosure. */
+  disclosure: NativeToolDisclosureClass;
 }
+
+const NATIVE_BRIDGE_TOOLS = new Set(["find_native_tools", "call_native_tool"]);
+const ARTIFACT_LOADER_TOOLS = new Set(["load_rule", "load_skill"]);
+const MCP_BRIDGE_TOOLS = new Set([
+  "find_mcp_tools",
+  "call_mcp_tool",
+  "list_mcp_resources",
+  "read_mcp_resource",
+  "list_mcp_prompts",
+  "get_mcp_prompt",
+]);
+const SESSION_CONTROL_TOOLS = new Set([
+  "ask_user",
+  "todo_write",
+  "set_task_status",
+  "switch_mode",
+]);
+const FOREGROUND_CONTROL_TOOLS = new Set(["respond_to_background_question"]);
+const BACKGROUND_CONTROL_TOOLS = new Set([
+  "spawn_background_agent",
+  "get_background_status",
+  "get_background_result",
+  "kill_background_agent",
+  "steer_background_agent",
+  "detach_background_agent",
+  "start_fleet_workflow",
+  "schedule_fleet_workflow",
+  "get_fleet_workflow_result",
+  "manage_fleet_automations",
+]);
+const BENCHMARK_ONLY_TOOLS = new Set([
+  "get_completions",
+  "get_inlay_hints",
+  "get_code_actions",
+  "apply_code_action",
+]);
+const DORMANT_TOOLS = new Set(["show_notification"]);
+const ESSENTIAL_TOOLS = new Set([
+  "web_search",
+  "web_fetch",
+  "read_file",
+  "get_context",
+  "list_files",
+  "search_files",
+  "write_file",
+  "apply_diff",
+  "find_and_replace",
+  "execute_command",
+  "get_terminal_output",
+  "ask_user",
+  "todo_write",
+  "set_task_status",
+  "switch_mode",
+  "load_rule",
+  "load_skill",
+  "find_native_tools",
+  "call_native_tool",
+  ...MCP_BRIDGE_TOOLS,
+]);
 
 const toolCapabilities = [
   // External web
@@ -52,6 +143,22 @@ const toolCapabilities = [
   ),
 
   // Read/search/context
+  metadata(
+    "find_native_tools",
+    "search",
+    ["tools.native.discover"],
+    "read",
+    "never",
+    true,
+  ),
+  metadata(
+    "call_native_tool",
+    "session",
+    ["tools.native.invoke"],
+    "control",
+    "never",
+    false,
+  ),
   metadata(
     "read_file",
     "read",
@@ -193,9 +300,25 @@ const toolCapabilities = [
     false,
   ),
   metadata(
+    "manage_memory",
+    "memory",
+    ["memory.manage", "memory.audit", "memory.lowAuthority"],
+    "write",
+    "never",
+    false,
+  ),
+  metadata(
+    "recall_memory",
+    "memory",
+    ["memory.recall", "memory.lowAuthority"],
+    "read",
+    "never",
+    true,
+  ),
+  metadata(
     "propose_memory",
     "memory",
-    ["memory.propose", "edit.review"],
+    ["memory.propose.authoritative", "edit.review"],
     "write",
     "always",
     false,
@@ -575,6 +698,16 @@ function metadata(
   composable?: boolean,
   canonicalResult?: boolean,
 ): ToolCapabilityMetadata {
+  const availability = resolveAvailability(name, devOnly);
+  const definitionSource: NativeToolDefinitionSource =
+    name === "todo_write"
+      ? "engine-inline"
+      : availability.kind === "mcp-bridge" ||
+          availability.kind === "session-control" ||
+          availability.kind === "background-control"
+        ? "adapter-definition"
+        : "registry-schema";
+  const engineInline = definitionSource === "engine-inline";
   return {
     name,
     cluster,
@@ -585,5 +718,47 @@ function metadata(
     composable,
     canonicalResult,
     devOnly,
+    availability,
+    definitionSource,
+    executionRoute: engineInline ? "engine-inline" : "runtime-dispatch",
+    telemetryOwner: engineInline ? "engine" : "runtime",
+    disclosure:
+      availability.kind === "dormant"
+        ? "dormant"
+        : ESSENTIAL_TOOLS.has(name) || definitionSource === "adapter-definition"
+          ? "essential"
+          : availability.kind === "artifact-loader"
+            ? "hidden"
+            : "eligible",
   };
+}
+
+function resolveAvailability(
+  name: string,
+  devOnly: boolean | undefined,
+): Readonly<{ kind: NativeToolAvailabilityKind }> {
+  if (DORMANT_TOOLS.has(name)) return Object.freeze({ kind: "dormant" });
+  if (devOnly) return Object.freeze({ kind: "dev-only" });
+  if (NATIVE_BRIDGE_TOOLS.has(name)) {
+    return Object.freeze({ kind: "native-bridge" });
+  }
+  if (ARTIFACT_LOADER_TOOLS.has(name)) {
+    return Object.freeze({ kind: "artifact-loader" });
+  }
+  if (MCP_BRIDGE_TOOLS.has(name)) {
+    return Object.freeze({ kind: "mcp-bridge" });
+  }
+  if (FOREGROUND_CONTROL_TOOLS.has(name)) {
+    return Object.freeze({ kind: "foreground-control" });
+  }
+  if (BACKGROUND_CONTROL_TOOLS.has(name)) {
+    return Object.freeze({ kind: "background-control" });
+  }
+  if (SESSION_CONTROL_TOOLS.has(name)) {
+    return Object.freeze({ kind: "session-control" });
+  }
+  if (BENCHMARK_ONLY_TOOLS.has(name)) {
+    return Object.freeze({ kind: "benchmark-only" });
+  }
+  return Object.freeze({ kind: "mode-group" });
 }

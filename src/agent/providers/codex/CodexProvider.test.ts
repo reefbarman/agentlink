@@ -175,15 +175,18 @@ describe("CodexProvider.complete", () => {
     const authManager = makeAuthManager();
 
     const provider = new CodexProvider(authManager as never);
+    const attempts: string[] = [];
     const result = await provider.complete({
       model: "gpt-5.2-codex",
       systemPrompt: "system",
       messages: [{ role: "user", content: "ping" }],
       maxTokens: 64,
+      onProviderRequestAttempt: ({ model }) => attempts.push(model),
     });
 
     expect(authManager.forceRefreshModelAuth).toHaveBeenCalledTimes(1);
     expect(createMock).toHaveBeenCalledTimes(2);
+    expect(attempts).toEqual(["gpt-5.6-sol", "gpt-5.6-sol"]);
     expect(result.text).toBe("ok");
   });
 
@@ -210,17 +213,20 @@ describe("CodexProvider.complete", () => {
     });
 
     const provider = new CodexProvider(authManager as never);
+    const attempts: string[] = [];
     await expect(
       provider.complete({
         model: "gpt-5.2-codex",
         systemPrompt: "system",
         messages: [{ role: "user", content: "ping" }],
         maxTokens: 64,
+        onProviderRequestAttempt: ({ model }) => attempts.push(model),
       }),
     ).rejects.toThrow(/401 unauthorized/i);
 
     expect(authManager.forceRefreshModelAuth).toHaveBeenCalledTimes(1);
     expect(createMock).toHaveBeenCalledTimes(2);
+    expect(attempts).toEqual(["gpt-5.6-sol", "gpt-5.6-sol"]);
   });
 
   it("recreates OpenAI client when oauth token changes after refresh", async () => {
@@ -701,6 +707,39 @@ describe("CodexProvider.complete", () => {
       (parameters?.properties ?? {}) as Record<string, unknown>
     ).zeta as Record<string, unknown> | undefined;
     expect(zetaProperty?.format).toBeUndefined();
+  });
+
+  it("attributes each complete model-fallback transport attempt", async () => {
+    createMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Model not found gpt-5.6-luna"), {
+          status: 404,
+        }),
+      )
+      .mockImplementationOnce(async () =>
+        (async function* () {
+          yield {
+            type: "response.done",
+            response: {
+              id: "resp",
+              usage: { input_tokens: 1, output_tokens: 1 },
+            },
+          };
+        })(),
+      );
+
+    const provider = new CodexProvider(makeAuthManager() as never);
+    const attempts: string[] = [];
+    await provider.complete({
+      model: "gpt-5.6-luna",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+      onProviderRequestAttempt: ({ model }) => attempts.push(model),
+    });
+
+    expect(createMock).toHaveBeenCalledTimes(2);
+    expect(attempts).toEqual(["gpt-5.6-luna", "gpt-5.5"]);
   });
 
   it("propagates oauth auth failure when refresh returns null", async () => {
@@ -1240,16 +1279,19 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
 
     const provider = new CodexProvider(makeAuthManager() as never);
     const events = [];
+    const attempts: string[] = [];
     for await (const event of provider.stream({
       model: "gpt-5.6-luna",
       systemPrompt: "system",
       messages: [{ role: "user", content: "ping" }],
       maxTokens: 64,
+      onProviderRequestAttempt: ({ model }) => attempts.push(model),
     })) {
       events.push(event);
     }
 
     expect(attemptedModels).toEqual(["gpt-5.6-luna", "gpt-5.5"]);
+    expect(attempts).toEqual(["gpt-5.6-luna", "gpt-5.5"]);
     expect(events).toContainEqual({
       type: "model_fallback",
       requestedModel: "gpt-5.6-luna",

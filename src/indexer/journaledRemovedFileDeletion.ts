@@ -9,11 +9,16 @@ import {
   planRemovedFileDeletes,
   type RemovedFileDeleteInput,
 } from "./removedFileDeletion.js";
+import type { RetrievalRecordId } from "./retrievalPublicationPort.js";
+
+export interface RemovedFileDeletionPort {
+  deleteRecords(recordIds: RetrievalRecordId[]): Promise<void>;
+}
 
 export interface JournaledRemovedFileDeletionResult {
   completedRelPaths: string[];
   errors: string[];
-  pointsDeleted: number;
+  recordsDeleted: number;
   cancelled: boolean;
   pending: boolean;
 }
@@ -21,7 +26,7 @@ export interface JournaledRemovedFileDeletionResult {
 export async function executeJournaledRemovedFileDeletes(args: {
   journalPath: string;
   requestedFiles: RemovedFileDeleteInput[];
-  deleteBatch: (pointIds: string[]) => Promise<void>;
+  deleteRecords: RemovedFileDeletionPort["deleteRecords"];
   checkpointCompleted: (relPaths: string[]) => void;
   isCancelled: () => boolean;
   createId: () => string;
@@ -49,7 +54,7 @@ export async function executeJournaledRemovedFileDeletes(args: {
       kind: "remove",
       generation: args.createId(),
       targetHash: null,
-      oldPointIds: plan.pointIds,
+      oldRecordIds: plan.recordIds,
       intendedBatches: [],
     })),
   };
@@ -62,7 +67,7 @@ export async function executeJournaledRemovedFileDeletes(args: {
       ...removed.completedRelPaths,
     ],
     errors: [...recovered.errors, ...removed.errors],
-    pointsDeleted: recovered.pointsDeleted + removed.pointsDeleted,
+    recordsDeleted: recovered.recordsDeleted + removed.recordsDeleted,
     cancelled: removed.cancelled,
     pending: removed.pending,
   };
@@ -72,7 +77,7 @@ async function executeJournalOperations(
   journal: FileIndexJournal,
   args: {
     journalPath: string;
-    deleteBatch: (pointIds: string[]) => Promise<void>;
+    deleteRecords: RemovedFileDeletionPort["deleteRecords"];
     checkpointCompleted: (relPaths: string[]) => void;
     isCancelled: () => boolean;
   },
@@ -81,7 +86,7 @@ async function executeJournalOperations(
     return {
       completedRelPaths: [],
       errors: [],
-      pointsDeleted: 0,
+      recordsDeleted: 0,
       cancelled: args.isCancelled(),
       pending: false,
     };
@@ -91,11 +96,11 @@ async function executeJournalOperations(
     planRemovedFileDeletes(
       journal.operations.map((operation) => ({
         relPath: operation.file,
-        pointIds: operation.oldPointIds,
+        recordIds: operation.oldRecordIds,
       })),
     ),
     {
-      deleteBatch: args.deleteBatch,
+      deleteBatch: args.deleteRecords,
       isCancelled: args.isCancelled,
     },
   );

@@ -30,14 +30,13 @@ cd "$(dirname "$0")/.."
 NEW_VERSION=$(npm version "$BUMP" --no-git-tag-version)
 echo "Bumped version to $NEW_VERSION"
 
-# Build
-npm run build
+TARGET=$(node scripts/package-retrieval-runtime.mjs --print-target)
+echo "Packaging retrieval runtime for $TARGET"
 
-# Package VSIX into releases/
+# Build, package, and verify one platform-specific VSIX for the current host.
 mkdir -p releases
-npx @vscode/vsce package --no-dependencies --allow-star-activation --out releases/
-VSIX=$(ls -t releases/*.vsix | head -1)
-echo "Built $VSIX"
+VSIX="releases/agentlink-${NEW_VERSION#v}-${TARGET}.vsix"
+npm run package -- "$VSIX"
 
 if $INSTALL; then
   echo "Installing $VSIX to all profiles..."

@@ -83,13 +83,18 @@ describe("loadSkills", () => {
     const skills = await loadSkills(tmpDir, "code");
     expect(skills).toEqual(
       expect.arrayContaining([
-        {
+        expect.objectContaining({
+          id: expect.stringContaining("readonly-review"),
           name: "readonly-review",
           description: "Read-only review",
+          revision: expect.stringMatching(/^[a-f0-9]{64}$/),
           skillPath,
           allowedTools: ["read_file", "search_files"],
+          restrictions: {
+            allowedTools: ["read_file", "search_files"],
+          },
           invocation: "manual",
-        },
+        }),
       ]),
     );
   });

@@ -135,6 +135,10 @@ describe("memoryCandidates", () => {
 
     expect(reminder).toContain(MEMORY_CANDIDATE_MARKER);
     expect(reminder).toContain("possible durable user preference");
+    expect(reminder).toContain("manage_memory");
+    expect(reminder).toContain(
+      "use reviewed `propose_memory` only for authoritative",
+    );
     expect(reminder).not.toContain("call propose_memory with a secret");
     expect(reminder.length).toBeLessThanOrEqual(900);
   });

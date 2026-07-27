@@ -226,6 +226,7 @@ export class AnthropicProvider implements ModelProvider {
       hostedTools,
     }) as unknown as Anthropic.MessageCreateParams;
 
+    request.onProviderRequestAttempt?.({ model });
     const stream = withAgentLinkHttpActivity(request.onTransportActivity, () =>
       client.messages.stream(requestParams, {
         signal,
@@ -279,9 +280,13 @@ export class AnthropicProvider implements ModelProvider {
       params.thinking = { type: "disabled" };
     }
 
+    request.onProviderRequestAttempt?.({ model });
     const response = request.signal
-      ? await client.messages.create(requestParams, { signal: request.signal })
-      : await client.messages.create(requestParams);
+      ? await client.messages.create(requestParams, {
+          signal: request.signal,
+          maxRetries: 0,
+        })
+      : await client.messages.create(requestParams, { maxRetries: 0 });
 
     const text = response.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")

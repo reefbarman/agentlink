@@ -39,6 +39,7 @@ const mockPostMessage = vi.fn();
 const mockFindFiles = vi.fn(async () => [] as Array<{ fsPath: string }>);
 const mockOpenTextDocument = vi.fn(async (filePath: string) => ({ filePath }));
 const mockShowTextDocument = vi.fn(async () => undefined);
+const mockShowInformationMessage = vi.fn();
 const mockShowErrorMessage = vi.fn();
 const mockShowOpenDialog = vi.fn();
 const mockOutputChannel = {
@@ -326,7 +327,7 @@ vi.mock("vscode", () => ({
   RelativePattern: MockRelativePattern,
   window: {
     createOutputChannel: vi.fn(() => mockOutputChannel),
-    showInformationMessage: vi.fn(),
+    showInformationMessage: mockShowInformationMessage,
     showWarningMessage: vi.fn(),
     showErrorMessage: mockShowErrorMessage,
     showOpenDialog: mockShowOpenDialog,
@@ -1497,6 +1498,349 @@ describe("ChatViewProvider session state sync", () => {
     expect(submitBrowserSetModel).toHaveBeenCalledWith(
       "openrouter-moonshotai-kimi-k3",
     );
+  });
+
+  it("refreshes project skill projections in prompt, cache, then slash order", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const order: string[] = [];
+    const customizationRegistry = {
+      invalidate: vi.fn((projectId: string) => {
+        order.push(`invalidate:${projectId}`);
+      }),
+      clear: vi.fn(),
+    };
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+      customizationRegistry as never,
+    );
+    const rebuildSystemPrompts = vi.fn(async (projectId?: string) => {
+      order.push(`prompt:${projectId ?? "all"}`);
+    });
+    provider.setSessionManager({
+      rebuildSystemPrompts,
+      getForegroundSession: () => ({
+        projectScope: { projectId: "project-a" },
+      }),
+    } as never);
+    (
+      provider as unknown as {
+        getCustomizationSelection(): {
+          scope: { projectId: string };
+        };
+        sendSlashCommands(): Promise<void>;
+      }
+    ).getCustomizationSelection = () => ({
+      scope: { projectId: "project-a" },
+    });
+    (
+      provider as unknown as {
+        sendSlashCommands(): Promise<void>;
+      }
+    ).sendSlashCommands = vi.fn(async () => {
+      order.push("slash");
+    });
+
+    await provider.refreshSkillConfiguration("project-a");
+
+    expect(customizationRegistry.invalidate).toHaveBeenCalledWith("project-a");
+    expect(customizationRegistry.clear).not.toHaveBeenCalled();
+    expect(rebuildSystemPrompts).toHaveBeenCalledWith("project-a");
+    expect(order).toEqual([
+      "prompt:project-a",
+      "invalidate:project-a",
+      "slash",
+    ]);
+
+    provider.dispose();
+  });
+
+  it("retains cached and published skill commands when prompt rebuild fails", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const customizationRegistry = {
+      invalidate: vi.fn(),
+      clear: vi.fn(),
+    };
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+      customizationRegistry as never,
+    );
+    const rebuildSystemPrompts = vi
+      .fn<(projectId?: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("prompt rebuild failed"))
+      .mockResolvedValueOnce();
+    provider.setSessionManager({
+      rebuildSystemPrompts,
+      getForegroundSession: () => undefined,
+    } as never);
+    (
+      provider as unknown as {
+        getCustomizationSelection(): {
+          scope: { projectId: string };
+        };
+        sendSlashCommands(): Promise<void>;
+      }
+    ).getCustomizationSelection = () => ({
+      scope: { projectId: "project-a" },
+    });
+    const sendSlashCommands = vi.fn(async () => {});
+    (
+      provider as unknown as {
+        sendSlashCommands(): Promise<void>;
+      }
+    ).sendSlashCommands = sendSlashCommands;
+
+    await provider.refreshSkillConfiguration("project-a");
+
+    expect(customizationRegistry.invalidate).not.toHaveBeenCalled();
+    expect(customizationRegistry.clear).not.toHaveBeenCalled();
+    expect(sendSlashCommands).not.toHaveBeenCalled();
+
+    await provider.refreshSkillConfiguration("project-a");
+
+    expect(rebuildSystemPrompts).toHaveBeenCalledTimes(2);
+    expect(customizationRegistry.invalidate).toHaveBeenCalledOnce();
+    expect(customizationRegistry.invalidate).toHaveBeenCalledWith("project-a");
+    expect(sendSlashCommands).toHaveBeenCalledOnce();
+    provider.dispose();
+  });
+
+  it("suppresses a stale same-project slash load after refresh commits", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const customizationRegistry = {
+      invalidate: vi.fn(),
+      clear: vi.fn(),
+    };
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+      customizationRegistry as never,
+    );
+    provider.setSessionManager({
+      rebuildSystemPrompts: vi.fn(async () => {}),
+      getForegroundSession: () => undefined,
+    } as never);
+    const selection = {
+      scope: {
+        projectId: "project-a",
+        workspaceFolderUri: "file:///workspace/a",
+      },
+      mode: "code",
+    };
+    (
+      provider as unknown as {
+        getCustomizationSelection(): typeof selection;
+      }
+    ).getCustomizationSelection = () => selection;
+    type TestSlashCommand = { name: string; skillRevision?: string };
+    let resolveStale!: (commands: TestSlashCommand[]) => void;
+    const staleCommands = new Promise<TestSlashCommand[]>((resolve) => {
+      resolveStale = resolve;
+    });
+    const getCurrentSlashCommands = vi
+      .fn()
+      .mockReturnValueOnce(staleCommands)
+      .mockResolvedValueOnce([{ name: "fresh", skillRevision: "revision-2" }]);
+    (
+      provider as unknown as {
+        getCurrentSlashCommands: typeof getCurrentSlashCommands;
+      }
+    ).getCurrentSlashCommands = getCurrentSlashCommands;
+    const postMessage = vi.fn();
+    (
+      provider as unknown as {
+        postMessage: typeof postMessage;
+      }
+    ).postMessage = postMessage;
+    const sendSlashCommands = (
+      provider as unknown as { sendSlashCommands(): Promise<void> }
+    ).sendSlashCommands.bind(provider);
+
+    const stalePublication = sendSlashCommands();
+    await provider.refreshSkillConfiguration("project-a");
+    resolveStale([{ name: "stale", skillRevision: "revision-1" }]);
+    await stalePublication;
+
+    const updates = postMessage.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.type === "agentSlashCommandsUpdate");
+    expect(updates).toEqual([
+      {
+        type: "agentSlashCommandsUpdate",
+        commands: [{ name: "fresh", skillRevision: "revision-2" }],
+      },
+    ]);
+    provider.dispose();
+  });
+
+  it("does not cancel a foreground slash load when another project refreshes", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const customizationRegistry = {
+      invalidate: vi.fn(),
+      clear: vi.fn(),
+    };
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+      customizationRegistry as never,
+    );
+    provider.setSessionManager({
+      rebuildSystemPrompts: vi.fn(async () => {}),
+      getForegroundSession: () => undefined,
+    } as never);
+    const selection = {
+      scope: {
+        projectId: "project-a",
+        workspaceFolderUri: "file:///workspace/a",
+      },
+      mode: "code",
+    };
+    (
+      provider as unknown as {
+        getCustomizationSelection(): typeof selection;
+      }
+    ).getCustomizationSelection = () => selection;
+    let resolveProjectA!: (commands: Array<{ name: string }>) => void;
+    const projectACommands = new Promise<Array<{ name: string }>>((resolve) => {
+      resolveProjectA = resolve;
+    });
+    (
+      provider as unknown as {
+        getCurrentSlashCommands(): Promise<Array<{ name: string }>>;
+      }
+    ).getCurrentSlashCommands = vi.fn(() => projectACommands);
+    const postMessage = vi.fn();
+    (
+      provider as unknown as {
+        postMessage: typeof postMessage;
+      }
+    ).postMessage = postMessage;
+    const sendSlashCommands = (
+      provider as unknown as { sendSlashCommands(): Promise<void> }
+    ).sendSlashCommands.bind(provider);
+
+    const projectAPublication = sendSlashCommands();
+    await provider.refreshSkillConfiguration("project-b");
+    resolveProjectA([{ name: "project-a-current" }]);
+    await projectAPublication;
+
+    expect(customizationRegistry.invalidate).toHaveBeenCalledWith("project-b");
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "agentSlashCommandsUpdate",
+      commands: [{ name: "project-a-current" }],
+    });
+    provider.dispose();
+  });
+
+  it("serializes overlapping skill refresh transactions", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const order: string[] = [];
+    const releaseFirst: { current?: () => void } = {};
+    const customizationRegistry = {
+      invalidate: vi.fn((projectId: string) => {
+        order.push(`invalidate:${projectId}`);
+      }),
+      clear: vi.fn(),
+    };
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+      customizationRegistry as never,
+    );
+    const rebuildSystemPrompts = vi
+      .fn<(projectId?: string) => Promise<void>>()
+      .mockImplementationOnce(
+        (projectId) =>
+          new Promise<void>((resolve) => {
+            order.push(`prompt:${projectId}:start`);
+            releaseFirst.current = () => {
+              order.push(`prompt:${projectId}:end`);
+              resolve();
+            };
+          }),
+      )
+      .mockImplementationOnce(async (projectId) => {
+        order.push(`prompt:${projectId}`);
+      });
+    provider.setSessionManager({
+      rebuildSystemPrompts,
+      getForegroundSession: () => undefined,
+    } as never);
+    (
+      provider as unknown as {
+        getCustomizationSelection(): {
+          scope: { projectId: string };
+        };
+        sendSlashCommands(): Promise<void>;
+      }
+    ).getCustomizationSelection = () => ({
+      scope: { projectId: "project-a" },
+    });
+    (
+      provider as unknown as {
+        sendSlashCommands(): Promise<void>;
+      }
+    ).sendSlashCommands = vi.fn(async () => {
+      order.push("slash");
+    });
+
+    const first = provider.refreshSkillConfiguration("project-a");
+    const second = provider.refreshSkillConfiguration("project-a");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(rebuildSystemPrompts).toHaveBeenCalledTimes(1);
+    expect(customizationRegistry.invalidate).not.toHaveBeenCalled();
+    releaseFirst.current?.();
+    await Promise.all([first, second]);
+
+    expect(order).toEqual([
+      "prompt:project-a:start",
+      "prompt:project-a:end",
+      "invalidate:project-a",
+      "slash",
+      "prompt:project-a",
+      "invalidate:project-a",
+      "slash",
+    ]);
+
+    provider.dispose();
+  });
+
+  it("routes manual slash refresh through the unified skill transaction", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const selection = { scope: { projectId: "project-a" } };
+    provider.setSessionManager({
+      getForegroundSession: () => undefined,
+    } as never);
+    (
+      provider as unknown as {
+        getCustomizationSelection(): typeof selection;
+        getCurrentSlashCommands(): Promise<unknown[]>;
+      }
+    ).getCustomizationSelection = () => selection;
+    (
+      provider as unknown as {
+        getCurrentSlashCommands(): Promise<unknown[]>;
+      }
+    ).getCurrentSlashCommands = vi.fn(async () => [{ name: "helper" }]);
+    const refreshSkillConfiguration = vi
+      .spyOn(provider, "refreshSkillConfiguration")
+      .mockResolvedValue();
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({ command: "agentRefreshSlashCommands" });
+
+    expect(refreshSkillConfiguration).toHaveBeenCalledWith("project-a");
+    provider.dispose();
   });
 
   it("publishes MCP status changes through the existing owner callback", async () => {
@@ -3490,6 +3834,380 @@ describe("ChatViewProvider session state sync", () => {
     expect(projected?.detectedQuestion?.prompt).toContain("Should I proceed");
   });
 
+  it("opens /memory locally and derives project scope in the host", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = {
+      id: "session-memory",
+      mode: "code",
+      model: "test-model",
+      status: "idle",
+      projectScope: {
+        projectId: "project-host",
+        workspaceFolderUri: "file:///workspace/host",
+        displayName: "Host project",
+        rootPath: "/workspace/host",
+      },
+    };
+    const sendMessage = vi.fn();
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+      getWorkspaceProjects: vi.fn(() => [session.projectScope]),
+      sendMessage,
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    } as never);
+    const health = {
+      status: "ready" as const,
+      retrieval: "lexical-only" as const,
+      crud: true,
+      dedupe: true,
+      conflict: true,
+      auditUndo: true,
+      recordCount: 0,
+      activeRecordCount: 0,
+      auditEventCount: 0,
+    };
+    const query = vi.fn(async () => ({
+      result: { records: [], total: 0 },
+      health,
+    }));
+    const activity = vi.fn(async () => ({ events: [], health }));
+    const manageAsUser = vi.fn();
+    const clearScope = vi.fn();
+    const importArchive = vi.fn();
+    (
+      provider as unknown as { sendInitialState: ReturnType<typeof vi.fn> }
+    ).sendInitialState = vi.fn();
+    (
+      provider as unknown as { postMessage: ReturnType<typeof vi.fn> }
+    ).postMessage = mockPostMessage;
+    provider.setContextHealthSources({
+      memory: { health: vi.fn(async () => health) },
+      memoryInspection: {
+        health: vi.fn(async () => health),
+        query,
+        activity,
+        detail: vi.fn(async () => ({ detail: null, health })),
+        manageAsUser,
+        clearScope,
+        exportArchive: vi.fn(),
+        importArchive,
+      },
+      retrieval: {
+        health: vi.fn(async () => ({
+          status: "unavailable" as const,
+          lexical: "unavailable" as const,
+          scalar: "unavailable" as const,
+          vector: "not_configured" as const,
+          structural: "unavailable" as const,
+          embeddingCredentials: "not_required" as const,
+          reasons: ["generic_error" as const],
+          fingerprintDisposition: "initialize" as const,
+          pendingPublications: 0,
+          sourceCount: 0,
+          chunkCount: 0,
+          relationCount: 0,
+          staleSourceCount: 0,
+        })),
+      },
+      semanticIndexEnabled: false,
+    });
+    mockPostMessage.mockClear();
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "agentSlashCommand",
+      name: "memory",
+      args: "",
+    });
+
+    expect(query).toHaveBeenCalledWith({ scope: "global", limit: 100 });
+    expect(activity).toHaveBeenCalledWith({ scope: "global", limit: 50 });
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentMemoryPanelUpdate",
+        open: true,
+        scope: "global",
+        availableScopes: ["global", "project"],
+        snapshot: expect.objectContaining({ records: [], total: 0, health }),
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    mockPostMessage.mockClear();
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "agentMemoryQuery",
+      requestId: "memory-request-1",
+      open: true,
+      request: {
+        scope: "project",
+        projectId: "project-forged",
+        query: "concise",
+        limit: 500,
+      },
+    });
+
+    expect(query).toHaveBeenLastCalledWith({
+      scope: "project",
+      projectId: "project-host",
+      query: "concise",
+      limit: 200,
+    });
+    expect(activity).toHaveBeenLastCalledWith({
+      scope: "project",
+      projectId: "project-host",
+      limit: 50,
+    });
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentMemoryPanelUpdate",
+        requestId: "memory-request-1",
+        open: true,
+        scope: "project",
+        availableScopes: ["global", "project"],
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    for (const failure of [
+      {
+        operation: manageAsUser,
+        message: {
+          command: "agentMemoryManage",
+          requestId: "memory-manage-failure",
+          input: {
+            operation: "forget",
+            scope: "global",
+            target_id: "memory-private",
+            source_evidence: "User selected forget.",
+          },
+          request: { scope: "global" },
+        },
+        requestId: "memory-manage-failure",
+      },
+      {
+        operation: clearScope,
+        message: {
+          command: "agentMemoryClear",
+          requestId: "memory-clear-failure",
+          scope: "global",
+          confirm: true,
+          request: { scope: "global" },
+        },
+        requestId: "memory-clear-failure",
+      },
+      {
+        operation: importArchive,
+        message: {
+          command: "agentMemoryImport",
+          requestId: "memory-import-failure",
+          scope: "global",
+          archive: {},
+          request: { scope: "global" },
+        },
+        requestId: "memory-import-failure",
+      },
+    ]) {
+      failure.operation.mockRejectedValueOnce(
+        new Error("private memory path /Users/test/autonomous-memory"),
+      );
+      mockPostMessage.mockClear();
+      await (
+        provider as unknown as {
+          handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+        }
+      ).handleWebviewMessage(failure.message);
+      expect(mockPostMessage).toHaveBeenCalledWith({
+        type: "agentMemoryPanelUpdate",
+        requestId: failure.requestId,
+        scope: "global",
+        availableScopes: ["global", "project"],
+        error: "The memory operation could not be completed.",
+      });
+      expect(JSON.stringify(mockPostMessage.mock.calls)).not.toContain(
+        "/Users/test/autonomous-memory",
+      );
+    }
+  });
+
+  it("runs context doctor through the shared provider action without a model request", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const appendAssistantMessage = vi.fn();
+    const session = {
+      id: "session-doctor",
+      mode: "code",
+      model: "test-model",
+      status: "idle",
+      lastInputTokens: 4_200,
+      lastOutputTokens: 300,
+      lastCacheReadTokens: 1_000,
+      contextBreakdown: {
+        prompt: {
+          sections: [{ label: "system", chars: 400, estimatedTokens: 100 }],
+          totalChars: 400,
+          estimatedTokens: 100,
+          profile: "compatibility",
+          profileSource: "compatibility-default",
+        },
+      },
+      toolResultContextAttributions: [],
+      omittedToolResultContextAttributions: 0,
+      projectScope: {
+        projectId: "project-doctor",
+        workspaceFolderUri: "file:///workspace/doctor",
+        displayName: "Doctor",
+        rootPath: "/workspace/doctor",
+      },
+      getAllMessages: vi.fn(() => [
+        { role: "user", content: "Inspect context" },
+      ]),
+      appendAssistantMessage,
+    };
+    const saveSession = vi.fn();
+    const sendMessage = vi.fn();
+    const getSession = vi.fn<(sessionId: string) => typeof session | undefined>(
+      () => session,
+    );
+    const manager = {
+      getForegroundSession: vi.fn(() => session),
+      getSession,
+      getWorkspaceProjects: vi.fn(() => [{ id: "project-doctor" }]),
+      getCheckpoints: vi.fn(() => []),
+      saveSession,
+      sendMessage,
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+    const postSessionLoaded = vi.fn();
+    (
+      provider as unknown as {
+        postSessionLoaded: (session: unknown, options: unknown) => void;
+      }
+    ).postSessionLoaded = postSessionLoaded;
+
+    expect(provider.runContextDoctor("session-doctor")).toEqual({ ok: true });
+    expect(appendAssistantMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "assistant",
+        diagnosticOnly: true,
+        content: [
+          expect.objectContaining({
+            type: "text",
+            text: expect.stringContaining("# Context Doctor"),
+          }),
+        ],
+      }),
+    );
+    expect(saveSession).toHaveBeenCalledWith("session-doctor");
+    expect(postSessionLoaded).toHaveBeenCalledWith(session, {
+      checkpoints: undefined,
+      tailTurns: 0,
+    });
+
+    appendAssistantMessage.mockClear();
+    saveSession.mockClear();
+    postSessionLoaded.mockClear();
+    await expect(
+      provider.submitBrowserSend({
+        text: "/context-doctor",
+        sessionId: "session-doctor",
+        projectId: "project-doctor",
+        mode: "code",
+        isSlashCommand: true,
+        slashCommandLabel: "/context-doctor",
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(appendAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(saveSession).toHaveBeenCalledWith("session-doctor");
+    expect(postSessionLoaded).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(
+      mockPostMessage.mock.calls.some(
+        ([message]) => message.type === "agentCommittedUserMessage",
+      ),
+    ).toBe(false);
+    expect(provider.runContextDoctor("other-session")).toEqual({
+      ok: false,
+      error: "session_not_foreground",
+    });
+
+    for (const status of [
+      "queued",
+      "streaming",
+      "tool_executing",
+      "awaiting_approval",
+    ]) {
+      (session as { status: string }).status = status;
+      expect(provider.runContextDoctor("session-doctor")).toEqual({
+        ok: false,
+        error: "session_busy",
+      });
+    }
+    expect(appendAssistantMessage).toHaveBeenCalledTimes(1);
+
+    (session as { status: string }).status = "idle";
+    (
+      session as {
+        projectScope: {
+          projectId: string;
+          workspaceFolderUri: string;
+          displayName: string;
+          rootPath?: string;
+        };
+      }
+    ).projectScope = {
+      projectId: "projectless",
+      workspaceFolderUri: "agentlink://projectless",
+      displayName: "No folder",
+    };
+    expect(provider.runContextDoctor("session-doctor")).toEqual({
+      ok: false,
+      error: "workspace_session_required",
+    });
+
+    (session as { status: string }).status = "queued";
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "agentSlashCommand",
+      name: "context-doctor",
+      args: "",
+    });
+    expect(mockShowInformationMessage).toHaveBeenCalledWith(
+      "Context Doctor requires a workspace session.",
+    );
+
+    (session as { status: string }).status = "idle";
+    getSession.mockReturnValueOnce(undefined);
+    await expect(
+      provider.submitBrowserSend({
+        text: "/context-doctor",
+        sessionId: "missing-session",
+        mode: "code",
+      }),
+    ).resolves.toEqual({ ok: false, error: "no_active_session" });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("queues browser sends during an active turn without registering an interjection", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
@@ -4560,6 +5278,8 @@ describe("ChatViewProvider session state sync", () => {
       onSessionsChanged: undefined,
     };
     provider.setSessionManager(manager as never);
+    const recordContextUsage = vi.fn();
+    provider.setContextUsageTelemetry({ record: recordContextUsage } as never);
 
     const handleAgentEvent = (
       provider as unknown as {
@@ -4569,6 +5289,46 @@ describe("ChatViewProvider session state sync", () => {
         ) => void;
       }
     ).handleAgentEvent;
+    handleAgentEvent.call(provider, "session-1", {
+      type: "request_context_attribution",
+      requestId: "request-1",
+      requestKind: "agent",
+      model: "claude-sonnet-4-6",
+      estimatedInputTokens: 99,
+      toolResultContextAttributions: [
+        {
+          toolCallId: "call-distinctive",
+          toolName: "read_file",
+          chars: 321,
+          bytes: 654,
+          estimatedTokens: 87,
+        },
+      ],
+      omittedToolResultContextAttributions: 3,
+      pinnedMemoryTokens: 456,
+      retrievedMemoryTokens: 789,
+      contextLedger: {
+        contextWindowTokens: 200_000,
+        maxInputTokens: 180_000,
+        outputReservationTokens: 16_000,
+        safetyBufferTokens: 9_000,
+        hardInputLimitTokens: 171_000,
+        requestedInputTokens: 99,
+        allocatedInputTokens: 99,
+        remainingInputTokens: 170_901,
+        overflowTokens: 0,
+        layers: [
+          {
+            layer: "retrieved_context",
+            requestedTokens: 789,
+            budgetTokens: 1_500,
+            allocatedTokens: 789,
+            omittedTokens: 0,
+            required: false,
+          },
+        ],
+      },
+    });
     handleAgentEvent.call(provider, "session-1", {
       type: "api_request",
       requestId: "request-1",
@@ -4594,6 +5354,36 @@ describe("ChatViewProvider session state sync", () => {
       "session-1",
       expect.anything(),
     );
+    expect(recordContextUsage).toHaveBeenCalledWith({
+      kind: "request_context_attribution",
+      sessionId: "session-1",
+      requestId: "request-1",
+      requestKind: "agent",
+      model: "claude-sonnet-4-6",
+      estimatedInputTokens: 99,
+      toolResultAttributions: [
+        {
+          toolCallId: "call-distinctive",
+          toolName: "read_file",
+          chars: 321,
+          bytes: 654,
+          estimatedTokens: 87,
+        },
+      ],
+      omittedToolResultAttributions: 3,
+      pinnedMemoryTokens: 456,
+      retrievedMemoryTokens: 789,
+      contextLedger: expect.objectContaining({
+        hardInputLimitTokens: 171_000,
+        remainingInputTokens: 170_901,
+        layers: [
+          expect.objectContaining({
+            layer: "retrieved_context",
+            allocatedTokens: 789,
+          }),
+        ],
+      }),
+    });
 
     const projected = (
       provider as unknown as {
@@ -5201,6 +5991,176 @@ describe("ChatViewProvider session state sync", () => {
     );
   });
 
+  it("normalizes health producer failures without exposing exception text", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const sendInitialState = vi.fn();
+    (provider as unknown as { sendInitialState(): void }).sendInitialState =
+      sendInitialState;
+
+    provider.setContextHealthSources({
+      memory: {
+        health: vi.fn(async () => {
+          throw new Error("private memory path /Users/test/memory");
+        }),
+      },
+      retrieval: {
+        health: vi.fn(async () => {
+          throw new Error("private retrieval path /Users/test/retrieval");
+        }),
+      },
+      semanticIndexEnabled: false,
+    });
+    await provider.refreshContextHealth();
+
+    const snapshot = (
+      provider as unknown as { contextHealth: Record<string, unknown> }
+    ).contextHealth;
+    expect(snapshot).toEqual({
+      memory: {
+        status: "unavailable",
+        retrieval: "unavailable",
+        reason: "Autonomous memory is unavailable.",
+      },
+      retrieval: {
+        status: "unavailable",
+        lexical: "unavailable",
+        vector: "unavailable",
+        structural: "unavailable",
+        reason: "The retrieval store is unavailable.",
+      },
+      index: {
+        status: "disabled",
+        state: "disabled",
+        reason: "Semantic indexing is disabled.",
+      },
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("/Users/test");
+    expect(sendInitialState).toHaveBeenCalled();
+  });
+
+  it("keeps the latest index state and ignores stale health refreshes", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { sendInitialState(): void }).sendInitialState =
+      vi.fn();
+
+    let resolveFirstMemory!: (value: never) => void;
+    let resolveFirstRetrieval!: (value: never) => void;
+    let resolveSecondMemory!: (value: never) => void;
+    let resolveSecondRetrieval!: (value: never) => void;
+    const memoryHealth = vi
+      .fn()
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFirstMemory = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveSecondMemory = resolve;
+        }),
+      );
+    const retrievalHealth = vi
+      .fn()
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFirstRetrieval = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveSecondRetrieval = resolve;
+        }),
+      );
+    const privateProvider = provider as unknown as {
+      memoryHealthProvider: { health(): Promise<never> };
+      retrievalHealthProvider: { health(): Promise<never> };
+      contextHealth: {
+        memory: Record<string, unknown>;
+        retrieval: Record<string, unknown>;
+        index: Record<string, unknown>;
+      };
+    };
+    privateProvider.memoryHealthProvider = { health: memoryHealth };
+    privateProvider.retrievalHealthProvider = { health: retrievalHealth };
+
+    const first = provider.refreshContextHealth();
+    const second = provider.refreshContextHealth();
+    provider.updateContextIndexHealth(
+      { state: "indexing", current: 4, total: 10 },
+      true,
+    );
+    resolveSecondMemory({
+      status: "ready",
+      retrieval: "hybrid",
+      crud: true,
+      dedupe: true,
+      conflict: true,
+      auditUndo: true,
+      recordCount: 9,
+      activeRecordCount: 8,
+      auditEventCount: 3,
+    } as never);
+    resolveSecondRetrieval({
+      status: "ready",
+      lexical: "ready",
+      scalar: "ready",
+      vector: "ready",
+      structural: "ready",
+      embeddingCredentials: "available",
+      reasons: [],
+      fingerprintDisposition: "compatible",
+      pendingPublications: 0,
+      sourceCount: 12,
+      chunkCount: 48,
+      relationCount: 6,
+      staleSourceCount: 0,
+    } as never);
+    await second;
+
+    resolveFirstMemory({
+      status: "degraded",
+      retrieval: "lexical-only",
+      crud: true,
+      dedupe: true,
+      conflict: true,
+      auditUndo: true,
+      recordCount: 1,
+      activeRecordCount: 1,
+      auditEventCount: 1,
+    } as never);
+    resolveFirstRetrieval({
+      status: "unavailable",
+      lexical: "unavailable",
+      scalar: "unavailable",
+      vector: "unavailable",
+      structural: "unavailable",
+      embeddingCredentials: "missing",
+      reason: "store_unavailable",
+      reasons: ["store_unavailable"],
+      fingerprintDisposition: "initialize",
+      pendingPublications: 0,
+      sourceCount: 0,
+      chunkCount: 0,
+      relationCount: 0,
+      staleSourceCount: 0,
+    } as never);
+    await first;
+
+    expect(privateProvider.contextHealth).toMatchObject({
+      memory: { status: "ready", activeRecordCount: 8 },
+      retrieval: { status: "ready", sourceCount: 12, chunkCount: 48 },
+      index: { status: "working", state: "indexing", current: 4, total: 10 },
+    });
+  });
+
   it("pushes a fresh stateUpdate when sessions change", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
@@ -5279,6 +6239,25 @@ describe("ChatViewProvider session state sync", () => {
         interrupted: false,
         condenseThreshold: 0.8,
         contextBudget: undefined,
+        contextHealth: {
+          memory: {
+            status: "not_measured",
+            retrieval: "not_measured",
+            reason: "Health has not been measured yet.",
+          },
+          retrieval: {
+            status: "not_measured",
+            lexical: "not_measured",
+            vector: "not_measured",
+            structural: "not_measured",
+            reason: "Health has not been measured yet.",
+          },
+          index: {
+            status: "not_measured",
+            state: "not_measured",
+            reason: "Health has not been measured yet.",
+          },
+        },
         reasoningEffort: "none",
         thinkingEnabled: false,
         agentWriteApproval: undefined,

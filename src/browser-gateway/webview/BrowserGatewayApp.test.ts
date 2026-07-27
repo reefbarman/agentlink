@@ -48,13 +48,27 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     onExportTranscript?: () => void;
     onInterject?: (text: string, attachments: string[]) => void;
     onSelectModel?: (modelId: string) => void;
-    onSend?: (text: string, attachments: string[]) => void;
+    onSend?: (
+      text: string,
+      attachments: string[],
+      displayText?: string,
+      slashCommandLabel?: string,
+    ) => void;
     onSetReasoningEffort?: (effort: "none" | "low" | "medium" | "high") => void;
     onStop?: () => void;
     slashCommands?: Array<{ name: string }>;
     submitOnEnter?: boolean;
   }) =>
     h("div", { "data-testid": "mock-input-area" }, [
+      h(
+        "button",
+        {
+          type: "button",
+          "data-testid": "trigger-memory",
+          onClick: () => onExecuteBuiltinCommand?.("memory", ""),
+        },
+        "Trigger /memory",
+      ),
       h(
         "button",
         {
@@ -90,6 +104,21 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
           onClick: () => onSend?.("Ship it", []),
         },
         "Trigger send",
+      ),
+      h(
+        "button",
+        {
+          type: "button",
+          "data-testid": "trigger-remember",
+          onClick: () =>
+            onSend?.(
+              "/remember Keep browser answers concise",
+              [],
+              undefined,
+              "/remember",
+            ),
+        },
+        "Trigger /remember",
       ),
       onInterject
         ? h(
@@ -2919,292 +2948,377 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
   it("keeps Ask Agent pinned when no routed VS Code instances are available", async () => {
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
-    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      const pathname = url.startsWith("http")
-        ? new URL(url).pathname
-        : url.split("?")[0];
-      if (url.includes("/api/instances")) {
-        return jsonResponse({ currentInstanceId: "", instances: [] });
-      }
-      if (pathname === "/api/ask-agent/session") {
-        return jsonResponse(createAskAgentSessionResponse());
-      }
-      if (pathname === "/api/ask-agent/sessions") {
-        return jsonResponse({
-          sessions: [
-            {
-              id: "browser-gateway:ask-agent:default",
-              mode: "ask",
-              model: "gpt-5.3-codex",
-              title: "Saved Ask Agent chat",
-              messageCount: 2,
-              totalInputTokens: 0,
-              totalOutputTokens: 0,
-              createdAt: 100,
-              lastActiveAt: 200,
-            },
-          ],
-        });
-      }
-      if (pathname === "/api/ask-agent/session/new") {
-        const response = createAskAgentSessionResponse();
-        response.snapshot.session.foreground.sessionId =
-          "browser-gateway:ask-agent:next";
-        return jsonResponse({ ok: true, snapshot: response.snapshot });
-      }
-      if (pathname === "/api/ask-agent/session/copy-first-prompt") {
-        return jsonResponse({ ok: true, prompt: "Copied first prompt" });
-      }
-      if (pathname === "/api/ask-agent/memory") {
-        return jsonResponse({
-          ok: true,
-          memory: {
-            sessionSummaryCount: 1,
-            chunkSummaryCount: 2,
-            totalSummaryCount: 3,
-            lastUpdatedAt: 123456,
-            recentSessions: [
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const pathname = url.startsWith("http")
+          ? new URL(url).pathname
+          : url.split("?")[0];
+        if (url.includes("/api/instances")) {
+          return jsonResponse({ currentInstanceId: "", instances: [] });
+        }
+        if (pathname === "/api/ask-agent/session") {
+          return jsonResponse(createAskAgentSessionResponse());
+        }
+        if (pathname === "/api/ask-agent/sessions") {
+          return jsonResponse({
+            sessions: [
               {
-                sessionId: "browser-gateway:ask-agent:default",
-                title: "Derived summary title",
-                messageCount: 4,
-                updatedAt: 123456,
+                id: "browser-gateway:ask-agent:default",
+                mode: "ask",
+                model: "gpt-5.3-codex",
+                title: "Saved Ask Agent chat",
+                messageCount: 2,
+                totalInputTokens: 0,
+                totalOutputTokens: 0,
+                createdAt: 100,
+                lastActiveAt: 200,
               },
             ],
-          },
-        });
-      }
-      if (pathname === "/api/ask-agent/memory/clear") {
-        return jsonResponse({
-          ok: true,
-          memory: {
-            sessionSummaryCount: 0,
-            chunkSummaryCount: 0,
-            totalSummaryCount: 0,
-            lastUpdatedAt: null,
-            recentSessions: [],
-          },
-        });
-      }
-      if (pathname === "/api/ask-agent/memory/proposal") {
-        const response = createAskAgentSessionResponse();
-        response.snapshot.ui.approval = {
-          kind: "memory",
-          id: "ask-agent-memory-approval-1",
-          memoryTier: "memory",
-          memoryScope: "global",
-          memoryOperation: "add",
-          memoryTitle: "Remember from Ask Agent",
-          memoryRationale:
-            "Ask Agent detected a possible durable user preference.",
-          memoryTargetPath: "~/.agentlink/memory.md",
-          memoryContent: "Going forward, always ask me before switching modes.",
-        } as ApprovalRequest;
-        return jsonResponse({
-          ok: true,
-          approval: response.snapshot.ui.approval,
-          snapshot: response.snapshot,
-        });
-      }
-      if (pathname === "/api/ask-agent/memory/nudge/dismiss") {
-        const response = createAskAgentSessionResponse();
-        response.snapshot.session.foreground.projectedMessages = [
-          {
-            id: "ask-agent-user-1",
-            role: "user",
-            content: "Ship it",
-            timestamp: 200,
-            blocks: [{ type: "text", text: "Ship it" }],
-          },
-          {
-            id: "ask-agent-assistant-1",
-            role: "assistant",
-            content:
-              "I received your message, but Ask Agent model turns are not connected yet.",
-            timestamp: 201,
-            blocks: [
+          });
+        }
+        if (pathname === "/api/ask-agent/session/new") {
+          const response = createAskAgentSessionResponse();
+          response.snapshot.session.foreground.sessionId =
+            "browser-gateway:ask-agent:next";
+          return jsonResponse({ ok: true, snapshot: response.snapshot });
+        }
+        if (pathname === "/api/ask-agent/session/copy-first-prompt") {
+          return jsonResponse({ ok: true, prompt: "Copied first prompt" });
+        }
+        if (pathname === "/api/ask-agent/memory") {
+          return jsonResponse({
+            ok: true,
+            memory: {
+              sessionSummaryCount: 1,
+              chunkSummaryCount: 2,
+              totalSummaryCount: 3,
+              lastUpdatedAt: 123456,
+              recentSessions: [
+                {
+                  sessionId: "browser-gateway:ask-agent:default",
+                  title: "Derived summary title",
+                  messageCount: 4,
+                  updatedAt: 123456,
+                },
+              ],
+            },
+          });
+        }
+        if (pathname === "/api/ask-agent/memory/clear") {
+          return jsonResponse({
+            ok: true,
+            memory: {
+              sessionSummaryCount: 0,
+              chunkSummaryCount: 0,
+              totalSummaryCount: 0,
+              lastUpdatedAt: null,
+              recentSessions: [],
+            },
+          });
+        }
+        if (pathname === "/api/ask-agent/autonomous-memory/health") {
+          return jsonResponse({
+            ok: true,
+            health: {
+              status: "ready",
+              retrieval: "lexical-only",
+              crud: true,
+              dedupe: true,
+              conflict: true,
+              auditUndo: true,
+              recordCount: 2,
+              activeRecordCount: 1,
+              auditEventCount: 3,
+            },
+          });
+        }
+        if (pathname === "/api/ask-agent/autonomous-memory/activity") {
+          return jsonResponse({
+            ok: true,
+            events: [
               {
-                type: "text",
-                text: "I received your message, but Ask Agent model turns are not connected yet.",
+                id: "audit-browser-memory-reversible",
+                operation: "remember",
+                disposition: "created",
+                occurredAt: "2026-07-25T12:00:00.000Z",
+                actor: {
+                  source: "foreground_agent",
+                  observedAt: "2026-07-25T12:00:00.000Z",
+                  evidence: "User stated a durable preference.",
+                },
+                scope: { kind: "global", id: "agentlink-user" },
+                changes: [
+                  {
+                    recordId: "memory-browser-1",
+                    before: null,
+                    after: { statement: "Prefer concise browser answers." },
+                  },
+                ],
               },
             ],
-          },
-        ];
-        response.snapshot.ui.memoryCandidateNudge = null;
-        return jsonResponse({ ok: true, snapshot: response.snapshot });
-      }
-      if (pathname === "/api/ask-agent/retry") {
-        const response = createAskAgentSessionResponse();
-        response.snapshot.session.foreground.projectedMessages.push(
-          {
-            id: "ask-agent-user-retry",
-            role: "user",
-            content: "Retry me",
-            timestamp: 250,
-            blocks: [{ type: "text", text: "Retry me" }],
-          },
-          {
-            id: "ask-agent-assistant-retry",
-            role: "assistant",
-            content: "Retried successfully.",
-            timestamp: 251,
-            blocks: [{ type: "text", text: "Retried successfully." }],
-          },
-        );
-        return jsonResponse({ ok: true, snapshot: response.snapshot });
-      }
-      if (pathname === "/api/ask-agent/stop") {
-        const response = createAskAgentSessionResponse();
-        return jsonResponse({
-          ok: true,
-          stopped: true,
-          snapshot: response.snapshot,
-        });
-      }
-      if (url.includes("/api/ask-agent/send")) {
-        const snapshot = createAskAgentSessionResponse().snapshot;
-        snapshot.ui.memoryCandidateNudge = {
-          id: "ask-agent-memory-nudge-1",
-          sessionId: "browser-gateway:ask-agent:default",
-          createdAt: 200,
-          kind: "preference",
-          matchedPhrase: "Going forward, always ask me before switching modes.",
-          suggestedScope: "global",
-          suggestedTier: "memory",
-          title: "Remember from Ask Agent",
-          rationale:
-            "Ask Agent detected a possible durable user preference. Review before saving; persistence requires explicit approval.",
-          content: "Going forward, always ask me before switching modes.",
-        };
-        snapshot.session.foreground.projectedMessages.push(
-          {
-            id: "ask-agent-user-1",
-            role: "user",
-            content: "Ship it",
-            timestamp: 200,
-            blocks: [{ type: "text", text: "Ship it" }],
-          },
-          {
-            id: "ask-agent-assistant-1",
-            role: "assistant",
-            content:
-              "I received your message, but Ask Agent model turns are not connected yet.",
-            timestamp: 201,
-            blocks: [
+            health: {
+              status: "ready",
+              retrieval: "lexical-only",
+              crud: true,
+              dedupe: true,
+              conflict: true,
+              auditUndo: true,
+              recordCount: 2,
+              activeRecordCount: 1,
+              auditEventCount: 3,
+            },
+          });
+        }
+        if (pathname === "/api/ask-agent/autonomous-memory/query") {
+          return jsonResponse({
+            ok: true,
+            result: { records: [], total: 0 },
+            health: {
+              status: "ready",
+              retrieval: "lexical-only",
+              crud: true,
+              dedupe: true,
+              conflict: true,
+              auditUndo: true,
+              recordCount: 2,
+              activeRecordCount: 1,
+              auditEventCount: 3,
+            },
+          });
+        }
+        if (pathname === "/api/ask-agent/autonomous-memory/manage") {
+          const input = JSON.parse(String(init?.body ?? "{}")) as {
+            operation?: string;
+            statement?: string;
+          };
+          const response = createAskAgentSessionResponse();
+          const disposition =
+            input.operation === "undo"
+              ? "undone"
+              : input.statement === "Keep browser answers concise"
+                ? "rejected-sensitive"
+                : "created";
+          return jsonResponse({
+            ok: true,
+            result: {
+              disposition,
+              relatedRecords: [],
+              auditEventId: "audit-browser-memory-1",
+            },
+            snapshot: response.snapshot,
+          });
+        }
+        if (pathname === "/api/ask-agent/memory/nudge/dismiss") {
+          const response = createAskAgentSessionResponse();
+          response.snapshot.session.foreground.projectedMessages = [
+            {
+              id: "ask-agent-user-1",
+              role: "user",
+              content: "Ship it",
+              timestamp: 200,
+              blocks: [{ type: "text", text: "Ship it" }],
+            },
+            {
+              id: "ask-agent-assistant-1",
+              role: "assistant",
+              content:
+                "I received your message, but Ask Agent model turns are not connected yet.",
+              timestamp: 201,
+              blocks: [
+                {
+                  type: "text",
+                  text: "I received your message, but Ask Agent model turns are not connected yet.",
+                },
+              ],
+            },
+          ];
+          response.snapshot.ui.memoryCandidateNudge = null;
+          return jsonResponse({ ok: true, snapshot: response.snapshot });
+        }
+        if (pathname === "/api/ask-agent/retry") {
+          const response = createAskAgentSessionResponse();
+          response.snapshot.session.foreground.projectedMessages.push(
+            {
+              id: "ask-agent-user-retry",
+              role: "user",
+              content: "Retry me",
+              timestamp: 250,
+              blocks: [{ type: "text", text: "Retry me" }],
+            },
+            {
+              id: "ask-agent-assistant-retry",
+              role: "assistant",
+              content: "Retried successfully.",
+              timestamp: 251,
+              blocks: [{ type: "text", text: "Retried successfully." }],
+            },
+          );
+          return jsonResponse({ ok: true, snapshot: response.snapshot });
+        }
+        if (pathname === "/api/ask-agent/stop") {
+          const response = createAskAgentSessionResponse();
+          return jsonResponse({
+            ok: true,
+            stopped: true,
+            snapshot: response.snapshot,
+          });
+        }
+        if (url.includes("/api/ask-agent/send")) {
+          const snapshot = createAskAgentSessionResponse().snapshot;
+          snapshot.ui.memoryCandidateNudge = {
+            id: "ask-agent-memory-nudge-1",
+            sessionId: "browser-gateway:ask-agent:default",
+            createdAt: 200,
+            kind: "preference",
+            matchedPhrase:
+              "Going forward, always ask me before switching modes.",
+            suggestedScope: "global",
+            suggestedTier: "memory",
+            title: "Remember from Ask Agent",
+            rationale:
+              "Ask Agent detected a possible durable user preference for low-authority memory.",
+            content: "Going forward, always ask me before switching modes.",
+          };
+          snapshot.session.foreground.projectedMessages.push(
+            {
+              id: "ask-agent-user-1",
+              role: "user",
+              content: "Ship it",
+              timestamp: 200,
+              blocks: [{ type: "text", text: "Ship it" }],
+            },
+            {
+              id: "ask-agent-assistant-1",
+              role: "assistant",
+              content:
+                "I received your message, but Ask Agent model turns are not connected yet.",
+              timestamp: 201,
+              blocks: [
+                {
+                  type: "text",
+                  text: "I received your message, but Ask Agent model turns are not connected yet.",
+                },
+              ],
+            },
+          );
+          return jsonResponse({ ok: true, snapshot });
+        }
+        if (pathname === "/api/ask-agent/slash-commands") {
+          return jsonResponse({
+            commands: [
               {
-                type: "text",
-                text: "I received your message, but Ask Agent model turns are not connected yet.",
+                name: "remember",
+                description: "Remember durable preferences",
+                source: "builtin",
+                builtin: false,
+                body: "Review this session for durable learnings.",
+              },
+              {
+                name: "memory",
+                description:
+                  "Inspect and manage autonomous low-authority memory",
+                source: "builtin",
+                builtin: true,
+              },
+              {
+                name: "mcp",
+                description: "Show Ask Agent MCP server connection status",
+                source: "builtin",
+                builtin: true,
+              },
+              {
+                name: "mcp-config",
+                description: "Show Ask Agent MCP configuration status",
+                source: "builtin",
+                builtin: true,
+              },
+              {
+                name: "mcp-refresh",
+                description: "Reconnect Ask Agent MCP servers",
+                source: "builtin",
+                builtin: true,
+              },
+              {
+                name: "skill:skill-writing",
+                description: "Write Agent Skills",
+                source: "skill",
+                builtin: false,
+                body: "Use the skill by calling load_skill.",
               },
             ],
-          },
-        );
-        return jsonResponse({ ok: true, snapshot });
-      }
-      if (pathname === "/api/ask-agent/slash-commands") {
-        return jsonResponse({
-          commands: [
-            {
-              name: "remember",
-              description: "Remember durable preferences",
-              source: "builtin",
-              builtin: false,
-              body: "Review this session for durable learnings.",
-            },
-            {
-              name: "mcp",
-              description: "Show Ask Agent MCP server connection status",
-              source: "builtin",
-              builtin: true,
-            },
-            {
-              name: "mcp-config",
-              description: "Show Ask Agent MCP configuration status",
-              source: "builtin",
-              builtin: true,
-            },
-            {
-              name: "mcp-refresh",
-              description: "Reconnect Ask Agent MCP servers",
-              source: "builtin",
-              builtin: true,
-            },
-            {
-              name: "skill:skill-writing",
-              description: "Write Agent Skills",
-              source: "skill",
-              builtin: false,
-              body: "Use the skill by calling load_skill.",
-            },
-          ],
-        });
-      }
-      if (pathname === "/api/ask-agent/mcp-config") {
-        const configSnapshot = createAskAgentMcpConfigSnapshot();
-        return jsonResponse({
-          ok: true,
-          infos: configSnapshot.statusInfos,
-          configSnapshot,
-        });
-      }
-      if (pathname === "/api/ask-agent/mcp-refresh") {
-        const configSnapshot = createAskAgentMcpConfigSnapshot();
-        return jsonResponse({
-          ok: true,
-          infos: configSnapshot.statusInfos,
-          configSnapshot,
-        });
-      }
-      if (pathname === "/api/ask-agent/models") {
-        return jsonResponse({
-          models: [
-            {
-              id: "gpt-5.3-codex",
-              displayName: "GPT-5.3 Codex",
-              provider: "browser-gateway",
-              contextWindow: 200000,
-              authenticated: true,
-            },
-            {
-              id: "gpt-5.2-codex",
-              displayName: "GPT-5.2 Codex",
-              provider: "browser-gateway",
-              contextWindow: 200000,
-              authenticated: true,
-            },
-            {
-              id: "gpt-5.1-codex",
-              displayName: "GPT-5.1 Codex",
-              provider: "browser-gateway",
-              contextWindow: 200000,
-              authenticated: true,
-            },
-          ],
-          source: "cached",
-          publishedByOwnerId: "vscode-owner",
-          publishedAt: 123,
-        });
-      }
-      if (pathname === "/api/ask-agent/model") {
-        const response = createAskAgentSessionResponse();
-        response.snapshot.session.foreground.model = "gpt-5.3-codex";
-        return jsonResponse({ ok: true, snapshot: response.snapshot });
-      }
-      if (url.includes("/api/ask-agent/thinking")) {
-        const response = createAskAgentSessionResponse();
-        response.snapshot.session.foreground.reasoningEffort = "low";
-        response.snapshot.session.foreground.thinkingEnabled = true;
-        return jsonResponse({ ok: true, snapshot: response.snapshot });
-      }
-      if (url.includes("/api/ui-state")) return jsonResponse(createSnapshot());
-      if (url.includes("/api/slash-commands"))
-        return jsonResponse({ commands: [] });
-      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
-      if (url.includes("/api/models")) return jsonResponse({ models: [] });
-      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
-      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
-      return jsonResponse({ error: "not_found" }, 404);
-    });
+          });
+        }
+        if (pathname === "/api/ask-agent/mcp-config") {
+          const configSnapshot = createAskAgentMcpConfigSnapshot();
+          return jsonResponse({
+            ok: true,
+            infos: configSnapshot.statusInfos,
+            configSnapshot,
+          });
+        }
+        if (pathname === "/api/ask-agent/mcp-refresh") {
+          const configSnapshot = createAskAgentMcpConfigSnapshot();
+          return jsonResponse({
+            ok: true,
+            infos: configSnapshot.statusInfos,
+            configSnapshot,
+          });
+        }
+        if (pathname === "/api/ask-agent/models") {
+          return jsonResponse({
+            models: [
+              {
+                id: "gpt-5.3-codex",
+                displayName: "GPT-5.3 Codex",
+                provider: "browser-gateway",
+                contextWindow: 200000,
+                authenticated: true,
+              },
+              {
+                id: "gpt-5.2-codex",
+                displayName: "GPT-5.2 Codex",
+                provider: "browser-gateway",
+                contextWindow: 200000,
+                authenticated: true,
+              },
+              {
+                id: "gpt-5.1-codex",
+                displayName: "GPT-5.1 Codex",
+                provider: "browser-gateway",
+                contextWindow: 200000,
+                authenticated: true,
+              },
+            ],
+            source: "cached",
+            publishedByOwnerId: "vscode-owner",
+            publishedAt: 123,
+          });
+        }
+        if (pathname === "/api/ask-agent/model") {
+          const response = createAskAgentSessionResponse();
+          response.snapshot.session.foreground.model = "gpt-5.3-codex";
+          return jsonResponse({ ok: true, snapshot: response.snapshot });
+        }
+        if (url.includes("/api/ask-agent/thinking")) {
+          const response = createAskAgentSessionResponse();
+          response.snapshot.session.foreground.reasoningEffort = "low";
+          response.snapshot.session.foreground.thinkingEnabled = true;
+          return jsonResponse({ ok: true, snapshot: response.snapshot });
+        }
+        if (url.includes("/api/ui-state"))
+          return jsonResponse(createSnapshot());
+        if (url.includes("/api/slash-commands"))
+          return jsonResponse({ commands: [] });
+        if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+        if (url.includes("/api/models")) return jsonResponse({ models: [] });
+        if (url.includes("/api/sessions"))
+          return jsonResponse({ sessions: [] });
+        if (url.includes("/api/debug/refresh"))
+          return jsonResponse({ ok: true });
+        return jsonResponse({ error: "not_found" }, 404);
+      },
+    );
 
     render(
       h(BrowserGatewayApp, {
@@ -3230,10 +3344,10 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       expect(screen.getByTestId("model-count").textContent).toBe("3");
     });
     await waitFor(() => {
-      expect(screen.getByTestId("slash-command-count").textContent).toBe("5");
+      expect(screen.getByTestId("slash-command-count").textContent).toBe("6");
     });
     expect(screen.getByTestId("slash-command-names").textContent).toBe(
-      "remember,mcp,mcp-config,mcp-refresh,skill:skill-writing",
+      "remember,memory,mcp,mcp-config,mcp-refresh,skill:skill-writing",
     );
     expect(screen.getByTestId("thinking-visible").textContent).toBe("true");
     expect(screen.queryByText("Model credentials needed")).toBeNull();
@@ -3241,8 +3355,33 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(screen.queryByText("No pending file diffs.")).toBeNull();
     expect(screen.queryByTestId("browser-diff-viewer")).toBeNull();
 
+    const sendCallsBeforeMemory = fetchMock.mock.calls.filter(([input]) =>
+      String(input).includes("/api/ask-agent/send"),
+    ).length;
+    fireEvent.click(screen.getByTestId("trigger-memory"));
+    await screen.findByText("No matching memory records.");
+    await waitFor(() => {
+      const queryCall = fetchMock.mock.calls.find(
+        ([input]) => String(input) === "/api/ask-agent/autonomous-memory/query",
+      );
+      expect(queryCall).toBeTruthy();
+      expect(JSON.parse(String(queryCall?.[1]?.body ?? "{}"))).toEqual({
+        limit: 100,
+      });
+    });
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes("/api/ask-agent/send"),
+      ),
+    ).toHaveLength(sendCallsBeforeMemory);
+    fireEvent.click(screen.getByTitle("Close memory manager"));
+    await waitFor(() => {
+      expect(screen.queryByText("No matching memory records.")).toBeNull();
+    });
+
     fireEvent.click(screen.getByTitle("Ask Agent Memory"));
     await screen.findByText("Derived Ask Agent memory");
+    await screen.findByText("Autonomous memory");
     expect(screen.getByText("Session summaries")).toBeTruthy();
     expect(screen.getByText("Turn summaries")).toBeTruthy();
     expect(screen.getByText("Derived summary title")).toBeTruthy();
@@ -3253,6 +3392,48 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     ).toBeTruthy();
     expect(screen.queryByText("Private derived session summary")).toBeNull();
     expect(screen.queryByText("Raw transcript text")).toBeNull();
+    expect(screen.getByText("Recent global activity")).toBeTruthy();
+    expect(screen.getByText("remember · created")).toBeTruthy();
+    expect(screen.getByText("Prefer concise browser answers.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([input]) =>
+            String(input) === "/api/ask-agent/autonomous-memory/health",
+        ),
+      ).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(
+          ([input]) =>
+            String(input) === "/api/ask-agent/autonomous-memory/activity",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input, init]) => {
+          if (String(input) !== "/api/ask-agent/autonomous-memory/manage") {
+            return false;
+          }
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            operation?: string;
+            source_evidence?: string;
+            undo_audit_event_id?: string;
+            scope?: string;
+          };
+          return (
+            body.operation === "undo" &&
+            body.source_evidence ===
+              "Browser user selected undo from memory activity." &&
+            body.undo_audit_event_id === "audit-browser-memory-reversible" &&
+            body.scope === undefined
+          );
+        }),
+      ).toBe(true);
+    });
+    expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
     fireEvent.click(screen.getByText("Clear summaries…"));
     await screen.findByText(/Clear derived summaries only\?/);
     fireEvent.click(screen.getByText("Confirm clear"));
@@ -3358,29 +3539,68 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(
       screen.getByText("Going forward, always ask me before switching modes."),
     ).toBeTruthy();
-    fireEvent.click(screen.getByText("Review memory proposal"));
+    fireEvent.click(screen.getByText("Remember"));
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([input, init]) => {
-          if (String(input) !== "/api/ask-agent/memory/proposal") return false;
+          if (String(input) !== "/api/ask-agent/autonomous-memory/manage") {
+            return false;
+          }
           const body = JSON.parse(
             String((init as RequestInit).body ?? "{}"),
           ) as {
             nudgeId?: string;
-            content?: string;
+            operation?: string;
+            source_evidence?: string;
+            kind?: string;
+            statement?: string;
             scope?: string;
           };
           return (
             body.nudgeId === "ask-agent-memory-nudge-1" &&
-            body.content ===
+            body.operation === "remember" &&
+            body.kind === "preference" &&
+            body.statement ===
               "Going forward, always ask me before switching modes." &&
-            body.scope === "global"
+            body.source_evidence ===
+              "Ask Agent detected a possible durable user preference for low-authority memory." &&
+            body.scope === undefined
           );
         }),
       ).toBe(true);
     });
     await waitFor(() => {
       expect(screen.queryByText("Possible durable memory")).toBeNull();
+    });
+
+    fireEvent.click(screen.getByTestId("trigger-remember"));
+    await screen.findByText("Memory not changed (rejected-sensitive).");
+    expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input, init]) => {
+          if (String(input) !== "/api/ask-agent/autonomous-memory/manage") {
+            return false;
+          }
+          const body = JSON.parse(
+            String((init as RequestInit).body ?? "{}"),
+          ) as {
+            operation?: string;
+            source_evidence?: string;
+            kind?: string;
+            statement?: string;
+            nudgeId?: string;
+          };
+          return (
+            body.operation === "remember" &&
+            body.kind === "preference" &&
+            body.statement === "Keep browser answers concise" &&
+            body.source_evidence ===
+              "User invoked /remember in Browser Ask Agent." &&
+            body.nudgeId === undefined
+          );
+        }),
+      ).toBe(true);
     });
 
     const dismissSnapshot = createAskAgentSessionResponse().snapshot;
@@ -3468,7 +3688,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       suggestedTier: "memory",
       title: "Remember from Ask Agent",
       rationale:
-        "Ask Agent detected a possible durable user preference. Review before saving; persistence requires explicit approval.",
+        "Ask Agent detected a possible durable user preference for low-authority memory.",
       content: "Remember that I prefer concise answers.",
     };
     MockEventSource.instances[0]?.addEventListener.mock.calls.find(

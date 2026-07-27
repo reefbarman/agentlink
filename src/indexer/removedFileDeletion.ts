@@ -1,26 +1,28 @@
-export const QDRANT_DELETE_BATCH_SIZE = 256;
+import type { RetrievalRecordId } from "./retrievalPublicationPort.js";
+
+export const RECORD_DELETE_BATCH_SIZE = 256;
 
 export interface RemovedFileDeleteInput {
   relPath: string;
-  pointIds: string[];
+  recordIds: RetrievalRecordId[];
 }
 
 export interface RemovedFileDeletePlan {
   relPath: string;
-  pointIds: string[];
-  batches: string[][];
+  recordIds: RetrievalRecordId[];
+  batches: RetrievalRecordId[][];
 }
 
 export interface RemovedFileDeleteResult {
   completedRelPaths: string[];
   errors: string[];
-  pointsDeleted: number;
+  recordsDeleted: number;
   cancelled: boolean;
 }
 
 export function planRemovedFileDeletes(
   files: RemovedFileDeleteInput[],
-  batchSize = QDRANT_DELETE_BATCH_SIZE,
+  batchSize = RECORD_DELETE_BATCH_SIZE,
 ): RemovedFileDeletePlan[] {
   if (!Number.isInteger(batchSize) || batchSize <= 0) {
     throw new Error("Delete batch size must be a positive integer");
@@ -33,8 +35,8 @@ export function planRemovedFileDeletes(
     return [
       {
         relPath: file.relPath,
-        pointIds: [...file.pointIds],
-        batches: chunk(file.pointIds, batchSize),
+        recordIds: [...file.recordIds],
+        batches: chunk(file.recordIds, batchSize),
       },
     ];
   });
@@ -51,27 +53,27 @@ export function checkpointRemovedFileCaches(options: {
 export async function executeRemovedFileDeletes(
   plans: RemovedFileDeletePlan[],
   options: {
-    deleteBatch: (pointIds: string[]) => Promise<void>;
+    deleteBatch: (recordIds: RetrievalRecordId[]) => Promise<void>;
     isCancelled: () => boolean;
   },
 ): Promise<RemovedFileDeleteResult> {
   const completedRelPaths: string[] = [];
   const errors: string[] = [];
-  let pointsDeleted = 0;
+  let recordsDeleted = 0;
 
   for (const plan of plans) {
     if (options.isCancelled()) {
-      return { completedRelPaths, errors, pointsDeleted, cancelled: true };
+      return { completedRelPaths, errors, recordsDeleted, cancelled: true };
     }
 
     let complete = true;
     for (const batch of plan.batches) {
       if (options.isCancelled()) {
-        return { completedRelPaths, errors, pointsDeleted, cancelled: true };
+        return { completedRelPaths, errors, recordsDeleted, cancelled: true };
       }
       try {
         await options.deleteBatch(batch);
-        pointsDeleted += batch.length;
+        recordsDeleted += batch.length;
       } catch (error) {
         errors.push(`Failed to delete points for ${plan.relPath}: ${error}`);
         complete = false;
@@ -81,11 +83,14 @@ export async function executeRemovedFileDeletes(
     if (complete) completedRelPaths.push(plan.relPath);
   }
 
-  return { completedRelPaths, errors, pointsDeleted, cancelled: false };
+  return { completedRelPaths, errors, recordsDeleted, cancelled: false };
 }
 
-function chunk(values: string[], batchSize: number): string[][] {
-  const batches: string[][] = [];
+function chunk(
+  values: RetrievalRecordId[],
+  batchSize: number,
+): RetrievalRecordId[][] {
+  const batches: RetrievalRecordId[][] = [];
   for (let index = 0; index < values.length; index += batchSize) {
     batches.push(values.slice(index, index + batchSize));
   }

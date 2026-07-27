@@ -1,5 +1,8 @@
 import * as vscode from "vscode";
 import * as path from "path";
+import { createHash } from "crypto";
+import { existsSync } from "fs";
+import { readFile, stat } from "fs/promises";
 import picomatch from "picomatch";
 
 import {
@@ -16,12 +19,15 @@ import {
   getRipgrepBinPath,
   parseRipgrepOutput,
 } from "../util/ripgrep.js";
-import { getAlCollectionName } from "../indexer/collectionName.js";
 import { requestEmbeddings } from "../indexer/embeddingClient.js";
+import { resolveContainedCodeIndexPath } from "../indexer/codeIndexPaths.js";
 import {
-  DEFAULT_QDRANT_URL,
-  queryQdrantPoints,
-} from "../indexer/qdrantClient.js";
+  getCodeSourceId,
+  getCodeWorkspaceScopeId,
+} from "../indexer/codeRetrievalIdentity.js";
+import type { RetrievalHealthReason } from "../core/retrieval/contracts.js";
+import { LanceDbRetrievalRepository } from "../storage/retrieval/LanceDbRetrievalRepository.js";
+import { canonicalizePath } from "../util/canonicalPath.js";
 
 import { type ToolResult } from "../shared/types.js";
 import { getSemanticReadinessMessage } from "../shared/semanticReadiness.js";
@@ -37,13 +43,6 @@ function semanticConfiguration(
   return vscode.workspace.getConfiguration(
     "agentlink",
     workspacePath ? vscode.Uri.file(workspacePath) : undefined,
-  );
-}
-
-export function getQdrantUrl(workspacePath?: string): string {
-  return semanticConfiguration(workspacePath).get<string>(
-    "qdrantUrl",
-    DEFAULT_QDRANT_URL,
   );
 }
 
@@ -70,7 +69,7 @@ function semanticErrorPayload(
     | "missing_embeddings_auth"
     | "no_workspace"
     | "missing_index"
-    | "qdrant_unavailable"
+    | "store_unavailable"
     | "generic_error",
   options?: { detail?: string },
 ): Record<string, unknown> {
@@ -97,10 +96,10 @@ function semanticErrorPayload(
                   "Run 'AgentLink: Rebuild Codebase Index'.",
                   "Or click 'Index Codebase' in the AgentLink sidebar.",
                 ]
-              : reason === "qdrant_unavailable"
+              : reason === "store_unavailable"
                 ? [
-                    "Ensure Qdrant is running at the configured agentlink.qdrantUrl.",
                     "Check AgentLink output logs and retry semantic search.",
+                    "Rebuild the codebase index if the local retrieval store is damaged.",
                   ]
                 : [
                     "Retry semantic search after resolving the underlying error.",
@@ -110,15 +109,17 @@ function semanticErrorPayload(
 
 function classifySemanticReasonFromError(
   message: string,
-): "missing_index" | "qdrant_unavailable" | undefined {
+): "missing_index" | "store_unavailable" | undefined {
   if (/No codebase index found/i.test(message)) return "missing_index";
-  if (/Qdrant is not reachable/i.test(message)) return "qdrant_unavailable";
+  if (/retrieval store (?:is )?unavailable/i.test(message)) {
+    return "store_unavailable";
+  }
   return undefined;
 }
 
 function getWorkspaceRootsForSemanticQuery(
   dirPath: string,
-  options?: { includeAllWorkspaceRoots?: boolean },
+  options?: { includeAllWorkspaceRoots?: boolean; exactFile?: boolean },
 ): SemanticQueryTarget[] {
   const roots = getWorkspaceRoots();
   if (roots.length === 0) return [];
@@ -134,6 +135,10 @@ function getWorkspaceRootsForSemanticQuery(
     {
       workspacePath: queryRoot,
       directoryPrefix: getDirectoryPrefix(queryRoot, dirPath),
+      scope: {
+        absolutePath: dirPath,
+        kind: options?.exactFile ? "file" : "directory",
+      },
     },
   ];
 }
@@ -147,10 +152,10 @@ function getDirectoryPrefix(
 }
 
 function prefixResultPaths(
-  results: QdrantSearchResult[],
+  results: SemanticSearchRecord[],
   workspacePath: string,
   allWorkspaceRoots: string[],
-): QdrantSearchResult[] {
+): SemanticSearchRecord[] {
   if (allWorkspaceRoots.length <= 1) return results;
 
   const folder = vscode.workspace.getWorkspaceFolder(
@@ -191,8 +196,8 @@ async function generateEmbedding(
     maxRetries: EMBEDDING_MAX_RETRIES,
     retryFetchErrors: true,
     shouldRetryStatus: isRetryableEmbeddingStatus,
-    retryDelayMs: (attempt, random) =>
-      Math.min(500 * 2 ** attempt + random * 250, 5000),
+    retryDelayMs: (attempt, random, retryAfterMs) =>
+      Math.min(retryAfterMs ?? 500 * 2 ** attempt + random * 250, 5_000),
   });
   if (!embedding) {
     throw new Error("OpenAI API returned no embedding data");
@@ -200,25 +205,49 @@ async function generateEmbedding(
   return embedding;
 }
 
-// --- Qdrant REST API ---
+// --- Semantic result compatibility shape ---
 
-interface QdrantPayload {
+interface SemanticSearchPayload {
   filePath: string;
   codeChunk: string;
   startLine: number;
   endLine: number;
+  sourceRevision?: string;
   type?: string;
 }
 
-interface QdrantSearchResult {
+interface SemanticSearchRecord {
   id: string | number;
   score: number;
-  payload?: QdrantPayload;
+  payload?: SemanticSearchPayload;
+}
+
+export interface SemanticQueryOptions {
+  retrievalStoreRoot?: string;
 }
 
 interface SemanticQueryTarget {
   workspacePath: string;
   directoryPrefix?: string;
+  scope?: {
+    absolutePath: string;
+    kind: "file" | "directory";
+  };
+}
+
+export interface SemanticFreshnessSummary {
+  stale_sources: string[];
+  deleted_sources: string[];
+  unverified_sources: string[];
+}
+
+export type SemanticFileQueryResult =
+  | { status: "current"; startLine: number; endLine: number }
+  | { status: "stale" | "deleted" | "unverified" };
+
+interface ValidatedSemanticResults {
+  results: SemanticSearchRecord[];
+  freshness: SemanticFreshnessSummary;
 }
 
 // --- Hybrid search helpers ---
@@ -228,14 +257,14 @@ interface SemanticQueryTarget {
  * Items appearing in multiple lists get boosted scores.
  */
 export function rrfMerge(
-  vectorResults: QdrantSearchResult[],
-  keywordResults: QdrantSearchResult[],
+  vectorResults: SemanticSearchRecord[],
+  keywordResults: SemanticSearchRecord[],
   limit: number,
   k: number = 60,
-): QdrantSearchResult[] {
+): SemanticSearchRecord[] {
   const scores = new Map<
     string,
-    { score: number; result: QdrantSearchResult }
+    { score: number; result: SemanticSearchRecord }
   >();
 
   vectorResults.forEach((r, rank) => {
@@ -283,9 +312,9 @@ function isExcludedSemanticResultPath(filePath: string): boolean {
 }
 
 function applySemanticResultExcludes(
-  results: QdrantSearchResult[],
+  results: SemanticSearchRecord[],
   excludeGlobs?: string[],
-): QdrantSearchResult[] {
+): SemanticSearchRecord[] {
   if (!excludeGlobs || excludeGlobs.length === 0) {
     return results;
   }
@@ -302,10 +331,10 @@ function applySemanticResultExcludes(
 }
 
 export function rerankResults(
-  results: QdrantSearchResult[],
+  results: SemanticSearchRecord[],
   queryKeywords: string[],
   excludeGlobs?: string[],
-): QdrantSearchResult[] {
+): SemanticSearchRecord[] {
   const filtered = applySemanticResultExcludes(
     results.filter(
       (r) => !isExcludedSemanticResultPath(r.payload?.filePath ?? ""),
@@ -344,165 +373,100 @@ export function rerankResults(
     .sort((a, b) => b.score - a.score);
 }
 
-// --- Qdrant query functions ---
+// --- Retrieval store query adapter ---
 
-/** Build the base filter object for Qdrant queries */
-function buildQdrantFilter(directoryPrefix?: string): Record<string, unknown> {
-  const mustNot = [
-    { key: "type", match: { value: "metadata" } },
-    { key: "indexVisible", match: { value: false } },
-  ];
-  const must: Array<{ key: string; match: { value: string } }> = [];
-
-  if (directoryPrefix) {
-    const normalized = path.posix.normalize(
-      directoryPrefix.replace(/\\/g, "/"),
+async function queryRetrievalStore(args: {
+  retrievalStoreRoot: string | undefined;
+  workspacePath: string;
+  queryText: string;
+  queryVector?: number[];
+  directoryPrefix?: string;
+  exactFile?: boolean;
+  limit: number;
+  excludeGlobs?: string[];
+}): Promise<SemanticSearchRecord[]> {
+  if (!args.retrievalStoreRoot) {
+    throw new Error(
+      "Retrieval store is unavailable: storage root was not provided",
     );
-    if (normalized !== "." && normalized !== "./") {
-      const cleaned = normalized.startsWith("./")
-        ? normalized.slice(2)
-        : normalized;
-      const segments = cleaned.split("/").filter(Boolean);
-      for (let index = 0; index < segments.length; index++) {
-        const segment = segments[index];
-        // Skip segments with special characters that could cause Qdrant filter issues
-        if (/^[a-zA-Z0-9._\-@]+$/.test(segment)) {
-          must.push({
-            key: `pathSegments.${index}`,
-            match: { value: segment },
-          });
-        }
-      }
-    }
+  }
+  if (!existsSync(args.retrievalStoreRoot)) {
+    throw new Error("No codebase index found in the local retrieval store");
   }
 
-  const filter: Record<string, unknown> = { must_not: mustNot };
-  if (must.length > 0) {
-    filter.must = must;
-  }
-  return filter;
-}
-
-/** Execute a vector-only search against Qdrant */
-async function queryQdrantVector(
-  qdrantUrl: string,
-  collectionName: string,
-  queryVector: number[],
-  directoryPrefix?: string,
-  limit: number = 10,
-  scoreThreshold: number = 0.35,
-): Promise<QdrantSearchResult[]> {
-  const filter = buildQdrantFilter(directoryPrefix);
-
-  const body = {
-    query: queryVector,
-    filter,
-    score_threshold: scoreThreshold,
-    limit,
-    params: { hnsw_ef: 256, exact: false },
-    with_payload: {
-      include: ["filePath", "codeChunk", "startLine", "endLine"],
-    },
-  };
-
-  return queryQdrantPoints<QdrantSearchResult>(qdrantUrl, collectionName, body);
-}
-
-/** Execute a vector search filtered by keyword text match */
-async function queryQdrantWithTextFilter(
-  qdrantUrl: string,
-  collectionName: string,
-  queryVector: number[],
-  keywords: string[],
-  directoryPrefix?: string,
-  limit: number = 20,
-): Promise<QdrantSearchResult[]> {
-  const baseFilter = buildQdrantFilter(directoryPrefix);
-
-  // Add text match filter — at least one keyword must appear (should = OR)
-  const textConditions = keywords.map((kw) => ({
-    key: "codeChunk",
-    match: { text: kw },
-  }));
-
-  // Wrap the base filter's must conditions + text filter together
-  const filter = {
-    ...baseFilter,
-    must: [
-      ...(Array.isArray(baseFilter.must) ? baseFilter.must : []),
-      { should: textConditions },
-    ],
-  };
-
-  const body = {
-    query: queryVector,
-    filter,
-    score_threshold: 0.2, // lower threshold since we have keyword signal
-    limit,
-    params: { hnsw_ef: 256, exact: false },
-    with_payload: {
-      include: ["filePath", "codeChunk", "startLine", "endLine"],
-    },
-  };
-
+  const repository = new LanceDbRetrievalRepository({
+    root: args.retrievalStoreRoot,
+  });
   try {
-    return await queryQdrantPoints<QdrantSearchResult>(
-      qdrantUrl,
-      collectionName,
-      body,
+    const workspaceScopeId = getCodeWorkspaceScopeId(args.workspacePath);
+    const normalizedPrefix = args.directoryPrefix
+      ? normalizeSemanticResultPath(args.directoryPrefix)
+      : undefined;
+    const result = await repository.query({
+      text: args.queryText,
+      ...(args.queryVector ? { embedding: args.queryVector } : {}),
+      mode: args.queryVector ? "hybrid" : "lexical",
+      filters: {
+        namespaces: ["code"],
+        sourceKinds: ["file"],
+        metadata: {
+          scopeId: workspaceScopeId,
+        },
+        ...(normalizedPrefix
+          ? args.exactFile
+            ? {
+                sourceIds: [
+                  getCodeSourceId(workspaceScopeId, normalizedPrefix),
+                ],
+              }
+            : { pathPrefix: normalizedPrefix }
+          : {}),
+      },
+      limit: Math.max(args.limit * 5, 20),
+      freshness: "index_only",
+      diversity: {
+        maxPerSource: Math.max(args.limit, 3),
+        collapseOverlaps: true,
+      },
+    });
+    if (isUnavailableRetrievalReason(result.degradedReason)) {
+      throw new Error(
+        `Retrieval store is unavailable: ${result.degradedReason}`,
+      );
+    }
+
+    const records = result.candidates.map((candidate) => ({
+      id: candidate.chunk.id,
+      score: candidate.scores.final,
+      payload: {
+        filePath: candidate.chunk.location?.path ?? candidate.source.path ?? "",
+        codeChunk: candidate.chunk.content,
+        startLine: candidate.chunk.location?.startLine ?? 1,
+        endLine: candidate.chunk.location?.endLine ?? 1,
+        sourceRevision: candidate.source.revision.id,
+      },
+    }));
+    return rerankResults(
+      records,
+      extractKeywords(args.queryText),
+      args.excludeGlobs,
     );
-  } catch {
-    return []; // silently fall back to vector-only
+  } finally {
+    await repository.close();
   }
 }
 
-/**
- * Hybrid search: combines vector similarity with keyword matching via RRF,
- * then reranks with multi-signal scoring.
- */
-async function queryQdrant(
-  qdrantUrl: string,
-  collectionName: string,
-  queryVector: number[],
-  queryText: string,
-  directoryPrefix?: string,
-  limit: number = 10,
-  excludeGlobs?: string[],
-): Promise<QdrantSearchResult[]> {
-  const keywords = extractKeywords(queryText);
-  const fetchLimit = Math.max(limit * 3, 20);
-
-  // Run vector and keyword-filtered searches in parallel
-  const [vectorResults, keywordResults] = await Promise.all([
-    queryQdrantVector(
-      qdrantUrl,
-      collectionName,
-      queryVector,
-      directoryPrefix,
-      fetchLimit,
-    ),
-    keywords.length > 0
-      ? queryQdrantWithTextFilter(
-          qdrantUrl,
-          collectionName,
-          queryVector,
-          keywords,
-          directoryPrefix,
-          fetchLimit,
-        )
-      : Promise.resolve([]),
-  ]);
-
-  // Merge with RRF
-  const merged =
-    keywordResults.length > 0
-      ? rrfMerge(vectorResults, keywordResults, fetchLimit)
-      : vectorResults;
-
-  // Rerank with multi-signal scoring
-  const reranked = rerankResults(merged, keywords, excludeGlobs);
-
-  return reranked.slice(0, limit);
+function isUnavailableRetrievalReason(
+  reason: RetrievalHealthReason | undefined,
+): boolean {
+  return (
+    reason === "missing_index" ||
+    reason === "store_unavailable" ||
+    reason === "repair_required" ||
+    reason === "rebuild_required" ||
+    reason === "lexical_index_unavailable" ||
+    reason === "scalar_index_unavailable"
+  );
 }
 
 // --- Result formatting ---
@@ -518,9 +482,10 @@ interface FormattedResult {
 interface BuildOutputOptions {
   semantic?: boolean;
   warning?: string;
+  freshness?: SemanticFreshnessSummary;
 }
 
-function formatResults(results: QdrantSearchResult[]): FormattedResult[] {
+function formatResults(results: SemanticSearchRecord[]): FormattedResult[] {
   return results
     .filter(
       (r) =>
@@ -555,8 +520,223 @@ function buildOutput(
   if (options.warning) {
     output.warning = options.warning;
   }
+  if (options.freshness && hasFreshnessIssues(options.freshness)) {
+    output.freshness = options.freshness;
+  }
 
   return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
+}
+
+async function validateSemanticResults(
+  results: SemanticSearchRecord[],
+  target: SemanticQueryTarget,
+  options: { hydrateChunks: boolean },
+): Promise<ValidatedSemanticResults> {
+  const freshness = emptyFreshnessSummary();
+  const sourceStates = new Map<
+    string,
+    | { status: "current"; content: string }
+    | { status: "stale" | "deleted" | "unverified" }
+  >();
+  const validated: SemanticSearchRecord[] = [];
+
+  for (const result of results) {
+    const payload = result.payload;
+    if (!payload?.filePath) continue;
+
+    const key = `${payload.filePath}\0${payload.sourceRevision ?? ""}`;
+    let state = sourceStates.get(key);
+    if (!state) {
+      state = await readSemanticSourceState(target, payload);
+      sourceStates.set(key, state);
+    }
+    recordFreshness(freshness, payload.filePath, state.status);
+
+    if (state.status !== "current") continue;
+    if (!options.hydrateChunks) {
+      validated.push(result);
+      continue;
+    }
+
+    if (
+      !Number.isInteger(payload.startLine) ||
+      !Number.isInteger(payload.endLine) ||
+      payload.startLine < 1 ||
+      payload.endLine < payload.startLine
+    ) {
+      addUnique(freshness.unverified_sources, payload.filePath);
+      continue;
+    }
+    const lines = state.content.split("\n");
+    if (payload.startLine > lines.length) {
+      addUnique(freshness.unverified_sources, payload.filePath);
+      continue;
+    }
+    const endLine = Math.min(payload.endLine, lines.length);
+    validated.push({
+      ...result,
+      payload: {
+        ...payload,
+        endLine,
+        codeChunk: lines.slice(payload.startLine - 1, endLine).join("\n"),
+      },
+    });
+  }
+
+  return { results: validated, freshness: dedupeFreshnessSummary(freshness) };
+}
+
+async function readSemanticSourceState(
+  target: SemanticQueryTarget,
+  payload: SemanticSearchPayload,
+): Promise<
+  | { status: "current"; content: string }
+  | { status: "stale" | "deleted" | "unverified" }
+> {
+  if (!payload.sourceRevision) return { status: "unverified" };
+  const identity = resolveContainedCodeIndexPath(
+    target.workspacePath,
+    path.resolve(target.workspacePath, payload.filePath),
+  );
+  if (
+    !identity ||
+    identity.portableRelativePath !== payload.filePath ||
+    !isWithinSemanticScope(identity.absolutePath, target.scope)
+  ) {
+    return { status: "unverified" };
+  }
+
+  try {
+    const preReadStat = await stat(identity.absolutePath);
+    if (!preReadStat.isFile()) return { status: "unverified" };
+    const content = await readFile(identity.absolutePath, "utf8");
+    const postReadStat = await stat(identity.absolutePath);
+    const finalIdentity = resolveContainedCodeIndexPath(
+      target.workspacePath,
+      identity.absolutePath,
+    );
+    if (
+      !finalIdentity ||
+      finalIdentity.absolutePath !== identity.absolutePath ||
+      !sameStableSourceStat(preReadStat, postReadStat)
+    ) {
+      return { status: "unverified" };
+    }
+    const revision = createHash("sha256").update(content).digest("hex");
+    return revision === payload.sourceRevision
+      ? { status: "current", content }
+      : { status: "stale" };
+  } catch (error) {
+    return isMissingSourceError(error)
+      ? { status: "deleted" }
+      : { status: "unverified" };
+  }
+}
+
+function isWithinSemanticScope(
+  candidatePath: string,
+  scope: SemanticQueryTarget["scope"],
+): boolean {
+  if (!scope) return true;
+  const scopePath = canonicalizePath(scope.absolutePath);
+  if (scope.kind === "file") return candidatePath === scopePath;
+  const relativePath = path.relative(scopePath, candidatePath);
+  return (
+    relativePath !== "" &&
+    relativePath !== ".." &&
+    !relativePath.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativePath)
+  );
+}
+
+function sameStableSourceStat(
+  before: Awaited<ReturnType<typeof stat>>,
+  after: Awaited<ReturnType<typeof stat>>,
+): boolean {
+  return (
+    before.isFile() &&
+    after.isFile() &&
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.size === after.size &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs
+  );
+}
+
+function recordFreshness(
+  freshness: SemanticFreshnessSummary,
+  filePath: string,
+  status: "current" | "stale" | "deleted" | "unverified",
+): void {
+  if (status === "stale") addUnique(freshness.stale_sources, filePath);
+  else if (status === "deleted") addUnique(freshness.deleted_sources, filePath);
+  else if (status === "unverified") {
+    addUnique(freshness.unverified_sources, filePath);
+  }
+}
+
+function isMissingSourceError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as Error & { code?: string }).code;
+  return code === "ENOENT" || code === "FileNotFound";
+}
+
+function emptyFreshnessSummary(): SemanticFreshnessSummary {
+  return { stale_sources: [], deleted_sources: [], unverified_sources: [] };
+}
+
+function mergeFreshnessSummaries(
+  summaries: SemanticFreshnessSummary[],
+): SemanticFreshnessSummary {
+  return dedupeFreshnessSummary({
+    stale_sources: summaries.flatMap((summary) => summary.stale_sources),
+    deleted_sources: summaries.flatMap((summary) => summary.deleted_sources),
+    unverified_sources: summaries.flatMap(
+      (summary) => summary.unverified_sources,
+    ),
+  });
+}
+
+function prefixFreshnessPaths(
+  freshness: SemanticFreshnessSummary,
+  workspacePath: string,
+  allWorkspaceRoots: string[],
+): SemanticFreshnessSummary {
+  if (allWorkspaceRoots.length <= 1) return freshness;
+  const folder = vscode.workspace.getWorkspaceFolder(
+    vscode.Uri.file(workspacePath),
+  );
+  const prefix = folder?.name;
+  if (!prefix) return freshness;
+  const applyPrefix = (filePath: string) => `${prefix}/${filePath}`;
+  return {
+    stale_sources: freshness.stale_sources.map(applyPrefix),
+    deleted_sources: freshness.deleted_sources.map(applyPrefix),
+    unverified_sources: freshness.unverified_sources.map(applyPrefix),
+  };
+}
+
+function dedupeFreshnessSummary(
+  freshness: SemanticFreshnessSummary,
+): SemanticFreshnessSummary {
+  return {
+    stale_sources: [...new Set(freshness.stale_sources)].sort(),
+    deleted_sources: [...new Set(freshness.deleted_sources)].sort(),
+    unverified_sources: [...new Set(freshness.unverified_sources)].sort(),
+  };
+}
+
+function hasFreshnessIssues(freshness: SemanticFreshnessSummary): boolean {
+  return (
+    freshness.stale_sources.length > 0 ||
+    freshness.deleted_sources.length > 0 ||
+    freshness.unverified_sources.length > 0
+  );
+}
+
+function addUnique(values: string[], value: string): void {
+  if (!values.includes(value)) values.push(value);
 }
 
 function escapeRegexLiteral(input: string): string {
@@ -569,8 +749,8 @@ function shouldFallbackToKeywordSearch(message: string): boolean {
     /\b(fetch failed|network|ECONN|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|timeout)\b/i.test(
       message,
     ) ||
-    /Qdrant is not reachable/i.test(message) ||
-    /Qdrant API error \((408|429|5\d\d)\):/i.test(message)
+    /retrieval store (?:is )?unavailable/i.test(message) ||
+    /No codebase index found/i.test(message)
   );
 }
 
@@ -579,9 +759,7 @@ function summarizeSemanticFailure(message: string): string {
   if (openAiStatus) {
     return `OpenAI embeddings failed with HTTP ${openAiStatus}`;
   }
-  if (/Qdrant/i.test(message)) {
-    return "the Qdrant search backend failed";
-  }
+
   if (
     /\b(fetch failed|network|ECONN|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|timeout)\b/i.test(
       message,
@@ -709,52 +887,77 @@ export async function semanticFileQuery(
   relFilePath: string,
   query: string,
   workspacePath?: string,
-): Promise<{ startLine: number; endLine: number } | null> {
+  expectedSourceRevision?: string,
+  options: SemanticQueryOptions = {},
+): Promise<SemanticFileQueryResult | null> {
   if (!isSemanticSearchEnabled(workspacePath)) return null;
 
-  const auth = await getEmbeddingAuth();
-  if (!auth) return null;
-
-  const qdrantUrl = getQdrantUrl(workspacePath);
   const resolvedWorkspacePath = workspacePath ?? tryGetFirstWorkspaceRoot();
   if (!resolvedWorkspacePath) return null;
 
-  const collectionName = getAlCollectionName(resolvedWorkspacePath);
-
-  // Normalize to forward slashes for Qdrant filePath matching
-  const normalizedPath = relFilePath.replace(/\\/g, "/");
+  const normalizedPath = normalizeSemanticResultPath(relFilePath);
 
   try {
-    const expandedQuery = expandQuery(query);
-    const queryVector = await generateEmbedding(expandedQuery, auth);
-
-    // Build filter: must match this exact file
-    const filter: Record<string, unknown> = {
-      must_not: [
-        { key: "type", match: { value: "metadata" } },
-        { key: "indexVisible", match: { value: false } },
-      ],
-      must: [{ key: "filePath", match: { value: normalizedPath } }],
-    };
-
-    const body = {
-      query: queryVector,
-      filter,
-      score_threshold: 0.25,
+    const auth = await getEmbeddingAuth();
+    const queryVector = auth
+      ? await generateEmbedding(expandQuery(query), auth).catch(() => undefined)
+      : undefined;
+    const candidates = await queryRetrievalStore({
+      retrievalStoreRoot: options.retrievalStoreRoot,
+      workspacePath: resolvedWorkspacePath,
+      queryText: query,
+      queryVector,
+      directoryPrefix: normalizedPath,
+      exactFile: true,
       limit: 3,
-      params: { hnsw_ef: 256, exact: false },
-      with_payload: { include: ["startLine", "endLine"] },
-    };
-
-    const points = await queryQdrantPoints<{
-      payload?: { startLine?: number; endLine?: number };
-    }>(qdrantUrl, collectionName, body);
-    if (!points || points.length === 0) return null;
-
-    // Return the best match's line range
-    const best = points[0].payload;
-    if (best?.startLine == null || best?.endLine == null) return null;
-    return { startLine: best.startLine, endLine: best.endLine };
+    });
+    if (candidates.length === 0) return null;
+    if (expectedSourceRevision) {
+      const matching = candidates.find(
+        (candidate) =>
+          candidate.payload?.sourceRevision === expectedSourceRevision,
+      )?.payload;
+      if (matching) {
+        return {
+          status: "current",
+          startLine: matching.startLine,
+          endLine: matching.endLine,
+        };
+      }
+      return candidates.some((candidate) => candidate.payload?.sourceRevision)
+        ? { status: "stale" }
+        : { status: "unverified" };
+    }
+    const validated = await validateSemanticResults(
+      candidates,
+      {
+        workspacePath: resolvedWorkspacePath,
+        directoryPrefix: normalizedPath,
+        scope: {
+          absolutePath: path.resolve(resolvedWorkspacePath, normalizedPath),
+          kind: "file",
+        },
+      },
+      { hydrateChunks: false },
+    );
+    const best = validated.results[0]?.payload;
+    if (best) {
+      return {
+        status: "current",
+        startLine: best.startLine,
+        endLine: best.endLine,
+      };
+    }
+    if (validated.freshness.stale_sources.length > 0) {
+      return { status: "stale" };
+    }
+    if (validated.freshness.deleted_sources.length > 0) {
+      return { status: "deleted" };
+    }
+    if (validated.freshness.unverified_sources.length > 0) {
+      return { status: "unverified" };
+    }
+    return null;
   } catch {
     return null;
   }
@@ -769,10 +972,11 @@ export async function semanticFileList(
   dirPath: string,
   query: string,
   limit: number = 20,
-  options?: { includeAllWorkspaceRoots?: boolean },
+  options: SemanticQueryOptions & { includeAllWorkspaceRoots?: boolean } = {},
 ): Promise<{
   files: Array<{ path: string; score: number }>;
   error?: string;
+  freshness?: SemanticFreshnessSummary;
 } | null> {
   if (!isSemanticSearchEnabled(dirPath)) {
     return {
@@ -781,44 +985,51 @@ export async function semanticFileList(
     };
   }
 
-  const auth = await getEmbeddingAuth();
-  if (!auth) {
-    return {
-      files: [],
-      ...semanticErrorPayload("missing_embeddings_auth"),
-    };
-  }
-
-  const qdrantUrl = getQdrantUrl(dirPath);
   const workspacePaths = getWorkspaceRootsForSemanticQuery(dirPath, options);
   if (workspacePaths.length === 0) {
     return { files: [], ...semanticErrorPayload("no_workspace") };
   }
 
   try {
-    const expandedQuery = expandQuery(query);
-    const queryVector = await generateEmbedding(expandedQuery, auth);
+    const auth = await getEmbeddingAuth();
+    const queryVector = auth
+      ? await generateEmbedding(expandQuery(query), auth).catch(() => undefined)
+      : undefined;
 
     // Fetch more chunks than limit since multiple chunks map to the same file
     const fetchLimit = limit * 5;
     const allWorkspaceRoots = getWorkspaceRoots();
 
     const perWorkspaceResults = await Promise.all(
-      workspacePaths.map(async ({ workspacePath, directoryPrefix }) => {
-        const collectionName = getAlCollectionName(workspacePath);
-        const results = await queryQdrant(
-          qdrantUrl,
-          collectionName,
+      workspacePaths.map(async (target) => {
+        const { workspacePath, directoryPrefix } = target;
+        const results = await queryRetrievalStore({
+          retrievalStoreRoot: options.retrievalStoreRoot,
+          workspacePath,
+          queryText: query,
           queryVector,
-          query,
           directoryPrefix,
-          fetchLimit,
-        );
-        return prefixResultPaths(results, workspacePath, allWorkspaceRoots);
+          limit: fetchLimit,
+        });
+        const validated = await validateSemanticResults(results, target, {
+          hydrateChunks: false,
+        });
+        return {
+          results: prefixResultPaths(
+            validated.results,
+            workspacePath,
+            allWorkspaceRoots,
+          ),
+          freshness: prefixFreshnessPaths(
+            validated.freshness,
+            workspacePath,
+            allWorkspaceRoots,
+          ),
+        };
       }),
     );
     const results = perWorkspaceResults
-      .flat()
+      .flatMap((result) => result.results)
       .sort((a, b) => b.score - a.score)
       .slice(0, fetchLimit);
 
@@ -839,7 +1050,13 @@ export async function semanticFileList(
       .slice(0, limit)
       .map(([fp, score]) => ({ path: fp, score }));
 
-    return { files: ranked };
+    const freshness = mergeFreshnessSummaries(
+      perWorkspaceResults.map((result) => result.freshness),
+    );
+    return {
+      files: ranked,
+      ...(hasFreshnessIssues(freshness) ? { freshness } : {}),
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const reason = classifySemanticReasonFromError(msg);
@@ -857,7 +1074,10 @@ export async function semanticSearch(
   query: string,
   limit?: number,
   excludeGlobs?: string[],
-  options?: { includeAllWorkspaceRoots?: boolean },
+  options: SemanticQueryOptions & {
+    includeAllWorkspaceRoots?: boolean;
+    exactFile?: boolean;
+  } = {},
 ): Promise<ToolResult> {
   if (!isSemanticSearchEnabled(dirPath)) {
     return {
@@ -870,19 +1090,6 @@ export async function semanticSearch(
     };
   }
 
-  const auth = await getEmbeddingAuth();
-  if (!auth) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(semanticErrorPayload("missing_embeddings_auth")),
-        },
-      ],
-    };
-  }
-
-  const qdrantUrl = getQdrantUrl(dirPath);
   const workspacePaths = getWorkspaceRootsForSemanticQuery(dirPath, options);
   if (workspacePaths.length === 0) {
     return {
@@ -896,32 +1103,52 @@ export async function semanticSearch(
   }
 
   try {
-    // Expand query for better embedding recall, then embed
-    const expandedQuery = expandQuery(query);
-    const queryVector = await generateEmbedding(expandedQuery, auth);
+    const auth = await getEmbeddingAuth();
+    const queryVector = auth
+      ? await generateEmbedding(expandQuery(query), auth).catch(() => undefined)
+      : undefined;
     const effectiveLimit = limit ?? 10;
     const allWorkspaceRoots = getWorkspaceRoots();
 
     const perWorkspaceResults = await Promise.all(
-      workspacePaths.map(async ({ workspacePath, directoryPrefix }) => {
-        const collectionName = getAlCollectionName(workspacePath);
-        const results = await queryQdrant(
-          qdrantUrl,
-          collectionName,
+      workspacePaths.map(async (target) => {
+        const { workspacePath, directoryPrefix } = target;
+        const results = await queryRetrievalStore({
+          retrievalStoreRoot: options.retrievalStoreRoot,
+          workspacePath,
+          queryText: query,
           queryVector,
-          query,
           directoryPrefix,
-          effectiveLimit,
+          exactFile: options.exactFile,
+          limit: effectiveLimit,
           excludeGlobs,
-        );
-        return prefixResultPaths(results, workspacePath, allWorkspaceRoots);
+        });
+        const validated = await validateSemanticResults(results, target, {
+          hydrateChunks: true,
+        });
+        return {
+          results: prefixResultPaths(
+            validated.results,
+            workspacePath,
+            allWorkspaceRoots,
+          ),
+          freshness: prefixFreshnessPaths(
+            validated.freshness,
+            workspacePath,
+            allWorkspaceRoots,
+          ),
+        };
       }),
     );
     const results = perWorkspaceResults
-      .flat()
+      .flatMap((result) => result.results)
       .sort((a, b) => b.score - a.score)
       .slice(0, effectiveLimit);
-    return buildOutput(query, formatResults(results));
+    return buildOutput(query, formatResults(results), {
+      freshness: mergeFreshnessSummaries(
+        perWorkspaceResults.map((result) => result.freshness),
+      ),
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const effectiveLimit = limit ?? 10;
