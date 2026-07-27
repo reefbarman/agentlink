@@ -503,18 +503,18 @@ function prepareReviewData(
   if (!isActiveAutoReviewPolicy(input.policy)) {
     return { eligible: false, reason: "inactive-auto-review-policy" };
   }
-  if (
-    !isBoundedString(input.sessionId, 1, 512) ||
-    !isOptionalBoundedString(
-      input.userObjective,
-      ACTION_REVIEW_EVIDENCE_LIMITS.maxUserObjectiveBytes,
-    )
-  ) {
+  if (!isBoundedString(input.sessionId, 1, 512)) {
     return { eligible: false, reason: "invalid-action" };
   }
 
+  const userObjective = boundOptionalText(
+    input.userObjective,
+    ACTION_REVIEW_EVIDENCE_LIMITS.maxUserObjectiveBytes,
+  );
+  const userObjectiveSha256 =
+    input.userObjective === undefined ? undefined : sha256(input.userObjective);
   const context = boundReviewContext(input.context ?? []);
-  const action = canonicalAction(input);
+  const action = canonicalAction(input, userObjective, userObjectiveSha256);
   if (!action.eligible) return action;
 
   const binding: ActionApprovalBinding = {
@@ -530,7 +530,7 @@ function prepareReviewData(
       "<untrusted-action-review-data>",
       JSON.stringify({
         binding,
-        userObjective: input.userObjective ?? null,
+        userObjective: userObjective ?? null,
         recentContext: context,
         action: action.value,
       }),
@@ -545,6 +545,8 @@ type CanonicalActionResult =
 
 function canonicalAction(
   input: ActionApprovalReviewInput,
+  userObjective: string | undefined,
+  userObjectiveSha256: string | undefined,
 ): CanonicalActionResult {
   switch (input.kind) {
     case "mode-switch": {
@@ -568,7 +570,8 @@ function canonicalAction(
           sourceMode: input.sourceMode,
           targetMode: input.targetMode,
           reason: input.reason ?? null,
-          userObjective: input.userObjective ?? null,
+          userObjective: userObjective ?? null,
+          userObjectiveSha256: userObjectiveSha256 ?? null,
           capabilityDelta: delta,
         },
       };
@@ -590,7 +593,8 @@ function canonicalAction(
           requestingTool: input.requestingTool,
           canonicalPath: normalizePath(target.canonicalPath),
           operation: operation.value,
-          userObjective: input.userObjective ?? null,
+          userObjective: userObjective ?? null,
+          userObjectiveSha256: userObjectiveSha256 ?? null,
         },
       };
     }
@@ -627,7 +631,8 @@ function canonicalAction(
         value: {
           kind: input.kind,
           requestingTool: input.requestingTool,
-          userObjective: input.userObjective ?? null,
+          userObjective: userObjective ?? null,
+          userObjectiveSha256: userObjectiveSha256 ?? null,
           proposals,
           totalEvidenceBytes,
         },
@@ -962,6 +967,16 @@ function truncateUtf8(value: string, maxBytes: number): string {
     result += character;
   }
   return result + suffix;
+}
+
+function boundOptionalText(
+  value: string | undefined,
+  maxBytes: number,
+): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return truncateUtf8(trimmed, maxBytes);
 }
 
 function isOptionalBoundedString(

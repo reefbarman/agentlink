@@ -116,7 +116,6 @@ describe("ChatTabHostCoordinator", () => {
       });
       const created = session("session-2");
       harness.sessions.set(created.id, created);
-      await harness.tabs.bindFocusedSession(created.id);
       return created;
     });
 
@@ -128,6 +127,11 @@ describe("ChatTabHostCoordinator", () => {
       session: { id: "session-2" },
     });
     expect(harness.tabs.getTab("tab-1")?.sessionId).toBe("session-1");
+    expect(harness.manager.createSession).toHaveBeenCalledWith("code", {
+      projectId: undefined,
+      foreground: false,
+    });
+    expect(harness.manager.switchTo).toHaveBeenCalledWith("session-2");
   });
 
   it("requires confirmation for a busy New Chat and preserves the stable tab", async () => {
@@ -170,6 +174,45 @@ describe("ChatTabHostCoordinator", () => {
     expect(harness.manager.stopSessionAndWait).toHaveBeenCalledWith(
       "session-1",
     );
+    expect(harness.manager.createSession).toHaveBeenCalledWith("code", {
+      projectId: undefined,
+      foreground: false,
+    });
+    expect(harness.manager.switchTo).toHaveBeenCalledWith("session-2");
+  });
+
+  it("does not promote a new tab session after focus moves during creation", async () => {
+    const harness = createHarness();
+    const first = session("session-1");
+    harness.sessions.set(first.id, first);
+    await harness.tabs.bindFocusedSession(first.id);
+    const initialAddress = harness.address();
+    let resolveCreation!: (created: AgentSession) => void;
+    harness.manager.createSession.mockImplementationOnce(
+      () =>
+        new Promise<AgentSession>((resolve) => {
+          resolveCreation = resolve;
+        }),
+    );
+
+    const creation = harness.coordinator.newTab(initialAddress, "code");
+    await vi.waitFor(() =>
+      expect(harness.manager.createSession).toHaveBeenCalledOnce(),
+    );
+    await harness.tabs.focusTab("tab-1");
+    const created = session("session-2");
+    harness.sessions.set(created.id, created);
+    resolveCreation(created);
+
+    await expect(creation).resolves.toMatchObject({
+      ok: true,
+      tab: { id: "tab-2", sessionId: "session-2" },
+    });
+    expect(harness.tabs.getFocusedTab()).toMatchObject({
+      id: "tab-1",
+      sessionId: "session-1",
+    });
+    expect(harness.manager.switchTo).not.toHaveBeenCalled();
   });
 
   it("replaces a browser-selected tab without changing VS Code focus", async () => {

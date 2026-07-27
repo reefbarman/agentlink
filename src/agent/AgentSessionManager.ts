@@ -3229,10 +3229,10 @@ export class AgentSessionManager {
   /**
    * Keep the session's prompt-facing Approve for Me flag in step with its
    * command approval policy. When the flag crosses the approve-for-me boundary,
-   * rebuild the system prompt so mode-switch guidance flips between user
-   * consent and automatic guardian review. Rebuilds are fire-and-forget and
-   * serialized per session; the engine picks up the new prompt on its next
-   * API request.
+   * rebuild the system prompt and conversation-placed mode anchor so mode-switch
+   * guidance flips between user consent and automatic guardian review. Rebuilds
+   * are fire-and-forget and serialized per session; the engine picks up the new
+   * prompt and anchor on its next API request.
    */
   private syncSessionApproveForMe(session: AgentSession | undefined): void {
     if (!session) return;
@@ -3245,12 +3245,13 @@ export class AgentSessionManager {
     const previous =
       this.approveForMePromptRebuilds.get(session.id) ?? Promise.resolve();
     const next = previous
-      .then(() =>
-        session.rebuildSystemPrompt({
+      .then(async () => {
+        await session.rebuildSystemPrompt({
           devMode: this.devMode,
           workspaceFolders: this.getWorkspaceFolders(),
-        }),
-      )
+        });
+        await session.refreshModeInstructionAnchor();
+      })
       .then(() => {
         this.log?.(
           `[approval] rebuilt system prompt for ${session.id} (Approve for Me ${approveForMe ? "on" : "off"})`,
@@ -6034,11 +6035,13 @@ export class AgentSessionManager {
       });
 
       const fleet = session.fleetMetadata;
-      if (fleet?.lifecycle === "running") {
+      const interruptedOnRestore = fleet?.lifecycle === "running";
+      if (interruptedOnRestore) {
         fleet.lifecycle = "interrupted";
         fleet.resultState = "interrupted";
         fleet.terminalReason = "extension_reloaded_during_run";
         fleet.completedAt = Date.now();
+        fleet.reloadInterruptionRecordedAt = fleet.completedAt;
       }
       if (fleet?.lifecycle === "cancelled") {
         this.bgCancelled.add(session.id);
@@ -6104,7 +6107,7 @@ export class AgentSessionManager {
       this.restoredBackgroundSessionIds.add(session.id);
       this.sessionRevisions.set(session.id, readResult.revision);
       restored.push(session);
-      if (fleet?.lifecycle === "interrupted") {
+      if (interruptedOnRestore) {
         await this.saveSessionNow(session.id);
       }
     }
@@ -7098,6 +7101,9 @@ export class AgentSessionManager {
         this.activeAcpOutputs.set(session.id, acpOutput);
         let lastPersistedPartialResult = session.fleetMetadata?.partialResult;
         let transcriptCommitted = false;
+        let terminalDoneEvent:
+          | Extract<AgentEvent, { type: "done" }>
+          | undefined;
         const persistPartialResult = (
           durability: PersistDurability = "durable",
         ) => {
@@ -7191,13 +7197,13 @@ export class AgentSessionManager {
             } else {
               session.status = "idle";
             }
-            this.recordAndEmitEvent(session.id, {
+            terminalDoneEvent = {
               type: "done",
               totalInputTokens: session.totalInputTokens,
               totalOutputTokens: session.totalOutputTokens,
               totalCacheReadTokens: session.totalCacheReadTokens,
               totalCacheCreationTokens: session.totalCacheCreationTokens,
-            });
+            };
           }
         } catch (err: unknown) {
           const error = err instanceof Error ? err.message : String(err);
@@ -7254,6 +7260,9 @@ export class AgentSessionManager {
             this.finalizeFleetMetadata(session, resolution);
             await this.saveSessionNow(session.id);
             this.bgFinalResults.set(session.id, resolution.resultText);
+            if (terminalDoneEvent) {
+              this.recordAndEmitEvent(session.id, terminalDoneEvent);
+            }
             for (const t of this.bgSafetyTimers.get(session.id) ?? []) {
               this.host.timers.clearTimeout(t);
             }
@@ -7444,6 +7453,7 @@ export class AgentSessionManager {
       let lastPersistedActiveAt = session.lastActiveAt;
       let lastPersistedPartialResult = session.fleetMetadata?.partialResult;
       let terminalEngineError: (AgentEvent & { type: "error" }) | undefined;
+      let terminalDoneEvent: Extract<AgentEvent, { type: "done" }> | undefined;
       const persistIfHistoryChanged = (
         durability: PersistDurability = "durable",
       ) => {
@@ -7537,8 +7547,12 @@ export class AgentSessionManager {
             statusDetail: this.bgStatusDetail.get(session.id),
           });
 
-          this.recordAndEmitEvent(session.id, event);
-          this.notifySessionChangeListeners();
+          if (event.type === "done") {
+            terminalDoneEvent = event;
+          } else {
+            this.recordAndEmitEvent(session.id, event);
+            this.notifySessionChangeListeners();
+          }
         }
         if (terminalEngineError) {
           session.status = "error";
@@ -7559,13 +7573,13 @@ export class AgentSessionManager {
           error,
           retryable: false,
         });
-        this.recordAndEmitEvent(session.id, {
+        terminalDoneEvent = {
           type: "done",
           totalInputTokens: session.totalInputTokens,
           totalOutputTokens: session.totalOutputTokens,
           totalCacheReadTokens: session.totalCacheReadTokens,
           totalCacheCreationTokens: session.totalCacheCreationTokens,
-        });
+        };
       } finally {
         this.releaseSessionToolContext(session.id, bgCtx);
         this.releasePreparedTurnMutationLease(preparedTurn);
@@ -7594,8 +7608,11 @@ export class AgentSessionManager {
       this.finalizeFleetMetadata(session, resolution);
       await this.saveSessionNow(session.id);
 
-      // Store result BEFORE resolving waiters to close the race window
+      // Store and publish the result only after its terminal fleet metadata is durable.
       this.bgFinalResults.set(session.id, resolution.resultText);
+      if (terminalDoneEvent) {
+        this.recordAndEmitEvent(session.id, terminalDoneEvent);
+      }
 
       // Clear all safety timers for this session
       for (const t of this.bgSafetyTimers.get(session.id) ?? [])
@@ -9435,6 +9452,15 @@ export class AgentSessionManager {
         // Already surfaced in the parent transcript (live or on a prior
         // restore) — re-announcing on every reload would duplicate it.
         if (fleet?.resultAnnouncedAt) return false;
+        // Legacy reload interruptions predate durable delivery tracking and can
+        // otherwise replay indefinitely. Newly recovered interruptions carry an
+        // explicit marker and remain eligible until they are announced.
+        if (
+          fleet?.terminalReason === "extension_reloaded_during_run" &&
+          fleet.reloadInterruptionRecordedAt === undefined
+        ) {
+          return false;
+        }
         // User-initiated cancellations were witnessed when they happened;
         // redelivering them as fresh results on restore is noise.
         if (

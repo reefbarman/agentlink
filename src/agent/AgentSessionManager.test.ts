@@ -60,6 +60,7 @@ const mocks = vi.hoisted(() => {
       getAllMessages: vi.fn(() => []),
       restoreFromStore: vi.fn(),
       rebuildSystemPrompt: vi.fn(async () => {}),
+      refreshModeInstructionAnchor: vi.fn(async () => {}),
       updateModelSelection: vi.fn(async function (
         this: { model: string; providerId: string | undefined },
         model: string,
@@ -842,25 +843,28 @@ describe("AgentSessionManager host injection", () => {
     expect(mgr.getCommandApprovalPolicy(session.id, "manual")).toBe("manual");
   });
 
-  it("syncs the session's Approve for Me prompt flag and rebuilds the prompt on policy toggle", async () => {
+  it("syncs Approve for Me guidance in the system prompt and mode anchor", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
-    const session = await mgr.createSession("code");
+    const session = await mgr.createSession("architect");
     session.approveForMe = false;
 
     mgr.setCommandApprovalPolicy(session.id, "approve-for-me");
     expect(session.approveForMe).toBe(true);
     await flushPromises();
     expect(session.rebuildSystemPrompt).toHaveBeenCalledTimes(1);
+    expect(session.refreshModeInstructionAnchor).toHaveBeenCalledTimes(1);
 
     // Re-applying the same policy must not schedule a redundant rebuild.
     mgr.setCommandApprovalPolicy(session.id, "approve-for-me");
     await flushPromises();
     expect(session.rebuildSystemPrompt).toHaveBeenCalledTimes(1);
+    expect(session.refreshModeInstructionAnchor).toHaveBeenCalledTimes(1);
 
     mgr.setCommandApprovalPolicy(session.id, "safe");
     expect(session.approveForMe).toBe(false);
     await flushPromises();
     expect(session.rebuildSystemPrompt).toHaveBeenCalledTimes(2);
+    expect(session.refreshModeInstructionAnchor).toHaveBeenCalledTimes(2);
   });
 
   it("starts an explicit new foreground session with Approve for Me off", async () => {

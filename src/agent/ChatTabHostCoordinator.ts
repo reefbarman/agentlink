@@ -76,11 +76,16 @@ export class ChatTabHostCoordinator {
     if (!validated.ok) return validated;
 
     const tab = await this.tabs.createTab();
-    const session = await this.sessions.createSession(mode, { projectId });
+    const session = await this.sessions.createSession(mode, {
+      projectId,
+      foreground: false,
+    });
     const bound = await this.ensureBinding(tab.id, null, session.id);
-    return bound
-      ? { ok: true, tab: bound, session }
-      : { ok: false, reason: "binding_conflict" };
+    if (!bound) return { ok: false, reason: "binding_conflict" };
+    if (this.tabs.getFocusedTabId() === tab.id) {
+      this.sessions.switchTo(session.id);
+    }
+    return { ok: true, tab: bound, session };
   }
 
   async newChat(
@@ -111,16 +116,21 @@ export class ChatTabHostCoordinator {
 
     const session = await this.sessions.createSession(mode, {
       projectId: options.projectId,
-      foreground: options.focus !== false,
+      foreground: false,
     });
     const bound = await this.ensureBinding(
       validated.tab.id,
       validated.tab.sessionId,
       session.id,
     );
-    return bound
-      ? { ok: true, tab: bound, session }
-      : { ok: false, reason: "binding_conflict" };
+    if (!bound) return { ok: false, reason: "binding_conflict" };
+    if (
+      options.focus !== false &&
+      this.tabs.getFocusedTabId() === validated.tab.id
+    ) {
+      this.sessions.switchTo(session.id);
+    }
+    return { ok: true, tab: bound, session };
   }
 
   async close(

@@ -11,6 +11,7 @@ export type AgentUiEvent =
   | {
       type: "agentQuestionRequest";
       id: string;
+      toolCallId?: string;
       /** Visible explanation shown above structured questions. */
       context: string;
       questions: Question[];
@@ -47,6 +48,7 @@ export interface AgentUiPublisher {
     context: string,
     questions: Question[],
     backgroundTask?: string,
+    toolCallId?: string,
   ): void;
   publishQuestionCleared(sessionId: string, id: string): void;
   publishQuestionProgress(
@@ -93,6 +95,7 @@ export class FanoutAgentUiPublisher implements AgentUiPublisher {
     context: string,
     questions: Question[],
     backgroundTask?: string,
+    toolCallId?: string,
   ): void {
     this.publish((publisher) =>
       publisher.publishQuestionRequest(
@@ -101,6 +104,7 @@ export class FanoutAgentUiPublisher implements AgentUiPublisher {
         context,
         questions,
         backgroundTask,
+        toolCallId,
       ),
     );
   }
@@ -194,6 +198,7 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
     context: string,
     questions: Question[],
     backgroundTask?: string,
+    toolCallId?: string,
   ): void {
     if (backgroundTask) this.globalQuestionIds.add(id);
     else this.globalQuestionIds.delete(id);
@@ -201,6 +206,7 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
       type: "agentQuestionRequest",
       ...this.questionSessionAddress(sessionId, id),
       id,
+      ...(toolCallId ? { toolCallId } : {}),
       context,
       questions,
       ...(backgroundTask ? { backgroundTask } : {}),
@@ -303,10 +309,12 @@ export class InMemoryAgentUiEventHub
     context: string,
     questions: Question[],
     backgroundTask?: string,
+    toolCallId?: string,
   ): void {
     this.publish(sessionId, {
       type: "agentQuestionRequest",
       id,
+      ...(toolCallId ? { toolCallId } : {}),
       context,
       questions,
       ...(backgroundTask ? { backgroundTask } : {}),

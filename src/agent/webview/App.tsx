@@ -1002,8 +1002,10 @@ export function App({
           break;
 
         case "agentQuestionCleared":
-          dispatch({ type: "CLEAR_QUESTION" });
-          setRemoteQuestionProgress(null);
+          dispatch({ type: "CLEAR_QUESTION", id: msg.id });
+          setRemoteQuestionProgress((progress) =>
+            progress?.id === msg.id ? null : progress,
+          );
           break;
 
         case "agentInteractionPromptsCleared":
@@ -3367,8 +3369,15 @@ export function App({
                         },
                       ),
                     );
-                    dispatch({ type: "CLEAR_QUESTION" });
-                    setRemoteQuestionProgress(null);
+                    dispatch({
+                      type: "SUBMIT_QUESTION",
+                      id,
+                      answers,
+                      notes,
+                    });
+                    setRemoteQuestionProgress((progress) =>
+                      progress?.id === id ? null : progress,
+                    );
                     setQuestionContextMode(null);
                     setQuestionAttachments({});
                     vscodeApi.postMessage({

@@ -1091,6 +1091,87 @@ describe("AgentSessionManager background agents", () => {
     ]);
   });
 
+  it("publishes ACP completion only after terminal metadata is durable", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "ACP result" },
+          },
+        });
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "end_turn" },
+        });
+      }),
+    };
+    let releaseTerminalSave: () => void = () => {};
+    const terminalSaveBlocked = new Promise<void>((resolve) => {
+      releaseTerminalSave = resolve;
+    });
+    let notifyTerminalSaveStarted: () => void = () => {};
+    const terminalSaveStarted = new Promise<void>((resolve) => {
+      notifyTerminalSaveStarted = resolve;
+    });
+    const saveSession = vi.fn(async ({ session: record }: any) => {
+      if (
+        record.summary.background &&
+        record.metadata.fleet?.lifecycle === "completed"
+      ) {
+        notifyTerminalSaveStarted();
+        await terminalSaveBlocked;
+      }
+      return { ok: true, revision: String(saveSession.mock.calls.length) };
+    });
+    const store = {
+      list: vi.fn(() => []),
+      listAll: vi.fn(() => []),
+      saveSession,
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    const parent = await mgr.createSession("code");
+    mgr.setToolContext(toolCtx);
+    let doneLifecycle: string | undefined;
+    let notifyDone: () => void = () => {};
+    const done = new Promise<void>((resolve) => {
+      notifyDone = resolve;
+    });
+    mgr.onEvent = (sessionId, event) => {
+      if (event.type !== "done") return;
+      doneLifecycle = mgr.getSession(sessionId)?.fleetMetadata?.lifecycle;
+      notifyDone();
+    };
+
+    await mgr.spawnBackground(
+      {
+        task: "external review",
+        message: "review this",
+        provider: "acp:claude",
+      },
+      parent.id,
+    );
+    await terminalSaveStarted;
+
+    expect(doneLifecycle).toBeUndefined();
+    releaseTerminalSave();
+    await done;
+    expect(doneLifecycle).toBe("completed");
+  });
+
   it("runs explicit ACP provider without native route resolution", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
@@ -3702,6 +3783,71 @@ describe("AgentSessionManager background agents", () => {
     });
   });
 
+  it("publishes native completion only after terminal metadata is durable", async () => {
+    let releaseTerminalSave: () => void = () => {};
+    const terminalSaveBlocked = new Promise<void>((resolve) => {
+      releaseTerminalSave = resolve;
+    });
+    let notifyTerminalSaveStarted: () => void = () => {};
+    const terminalSaveStarted = new Promise<void>((resolve) => {
+      notifyTerminalSaveStarted = resolve;
+    });
+    let terminalSavePending = false;
+    const saveSession = vi.fn(async ({ session: record }: any) => {
+      if (
+        record.summary.background &&
+        record.metadata.fleet?.lifecycle === "completed"
+      ) {
+        terminalSavePending = true;
+        notifyTerminalSaveStarted();
+        await terminalSaveBlocked;
+        terminalSavePending = false;
+      }
+      return { ok: true, revision: String(saveSession.mock.calls.length) };
+    });
+    const store = {
+      list: vi.fn(() => []),
+      listAll: vi.fn(() => []),
+      saveSession,
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    let doneLifecycle: string | undefined;
+    let projectedWhileTerminalSavePending = false;
+    mgr.onDidChangeSessions(() => {
+      if (terminalSavePending) projectedWhileTerminalSavePending = true;
+    });
+    let notifyDone: () => void = () => {};
+    const done = new Promise<void>((resolve) => {
+      notifyDone = resolve;
+    });
+    mgr.onEvent = (sessionId, event) => {
+      if (event.type !== "done") return;
+      doneLifecycle = mgr.getSession(sessionId)?.fleetMetadata?.lifecycle;
+      notifyDone();
+    };
+
+    await mgr.spawnBackground({
+      task: "review task",
+      message: "review thoroughly",
+      expectedResult: "text",
+    });
+    await terminalSaveStarted;
+
+    expect(doneLifecycle).toBeUndefined();
+    expect(projectedWhileTerminalSavePending).toBe(false);
+    releaseTerminalSave();
+    await done;
+    expect(doneLifecycle).toBe("completed");
+  });
+
   it("records durable native fleet identity and completion", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
@@ -4025,8 +4171,8 @@ describe("AgentSessionManager background agents", () => {
       messageCount: 1,
       totalInputTokens: 0,
       totalOutputTokens: 0,
-      createdAt: now - 2,
-      lastActiveAt: now,
+      createdAt: now - 3,
+      lastActiveAt: now - 2,
       background: false,
     };
     const childSummary = {
@@ -4123,6 +4269,164 @@ describe("AgentSessionManager background agents", () => {
         },
       ],
     );
+
+    foreground!.lastActiveAt = now;
+    expect(
+      mgr.getBackgroundCompletionsForParent(foregroundSummary.id),
+    ).toHaveLength(1);
+  });
+
+  it("keeps unannounced reload interruptions recoverable across activations", async () => {
+    const now = Date.now();
+    const summary = {
+      schemaVersion: 1,
+      id: "unannounced-interruption",
+      mode: "review",
+      model: "claude-sonnet-4-6",
+      title: "Unannounced interrupted review",
+      messageCount: 1,
+      totalInputTokens: 20,
+      totalOutputTokens: 10,
+      createdAt: now - 3_000,
+      lastActiveAt: now - 2_000,
+      background: true,
+    };
+    const store = {
+      identity: {
+        ownerId: "test-owner",
+        surface: "test",
+        startedAt: now,
+      },
+      list: vi.fn(() => []),
+      listAll: vi.fn(() => [summary]),
+      readSession: vi.fn().mockResolvedValue({
+        ok: true,
+        revision: "1",
+        value: {
+          summary,
+          messages: [{ role: "user", content: "review" }],
+          metadata: {
+            mode: summary.mode,
+            model: summary.model,
+            totalInputTokens: 20,
+            totalOutputTokens: 10,
+            fleet: {
+              schemaVersion: 1,
+              placement: "background",
+              parentSessionId: "foreground-1",
+              rootSessionId: "foreground-1",
+              task: summary.title,
+              depth: 1,
+              backend: "native",
+              resolvedMode: "review",
+              resolvedModel: summary.model,
+              resolvedProvider: "anthropic",
+              taskClass: "review_code",
+              routingReason: "persisted",
+              fallbackUsed: false,
+              lifecycle: "interrupted",
+              resultState: "interrupted",
+              terminalReason: "extension_reloaded_during_run",
+              completedAt: now - 1_000,
+              reloadInterruptionRecordedAt: now - 1_000,
+              partialResult: "recoverable partial output",
+            },
+          },
+        },
+      }),
+      saveSession: vi.fn().mockResolvedValue({ ok: true, revision: "2" }),
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    await mgr.restorePersistedBackgroundSessions("foreground-1");
+
+    expect(mgr.getBackgroundCompletionsForParent("foreground-1")).toEqual([
+      expect.objectContaining({
+        sessionId: summary.id,
+        status: "error",
+      }),
+    ]);
+    expect(store.saveSession).not.toHaveBeenCalled();
+  });
+
+  it("does not replay legacy reload interruptions", async () => {
+    const now = Date.now();
+    const summary = {
+      schemaVersion: 1,
+      id: "old-interruption",
+      mode: "review",
+      model: "claude-sonnet-4-6",
+      title: "Old interrupted review",
+      messageCount: 1,
+      totalInputTokens: 20,
+      totalOutputTokens: 10,
+      createdAt: now - 3_000,
+      lastActiveAt: now - 2_000,
+      background: true,
+    };
+    const saveSession = vi.fn().mockResolvedValue({ ok: true, revision: "2" });
+    const store = {
+      identity: {
+        ownerId: "test-owner",
+        surface: "test",
+        startedAt: now,
+      },
+      list: vi.fn(() => []),
+      listAll: vi.fn(() => [summary]),
+      readSession: vi.fn().mockResolvedValue({
+        ok: true,
+        revision: "1",
+        value: {
+          summary,
+          messages: [{ role: "user", content: "review" }],
+          metadata: {
+            mode: summary.mode,
+            model: summary.model,
+            totalInputTokens: 20,
+            totalOutputTokens: 10,
+            fleet: {
+              schemaVersion: 1,
+              placement: "background",
+              parentSessionId: "foreground-1",
+              rootSessionId: "foreground-1",
+              task: summary.title,
+              depth: 1,
+              backend: "native",
+              resolvedMode: "review",
+              resolvedModel: summary.model,
+              resolvedProvider: "anthropic",
+              taskClass: "review_code",
+              routingReason: "persisted",
+              fallbackUsed: false,
+              lifecycle: "interrupted",
+              resultState: "interrupted",
+              terminalReason: "extension_reloaded_during_run",
+              completedAt: now - 1_000,
+              partialResult: "stale partial output",
+            },
+          },
+        },
+      }),
+      saveSession,
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    await mgr.restorePersistedBackgroundSessions("foreground-1");
+
+    expect(mgr.getBackgroundCompletionsForParent("foreground-1")).toEqual([]);
+    expect(saveSession).not.toHaveBeenCalled();
   });
 
   it("restores background trees for all open tabs while preserving single-root pruning", async () => {

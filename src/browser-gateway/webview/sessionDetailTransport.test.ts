@@ -113,9 +113,10 @@ describe("requestDirectSessionDetail", () => {
     ).rejects.toThrow("direct_session_detail_media_type_invalid");
   });
 
-  it("rejects responses above the authenticated detail byte limit", async () => {
+  it("rejects responses above the authenticated session-detail byte limit", async () => {
     const content = new Uint8Array(
-      BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes + 1,
+      BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes +
+        1,
     );
     await expect(
       requestDirectSessionDetail({

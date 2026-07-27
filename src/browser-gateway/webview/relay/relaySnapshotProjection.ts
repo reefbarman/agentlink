@@ -471,7 +471,13 @@ function projectBlock(
         },
       ];
     case "question_answer":
-      return [{ type: "question_answer", items: block.items }];
+      return [
+        {
+          type: "question_answer",
+          ...(block.toolCallId ? { toolCallId: block.toolCallId } : {}),
+          items: block.items,
+        },
+      ];
     case "pairing_status":
       return [];
   }

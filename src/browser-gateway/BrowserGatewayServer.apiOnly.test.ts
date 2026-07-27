@@ -39,6 +39,7 @@ function makeSessionManagerStub() {
     getWorkspaceProjects: vi.fn(() => []),
     getDefaultProjectScope: vi.fn(() => undefined),
     listPersistedSessions: vi.fn(() => []),
+    getSessionInfos: vi.fn(() => []),
     getForegroundSession: vi.fn(() => null),
     getPersistedSessionMessages: vi.fn(() => []),
     getBgSessionInfos: vi.fn(() => []),

@@ -854,6 +854,33 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(nextSession.snapshot.ui.projectHandoff).toBeNull();
   });
 
+  it("answers against the provider tool-call ID when the UI request ID differs", () => {
+    const store = createStore();
+    const assistant = store.startAssistantMessage({ now: 100 });
+    store.startAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "tool-ask-provider",
+      toolName: "ask_user",
+      input: {},
+    });
+    store.setQuestionRequest({
+      id: "question-ui-request",
+      toolCallId: "tool-ask-provider",
+      context: "Need a decision.",
+      questions: [{ id: "continue", type: "yes_no", question: "Continue?" }],
+    });
+
+    const result = store.answerQuestion("question-ui-request", {
+      continue: true,
+    });
+
+    expect(result).toMatchObject({
+      messageId: assistant.id,
+      toolCallId: "tool-ask-provider",
+      responses: [{ question: "Continue?", answer: true }],
+    });
+  });
+
   it("returns ordered question attachment metadata and media", () => {
     const store = createStore();
     store.appendUserMessage({ id: "ask-user-1", text: "Ask me", now: 100 });

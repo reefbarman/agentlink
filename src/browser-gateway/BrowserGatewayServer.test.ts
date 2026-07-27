@@ -912,7 +912,7 @@ describe("BrowserGatewayServer", () => {
         projectedMessages: [
           {
             content: "x".repeat(
-              BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes,
+              BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes,
             ),
           },
         ],

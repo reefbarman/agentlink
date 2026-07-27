@@ -10,6 +10,7 @@ import {
   type BrowserGatewayOwnerCommandKind,
   type BrowserGatewayOwnerEventKind,
   parseBrowserGatewayChatTabSelection,
+  parseBrowserGatewayDetailHandle,
   parseBrowserGatewayOwnerCheckpoint,
   parseBrowserGatewayOwnerCommand,
   parseBrowserGatewayOwnerCommandAck,
@@ -376,6 +377,39 @@ function expectProtocolError(
 }
 
 describe("browser gateway data-plane limits", () => {
+  it("allows larger bounded session details without relaxing ordinary detail limits", () => {
+    const betweenLimits =
+      BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes + 1;
+    expect(
+      parseBrowserGatewayDetailHandle({
+        ...detailHandle,
+        kind: "session",
+        byteLength: betweenLimits,
+      }),
+    ).toMatchObject({ kind: "session", byteLength: betweenLimits });
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayDetailHandle({
+          ...detailHandle,
+          byteLength: betweenLimits,
+        }),
+      "resource_limit",
+      "$.byteLength",
+    );
+    expectProtocolError(
+      () =>
+        parseBrowserGatewayDetailHandle({
+          ...detailHandle,
+          kind: "session",
+          byteLength:
+            BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes +
+            1,
+        }),
+      "resource_limit",
+      "$.byteLength",
+    );
+  });
+
   it("locks every parent-plan limit and assigns one enforcing owner", () => {
     expect(BROWSER_GATEWAY_DATA_PLANE_LIMITS).toEqual({
       ownerEventPayloadBytes: 262_144,
@@ -391,6 +425,7 @@ describe("browser gateway data-plane limits", () => {
       selectedOwnerCheckpointUserTurns: 20,
       selectedOwnerCheckpointMessages: 200,
       authenticatedDetailResponseBytes: 8_388_608,
+      authenticatedSessionDetailResponseBytes: 33_554_432,
       authenticatedDetailStoreBytes: 33_554_432,
       retainedReplayBytesPerOwnerGeneration: 524_288,
       retainedReplayEventsPerOwnerGeneration: 64,
@@ -699,6 +734,7 @@ describe("browser gateway owner protocol", () => {
         {
           type: "question_answer",
           blockId: "question-1",
+          toolCallId: "tool-ask-1",
           items: [
             {
               question: "Proceed?",

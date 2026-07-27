@@ -17,7 +17,7 @@ function createWorkspaceState(): ChatTabWorkspaceState {
 }
 
 describe("createForegroundChatTabSync", () => {
-  it("coalesces notifications that arrive while a bind is in flight", async () => {
+  it("coalesces notifications and skips an unchanged foreground binding", async () => {
     const resolvers: Array<() => void> = [];
     const bindFocusedSession = vi.fn(
       () =>
@@ -35,16 +35,11 @@ describe("createForegroundChatTabSync", () => {
     expect(second).toBe(first);
     expect(bindFocusedSession).toHaveBeenCalledTimes(1);
 
-    // The notification that arrived mid-bind is absorbed by one re-check.
     resolvers[0]!();
-    await vi.waitFor(() => expect(bindFocusedSession).toHaveBeenCalledTimes(2));
-    resolvers[1]!();
     await first;
+    await sync();
 
-    const third = sync();
-    expect(bindFocusedSession).toHaveBeenCalledTimes(3);
-    resolvers[2]!();
-    await third;
+    expect(bindFocusedSession).toHaveBeenCalledTimes(1);
   });
 
   it("recovers after a bind failure", async () => {
@@ -60,6 +55,40 @@ describe("createForegroundChatTabSync", () => {
     await expect(sync()).rejects.toThrow("boom");
     await expect(sync()).resolves.toBeUndefined();
     expect(bindFocusedSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not bind an unchanged foreground session into a newly focused empty tab", async () => {
+    const controller = new ChatTabController(createWorkspaceState(), {
+      createId: (() => {
+        let index = 0;
+        return () => `tab-${++index}`;
+      })(),
+    });
+    let foregroundSessionId: string | undefined = "session-1";
+    const sync = createForegroundChatTabSync({
+      getForegroundSessionId: () => foregroundSessionId,
+      bindFocusedSession: (sessionId) =>
+        controller.bindFocusedSession(sessionId),
+    });
+
+    await sync();
+    const empty = await controller.createTab();
+    expect(controller.getFocusedTab()).toMatchObject({
+      id: empty.id,
+      sessionId: null,
+    });
+
+    await sync();
+
+    expect(controller.getFocusedTab()).toMatchObject({
+      id: empty.id,
+      sessionId: null,
+    });
+    expect(controller.getTabForSession("session-1")?.id).toBe("tab-1");
+
+    foregroundSessionId = "session-2";
+    await sync();
+    expect(controller.getFocusedTab().sessionId).toBe("session-2");
   });
 
   it("skips binding while no foreground session exists", async () => {

@@ -414,6 +414,8 @@ export interface AppState {
   approvalRequest: ApprovalRequest | null;
   questionRequest: {
     id: string;
+    /** Correlates the UI request with the provider's ask_user tool call. */
+    toolCallId?: string;
     /** Visible explanation shown above structured questions. */
     context: string;
     questions: Question[];
@@ -565,11 +567,18 @@ export type AppAction =
   | {
       type: "SET_QUESTION";
       id: string;
+      toolCallId?: string;
       context: string;
       questions: Question[];
       backgroundTask?: string;
     }
-  | { type: "CLEAR_QUESTION" }
+  | {
+      type: "SUBMIT_QUESTION";
+      id: string;
+      answers: Record<string, string | string[] | number | boolean | undefined>;
+      notes: Record<string, string>;
+    }
+  | { type: "CLEAR_QUESTION"; id?: string }
   | {
       type: "SET_DETECTED_QUESTION";
       detectedQuestion: (DetectedQuestion & { messageId: string }) | null;
@@ -962,7 +971,11 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
             });
             const items = parseAskUserQuestionAnswerItems(toolResult);
             if (items.length > 0) {
-              blocks.push({ type: "question_answer", items });
+              blocks.push({
+                type: "question_answer",
+                toolCallId: toolId,
+                items,
+              });
             }
           } else if (toolName === "load_skill") {
             const parsed = parseLoadSkillResult(toolResult);
@@ -1876,14 +1889,27 @@ export function reducer(state: AppState, action: AppAction): AppState {
         msgs[targetIdx] = target;
       }
 
-      // When ask_user completes, add a question_answer summary block.
+      // When ask_user completes, reconcile the optimistic submitted-answer
+      // summary with the durable tool result instead of appending a duplicate.
       if (action.toolName === "ask_user") {
         const items = parseAskUserQuestionAnswerItems(action.result);
         if (items.length > 0) {
-          target.blocks = [
-            ...target.blocks,
-            { type: "question_answer" as const, items },
-          ];
+          const answerIdx = target.blocks.findIndex(
+            (block) =>
+              block.type === "question_answer" &&
+              block.toolCallId === action.toolCallId,
+          );
+          const answerBlock = {
+            type: "question_answer" as const,
+            toolCallId: action.toolCallId,
+            items,
+          };
+          target.blocks =
+            answerIdx >= 0
+              ? target.blocks.map((block, index) =>
+                  index === answerIdx ? answerBlock : block,
+                )
+              : [...target.blocks, answerBlock];
           msgs[targetIdx] = target;
         }
       }
@@ -2511,11 +2537,39 @@ export function reducer(state: AppState, action: AppAction): AppState {
         action.id,
         action.context,
       );
+      let toolCallId = action.toolCallId;
+      if (!toolCallId) {
+        for (
+          let messageIdx = messages.length - 1;
+          messageIdx >= 0;
+          messageIdx -= 1
+        ) {
+          const toolCall = [...messages[messageIdx].blocks]
+            .reverse()
+            .find(
+              (block) =>
+                block.type === "tool_call" &&
+                normalizeProjectedToolName(block.name) === "ask_user" &&
+                !messages.some((message) =>
+                  message.blocks.some(
+                    (candidate) =>
+                      candidate.type === "question_answer" &&
+                      candidate.toolCallId === block.id,
+                  ),
+                ),
+            );
+          if (toolCall?.type === "tool_call") {
+            toolCallId = toolCall.id;
+            break;
+          }
+        }
+      }
       return {
         ...state,
         messages,
         questionRequest: {
           id: action.id,
+          ...(toolCallId ? { toolCallId } : {}),
           context: action.context,
           questions: action.questions,
           ...(action.backgroundTask
@@ -2525,8 +2579,60 @@ export function reducer(state: AppState, action: AppAction): AppState {
       };
     }
 
+    case "SUBMIT_QUESTION": {
+      const request = state.questionRequest;
+      if (!request || request.id !== action.id) return state;
+
+      const items = request.questions.map((question) => ({
+        question: question.question,
+        answer: normalizeAskUserAnswer(action.answers[question.id]),
+        ...(action.notes[question.id]?.trim()
+          ? { note: action.notes[question.id].trim() }
+          : {}),
+      }));
+      const toolCallId = request.toolCallId;
+      let targetIdx = -1;
+      if (toolCallId) {
+        for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+          if (
+            state.messages[index].blocks.some(
+              (block) => block.type === "tool_call" && block.id === toolCallId,
+            )
+          ) {
+            targetIdx = index;
+            break;
+          }
+        }
+      }
+      if (targetIdx < 0 || !toolCallId) {
+        return { ...state, questionRequest: null };
+      }
+
+      const messages = [...state.messages];
+      const target = { ...messages[targetIdx] };
+      const answerBlock: ContentBlock = {
+        type: "question_answer",
+        toolCallId,
+        items,
+      };
+      const existingIdx = target.blocks.findIndex(
+        (block) =>
+          block.type === "question_answer" && block.toolCallId === toolCallId,
+      );
+      target.blocks =
+        existingIdx >= 0
+          ? target.blocks.map((block, index) =>
+              index === existingIdx ? answerBlock : block,
+            )
+          : [...target.blocks, answerBlock];
+      messages[targetIdx] = target;
+      return { ...state, messages, questionRequest: null };
+    }
+
     case "CLEAR_QUESTION":
-      return { ...state, questionRequest: null };
+      return action.id && state.questionRequest?.id !== action.id
+        ? state
+        : { ...state, questionRequest: null };
 
     case "SET_DETECTED_QUESTION":
       return {

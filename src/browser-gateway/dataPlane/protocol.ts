@@ -1,5 +1,8 @@
 import { utf8ByteLength } from "../../shared/streamingBaselineMetrics.js";
-import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./limits.js";
+import {
+  BROWSER_GATEWAY_DATA_PLANE_LIMITS,
+  browserGatewayDetailResponseByteLimit,
+} from "./limits.js";
 
 export const BROWSER_GATEWAY_DATA_PLANE_PROTOCOL_VERSION = "1";
 
@@ -272,6 +275,7 @@ export type BrowserGatewayTranscriptBlock =
   | {
       type: "question_answer";
       blockId: string;
+      toolCallId?: string;
       items: Array<{
         question: string;
         answer: string | string[] | number | boolean | null;
@@ -1326,14 +1330,16 @@ function parseDetailHandle(
     "mediaType",
   ]);
   const mediaType = optionalString(object, "mediaType", path, 256);
+  const kind = enumValue(
+    object.kind,
+    `${path}.kind`,
+    new Set(["message", "diff", "media", "interaction", "session"]),
+  ) as BrowserGatewayDetailHandle["kind"];
   const byteLength = positiveSafeInteger(
     object.byteLength,
     `${path}.byteLength`,
   );
-  if (
-    byteLength >
-    BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes
-  ) {
+  if (byteLength > browserGatewayDetailResponseByteLimit(kind)) {
     fail(
       "resource_limit",
       `${path}.byteLength`,
@@ -1343,11 +1349,7 @@ function parseDetailHandle(
   return {
     ...parseIdentity(object, path),
     handleId: nonEmptyString(object.handleId, `${path}.handleId`, 256),
-    kind: enumValue(
-      object.kind,
-      `${path}.kind`,
-      new Set(["message", "diff", "media", "interaction", "session"]),
-    ) as BrowserGatewayDetailHandle["kind"],
+    kind,
     byteLength,
     expiresAt: nonNegativeFiniteNumber(object.expiresAt, `${path}.expiresAt`),
     ...(mediaType ? { mediaType } : {}),
@@ -2275,10 +2277,17 @@ function parseTranscriptBlock(
       };
     }
     case "question_answer": {
-      const object = strictRecord(value, path, ["type", "blockId", "items"]);
+      const object = strictRecord(value, path, [
+        "type",
+        "blockId",
+        "toolCallId",
+        "items",
+      ]);
+      const toolCallId = optionalString(object, "toolCallId", path, 256);
       return {
         type: "question_answer",
         blockId: nonEmptyString(object.blockId, `${path}.blockId`, 256),
+        ...(toolCallId ? { toolCallId } : {}),
         items: arrayValue(object.items, `${path}.items`).map((item, index) =>
           parseQuestionAnswerItem(item, `${path}.items[${index}]`),
         ),

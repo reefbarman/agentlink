@@ -47,7 +47,7 @@ export async function requestDirectSessionDetail(
   const content = new Uint8Array(await response.arrayBuffer());
   if (
     content.byteLength >
-    BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes
+    BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes
   ) {
     throw new Error("direct_session_detail_too_large");
   }

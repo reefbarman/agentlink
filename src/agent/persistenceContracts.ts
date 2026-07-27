@@ -8,9 +8,9 @@ import type {
 import type { AgentMessage } from "./types.js";
 import type { BackgroundResultState } from "../core/capabilities/background.js";
 import type { Checkpoint } from "./CheckpointManager.js";
+import type { CoreModelToolResultBlock } from "../core/modelRuntime.js";
 import type { FleetResultEnvelope } from "./FleetWorkflows.js";
 import type { PendingQuestionRecoveryContext } from "../core/tools/types.js";
-import type { CoreModelToolResultBlock } from "../core/modelRuntime.js";
 import type { Question } from "./webview/types.js";
 import type { ReasoningEffort } from "./providers/types.js";
 import type { SessionProjectScope } from "../core/workspaceProjects.js";
@@ -150,6 +150,8 @@ export interface PersistedFleetMetadata {
   partialResult?: string;
   /** Whether the provider/engine classified a failed run as retryable. */
   agentRetryable?: boolean;
+  /** Timestamp when a running child was first recovered as reload-interrupted. */
+  reloadInterruptionRecordedAt?: number;
   /** Timestamp when the terminal result was surfaced in the parent transcript. */
   resultAnnouncedAt?: number;
   goalId?: string;

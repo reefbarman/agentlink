@@ -206,6 +206,7 @@ export type BrowserGatewayNormalizedTranscriptBlock =
   | {
       readonly type: "question_answer";
       readonly blockId: string;
+      readonly toolCallId?: string;
       readonly items: readonly {
         readonly question: string;
         readonly answer: string | string[] | number | boolean | null;
@@ -689,6 +690,7 @@ function normalizeLegacyBlock(
       return {
         type: "question_answer",
         blockId: `question-answer-${index}`,
+        ...(block.toolCallId ? { toolCallId: block.toolCallId } : {}),
         items: structuredClone(block.items),
       };
     case "pairing_code":

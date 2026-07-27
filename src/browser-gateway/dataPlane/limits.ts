@@ -12,6 +12,7 @@ export const BROWSER_GATEWAY_DATA_PLANE_LIMITS = Object.freeze({
   selectedOwnerCheckpointUserTurns: 20,
   selectedOwnerCheckpointMessages: 200,
   authenticatedDetailResponseBytes: 8 * 1024 * 1024,
+  authenticatedSessionDetailResponseBytes: 32 * 1024 * 1024,
   authenticatedDetailStoreBytes: 32 * 1024 * 1024,
   retainedReplayBytesPerOwnerGeneration: 512 * 1024,
   retainedReplayEventsPerOwnerGeneration: 64,
@@ -50,6 +51,7 @@ export const BROWSER_GATEWAY_DATA_PLANE_LIMIT_OWNERS = Object.freeze({
   selectedOwnerCheckpointUserTurns: "owner-adapter",
   selectedOwnerCheckpointMessages: "owner-adapter",
   authenticatedDetailResponseBytes: "helper-detail-store",
+  authenticatedSessionDetailResponseBytes: "helper-session-detail-store",
   authenticatedDetailStoreBytes: "helper-detail-store",
   retainedReplayBytesPerOwnerGeneration: "helper-relay-store",
   retainedReplayEventsPerOwnerGeneration: "helper-relay-store",
@@ -72,3 +74,9 @@ export const BROWSER_GATEWAY_DATA_PLANE_LIMIT_OWNERS = Object.freeze({
 } as const satisfies Readonly<
   Record<BrowserGatewayDataPlaneLimitName, string>
 >);
+
+export function browserGatewayDetailResponseByteLimit(kind: string): number {
+  return kind === "session"
+    ? BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes
+    : BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes;
+}

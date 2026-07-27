@@ -5,6 +5,7 @@ import * as path from "path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentMessage } from "./types.js";
+import type { AppAction } from "../shared/chatProjection.js";
 
 type Listener<T> = (value: T) => void;
 
@@ -2485,6 +2486,70 @@ describe("ChatViewProvider session state sync", () => {
           message.id === "question-1",
       ),
     ).toBe(true);
+  });
+
+  it("projects the provider tool-call ID separately from the UI question ID", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = {
+      id: "session-1",
+      title: "Session 1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "tool_executing",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      getAllMessages: () => [] as unknown[],
+    };
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      clearPendingQuestionRecovery: vi.fn(),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    } as never);
+    const questions = [
+      { id: "continue", type: "yes_no" as const, question: "Continue?" },
+    ];
+
+    const response = provider.handleToolQuestion(
+      "Need a decision.",
+      questions,
+      "session-1",
+      undefined,
+      undefined,
+      "toolu-live-ask",
+    );
+    const questionRequest =
+      provider.getBrowserProjectedForegroundState()?.questionRequest;
+
+    expect(questionRequest).toMatchObject({
+      toolCallId: "toolu-live-ask",
+      context: "Need a decision.",
+    });
+    expect(questionRequest?.id).not.toBe("toolu-live-ask");
+    if (!questionRequest)
+      throw new Error("Expected a pending question request");
+    (
+      provider as unknown as {
+        pendingQuestions: Map<string, (raw: unknown) => void>;
+      }
+    ).pendingQuestions.get(questionRequest.id)?.({
+      answers: { continue: true },
+      notes: {},
+    });
+    await expect(response).resolves.toMatchObject({
+      answers: { continue: true },
+    });
   });
 
   it("forwards pending ask_user recovery through the production tool question handler", async () => {
@@ -5882,22 +5947,41 @@ describe("ChatViewProvider session state sync", () => {
     pendingQuestions.set("question-1", resolveSpy);
     questionState.questionSessionById.set("question-1", "session-1");
 
-    (
-      provider as unknown as {
-        projectedForegroundState: { questionRequest: unknown };
-      }
-    ).projectedForegroundState = {
-      ...(
-        provider as unknown as {
-          projectedForegroundState: Record<string, unknown>;
-        }
-      ).projectedForegroundState,
-      questionRequest: {
-        id: "question-1",
-        context: "Need input.",
-        questions: [],
+    const projection = provider as unknown as {
+      applyProjectedAction: (action: AppAction) => void;
+    };
+    const questions = [
+      {
+        id: "q1",
+        type: "yes_no" as const,
+        question: "Proceed?",
       },
-    } as never;
+    ];
+    projection.applyProjectedAction({
+      type: "TOOL_START",
+      toolCallId: "tool-ask-1",
+      toolName: "ask_user",
+      input: { context: "Need input.", questions },
+    });
+    projection.applyProjectedAction({
+      type: "SET_QUESTION",
+      id: "question-1",
+      context: "Need input.",
+      questions,
+    });
+    expect(
+      (
+        provider as unknown as {
+          projectedForegroundState: {
+            questionRequest: { toolCallId?: string } | null;
+          };
+        }
+      ).projectedForegroundState.questionRequest,
+    ).toMatchObject({ toolCallId: "tool-ask-1" });
+    const applyProjectedActionSpy = vi.spyOn(
+      projection,
+      "applyProjectedAction",
+    );
 
     const ok = await provider.submitBrowserQuestionResponse({
       id: "question-1",
@@ -5914,13 +5998,12 @@ describe("ChatViewProvider session state sync", () => {
       "session-1",
       "question-1",
     );
-    expect(
-      (
-        provider as unknown as {
-          projectedForegroundState: { questionRequest: unknown };
-        }
-      ).projectedForegroundState.questionRequest,
-    ).toBeNull();
+    expect(applyProjectedActionSpy).toHaveBeenCalledWith({
+      type: "SUBMIT_QUESTION",
+      id: "question-1",
+      answers: { q1: "Yes" },
+      notes: {},
+    });
     expect(pendingQuestions.has("question-1")).toBe(false);
   });
 
@@ -6293,6 +6376,7 @@ describe("chat tab host routing", () => {
       reorder: vi.fn(),
     };
     const chatTabController = {
+      getFocusedTabId: vi.fn(() => "tab-1"),
       validateAction: vi.fn(() => ({
         ok: true,
         tab: {
@@ -6375,6 +6459,118 @@ describe("chat tab host routing", () => {
       fixture.provider.handleEditorPaneMessage(message, connection as never);
     return { ...fixture, address, connection, handleEditor };
   }
+
+  it("binds the first send to its exact empty tab before promoting the session", async () => {
+    const { chatTabController, coordinator, provider } =
+      await makeTabRoutingProvider();
+    const projectScope = {
+      schemaVersion: 1,
+      kind: "project",
+      projectId: "project-1",
+      workspaceFolderUri: "file:///tmp/project",
+      displayName: "Project",
+      rootPath: "/tmp/project",
+    };
+    const createdSession = {
+      id: "session-created-for-tab-4",
+      title: "New task",
+      mode: "code",
+      model: "gpt-5.6-sol",
+      status: "idle",
+      projectScope,
+      projectAvailability: "available",
+      reasoningEffort: "high",
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      estimatedTotalUsed: 0,
+      getAllMessages: vi.fn(() => []),
+    };
+    let foregroundSession: typeof createdSession | undefined;
+    const createSession = vi.fn();
+    const sendMessage = vi.fn(async () => undefined);
+    const switchTo = vi.fn(() => {
+      foregroundSession = createdSession;
+    });
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getSession: vi.fn((id: string) =>
+        id === createdSession.id ? createdSession : undefined,
+      ),
+      getForegroundSession: vi.fn(() => foregroundSession),
+      getWorkspaceProjects: vi.fn(() => [
+        {
+          id: "project-1",
+          name: "Project",
+          uri: "file:///tmp/project",
+          rootPath: "/tmp/project",
+          availability: { status: "available" },
+        },
+      ]),
+      createSession,
+      switchTo,
+      sendMessage,
+    };
+    coordinator.newChat.mockResolvedValueOnce({
+      ok: true,
+      tab: {
+        id: "tab-4",
+        displayNumber: 4,
+        sessionId: createdSession.id,
+        placement: "docked",
+        terminalGeneration: 1,
+      },
+      session: createdSession,
+    });
+    chatTabController.getFocusedTabId = vi.fn(() => "tab-4");
+    (
+      provider as unknown as {
+        resolveAttachments(): Promise<{
+          text: string;
+          images: unknown[];
+          documents: unknown[];
+        }>;
+        buildChatState(): Record<string, unknown>;
+      }
+    ).resolveAttachments = vi.fn(async () => ({
+      text: "exact tab prompt",
+      images: [],
+      documents: [],
+    }));
+    (
+      provider as unknown as { buildChatState(): Record<string, unknown> }
+    ).buildChatState = vi.fn(() => ({ sessionId: createdSession.id }));
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "agentSend",
+      controllerEpoch: "epoch-1",
+      tabId: "tab-4",
+      sessionId: null,
+      text: "exact tab prompt",
+      mode: "code",
+    });
+
+    expect(coordinator.newChat).toHaveBeenCalledWith(
+      {
+        controllerEpoch: "epoch-1",
+        tabId: "tab-4",
+        sessionId: null,
+      },
+      "code",
+      { focus: false },
+    );
+    expect(createSession).not.toHaveBeenCalled();
+    expect(switchTo).toHaveBeenCalledWith(createdSession.id);
+    expect(sendMessage).toHaveBeenCalledWith(
+      createdSession.id,
+      "exact tab prompt",
+      "code",
+      expect.objectContaining({ origin: "vscode" }),
+    );
+  });
 
   it("hydrates the exact persisted session for a registered editor pane", async () => {
     const { provider } = await makeTabRoutingProvider();

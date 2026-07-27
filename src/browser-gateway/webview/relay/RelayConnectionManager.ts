@@ -324,7 +324,7 @@ export class RelayConnectionManager {
         handle.mediaType !== "application/json; charset=utf-8" ||
         handle.expiresAt <= this.now() ||
         handle.byteLength >
-          BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes
+          BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes
       ) {
         throw new Error("relay_session_detail_handle_invalid");
       }

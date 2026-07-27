@@ -78,6 +78,7 @@ export interface BrowserGatewayUiState {
   question:
     | {
         id: string;
+        toolCallId?: string;
         context: string;
         questions: Question[];
         backgroundTask?: string;
@@ -93,6 +94,7 @@ export interface BrowserGatewayWireState {
   approval: ApprovalRequest | null;
   question: {
     id: string;
+    toolCallId?: string;
     context: string;
     questions: Question[];
     backgroundTask?: string;
@@ -140,6 +142,7 @@ export interface BrowserGatewaySessionState {
         messageQueue: AppState["messageQueue"];
         questionRequest: {
           id: string;
+          toolCallId?: string;
           context: string;
           questions: Question[];
           backgroundTask?: string;
@@ -193,6 +196,7 @@ export interface BrowserGatewayWireSessionState {
     messageQueue: AppState["messageQueue"];
     questionRequest: {
       id: string;
+      toolCallId?: string;
       context: string;
       questions: Question[];
       backgroundTask?: string;
@@ -228,6 +232,7 @@ export interface BrowserGatewayDetachedSessionUiState {
   approval: ApprovalRequest | null;
   question: {
     id: string;
+    toolCallId?: string;
     context: string;
     questions: Question[];
     backgroundTask?: string;
@@ -290,6 +295,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   private question:
     | {
         id: string;
+        toolCallId?: string;
         context: string;
         questions: Question[];
         backgroundTask?: string;
@@ -801,6 +807,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     if (!ui.question && pendingQuestion) {
       ui.question = {
         id: pendingQuestion.questionRequestId,
+        toolCallId: pendingQuestion.toolUseId,
         context: pendingQuestion.context,
         questions: structuredClone(pendingQuestion.questions),
       };
@@ -1279,6 +1286,9 @@ export class BrowserGatewayService implements vscode.Disposable {
       if (foregroundQuestion) {
         return {
           id: foregroundQuestion.id,
+          ...(foregroundQuestion.toolCallId
+            ? { toolCallId: foregroundQuestion.toolCallId }
+            : {}),
           context: foregroundQuestion.context,
           questions: foregroundQuestion.questions.map((question) => ({
             ...question,
@@ -1407,6 +1417,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       case "agentQuestionRequest":
         this.question = {
           id: event.id,
+          ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
           context: event.context,
           questions: event.questions,
           ...(event.backgroundTask
@@ -1604,6 +1615,7 @@ function createDetachedSessionUiState(
       case "agentQuestionRequest":
         state.question = {
           id: event.id,
+          ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
           context: event.context,
           questions: structuredClone(event.questions),
           ...(event.backgroundTask

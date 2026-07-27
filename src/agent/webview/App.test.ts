@@ -722,6 +722,7 @@ describe("webview App reducer background agent launch blocks", () => {
         }),
         {
           type: "question_answer",
+          toolCallId: "tool-ask-user",
           items: [
             {
               question: "Which scope?",

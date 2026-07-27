@@ -865,12 +865,13 @@ export class BrowserGatewayAskAgentSessionStore {
       return null;
     }
     const request = this.questionRequest;
+    const toolCallId = request.toolCallId ?? request.id;
     const session = this.getActiveSession();
     const messageIndex = session.messages.findIndex(
       (message) =>
         message.role === "assistant" &&
         message.blocks.some(
-          (block) => block.type === "tool_call" && block.id === request.id,
+          (block) => block.type === "tool_call" && block.id === toolCallId,
         ),
     );
     if (messageIndex < 0) {
@@ -897,12 +898,16 @@ export class BrowserGatewayAskAgentSessionStore {
       ...message,
       blocks: [
         ...message.blocks,
-        { type: "question_answer", items: responses },
+        {
+          type: "question_answer",
+          toolCallId,
+          items: responses,
+        },
       ],
     };
     this.questionRequest = null;
     this.questionProgress = null;
-    return { messageId: message.id, toolCallId: request.id, responses, media };
+    return { messageId: message.id, toolCallId, responses, media };
   }
 
   setTodos(todos: TodoItem[]): void {
@@ -1193,7 +1198,11 @@ export class BrowserGatewayAskAgentSessionStore {
       };
     }
     if (params.toolName === "ask_user") {
-      this.appendQuestionAnswerBlockFromToolResult(message, params.result);
+      this.appendQuestionAnswerBlockFromToolResult(
+        message,
+        params.toolCallId,
+        params.result,
+      );
     }
   }
 
@@ -1424,6 +1433,7 @@ export class BrowserGatewayAskAgentSessionStore {
 
   private appendQuestionAnswerBlockFromToolResult(
     message: ChatMessage,
+    toolCallId: string,
     result: string,
   ): void {
     try {
@@ -1464,10 +1474,20 @@ export class BrowserGatewayAskAgentSessionStore {
           })
         : [];
       if (items.length === 0) return;
-      if (message.blocks.some((block) => block.type === "question_answer")) {
+      const answerIdx = message.blocks.findIndex(
+        (block) =>
+          block.type === "question_answer" && block.toolCallId === toolCallId,
+      );
+      const answerBlock = {
+        type: "question_answer" as const,
+        toolCallId,
+        items,
+      };
+      if (answerIdx >= 0) {
+        message.blocks[answerIdx] = answerBlock;
         return;
       }
-      message.blocks.push({ type: "question_answer", items });
+      message.blocks.push(answerBlock);
     } catch {
       // Ignore malformed tool results; raw result remains in the tool block.
     }

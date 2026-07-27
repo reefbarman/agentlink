@@ -383,6 +383,8 @@ describe("FanoutAgentUiPublisher", () => {
       "question-2",
       "Fanout needs input.",
       [],
+      undefined,
+      "tool-ask-2",
     );
     publisher.publishQuestionCleared("session-3", "question-2");
 
@@ -401,6 +403,7 @@ describe("FanoutAgentUiPublisher", () => {
         "Fanout needs input.",
         [],
         undefined,
+        "tool-ask-2",
       );
       expect(target.publishQuestionCleared).toHaveBeenCalledWith(
         "session-3",

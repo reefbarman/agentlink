@@ -15,7 +15,10 @@ import {
   type BrowserGatewayOwnerCommandAck,
   type BrowserGatewayOwnerPublicationBatch,
 } from "../dataPlane/protocol.js";
-import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "../dataPlane/limits.js";
+import {
+  BROWSER_GATEWAY_DATA_PLANE_LIMITS,
+  browserGatewayDetailResponseByteLimit,
+} from "../dataPlane/limits.js";
 import { readBoundedBody, readJsonBody } from "../nodeHttpPrimitives.js";
 import type { HelperLifecycleCoordinator } from "./HelperLifecycleCoordinator.js";
 import type { InternalDataPlaneRouteHandler } from "./helperRouteFamilies.js";
@@ -347,7 +350,7 @@ export class BrowserGatewayDataPlaneRoutes {
       try {
         content = await readBoundedBody(
           req,
-          BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes,
+          browserGatewayDetailResponseByteLimit(handle.kind),
         );
       } catch {
         throw new DataPlaneRouteError(413, "detail_body_limit_exceeded");

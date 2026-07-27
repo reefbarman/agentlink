@@ -555,6 +555,7 @@ export type ExtensionToWebview =
       type: "agentQuestionRequest";
       sessionId?: string;
       id: string;
+      toolCallId?: string;
       context: string;
       questions: import("./webview/types.js").Question[];
       backgroundTask?: string;
@@ -3288,6 +3289,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.applyProjectedAction({
       type: "SET_QUESTION",
       id: question.questionRequestId,
+      toolCallId: question.toolUseId,
       context: question.context,
       questions: question.questions,
     });
@@ -3296,6 +3298,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       question.questionRequestId,
       question.context,
       question.questions,
+      undefined,
+      question.toolUseId,
     );
   }
 
@@ -3305,6 +3309,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     sessionId: string,
     backgroundTask?: string,
     pendingQuestionRecovery?: import("../core/tools/types.js").PendingQuestionRecoveryContext,
+    toolCallId?: string,
   ): Promise<import("./toolAdapter.js").QuestionResponse> {
     const { randomUUID } = require("crypto") as typeof import("crypto");
     const id = randomUUID();
@@ -3333,6 +3338,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           id,
           context,
           questions,
+          ...(toolCallId ? { toolCallId } : {}),
           ...(backgroundTask ? { backgroundTask } : {}),
         });
         if (!backgroundTask && pendingQuestionRecovery) {
@@ -3351,6 +3357,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         context,
         questions,
         backgroundTask,
+        toolCallId ?? pendingQuestionRecovery?.toolUseId,
       );
     });
   }
@@ -3470,7 +3477,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (
           this.sessionManager?.getForegroundSession()?.id === recoverySession.id
         ) {
-          this.applyProjectedAction({ type: "CLEAR_QUESTION" });
+          this.applyProjectedAction({ type: "CLEAR_QUESTION", id: msg.id });
         }
         this.uiPublisher.publishQuestionCleared(recoverySession.id, msg.id);
         // The recovered answer was committed straight into session history
@@ -3497,7 +3504,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       notes: msg.notes ?? {},
       attachments,
     });
-    this.applyProjectedAction({ type: "CLEAR_QUESTION" });
+    this.applyProjectedAction({
+      type: "SUBMIT_QUESTION",
+      id: msg.id,
+      answers: msg.answers,
+      notes: msg.notes ?? {},
+    });
     this.uiPublisher.publishQuestionCleared(sessionId, msg.id);
     return true;
   }
@@ -6430,9 +6442,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         let effectiveSessionId =
           await this.resolveForegroundSessionTransition(sessionId);
         if (!effectiveSessionId || !mgr.getSession(effectiveSessionId)) {
-          const newSession = await mgr.createSession(mode, {
-            activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
-          });
+          const address = parseChatTabActionAddress(msg);
+          let newSession: AgentSession;
+          if (address) {
+            const result = await this.chatTabHostCoordinator?.newChat(
+              address,
+              mode,
+              { focus: false },
+            );
+            if (!result?.ok || !result.session) {
+              this.rejectChatTabAction("agentSend", "stale_session");
+              return;
+            }
+            newSession = result.session;
+            if (this.chatTabController?.getFocusedTabId() === address.tabId) {
+              mgr.switchTo(newSession.id);
+            }
+          } else {
+            newSession = await mgr.createSession(mode, {
+              activeFilePath:
+                vscode.window.activeTextEditor?.document.uri.fsPath,
+            });
+          }
           effectiveSessionId = newSession.id;
           this.approvalManager?.migrateSessionState(
             "agent",
@@ -6494,13 +6525,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         if (nonEmptyMessages.length === 0) return;
 
-        for (const message of nonEmptyMessages) {
-          this.applyProjectedAction({
-            type: "ADD_USER_MESSAGE",
-            text: message.displayText ?? message.text,
-            isSlashCommand: message.isSlashCommand,
-            slashCommandLabel: message.slashCommandLabel,
-          });
+        if (mgr.getForegroundSession()?.id === effectiveSessionId) {
+          for (const message of nonEmptyMessages) {
+            this.applyProjectedAction({
+              type: "ADD_USER_MESSAGE",
+              text: message.displayText ?? message.text,
+              isSlashCommand: message.isSlashCommand,
+              slashCommandLabel: message.slashCommandLabel,
+            });
+          }
         }
 
         this.log(
@@ -8348,6 +8381,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.applyProjectedAction({
           type: "SET_QUESTION",
           id: extMsg.id,
+          toolCallId: extMsg.toolCallId,
           context: extMsg.context,
           questions: extMsg.questions,
           ...(extMsg.backgroundTask

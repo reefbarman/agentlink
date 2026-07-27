@@ -1283,6 +1283,7 @@ function projectBlock(
       return {
         type: "question_answer",
         blockId: `question-answer-${index}`,
+        ...(block.toolCallId ? { toolCallId: block.toolCallId } : {}),
         items: block.items.map((item) => ({
           question: bounded(item.question, 8_000),
           answer: Array.isArray(item.answer)

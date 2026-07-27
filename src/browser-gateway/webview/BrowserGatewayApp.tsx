@@ -156,7 +156,7 @@ const SIDE_PANE_KEYBOARD_STEP = 32;
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
 const TOUCH_POINTER_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
 const DISCONNECTED_INSTANCE_RETENTION_MS = 3 * 60 * 1_000;
-const MAX_DETACHED_SESSION_DETAIL_CACHE_ENTRIES = 16;
+const MAX_DETACHED_SESSION_DETAIL_CACHE_ENTRIES = 4;
 
 /**
  * Run `callback` after the browser has had a chance to paint the current

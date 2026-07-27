@@ -417,6 +417,124 @@ describe("tool lifecycle projection", () => {
   });
 });
 
+describe("ask_user result projection", () => {
+  const question = {
+    id: "choice",
+    type: "multiple_choice" as const,
+    question: "Which option?",
+    options: ["A", "B"],
+    recommended: "A",
+  };
+
+  function pendingQuestionState() {
+    let state = reducer(initialState, {
+      type: "TOOL_START" as const,
+      toolCallId: "tool-ask-1",
+      toolName: "ask_user",
+      input: { context: "Choose.", questions: [question] },
+    });
+    state = reducer(state, {
+      type: "SET_QUESTION",
+      id: "request-1",
+      context: "Choose.",
+      questions: [question],
+    });
+    return state;
+  }
+
+  it("projects submitted answers immediately and reconciles the durable result", () => {
+    let state = reducer(pendingQuestionState(), {
+      type: "SUBMIT_QUESTION",
+      id: "request-1",
+      answers: { choice: "B" },
+      notes: { choice: "Use the smaller scope." },
+    });
+
+    expect(state.questionRequest).toBeNull();
+    expect(state.messages.flatMap((message) => message.blocks)).toContainEqual({
+      type: "question_answer",
+      toolCallId: "tool-ask-1",
+      items: [
+        {
+          question: "Which option?",
+          answer: "B",
+          note: "Use the smaller scope.",
+        },
+      ],
+    });
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-ask-1",
+      toolName: "ask_user",
+      result: JSON.stringify({
+        responses: [{ question: "Which option?", answer: "B" }],
+      }),
+      durationMs: 1,
+    });
+
+    const answerBlocks = state.messages
+      .flatMap((message) => message.blocks)
+      .filter((block) => block.type === "question_answer");
+    expect(answerBlocks).toEqual([
+      {
+        type: "question_answer",
+        toolCallId: "tool-ask-1",
+        items: [{ question: "Which option?", answer: "B" }],
+      },
+    ]);
+  });
+
+  it("uses an explicit tool-call ID when multiple ask_user calls are present", () => {
+    let state = reducer(initialState, {
+      type: "TOOL_START",
+      toolCallId: "tool-ask-1",
+      toolName: "ask_user",
+      input: { context: "First.", questions: [question] },
+    });
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "tool-ask-2",
+      toolName: "ask_user",
+      input: { context: "Second.", questions: [question] },
+    });
+
+    state = reducer(state, {
+      type: "SET_QUESTION",
+      id: "request-1",
+      toolCallId: "tool-ask-1",
+      context: "First.",
+      questions: [question],
+    });
+    state = reducer(state, {
+      type: "SUBMIT_QUESTION",
+      id: "request-1",
+      answers: { choice: "A" },
+      notes: {},
+    });
+
+    expect(state.messages.flatMap((message) => message.blocks)).toContainEqual({
+      type: "question_answer",
+      toolCallId: "tool-ask-1",
+      items: [{ question: "Which option?", answer: "A" }],
+    });
+  });
+
+  it("ignores a delayed clear for an earlier question", () => {
+    let state = pendingQuestionState();
+    state = reducer(state, {
+      type: "SET_QUESTION",
+      id: "request-2",
+      context: "Choose again.",
+      questions: [question],
+    });
+
+    const next = reducer(state, { type: "CLEAR_QUESTION", id: "request-1" });
+
+    expect(next.questionRequest?.id).toBe("request-2");
+  });
+});
+
 describe("BG_AGENT_DONE result placement", () => {
   const bgDone = {
     type: "BG_AGENT_DONE" as const,

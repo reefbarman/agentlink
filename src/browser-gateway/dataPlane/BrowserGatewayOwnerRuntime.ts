@@ -21,7 +21,10 @@ import {
   type BrowserGatewayOwnerProjectionPublication,
 } from "./ownerProjectionAdapter.js";
 import type { BrowserGatewayOwnerProjectionSources } from "./ownerProjectionSources.js";
-import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./limits.js";
+import {
+  BROWSER_GATEWAY_DATA_PLANE_LIMITS,
+  browserGatewayDetailResponseByteLimit,
+} from "./limits.js";
 
 export interface BrowserGatewayOwnerCommandExecutionResult {
   readonly detail?: {
@@ -255,7 +258,7 @@ export class BrowserGatewayOwnerRuntime {
       if (result?.detail) {
         if (
           result.detail.content.byteLength >
-          BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes
+          browserGatewayDetailResponseByteLimit(result.detail.kind)
         ) {
           throw new Error("browser_gateway_session_detail_too_large");
         }

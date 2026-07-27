@@ -2462,7 +2462,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const byteLength = Buffer.byteLength(serialized, "utf8");
     if (
       byteLength >
-      BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedDetailResponseBytes
+      BROWSER_GATEWAY_DATA_PLANE_LIMITS.authenticatedSessionDetailResponseBytes
     ) {
       this.writeJson(res, 413, { error: "session_detail_too_large" });
       return;

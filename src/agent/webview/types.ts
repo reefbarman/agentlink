@@ -113,6 +113,8 @@ export interface ProviderUsageCardData {
 /** A question posed by the agent via the ask_user tool */
 export interface QuestionRequest {
   id: string;
+  /** Provider ask_user tool-call ID when it differs from the UI request ID. */
+  toolCallId?: string;
   /** Visible explanation shown above structured questions. */
   context: string;
   questions: Question[];
@@ -957,6 +959,8 @@ export type ContentBlock =
     }
   | {
       type: "question_answer";
+      /** Correlates live submissions with the eventual ask_user tool result. */
+      toolCallId?: string;
       /** Array of Q&A pairs from the ask_user tool */
       items: Array<{
         question: string;
