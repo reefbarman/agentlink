@@ -6,13 +6,28 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  package:
+    name: Package ${{ matrix.target }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - darwin-arm64
+          - darwin-x64
+          - linux-arm64
+          - linux-x64
+          - alpine-arm64
+          - alpine-x64
+          - win32-arm64
+          - win32-x64
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -21,10 +36,55 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run build
+      - name: Install target LanceDB addon
+        env:
+          AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
+        run: |
+          NATIVE_PACKAGE=$(node scripts/package-retrieval-runtime.mjs --print-native-package)
+          npm install --no-save --package-lock=false --force "${NATIVE_PACKAGE}@0.22.3"
+
+      - name: Build target bundle
+        env:
+          AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
+        run: npm run build
+
+      - name: Verify package inventory
+        env:
+          AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
+        run: |
+          npx --yes @vscode/vsce@3.9.2 ls \
+            --no-dependencies \
+            | node scripts/verify-retrieval-package.mjs \
+                --target "$AGENTLINK_VSCE_TARGET"
 
       - name: Package VSIX
-        run: npx @vscode/vsce package --no-dependencies --out dist/
+        env:
+          AGENTLINK_VSCE_TARGET: ${{ matrix.target }}
+        run: |
+          VERSION=$(node -p 'require("./package.json").version')
+          npx --yes @vscode/vsce@3.9.2 package \
+            --no-dependencies \
+            --allow-star-activation \
+            --target "$AGENTLINK_VSCE_TARGET" \
+            --out "agentlink-${VERSION}-${AGENTLINK_VSCE_TARGET}.vsix"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentlink-${{ matrix.target }}
+          path: agentlink-*-${{ matrix.target }}.vsix
+          if-no-files-found: error
+
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agentlink-*
+          path: dist
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

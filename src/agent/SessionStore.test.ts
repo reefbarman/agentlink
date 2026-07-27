@@ -261,6 +261,128 @@ describe("SessionStore", () => {
     expect(reloadedStore.get("background-1")?.background).toBe(true);
   });
 
+  it("preserves exact active skill state through the legacy save API", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const activeSkillState = {
+      schemaVersion: 1 as const,
+      catalogRevision: "catalog-revision",
+      activations: [
+        {
+          id: "project:agentlink:.agentlink/skills/review",
+          name: "review",
+          revision: "skill-revision",
+        },
+      ],
+      policy: {
+        schemaVersion: 1 as const,
+        revision: "policy-revision",
+        skillIds: ["project:agentlink:.agentlink/skills/review"],
+        dependencies: [],
+        recommendations: [],
+        requestedTools: [],
+        allowedTools: ["read_file"],
+      },
+    };
+
+    store.save({
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Restricted session",
+      createdAt: 1,
+      lastActiveAt: 2,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+      lastInputTokens: 0,
+      lastCacheReadTokens: 0,
+      getLoadedSkills: () => ["review"],
+      getActiveSkillState: () => activeSkillState,
+      getAllMessages: () => [] as AgentMessage[],
+    });
+    await (store as any).sessionWriteQueues.get("session-1");
+
+    await expect(store.readSession("session-1")).resolves.toEqual(
+      expect.objectContaining({
+        ok: true,
+        value: expect.objectContaining({
+          metadata: expect.objectContaining({
+            loadedSkills: ["review"],
+            activeSkillState,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("round-trips optional prompt-profile evidence through both save APIs", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const promptProfile = {
+      profile: "reasoning" as const,
+      source: "exact-model-override" as const,
+      policyRevision: "prompt-profile-policy-v1" as const,
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    };
+
+    await expect(
+      store.saveSession({
+        session: createRecord({ metadata: { promptProfile } }),
+        expectedRevision: null,
+      }),
+    ).resolves.toEqual({ ok: true, revision: "1" });
+    await expect(store.readSession("session-1")).resolves.toEqual(
+      expect.objectContaining({
+        ok: true,
+        value: expect.objectContaining({
+          metadata: expect.objectContaining({ promptProfile }),
+        }),
+      }),
+    );
+
+    store.save({
+      id: "legacy-api",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      promptProfile,
+      title: "Legacy API",
+      createdAt: 1,
+      lastActiveAt: 2,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+      lastInputTokens: 0,
+      lastCacheReadTokens: 0,
+      getAllMessages: () => [] as AgentMessage[],
+    });
+    await (store as any).sessionWriteQueues.get("legacy-api");
+    await expect(store.readSession("legacy-api")).resolves.toEqual(
+      expect.objectContaining({
+        ok: true,
+        value: expect.objectContaining({
+          metadata: expect.objectContaining({ promptProfile }),
+        }),
+      }),
+    );
+
+    writeLegacySession(tmpDir, "without-profile");
+    const reloaded = new SessionStore(tmpDir);
+    await expect(reloaded.readSession("without-profile")).resolves.toEqual(
+      expect.objectContaining({
+        ok: true,
+        value: expect.objectContaining({
+          metadata: expect.not.objectContaining({
+            promptProfile: expect.anything(),
+          }),
+        }),
+      }),
+    );
+  });
+
   it("round-trips independent approval dimensions and leaves legacy records optional", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
     const store = new SessionStore(tmpDir);

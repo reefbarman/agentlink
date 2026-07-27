@@ -887,6 +887,87 @@ function projectForeground(
           },
         }
       : {}),
+    contextHealth: foreground.contextHealth
+      ? {
+          memory: {
+            status: foreground.contextHealth.memory.status,
+            retrieval: foreground.contextHealth.memory.retrieval,
+            ...(foreground.contextHealth.memory.activeRecordCount !== undefined
+              ? {
+                  activeRecordCount: safeInteger(
+                    foreground.contextHealth.memory.activeRecordCount,
+                  ),
+                }
+              : {}),
+            ...(foreground.contextHealth.memory.reason
+              ? { reason: bounded(foreground.contextHealth.memory.reason, 240) }
+              : {}),
+          },
+          retrieval: {
+            status: foreground.contextHealth.retrieval.status,
+            lexical: foreground.contextHealth.retrieval.lexical,
+            vector: foreground.contextHealth.retrieval.vector,
+            structural: foreground.contextHealth.retrieval.structural,
+            ...(foreground.contextHealth.retrieval.sourceCount !== undefined
+              ? {
+                  sourceCount: safeInteger(
+                    foreground.contextHealth.retrieval.sourceCount,
+                  ),
+                }
+              : {}),
+            ...(foreground.contextHealth.retrieval.chunkCount !== undefined
+              ? {
+                  chunkCount: safeInteger(
+                    foreground.contextHealth.retrieval.chunkCount,
+                  ),
+                }
+              : {}),
+            ...(foreground.contextHealth.retrieval.staleSourceCount !==
+            undefined
+              ? {
+                  staleSourceCount: safeInteger(
+                    foreground.contextHealth.retrieval.staleSourceCount,
+                  ),
+                }
+              : {}),
+            ...(foreground.contextHealth.retrieval.reason
+              ? {
+                  reason: bounded(
+                    foreground.contextHealth.retrieval.reason,
+                    240,
+                  ),
+                }
+              : {}),
+          },
+          index: {
+            status: foreground.contextHealth.index.status,
+            state: foreground.contextHealth.index.state,
+            ...(foreground.contextHealth.index.current !== undefined
+              ? { current: safeInteger(foreground.contextHealth.index.current) }
+              : {}),
+            ...(foreground.contextHealth.index.total !== undefined
+              ? { total: safeInteger(foreground.contextHealth.index.total) }
+              : {}),
+            ...(foreground.contextHealth.index.totalFilesInIndex !== undefined
+              ? {
+                  totalFilesInIndex: safeInteger(
+                    foreground.contextHealth.index.totalFilesInIndex,
+                  ),
+                }
+              : {}),
+            ...(foreground.contextHealth.index.totalChunksInIndex !== undefined
+              ? {
+                  totalChunksInIndex: safeInteger(
+                    foreground.contextHealth.index.totalChunksInIndex,
+                  ),
+                }
+              : {}),
+            ...(foreground.contextHealth.index.reason
+              ? { reason: bounded(foreground.contextHealth.index.reason, 240) }
+              : {}),
+          },
+        }
+      : null,
     ...(foreground.condenseThreshold !== undefined
       ? { condenseThreshold: finiteNonNegative(foreground.condenseThreshold) }
       : {}),

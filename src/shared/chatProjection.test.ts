@@ -1,12 +1,12 @@
-import { describe, expect, it } from "vitest";
-
-import type { AppState } from "./chatProjection.js";
-import type { ChatMessage } from "../agent/webview/types.js";
 import {
   agentMessagesToChatMessages,
   initialState,
   reducer,
 } from "./chatProjection.js";
+import { describe, expect, it } from "vitest";
+
+import type { AppState } from "./chatProjection.js";
+import type { ChatMessage } from "../agent/webview/types.js";
 
 describe("original prompt projection", () => {
   it("keeps the first submitted prompt stable across later user turns", () => {
@@ -149,6 +149,80 @@ describe("legacy web activity chat projection", () => {
       },
     );
     expect(messages[0]?.blocks[1]).toEqual({ type: "text", text: "Result" });
+  });
+});
+
+describe("deferred native tool chat projection", () => {
+  it("renders the canonical target without mutating provider replay history", () => {
+    const wrapperInput = {
+      name: "get_call_hierarchy",
+      input: {
+        path: "src/file.ts",
+        line: 1,
+        column: 1,
+        direction: "both",
+      },
+    };
+    const source = [
+      {
+        role: "assistant" as const,
+        content: [
+          {
+            type: "tool_use" as const,
+            id: "native-1",
+            name: "call_native_tool",
+            input: wrapperInput,
+          },
+        ],
+      },
+      {
+        role: "user" as const,
+        content: [
+          {
+            type: "tool_result" as const,
+            tool_use_id: "native-1",
+            content: "hierarchy",
+          },
+        ],
+      },
+    ];
+
+    const messages = agentMessagesToChatMessages(source);
+
+    expect(messages[0]?.blocks[0]).toMatchObject({
+      type: "tool_call",
+      id: "native-1",
+      name: "get_call_hierarchy",
+      inputJson: JSON.stringify(wrapperInput.input),
+      result: "hierarchy",
+    });
+    expect(source[0]?.content[0]).toEqual({
+      type: "tool_use",
+      id: "native-1",
+      name: "call_native_tool",
+      input: wrapperInput,
+    });
+  });
+
+  it("does not let wrappers impersonate inline session controls", () => {
+    const messages = agentMessagesToChatMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "native-1",
+            name: "call_native_tool",
+            input: { name: "ask_user", input: { questions: [] } },
+          },
+        ],
+      },
+    ]);
+
+    expect(messages[0]?.blocks[0]).toMatchObject({
+      type: "tool_call",
+      name: "call_native_tool",
+    });
   });
 });
 
@@ -447,5 +521,65 @@ describe("BG_AGENT_DONE result placement", () => {
         ),
       ),
     ).toHaveLength(1);
+  });
+});
+
+describe("context health projection", () => {
+  const health = {
+    memory: {
+      status: "ready" as const,
+      retrieval: "hybrid" as const,
+      activeRecordCount: 7,
+    },
+    retrieval: {
+      status: "degraded" as const,
+      lexical: "ready" as const,
+      vector: "unavailable" as const,
+      structural: "ready" as const,
+      sourceCount: 12,
+      chunkCount: 48,
+      staleSourceCount: 2,
+    },
+    index: {
+      status: "working" as const,
+      state: "indexing" as const,
+      current: 3,
+      total: 10,
+    },
+  };
+
+  it("preserves health across partial state updates and replaces explicit values", () => {
+    const withHealth = reducer(initialState, {
+      type: "SET_STATE",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "gpt-5.6-sol",
+        streaming: false,
+        contextHealth: health,
+      },
+    });
+    const preserved = reducer(withHealth, {
+      type: "SET_STATE",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "gpt-5.6-sol",
+        streaming: true,
+      },
+    });
+    const cleared = reducer(preserved, {
+      type: "SET_STATE",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "gpt-5.6-sol",
+        streaming: false,
+        contextHealth: null,
+      },
+    });
+
+    expect(preserved.contextHealth).toBe(health);
+    expect(cleared.contextHealth).toBeNull();
   });
 });

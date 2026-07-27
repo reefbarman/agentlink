@@ -14,6 +14,7 @@ import type { BrowserGatewayCoreOwnerRegistrationResolution } from "./coreOwnerR
 import type { BrowserGatewayDataPlaneMode } from "./browserGatewayDataPlaneMode.js";
 import type { CoreModelCatalogEntry } from "../core/modelCatalog.js";
 import type { OpenAiCompatibleRuntimeProfile } from "../core/model/providers/openaiCompatible/types.js";
+import type { PromptProfileResolution } from "../core/promptProfile.js";
 
 export const BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION = 2;
 
@@ -69,6 +70,11 @@ export interface BrowserGatewayInstanceStatusSummary {
   sessionTitle?: string;
 }
 
+export interface BrowserGatewayMemoryRuntimeDescriptor {
+  mode: "off" | "autonomous";
+  retrievalStoreRoot: string;
+}
+
 export interface BrowserGatewayCoreOwnerLeaseRegistration {
   ownerId: string;
   ownerKind: CoreHostKind;
@@ -76,6 +82,7 @@ export interface BrowserGatewayCoreOwnerLeaseRegistration {
   scope: CoreSessionScopeDto;
   ownerGenerationId: string;
   capabilities?: CoreCapabilityStatusDto[];
+  memoryRuntime?: BrowserGatewayMemoryRuntimeDescriptor;
   instanceId?: string;
   processId?: number;
 }
@@ -84,6 +91,7 @@ export interface BrowserGatewayCoreOwnerHeartbeatRequest {
   ownerId: string;
   ownerGenerationId: string;
   capabilities?: CoreCapabilityStatusDto[];
+  memoryRuntime?: BrowserGatewayMemoryRuntimeDescriptor;
 }
 
 export interface BrowserGatewayCoreOwnerRegistrationResponse {
@@ -163,12 +171,18 @@ export type BrowserGatewayOpenAiCompatibleRuntimeProfiles = Readonly<
   Record<string, OpenAiCompatibleRuntimeProfile>
 >;
 
+/** Private owner-published profile evidence keyed by exact model ID. */
+export type BrowserGatewayPromptProfileResolutions = Readonly<
+  Record<string, PromptProfileResolution>
+>;
+
 export interface BrowserGatewayModelCatalogPublishRequest {
   publishedByOwnerId: string;
   publishedByOwnerGenerationId: string;
   helperGenerationId: string;
   models: CoreModelCatalogEntry[];
   openAiCompatibleRuntimeProfiles?: BrowserGatewayOpenAiCompatibleRuntimeProfiles;
+  promptProfileResolutions?: BrowserGatewayPromptProfileResolutions;
 }
 
 export interface BrowserGatewayModelCatalogPublishResponse {

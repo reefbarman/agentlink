@@ -35,6 +35,19 @@ import type {
   BrowserGatewayAskAgentSummaryResult,
 } from "./browserGatewayAskAgentSummarizer.js";
 import { StreamingBaselineRecorder } from "../../shared/streamingBaselineMetrics.js";
+import type {
+  MemoryInspectionProvider,
+  MemoryToolProvider,
+} from "../../core/capabilities/memory.js";
+import type { MemoryHealthSnapshot } from "../../core/memory/contracts.js";
+import { BrowserGatewayAutonomousMemoryRuntime } from "./BrowserGatewayAutonomousMemoryRuntime.js";
+import {
+  BrowserGatewayDerivedSessionRuntime,
+  type BrowserGatewayDerivedSessionProvider,
+} from "./BrowserGatewayDerivedSessionRuntime.js";
+import { InMemoryRetrievalRepository } from "../../core/retrieval/InMemoryRetrievalRepository.js";
+import { DerivedSessionRetrievalService } from "../../core/session/DerivedSessionRetrievalService.js";
+import type { BrowserGatewayMemoryRuntimeDescriptor } from "../protocol.js";
 import {
   BROWSER_GATEWAY_CLIENT_ORIGIN_HEADER,
   BROWSER_GATEWAY_HELPER_SECRET_HEADER,
@@ -133,9 +146,11 @@ async function provisionAskAgentModelForTest(params: {
   model?: Record<string, unknown>;
   models?: Array<Record<string, unknown>>;
   openAiCompatibleRuntimeProfiles?: Record<string, unknown>;
+  promptProfileResolutions?: Record<string, unknown>;
   ownerId?: string;
   ownerGenerationId?: string;
   instanceId?: string;
+  memoryRuntime?: BrowserGatewayMemoryRuntimeDescriptor;
 }): Promise<Record<string, string>> {
   const ownerId = params.ownerId ?? "vscode-owner";
   const ownerGenerationId = params.ownerGenerationId ?? "vscode-generation-1";
@@ -161,6 +176,7 @@ async function provisionAskAgentModelForTest(params: {
         ownerGenerationId,
         instanceId,
         processId: process.pid,
+        memoryRuntime: params.memoryRuntime,
       }),
     },
   );
@@ -191,6 +207,9 @@ async function provisionAskAgentModelForTest(params: {
               openAiCompatibleRuntimeProfiles:
                 params.openAiCompatibleRuntimeProfiles,
             }
+          : {}),
+        ...(params.promptProfileResolutions
+          ? { promptProfileResolutions: params.promptProfileResolutions }
           : {}),
       }),
     },
@@ -229,9 +248,12 @@ async function makeAskAgentToolLoopTestHarness(params: {
   model?: Record<string, unknown>;
   models?: Array<Record<string, unknown>>;
   openAiCompatibleRuntimeProfiles?: Record<string, unknown>;
+  promptProfileResolutions?: Record<string, unknown>;
   cachedWebPolicy?: Parameters<
     BrowserGatewayAskAgentPreferencesStore["update"]
   >[0]["webPolicy"];
+  askAgentAutonomousMemoryRuntime?: BrowserGatewayAutonomousMemoryRuntime;
+  memoryRuntime?: BrowserGatewayMemoryRuntimeDescriptor;
   beforeAskAgentSnapshotPublish?: (
     publication: AskAgentControllerPublication,
   ) => void | Promise<void>;
@@ -279,6 +301,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
       askAgentMemoryStore: new BrowserGatewayAskAgentMemoryStore({
         filePath: path.join(storeDir, "memory.json"),
       }),
+      askAgentAutonomousMemoryRuntime: params.askAgentAutonomousMemoryRuntime,
       streamingMetrics: params.streamingMetrics,
       beforeAskAgentSnapshotPublish: params.beforeAskAgentSnapshotPublish,
     },
@@ -300,6 +323,8 @@ async function makeAskAgentToolLoopTestHarness(params: {
     model: params.model,
     models: params.models,
     openAiCompatibleRuntimeProfiles: params.openAiCompatibleRuntimeProfiles,
+    promptProfileResolutions: params.promptProfileResolutions,
+    memoryRuntime: params.memoryRuntime,
   });
   const owner = await fetch(`${helperBase}/api/ask-agent/session`, {
     headers: { Cookie: cookie },
@@ -579,6 +604,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(commandNames).toContain("mcp");
     expect(commandNames).toContain("mcp-config");
     expect(commandNames).toContain("mcp-refresh");
+    expect(commandNames).toContain("memory");
     expect(commandNames).toContain("skill:skill-writing");
     expect(commandNames).not.toContain("new");
     expect(commandNames).not.toContain("mode");
@@ -594,12 +620,12 @@ describe("BrowserGatewayHelper proxy routing", () => {
         .filter((command) => command.builtin)
         .map((command) => command.name)
         .sort(),
-    ).toEqual(["mcp", "mcp-config", "mcp-refresh"]);
+    ).toEqual(["mcp", "mcp-config", "mcp-refresh", "memory"]);
 
     await fs.rm(extensionRootPath, { recursive: true, force: true });
   });
 
-  it("creates Ask Agent memory proposals without writing until approval", async () => {
+  it("creates authoritative Ask Agent proposals without writing until approval", async () => {
     const extensionRootPath = await makeExtensionRoot();
     const homeDir = await fs.mkdtemp(
       path.join(os.tmpdir(), ".tmp-helper-home-"),
@@ -627,7 +653,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
       const cookie = bootstrap.headers.get("set-cookie")?.split(";")[0] ?? "";
       expect(cookie).toContain("agentlink_bg_session=");
 
-      const memoryPath = path.join(homeDir, ".agentlink", "memory.md");
+      const instructionsPath = path.join(homeDir, ".agentlink", "CLAUDE.md");
       const proposal = await fetch(
         `${helperBase}/api/ask-agent/memory/proposal`,
         {
@@ -637,12 +663,12 @@ describe("BrowserGatewayHelper proxy routing", () => {
             Cookie: cookie,
           },
           body: JSON.stringify({
-            tier: "memory",
+            tier: "instructions",
             scope: "global",
             operation: "add",
-            title: "Remember preference",
-            rationale: "User invoked /remember in Ask Agent.",
-            content: "User prefers checklist smoke-test notes.",
+            title: "Add validation instruction",
+            rationale: "Authoritative configuration requires explicit review.",
+            content: "Use checklist-based smoke-test notes.",
           }),
         },
       );
@@ -655,7 +681,9 @@ describe("BrowserGatewayHelper proxy routing", () => {
         id: proposalBody.approval.id,
         kind: "memory",
       });
-      await expect(fs.readFile(memoryPath, "utf-8")).rejects.toMatchObject({
+      await expect(
+        fs.readFile(instructionsPath, "utf-8"),
+      ).rejects.toMatchObject({
         code: "ENOENT",
       });
 
@@ -679,8 +707,8 @@ describe("BrowserGatewayHelper proxy routing", () => {
         snapshot: { ui: { approval: null | unknown } };
       };
       expect(acceptedBody.snapshot.ui.approval).toBeNull();
-      await expect(fs.readFile(memoryPath, "utf-8")).resolves.toContain(
-        "User prefers checklist smoke-test notes.",
+      await expect(fs.readFile(instructionsPath, "utf-8")).resolves.toContain(
+        "Use checklist-based smoke-test notes.",
       );
     } finally {
       process.env.HOME = originalHome;
@@ -689,7 +717,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     }
   });
 
-  it("surfaces durable memory candidate nudges without writing until approval", async () => {
+  it("rejects legacy low-authority nudge proposals without dismissing the nudge", async () => {
     const extensionRootPath = await makeExtensionRoot();
     const homeDir = await fs.mkdtemp(
       path.join(os.tmpdir(), ".tmp-helper-home-"),
@@ -769,17 +797,26 @@ describe("BrowserGatewayHelper proxy routing", () => {
           }),
         },
       );
-      expect(proposal.status).toBe(200);
-      const proposalBody = (await proposal.json()) as {
-        approval: { id: string; memoryContent?: string };
-        snapshot: {
-          ui: { approval: { id: string } | null; memoryCandidateNudge: null };
-        };
-      };
-      expect(proposalBody.snapshot.ui.memoryCandidateNudge).toBeNull();
-      expect(proposalBody.snapshot.ui.approval?.id).toBe(
-        proposalBody.approval.id,
+      expect(proposal.status).toBe(400);
+      await expect(proposal.json()).resolves.toEqual({
+        error: "invalid_memory_tier",
+      });
+      const afterRejection = await fetch(
+        `${helperBase}/api/ask-agent/session`,
+        {
+          headers: { Cookie: cookie },
+        },
       );
+      await expect(afterRejection.json()).resolves.toMatchObject({
+        snapshot: {
+          ui: {
+            approval: null,
+            memoryCandidateNudge: {
+              id: sendBody.snapshot.ui.memoryCandidateNudge?.id,
+            },
+          },
+        },
+      });
       await expect(fs.readFile(memoryPath, "utf-8")).rejects.toMatchObject({
         code: "ENOENT",
       });
@@ -1373,7 +1410,6 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(html).toContain(`/codicon.css?v=${encodedVersion}`);
     expect(html).toContain(`/browser-gateway.css?v=${encodedVersion}`);
     expect(html).toContain(`/browser-gateway.js?v=${encodedVersion}`);
-    expect(html).toContain('dataPlaneMode: "off"');
 
     const iconResponse = await fetch(
       `${helperBase}/agentlink-icon.png?v=${encodedVersion}`,
@@ -2345,6 +2381,15 @@ describe("BrowserGatewayHelper proxy routing", () => {
               authenticated: true,
             },
           ],
+          promptProfileResolutions: {
+            "claude-sonnet-4-5": {
+              profile: "reasoning",
+              source: "exact-model-override",
+              policyRevision: "prompt-profile-policy-v1",
+              providerId: "anthropic",
+              modelId: "claude-sonnet-4-5",
+            },
+          },
           openAiCompatibleRuntimeProfiles: {
             "openai-compatible:local": {
               providerId: "openai-compatible:local",
@@ -2378,6 +2423,52 @@ describe("BrowserGatewayHelper proxy routing", () => {
       modelCount: 3,
     });
 
+    for (const promptProfileResolution of [
+      {
+        profile: "reasoning",
+        source: "compatibility-default",
+        policyRevision: "prompt-profile-policy-v1",
+        providerId: "anthropic",
+        modelId: "claude-sonnet-4-5",
+      },
+      {
+        profile: "reasoning",
+        source: "exact-model-override",
+        policyRevision: "prompt-profile-policy-v0",
+        providerId: "anthropic",
+        modelId: "claude-sonnet-4-5",
+      },
+    ]) {
+      const invalidCatalog = await fetch(
+        `${helperBase}/internal/model-catalog`,
+        {
+          method: "POST",
+          headers: internalHeaders,
+          body: JSON.stringify({
+            publishedByOwnerId: "vscode-owner",
+            publishedByOwnerGenerationId: "vscode-generation-1",
+            helperGenerationId: discovery.helperGenerationId,
+            models: [
+              {
+                id: "claude-sonnet-4-5",
+                displayName: "Claude Sonnet 4.5",
+                providerId: "anthropic",
+                contextWindow: 200_000,
+                authenticated: true,
+              },
+            ],
+            promptProfileResolutions: {
+              "claude-sonnet-4-5": promptProfileResolution,
+            },
+          }),
+        },
+      );
+      expect(invalidCatalog.status).toBe(400);
+      await expect(invalidCatalog.json()).resolves.toEqual({
+        error: "invalid_request",
+      });
+    }
+
     const modelsResponse = await fetch(`${helperBase}/api/ask-agent/models`, {
       headers: { Cookie: cookie },
     });
@@ -2408,6 +2499,12 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(publicModelsJson).not.toContain("127.0.0.1:1234");
     expect(publicModelsJson).not.toContain("X-Test-Static");
     expect(publicModelsJson).not.toContain("safe-value");
+    expect(publicModelsJson).not.toContain("promptProfileResolutions");
+    expect(publicModelsJson).not.toContain("prompt-profile-policy-v1");
+    expect(publicModelsJson).not.toContain("exact-model-override");
+    expect(publicModelsJson).not.toContain(
+      "You are AgentLink Ask Agent in a browser gateway",
+    );
 
     const modelResponse = await fetch(`${helperBase}/api/ask-agent/model`, {
       method: "POST",
@@ -3580,6 +3677,250 @@ describe("BrowserGatewayHelper proxy routing", () => {
     await fs.rm(extensionRootPath, { recursive: true, force: true });
   });
 
+  it("routes production Browser summaries, recall, status, and clearing through shared retrieval", async () => {
+    const extensionRootPath = await makeExtensionRoot();
+    const helperPort = await getAvailablePort();
+    const helperServer = http.createServer();
+    servers.push(helperServer);
+    const storeDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), ".tmp-ask-agent-shared-retrieval-"),
+    );
+    isolatedStoreDirs.push(storeDir);
+
+    const repository = new InMemoryRetrievalRepository();
+    const service = new DerivedSessionRetrievalService(repository);
+    const provider: BrowserGatewayDerivedSessionProvider = {
+      async initialize() {
+        return {
+          status: "missing",
+          filePath: path.join(storeDir, "legacy-memory.json"),
+          checkpoint: {
+            sourceKey: "legacy-browser-json",
+            sourceRevision: "missing",
+            importerSchemaVersion: 1,
+            status: "missing",
+            updatedAt: "2026-07-26T00:00:00.000Z",
+          },
+        };
+      },
+      async publish(request) {
+        const outcome = await service.upsert(request);
+        if (outcome.status !== "published") {
+          throw new Error(`Unexpected publication status: ${outcome.status}`);
+        }
+      },
+      async recall(request) {
+        return await service.recall(request);
+      },
+      async deleteSession(request) {
+        return await service.deleteSession(request);
+      },
+      async clearScope(request) {
+        return await service.clearScope(request);
+      },
+      async inspect(request) {
+        return await service.inspect(request);
+      },
+      async dispose() {},
+    };
+    const createProvider = vi.fn(() => provider);
+    const derivedRuntime = new BrowserGatewayDerivedSessionRuntime({
+      createProvider,
+    });
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const askAgentModelClient = {
+      complete: async (
+        params: Parameters<BrowserGatewayAskAgentModelClient["complete"]>[0],
+      ) => {
+        completionParams.push(params);
+        const answer = `Answer to ${getLatestStringUserMessage(params.iterationMessages)}`;
+        params.onDelta?.(answer);
+        return answer;
+      },
+    } satisfies Pick<BrowserGatewayAskAgentModelClient, "complete">;
+    const askAgentSummarizer = {
+      summarize: async () =>
+        ({
+          title: "Shared retrieval discussion",
+          summary: "The prior discussion selected the cobalt launch profile.",
+          topics: ["cobalt", "launch profile"],
+          decisions: ["Use the cobalt launch profile."],
+          openQuestions: [],
+          durableCandidateHints: [],
+          latestTurn: {
+            summary: "Selected the cobalt launch profile for deployment.",
+            keywords: ["cobalt", "launch", "deployment"],
+            entities: ["cobalt launch profile"],
+          },
+        }) satisfies BrowserGatewayAskAgentSummaryResult,
+    } satisfies BrowserGatewayAskAgentSummarizer;
+    const askAgentHistoryStore = new BrowserGatewayAskAgentHistoryStore({
+      filePath: path.join(storeDir, "history.json"),
+    });
+    const options: HelperRuntimeOptions = {
+      port: helperPort,
+      helperVersion: "test-version",
+      idleShutdownMs: 120_000,
+      extensionRootPath,
+    };
+    helper = new BrowserGatewayHelper(options, helperServer, {
+      askAgentModelClient,
+      askAgentSummarizer,
+      askAgentHistoryStore,
+      askAgentPreferencesStore: new BrowserGatewayAskAgentPreferencesStore({
+        filePath: path.join(storeDir, "preferences.json"),
+      }),
+      askAgentDerivedSessionRuntime: derivedRuntime,
+      askAgentMemorySummaryDebounceMs: 0,
+    });
+    helperServer.on("request", helper.handleRequest);
+    await helper.start();
+
+    const helperBase = `http://127.0.0.1:${helperPort}`;
+    const root = await fetch(`${helperBase}/`);
+    const cookie = String(root.headers.get("set-cookie")?.split(";")[0] ?? "");
+    const discovery = JSON.parse(
+      await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
+    ) as { clientSharedSecret: string; helperGenerationId: string };
+    await provisionAskAgentModelForTest({
+      helperBase,
+      discovery,
+      memoryRuntime: {
+        mode: "off",
+        retrievalStoreRoot: path.join(storeDir, "shared-retrieval"),
+      },
+    });
+
+    const firstSessionResponse = await fetch(
+      `${helperBase}/api/ask-agent/session`,
+      { headers: { Cookie: cookie } },
+    );
+    const firstSession = (await firstSessionResponse.json()) as {
+      session: { sessionId: string };
+    };
+    const firstSend = await fetch(`${helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({
+        sessionId: firstSession.session.sessionId,
+        text: "Choose the cobalt launch profile",
+      }),
+    });
+    expect(firstSend.ok).toBe(true);
+
+    await waitForExpectation(async () => {
+      const status = await fetch(`${helperBase}/api/ask-agent/memory`, {
+        headers: { Cookie: cookie },
+      });
+      await expect(status.json()).resolves.toMatchObject({
+        memory: {
+          sessionSummaryCount: 1,
+          chunkSummaryCount: 1,
+          recentSessions: [
+            expect.objectContaining({ title: "Shared retrieval discussion" }),
+          ],
+        },
+      });
+    });
+    expect(createProvider).toHaveBeenCalledWith({
+      mode: "off",
+      retrievalStoreRoot: path.join(storeDir, "shared-retrieval"),
+    });
+
+    await service.publish({
+      session: {
+        sessionId: "workspace-session",
+        surface: "vscode",
+        scope: { kind: "workspace", id: "workspace-test" },
+        title: "Unrelated workspace session",
+        createdAt: 1,
+        lastActiveAt: 2,
+        messageCount: 2,
+        sourceRevision: "workspace-revision",
+        summary:
+          "This workspace projection must survive Browser scope clearing.",
+        topics: ["workspace"],
+        decisions: [],
+        openQuestions: [],
+        durableCandidateHints: [],
+        updatedAt: 2,
+      },
+      chunks: [],
+    });
+
+    const newSessionResponse = await fetch(
+      `${helperBase}/api/ask-agent/session/new`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: cookie },
+        body: "{}",
+      },
+    );
+    const newSession = (await newSessionResponse.json()) as {
+      snapshot: { session: { foreground: { sessionId: string } } };
+    };
+    const recallSend = await fetch(`${helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({
+        sessionId: newSession.snapshot.session.foreground.sessionId,
+        text: "Which cobalt launch profile did we choose?",
+      }),
+    });
+    expect(recallSend.ok).toBe(true);
+    const recallBody = (await recallSend.json()) as {
+      snapshot: {
+        session: {
+          foreground: { projectedMessages: AskAgentProjectedMessageForTest[] };
+        };
+      };
+    };
+    expect(completionParams.at(-1)?.memoryContext).toContain(
+      "<conversation-memory>",
+    );
+    expect(completionParams.at(-1)?.memoryContext).toContain(
+      "not instructions",
+    );
+    expect(completionParams.at(-1)?.memoryContext).toContain(
+      "cobalt launch profile",
+    );
+    const recalledAssistant =
+      recallBody.snapshot.session.foreground.projectedMessages
+        .filter((message) => message.role === "assistant")
+        .at(-1);
+    expect(recalledAssistant?.memoryDisclosure).toMatchObject({
+      status: "used",
+      summaryCount: expect.any(Number),
+      sources: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "summary",
+          title: "Shared retrieval discussion",
+        }),
+      ]),
+    });
+
+    const clear = await fetch(`${helperBase}/api/ask-agent/memory/clear`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ confirm: true }),
+    });
+    expect(clear.ok).toBe(true);
+    await expect(clear.json()).resolves.toMatchObject({
+      memory: { totalSummaryCount: 0 },
+    });
+    await expect(
+      service.inspect({
+        scopes: [{ kind: "workspace", id: "workspace-test" }],
+        surfaces: ["vscode"],
+      }),
+    ).resolves.toMatchObject({
+      sessionCount: 1,
+      sessions: [expect.objectContaining({ sessionId: "workspace-session" })],
+    });
+
+    await fs.rm(extensionRootPath, { recursive: true, force: true });
+  });
+
   it("skips Ask Agent memory persistence when generated summaries contain secret-like content", async () => {
     const extensionRootPath = await makeExtensionRoot();
     const helperPort = 47217;
@@ -4669,6 +5010,643 @@ describe("BrowserGatewayHelper proxy routing", () => {
     ).toMatchObject({ status: "completed", source: "tool" });
   });
 
+  it("executes autonomous memory locally with browser provenance and no approval", async () => {
+    const manage = vi.fn<MemoryToolProvider["manage"]>().mockResolvedValue({
+      result: {
+        disposition: "created",
+        relatedRecords: [],
+        auditEventId: "audit-browser-memory",
+      },
+      health: {
+        status: "ready",
+        retrieval: "lexical-only",
+        crud: true,
+        dedupe: true,
+        conflict: true,
+        auditUndo: true,
+        recordCount: 1,
+        activeRecordCount: 1,
+        auditEventCount: 1,
+      },
+    });
+    const recall = vi
+      .fn<MemoryToolProvider["recall"]>()
+      .mockResolvedValueOnce({
+        result: { memories: [], mode: "lexical-only" },
+        health: {
+          status: "ready",
+          retrieval: "lexical-only",
+          crud: true,
+          dedupe: true,
+          conflict: true,
+          auditUndo: true,
+          recordCount: 1,
+          activeRecordCount: 1,
+          auditEventCount: 1,
+        },
+      })
+      .mockRejectedValueOnce(
+        new Error("Project-scoped memory requires an active project"),
+      );
+    const healthSnapshot: MemoryHealthSnapshot = {
+      status: "ready",
+      retrieval: "lexical-only",
+      crud: true,
+      dedupe: true,
+      conflict: true,
+      auditUndo: true,
+      recordCount: 1,
+      activeRecordCount: 1,
+      auditEventCount: 1,
+      reason: "private memory path /Users/test/autonomous-memory",
+    };
+    const { reason: _privateReason, ...publicHealthSnapshot } = healthSnapshot;
+    const health = vi.fn(async () => healthSnapshot);
+    const query = vi.fn<MemoryInspectionProvider["query"]>().mockResolvedValue({
+      result: { records: [], total: 0 },
+      health: healthSnapshot,
+    });
+    const activity = vi
+      .fn<MemoryInspectionProvider["activity"]>()
+      .mockResolvedValue({
+        events: [
+          {
+            id: "audit-browser-memory",
+            operation: "remember",
+            disposition: "created",
+            occurredAt: "2026-07-25T12:00:00.000Z",
+            actor: {
+              source: "foreground_agent",
+              observedAt: "2026-07-25T12:00:00.000Z",
+              sessionId: "browser-session",
+            },
+            scope: { kind: "global", id: "agentlink-user" },
+            changes: [],
+          },
+        ],
+        health: healthSnapshot,
+      });
+    const manageAsUser = vi
+      .fn<MemoryInspectionProvider["manageAsUser"]>()
+      .mockResolvedValue({
+        result: {
+          disposition: "not-found" as const,
+          relatedRecords: [],
+          auditEventId: "audit-browser-user",
+        },
+        health: healthSnapshot,
+      });
+    const exportArchive = vi.fn(async () => ({
+      archive: {
+        schema: "agentlink-memory" as const,
+        version: 1 as const,
+        archiveId: "archive-browser",
+        exportedAt: "2026-07-25T12:00:00.000Z",
+        scope: { kind: "global" as const, id: "agentlink-user" },
+        records: [],
+        warning: "Export warning",
+      },
+      health: healthSnapshot,
+    }));
+    const importArchive = vi.fn(async () => ({
+      result: {
+        importedCount: 0,
+        skippedCount: 0,
+        snapshotId: "snapshot-browser",
+        auditEventId: "audit-browser-import",
+      },
+      health: healthSnapshot,
+    }));
+    const runtime = new BrowserGatewayAutonomousMemoryRuntime({
+      createProvider: () => ({
+        manage,
+        recall,
+        health,
+        activity,
+        query,
+        detail: vi.fn(async () => ({
+          detail: null,
+          health: healthSnapshot,
+        })),
+        manageAsUser,
+        clearScope: vi.fn(async () => ({
+          result: {
+            clearedCount: 0,
+            auditEventId: "audit-browser-clear",
+          },
+          health: healthSnapshot,
+        })),
+        exportArchive,
+        importArchive,
+        dispose: vi.fn(async () => undefined),
+      }),
+    });
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      if (params.toolMessages?.length) {
+        return { text: "Memory operation complete.", toolCalls: [] };
+      }
+      const latestUserText = getLatestStringUserMessage(
+        params.iterationMessages,
+      );
+      if (latestUserText === "Recall global browser memory") {
+        return {
+          text: "Recalling global memory.",
+          toolCalls: [
+            {
+              id: "call-recall-global-memory",
+              name: "call_native_tool",
+              input: {
+                name: "recall_memory",
+                input: {
+                  query: "concise browser answers",
+                  scope: "global",
+                  limit: 4,
+                },
+              },
+            },
+          ],
+        };
+      }
+      if (latestUserText === "Recall project browser memory") {
+        return {
+          text: "Trying project memory.",
+          toolCalls: [
+            {
+              id: "call-recall-project-memory",
+              name: "call_native_tool",
+              input: {
+                name: "recall_memory",
+                input: {
+                  query: "project browser memory",
+                  scope: "project",
+                },
+              },
+            },
+          ],
+        };
+      }
+      return {
+        text: "Storing memory.",
+        toolCalls: [
+          {
+            id: "call-manage-memory",
+            name: "call_native_tool",
+            input: {
+              name: "manage_memory",
+              input: {
+                operation: "remember",
+                scope: "global",
+                source_evidence: "The browser user stated this preference.",
+                kind: "preference",
+                statement: "Use concise browser answers.",
+              },
+            },
+          },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      askAgentAutonomousMemoryRuntime: runtime,
+      memoryRuntime: {
+        mode: "autonomous",
+        retrievalStoreRoot: "/shared/retrieval-store",
+      },
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Remember that I prefer concise answers" }),
+    });
+    const body = (await send.json()) as {
+      snapshot: {
+        ui: { approval: unknown | null };
+        session: {
+          foreground: { projectedMessages: ChatMessage[] };
+        };
+      };
+    };
+
+    expect(send.ok).toBe(true);
+    const providerToolNames = completionParams[0]?.tools?.map(
+      (tool) => tool.name,
+    );
+    expect(providerToolNames).toEqual(
+      expect.arrayContaining(["find_native_tools", "call_native_tool"]),
+    );
+    expect(providerToolNames).not.toEqual(
+      expect.arrayContaining([
+        "manage_memory",
+        "recall_memory",
+        "generate_image",
+        "present_images",
+        "write_file",
+        "apply_diff",
+        "execute_command",
+        "get_hover",
+        "get_references",
+        "codebase_search",
+        "get_repo_map",
+      ]),
+    );
+    expect(manage).toHaveBeenCalledOnce();
+    expect(manage).toHaveBeenCalledWith({
+      input: {
+        operation: "remember",
+        scope: "global",
+        source_evidence: "The browser user stated this preference.",
+        kind: "preference",
+        statement: "Use concise browser answers.",
+      },
+      context: {
+        sessionId: expect.any(String),
+        isBackground: false,
+        observedAt: expect.any(String),
+      },
+    });
+    expect(manage.mock.calls[0]![0].context.sessionId).toBeTruthy();
+    expect(body.snapshot.ui.approval).toBeNull();
+    const assistant = body.snapshot.session.foreground.projectedMessages.find(
+      (message) => message.role === "assistant",
+    );
+    expect(assistant?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "call-manage-memory",
+          name: "manage_memory",
+          complete: true,
+        }),
+      ]),
+    );
+    expect(JSON.stringify(assistant)).not.toContain("call_native_tool");
+
+    const healthResponse = await fetch(
+      `${harness.helperBase}/api/ask-agent/autonomous-memory/health`,
+      { headers: { Cookie: harness.cookie } },
+    );
+    expect(healthResponse.ok).toBe(true);
+    await expect(healthResponse.json()).resolves.toEqual({
+      ok: true,
+      health: publicHealthSnapshot,
+    });
+
+    const activityResponse = await fetch(
+      `${harness.helperBase}/api/ask-agent/autonomous-memory/activity`,
+      { headers: { Cookie: harness.cookie } },
+    );
+    expect(activityResponse.ok).toBe(true);
+    await expect(activityResponse.json()).resolves.toMatchObject({
+      ok: true,
+      events: [
+        {
+          id: "audit-browser-memory",
+          scope: { kind: "global", id: "agentlink-user" },
+        },
+      ],
+      health: publicHealthSnapshot,
+    });
+    expect(activity).toHaveBeenCalledWith({ scope: "global", limit: 50 });
+
+    const queryResponse = await fetch(
+      `${harness.helperBase}/api/ask-agent/autonomous-memory/query`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({ query: "concise" }),
+      },
+    );
+    expect(queryResponse.ok).toBe(true);
+    await expect(queryResponse.json()).resolves.toEqual({
+      ok: true,
+      result: { records: [], total: 0 },
+      health: publicHealthSnapshot,
+    });
+
+    query.mockRejectedValueOnce(
+      new Error("private memory path /Users/test/autonomous-memory"),
+    );
+    const failedQueryResponse = await fetch(
+      `${harness.helperBase}/api/ask-agent/autonomous-memory/query`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({ query: "private" }),
+      },
+    );
+    expect(failedQueryResponse.status).toBe(409);
+    const failedQueryText = await failedQueryResponse.text();
+    expect(JSON.parse(failedQueryText)).toEqual({
+      error: "memory_unavailable",
+    });
+    expect(failedQueryText).not.toContain("/Users/test/autonomous-memory");
+
+    const invalidProjectManage = await fetch(
+      `${harness.helperBase}/api/ask-agent/autonomous-memory/manage`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({
+          operation: "remember",
+          scope: "project",
+          source_evidence: "Browser user request.",
+          kind: "preference",
+          statement: "Reject project scope here.",
+        }),
+      },
+    );
+    expect(invalidProjectManage.status).toBe(400);
+    expect(manage).toHaveBeenCalledTimes(1);
+
+    const blankEvidenceManage = await fetch(
+      `${harness.helperBase}/api/ask-agent/autonomous-memory/manage`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({
+          operation: "remember",
+          source_evidence: "   ",
+          kind: "preference",
+          statement: "Reject blank source evidence.",
+        }),
+      },
+    );
+    expect(blankEvidenceManage.status).toBe(400);
+    expect(manage).toHaveBeenCalledTimes(1);
+
+    const directManageResponse = await fetch(
+      `${harness.helperBase}/api/ask-agent/autonomous-memory/manage`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({
+          operation: "remember",
+          source_evidence: "Browser user invoked /remember.",
+          kind: "preference",
+          statement: "Use direct autonomous browser memory.",
+        }),
+      },
+    );
+    const directManageBody = (await directManageResponse.json()) as {
+      ok: boolean;
+      snapshot: { ui: { approval: unknown | null } };
+    };
+    expect(directManageResponse.ok).toBe(true);
+    expect(directManageBody.ok).toBe(true);
+    expect(directManageBody.snapshot.ui.approval).toBeNull();
+    expect(manageAsUser).toHaveBeenCalledWith(
+      {
+        operation: "remember",
+        scope: "global",
+        source_evidence: "Browser user invoked /remember.",
+        kind: "preference",
+        statement: "Use direct autonomous browser memory.",
+      },
+      {
+        observedAt: expect.any(String),
+        evidence: "Browser user invoked /remember.",
+      },
+    );
+    expect(manage).toHaveBeenCalledTimes(1);
+
+    const undoResponse = await fetch(
+      `${harness.helperBase}/api/ask-agent/autonomous-memory/manage`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({
+          operation: "undo",
+          source_evidence: "Browser user selected undo from memory activity.",
+          undo_audit_event_id: "audit-browser-memory",
+        }),
+      },
+    );
+    const undoBody = (await undoResponse.json()) as {
+      ok: boolean;
+      snapshot: { ui: { approval: unknown | null } };
+    };
+    expect(undoResponse.ok).toBe(true);
+    expect(undoBody.ok).toBe(true);
+    expect(undoBody.snapshot.ui.approval).toBeNull();
+    expect(manageAsUser).toHaveBeenNthCalledWith(
+      2,
+      {
+        operation: "undo",
+        scope: "global",
+        source_evidence: "Browser user selected undo from memory activity.",
+        undo_audit_event_id: "audit-browser-memory",
+      },
+      {
+        observedAt: expect.any(String),
+        evidence: "Browser user selected undo from memory activity.",
+      },
+    );
+    expect(manage).toHaveBeenCalledTimes(1);
+
+    const exportResponse = await fetch(
+      `${harness.helperBase}/api/ask-agent/autonomous-memory/export`,
+      {
+        method: "POST",
+        headers: { Cookie: harness.cookie },
+      },
+    );
+    expect(exportResponse.ok).toBe(true);
+    await expect(exportResponse.json()).resolves.toMatchObject({
+      ok: true,
+      archive: {
+        schema: "agentlink-memory",
+        version: 1,
+        archiveId: "archive-browser",
+      },
+    });
+    expect(exportArchive).toHaveBeenCalledWith({ scope: "global" });
+
+    const invalidImportResponse = await fetch(
+      `${harness.helperBase}/api/ask-agent/autonomous-memory/import`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({ archive: { schema: "not-agentlink" } }),
+      },
+    );
+    expect(invalidImportResponse.status).toBe(400);
+    await expect(invalidImportResponse.json()).resolves.toEqual({
+      error: "invalid_request",
+    });
+    expect(importArchive).not.toHaveBeenCalled();
+
+    const archive = {
+      schema: "agentlink-memory" as const,
+      version: 1 as const,
+      archiveId: "archive-browser",
+      exportedAt: "2026-07-25T12:00:00.000Z",
+      scope: { kind: "global" as const, id: "agentlink-user" },
+      records: [],
+      warning: "Export warning",
+    };
+    const importResponse = await fetch(
+      `${harness.helperBase}/api/ask-agent/autonomous-memory/import`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({ archive }),
+      },
+    );
+    expect(importResponse.ok).toBe(true);
+    await expect(importResponse.json()).resolves.toMatchObject({
+      ok: true,
+      result: { snapshotId: "snapshot-browser" },
+    });
+    expect(importArchive).toHaveBeenCalledWith(archive, {
+      scope: "global",
+      observedAt: expect.any(String),
+      evidence: "Browser user imported an autonomous-memory archive.",
+    });
+
+    const recallGlobalResponse = await fetch(
+      `${harness.helperBase}/api/ask-agent/send`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({ text: "Recall global browser memory" }),
+      },
+    );
+    const recallGlobalBody = (await recallGlobalResponse.json()) as {
+      snapshot: { ui: { approval: unknown | null } };
+    };
+    expect(recallGlobalResponse.ok).toBe(true);
+    expect(recall).toHaveBeenNthCalledWith(1, {
+      input: {
+        query: "concise browser answers",
+        scope: "global",
+        limit: 4,
+      },
+      context: {
+        sessionId: expect.any(String),
+        isBackground: false,
+        observedAt: expect.any(String),
+      },
+    });
+    expect(recallGlobalBody.snapshot.ui.approval).toBeNull();
+    const recallReplayToolUse = completionParams
+      .at(-1)
+      ?.iterationMessages?.flatMap((message) =>
+        Array.isArray(message.content) ? message.content : [],
+      )
+      .find(
+        (block) =>
+          block.type === "tool_use" && block.id === "call-recall-global-memory",
+      );
+    expect(recallReplayToolUse).toEqual({
+      type: "tool_use",
+      id: "call-recall-global-memory",
+      name: "call_native_tool",
+      input: {
+        name: "recall_memory",
+        input: {
+          query: "concise browser answers",
+          scope: "global",
+          limit: 4,
+        },
+      },
+    });
+
+    const recallProjectResponse = await fetch(
+      `${harness.helperBase}/api/ask-agent/send`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({ text: "Recall project browser memory" }),
+      },
+    );
+    const recallProjectBody = (await recallProjectResponse.json()) as {
+      snapshot: {
+        ui: { approval: unknown | null };
+        session: {
+          foreground: { projectedMessages: ChatMessage[] };
+        };
+      };
+    };
+    expect(recallProjectResponse.ok).toBe(true);
+    expect(recall).toHaveBeenCalledTimes(1);
+    expect(recallProjectBody.snapshot.ui.approval).toBeNull();
+    const projectRecallAssistant =
+      recallProjectBody.snapshot.session.foreground.projectedMessages
+        .filter((message) => message.role === "assistant")
+        .at(-1);
+    expect(projectRecallAssistant?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "call-recall-project-memory",
+          name: "recall_memory",
+          complete: true,
+          result: expect.stringContaining(
+            "Invalid input for native tool 'recall_memory'",
+          ),
+        }),
+      ]),
+    );
+
+    const discovery = JSON.parse(
+      await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
+    ) as { clientSharedSecret: string; helperGenerationId: string };
+    await provisionAskAgentModelForTest({
+      helperBase: harness.helperBase,
+      discovery,
+      ownerId: "descriptor-less-owner",
+      ownerGenerationId: "descriptor-less-generation",
+      instanceId: "descriptor-less-instance",
+      grantCredential: false,
+    });
+    const unavailableHealth = await fetch(
+      `${harness.helperBase}/api/ask-agent/autonomous-memory/health`,
+      { headers: { Cookie: harness.cookie } },
+    );
+    await expect(unavailableHealth.json()).resolves.toMatchObject({
+      ok: true,
+      health: {
+        status: "unavailable",
+        reason: "missing-owner-descriptor",
+      },
+    });
+  });
+
   it("clears pending Ask Agent questions when set_task_status finalizes a later turn", async () => {
     let callCount = 0;
     const modelClient = makeAskAgentToolLoopClient(async () => {
@@ -5030,8 +6008,11 @@ describe("BrowserGatewayHelper proxy routing", () => {
         toolCalls: [
           {
             id: "image-call-1",
-            name: "generate_image",
-            input: { prompt: "Create a tiny test avatar", count: 1 },
+            name: "call_native_tool",
+            input: {
+              name: "generate_image",
+              input: { prompt: "Create a tiny test avatar", count: 1 },
+            },
           },
         ],
       };
@@ -5344,6 +6325,15 @@ describe("BrowserGatewayHelper proxy routing", () => {
         },
         codexModel,
       ],
+      promptProfileResolutions: {
+        [codexModelId]: {
+          profile: "reasoning",
+          source: "exact-model-override",
+          policyRevision: "prompt-profile-policy-v1",
+          providerId: "openai-codex",
+          modelId: codexModelId,
+        },
+      },
       openAiCompatibleRuntimeProfiles: {
         [customProviderId]: {
           providerId: customProviderId,
@@ -5384,6 +6374,15 @@ describe("BrowserGatewayHelper proxy routing", () => {
       instanceId: "codex-instance",
       providerId: "openai-codex",
       model: codexModel,
+      promptProfileResolutions: {
+        [codexModelId]: {
+          profile: "compatibility",
+          source: "exact-model-override",
+          policyRevision: "prompt-profile-policy-v1",
+          providerId: "openai-codex",
+          modelId: codexModelId,
+        },
+      },
     });
 
     const selectModel = async (model: string) =>
@@ -5410,6 +6409,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(completionParams[0]).toMatchObject({
       model: customModelId,
       providerId: customProviderId,
+      promptProfile: "compatibility",
       credential: {
         bearerToken: "test-token",
         grantedByOwnerId: "vscode-owner",
@@ -5422,6 +6422,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(completionParams[1]).toMatchObject({
       model: codexModelId,
       providerId: "openai-codex",
+      promptProfile: "reasoning",
       credential: {
         bearerToken: "codex-owner-token",
         grantedByOwnerId: "codex-owner",
@@ -6028,8 +7029,11 @@ describe("BrowserGatewayHelper proxy routing", () => {
           toolCalls: [
             {
               id: "present-search-image-1",
-              name: "present_images",
-              input: { use_recent_images: 1 },
+              name: "call_native_tool",
+              input: {
+                name: "present_images",
+                input: { use_recent_images: 1 },
+              },
             },
           ],
         };
@@ -6509,6 +7513,163 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
     expect(upstreamRequests.map((request) => request.url)).not.toContain(
       "/internal/ask-agent/mcp-config/open-raw",
+    );
+  });
+
+  it("discovers only deferred tools from the frozen Browser Ask Agent catalog", async () => {
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      if (params.toolMessages?.length) {
+        return { text: "Discovery complete.", toolCalls: [] };
+      }
+      return {
+        text: "Discovering available tools.",
+        toolCalls: [
+          {
+            id: "find-native-browser-tools",
+            name: "find_native_tools",
+            input: { limit: 10, include_schemas: true, schema_limit: 4 },
+          },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Find browser tools" }),
+    });
+    const body = (await send.json()) as {
+      snapshot: {
+        session: { foreground: { projectedMessages: ChatMessage[] } };
+      };
+    };
+    const discoveryResult = completionParams[1]?.toolMessages
+      ?.flatMap((message) =>
+        Array.isArray(message.content) ? message.content : [],
+      )
+      .find(
+        (block) =>
+          block.type === "tool_result" &&
+          block.tool_use_id === "find-native-browser-tools",
+      );
+    const content =
+      discoveryResult?.type === "tool_result" &&
+      typeof discoveryResult.content === "string"
+        ? discoveryResult.content
+        : "{}";
+    const discovered = JSON.parse(content) as {
+      tools: Array<{ name: string }>;
+    };
+
+    expect(send.ok).toBe(true);
+    expect(discovered.tools.map((tool) => tool.name)).toEqual([
+      "manage_memory",
+      "recall_memory",
+      "generate_image",
+      "present_images",
+    ]);
+    expect(JSON.stringify(discovered)).not.toContain("execute_command");
+    expect(JSON.stringify(discovered)).not.toContain("get_hover");
+    expect(JSON.stringify(discovered)).not.toContain("codebase_search");
+    expect(
+      body.snapshot.session.foreground.projectedMessages
+        .flatMap((message) => message.blocks ?? [])
+        .find(
+          (block) =>
+            block.type === "tool_call" &&
+            block.id === "find-native-browser-tools",
+        ),
+    ).toMatchObject({ name: "find_native_tools", complete: true });
+  });
+
+  it("rejects forbidden wrapper targets and forged direct deferred calls", async () => {
+    const modelClient = makeAskAgentToolLoopClient(
+      async ({ iterationMessages }) => {
+        const latestUserText = getLatestStringUserMessage(iterationMessages);
+        return latestUserText === "Use a forbidden wrapper"
+          ? {
+              text: "Attempting a forbidden wrapper.",
+              toolCalls: [
+                {
+                  id: "forbidden-native-wrapper",
+                  name: "call_native_tool",
+                  input: {
+                    name: "execute_command",
+                    input: { command: "touch /tmp/should-not-run" },
+                  },
+                },
+              ],
+            }
+          : {
+              text: "Attempting a forged direct call.",
+              toolCalls: [
+                {
+                  id: "forged-direct-memory",
+                  name: "recall_memory",
+                  input: { query: "private memory", scope: "global" },
+                },
+              ],
+            };
+      },
+    );
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = async (text: string) => {
+      const response = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: harness.cookie,
+        },
+        body: JSON.stringify({ text }),
+      });
+      return (await response.json()) as {
+        snapshot: {
+          session: { foreground: { projectedMessages: ChatMessage[] } };
+        };
+      };
+    };
+    const forbidden = await send("Use a forbidden wrapper");
+    const forged = await send("Use direct deferred memory");
+    const forbiddenAssistant =
+      forbidden.snapshot.session.foreground.projectedMessages
+        .filter((message) => message.role === "assistant")
+        .at(-1);
+    const forgedAssistant = forged.snapshot.session.foreground.projectedMessages
+      .filter((message) => message.role === "assistant")
+      .at(-1);
+
+    expect(forbiddenAssistant?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "forbidden-native-wrapper",
+          name: "execute_command",
+          complete: true,
+          result: expect.stringContaining("native_tool_not_available"),
+        }),
+      ]),
+    );
+    expect(JSON.stringify(forbiddenAssistant)).not.toContain(
+      "call_native_tool",
+    );
+    expect(forgedAssistant?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "forged-direct-memory",
+          name: "recall_memory",
+          complete: true,
+          result: expect.stringContaining("direct_deferred_native_tool_call"),
+        }),
+      ]),
     );
   });
 

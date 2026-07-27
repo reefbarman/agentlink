@@ -1,17 +1,58 @@
 import type { AgentConfig, AgentMessage } from "./types.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildPromptArtifacts, buildSystemPrompt } from "./systemPrompt.js";
+import {
+  buildModeInstructionBlock,
+  buildPromptArtifacts,
+  buildSystemPrompt,
+} from "./systemPrompt.js";
 
 import { AgentSession } from "./AgentSession.js";
 import type { ContentBlock } from "./providers/types.js";
+import type { PersistedActiveSkillState } from "./persistenceContracts.js";
+import type { SkillEntry } from "./skillLoader.js";
+import type { SkillCatalogProjection } from "./skillCatalogProjection.js";
 import {
   createProjectlessSessionScope,
   type SessionProjectScope,
 } from "../core/workspaceProjects.js";
+import type { PromptProfileResolution } from "../core/promptProfile.js";
 
-function makePromptArtifacts(systemPrompt: string) {
+function makeSkillCatalogProjection(
+  revision: string,
+  omissions: SkillCatalogProjection["omissions"] = [],
+): SkillCatalogProjection {
+  return {
+    schemaVersion: 1,
+    revision,
+    budgetChars: 1_024,
+    renderedChars: 0,
+    discoveredCount: omissions.length,
+    enabledCount: omissions.length,
+    advertisedCount: 0,
+    truncatedCount: 0,
+    omittedCount: omissions.length,
+    sourceChars: 0,
+    deferredChars: 0,
+    retrievalFallbackRequired: omissions.length > 0,
+    advertised: [],
+    omissions,
+    catalogXml: "",
+  };
+}
+
+function makePromptArtifacts(
+  systemPrompt: string,
+  promptProfile: PromptProfileResolution = {
+    profile: "compatibility" as const,
+    source: "compatibility-default" as const,
+    policyRevision: "prompt-profile-policy-v1" as const,
+    providerId: "test",
+    modelId: "test-model",
+  },
+) {
   return {
     systemPrompt,
+    promptProfile,
     skills: [],
     advertisedRules: [],
     promptBreakdown: {
@@ -44,6 +85,7 @@ vi.mock("./systemPrompt.js", () => {
 
 const mockedBuildSystemPrompt = vi.mocked(buildSystemPrompt);
 const mockedBuildPromptArtifacts = vi.mocked(buildPromptArtifacts);
+const mockedBuildModeInstructionBlock = vi.mocked(buildModeInstructionBlock);
 
 const testProjectScope: SessionProjectScope = {
   schemaVersion: 1,
@@ -74,10 +116,43 @@ async function makeSession(
   });
 }
 
+function makeSkillEntry(
+  name: string,
+  revision: string,
+  allowedTools?: string[],
+): SkillEntry {
+  const skillDirectory = `/test/.agentlink/skills/${name}`;
+  const skillPath = `${skillDirectory}/SKILL.md`;
+  return {
+    id: `project:agentlink:.agentlink/skills/${name}`,
+    name,
+    description: `${name} skill`,
+    revision,
+    sourceChars: 128,
+    provenance: {
+      scope: "project",
+      namespace: "agentlink",
+      sourceRoot: "/test/.agentlink/skills",
+      skillDirectory,
+      realSkillPath: skillPath,
+      priority: 1,
+    },
+    skillPath,
+    allowedTools,
+    restrictions: { allowedTools },
+    permissions: { requestedTools: [] },
+    dependencies: [],
+    recommendations: [],
+    resolvedDependencies: [],
+    enabled: true,
+  };
+}
+
 describe("AgentSession", () => {
   beforeEach(() => {
     mockedBuildSystemPrompt.mockClear();
     mockedBuildPromptArtifacts.mockClear();
+    mockedBuildModeInstructionBlock.mockClear();
     mockedBuildSystemPrompt.mockResolvedValue("mock system prompt");
     mockedBuildPromptArtifacts.mockResolvedValue(
       makePromptArtifacts("mock system prompt"),
@@ -252,6 +327,105 @@ describe("AgentSession", () => {
       );
     });
 
+    it("passes disabled skill IDs to buildPromptArtifacts on create", async () => {
+      const disabledSkillIds = [
+        "project:agentlink:.agentlink/skills/private-helper",
+      ];
+      const session = await makeSession({
+        config: { ...testConfig, disabledSkillIds },
+      });
+
+      expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
+        "code",
+        "/test",
+        expect.objectContaining({ disabledSkillIds }),
+      );
+      expect(session.disabledSkillIds).toEqual(disabledSkillIds);
+      expect(session.disabledSkillIds).not.toBe(disabledSkillIds);
+    });
+
+    it("freezes the resolved skill catalog budget across prompt rebuilds", async () => {
+      const budgetChars = 2_345;
+      mockedBuildPromptArtifacts.mockResolvedValueOnce({
+        ...makePromptArtifacts("initial prompt"),
+        skillCatalog: {
+          schemaVersion: 1,
+          revision: "catalog-revision",
+          budgetChars,
+          renderedChars: 0,
+          discoveredCount: 0,
+          enabledCount: 0,
+          advertisedCount: 0,
+          truncatedCount: 0,
+          omittedCount: 0,
+          sourceChars: 0,
+          deferredChars: 0,
+          retrievalFallbackRequired: false,
+          advertised: [],
+          omissions: [],
+          catalogXml: "",
+        },
+      });
+      const session = await makeSession();
+
+      expect(session.skillCatalogBudgetChars).toBe(budgetChars);
+
+      mockedBuildPromptArtifacts.mockClear();
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("rebuilt prompt"),
+      );
+      await session.rebuildSystemPrompt();
+      expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
+        "code",
+        "/test",
+        expect.objectContaining({ skillCatalogBudgetChars: budgetChars }),
+      );
+
+      mockedBuildPromptArtifacts.mockClear();
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("ask prompt"),
+      );
+      await session.setMode("ask");
+      expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
+        "ask",
+        "/test",
+        expect.objectContaining({ skillCatalogBudgetChars: budgetChars }),
+      );
+    });
+
+    it("keeps the committed skill catalog projection in sync across prompt changes", async () => {
+      const initial = makeSkillCatalogProjection("initial", [
+        {
+          id: "project:agentlink:.agentlink/skills/omitted",
+          name: "omitted",
+          revision: "skill-revision",
+          reason: "budget",
+        },
+      ]);
+      mockedBuildPromptArtifacts.mockResolvedValueOnce({
+        ...makePromptArtifacts("initial prompt"),
+        skillCatalog: initial,
+      });
+      const session = await makeSession();
+      expect(session.getSkillCatalogProjection()).toBe(initial);
+
+      const rebuilt = makeSkillCatalogProjection("rebuilt");
+      mockedBuildPromptArtifacts.mockResolvedValueOnce({
+        ...makePromptArtifacts("rebuilt prompt"),
+        skillCatalog: rebuilt,
+      });
+      await session.rebuildSystemPrompt();
+      expect(session.getSkillCatalogProjection()).toBe(rebuilt);
+
+      const switched = makeSkillCatalogProjection("switched");
+      mockedBuildPromptArtifacts.mockResolvedValueOnce({
+        ...makePromptArtifacts("ask prompt"),
+        skillCatalog: switched,
+      });
+      await session.setMode("ask");
+      expect(session.getSkillCatalogProjection()).toBe(switched);
+    });
+
     it("defaults autoCondenseThreshold to 0.9 when not provided", async () => {
       const configWithoutThreshold: AgentConfig = {
         ...testConfig,
@@ -287,23 +461,269 @@ describe("AgentSession", () => {
     it("clears active skill tool restrictions when a new user message starts", async () => {
       mockedBuildPromptArtifacts.mockResolvedValue({
         ...makePromptArtifacts("mock system prompt"),
-        skills: [
-          {
-            name: "safe-review",
-            description: "Safe review",
-            skillPath: "/test/.agentlink/skills/safe-review/SKILL.md",
-            allowedTools: ["read_file"],
-          },
-        ],
+        skills: [makeSkillEntry("safe-review", "a".repeat(64), ["read_file"])],
       });
       const session = await makeSession();
 
-      session.trackLoadedSkill("safe-review");
+      session.trackLoadedSkill({
+        id: "project:agentlink:.agentlink/skills/safe-review",
+        name: "safe-review",
+        revision: "a".repeat(64),
+        skillPath: "/test/.agentlink/skills/safe-review/SKILL.md",
+      });
       expect(session.getActiveSkillAllowedTools()).toEqual(["read_file"]);
 
       session.addUserMessage("new task");
       expect(session.getActiveSkillAllowedTools()).toBeUndefined();
       expect(session.getLoadedSkills()).toEqual(["safe-review"]);
+    });
+
+    it("rejects stale canonical skill activations without changing policy", async () => {
+      const skill = makeSkillEntry("safe-review", "a".repeat(64), [
+        "read_file",
+      ]);
+      mockedBuildPromptArtifacts.mockResolvedValue({
+        ...makePromptArtifacts("mock system prompt"),
+        skills: [skill],
+      });
+      const session = await makeSession();
+
+      expect(
+        session.trackLoadedSkill({
+          id: skill.id,
+          name: skill.name,
+          revision: "b".repeat(64),
+          skillPath: skill.skillPath,
+        }),
+      ).toBe(false);
+      expect(session.getActiveSkillAllowedTools()).toBeUndefined();
+      expect(session.getLoadedSkills()).toEqual([]);
+    });
+
+    it("intersects active skill restrictions independent of load order", async () => {
+      const broad = makeSkillEntry("broad", "a".repeat(64), [
+        "read_file",
+        "search_files",
+      ]);
+      const narrow = makeSkillEntry("narrow", "b".repeat(64), ["read_file"]);
+      mockedBuildPromptArtifacts.mockResolvedValue({
+        ...makePromptArtifacts("mock system prompt"),
+        skills: [broad, narrow],
+      });
+
+      const activate = (session: AgentSession, skill: SkillEntry) =>
+        session.trackLoadedSkill({
+          id: skill.id,
+          name: skill.name,
+          revision: skill.revision,
+          skillPath: skill.skillPath,
+        });
+
+      const broadThenNarrow = await makeSession();
+      expect(activate(broadThenNarrow, broad)).toBe(true);
+      expect(activate(broadThenNarrow, narrow)).toBe(true);
+      expect(broadThenNarrow.getActiveSkillAllowedTools()).toEqual([
+        "read_file",
+      ]);
+
+      const narrowThenBroad = await makeSession();
+      expect(activate(narrowThenBroad, narrow)).toBe(true);
+      expect(narrowThenBroad.getActiveSkillAllowedTools()).toEqual([
+        "read_file",
+      ]);
+      expect(activate(narrowThenBroad, broad)).toBe(true);
+      expect(narrowThenBroad.getActiveSkillAllowedTools()).toEqual([
+        "read_file",
+      ]);
+      expect(narrowThenBroad.getActiveSkillPolicy().revision).toBe(
+        broadThenNarrow.getActiveSkillPolicy().revision,
+      );
+    });
+
+    it("snapshots and restores exact active skill authority", async () => {
+      const broad = makeSkillEntry("broad", "a".repeat(64), [
+        "read_file",
+        "search_files",
+      ]);
+      const narrow = makeSkillEntry("narrow", "b".repeat(64), ["read_file"]);
+      mockedBuildPromptArtifacts.mockResolvedValue({
+        ...makePromptArtifacts("mock system prompt"),
+        skills: [broad, narrow],
+        skillCatalog: makeSkillCatalogProjection("catalog-before"),
+      });
+      const source = await makeSession();
+      for (const skill of [broad, narrow]) {
+        expect(
+          source.trackLoadedSkill({
+            id: skill.id,
+            name: skill.name,
+            revision: skill.revision,
+            skillPath: skill.skillPath,
+          }),
+        ).toBe(true);
+      }
+
+      const snapshot = source.getActiveSkillState();
+      expect(snapshot).toEqual({
+        schemaVersion: 1,
+        catalogRevision: "catalog-before",
+        activations: [broad, narrow]
+          .sort((left, right) => left.id.localeCompare(right.id))
+          .map(({ id, name, revision }) => ({ id, name, revision })),
+        policy: source.getActiveSkillPolicy(),
+      });
+
+      mockedBuildPromptArtifacts.mockResolvedValue({
+        ...makePromptArtifacts("restored prompt"),
+        skills: [broad, narrow],
+        // Catalog revision is audit provenance. Unrelated catalog changes do not
+        // revoke an exact active batch whose skills and recomputed policy match.
+        skillCatalog: makeSkillCatalogProjection("catalog-after"),
+      });
+      const restored = await makeSession();
+      restored.restoreFromStore({
+        id: "restored",
+        title: "Restored",
+        createdAt: 1,
+        lastActiveAt: 2,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        loadedSkills: ["legacy-display-only"],
+        activeSkillState: snapshot,
+        messages: [],
+      });
+
+      expect(restored.getActiveSkillAllowedTools()).toEqual(["read_file"]);
+      expect(restored.getLoadedSkills()).toEqual([
+        "legacy-display-only",
+        "broad",
+        "narrow",
+      ]);
+      expect(restored.getActiveSkillState()).toMatchObject({
+        catalogRevision: "catalog-after",
+        activations: snapshot?.activations,
+      });
+    });
+
+    it.each([
+      [
+        "a stale activation revision",
+        (state: PersistedActiveSkillState) => ({
+          ...state,
+          activations: state.activations.map((activation, index) =>
+            index === 0
+              ? { ...activation, revision: "f".repeat(64) }
+              : activation,
+          ),
+        }),
+      ],
+      [
+        "a mismatched policy revision",
+        (state: PersistedActiveSkillState) => ({
+          ...state,
+          policy: { ...state.policy, revision: "f".repeat(64) },
+        }),
+      ],
+      [
+        "duplicate canonical activations",
+        (state: PersistedActiveSkillState) => ({
+          ...state,
+          activations: [state.activations[0]!, state.activations[0]!],
+        }),
+      ],
+    ])(
+      "rejects the entire restored skill batch for %s",
+      async (_label, mutate) => {
+        const skill = makeSkillEntry("safe-review", "a".repeat(64), [
+          "read_file",
+        ]);
+        mockedBuildPromptArtifacts.mockResolvedValue({
+          ...makePromptArtifacts("mock system prompt"),
+          skills: [skill],
+          skillCatalog: makeSkillCatalogProjection("catalog"),
+        });
+        const source = await makeSession();
+        source.trackLoadedSkill({
+          id: skill.id,
+          name: skill.name,
+          revision: skill.revision,
+          skillPath: skill.skillPath,
+        });
+        const snapshot = source.getActiveSkillState();
+        expect(snapshot).toBeDefined();
+
+        const restored = await makeSession();
+        restored.restoreFromStore({
+          id: "restored",
+          title: "Restored",
+          createdAt: 1,
+          lastActiveAt: 2,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          loadedSkills: [skill.name],
+          activeSkillState: mutate(snapshot!),
+          messages: [],
+        });
+
+        expect(restored.getLoadedSkills()).toEqual([skill.name]);
+        expect(restored.getActiveSkillAllowedTools()).toBeUndefined();
+        expect(restored.getActiveSkillState()).toBeUndefined();
+      },
+    );
+
+    it("revokes active authority when refresh changes the same skill revision", async () => {
+      const original = makeSkillEntry("safe-review", "a".repeat(64), [
+        "read_file",
+      ]);
+      mockedBuildPromptArtifacts.mockResolvedValue({
+        ...makePromptArtifacts("mock system prompt"),
+        skills: [original],
+        skillCatalog: makeSkillCatalogProjection("catalog-before"),
+      });
+      const session = await makeSession();
+      session.trackLoadedSkill({
+        id: original.id,
+        name: original.name,
+        revision: original.revision,
+        skillPath: original.skillPath,
+      });
+      expect(session.getActiveSkillAllowedTools()).toEqual(["read_file"]);
+
+      const changed = makeSkillEntry("safe-review", "b".repeat(64), [
+        "read_file",
+        "write_file",
+      ]);
+      session.setAdvertisedSkills([changed]);
+
+      expect(session.getLoadedSkills()).toEqual([original.name]);
+      expect(session.getActiveSkillAllowedTools()).toBeUndefined();
+      expect(session.getActiveSkillState()).toBeUndefined();
+    });
+
+    it("does not authorize legacy loaded skill names", async () => {
+      const skill = makeSkillEntry("safe-review", "a".repeat(64), [
+        "read_file",
+      ]);
+      mockedBuildPromptArtifacts.mockResolvedValue({
+        ...makePromptArtifacts("mock system prompt"),
+        skills: [skill],
+        skillCatalog: makeSkillCatalogProjection("catalog"),
+      });
+      const restored = await makeSession();
+      restored.restoreFromStore({
+        id: "legacy",
+        title: "Legacy",
+        createdAt: 1,
+        lastActiveAt: 2,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        loadedSkills: [skill.name],
+        messages: [],
+      });
+
+      expect(restored.getLoadedSkills()).toEqual([skill.name]);
+      expect(restored.getActiveSkillAllowedTools()).toBeUndefined();
+      expect(restored.getActiveSkillState()).toBeUndefined();
     });
 
     it("addUserMessage appends a user message", async () => {
@@ -464,6 +884,25 @@ describe("AgentSession", () => {
       expect(msgs[1].role).toBe("assistant");
     });
 
+    it("keeps diagnostics in full history but excludes them from provider history", async () => {
+      const session = await makeSession();
+      session.addUserMessage("user msg");
+      const diagnostic: AgentMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "# Context Doctor" }],
+        diagnosticOnly: true,
+      };
+      session.appendAssistantMessage(diagnostic);
+
+      expect(session.getAllMessages()).toEqual([
+        { role: "user", content: "user msg" },
+        diagnostic,
+      ]);
+      expect(session.getMessages()).toEqual([
+        { role: "user", content: "user msg" },
+      ]);
+    });
+
     it("keeps runtime errors in full history but excludes them from provider history", async () => {
       const session = await makeSession();
       session.addUserMessage("user msg");
@@ -545,13 +984,14 @@ describe("AgentSession", () => {
       ]);
 
       const msgs = session.getMessages();
-      expect(msgs).toHaveLength(4);
-      expect(msgs[0]?.isSummary).toBe(true);
-      expect(msgs[1]?.role).toBe("assistant");
-      expect(msgs[2]?.role).toBe("user");
-      expect(msgs[2]?.isResumeContext).toBe(true);
-      expect(Array.isArray(msgs[2]?.content)).toBe(true);
-      const injected = msgs[2]?.content as Array<{
+      expect(msgs).toHaveLength(5);
+      expect(msgs[0]).toEqual({ role: "user", content: "Fix issue" });
+      expect(msgs[1]?.isSummary).toBe(true);
+      expect(msgs[2]?.role).toBe("assistant");
+      expect(msgs[3]?.role).toBe("user");
+      expect(msgs[3]?.isResumeContext).toBe(true);
+      expect(Array.isArray(msgs[3]?.content)).toBe(true);
+      const injected = msgs[3]?.content as Array<{
         type: string;
         text?: string;
       }>;
@@ -561,7 +1001,7 @@ describe("AgentSession", () => {
       );
       expect(injected[0]?.text).toContain('"content": "Fix the issue"');
       expect(injected[0]?.text).toContain('"status": "in_progress"');
-      expect(msgs[3]).toEqual({
+      expect(msgs[4]).toEqual({
         role: "user",
         content: "Continue fixing the issue.",
       });
@@ -680,6 +1120,42 @@ describe("AgentSession", () => {
       session.addUsage(1000, 500);
       expect(session.estimatedAccumulatedTokens).toBe(0);
       expect(session.estimatedAccumulationBySource).toEqual({});
+    });
+
+    it("tracks bounded per-tool-result byte and token attribution", async () => {
+      const session = await makeSession();
+      session.addUsage(0, 0);
+
+      session.addToolResultContextAttribution(
+        "call-1",
+        "read_file",
+        "é".repeat(400),
+      );
+      for (let index = 0; index < 64; index += 1) {
+        session.addToolResultContextAttribution(
+          `call-${index + 2}`,
+          "search_files",
+          "x".repeat(4),
+        );
+      }
+
+      expect(session.toolResultContextAttributions).toHaveLength(64);
+      expect(session.toolResultContextAttributions[0]).toEqual({
+        toolCallId: "call-1",
+        toolName: "read_file",
+        chars: 400,
+        bytes: 800,
+        estimatedTokens: 100,
+      });
+      expect(session.omittedToolResultContextAttributions).toBe(1);
+      expect(session.estimatedAccumulationBySource).toEqual({
+        "tool:read_file": 100,
+        "tool:search_files": 64,
+      });
+
+      session.addUsage(1_000, 500);
+      expect(session.toolResultContextAttributions).toEqual([]);
+      expect(session.omittedToolResultContextAttributions).toBe(0);
     });
 
     it("attributes user messages and attachments to the accumulator", async () => {
@@ -885,6 +1361,24 @@ describe("AgentSession", () => {
       );
     });
 
+    it("setMode preserves disabled skill IDs", async () => {
+      const disabledSkillIds = [
+        "project:agentlink:.agentlink/skills/private-helper",
+      ];
+      const session = await makeSession({
+        config: { ...testConfig, disabledSkillIds },
+      });
+      mockedBuildPromptArtifacts.mockClear();
+
+      await session.setMode("ask");
+
+      expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
+        "ask",
+        "/test",
+        expect.objectContaining({ disabledSkillIds }),
+      );
+    });
+
     it("setMode preserves background prompt identity", async () => {
       const session = await makeSession({
         background: true,
@@ -903,6 +1397,74 @@ describe("AgentSession", () => {
   });
 
   describe("rebuildSystemPrompt", () => {
+    it("updates profile state and refreshes conversation mode instructions", async () => {
+      const session = await makeSession({ providerId: "codex" });
+      const reasoningProfile = {
+        profile: "reasoning" as const,
+        source: "exact-model-override" as const,
+        policyRevision: "prompt-profile-policy-v1" as const,
+        providerId: "codex",
+        modelId: session.model,
+      };
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("reasoning prompt", reasoningProfile),
+      );
+      mockedBuildModeInstructionBlock.mockClear();
+
+      await session.rebuildSystemPrompt({
+        promptProfileOverrides: { [session.model]: "reasoning" },
+      });
+
+      expect(session.promptProfile).toBe(reasoningProfile);
+      expect(session.systemPrompt).toBe("reasoning prompt");
+      expect(mockedBuildModeInstructionBlock).toHaveBeenCalledWith(
+        "code",
+        "/test",
+        expect.objectContaining({ promptProfile: "reasoning" }),
+      );
+      expect(session.buildModeInstructionInsertions([])).toEqual([
+        {
+          beforeIndex: 0,
+          blockText: expect.stringContaining('mode="code"'),
+        },
+      ]);
+    });
+
+    it("does not commit staged profile inputs when mode instruction construction fails", async () => {
+      const session = await makeSession({
+        providerId: "codex",
+        config: {
+          ...testConfig,
+          disabledSkillIds: ["previous-skill"],
+        },
+      });
+      const previousPrompt = session.systemPrompt;
+      const previousProfile = session.promptProfile;
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("uncommitted prompt", {
+          profile: "reasoning",
+          source: "exact-model-override",
+          policyRevision: "prompt-profile-policy-v1",
+          providerId: "codex",
+          modelId: session.model,
+        }),
+      );
+      mockedBuildModeInstructionBlock.mockRejectedValueOnce(
+        new Error("mode block failed"),
+      );
+
+      await expect(
+        session.rebuildSystemPrompt({
+          disabledSkillIds: ["replacement-skill"],
+          promptProfileOverrides: { [session.model]: "reasoning" },
+        }),
+      ).rejects.toThrow("mode block failed");
+
+      expect(session.systemPrompt).toBe(previousPrompt);
+      expect(session.promptProfile).toBe(previousProfile);
+      expect(session.disabledSkillIds).toEqual(["previous-skill"]);
+    });
+
     it("passes stored providerId to buildPromptArtifacts", async () => {
       const session = await makeSession({ providerId: "codex" });
       mockedBuildPromptArtifacts.mockClear();
@@ -932,6 +1494,31 @@ describe("AgentSession", () => {
         "/test",
         expect.objectContaining({ isBackground: true }),
       );
+    });
+
+    it("updates and forwards disabled skill IDs on rebuild", async () => {
+      const session = await makeSession({
+        config: {
+          ...testConfig,
+          disabledSkillIds: [
+            "project:agentlink:.agentlink/skills/previous-helper",
+          ],
+        },
+      });
+      const disabledSkillIds = [
+        "project:agentlink:.agentlink/skills/private-helper",
+      ];
+      mockedBuildPromptArtifacts.mockClear();
+
+      await session.rebuildSystemPrompt({ disabledSkillIds });
+
+      expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
+        "code",
+        "/test",
+        expect.objectContaining({ disabledSkillIds }),
+      );
+      expect(session.disabledSkillIds).toEqual(disabledSkillIds);
+      expect(session.disabledSkillIds).not.toBe(disabledSkillIds);
     });
 
     it("forwards the Approve for Me flag on rebuild and mode switch", async () => {

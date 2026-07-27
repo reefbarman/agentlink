@@ -222,7 +222,7 @@ export class AskAgentController {
       suggestedTier: "memory",
       title: "Remember from Ask Agent",
       rationale:
-        "Ask Agent detected a possible durable user preference. Review before saving; persistence requires explicit approval.",
+        "Ask Agent detected a possible durable user preference for low-authority memory.",
       content: params.candidate.matchedPhrase,
     };
     this.memoryCandidateNudgeCounts.set(params.sessionId, nudgeCount + 1);

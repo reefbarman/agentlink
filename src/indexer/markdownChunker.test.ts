@@ -1,5 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { isMarkdownFile, markdownChunkFile } from "./markdownChunker.js";
+
+import { MAX_CODE_INDEX_CHUNK_CHARS } from "./chunkQuality.js";
 
 describe("isMarkdownFile", () => {
   it("returns true for .md files", () => {
@@ -62,13 +64,18 @@ describe("markdownChunkFile", () => {
     expect(chunks[2].startLine).toBe(9);
   });
 
-  it("includes heading context in embeddingContent (no file path)", () => {
+  it("includes normalized file path and heading context in embeddingContent", () => {
     const content =
       "# Title\n\nSome content that is long enough to pass the minimum character threshold for chunks.";
     const chunks = markdownChunkFile(content, fp, rp);
     expect(chunks.length).toBe(1);
-    expect(chunks[0].embeddingContent).toContain("// # Title");
-    expect(chunks[0].embeddingContent).not.toContain("// File:");
+    expect(chunks[0].embeddingContent).toBe(
+      [
+        "// README.md",
+        "// # Title",
+        "Some content that is long enough to pass the minimum character threshold for chunks.",
+      ].join("\n"),
+    );
   });
 
   it("includes heading context in embeddingContent", () => {
@@ -88,8 +95,15 @@ describe("markdownChunkFile", () => {
     // First chunk has the H1 heading context
     expect(chunks[0].embeddingContent).toContain("// # Main Title");
 
-    // Second chunk has the H2 heading context
-    expect(chunks[1].embeddingContent).toContain("// ## Sub Section");
+    // Second chunk preserves the full heading hierarchy without duplicating H2.
+    expect(chunks[1].scope).toEqual(["# Main Title", "## Sub Section"]);
+    expect(chunks[1].embeddingContent).toContain(
+      "// # Main Title > ## Sub Section",
+    );
+    expect(chunks[1].embeddingContent!.match(/## Sub Section/g)).toHaveLength(
+      1,
+    );
+    expect(chunks[1].content).toContain("## Sub Section");
   });
 
   it("handles pre-heading content", () => {
@@ -104,9 +118,9 @@ describe("markdownChunkFile", () => {
     const chunks = markdownChunkFile(content, fp, rp);
     expect(chunks.length).toBe(2);
 
-    // Pre-heading chunk has no heading context (no file path, no heading)
+    // Pre-heading chunk has path context but no fabricated heading.
     expect(chunks[0].content).toContain("preamble");
-    expect(chunks[0].embeddingContent).not.toContain("// File:");
+    expect(chunks[0].embeddingContent).toContain("// README.md");
     expect(chunks[0].embeddingContent).not.toContain("// #");
 
     // Heading chunk has heading context
@@ -131,6 +145,34 @@ describe("markdownChunkFile", () => {
     // Each sub-chunk still has the heading context
     expect(chunks[0].embeddingContent).toContain("// # Big Section");
     expect(chunks[1].embeddingContent).toContain("// # Big Section");
+  });
+
+  it("hard-splits a giant Markdown line while retaining heading hierarchy", () => {
+    const giantLine = "x".repeat(MAX_CODE_INDEX_CHUNK_CHARS * 2 + 1);
+    const content = ["# Guide", "", "## Installation", "", giantLine].join(
+      "\n",
+    );
+
+    const chunks = markdownChunkFile(
+      content,
+      "/workspace/docs/guide.md",
+      "docs/guide.md",
+    );
+    const giantParts = chunks.filter((chunk) => chunk.startLine === 5);
+
+    expect(giantParts).toHaveLength(3);
+    expect(giantParts.map((chunk) => chunk.content).join("")).toBe(giantLine);
+    expect(
+      giantParts.every(
+        (chunk) =>
+          chunk.endLine === 5 &&
+          chunk.content.length <= MAX_CODE_INDEX_CHUNK_CHARS &&
+          chunk.language === "markdown" &&
+          chunk.embeddingContent?.startsWith(
+            "// docs/guide.md\n// # Guide > ## Installation\n",
+          ),
+      ),
+    ).toBe(true);
   });
 
   it("sets correct line numbers", () => {

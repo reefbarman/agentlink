@@ -46,6 +46,12 @@ import {
 } from "./agent/clientFactory.js";
 import { IndexerManager } from "./indexer/IndexerManager.js";
 import { registerIndexCommands } from "./indexer/indexCommands.js";
+import { AutonomousMemoryToolProvider } from "./storage/retrieval/AutonomousMemoryToolProvider.js";
+import { LanceDbRetrievalRepository } from "./storage/retrieval/LanceDbRetrievalRepository.js";
+import { RetrievalSkillCatalogFallbackProvider } from "./storage/retrieval/RetrievalSkillCatalogFallbackProvider.js";
+import { getRetrievalStoreRoot } from "./storage/retrieval/retrievalStorePaths.js";
+import { SkillCatalogRetrievalService } from "./core/catalog/SkillCatalogRetrievalService.js";
+import { migrateLegacyMemoryFiles } from "./agent/legacyMemoryMigration.js";
 import { ChatViewProvider } from "./agent/ChatViewProvider.js";
 import { AgentSessionManager } from "./agent/AgentSessionManager.js";
 import { ChatTabController, type ChatTab } from "./agent/ChatTabController.js";
@@ -63,6 +69,10 @@ import {
 } from "./agent/modeModelPreferences.js";
 import { SessionStore } from "./agent/SessionStore.js";
 import type { AgentConfig } from "./agent/types.js";
+import {
+  normalizePromptProfileOverrides,
+  resolvePromptProfile,
+} from "./core/promptProfile.js";
 import { registerEditorContextCommands } from "./agent/editorContextCommands.js";
 import { registerModelAuthCommands } from "./agent/modelAuthCommands.js";
 import { AnthropicProvider } from "./agent/providers/anthropic/index.js";
@@ -115,6 +125,7 @@ import {
 import { resolveWorkspaceSessionLocation } from "./agent/workspaceSessionIdentity.js";
 import { createSessionProjectScope } from "./core/workspaceProjects.js";
 import { createWorkspaceProjectCatalog } from "./adapters/vscode/workspaceProjectCapabilities.js";
+import { getAffectedProjectSettingIds } from "./adapters/vscode/projectSettingsAccessor.js";
 import {
   createToolUsageTelemetry,
   type ToolUsageTelemetry,
@@ -187,6 +198,7 @@ let browserGatewayHelperAdminClient: BrowserGatewayHelperAdminClient | null =
 let browserGatewayHelperModelAuthLeaseClient: BrowserGatewayHelperModelAuthLeaseClient | null =
   null;
 let browserGatewayShutdownPromise: Promise<void> | null = null;
+let skillCatalogShutdownPromise: Promise<void> | null = null;
 
 const SEMANTIC_SETUP_PROMPT_DISMISSED_KEY =
   "semanticSetupPromptDismissedGlobally";
@@ -942,16 +954,86 @@ export function activate(context: vscode.ExtensionContext): void {
       agentTerminalProvider.refresh(),
     ),
   );
-  const projectCatalog = createWorkspaceProjectCatalog({
-    workspaceFolders: vscode.workspace.workspaceFolders,
-    canonicalizeFileRoot: (rootPath) => {
-      try {
-        return fs.realpathSync.native(rootPath);
-      } catch {
-        return undefined;
-      }
+  const createCurrentProjectCatalog = () =>
+    createWorkspaceProjectCatalog({
+      workspaceFolders: vscode.workspace.workspaceFolders,
+      canonicalizeFileRoot: (rootPath) => {
+        try {
+          return fs.realpathSync.native(rootPath);
+        } catch {
+          return undefined;
+        }
+      },
+    });
+  const projectCatalog = createCurrentProjectCatalog();
+  const browserGatewayWorkspaceInstanceId =
+    context.workspaceState.get<string>("browserGatewayInstanceId") ??
+    randomUUID();
+  void context.workspaceState.update(
+    "browserGatewayInstanceId",
+    browserGatewayWorkspaceInstanceId,
+  );
+  const getAutonomousMemoryMode = () =>
+    vscode.workspace
+      .getConfiguration("agentlink")
+      .get<"off" | "autonomous">("memory.mode", "off");
+  let autonomousMemoryMigrationsPending = 0;
+  let autonomousMemoryMigrationTail = Promise.resolve();
+  const retrievalStoreRoot = getRetrievalStoreRoot(
+    context.globalStorageUri.fsPath,
+  );
+  const autonomousMemoryToolProvider = new AutonomousMemoryToolProvider({
+    root: retrievalStoreRoot,
+    getMode: getAutonomousMemoryMode,
+    isInitializing: () => autonomousMemoryMigrationsPending > 0,
+  });
+  const skillCatalogRetrievalRepository = new LanceDbRetrievalRepository({
+    root: retrievalStoreRoot,
+  });
+  const skillCatalogFallbackProvider =
+    new RetrievalSkillCatalogFallbackProvider(
+      new SkillCatalogRetrievalService(skillCatalogRetrievalRepository),
+      `vscode:${browserGatewayWorkspaceInstanceId}`,
+    );
+  context.subscriptions.push({
+    dispose: () => {
+      void autonomousMemoryToolProvider.dispose();
     },
   });
+  context.subscriptions.push({
+    dispose: () => {
+      skillCatalogShutdownPromise ??= skillCatalogFallbackProvider
+        .dispose()
+        .finally(() => skillCatalogRetrievalRepository.close());
+    },
+  });
+  const runLegacyMemoryMigration = (): Promise<void> => {
+    if (getAutonomousMemoryMode() !== "autonomous") {
+      return Promise.resolve();
+    }
+    autonomousMemoryMigrationsPending += 1;
+    const run = autonomousMemoryMigrationTail.then(async () => {
+      if (getAutonomousMemoryMode() !== "autonomous") return;
+      try {
+        const result = await migrateLegacyMemoryFiles({
+          provider: autonomousMemoryToolProvider,
+          projectCatalog: createCurrentProjectCatalog(),
+        });
+        log(
+          `[memory] Legacy migration complete imported=${result.imported.length} missing=${result.skippedMissing.length}`,
+        );
+      } catch (error) {
+        log(`[memory] Legacy migration failed: ${String(error)}`);
+      }
+    });
+    const settled = run.finally(() => {
+      autonomousMemoryMigrationsPending -= 1;
+    });
+    autonomousMemoryMigrationTail = settled.catch(() => undefined);
+    return settled;
+  };
+  const initialLegacyMemoryMigration = runLegacyMemoryMigration();
+
   const legacyPrimaryRootPath = workspaceSessionLocation.legacyPrimaryRootPath;
   const canonicalLegacyPrimaryRootPath = legacyPrimaryRootPath
     ? (() => {
@@ -1031,13 +1113,27 @@ export function activate(context: vscode.ExtensionContext): void {
     codexStoreResponses:
       agentConfiguration.get<boolean>("codexStoreResponses") ?? false,
     codexProMode: agentConfiguration.get<boolean>("codexProMode") ?? false,
+    promptProfileOverrides: normalizePromptProfileOverrides(
+      agentConfiguration.get<unknown>("modelPromptProfiles"),
+    ),
+    disabledSkillIds:
+      agentConfiguration.get<string[]>("skills.disabledIds") ?? [],
   };
 
   // Dev builds (__DEV_BUILD__) expose the feedback tools and dev sidebar UI,
   // so they must also get the dev-mode system prompt — not just F5 sessions.
   const isDevMode =
     __DEV_BUILD__ || context.extensionMode === vscode.ExtensionMode.Development;
-  const projectCustomizationRegistry = new ProjectCustomizationRegistry();
+  const projectCustomizationRegistry = new ProjectCustomizationRegistry(
+    undefined,
+    (scope) =>
+      vscode.workspace
+        .getConfiguration(
+          "agentlink",
+          vscode.Uri.parse(scope.workspaceFolderUri),
+        )
+        .get<string[]>("skills.disabledIds", []),
+  );
   chatTabController = new ChatTabController(context.workspaceState, { log });
   context.subscriptions.push(chatTabController);
   void chatTabController.initialize().catch((error) => {
@@ -1167,11 +1263,36 @@ export function activate(context: vscode.ExtensionContext): void {
           condenseThreshold: model.condenseThreshold,
         }),
       );
+      const activeScope =
+        agentSessionManager.getForegroundSession()?.projectScope ??
+        agentSessionManager.getDefaultProjectScope();
+      const profileConfiguration = vscode.workspace.getConfiguration(
+        "agentlink",
+        activeScope
+          ? vscode.Uri.parse(activeScope.workspaceFolderUri)
+          : undefined,
+      );
+      const promptProfileOverrides = normalizePromptProfileOverrides(
+        profileConfiguration.get<unknown>("modelPromptProfiles"),
+      );
+      const promptProfileResolutions = Object.fromEntries(
+        models.map((model) => [
+          model.id,
+          resolvePromptProfile({
+            providerId: normalizeBrowserGatewayModelCredentialProviderId(
+              model.providerId,
+            ),
+            modelId: model.id,
+            overrides: promptProfileOverrides,
+          }),
+        ]),
+      );
       const result = await client.publishModelCatalog({
         helperGenerationId: discovery.helperGenerationId,
         models,
         openAiCompatibleRuntimeProfiles:
           openAiCompatibleProviderManager.getRuntimeProfiles(),
+        promptProfileResolutions,
       });
       log(
         `[browser-gateway-helper] published model catalog to helper modelCount=${result.modelCount}`,
@@ -1352,6 +1473,7 @@ export function activate(context: vscode.ExtensionContext): void {
         ),
       },
       projectMcpHubRegistry: chatViewProvider.getProjectMcpHubRegistry(),
+      skillCatalogFallbackProvider,
       executionUnavailableReason:
         workspaceSessionLocation.status === "legacy_conflict"
           ? "Local execution is disabled because multiple legacy session-history locations were found. Resolve the history-storage conflict before starting or continuing a session."
@@ -1476,13 +1598,6 @@ export function activate(context: vscode.ExtensionContext): void {
     browserGatewayService?.bumpModelsVersion();
   });
   browserGatewayAuthToken = randomUUID();
-  const browserGatewayWorkspaceInstanceId =
-    context.workspaceState.get<string>("browserGatewayInstanceId") ??
-    randomUUID();
-  void context.workspaceState.update(
-    "browserGatewayInstanceId",
-    browserGatewayWorkspaceInstanceId,
-  );
   const browserGatewayWindowId = randomUUID();
   const browserGatewayInstanceId = `${browserGatewayWorkspaceInstanceId}:${browserGatewayWindowId}`;
   const browserGatewayDataPlaneConfiguration = vscode.workspace
@@ -1534,6 +1649,15 @@ export function activate(context: vscode.ExtensionContext): void {
       rootPathLabel: browserWorkspacePath,
     },
     ownerGenerationId: helperCoreOwnerGenerationId,
+    memoryRuntime: {
+      mode:
+        autonomousMemoryMigrationsPending > 0
+          ? "off"
+          : getAutonomousMemoryMode(),
+      retrievalStoreRoot: getRetrievalStoreRoot(
+        context.globalStorageUri.fsPath,
+      ),
+    },
     capabilities: isBrowserGatewayOwnerPublicationEnabled(
       browserGatewayDataPlaneMode,
     )
@@ -1544,6 +1668,51 @@ export function activate(context: vscode.ExtensionContext): void {
     instanceId: browserGatewayInstanceId,
     processId: process.pid,
   };
+
+  const refreshMemoryRuntimeAfterMigration = (): void => {
+    helperCoreOwner.memoryRuntime = {
+      mode: "off",
+      retrievalStoreRoot: getRetrievalStoreRoot(
+        context.globalStorageUri.fsPath,
+      ),
+    };
+    void browserGatewayHelperLeaseClient?.refresh();
+    void runLegacyMemoryMigration().finally(() => {
+      helperCoreOwner.memoryRuntime = {
+        mode:
+          autonomousMemoryMigrationsPending > 0
+            ? "off"
+            : getAutonomousMemoryMode(),
+        retrievalStoreRoot: getRetrievalStoreRoot(
+          context.globalStorageUri.fsPath,
+        ),
+      };
+      void browserGatewayHelperLeaseClient?.refresh();
+      void chatViewProvider.refreshContextHealth();
+    });
+  };
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration("agentlink.memory.mode")) return;
+      if (getAutonomousMemoryMode() === "off") {
+        helperCoreOwner.memoryRuntime = {
+          mode: "off",
+          retrievalStoreRoot: getRetrievalStoreRoot(
+            context.globalStorageUri.fsPath,
+          ),
+        };
+        void browserGatewayHelperLeaseClient?.refresh();
+        void chatViewProvider.refreshContextHealth();
+        return;
+      }
+      refreshMemoryRuntimeAfterMigration();
+    }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      if (getAutonomousMemoryMode() === "autonomous") {
+        refreshMemoryRuntimeAfterMigration();
+      }
+    }),
+  );
 
   let browserGatewayActivationDisposed = false;
   let browserGatewayHelperBootstrapPromise: Promise<string> | null = null;
@@ -1998,7 +2167,12 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   browserGatewayHealthCheckTimer = setInterval(() => {
-    if (browserGatewayRestartInProgress) return;
+    if (
+      browserGatewayRestartInProgress ||
+      autonomousMemoryMigrationsPending > 0
+    ) {
+      return;
+    }
     void ensureBrowserGatewayRuntimeReady().catch((err) => {
       if (!browserGatewayActivationDisposed) {
         log(`[browser-gateway] periodic health check failed: ${err}`);
@@ -2006,11 +2180,25 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   }, BROWSER_GATEWAY_HEALTH_CHECK_INTERVAL_MS);
 
-  void ensureBrowserGatewayRuntimeReady().catch((err) => {
-    if (!browserGatewayActivationDisposed) {
-      log(`[browser-gateway] activation auto-start failed: ${err}`);
-    }
-  });
+  void initialLegacyMemoryMigration
+    .finally(() => {
+      helperCoreOwner.memoryRuntime = {
+        mode:
+          autonomousMemoryMigrationsPending > 0
+            ? "off"
+            : getAutonomousMemoryMode(),
+        retrievalStoreRoot: getRetrievalStoreRoot(
+          context.globalStorageUri.fsPath,
+        ),
+      };
+      void chatViewProvider.refreshContextHealth();
+      return ensureBrowserGatewayRuntimeReady();
+    })
+    .catch((err) => {
+      if (!browserGatewayActivationDisposed) {
+        log(`[browser-gateway] activation auto-start failed: ${err}`);
+      }
+    });
 
   // Initialize modes, slash commands, MCP hub, and file watchers
   chatViewProvider.initialize(workspaceCwd).catch((err) => {
@@ -2121,8 +2309,12 @@ export function activate(context: vscode.ExtensionContext): void {
     onFileRead: (filePath) => {
       agentSessionManager.getForegroundSession()?.trackFileRead(filePath);
     },
-    onSpawnBackground: (callerSessionId, request) =>
-      agentSessionManager.spawnBackground(request, callerSessionId),
+    onSpawnBackground: (callerSessionId, request, skillAuthority) =>
+      agentSessionManager.spawnBackground(
+        request,
+        callerSessionId,
+        skillAuthority,
+      ),
     onGetBackgroundStatus: (callerSessionId, sessionId) =>
       agentSessionManager.getAuthorizedBackgroundStatus(
         callerSessionId,
@@ -2150,8 +2342,12 @@ export function activate(context: vscode.ExtensionContext): void {
         callerSessionId,
         sessionId,
       ),
-    onStartFleetWorkflow: (callerSessionId, request) =>
-      agentSessionManager.startFleetWorkflow(request, callerSessionId),
+    onStartFleetWorkflow: (callerSessionId, request, skillAuthority) =>
+      agentSessionManager.startFleetWorkflow(
+        request,
+        callerSessionId,
+        skillAuthority,
+      ),
     onScheduleFleetAutomation: (input) =>
       fleetAutomationLifecycle.schedule(input),
     onCollectFleetWorkflow: (workflowId, kind) =>
@@ -2166,6 +2362,7 @@ export function activate(context: vscode.ExtensionContext): void {
         agentSessionManager.getForegroundSession()?.id ?? "agent",
     }),
     toolCallTracker,
+    memoryToolProvider: autonomousMemoryToolProvider,
     toolUsageTelemetry: toolUsageTelemetry ?? undefined,
   });
 
@@ -2213,7 +2410,9 @@ export function activate(context: vscode.ExtensionContext): void {
         e.affectsConfiguration("agentlink.modelCondenseThresholds") ||
         e.affectsConfiguration("agentlink.codexStatefulResponses") ||
         e.affectsConfiguration("agentlink.codexStoreResponses") ||
-        e.affectsConfiguration("agentlink.codexProMode")
+        e.affectsConfiguration("agentlink.codexProMode") ||
+        e.affectsConfiguration("agentlink.modelPromptProfiles") ||
+        e.affectsConfiguration("agentlink.skills.disabledIds")
       ) {
         const activeScope =
           agentSessionManager.getForegroundSession()?.projectScope ??
@@ -2255,7 +2454,32 @@ export function activate(context: vscode.ExtensionContext): void {
           codexStoreResponses:
             config.get<boolean>("codexStoreResponses") ?? false,
           codexProMode: config.get<boolean>("codexProMode") ?? false,
+          promptProfileOverrides: normalizePromptProfileOverrides(
+            config.get<unknown>("modelPromptProfiles"),
+          ),
+          disabledSkillIds: config.get<string[]>("skills.disabledIds") ?? [],
         });
+        if (e.affectsConfiguration("agentlink.skills.disabledIds")) {
+          const affectedProjectIds = getAffectedProjectSettingIds(
+            e,
+            "skills.disabledIds",
+            projectCatalog.listProjects(),
+          );
+          for (const projectId of affectedProjectIds) {
+            void chatViewProvider.refreshSkillConfiguration(projectId);
+          }
+        }
+        if (e.affectsConfiguration("agentlink.modelPromptProfiles")) {
+          const affectedProjectIds = getAffectedProjectSettingIds(
+            e,
+            "modelPromptProfiles",
+            projectCatalog.listProjects(),
+          );
+          for (const projectId of affectedProjectIds) {
+            void agentSessionManager.rebuildSystemPrompts(projectId);
+          }
+          void publishBrowserGatewayModelCatalog();
+        }
       }
     }),
   );
@@ -2362,6 +2586,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const semanticEnabled = vscode.workspace
     .getConfiguration("agentlink")
     .get<boolean>("semanticSearchEnabled", false);
+  chatViewProvider.setContextHealthSources({
+    memory: autonomousMemoryToolProvider,
+    memoryInspection: autonomousMemoryToolProvider,
+    retrieval: skillCatalogRetrievalRepository,
+    semanticIndexEnabled: semanticEnabled,
+  });
 
   if (semanticEnabled) {
     indexerManager = new IndexerManager(
@@ -2370,10 +2600,15 @@ export function activate(context: vscode.ExtensionContext): void {
       log,
     );
     context.subscriptions.push(indexerManager);
+    chatViewProvider.updateContextIndexHealth(indexerManager.getStatus(), true);
 
     // Forward index status to sidebar + status bar error
     indexerManager.onStatusChanged((status) => {
       sidebarProvider.updateIndexStatus(status);
+      chatViewProvider.updateContextIndexHealth(status, true);
+      if (status.state === "idle" || status.state === "error") {
+        void chatViewProvider.refreshContextHealth();
+      }
       if (status.state === "error" && status.error) {
         statusBarManager.setError(`Indexing: ${status.error}`);
 
@@ -2386,7 +2621,7 @@ export function activate(context: vscode.ExtensionContext): void {
           status.readinessReason &&
           (status.readinessReason === "missing_embeddings_auth" ||
             status.readinessReason === "missing_index" ||
-            status.readinessReason === "qdrant_unavailable" ||
+            status.readinessReason === "store_unavailable" ||
             status.readinessReason === "disabled")
         ) {
           void vscode.window
@@ -2450,6 +2685,8 @@ export async function deactivate(): Promise<void> {
   toolUsageTelemetry = null;
   await browserGatewayShutdownPromise;
   browserGatewayShutdownPromise = null;
+  await skillCatalogShutdownPromise;
+  skillCatalogShutdownPromise = null;
   contextUsageTelemetry?.dispose();
   contextUsageTelemetry = null;
 }

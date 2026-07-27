@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "fixtureRevision": "unified-context-v1",
+  "metrics": [
+    "recallAtK",
+    "mrr",
+    "ndcg",
+    "sourceDiversity",
+    "exactIdentifierRecall",
+    "exactPathRecall",
+    "staleSuppression",
+    "irrelevantMemoryFalsePositiveRate",
+    "sensitiveMemoryFalseNegativeRate",
+    "latencyMs",
+    "indexTimeMs",
+    "updateVisibilityMs",
+    "storageBytes"
+  ],
+  "surfaces": [
+    "codebase_search",
+    "search_files_semantic",
+    "list_files_query",
+    "read_file_query",
+    "memory",
+    "skill_rule",
+    "native_tool",
+    "session"
+  ],
+  "queries": [
+    {
+      "id": "code-cart-total",
+      "namespace": "code",
+      "query": "where is the cart total calculated and discount prevented from making totals negative",
+      "expectedRelevant": [
+        "fixtures/agent-eval-workspace/pristine-small-ts-bugfix/src/cart.js",
+        "fixtures/agent-eval-workspace/pristine-small-ts-bugfix/test/cart.test.js"
+      ],
+      "exactIdentifiers": ["calculateCartTotal"],
+      "forbidden": []
+    },
+    {
+      "id": "code-money-invoice",
+      "namespace": "code",
+      "query": "format money cents and compute order subtotal invoice total",
+      "expectedRelevant": [
+        "fixtures/agent-eval-workspace/pristine-multi-file-refactor/src/invoices.js",
+        "fixtures/agent-eval-workspace/pristine-multi-file-refactor/src/orders.js",
+        "fixtures/agent-eval-workspace/pristine-multi-file-refactor/src/money.js"
+      ],
+      "exactIdentifiers": ["formatCents", "orderSubtotal", "invoiceTotal"],
+      "forbidden": []
+    },
+    {
+      "id": "stale-source",
+      "namespace": "code",
+      "query": "legacy removed total calculator",
+      "expectedRelevant": [],
+      "forbidden": [
+        "fixtures/unified-context-baselines/v1/corpus/deleted-source.ts"
+      ]
+    },
+    {
+      "id": "memory-preference",
+      "namespace": "memory",
+      "query": "which package manager does this project use",
+      "expectedRelevant": ["memory:project-package-manager-current"],
+      "forbidden": [
+        "memory:project-package-manager-superseded",
+        "memory:unrelated-theme"
+      ]
+    },
+    {
+      "id": "skill-rfc",
+      "namespace": "skill_rule",
+      "query": "draft an architecture RFC",
+      "expectedRelevant": ["skill:rfc-writing"],
+      "forbidden": ["skill:pr-description-writing"]
+    },
+    {
+      "id": "tool-definition",
+      "namespace": "native_tool",
+      "query": "navigate to the concrete implementation of an interface",
+      "expectedRelevant": ["tool:go_to_implementation"],
+      "forbidden": ["tool:go_to_definition"]
+    },
+    {
+      "id": "session-recall",
+      "namespace": "session",
+      "query": "what validation command did we agree to run",
+      "expectedRelevant": ["session:validation-agreement"],
+      "forbidden": ["session:older-superseded-command"]
+    }
+  ]
+}

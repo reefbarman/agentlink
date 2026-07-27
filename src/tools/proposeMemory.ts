@@ -39,6 +39,16 @@ const applyProposal = applyMemoryProposal;
 const deleteTarget = deleteMemoryProposalTarget;
 const isSameMemoryDestination = isSameMemoryProposalDestination;
 
+function assertAuthoritativeTier(
+  params: Pick<ProposeMemoryParams, "tier">,
+): void {
+  if (params.tier === "memory") {
+    throw new Error(
+      "Low-authority memory must use manage_memory, not an approval proposal",
+    );
+  }
+}
+
 function projectRoot(): string {
   return tryGetFirstWorkspaceRoot() ?? process.cwd();
 }
@@ -257,6 +267,7 @@ export async function handleProposeMemory(
   sessionId?: string,
 ): Promise<ToolResult> {
   try {
+    assertAuthoritativeTier(params);
     validateSkill(params);
     if (params.tier === "command") validateName(params);
 
@@ -310,6 +321,7 @@ export async function handleProposeMemory(
               approval,
               params.content,
             );
+            assertAuthoritativeTier(maybeRetargeted);
             if (maybeRetargeted.tier === "skill")
               validateSkill(maybeRetargeted);
             if (
@@ -338,6 +350,7 @@ export async function handleProposeMemory(
     }
 
     retargeted = retargetedFromDecision(params, decision, params.content);
+    assertAuthoritativeTier(retargeted);
     if (retargeted.tier === "skill") validateSkill(retargeted);
     if (retargeted.tier === "skill" || retargeted.tier === "command") {
       validateName(retargeted);

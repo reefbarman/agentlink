@@ -91,8 +91,50 @@ describe("ProjectCustomizationRegistry", () => {
     await registry.getSlashCommands(project, "ask");
 
     expect(loadSlashCommands).toHaveBeenCalledTimes(2);
-    expect(loadSlashCommands).toHaveBeenNthCalledWith(1, "/project-a", "code");
-    expect(loadSlashCommands).toHaveBeenNthCalledWith(2, "/project-a", "ask");
+    expect(loadSlashCommands).toHaveBeenNthCalledWith(
+      1,
+      "/project-a",
+      "code",
+      [],
+    );
+    expect(loadSlashCommands).toHaveBeenNthCalledWith(
+      2,
+      "/project-a",
+      "ask",
+      [],
+    );
+  });
+
+  it("refreshes generated commands when the disabled skill policy changes", async () => {
+    let disabledSkillIds: string[] = [];
+    const loadSlashCommands = vi.fn(
+      async (_rootPath: string, _mode: string, disabled: readonly string[]) => [
+        command("policy", disabled.join(",")),
+      ],
+    );
+    const registry = new ProjectCustomizationRegistry(
+      {
+        loadCustomModes: vi.fn(async () => []),
+        loadSlashCommands,
+      },
+      () => disabledSkillIds,
+    );
+    const project = scope("project-a", "/project-a");
+
+    await expect(registry.getSlashCommands(project, "code")).resolves.toEqual([
+      expect.objectContaining({ body: "" }),
+    ]);
+    disabledSkillIds = ["project:agentlink:.agentlink/skills/helper"];
+    await expect(registry.getSlashCommands(project, "code")).resolves.toEqual([
+      expect.objectContaining({
+        body: "project:agentlink:.agentlink/skills/helper",
+      }),
+    ]);
+
+    expect(loadSlashCommands).toHaveBeenCalledTimes(2);
+    expect(loadSlashCommands).toHaveBeenLastCalledWith("/project-a", "code", [
+      "project:agentlink:.agentlink/skills/helper",
+    ]);
   });
 
   it("invalidates only the selected project", async () => {

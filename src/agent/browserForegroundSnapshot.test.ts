@@ -34,6 +34,29 @@ function createState(overrides: Partial<AppState> = {}): AppState {
     lastOutputTokens: 34,
     lastCacheReadTokens: 56,
     estimatedTotalUsed: 78,
+    contextHealth: {
+      memory: {
+        status: "ready",
+        retrieval: "hybrid",
+        activeRecordCount: 7,
+      },
+      retrieval: {
+        status: "degraded",
+        lexical: "ready",
+        vector: "unavailable",
+        structural: "ready",
+        sourceCount: 12,
+        chunkCount: 48,
+        staleSourceCount: 2,
+        reason: "Vector retrieval is unavailable.",
+      },
+      index: {
+        status: "working",
+        state: "indexing",
+        current: 3,
+        total: 10,
+      },
+    },
     statusOverride: "Working",
     originalPrompt: "Original prompt",
     messages: [
@@ -119,6 +142,11 @@ describe("createBrowserForegroundSnapshot", () => {
       lastOutputTokens: 34,
       lastCacheReadTokens: 56,
       estimatedTotalUsed: 78,
+      contextHealth: {
+        memory: { status: "ready", activeRecordCount: 7 },
+        retrieval: { status: "degraded", sourceCount: 12 },
+        index: { status: "working", current: 3, total: 10 },
+      },
       thinkingEnabled: true,
       reasoningEffort: "high",
       restoringSession: true,
@@ -186,6 +214,14 @@ describe("createBrowserForegroundSnapshot", () => {
       state.loadedInstructions?.[0],
     );
     expect(snapshot.contextBudget).not.toBe(state.chatState.contextBudget);
+    expect(snapshot.contextHealth).not.toBe(state.contextHealth);
+    expect(snapshot.contextHealth?.memory).not.toBe(
+      state.contextHealth?.memory,
+    );
+    expect(snapshot.contextHealth?.retrieval).not.toBe(
+      state.contextHealth?.retrieval,
+    );
+    expect(snapshot.contextHealth?.index).not.toBe(state.contextHealth?.index);
     expect(snapshot.revertRecoveryNotice).not.toBe(state.revertRecoveryNotice);
   });
 
@@ -196,6 +232,7 @@ describe("createBrowserForegroundSnapshot", () => {
       debugInfo: null,
       loadedInstructions: null,
       revertRecoveryNotice: null,
+      contextHealth: null,
       messageQueue: [{ id: "queue-1", text: "queued" }],
       chatState: {
         ...createState().chatState,
@@ -210,6 +247,7 @@ describe("createBrowserForegroundSnapshot", () => {
       debugInfo: null,
       loadedInstructions: null,
       contextBudget: undefined,
+      contextHealth: null,
       condenseThreshold: undefined,
       revertRecoveryNotice: null,
       messageQueue: [

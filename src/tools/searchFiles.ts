@@ -25,10 +25,12 @@ import {
   jsonResult,
   type ToolResult,
 } from "../shared/types.js";
+import type { SemanticQueryOptions } from "../services/semanticSearch.js";
 
 export interface SearchFilesProviders {
   workspaceFileProvider: WorkspaceFileProvider;
   pathAccessProvider: PathAccessProvider;
+  semanticQueryOptions?: SemanticQueryOptions;
 }
 
 function withWarning(result: ToolResult, warning?: string): ToolResult {
@@ -281,7 +283,16 @@ export async function handleSearchFiles(
     // Semantic search is handled separately
     if (params.semantic) {
       const { semanticSearch } = await import("../services/semanticSearch.js");
-      return semanticSearch(searchDir, params.regex, params.max_results);
+      return semanticSearch(
+        resolvedPath,
+        params.regex,
+        params.max_results,
+        undefined,
+        {
+          exactFile: pathIsFile,
+          ...providers.semanticQueryOptions,
+        },
+      );
     }
 
     const warning =

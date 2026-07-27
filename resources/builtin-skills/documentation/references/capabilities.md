@@ -19,6 +19,7 @@ Switch with `/mode <slug>` or the mode selector. Default mode: `agentlink.defaul
 ## Models and providers
 
 - Model picker is built into the chat UI (`/model`). Per-mode defaults: `agentlink.modeModelPreferences`; per-mode thinking level: `agentlink.modeReasoningEffortPreferences`.
+- Prompt guidance is selected by model profile. Unknown and custom models use the full `compatibility` prompt; `agentlink.modelPromptProfiles` can apply an exact model-ID `reasoning` override for dogfood evaluation. Reasoning support or thinking controls alone do not select the compact profile.
 - Auth: command palette entries **AgentLink: Set Anthropic API Key**, **AgentLink: Set OpenAI API Key**, **AgentLink: Sign In to OpenAI/Codex** (ChatGPT/Codex OAuth, multi-account management available), plus secure set/clear commands for named OpenAI-compatible connection keys.
 - Anthropic model metadata (context window, output tokens, reasoning efforts) refreshes lazily from the API; toggle with `agentlink.anthropic.dynamicModelCapabilities`.
 - **AgentLink: Configure OpenAI-compatible Model** is the guided, add-only setup path. It selects or creates a named credential, performs bounded user-invoked OpenRouter/generic `/models` discovery with manual fallback and editable conservative defaults, then adds one model backed by one connection. Edit/remove and advanced multi-model settings remain in User Settings JSON.
@@ -28,8 +29,10 @@ Switch with `/mode <slug>` or the mode selector. Default mode: `agentlink.defaul
 
 ## Built-in slash commands
 
-`/new`, `/mode`, `/model`, `/condense`, `/checkpoint`, `/revert`, `/help`, `/fleet`, `/remember`, `/skills`, `/mcp`, `/mcp-config`, `/mcp-refresh`, `/btw`, `/worktree`, `/pair`, `/usage`. Custom commands and detected skills appear in the same picker (see `references/customization.md`).
+`/new`, `/mode`, `/model`, `/condense`, `/context-doctor`, `/checkpoint`, `/revert`, `/help`, `/fleet`, `/remember`, `/memory`, `/skills`, `/mcp`, `/mcp-config`, `/mcp-refresh`, `/btw`, `/worktree`, `/pair`, `/usage`. Custom commands and detected skills appear in the same picker (see `references/customization.md`).
 
+- `/context-doctor` — append a read-only workspace-session report covering prompt/tool/context-ledger allocations, retained and repeated tool results, condensation evidence, and explicit unavailable diagnostics. It makes no model request, and the report is excluded from future provider and condensation context. Available in VS Code chat and the browser remote, but not projectless Browser Ask Agent.
+- `/memory` — open the local autonomous-memory manager without a model request. Inspect/filter records, provenance, revisions, and audit history; forget/restore, undo, clear a confirmed scope, or import/export versioned archives. VS Code supports global and current-project scopes; projectless Browser Ask Agent supports global scope only.
 - `/btw <question>` — quick side question in a forked read-only session; answer can be promoted into the main transcript. VS Code-only.
 - `/worktree [task] [--branch <name>]` — set up isolated work without interrupting the current turn; missing details are gathered in a small text session, followed by inline **Create & start** / **Create & prefill** actions in the Activity Shelf. VS Code-only.
 - `/pair` — pairing code for a new browser remote device.
@@ -37,9 +40,20 @@ Switch with `/mode <slug>` or the mode selector. Default mode: `agentlink.defaul
 
 ## Context management
 
-- **Auto-condense** compresses the conversation when the context window fills (`agentlink.autoCondense`, per-model thresholds in `agentlink.modelCondenseThresholds`) and deterministically reattaches the current structured TODO list with its completed, in-progress, and pending states. Resume guidance tells the agent to reconcile stale status against the checkpoint/workspace rather than repeat already-completed work; `/condense` triggers it manually.
+- Native tools use stable progressive disclosure: essential definitions remain inline, while eligible tools are discovered through `find_native_tools` and invoked through `call_native_tool`. Discovery is bounded and searches only the immutable catalog already authorized for that provider request; it cannot broaden mode, profile, skill, background, web, or surface restrictions. Live activity and public transcripts show the canonical target, while provider-private replay retains the wrapper identity and tool-call ID.
+- Every provider request receives an immutable model-aware context ledger: model input/output envelope, output reservation, safety buffer, required layers, bounded retrieved/working-set allocations, omissions, remaining capacity, and overflow. Required layers are measured rather than silently reduced, so overflow can still be reported.
+- `get_context` unchanged-content omission is opt-in, current-session, and exact-range-only; `refresh` forces content back in. The Activity Shelf separately reports memory, lexical/vector/structural retrieval, and index health. `/context-doctor` reports measured request allocation/retention evidence, not retrieval-store health or memory conflicts.
+- Browser Ask Agent applies the same mechanism to a stricter helper-owned projectless catalog. It can defer only already-authorized global-memory and display-safe image tools; it cannot discover or invoke file writes, shell commands, VS Code editor/language state, semantic code search, repo maps, or background/fleet orchestration.
+- **Auto-condense** compresses the conversation when the context window fills (`agentlink.autoCondense`, per-model thresholds in `agentlink.modelCondenseThresholds`) and deterministically reattaches the current structured TODO list with its completed, in-progress, and pending states. Resume guidance tells the agent to reconcile stale status against the checkpoint/workspace rather than repeat already-completed work; `/condense` triggers it manually, while `/context-doctor` inspects the latest completed allocation without changing it.
 - **Checkpoints** (`/checkpoint`, `/revert`) snapshot the workspace into AgentLink's own shadow git repo under `.agentlink/checkpoints/` — separate from the project's real git history.
 - Sessions persist and restore across VS Code reloads.
+
+## Autonomous memory
+
+- `agentlink.memory.mode = autonomous` enables typed, audited low-authority memory during dogfood; `off` is the default. Memory is evidence only and cannot authorize tools or override current user, repository, instruction, skill, or command evidence.
+- `manage_memory` performs provenance-bearing, secret-scanned, quota-bound CRUD and undo without a per-write approval card. `recall_memory` provides bounded credential-free lexical retrieval. When autonomous memory is enabled, normal foreground sends, retries, interrupted-session resumes, and native background invocations also receive one bounded immutable low-authority recall snapshot that is reused across provider retries/tool loops without entering transcript history.
+- Legacy global and project `.agentlink/memory.md` files are imported idempotently into typed records and left byte-identical for rollback; they are no longer concatenated into the system prompt. `propose_memory` remains the reviewed path for authoritative instructions, skills, and commands; it no longer writes low-authority memory.
+- `/memory` provides direct inspection and lifecycle controls without a model request: bounded search/filtering, record detail, provenance/revisions/audit history, forget/restore, undo, confirmed scope clearing, and versioned JSON import/export. VS Code supports global and current-project scopes. Projectless Browser Ask Agent uses global scope and shares the helper-owned runtime selected unanimously by connected external owners.
 
 ## Approvals
 
@@ -80,7 +94,7 @@ Native `web_search` / `web_fetch` tools with configurable backends, domain allow
 
 ## Semantic codebase search
 
-Optional `codebase_search` tool backed by a Qdrant vector index with OpenAI embeddings: `agentlink.semanticSearchEnabled`, `agentlink.qdrantUrl`, `agentlink.autoIndex`, `agentlink.indexExclusions`, `agentlink.chunkGranularity`. Setup steps: README `## Semantic Codebase Search Setup`.
+Optional `codebase_search` tool backed by AgentLink's embedded local LanceDB retrieval store; current production retrieval does not require Qdrant. Lexical indexing and search work without credentials; optional OpenAI embedding auth adds vector and hybrid ranking. Legacy Qdrant index data is not migrated in place—rebuild the workspace index for LanceDB, and expect an older rollback build to need its own Qdrant configuration/rebuild. Settings: `agentlink.semanticSearchEnabled`, `agentlink.autoIndex`, `agentlink.indexExclusions`, `agentlink.chunkGranularity`. Setup steps: README `## Semantic Codebase Search Setup`.
 
 ## AgentLink Terminal
 

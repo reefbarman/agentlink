@@ -1,7 +1,9 @@
 import type {
+  CondenseMetadata,
   McpApprovalPromotionMeta,
   RequestContextBreakdown,
   ToolResult,
+  ToolResultContextAttribution,
 } from "../shared/types.js";
 import type { MessageParam, ReasoningEffort } from "./providers/types.js";
 
@@ -58,6 +60,8 @@ export type AgentMessage = MessageParam & {
   condenseParent?: string;
   preservedContext?: PreservedRuntimeContext;
   runtimeError?: AgentRuntimeError;
+  /** Persisted transcript-only diagnostic; never sent to providers or condensation. */
+  diagnosticOnly?: boolean;
   uiHint?: {
     userMessage?: {
       displayText?: string;
@@ -130,23 +134,7 @@ export type AgentEvent =
       durationMs?: number;
       /** Non-fatal validator/retry warnings for this condense run */
       validationWarnings?: string[];
-      metadata?: {
-        inputMessageCount: number;
-        sourceUserMessageCount: number;
-        hadPriorSummaryInInput: boolean;
-        sourceHash: string;
-        providerId: string;
-        condenseModel: string;
-        modelCandidates: string[];
-        selectedModel: string;
-        latestUserMessage: string;
-        currentTask: string;
-        pendingTasks: string[];
-        canonicalUserMessages: string[];
-        requestMessageCount: number;
-        effectiveHistoryMessageCount: number;
-        effectiveHistoryRoles: string[];
-      };
+      metadata?: CondenseMetadata;
     }
   | {
       type: "condense_error";
@@ -162,6 +150,19 @@ export type AgentEvent =
       model: string;
       startedAt: number;
       schedulerQueued: boolean;
+    }
+  | {
+      /** Privacy-safe composition snapshot for one physical provider invocation. */
+      type: "request_context_attribution";
+      requestId: string;
+      requestKind: "agent" | "condense";
+      model: string;
+      estimatedInputTokens: number;
+      toolResultContextAttributions: ToolResultContextAttribution[];
+      omittedToolResultContextAttributions: number;
+      pinnedMemoryTokens: number;
+      retrievedMemoryTokens: number;
+      contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
     }
   | {
       type: "api_request";
@@ -188,6 +189,12 @@ export type AgentEvent =
       accumulatedEstimatedTokens?: number;
       /** Per-source split of that estimate (e.g. "tool:read_file") for jump attribution. */
       accumulatedEstimatedTokensBySource?: Record<string, number>;
+      /** Bounded per-result byte/token detail retained behind tool source totals. */
+      toolResultContextAttributions?: ToolResultContextAttribution[];
+      omittedToolResultContextAttributions?: number;
+      /** Stage 0 ledger placeholders; populated by the typed memory path in later stages. */
+      pinnedMemoryTokens?: number;
+      retrievedMemoryTokens?: number;
     }
   | {
       type: "warning";
@@ -275,4 +282,11 @@ export interface AgentConfig {
   codexStatefulResponses?: boolean;
   codexStoreResponses?: boolean;
   codexProMode?: boolean;
+  /** Exact model-ID prompt profile overrides from reviewed configuration. */
+  promptProfileOverrides?: Record<
+    string,
+    import("../core/promptProfile.js").PromptProfile
+  >;
+  /** Exact canonical skill IDs disabled by reviewed workspace configuration. */
+  disabledSkillIds?: string[];
 }

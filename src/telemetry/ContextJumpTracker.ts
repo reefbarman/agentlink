@@ -1,4 +1,5 @@
 import type { ContextUsageRecord } from "./ContextUsageTelemetry.js";
+import type { ToolResultContextAttribution } from "../shared/types.js";
 
 /**
  * Watches per-session context-window usage across API responses and condenses,
@@ -23,10 +24,26 @@ export interface ContextJumpApiRequestInfo {
   accumulatedEstimatedTokens?: number;
   /** Per-source split of that estimate, e.g. { "tool:read_file": 12000 }. */
   accumulatedBySource?: Record<string, number>;
+  toolResultAttributions?: ToolResultContextAttribution[];
+  omittedToolResultAttributions?: number;
+  pinnedMemoryTokens?: number;
+  retrievedMemoryTokens?: number;
   /** Estimated tokens of the system prompt sent with this request. */
   systemPromptTokens?: number;
   /** Estimated tokens of the tool definitions sent with this request. */
   toolDefinitionTokens?: number;
+}
+
+export interface RequestContextAttributionInfo {
+  requestId: string;
+  requestKind: "agent" | "condense";
+  model: string;
+  estimatedInputTokens: number;
+  toolResultAttributions?: ToolResultContextAttribution[];
+  omittedToolResultAttributions?: number;
+  pinnedMemoryTokens?: number;
+  retrievedMemoryTokens?: number;
+  contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
 }
 
 export interface ContextJumpCondenseInfo {
@@ -85,6 +102,25 @@ export class ContextJumpTracker {
     ) => number = jumpThresholdTokens,
   ) {}
 
+  onRequestContextAttribution(
+    sessionId: string,
+    info: RequestContextAttributionInfo,
+  ): void {
+    this.emit({
+      kind: "request_context_attribution",
+      sessionId,
+      requestId: info.requestId,
+      requestKind: info.requestKind,
+      model: info.model,
+      estimatedInputTokens: info.estimatedInputTokens,
+      toolResultAttributions: info.toolResultAttributions ?? [],
+      omittedToolResultAttributions: info.omittedToolResultAttributions ?? 0,
+      pinnedMemoryTokens: info.pinnedMemoryTokens ?? 0,
+      retrievedMemoryTokens: info.retrievedMemoryTokens ?? 0,
+      ...(info.contextLedger ? { contextLedger: info.contextLedger } : {}),
+    });
+  }
+
   onCondense(sessionId: string, info: ContextJumpCondenseInfo): void {
     const state = this.ensure(sessionId);
     this.emit({
@@ -118,6 +154,10 @@ export class ContextJumpTracker {
         toolDefinitionTokens: info.toolDefinitionTokens,
         accumulatedEstimatedTokens: info.accumulatedEstimatedTokens,
         accumulatedBySource: topAccumulationSources(info.accumulatedBySource),
+        toolResultAttributions: info.toolResultAttributions,
+        omittedToolResultAttributions: info.omittedToolResultAttributions,
+        pinnedMemoryTokens: info.pinnedMemoryTokens,
+        retrievedMemoryTokens: info.retrievedMemoryTokens,
       });
     } else if (prev !== null) {
       const delta = info.inputTokens - prev;
@@ -153,6 +193,10 @@ export class ContextJumpTracker {
           cacheCreationTokens: info.cacheCreationTokens,
           accumulatedEstimatedTokens: info.accumulatedEstimatedTokens,
           accumulatedBySource: topAccumulationSources(info.accumulatedBySource),
+          toolResultAttributions: info.toolResultAttributions,
+          omittedToolResultAttributions: info.omittedToolResultAttributions,
+          pinnedMemoryTokens: info.pinnedMemoryTokens,
+          retrievedMemoryTokens: info.retrievedMemoryTokens,
           systemPromptDeltaTokens,
           toolDefinitionDeltaTokens,
           prevAssistantOutputTokens,

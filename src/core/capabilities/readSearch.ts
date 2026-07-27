@@ -3,8 +3,6 @@ import type {
   StructuralGraphCache,
 } from "../../indexer/structuralGraph.js";
 
-import type { ToolResult } from "../../shared/types.js";
-
 export interface ResolvedWorkspacePath {
   absolutePath: string;
   inWorkspace: boolean;
@@ -53,8 +51,14 @@ export interface CodebaseSearchParams {
   exclude_globs?: string[];
 }
 
+export interface SemanticSearchResult {
+  payload: Record<string, unknown>;
+  isError?: boolean;
+  error?: { kind: string; message: string };
+}
+
 export interface SemanticSearchProvider {
-  search(params: CodebaseSearchParams): Promise<ToolResult>;
+  search(params: CodebaseSearchParams): Promise<SemanticSearchResult>;
 }
 
 export interface ListFilesParams {
@@ -101,8 +105,8 @@ export interface AdvertisedArtifactProvider {
 export interface StructuralGraphSnapshot {
   graph: StructuralGraphCache;
   workspaceRoot: string;
-  collectionName: string;
-  structuralCachePath: string;
+  indexName: string;
+  structuralStorePath: string;
   graphExists: boolean;
 }
 
@@ -110,7 +114,7 @@ export interface StructuralGraphProvider {
   resolveWorkspaceRoot(inputPath?: string): string | undefined;
   resolvePath(inputPath: string): ResolvedWorkspacePath;
   getWorkspaceRootForPath(absolutePath: string): string | undefined;
-  loadGraph(workspaceRoot: string): StructuralGraphSnapshot;
+  loadGraph(workspaceRoot: string): Promise<StructuralGraphSnapshot>;
   getTargetFreshness(
     absolutePath: string,
     target: StructuralFileEntry | undefined,

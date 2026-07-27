@@ -16,6 +16,10 @@ import type {
   McpManagerView,
 } from "../../shared/mcpManagerTypes.js";
 import type {
+  MemoryPanelSnapshot,
+  MemoryToolScope,
+} from "../../core/capabilities/memory.js";
+import type {
   TerminalApprovalPolicy,
   TerminalApprovalReviewer,
   TerminalExecutionPreset,
@@ -23,9 +27,11 @@ import type {
 
 import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy.js";
 import type { ComposeTrace } from "../../shared/composeTypes.js";
+import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
 import type { LoadedInstructionDebugInfo } from "../../shared/chatProjection.js";
 import type { McpFormElicitationRequest } from "../../shared/mcpElicitation.js";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation.js";
+import type { MemoryRecordDetail } from "../../core/memory/contracts.js";
 
 export interface ProjectInfo {
   projectId: string;
@@ -79,6 +85,10 @@ export interface SlashCommandInfo {
   body?: string;
   /** Absolute SKILL.md path for generated skill commands. */
   skillPath?: string;
+  /** Exact canonical identity for generated skill commands. */
+  skillId?: string;
+  /** SHA-256 content revision advertised with the generated skill command. */
+  skillRevision?: string;
   /** Codicon name to show next to the command */
   icon?: string;
   /** Value shown right-aligned (e.g. current model name) */
@@ -406,6 +416,16 @@ export type ExtensionMessage =
       configSnapshot?: McpConfigSnapshot;
     }
   | { type: "agentMcpConfigMutationResult"; result: McpConfigMutationResult }
+  | {
+      type: "agentMemoryPanelUpdate";
+      requestId?: string;
+      open?: boolean;
+      scope: MemoryToolScope;
+      availableScopes: MemoryToolScope[];
+      snapshot?: MemoryPanelSnapshot;
+      selected?: MemoryRecordDetail | null;
+      error?: string;
+    }
   | {
       type: "showApproval";
       request: import("../../approvals/webview/types").ApprovalRequest;
@@ -820,6 +840,7 @@ export interface ChatState {
     softThresholdBudget: number;
     hardBudget: number;
   };
+  contextHealth?: ContextHealthSnapshot | null;
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
   commandApprovalPolicy?: CommandApprovalPolicy;
   approvalPolicy?: TerminalApprovalPolicy;

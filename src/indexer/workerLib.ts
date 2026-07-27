@@ -11,7 +11,9 @@ import * as fsp from "fs/promises";
 import * as path from "path";
 import { createHash } from "crypto";
 import { Semaphore } from "../util/Semaphore.js";
+import { parseRetrievalFingerprint } from "../core/retrieval/fingerprint.js";
 import { writeAtomicJsonFile } from "./atomicJsonFile.js";
+import { resolveContainedCodeIndexPath } from "./codeIndexPaths.js";
 import type { IndexWorkerMetrics } from "./workerMetrics.js";
 import type { IndexCache } from "./types.js";
 import {
@@ -100,7 +102,7 @@ export function isBinaryContent(content: string): boolean {
 // --- Path segments ---
 
 /**
- * Build a Qdrant-compatible pathSegments map from a relative file path.
+ * Build an ordered path-segment map from a relative file path.
  * e.g. "src/services/Foo.ts" → { "0": "src", "1": "services", "2": "Foo.ts" }
  */
 export function buildPathSegments(relPath: string): Record<string, string> {
@@ -145,8 +147,21 @@ export function loadCache(cachePath: string): IndexCache {
   return loaded.status === "corrupt" ? { version: 1, files: {} } : loaded.cache;
 }
 
-export function writeCache(cachePath: string, cache: IndexCache): void {
-  writeAtomicJsonFile(cachePath, cache);
+export function writeCache(cachePath: string, cache: IndexCache): number {
+  const persisted = {
+    ...cache,
+    files: Object.fromEntries(
+      Object.entries(cache.files).map(([file, entry]) => [
+        file,
+        {
+          ...entry,
+          pointIds: [...entry.recordIds],
+        },
+      ]),
+    ),
+  };
+  writeAtomicJsonFile(cachePath, persisted);
+  return Buffer.byteLength(JSON.stringify(persisted), "utf8");
 }
 
 function validateIndexCache(value: unknown): IndexCache {
@@ -162,18 +177,19 @@ function validateIndexCache(value: unknown): IndexCache {
   }
 
   const files: IndexCache["files"] = {};
-  const ownedPointIds = new Set<string>();
+  const ownedRecordIds = new Set<string>();
   for (const [file, entry] of Object.entries(value.files)) {
+    const recordIds = isRecord(entry)
+      ? resolveStringArrayAlias(entry, "recordIds", "pointIds")
+      : null;
     if (
       file.length === 0 ||
       !isRecord(entry) ||
       typeof entry.hash !== "string" ||
       entry.hash.length === 0 ||
-      !Array.isArray(entry.pointIds) ||
-      entry.pointIds.some(
-        (pointId) => typeof pointId !== "string" || pointId.length === 0,
-      ) ||
-      new Set(entry.pointIds).size !== entry.pointIds.length ||
+      !recordIds ||
+      recordIds.some((recordId) => recordId.length === 0) ||
+      new Set(recordIds).size !== recordIds.length ||
       typeof entry.indexedAt !== "string" ||
       (entry.mtimeMs !== undefined && typeof entry.mtimeMs !== "number") ||
       (entry.size !== undefined && typeof entry.size !== "number") ||
@@ -185,13 +201,15 @@ function validateIndexCache(value: unknown): IndexCache {
     ) {
       throw new Error(`Malformed vector cache entry for ${file || "<empty>"}`);
     }
-    if (entry.pointIds.some((pointId) => ownedPointIds.has(pointId))) {
-      throw new Error(`Vector cache point IDs have multiple owners at ${file}`);
+    if (recordIds.some((recordId) => ownedRecordIds.has(recordId))) {
+      throw new Error(
+        `Vector cache record IDs have multiple owners at ${file}`,
+      );
     }
-    for (const pointId of entry.pointIds) ownedPointIds.add(pointId);
+    for (const recordId of recordIds) ownedRecordIds.add(recordId);
     files[file] = {
       hash: entry.hash,
-      pointIds: [...entry.pointIds],
+      recordIds,
       indexedAt: entry.indexedAt,
       ...(entry.mtimeMs !== undefined ? { mtimeMs: entry.mtimeMs } : {}),
       ...(entry.size !== undefined ? { size: entry.size } : {}),
@@ -210,6 +228,9 @@ function validateIndexCache(value: unknown): IndexCache {
     ...(value.granularity !== undefined
       ? { granularity: value.granularity }
       : {}),
+    ...(value.fingerprint !== undefined
+      ? { fingerprint: parseRetrievalFingerprint(value.fingerprint) }
+      : {}),
   };
 }
 
@@ -219,14 +240,28 @@ export function loadStructuralCache(
 ): StructuralGraphCache {
   try {
     const raw = fs.readFileSync(cachePath, "utf-8");
-    const parsed = JSON.parse(raw) as StructuralGraphCache;
-    if (parsed.version === STRUCTURAL_GRAPH_CACHE_VERSION && parsed.files) {
-      return parsed;
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      !isRecord(parsed) ||
+      parsed.version !== STRUCTURAL_GRAPH_CACHE_VERSION ||
+      typeof parsed.workspaceRoot !== "string" ||
+      typeof parsed.generatedAt !== "string" ||
+      !isRecord(parsed.files)
+    ) {
+      return emptyStructuralCache(workspaceRoot);
     }
+    const indexName = resolveStringAlias(parsed, "indexName", "collectionName");
+    if (indexName === undefined) return emptyStructuralCache(workspaceRoot);
+    return {
+      version: STRUCTURAL_GRAPH_CACHE_VERSION,
+      workspaceRoot: parsed.workspaceRoot,
+      ...(indexName ? { indexName } : {}),
+      generatedAt: parsed.generatedAt,
+      files: parsed.files as StructuralGraphCache["files"],
+    };
   } catch {
-    // Missing or corrupt — start fresh
+    return emptyStructuralCache(workspaceRoot);
   }
-  return emptyStructuralCache(workspaceRoot);
 }
 
 export function writeStructuralCache(
@@ -238,15 +273,64 @@ export function writeStructuralCache(
 
 export function emptyStructuralCache(
   workspaceRoot: string,
-  collectionName?: string,
+  indexName?: string,
 ): StructuralGraphCache {
   return {
     version: STRUCTURAL_GRAPH_CACHE_VERSION,
     workspaceRoot,
-    ...(collectionName ? { collectionName } : {}),
+    ...(indexName ? { indexName } : {}),
     generatedAt: new Date(0).toISOString(),
     files: {},
   };
+}
+
+function resolveStringAlias(
+  value: Record<string, unknown>,
+  canonicalKey: string,
+  legacyKey: string,
+): string | null | undefined {
+  const canonical = value[canonicalKey];
+  const legacy = value[legacyKey];
+  if (
+    canonical !== undefined &&
+    (typeof canonical !== "string" || canonical.length === 0)
+  ) {
+    return undefined;
+  }
+  if (
+    legacy !== undefined &&
+    (typeof legacy !== "string" || legacy.length === 0)
+  ) {
+    return undefined;
+  }
+  if (canonical !== undefined && legacy !== undefined && canonical !== legacy) {
+    return undefined;
+  }
+  return canonical ?? legacy ?? null;
+}
+
+function resolveStringArrayAlias(
+  value: Record<string, unknown>,
+  canonicalKey: string,
+  legacyKey: string,
+): string[] | null {
+  const canonical = value[canonicalKey];
+  const legacy = value[legacyKey];
+  const isStringArray = (candidate: unknown): candidate is string[] =>
+    Array.isArray(candidate) &&
+    candidate.every((entry) => typeof entry === "string");
+  if (canonical !== undefined && !isStringArray(canonical)) return null;
+  if (legacy !== undefined && !isStringArray(legacy)) return null;
+  if (canonical === undefined && legacy === undefined) return null;
+  if (
+    canonical !== undefined &&
+    legacy !== undefined &&
+    (canonical.length !== legacy.length ||
+      canonical.some((entry, index) => entry !== legacy[index]))
+  ) {
+    return null;
+  }
+  return [...(canonical ?? legacy ?? [])];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -308,7 +392,7 @@ export interface ScanResult {
   toIndexPaths: Array<{ absPath: string; relPath: string }>;
   /** Relative paths absent from a full workspace scan. Always empty incrementally. */
   removedRelPaths: string[];
-  /** Relative paths removed or changed and therefore stale in Qdrant. */
+  /** Relative paths removed or changed and therefore stale in the retrieval store. */
   staleRelPaths: string[];
   /** Whether hash-equal files refreshed cache stat metadata. */
   cacheMetadataChanged: boolean;
@@ -419,33 +503,49 @@ export async function scanFiles(
   const mode = options.mode ?? "full";
   const currentFiles = new Set<string>();
   const candidates: Array<{ absPath: string; relPath: string }> = [];
+  const candidateRelPaths = new Set<string>();
 
-  for (const absPath of files) {
-    if (!absPath.startsWith(workspaceRoot)) continue;
-    const relPath = path.relative(workspaceRoot, absPath);
-    if (relPath.startsWith("..")) continue;
-    currentFiles.add(relPath);
+  for (const candidatePath of files) {
+    const identity = resolveContainedCodeIndexPath(
+      workspaceRoot,
+      candidatePath,
+    );
+    if (!identity) continue;
+    currentFiles.add(identity.relativePath);
 
-    const ext = path.extname(absPath).toLowerCase();
+    const ext = path.extname(identity.absolutePath).toLowerCase();
     if (ext && !INDEXABLE_EXTENSIONS.has(ext)) continue;
-    candidates.push({ absPath, relPath });
+    if (candidateRelPaths.has(identity.relativePath)) continue;
+    candidateRelPaths.add(identity.relativePath);
+    candidates.push({
+      absPath: identity.absolutePath,
+      relPath: identity.relativePath,
+    });
   }
 
-  const semaphore = new Semaphore(IO_CONCURRENCY);
   let scanned = 0;
-  const outcomes = await Promise.all(
-    candidates.map(async ({ absPath, relPath }): Promise<ScanOutcome> => {
-      const release = await semaphore.acquire();
+  let cursor = 0;
+  const outcomes: ScanOutcome[] = Array.from({ length: candidates.length });
+  const scanNext = async (): Promise<void> => {
+    while (!options.isCancelled?.()) {
+      const candidateIndex = cursor++;
+      const candidate = candidates[candidateIndex];
+      if (!candidate) return;
+      const { absPath, relPath } = candidate;
       let readActive = false;
       try {
-        if (options.isCancelled?.()) return {};
         options.metrics?.readStarted();
         readActive = true;
 
         const stat = await fsp.stat(absPath);
-        if (options.isCancelled?.()) return {};
-        if (!stat.isFile()) return {};
-        if (stat.size > MAX_FILE_SIZE || stat.size === 0) return {};
+        if (options.isCancelled?.()) {
+          outcomes[candidateIndex] = {};
+          continue;
+        }
+        if (!stat.isFile() || stat.size > MAX_FILE_SIZE || stat.size === 0) {
+          outcomes[candidateIndex] = {};
+          continue;
+        }
 
         const cached = cache.files[relPath];
         if (
@@ -455,14 +555,21 @@ export async function scanFiles(
           cached.mtimeMs === stat.mtimeMs &&
           cached.size === stat.size
         ) {
-          return {};
+          outcomes[candidateIndex] = {};
+          continue;
         }
 
         const read = await readStableFile(absPath, stat, options.isCancelled);
-        if (!read) return {};
+        if (!read) {
+          outcomes[candidateIndex] = {};
+          continue;
+        }
         options.metrics?.contentRetained(read.contentBytes);
         try {
-          if (isBinaryContent(read.content)) return {};
+          if (isBinaryContent(read.content)) {
+            outcomes[candidateIndex] = {};
+            continue;
+          }
 
           const hash = hashContent(read.content);
           if (cached?.hash === hash) {
@@ -471,39 +578,47 @@ export async function scanFiles(
               cached.size !== read.stat.size;
             cached.mtimeMs = read.stat.mtimeMs;
             cached.size = read.stat.size;
-            return { cacheMetadataChanged };
+            outcomes[candidateIndex] = { cacheMetadataChanged };
+            continue;
           }
 
-          return { toIndexPath: { absPath, relPath } };
+          outcomes[candidateIndex] = {
+            toIndexPath: { absPath, relPath },
+          };
         } finally {
           options.metrics?.contentReleased(read.contentBytes);
         }
       } catch (err) {
-        if (options.isCancelled?.()) return {};
-        return { error: `Failed to scan ${relPath}: ${err}` };
+        outcomes[candidateIndex] = options.isCancelled?.()
+          ? {}
+          : { error: `Failed to scan ${relPath}: ${err}` };
       } finally {
         if (readActive) options.metrics?.readFinished();
-        try {
-          scanned++;
-          if (scanned % 100 === 0) {
-            options.onProgress?.(scanned, candidates.length);
-          }
-        } finally {
-          release();
+        scanned++;
+        if (scanned % 100 === 0) {
+          options.onProgress?.(scanned, candidates.length);
         }
       }
-    }),
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(IO_CONCURRENCY, candidates.length) }, () =>
+      scanNext(),
+    ),
   );
 
   options.onProgress?.(candidates.length, candidates.length);
 
-  const toIndexPaths = outcomes.flatMap((outcome) =>
+  const completedOutcomes = outcomes.filter(
+    (outcome): outcome is ScanOutcome => outcome !== undefined,
+  );
+  const toIndexPaths = completedOutcomes.flatMap((outcome) =>
     outcome.toIndexPath ? [outcome.toIndexPath] : [],
   );
-  const errors = outcomes.flatMap((outcome) =>
+  const errors = completedOutcomes.flatMap((outcome) =>
     outcome.error ? [outcome.error] : [],
   );
-  const cacheMetadataChanged = outcomes.some(
+  const cacheMetadataChanged = completedOutcomes.some(
     (outcome) => outcome.cacheMetadataChanged,
   );
   const removedRelPaths: string[] = [];
@@ -539,6 +654,7 @@ export interface FileWithContent {
 }
 
 export interface ReadFilesBatchOptions {
+  workspaceRoot: string;
   cache?: IndexCache;
   metrics?: IndexWorkerMetrics;
   isCancelled?: () => boolean;
@@ -557,7 +673,7 @@ interface ReadOutcome {
 export async function readFilesBatch(
   paths: Array<{ absPath: string; relPath: string }>,
   errors: string[],
-  options: ReadFilesBatchOptions = {},
+  options: ReadFilesBatchOptions,
 ): Promise<FileWithContent[]> {
   const semaphore = new Semaphore(IO_CONCURRENCY);
   const outcomes = await Promise.all(
@@ -569,13 +685,38 @@ export async function readFilesBatch(
         options.metrics?.readStarted();
         readActive = true;
 
-        const stat = await fsp.stat(absPath);
+        const identity = resolveContainedCodeIndexPath(
+          options.workspaceRoot,
+          absPath,
+        );
+        if (!identity || identity.relativePath !== relPath) {
+          throw new Error(
+            "Path does not match its canonical workspace identity",
+          );
+        }
+
+        const stat = await fsp.stat(identity.absolutePath);
         if (options.isCancelled?.()) return {};
         if (!stat.isFile()) return {};
         if (stat.size > MAX_FILE_SIZE || stat.size === 0) return {};
 
-        const read = await readStableFile(absPath, stat, options.isCancelled);
+        const read = await readStableFile(
+          identity.absolutePath,
+          stat,
+          options.isCancelled,
+        );
         if (!read || isBinaryContent(read.content)) return {};
+        const finalIdentity = resolveContainedCodeIndexPath(
+          options.workspaceRoot,
+          identity.absolutePath,
+        );
+        if (
+          !finalIdentity ||
+          finalIdentity.absolutePath !== identity.absolutePath ||
+          finalIdentity.relativePath !== identity.relativePath
+        ) {
+          throw new Error("Path changed its canonical workspace identity");
+        }
 
         const hash = hashContent(read.content);
         const cached = options.cache?.files[relPath];
@@ -592,8 +733,8 @@ export async function readFilesBatch(
         options.metrics?.contentRetained(read.contentBytes);
         return {
           file: {
-            absPath,
-            relPath,
+            absPath: identity.absolutePath,
+            relPath: identity.relativePath,
             content: read.content,
             contentBytes: read.contentBytes,
             hash,

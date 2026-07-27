@@ -54,7 +54,7 @@ describe("projectVisibleStructuralGraph", () => {
     const vectorCache = cache();
     vectorCache.files["src/changed.ts"] = {
       hash: pending.hash,
-      pointIds: ["point-2"],
+      recordIds: ["point-2"],
       indexedAt: pending.indexedAt,
       generation: pending.generation,
       visibility: "pending",
@@ -85,7 +85,7 @@ describe("projectVisibleStructuralGraph", () => {
     const vectorCache = cache();
     vectorCache.files["src/changed.ts"] = {
       hash: current.hash,
-      pointIds: ["point-1"],
+      recordIds: ["point-1"],
       indexedAt: current.indexedAt,
       generation: "generation-1",
       visibility: "current",

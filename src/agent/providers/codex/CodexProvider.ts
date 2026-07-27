@@ -286,6 +286,7 @@ export class CodexProvider implements ModelProvider {
       cache,
       state,
       signal,
+      onProviderRequestAttempt,
       onTransportActivity,
     } = request;
 
@@ -346,6 +347,7 @@ export class CodexProvider implements ModelProvider {
           );
         }
 
+        onProviderRequestAttempt?.({ model: effectiveModel });
         const result = await this.executeStream(
           requestBody,
           auth,
@@ -457,6 +459,7 @@ export class CodexProvider implements ModelProvider {
       cache,
       state,
       signal,
+      onProviderRequestAttempt,
     } = request;
 
     const codexInput = translateCodexMessages(messages, {
@@ -503,6 +506,7 @@ export class CodexProvider implements ModelProvider {
       let text = "";
 
       try {
+        onProviderRequestAttempt?.({ model: effectiveModel });
         const result = await collectCoreModelCompleteResult(
           await this.executeStream(requestBody, auth, effectiveModel, signal),
         );

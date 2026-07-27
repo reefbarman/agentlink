@@ -1,8 +1,9 @@
 import * as os from "os";
 import * as path from "path";
 
-import { randomUUID } from "crypto";
+import type { ToolResultContextAttribution } from "../shared/types.js";
 import { appendJsonlLinesWithLock } from "./jsonlAppend.js";
+import { randomUUID } from "crypto";
 
 /**
  * Per-event records describing how context-window usage moves over a session.
@@ -12,6 +13,20 @@ import { appendJsonlLinesWithLock } from "./jsonlAppend.js";
  * individual attribution, not an aggregate.
  */
 export type ContextUsageRecord =
+  | {
+      /** Privacy-safe composition attribution emitted for every provider request. */
+      kind: "request_context_attribution";
+      sessionId: string;
+      requestId: string;
+      requestKind: "agent" | "condense";
+      model: string;
+      estimatedInputTokens: number;
+      toolResultAttributions: ToolResultContextAttribution[];
+      omittedToolResultAttributions: number;
+      pinnedMemoryTokens: number;
+      retrievedMemoryTokens: number;
+      contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
+    }
   | {
       /** A condense completed: usage dropped from prev to the post-condense estimate. */
       kind: "condense";
@@ -39,6 +54,10 @@ export type ContextUsageRecord =
       toolDefinitionTokens?: number;
       accumulatedEstimatedTokens?: number;
       accumulatedBySource?: Record<string, number>;
+      toolResultAttributions?: ToolResultContextAttribution[];
+      omittedToolResultAttributions?: number;
+      pinnedMemoryTokens?: number;
+      retrievedMemoryTokens?: number;
     }
   | {
       /** Usage grew by more than the jump threshold between consecutive API responses. */
@@ -55,6 +74,10 @@ export type ContextUsageRecord =
       accumulatedEstimatedTokens?: number;
       /** Estimated tokens per source label, e.g. "tool:read_file". */
       accumulatedBySource?: Record<string, number>;
+      toolResultAttributions?: ToolResultContextAttribution[];
+      omittedToolResultAttributions?: number;
+      pinnedMemoryTokens?: number;
+      retrievedMemoryTokens?: number;
       systemPromptDeltaTokens?: number;
       toolDefinitionDeltaTokens?: number;
       /** Exact output tokens of the previous response (text + thinking +

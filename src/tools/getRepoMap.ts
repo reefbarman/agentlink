@@ -5,6 +5,8 @@ import type {
   StructuralFileEntry,
   StructuralGraphCache,
 } from "../indexer/structuralGraph.js";
+import { resolveContainedCodeIndexPath } from "../indexer/codeIndexPaths.js";
+import { canonicalizePath } from "../util/canonicalPath.js";
 import {
   errorResult,
   handleToolError,
@@ -105,20 +107,29 @@ export async function handleGetRepoMap(
           { path: params.path },
         );
       }
-      scopeRelPath = normalizeRelPath(
-        path.relative(workspaceRoot, absolutePath),
+      const identity = resolveContainedCodeIndexPath(
+        workspaceRoot,
+        absolutePath,
       );
-      if (scopeRelPath === ".") scopeRelPath = undefined;
+      if (identity) {
+        scopeRelPath = identity.portableRelativePath;
+      } else if (
+        canonicalizePath(workspaceRoot) !== canonicalizePath(absolutePath)
+      ) {
+        return errorResult("No workspace folder owns this path.", {
+          path: params.path,
+        });
+      }
     }
 
-    const { graph, collectionName, structuralCachePath, graphExists } =
-      structuralGraphProvider.loadGraph(workspaceRoot);
+    const { graph, indexName, structuralStorePath, graphExists } =
+      await structuralGraphProvider.loadGraph(workspaceRoot);
 
     const payload = buildRepoMapPayload({
       graph,
       workspaceRoot,
-      collectionName,
-      structuralCachePath,
+      indexName,
+      structuralStorePath,
       graphExists,
       scopeRelPath,
       maxChars,
@@ -135,8 +146,8 @@ export async function handleGetRepoMap(
 export function buildRepoMapPayload(args: {
   graph: StructuralGraphCache;
   workspaceRoot?: string;
-  collectionName?: string;
-  structuralCachePath?: string;
+  indexName?: string;
+  structuralStorePath?: string;
   graphExists?: boolean;
   scopeRelPath?: string;
   maxChars?: number;
@@ -179,8 +190,8 @@ export function buildRepoMapPayload(args: {
     makePayload({
       graph: args.graph,
       workspaceRoot: args.workspaceRoot,
-      collectionName: args.collectionName,
-      structuralCachePath: args.structuralCachePath,
+      indexName: args.indexName,
+      structuralStorePath: args.structuralStorePath,
       graphExists,
       scopeRelPath,
       maxChars,
@@ -200,8 +211,8 @@ export function buildRepoMapPayload(args: {
     const nextPayload = makePayload({
       graph: args.graph,
       workspaceRoot: args.workspaceRoot,
-      collectionName: args.collectionName,
-      structuralCachePath: args.structuralCachePath,
+      indexName: args.indexName,
+      structuralStorePath: args.structuralStorePath,
       graphExists,
       scopeRelPath,
       maxChars,
@@ -227,8 +238,8 @@ export function buildRepoMapPayload(args: {
     const nextPayload = makePayload({
       graph: args.graph,
       workspaceRoot: args.workspaceRoot,
-      collectionName: args.collectionName,
-      structuralCachePath: args.structuralCachePath,
+      indexName: args.indexName,
+      structuralStorePath: args.structuralStorePath,
       graphExists,
       scopeRelPath,
       maxChars,
@@ -255,8 +266,8 @@ export function buildRepoMapPayload(args: {
     const nextPayload = makePayload({
       graph: args.graph,
       workspaceRoot: args.workspaceRoot,
-      collectionName: args.collectionName,
-      structuralCachePath: args.structuralCachePath,
+      indexName: args.indexName,
+      structuralStorePath: args.structuralStorePath,
       graphExists,
       scopeRelPath,
       maxChars,
@@ -283,8 +294,8 @@ export function buildRepoMapPayload(args: {
 function makePayload(args: {
   graph: StructuralGraphCache;
   workspaceRoot?: string;
-  collectionName?: string;
-  structuralCachePath?: string;
+  indexName?: string;
+  structuralStorePath?: string;
   graphExists: boolean;
   scopeRelPath?: string;
   maxChars: number;
@@ -311,9 +322,9 @@ function makePayload(args: {
   return {
     workspace_root: args.workspaceRoot ?? args.graph.workspaceRoot,
     cache: {
-      collection_name: args.collectionName ?? args.graph.collectionName,
-      ...(args.structuralCachePath
-        ? { structural_cache_path: args.structuralCachePath }
+      index_name: args.indexName ?? args.graph.indexName,
+      ...(args.structuralStorePath
+        ? { structural_store_path: args.structuralStorePath }
         : {}),
     },
     freshness: {
@@ -526,12 +537,12 @@ function buildNote(
   scopeRelPath: string | undefined,
 ): string | undefined {
   if (!graphExists) {
-    return "Structural sidecar cache is missing. Build or refresh the codebase index before relying on the repo map.";
+    return "Structural index is unavailable. Build or refresh the codebase index before relying on the repo map.";
   }
   if (matchedFiles === 0) {
     return scopeRelPath
       ? "No indexed files matched the requested scope. The path may be unindexed, ignored, unsupported, or awaiting the next index refresh."
-      : "Structural sidecar cache is available but contains no indexed files.";
+      : "Structural index is available but contains no indexed files.";
   }
   return undefined;
 }

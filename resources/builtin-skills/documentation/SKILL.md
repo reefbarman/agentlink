@@ -23,10 +23,10 @@ The README is large. Do not read it whole — jump to the relevant section with 
 
 Start with the matching reference file in this skill's `references/` directory, then drill into the README/package.json for specifics:
 
-- **"What can AgentLink do?" / modes / models / slash commands / background agents / checkpoints / browser remote / terminal** → `references/capabilities.md`
+- **"What can AgentLink do?" / modes / models / slash commands / background agents / checkpoints / browser remote / terminal / autonomous memory / context management / semantic retrieval** → `references/capabilities.md`
 - **Settings ("how do I change/enable X?")** → `references/settings.md`, then confirm the setting in `package.json`
 - **MCP servers (connect, configure, debug)** → `references/mcp.md`
-- **Custom modes, custom slash commands, skills, rules, AGENTS.md/CLAUDE.md instruction files, memory** → `references/customization.md`
+- **Custom modes, custom slash commands, skills, rules, AGENTS.md/CLAUDE.md instruction files, `/memory`, `/remember`, and reviewed durable configuration** → `references/customization.md`
 - **A specific built-in tool's parameters or behavior, or diagnosing why an operation happened** → README `## Tools` section (`diagnose_activity` for structured current-session evidence)
 - **Installation / upgrading / platform issues / troubleshooting** → README sections of the same name
 

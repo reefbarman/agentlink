@@ -1,20 +1,34 @@
-import { describe, expect, it } from "vitest";
-
 import {
   ContextJumpTracker,
   MIN_JUMP_THRESHOLD_TOKENS,
   jumpThresholdTokens,
   topAccumulationSources,
 } from "./ContextJumpTracker.js";
+import { describe, expect, it } from "vitest";
+
 import type { ContextUsageRecord } from "./ContextUsageTelemetry.js";
 
 function createTracker(): {
   tracker: ContextJumpTracker;
   records: ContextUsageRecord[];
+  requestAttributions: Extract<
+    ContextUsageRecord,
+    { kind: "request_context_attribution" }
+  >[];
 } {
   const records: ContextUsageRecord[] = [];
-  const tracker = new ContextJumpTracker((record) => records.push(record));
-  return { tracker, records };
+  const requestAttributions: Extract<
+    ContextUsageRecord,
+    { kind: "request_context_attribution" }
+  >[] = [];
+  const tracker = new ContextJumpTracker((record) => {
+    if (record.kind === "request_context_attribution") {
+      requestAttributions.push(record);
+    } else {
+      records.push(record);
+    }
+  });
+  return { tracker, records, requestAttributions };
 }
 
 describe("jumpThresholdTokens", () => {
@@ -49,10 +63,29 @@ describe("topAccumulationSources", () => {
 });
 
 describe("ContextJumpTracker", () => {
-  it("does not emit for the first request of a session", () => {
-    const { tracker, records } = createTracker();
-    tracker.onApiRequest("s1", { model: "m", inputTokens: 150_000 });
+  it("persists attribution for a physical provider request", () => {
+    const { tracker, records, requestAttributions } = createTracker();
+    tracker.onRequestContextAttribution("s1", {
+      requestId: "request-1",
+      requestKind: "condense",
+      model: "m",
+      estimatedInputTokens: 150_000,
+    });
     expect(records).toEqual([]);
+    expect(requestAttributions).toEqual([
+      {
+        kind: "request_context_attribution",
+        sessionId: "s1",
+        requestId: "request-1",
+        requestKind: "condense",
+        model: "m",
+        estimatedInputTokens: 150_000,
+        toolResultAttributions: [],
+        omittedToolResultAttributions: 0,
+        pinnedMemoryTokens: 0,
+        retrievedMemoryTokens: 0,
+      },
+    ]);
   });
 
   it("emits a context_jump with attribution when growth exceeds the threshold", () => {
@@ -71,6 +104,18 @@ describe("ContextJumpTracker", () => {
       cacheCreationTokens: 30_000,
       accumulatedEstimatedTokens: 25_000,
       accumulatedBySource: { "tool:read_file": 20_000, "tool:grep": 5_000 },
+      toolResultAttributions: [
+        {
+          toolCallId: "call-1",
+          toolName: "read_file",
+          chars: 80_000,
+          bytes: 80_000,
+          estimatedTokens: 20_000,
+        },
+      ],
+      omittedToolResultAttributions: 2,
+      pinnedMemoryTokens: 0,
+      retrievedMemoryTokens: 0,
       systemPromptTokens: 5_000,
       toolDefinitionTokens: 12_000,
     });
@@ -85,6 +130,18 @@ describe("ContextJumpTracker", () => {
       deltaPctOfWindow: 20,
       accumulatedEstimatedTokens: 25_000,
       accumulatedBySource: { "tool:read_file": 20_000, "tool:grep": 5_000 },
+      toolResultAttributions: [
+        {
+          toolCallId: "call-1",
+          toolName: "read_file",
+          chars: 80_000,
+          bytes: 80_000,
+          estimatedTokens: 20_000,
+        },
+      ],
+      omittedToolResultAttributions: 2,
+      pinnedMemoryTokens: 0,
+      retrievedMemoryTokens: 0,
       systemPromptDeltaTokens: 0,
       toolDefinitionDeltaTokens: 2_000,
       unattributedTokens: 40_000 - 25_000 - 2_000,
@@ -118,8 +175,14 @@ describe("ContextJumpTracker", () => {
 
   it("flags jumps where the model changed since the previous request", () => {
     const { tracker, records } = createTracker();
-    tracker.onApiRequest("s1", { model: "m1", inputTokens: 50_000 });
-    tracker.onApiRequest("s1", { model: "m2", inputTokens: 90_000 });
+    tracker.onApiRequest("s1", {
+      model: "m1",
+      inputTokens: 50_000,
+    });
+    tracker.onApiRequest("s1", {
+      model: "m2",
+      inputTokens: 90_000,
+    });
 
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({
@@ -130,14 +193,23 @@ describe("ContextJumpTracker", () => {
 
   it("stays quiet for growth below the threshold", () => {
     const { tracker, records } = createTracker();
-    tracker.onApiRequest("s1", { model: "m", inputTokens: 50_000 });
-    tracker.onApiRequest("s1", { model: "m", inputTokens: 60_000 });
+    tracker.onApiRequest("s1", {
+      model: "m",
+      inputTokens: 50_000,
+    });
+    tracker.onApiRequest("s1", {
+      model: "m",
+      inputTokens: 60_000,
+    });
     expect(records).toEqual([]);
   });
 
   it("emits condense and post_condense_first_request with the estimate gap", () => {
     const { tracker, records } = createTracker();
-    tracker.onApiRequest("s1", { model: "m", inputTokens: 180_000 });
+    tracker.onApiRequest("s1", {
+      model: "m",
+      inputTokens: 180_000,
+    });
     tracker.onCondense("s1", {
       model: "m",
       prevInputTokens: 180_000,
@@ -147,6 +219,17 @@ describe("ContextJumpTracker", () => {
     tracker.onApiRequest("s1", {
       model: "m",
       inputTokens: 95_000,
+      toolResultAttributions: [
+        {
+          toolCallId: "call-2",
+          toolName: "get_context",
+          chars: 4_000,
+          bytes: 4_000,
+          estimatedTokens: 1_000,
+        },
+      ],
+      pinnedMemoryTokens: 0,
+      retrievedMemoryTokens: 0,
       systemPromptTokens: 6_000,
       toolDefinitionTokens: 40_000,
     });
@@ -165,6 +248,17 @@ describe("ContextJumpTracker", () => {
       condenseEstimateTokens: 12_000,
       actualInputTokens: 95_000,
       estimateGapTokens: 83_000,
+      toolResultAttributions: [
+        {
+          toolCallId: "call-2",
+          toolName: "get_context",
+          chars: 4_000,
+          bytes: 4_000,
+          estimatedTokens: 1_000,
+        },
+      ],
+      pinnedMemoryTokens: 0,
+      retrievedMemoryTokens: 0,
       systemPromptTokens: 6_000,
       toolDefinitionTokens: 40_000,
     });
@@ -172,27 +266,45 @@ describe("ContextJumpTracker", () => {
 
   it("does not double-report the post-condense request as a context_jump", () => {
     const { tracker, records } = createTracker();
-    tracker.onApiRequest("s1", { model: "m", inputTokens: 180_000 });
+    tracker.onApiRequest("s1", {
+      model: "m",
+      inputTokens: 180_000,
+    });
     tracker.onCondense("s1", {
       model: "m",
       prevInputTokens: 180_000,
       newInputTokens: 12_000,
     });
-    tracker.onApiRequest("s1", { model: "m", inputTokens: 95_000 });
-    tracker.onApiRequest("s1", { model: "m", inputTokens: 96_000 });
+    tracker.onApiRequest("s1", {
+      model: "m",
+      inputTokens: 95_000,
+    });
+    tracker.onApiRequest("s1", {
+      model: "m",
+      inputTokens: 96_000,
+    });
 
     expect(records.filter((r) => r.kind === "context_jump")).toEqual([]);
   });
 
   it("tracks sessions independently and forgets on request", () => {
     const { tracker, records } = createTracker();
-    tracker.onApiRequest("s1", { model: "m", inputTokens: 50_000 });
-    tracker.onApiRequest("s2", { model: "m", inputTokens: 200_000 });
+    tracker.onApiRequest("s1", {
+      model: "m",
+      inputTokens: 50_000,
+    });
+    tracker.onApiRequest("s2", {
+      model: "m",
+      inputTokens: 200_000,
+    });
     expect(records).toEqual([]);
 
     tracker.forget("s1");
     // After forget, the next request is a fresh baseline, not a jump.
-    tracker.onApiRequest("s1", { model: "m", inputTokens: 190_000 });
+    tracker.onApiRequest("s1", {
+      model: "m",
+      inputTokens: 190_000,
+    });
     expect(records).toEqual([]);
   });
 });

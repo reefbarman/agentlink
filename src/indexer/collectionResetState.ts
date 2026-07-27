@@ -3,24 +3,25 @@ import * as path from "path";
 
 import { writeAtomicJsonFile } from "./atomicJsonFile.js";
 
-export const COLLECTION_RESET_STATE_VERSION = 1;
+export const INDEX_RESET_STATE_VERSION = 1;
 
-export interface CollectionResetTarget {
-  qdrantUrl: string;
-  collectionName: string;
+export interface IndexResetTarget {
+  storeRoot: string;
+  workspaceScopeId: string;
 }
 
-export interface CollectionResetState extends CollectionResetTarget {
-  version: typeof COLLECTION_RESET_STATE_VERSION;
+export interface IndexResetState {
+  version: typeof INDEX_RESET_STATE_VERSION;
   status: "in-progress" | "complete";
+  target: IndexResetTarget;
 }
 
-export type CollectionResetLoadResult =
+export type IndexResetLoadResult =
   | { status: "missing" }
-  | { status: "valid"; state: CollectionResetState }
+  | { status: "valid"; state: IndexResetState }
   | { status: "corrupt"; error: string };
 
-export function getCollectionResetStatePath(cachePath: string): string {
+export function getIndexResetStatePath(cachePath: string): string {
   const extension = path.extname(cachePath);
   if (!extension) return `${cachePath}.reset.json`;
   return path.join(
@@ -29,9 +30,7 @@ export function getCollectionResetStatePath(cachePath: string): string {
   );
 }
 
-export function loadCollectionResetState(
-  statePath: string,
-): CollectionResetLoadResult {
+export function loadIndexResetState(statePath: string): IndexResetLoadResult {
   let raw: string;
   try {
     raw = fs.readFileSync(statePath, "utf8");
@@ -49,22 +48,18 @@ export function loadCollectionResetState(
     const value = JSON.parse(raw) as unknown;
     if (
       !isRecord(value) ||
-      value.version !== COLLECTION_RESET_STATE_VERSION ||
-      (value.status !== "in-progress" && value.status !== "complete") ||
-      typeof value.qdrantUrl !== "string" ||
-      value.qdrantUrl.length === 0 ||
-      typeof value.collectionName !== "string" ||
-      value.collectionName.length === 0
+      value.version !== INDEX_RESET_STATE_VERSION ||
+      (value.status !== "in-progress" && value.status !== "complete")
     ) {
-      throw new Error("Unsupported or malformed collection reset state");
+      throw new Error("Unsupported or malformed index reset state");
     }
+    const target = readTarget(value);
     return {
       status: "valid",
       state: {
-        version: COLLECTION_RESET_STATE_VERSION,
+        version: INDEX_RESET_STATE_VERSION,
         status: value.status,
-        qdrantUrl: value.qdrantUrl,
-        collectionName: value.collectionName,
+        target,
       },
     };
   } catch (error) {
@@ -72,32 +67,138 @@ export function loadCollectionResetState(
   }
 }
 
-export function beginCollectionReset(
+export function beginIndexReset(
   statePath: string,
-  target: CollectionResetTarget,
+  target: IndexResetTarget,
 ): void {
-  writeAtomicJsonFile(statePath, {
-    version: COLLECTION_RESET_STATE_VERSION,
-    status: "in-progress",
-    ...target,
-  } satisfies CollectionResetState);
+  writeResetState(statePath, "in-progress", target);
 }
 
-export function completeCollectionReset(
+export function completeIndexReset(
   statePath: string,
-  target: CollectionResetTarget,
+  target: IndexResetTarget,
+): void {
+  writeResetState(statePath, "complete", target);
+}
+
+function readTarget(value: Record<string, unknown>): IndexResetTarget {
+  const canonical = readCanonicalTarget(value);
+  const legacy = readLegacyTarget(value);
+  if (!canonical && !legacy) {
+    throw new Error("Index reset state target is missing");
+  }
+  if (
+    canonical &&
+    legacy &&
+    (normalizeStoreRoot(canonical.storeRoot) !==
+      normalizeStoreRoot(legacy.storeRoot) ||
+      canonical.workspaceScopeId !== legacy.workspaceScopeId)
+  ) {
+    throw new Error("Index reset state target aliases conflict");
+  }
+  return canonical ?? legacy!;
+}
+
+function readCanonicalTarget(
+  value: Record<string, unknown>,
+): IndexResetTarget | null {
+  if (!("target" in value)) return null;
+  if (!isRecord(value.target)) {
+    throw new Error("Index reset state canonical target is malformed");
+  }
+  const current = readOptionalTargetFields(
+    value.target,
+    "storeRoot",
+    "workspaceScopeId",
+    "canonical",
+  );
+  const previous = readOptionalTargetFields(
+    value.target,
+    "endpoint",
+    "indexName",
+    "previous canonical",
+  );
+  if (!current && !previous) {
+    throw new Error("Index reset state canonical target is malformed");
+  }
+  if (
+    current &&
+    previous &&
+    (normalizeStoreRoot(current.storeRoot) !==
+      normalizeStoreRoot(previous.storeRoot) ||
+      current.workspaceScopeId !== previous.workspaceScopeId)
+  ) {
+    throw new Error("Index reset state canonical target aliases conflict");
+  }
+  return current ?? previous;
+}
+
+function readLegacyTarget(
+  value: Record<string, unknown>,
+): IndexResetTarget | null {
+  const hasEndpoint = "qdrantUrl" in value;
+  const hasIndexName = "collectionName" in value;
+  if (!hasEndpoint && !hasIndexName) return null;
+  if (!hasEndpoint || !hasIndexName) {
+    throw new Error("Index reset state legacy target is malformed");
+  }
+  return readTargetFields(value, "qdrantUrl", "collectionName", "legacy");
+}
+
+function readTargetFields(
+  value: Record<string, unknown>,
+  endpointField: string,
+  indexNameField: string,
+  label: string,
+): IndexResetTarget {
+  const storeRoot = value[endpointField];
+  const workspaceScopeId = value[indexNameField];
+  if (
+    typeof storeRoot !== "string" ||
+    storeRoot.length === 0 ||
+    typeof workspaceScopeId !== "string" ||
+    workspaceScopeId.length === 0
+  ) {
+    throw new Error(`Index reset state ${label} target is malformed`);
+  }
+  return { storeRoot, workspaceScopeId };
+}
+
+function readOptionalTargetFields(
+  value: Record<string, unknown>,
+  storeRootField: string,
+  workspaceScopeIdField: string,
+  label: string,
+): IndexResetTarget | null {
+  const hasStoreRoot = storeRootField in value;
+  const hasWorkspaceScopeId = workspaceScopeIdField in value;
+  if (!hasStoreRoot && !hasWorkspaceScopeId) return null;
+  if (!hasStoreRoot || !hasWorkspaceScopeId) {
+    throw new Error(`Index reset state ${label} target is malformed`);
+  }
+  return readTargetFields(value, storeRootField, workspaceScopeIdField, label);
+}
+
+function writeResetState(
+  statePath: string,
+  status: IndexResetState["status"],
+  target: IndexResetTarget,
 ): void {
   writeAtomicJsonFile(statePath, {
-    version: COLLECTION_RESET_STATE_VERSION,
-    status: "complete",
-    ...target,
-  } satisfies CollectionResetState);
+    version: INDEX_RESET_STATE_VERSION,
+    status,
+    target,
+  });
+}
+
+function normalizeStoreRoot(value: string): string {
+  return value.replace(/[\\/]+$/, "");
 }
 
 function inspectMissingEntry(entryPath: string): string | null {
   try {
     fs.lstatSync(entryPath);
-    return "Collection reset state path exists but could not be read";
+    return "Index reset state path exists but could not be read";
   } catch (error) {
     return isMissingFile(error) ? null : describeError(error);
   }

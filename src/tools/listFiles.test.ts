@@ -183,6 +183,38 @@ describe("handleListFiles", () => {
     });
   });
 
+  it("surfaces semantic source freshness alongside ranked entries", async () => {
+    semanticFileListMock.mockResolvedValue({
+      files: [{ path: "src/changed.ts", score: 0.75 }],
+      freshness: {
+        stale_sources: ["src/changed.ts"],
+        deleted_sources: ["src/deleted.ts"],
+        unverified_sources: [],
+      },
+    });
+    const { handleListFiles } = await import("./listFiles.js");
+
+    const result = await handleListFiles(
+      { path: "docs", query: "semantic source" },
+      approvalManager,
+      approvalPanel,
+      sessionId,
+    );
+
+    expect(JSON.parse(textResult(result))).toEqual({
+      path: "docs",
+      query: "semantic source",
+      semantic: true,
+      entries: "src/changed.ts (score: 0.7500)",
+      count: 1,
+      freshness: {
+        stale_sources: ["src/changed.ts"],
+        deleted_sources: ["src/deleted.ts"],
+        unverified_sources: [],
+      },
+    });
+  });
+
   it("passes --no-ignore for recursive listings when include_ignored is true", async () => {
     const { handleListFiles } = await import("./listFiles.js");
 

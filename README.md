@@ -72,11 +72,13 @@ flowchart LR
 - **Inline approvals in chat** — command, write, rename, MCP, and mode-switch approvals render in the built-in chat UI. The separate approval panel provides a focused review surface for pending operations.
 - **Session history and restore** — chat sessions are persisted and restored across VS Code reloads/startup.
 - **Checkpoints and revert** — create workspace checkpoints and revert later. Checkpoints are stored in AgentLink’s own shadow git repo under `.agentlink/checkpoints/`, separate from your project’s real git history.
-- **Slash commands** — built-ins include `/new`, `/mode`, `/model`, `/condense`, `/checkpoint`, `/revert`, `/help`, `/fleet`, `/skills`, `/mcp`, `/mcp-config`, `/mcp-refresh`, `/btw`, `/worktree`, and `/pair`. Custom commands and detected skills appear in the same picker.
+- **Slash commands** — built-ins include `/new`, `/mode`, `/model`, `/condense`, `/context-doctor`, `/checkpoint`, `/revert`, `/help`, `/fleet`, `/remember`, `/memory`, `/skills`, `/mcp`, `/mcp-config`, `/mcp-refresh`, `/btw`, `/worktree`, `/pair`, and `/usage`. Custom commands and detected skills appear in the same picker.
 - **`/btw` side questions** — `/btw <question>` asks a quick side question that forks the current conversation into a read-only session (no edits or commands), so you get an answer without polluting the main thread. The answer streams into a side panel with a visible turn/tool budget (max 5 API turns / 10 tool calls) and a Cancel button; when it finishes you can **Add to conversation** to promote the question and answer into the main transcript. Runs self-abort after a deadline if they stall. (Foreground surface only — not exposed on the read-only browser remote.)
 - **`/worktree` parallel setup** — runs independently of an active foreground turn, so it can configure and open alternative work without queuing a message or interrupting the current agent. A bare `/worktree` opens a lightweight read-only text session in the Chat Activity Shelf; the setup agent can inspect the repository and ask simple follow-up questions there before presenting inline **Create & start** and **Create & prefill** actions. Supplying a task directly, such as `/worktree Prototype the passkey flow`, skips the questions and shows the same inline launch actions. Optional flags are `--task`, `--prompt`, `--branch`, `--base`/`--base-ref`, `--path`/`--worktree-path`, `--mode`, `--autosubmit`, and `--prefill`/`--no-autosubmit`. This local-window launcher is explicitly unavailable from the browser remote.
 - **Background agents** — spawn parallel sub-agents for review and research, then inspect their result/transcript from the foreground session. The Agent Fleet panel hides itself when every agent finishes; run `/fleet` to reveal completed results again.
 - **Auto-condense** — when context fills up, AgentLink condenses the conversation while deterministically reattaching the structured TODO list (including completed, in-progress, and pending status) so the agent can resume from the same plan.
+- **Context Doctor** — `/context-doctor` appends a read-only report for the current workspace session: prompt-profile and section measurements, tool-schema cost, the latest completed request ledger, retained/repeated tool results, condensation evidence, and explicit “not yet instrumented” gaps. It makes no model request or approval request, and its diagnostic transcript entry is excluded from future provider and condensation context. Available in VS Code chat and the browser remote for workspace sessions; projectless Browser Ask Agent is intentionally unsupported.
+- **Autonomous memory manager** — when `agentlink.memory.mode` is `autonomous`, `/memory` opens a local inspection panel without making a model request. Search and filter typed records, inspect provenance/revisions/audit history, forget or restore records, undo auditable changes, clear a confirmed scope, and import/export versioned JSON archives. VS Code exposes global and current-project scopes; projectless Browser Ask Agent exposes global scope only. `/remember` remains the model-assisted workflow for identifying durable candidates.
 - **Polish prompt** — a sparkle button in the composer toolbar rewrites your draft with the current provider's fast model before sending: it fixes spelling, grammar, and punctuation and tightens wording while preserving meaning, tone, code, file paths, `@`-mentions, and any leading slash command. The polished text replaces the draft in place (nothing is sent), a revert button restores exactly what you had typed, and a draft edited while the request was in flight is never overwritten. Available in both the VS Code chat and the browser remote; uses model quota.
 - **Model picker + auth-aware UX** — model selection is built into the chat UI and can prompt for Anthropic or OpenAI/Codex auth as needed. For Anthropic, model metadata (available models, context window, output tokens, reasoning-effort options) is refreshed from the Anthropic API and merged over built-in defaults; the refresh is lazy (never on activation) and falls back to built-in static metadata when offline. Toggle with `agentlink.anthropic.dynamicModelCapabilities` (default on).
 
@@ -90,10 +92,13 @@ flowchart LR
 
 ### Install script (recommended)
 
-Download and install the latest release from GitHub:
+Download and install the latest release from GitHub. The script selects the local `code` installation's platform/architecture; set `AGENTLINK_VSCE_TARGET` explicitly for remote or emulated extension hosts.
 
 ```sh
 curl -sL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash
+# Example override:
+curl -sL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh \
+  | AGENTLINK_VSCE_TARGET=linux-x64 bash
 ```
 
 Or clone the repo first and run it locally:
@@ -104,8 +109,8 @@ Or clone the repo first and run it locally:
 
 ### Manual download
 
-1. Go to the [latest release](https://github.com/reefbarman/agentlink/releases/latest)
-2. Download the `.vsix` file
+1. Go to the [latest release](https://github.com/reefbarman/agentlink/releases/latest).
+2. Download the target-labeled `.vsix` matching the machine that runs the VS Code extension host (`darwin`, `linux`, `alpine`, or `win32`, with `arm64` or `x64`).
 3. Install it:
 
    ```sh
@@ -117,9 +122,11 @@ Or clone the repo first and run it locally:
 ```sh
 git clone https://github.com/reefbarman/agentlink.git
 cd agentlink
-npm install && npm run build
-npx @vscode/vsce package --no-dependencies --allow-star-activation
-code --install-extension agentlink-*.vsix --force
+npm install
+npm run package
+TARGET=$(node scripts/package-retrieval-runtime.mjs --print-target)
+VERSION=$(node -p "require('./package.json').version")
+code --install-extension "agentlink-${VERSION}-${TARGET}.vsix" --force
 ```
 
 After installing, reload VS Code and open the AgentLink activity bar.
@@ -157,7 +164,7 @@ Useful built-in workflows:
 
 - use `/model` to switch models
 - use `/mode` to switch behavior without starting over
-- use `/condense` to manually compress context
+- use `/condense` to manually compress context or `/context-doctor` to inspect its current allocation
 - use `/checkpoint` before risky edits and `/revert` if needed
 - use background agents for review/research from inside the chat UI
 
@@ -189,6 +196,8 @@ Run **AgentLink: Configure OpenAI-compatible Model** for the guided setup path. 
 4. Review the context/output limits and declared tool, reasoning, and image capabilities before saving.
 
 OpenRouter discovery maps bounded catalog metadata such as context length, tool parameters, reasoning efforts, and image input. Generic OpenAI-compatible catalogs often expose only model IDs, so AgentLink uses clearly labeled, editable conservative defaults: 32,768 context tokens, 4,096 output tokens, and chat-only text capabilities. Discovery is user-invoked and one-shot; AgentLink does not refresh provider catalogs in the background. Redirects, oversized catalogs, invalid endpoint URLs, and credential-bearing unsafe HTTP are rejected or explicitly gated.
+
+Prompt profiles are resolved separately from declared reasoning capability. The full `compatibility` profile is the default for unknown and custom models. The compact `reasoning` profile requires an exact model-ID override in `agentlink.modelPromptProfiles` or membership in a committed cohort that has passed task-success and safety evaluation; the automatic evaluated cohort is currently empty, so thinking/reasoning support alone never opts a model in. Browser Ask Agent receives the same validated resolution from its connected VS Code owner, and `/context-doctor` reports the profile resolved for the current workspace session.
 
 The wizard is add-only and runs in VS Code. Edit or remove entries in User Settings JSON; use raw settings for advanced multi-model connections, custom headers, timeouts, or a separate auxiliary model. Browser Ask Agent receives the refreshed model catalog and credentials server-side but cannot create or edit configuration.
 
@@ -360,7 +369,9 @@ The `language-benchmark` group is opt-in; adding it back to normal modes defeats
 
 This lets you define reusable prompts/workflows for the built-in agent while keeping project-specific commands in the repo.
 
-Detected skills are also exposed as slash commands in the built-in chat. Skills loaded from `~/.agents/skills/`, `~/.claude/skills/`, `~/.agentlink/skills/`, `.agents/skills/`, `.claude/skills/`, `.agentlink/skills/`, and their `skills-<mode>/` variants appear as `/<name>` with a `Skill` badge. Selecting one sends a prompt that asks the agent to load that skill with `load_skill` and follow its instructions. Use `/skills` to open the AgentLink output channel with the skills detected for the current mode, including their resolved `SKILL.md` paths.
+Detected skills are also exposed as slash commands in the built-in chat. Skills loaded from `~/.agents/skills/`, `~/.claude/skills/`, `~/.agentlink/skills/`, workspace/ancestor `.agents/skills/`, `.claude/skills/`, `.agentlink/skills/`, and their `skills-<mode>/` variants appear as `/skill:<name>` with a `Skill` badge. If multiple enabled skills share a name, each uses `/skill:<canonical-id>` so one source cannot silently replace another. Selecting one sends a prompt that asks the agent to load that exact skill revision with `load_skill` and follow its instructions. Use `/skills` to open the AgentLink output channel with the skills detected for the current mode, including their canonical IDs and resolved `SKILL.md` paths.
+
+The canonical skill catalog validates metadata and safe symlinks, reports collisions, and disables missing, ambiguous, or cyclic dependencies. Skill `allowed-tools` declarations are restriction-only: active allowlists intersect with each other and can never grant a tool denied by the current mode, profile, background policy, or surface. Skill metadata in the system prompt is budgeted; enabled entries omitted from that projection remain in the revisioned session catalog for bounded retrieval and must still match the current canonical ID and revision before loading. Projectless Browser Ask Agent exposes only safe prompt-only skills and rejects skills that declare a tool allowlist.
 
 ### Connect the built-in agent to MCP servers
 
@@ -506,78 +517,64 @@ This does not disable unrelated connected MCP tools.
 
 ## Semantic Codebase Search Setup
 
-Semantic search powers `codebase_search` plus the `query` parameter on `read_file` and `list_files`. It uses a local Qdrant vector database for the code index and OpenAI embeddings for indexing and queries.
+Semantic search powers `codebase_search` plus the `query` parameter on `read_file` and `list_files`. AgentLink stores the workspace index in an embedded local LanceDB retrieval store; no external database process or service such as Qdrant is required by the current production path.
 
-### Requirements
+Lexical indexing and search work without credentials. An optional OpenAI API key adds vector embeddings and hybrid ranking. ChatGPT/Codex OAuth authenticates model chat but does not provide embeddings.
 
-- Qdrant running locally or remotely
-- OpenAI authentication configured in AgentLink
-- `agentlink.semanticSearchEnabled` set to `true`
-
-### 1. Set up Qdrant
-
-The default Qdrant URL is:
-
-```text
-http://localhost:6333
-```
-
-The quickest way to run Qdrant locally is Docker:
-
-```sh
-docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
-```
-
-If you already run Qdrant elsewhere, point AgentLink at it with the `agentlink.qdrantUrl` setting.
-
-### 2. Configure OpenAI authentication
-
-Semantic indexing and search need embedding auth. In VS Code, run:
-
-- **AgentLink: Sign In to OpenAI/Codex** to use ChatGPT/Codex OAuth or an OpenAI API key
-- or **AgentLink: Set OpenAI API Key** if you want to store an API key directly
-
-You can also provide `OPENAI_API_KEY` in the environment.
-
-### 3. Enable semantic search
+### 1. Enable semantic search
 
 Set these VS Code settings:
 
 ```jsonc
 {
   "agentlink.semanticSearchEnabled": true,
-  "agentlink.qdrantUrl": "http://localhost:6333",
   "agentlink.autoIndex": true,
 }
 ```
 
-- `agentlink.semanticSearchEnabled` turns on semantic indexing and search
-- `agentlink.qdrantUrl` points to your Qdrant instance
-- `agentlink.autoIndex` rebuilds the workspace index automatically on startup when semantic search is enabled
+- `agentlink.semanticSearchEnabled` enables local codebase indexing and retrieval.
+- `agentlink.autoIndex` indexes the workspace automatically on startup when semantic search is enabled.
 
-### 4. Build the codebase index
+### 2. Build the codebase index
 
-Once semantic search is enabled, use either of these entry points:
+Use either entry point:
 
 - Sidebar button: **Index Codebase** / **Rebuild Index**
 - Command palette: **AgentLink: Rebuild Codebase Index**
 
-If indexing is already running, use **AgentLink: Cancel Indexing**.
+If indexing is already running, use **AgentLink: Cancel Indexing**. Without embedding credentials, AgentLink publishes the same source and structural records with nullable vectors and serves them through lexical ranking.
 
-### 5. Query the index
+### 3. Optionally enable vector and hybrid ranking
+
+To add vector embeddings, run **AgentLink: Set OpenAI API Key for Embeddings** or provide `OPENAI_API_KEY` in the extension host environment. You can also use an OpenAI API key for both model chat and embeddings.
+
+Embedding inputs are sent to OpenAI when this optional capability is configured. The retrieval store and generated index remain local.
+
+### 4. Query the index
 
 After indexing completes, agents can use:
 
-- `codebase_search` for semantic code search
+- `codebase_search` for natural-language code search
 - `read_file` with `query` to jump to the most relevant section of a file
 - `list_files` with `query` to find files by meaning instead of path/glob
+- `search_files` with `semantic: true` to use the same retrieval index
 
 ### Notes
 
-- Index data is workspace-specific.
+- Index data is workspace-specific and stored under AgentLink's extension storage.
 - `agentlink.indexExclusions` adds extra glob-based exclusions on top of `.gitignore`.
-- `agentlink.chunkGranularity` controls indexing detail: `standard` is cheaper, `fine` gives better granularity.
-- If you are following Roo Code's Qdrant docs, the same Qdrant setup applies here; the AgentLink-specific pieces are enabling `agentlink.semanticSearchEnabled` and configuring OpenAI auth inside AgentLink.
+- `agentlink.chunkGranularity` controls indexing detail: `standard` is cheaper, while `fine` provides more retrieval granularity.
+- Missing embedding credentials degrade vector/hybrid requests to lexical ranking; they do not block indexing or search.
+- Legacy Qdrant index contents are not migrated in place. Rebuild the workspace index to publish fresh code and structural records into LanceDB. Compatibility aliases for old reset-state field names do not re-enable a live Qdrant integration.
+- Rolling back to a build that expects Qdrant does not convert LanceDB data back into a Qdrant index; that older build may require its own database configuration and rebuild. AgentLink does not claim to delete external Qdrant data or services.
+
+## Unified context allocation and health
+
+Each provider request gets an immutable model-aware context ledger. It records the context window and input ceiling, reserves output and a safety buffer, measures required layers, allocates bounded retrieved/working-set layers in declared priority order, and reports per-layer omissions plus any required-context overflow. Required prompt material is measured rather than silently truncated, so the ledger can report that a request exceeds its safe envelope instead of claiming every request always fits.
+
+`get_context` complements that request ledger with content-addressed working-set tracking. Unchanged content omission is opt-in through `dedupe_unchanged_content`, applies only to the exact range already returned in the current session, and can be bypassed with `refresh`; overlapping ranges and separate full-file reads are tracked independently.
+
+The Chat Activity Shelf separately projects context-system health for autonomous memory, lexical/vector/structural retrieval, and index state. This operational health display is not part of `/context-doctor`: the doctor reports measured prompt sections, tool schemas, the latest completed request ledger, retained/repeated tool results, and condensation evidence, and labels diagnostics it does not yet instrument rather than guessing.
 
 ## Upgrading from the retired external-agent integration
 
@@ -607,6 +604,35 @@ When a connected MCP server requests URL elicitation, AgentLink shows an explici
 ## Tools
 
 The tools below are available to the built-in agent according to its active mode and capability profile. Some development or orchestration tools are intentionally exposed only in specific modes.
+
+### find_native_tools
+
+Discover native AgentLink tools whose schemas were deferred from the current provider request. The result is bounded, stable, and derived only from the immutable catalog already authorized for that request; discovery cannot broaden mode, profile, skill, background, web, or surface restrictions.
+
+| Parameter         | Type     | Description                                                         |
+| ----------------- | -------- | ------------------------------------------------------------------- |
+| `query`           | string?  | Match text against deferred tool names and descriptions.            |
+| `limit`           | number?  | Maximum results, from 1 to 50; defaults to 10.                      |
+| `offset`          | number?  | Zero-based offset for deterministic pagination.                     |
+| `include_schemas` | boolean? | Include input schemas; defaults to false.                           |
+| `schema_limit`    | number?  | Maximum returned schemas, from 1 to 10; defaults to 1 when enabled. |
+
+The response includes the matching tools, total count, applied offset and limit, and `nextOffset` when another page exists. Results preserve the authorized catalog's deterministic order.
+
+### call_native_tool
+
+Invoke one exact tool returned by `find_native_tools`.
+
+| Parameter | Type   | Description                                                   |
+| --------- | ------ | ------------------------------------------------------------- |
+| `name`    | string | Exact deferred tool name from the current discovery snapshot. |
+| `input`   | object | Arguments validated against that tool's authorized schema.    |
+
+Each call is resolved against the same frozen request catalog before dispatch. The canonical target retains its normal authorization, schema validation, approval, telemetry, activity, and transcript behavior. Unknown tools, forged direct calls to deferred tools, stale targets, and invalid inputs fail closed.
+
+Live activity and public transcript projections show the canonical target tool and input. Provider-private replay retains the original `call_native_tool` wrapper and tool-call ID because that is the definition the provider received; this replay data does not appear in public chat messages.
+
+Browser Ask Agent uses the same bridge semantics over a stricter helper-owned projectless catalog. It can discover only deferred tools that the helper already authorized, currently global memory and display-safe image tools. It cannot discover or invoke file writes, shell commands, VS Code editor/language intelligence, semantic code search, repo maps, or background/fleet orchestration. Granted local reads, prepared web tools, and prepared MCP tools remain subject to their existing Browser Ask Agent restrictions.
 
 ### web_search
 
@@ -766,7 +792,7 @@ Working-set statuses are `new`, `unchanged`, `changed`, and `omitted_unchanged`.
 
 ### get_repo_map
 
-Read the structural repo-map sidecar as a budgeted whole-project or scoped skeleton. Use this before broad edits to understand module boundaries and high-level dependency shape, then drill into specific files with `get_module_neighbors` when you need exact imports/dependents.
+Read the structural code index as a budgeted whole-project or scoped skeleton. Use this before broad edits to understand module boundaries and high-level dependency shape, then drill into specific files with `get_module_neighbors` when you need exact imports/dependents.
 
 | Parameter          | Type     | Description                                                                                                         |
 | ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------- |
@@ -777,21 +803,21 @@ Read the structural repo-map sidecar as a budgeted whole-project or scoped skele
 
 **Response includes:**
 
-- `workspace_root`, `cache` — sidecar identity and cache location when available
-- `freshness.graph` — sidecar availability, generated timestamp, cache version, and indexed file count
+- `workspace_root`, `cache` — workspace index identity (`index_name`) and unified retrieval-store location (`structural_store_path`) when available
+- `freshness.graph` — structural-index availability, generated timestamp, schema version, and indexed file count
 - `scope` — requested scope path and number of indexed files matched
 - `totals` — aggregate counts for files, imports, internal imports, external imports, exports, and symbols
 - `directories` — budgeted directory summaries sorted by file count
 - `external_dependencies` — budgeted external specifier summaries by importer count (omitted when `include_external: false`)
 - `files` — budgeted file/module skeletons: path, language, internal imports, external imports, exports, top-level symbols, and reverse import count
 - `budget` — requested budget, final serialized character count, truncation flag, and omitted counts
-- `note` — present for missing sidecar or empty scope cases
+- `note` — present for unavailable structural-index or empty-scope cases
 
-The tool is intentionally static and budgeted. It is best for orientation, module-boundary discovery, and deciding where to inspect next; use `get_module_neighbors` for a complete single-file neighborhood and LSP tools for symbol-precise semantics. Requires the codebase index/structural sidecar to be built.
+The tool is intentionally static and budgeted. It is best for orientation, module-boundary discovery, and deciding where to inspect next; use `get_module_neighbors` for a complete single-file neighborhood and LSP tools for symbol-precise semantics. Requires the codebase index to be built.
 
 ### get_module_neighbors
 
-Read the structural repo-map sidecar for a single source/config file. Use this after `get_context` when you need module-level blast-radius awareness before editing: what the file imports, what it exports, which indexed modules import it, and what top-level symbols it declares.
+Read the structural code index for a single source/config file. Use this after `get_context` when you need module-level blast-radius awareness before editing: what the file imports, what it exports, which indexed modules import it, and what top-level symbols it declares.
 
 | Parameter     | Type    | Description                                                                                                   |
 | ------------- | ------- | ------------------------------------------------------------------------------------------------------------- |
@@ -800,16 +826,16 @@ Read the structural repo-map sidecar for a single source/config file. Use this a
 
 **Response includes:**
 
-- `path`, `workspace_root`, `cache` — target and sidecar cache identity
+- `path`, `workspace_root`, `cache` — target, workspace index identity (`index_name`), and unified retrieval-store location (`structural_store_path`)
 - `freshness.target` — `fresh`, `stale`, `missing_from_graph`, `target_missing`, or `unknown`, with hashes when available
-- `freshness.graph` — sidecar availability, generated timestamp, cache version, and file count
+- `freshness.graph` — structural-index availability, generated timestamp, schema version, and file count
 - `imports` — bounded list of static/reexport/require/dynamic imports with specifiers, resolved relative paths, imported names, and line numbers
 - `exports` — bounded list of named/default/reexport/CommonJS exports
 - `symbols` — bounded top-level symbols recorded by the structural extractor
 - `dependents` — bounded reverse module dependencies: indexed files whose resolved imports point at the target
-- `note` — omitted when the sidecar and target are usable; present for missing/stale graph cases
+- `note` — omitted when the structural index and target are usable; present for unavailable/stale graph cases
 
-This is a static module graph, not an LSP-precise symbol reference query. Use language tools such as `get_references`, `go_to_definition`, and `get_call_hierarchy` when exact symbol semantics matter. Requires the codebase index/structural sidecar to be built.
+This is a static module graph, not an LSP-precise symbol reference query. Use language tools such as `get_references`, `go_to_definition`, and `get_call_hierarchy` when exact symbol semantics matter. Requires the codebase index to be built.
 
 ### load_skill
 
@@ -867,7 +893,7 @@ Search file contents using regex, or perform semantic codebase search when `sema
 | `offset`           | number?  | Skip first N matches before returning results. Use with `max_results` for pagination.                                        |
 | `output_mode`      | string?  | `content` (default, matching lines with context), `files_with_matches` (file paths only), or `count` (match counts per file) |
 
-Regex mode is powered by ripgrep with context lines and per-file match counts. AgentLink supports VS Code's legacy and platform-specific `@vscode/ripgrep-universal` package layouts, then falls back to a verified `rg` on the extension host's `PATH`. When `path` already names one file, a supplied `file_pattern` is redundant: AgentLink ignores it, completes the search, and returns a warning in every output mode. Semantic mode uses the same Qdrant-backed codebase index as `codebase_search`.
+Regex mode is powered by ripgrep with context lines and per-file match counts. AgentLink supports VS Code's legacy and platform-specific `@vscode/ripgrep-universal` package layouts, then falls back to a verified `rg` on the extension host's `PATH`. When `path` already names one file, a supplied `file_pattern` is redundant: AgentLink ignores it, completes the search, and returns a warning in every output mode. Semantic mode uses the same embedded local retrieval index as `codebase_search`.
 
 ### search_session_history
 
@@ -994,20 +1020,63 @@ When both selectors are omitted, the most recent session image is presented. Exa
 
 **Response includes:** `status: "presented"`, the selected image count and image metadata (`id`, `name`, and `mimeType`), plus image blocks rendered both on the collapsed tool result and directly in the assistant’s main transcript message. PNG, JPEG, GIF, and WebP session images are supported.
 
+### Autonomous memory inspection and migration
+
+Set `agentlink.memory.mode` to `autonomous` to enable typed low-authority memory and the `/memory` manager. The manager is a local control surface: opening it, changing filters, viewing details, and performing its direct user actions do not send a model request or create an agent approval flow. Mutations still pass through the same scope checks, provenance, secret scanning, quotas, revisions, audit, undo, and health reporting as the native memory tools.
+
+The VS Code manager supports global and current-project scopes. Projectless Browser Ask Agent supports global scope only and uses the helper-owned runtime selected from connected VS Code owners. Both surfaces support bounded search/filtering, record detail, forget/restore, audit undo, confirmed scope clearing, and versioned JSON import/export. Imported archives are validated before persistence; target scope is derived by the host rather than trusted from browser input.
+
+On first use, legacy global and project `.agentlink/memory.md` content is imported idempotently into typed records. The Markdown files are left byte-identical and compatibility readers remain available for rollback, but legacy content is no longer concatenated directly into the system prompt. `propose_memory` remains the reviewed path for authoritative instructions, skills, and commands; autonomous memory remains non-authoritative evidence.
+
+### manage_memory
+
+Create, update, supersede, forget, restore, or undo typed low-authority memory. The tool is available when `agentlink.memory.mode` is `autonomous`; it does not open a per-write approval card. Every mutation carries provenance, is secret-scanned and quota-bound, uses revision checks for existing records, and produces an audit event that can be undone. Memory remains evidence only: it cannot authorize tools or override current user, repository, instruction, skill, or command evidence.
+
+| Parameter             | Type                                                                                           | Description                                                                                                    |
+| --------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `operation`           | `"remember" \| "update" \| "supersede" \| "forget" \| "restore" \| "undo"`                     | Typed mutation to perform.                                                                                     |
+| `scope`               | `"global" \| "project"`                                                                        | User-global or current-project scope. Browser Ask Agent supports global scope only.                            |
+| `source_evidence`     | string                                                                                         | Required concise supporting evidence; secrets, credentials, raw tool output, and transient state are rejected. |
+| `kind`                | `"preference" \| "project_fact" \| "gotcha" \| "decision" \| "workflow_hint" \| "correction"`? | Required for `remember`.                                                                                       |
+| `statement`           | string?                                                                                        | Durable statement for `remember`, `update`, or `supersede` (maximum 1,000 characters).                         |
+| `target_id`           | string?                                                                                        | Record ID for `update`, `supersede`, `forget`, or `restore`.                                                   |
+| `conflict_key`        | string?                                                                                        | Stable exact deduplication/conflict key when known.                                                            |
+| `confidence`          | number?                                                                                        | Evidence confidence from 0 to 1.                                                                               |
+| `expires_at`          | string?                                                                                        | Optional ISO-8601 expiry time.                                                                                 |
+| `expected_revision`   | integer?                                                                                       | Compare-and-set revision required when mutating an existing record.                                            |
+| `undo_audit_event_id` | string?                                                                                        | Audit event ID to compensate when `operation` is `undo`.                                                       |
+
+**Response includes:** `result.disposition` (`created`, `updated`, `same-fact`, `superseded`, `contested`, `forgotten`, `restored`, `undone`, `rejected-sensitive`, `rejected-quota`, `not-found`, or `stale-revision`), optional affected `record`, `relatedRecords`, `auditEventId`, and a memory `health` snapshot. A successful tool call can still report a rejected or no-op disposition; callers must not present those as a committed change.
+
+### recall_memory
+
+Search typed low-authority memory with bounded credential-free lexical retrieval. Recall excludes ineligible superseded, forgotten, contested, or expired records from automatic use and labels every returned item as low-authority evidence that cannot authorize tools. Optional embeddings may add hybrid ranking later without changing the tool contract; lexical recall remains functional without embedding credentials.
+
+When autonomous memory is enabled, AgentLink also performs a separate bounded automatic recall once per logical foreground send, retry, interrupted-session resume, or native background invocation. The resulting immutable evidence snapshot is reused across provider retries and tool-loop turns, never written to transcript history, and counted as retrieved-memory context. Current user and repository evidence always outrank it. Legacy global and project `.agentlink/memory.md` files are imported idempotently into typed records and left byte-identical for rollback; they are no longer concatenated directly into every system prompt.
+
+| Parameter       | Type                              | Description                                                            |
+| --------------- | --------------------------------- | ---------------------------------------------------------------------- |
+| `query`         | string                            | Required search query (maximum 1,000 characters).                      |
+| `scope`         | `"global" \| "project" \| "all"`? | Scope filter; defaults to all scopes available to the current session. |
+| `limit`         | integer?                          | Maximum records to return. Default: 10. Maximum: 20.                   |
+| `minimum_score` | number?                           | Minimum lexical relevance score from 0 to 1. Default: 0.2.             |
+
+**Response includes:** `result.memories`, each with the typed record, relevance `score`, bounded `rendering`, `authority: "low-authority-evidence"`, and `canAuthorizeTools: false`; `result.mode` (`lexical-only` or `hybrid`); and a memory `health` snapshot.
+
 ### propose_memory
 
-Propose a cross-session memory/config update. This is the sanctioned path for durable learnings: the tool resolves the correct target, validates skill/command names and skill frontmatter, and always requires explicit user approval before writing. Approval can retarget tier/scope/name in the approval card; add/update proposals then open an editable diff view for reviewing or editing the final target file content before it is saved. Skill/command removals delete the target only after approval.
+Propose a reviewed authoritative configuration update. This remains the sanctioned path for durable instructions, reusable skills, and slash commands: the tool resolves the correct target, validates skill/command names and skill frontmatter, and always requires explicit user approval before writing. Approval can retarget tier/scope/name in the approval card; add/update proposals then open an editable diff view for reviewing or editing the final target file content before it is saved. Skill/command removals delete the target only after approval. Use `manage_memory` instead for low-authority preferences, facts, gotchas, decisions, workflow hints, and corrections.
 
-| Parameter   | Type                                                 | Description                                                                   |
-| ----------- | ---------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `tier`      | `"instructions" \| "skill" \| "command" \| "memory"` | Destination tier. Prefer instructions/skills/commands before memory fallback. |
-| `scope`     | `"global" \| "project"`                              | Write to user-global AgentLink config or the current project.                 |
-| `operation` | `"add" \| "update" \| "remove"`                      | Add new content, update existing content, or remove stale content.            |
-| `title`     | string                                               | Short approval-card label.                                                    |
-| `rationale` | string                                               | Why this should be remembered; shown to the user.                             |
-| `content`   | string                                               | Markdown entry/body. For `skill`, this must be the complete `SKILL.md`.       |
-| `name`      | string?                                              | Required for `skill` and `command`; lowercase hyphen identifier.              |
-| `replaces`  | string?                                              | Existing text to update/remove, matched with normalized whitespace.           |
+| Parameter   | Type                                     | Description                                                             |
+| ----------- | ---------------------------------------- | ----------------------------------------------------------------------- |
+| `tier`      | `"instructions" \| "skill" \| "command"` | Authoritative destination tier.                                         |
+| `scope`     | `"global" \| "project"`                  | Write to user-global AgentLink config or the current project.           |
+| `operation` | `"add" \| "update" \| "remove"`          | Add new content, update existing content, or remove stale content.      |
+| `title`     | string                                   | Short approval-card label.                                              |
+| `rationale` | string                                   | Why this should be persisted; shown to the user.                        |
+| `content`   | string                                   | Markdown entry/body. For `skill`, this must be the complete `SKILL.md`. |
+| `name`      | string?                                  | Required for `skill` and `command`; lowercase hyphen identifier.        |
+| `replaces`  | string?                                  | Existing text to update/remove, matched with normalized whitespace.     |
 
 Targets:
 
@@ -1015,7 +1084,6 @@ Targets:
 - `instructions` + `global` → `~/.agentlink/CLAUDE.md`
 - `skill` → `{scope}/.agentlink/skills/<name>/SKILL.md`
 - `command` → `{scope}/.agentlink/commands/<name>.md` for adds; updates/removals edit an existing same-scope `.agentlink`, `.claude`, or `.agents` command using normal command precedence
-- `memory` → `{scope}/.agentlink/memory.md`
 
 Responses include `status`, `path`, `tier`, `scope`, `operation`, and any new diagnostics. If `replaces` cannot be found, the error includes the current target content so the agent can retry accurately. Rejected approvals return `status: "rejected_by_user"`, plus `reason` and `follow_up` when supplied.
 
@@ -1846,47 +1914,48 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 
 ## Extension Settings
 
-| Setting                                        | Default                    | Description                                                                                                                                 |
-| ---------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agentlink.browserGatewayPort`                 | `47137`                    | Stable port for the shared browser gateway helper                                                                                           |
-| `agentlink.browserGatewayLanAccess`            | `false`                    | Expose the browser gateway on the LAN; non-loopback devices must pair first                                                                 |
-| `agentlink.browserGatewayMdnsName`             | `agentlink`                | mDNS hostname advertised as `<name>.local` when LAN access is enabled                                                                       |
-| `agentlink.browserGateway.dataPlane`           | `on`                       | Helper-owned relay default; set `off` for complete legacy rollback or `shadow` for dual publication with legacy browser traffic             |
-| `agentlink.defaultMode`                        | `code`                     | Default mode for new built-in agent sessions                                                                                                |
-| `agentlink.agentModel`                         | `gpt-5.6-sol`              | Legacy fallback model for the built-in agent chat; mode defaults use `agentlink.modeModelPreferences`                                       |
-| `agentlink.modeModelPreferences`               | GPT-5.6 Sol per mode       | Default model by mode slug; changing the picker in a mode updates that mode's preference                                                    |
-| `agentlink.modeReasoningEffortPreferences`     | `{}`                       | Default thinking level by mode slug; changing the picker in a mode updates that mode's preference                                           |
-| `agentlink.agentMaxTokens`                     | `8192`                     | Maximum output tokens per built-in agent response                                                                                           |
-| `agentlink.thinkingBudget`                     | `10000`                    | Extended thinking budget for thinking-capable models                                                                                        |
-| `agentlink.showThinking`                       | `true`                     | Show thinking blocks in the built-in agent chat UI                                                                                          |
-| `agentlink.anthropic.dynamicModelCapabilities` | `true`                     | Lazily refresh Anthropic model capabilities and merge them over built-in defaults                                                           |
-| `agentlink.autoCondense`                       | `true`                     | Automatically condense built-in agent conversation context when it fills up                                                                 |
-| `agentlink.autoCondenseThreshold`              | `0.9`                      | Legacy global condense threshold retained for migration; prefer `agentlink.modelCondenseThresholds`                                         |
-| `agentlink.modelCondenseThresholds`            | `{}`                       | Per-model condense thresholds for the built-in agent                                                                                        |
-| `agentlink.codexStatefulResponses`             | `true`                     | Chain OpenAI/Codex Responses API turns with `previous_response_id` when available                                                           |
-| `agentlink.codexStoreResponses`                | `false`                    | Opt into OpenAI server-side response storage for stateful Codex/API-key sessions                                                            |
-| `agentlink.provider.maxConcurrentRequests`     | `24`                       | Max simultaneous background model requests per provider; foreground turns bypass the limit (range 1–128)                                    |
-| `agentlink.openaiCompatible.baseUrl`           | `http://127.0.0.1:1234/v1` | OpenAI-compatible helper endpoint for optional question detection/background summaries                                                      |
-| `agentlink.openaiCompatible.model`             | `""`                       | Helper endpoint model id; empty lets compatible local servers choose                                                                        |
-| `agentlink.openaiCompatible.apiKey`            | `""`                       | Optional helper endpoint Bearer token                                                                                                       |
-| `agentlink.openaiCompatible.timeoutMs`         | `5000`                     | Timeout for helper endpoint calls before falling back                                                                                       |
-| `agentlink.questionDetection.mode`             | `heuristic`                | How AgentLink detects idle agent questions and generates answer buttons (`heuristic`, `agent`, `openai`)                                    |
-| `agentlink.bgSummary.mode`                     | `heuristic`                | How background-agent status snippets are summarized (`heuristic`, `agent`, `openai`); model-backed modes use low-priority provider requests |
-| `agentlink.background.defaultAgent`            | `native:auto`              | Background backend: native routing or a configured ACP backend (`acp:<id>`)                                                                 |
-| `agentlink.background.acpAgents`               | `[]`                       | ACP stdio subprocesses available as background-agent backends                                                                               |
-| `agentlink.background.maxConcurrent`           | `8`                        | Max background agents running at once (also caps per-root and per-provider concurrency); extra launches queue                               |
-| `agentlink.semanticSearchEnabled`              | `false`                    | Enable semantic codebase search via Qdrant. Requires Qdrant plus OpenAI auth for embeddings                                                 |
-| `agentlink.qdrantUrl`                          | `http://localhost:6333`    | Qdrant vector database URL used for semantic search and indexing                                                                            |
-| `agentlink.autoIndex`                          | `true`                     | Automatically index the workspace on startup when semantic search is enabled                                                                |
-| `agentlink.chunkGranularity`                   | `fine`                     | Index chunking mode: `standard` or `fine`                                                                                                   |
-| `agentlink.indexExclusions`                    | built-in defaults          | Extra glob patterns to exclude from indexing in addition to `.gitignore`                                                                    |
-| `agentlink.masterBypass`                       | `false`                    | Skip ordinary command and file-write prompts; native escalation, outside-path, MCP, protected-path, and read-only/delegation gates remain   |
-| `agentlink.approvalPosition`                   | `panel`                    | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel)                                                           |
-| `agentlink.diagnosticDelay`                    | `1500`                     | Max ms to wait for diagnostics after save                                                                                                   |
-| `agentlink.recentApprovalTtl`                  | `60`                       | Seconds the same session remembers an identical command approval. `0` = off                                                                 |
-| `agentlink.commandAutoApproveTier`             | `safe`                     | Static command safety tier auto-approved when no explicit rule applies (`off`, `safe`, or `sensitive`)                                      |
-| `agentlink.worktreeDirectorySuffix`            | `-worktrees`               | Suffix for sibling worktree containers used by the manual `/worktree` flow                                                                  |
-| `agentlink.writeRules`                         | `[]`                       | Glob patterns for auto-approved file writes (settings-level)                                                                                |
+| Setting                                        | Default                    | Description                                                                                                                                                                   |
+| ---------------------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agentlink.browserGatewayPort`                 | `47137`                    | Stable port for the shared browser gateway helper                                                                                                                             |
+| `agentlink.browserGatewayLanAccess`            | `false`                    | Expose the browser gateway on the LAN; non-loopback devices must pair first                                                                                                   |
+| `agentlink.browserGatewayMdnsName`             | `agentlink`                | mDNS hostname advertised as `<name>.local` when LAN access is enabled                                                                                                         |
+| `agentlink.browserGateway.dataPlane`           | `on`                       | Helper-owned relay default; set `off` for complete legacy rollback or `shadow` for dual publication with legacy browser traffic                                               |
+| `agentlink.defaultMode`                        | `code`                     | Default mode for new built-in agent sessions                                                                                                                                  |
+| `agentlink.agentModel`                         | `gpt-5.6-sol`              | Legacy fallback model for the built-in agent chat; mode defaults use `agentlink.modeModelPreferences`                                                                         |
+| `agentlink.modeModelPreferences`               | GPT-5.6 Sol per mode       | Default model by mode slug; changing the picker in a mode updates that mode's preference                                                                                      |
+| `agentlink.modeReasoningEffortPreferences`     | `{}`                       | Default thinking level by mode slug; changing the picker in a mode updates that mode's preference                                                                             |
+| `agentlink.modelPromptProfiles`                | `{}`                       | Exact model-ID overrides for `compatibility` or compact `reasoning` prompts; unknown models default to compatibility and automatic reasoning rollout remains evaluation-gated |
+| `agentlink.agentMaxTokens`                     | `8192`                     | Maximum output tokens per built-in agent response                                                                                                                             |
+| `agentlink.thinkingBudget`                     | `10000`                    | Extended thinking budget for thinking-capable models                                                                                                                          |
+| `agentlink.showThinking`                       | `true`                     | Show thinking blocks in the built-in agent chat UI                                                                                                                            |
+| `agentlink.anthropic.dynamicModelCapabilities` | `true`                     | Lazily refresh Anthropic model capabilities and merge them over built-in defaults                                                                                             |
+| `agentlink.autoCondense`                       | `true`                     | Automatically condense built-in agent conversation context when it fills up                                                                                                   |
+| `agentlink.autoCondenseThreshold`              | `0.9`                      | Legacy global condense threshold retained for migration; prefer `agentlink.modelCondenseThresholds`                                                                           |
+| `agentlink.modelCondenseThresholds`            | `{}`                       | Per-model condense thresholds for the built-in agent                                                                                                                          |
+| `agentlink.codexStatefulResponses`             | `true`                     | Chain OpenAI/Codex Responses API turns with `previous_response_id` when available                                                                                             |
+| `agentlink.codexStoreResponses`                | `false`                    | Opt into OpenAI server-side response storage for stateful Codex/API-key sessions                                                                                              |
+| `agentlink.provider.maxConcurrentRequests`     | `24`                       | Max simultaneous background model requests per provider; foreground turns bypass the limit (range 1–128)                                                                      |
+| `agentlink.openaiCompatible.baseUrl`           | `http://127.0.0.1:1234/v1` | OpenAI-compatible helper endpoint for optional question detection/background summaries                                                                                        |
+| `agentlink.openaiCompatible.model`             | `""`                       | Helper endpoint model id; empty lets compatible local servers choose                                                                                                          |
+| `agentlink.openaiCompatible.apiKey`            | `""`                       | Optional helper endpoint Bearer token                                                                                                                                         |
+| `agentlink.openaiCompatible.timeoutMs`         | `5000`                     | Timeout for helper endpoint calls before falling back                                                                                                                         |
+| `agentlink.questionDetection.mode`             | `heuristic`                | How AgentLink detects idle agent questions and generates answer buttons (`heuristic`, `agent`, `openai`)                                                                      |
+| `agentlink.bgSummary.mode`                     | `heuristic`                | How background-agent status snippets are summarized (`heuristic`, `agent`, `openai`); model-backed modes use low-priority provider requests                                   |
+| `agentlink.background.defaultAgent`            | `native:auto`              | Background backend: native routing or a configured ACP backend (`acp:<id>`)                                                                                                   |
+| `agentlink.background.acpAgents`               | `[]`                       | ACP stdio subprocesses available as background-agent backends                                                                                                                 |
+| `agentlink.background.maxConcurrent`           | `8`                        | Max background agents running at once (also caps per-root and per-provider concurrency); extra launches queue                                                                 |
+| `agentlink.semanticSearchEnabled`              | `false`                    | Enable embedded local codebase retrieval; lexical ranking works without credentials and optional embeddings add vector/hybrid ranking                                         |
+| `agentlink.memory.mode`                        | `off`                      | Dogfood typed autonomous low-authority memory (`autonomous`) or disable its tools (`off`)                                                                                     |
+| `agentlink.autoIndex`                          | `true`                     | Automatically index the workspace on startup when semantic search is enabled                                                                                                  |
+| `agentlink.chunkGranularity`                   | `fine`                     | Index chunking mode: `standard` or `fine`                                                                                                                                     |
+| `agentlink.indexExclusions`                    | built-in defaults          | Extra glob patterns to exclude from indexing in addition to `.gitignore`                                                                                                      |
+| `agentlink.masterBypass`                       | `false`                    | Skip ordinary command and file-write prompts; native escalation, outside-path, MCP, protected-path, and read-only/delegation gates remain                                     |
+| `agentlink.approvalPosition`                   | `panel`                    | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel)                                                                                             |
+| `agentlink.diagnosticDelay`                    | `1500`                     | Max ms to wait for diagnostics after save                                                                                                                                     |
+| `agentlink.recentApprovalTtl`                  | `60`                       | Seconds the same session remembers an identical command approval. `0` = off                                                                                                   |
+| `agentlink.commandAutoApproveTier`             | `safe`                     | Static command safety tier auto-approved when no explicit rule applies (`off`, `safe`, or `sensitive`)                                                                        |
+| `agentlink.worktreeDirectorySuffix`            | `-worktrees`               | Suffix for sibling worktree containers used by the manual `/worktree` flow                                                                                                    |
+| `agentlink.writeRules`                         | `[]`                       | Glob patterns for auto-approved file writes (settings-level)                                                                                                                  |
 
 ## Platform Notes
 
@@ -1894,11 +1963,11 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 
 All core features work on Windows: diff views, integrated terminal, diagnostics, language server tools, file operations, browser remote control, and the approval system.
 
-**Building from source:** `npm install && npm run build` works on all platforms. The release script (`npm run release`) requires bash — use Git Bash, WSL, or macOS/Linux.
+**Building from source:** `npm install && npm run build` works on all platforms. `npm run package` produces and verifies a target-labeled VSIX for the current host. The release script (`npm run release`) requires bash — use Git Bash, WSL, or macOS/Linux.
 
 ### macOS / Linux
 
-Fully supported. Browser remote control, integrated terminals, diff review, and semantic indexing use the same extension workflows as Windows.
+Fully supported. Browser remote control, integrated terminals, diff review, and semantic indexing use the same extension workflows as Windows. GitHub releases publish separate LanceDB-enabled VSIX artifacts for Darwin, GNU/Linux, Alpine/musl, and Windows on both ARM64 and x64; the install script selects the current host target instead of downloading an arbitrary asset.
 
 ## Troubleshooting
 
@@ -1926,13 +1995,11 @@ Common fixes:
 
 Common causes:
 
-- **Semantic search disabled** — set `agentlink.semanticSearchEnabled` to `true`
-- **Qdrant not reachable** — verify `agentlink.qdrantUrl` and make sure Qdrant is running
-- **No index yet** — run **AgentLink: Rebuild Codebase Index** or click **Index Codebase** in the sidebar
-- **OpenAI auth missing** — run **AgentLink: Sign In to OpenAI/Codex** or set `OPENAI_API_KEY`
-- **No workspace open** — semantic search requires an open workspace folder
-
-If Qdrant is reachable but returns no collection, AgentLink will report that no codebase index was found for the current workspace.
+- **Semantic search disabled** — set `agentlink.semanticSearchEnabled` to `true`.
+- **No index yet** — run **AgentLink: Rebuild Codebase Index** or click **Index Codebase** in the sidebar.
+- **Retrieval store unavailable** — check **View > Output > AgentLink**, then rebuild the index if the local store is damaged.
+- **No vector/hybrid ranking** — run **AgentLink: Set OpenAI API Key for Embeddings** or set `OPENAI_API_KEY`; lexical retrieval remains available without it.
+- **No workspace open** — semantic search requires an open workspace folder.
 
 ## Architecture
 

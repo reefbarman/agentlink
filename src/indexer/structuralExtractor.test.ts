@@ -7,6 +7,9 @@ import {
   buildLineStarts,
   extractStructuralFile,
   getLineNumberAtOffset,
+  normalizeStructuralSymbolHints,
+  shouldUseTreeSitterSymbolHints,
+  STRUCTURAL_EXTRACTOR_VERSION,
   type StructuralExtractorMetrics,
 } from "./structuralExtractor.js";
 
@@ -110,6 +113,21 @@ describe("extractStructuralFile", () => {
     });
   }
 
+  it("rejects mismatched absolute and relative path identities", () => {
+    const content = "export const actual = true;";
+    const absPath = writeFile("src/actual.ts", content);
+
+    expect(() =>
+      extractStructuralFile({
+        content,
+        absPath,
+        relPath: "src/claimed.ts",
+        workspaceRoot,
+        hash: hashContent(content),
+      }),
+    ).toThrow("Path does not match its canonical workspace identity");
+  });
+
   it("bounds module-resolution candidate checks", () => {
     writeFile("src/direct.ts", "export const direct = true;");
     writeFile("src/generated.ts", "export const generated = true;");
@@ -143,6 +161,32 @@ describe("extractStructuralFile", () => {
     expect(metrics.resolutionCandidateChecks).toBeLessThanOrEqual(
       metrics.relativeSpecifiers * 15,
     );
+  });
+
+  it("leaves traversal and symlink escapes unresolved", () => {
+    const outsideName = `${path.basename(workspaceRoot)}-outside`;
+    const outside = path.join(path.dirname(workspaceRoot), `${outsideName}.ts`);
+    try {
+      fs.writeFileSync(outside, "export const outside = true;", "utf8");
+      const alias = path.join(workspaceRoot, "src", "linked.ts");
+      fs.mkdirSync(path.dirname(alias), { recursive: true });
+      fs.symlinkSync(outside, alias, "file");
+
+      const entry = extract(
+        "src/nested/importer.ts",
+        [
+          `import { outside } from "../../../${outsideName}";`,
+          'import { linked } from "../linked";',
+        ].join("\n"),
+      );
+
+      expect(entry.imports.map((item) => item.resolvedRelPath)).toEqual([
+        undefined,
+        undefined,
+      ]);
+    } finally {
+      fs.rmSync(outside, { force: true });
+    }
   });
 
   it("extracts static JS/TS imports and resolves relative specifiers", () => {
@@ -409,6 +453,77 @@ describe("extractStructuralFile", () => {
     }
   });
 
+  it("normalizes parser symbol hints into the stable structural vocabulary", () => {
+    expect(
+      normalizeStructuralSymbolHints([
+        {
+          name: "run",
+          kind: "method",
+          exported: false,
+          line: 8,
+          scope: ["class Worker", "method run"],
+        },
+        {
+          name: "run",
+          kind: "method",
+          exported: false,
+          line: 9,
+          scope: ["class Worker", "method run"],
+        },
+        { name: "State", kind: "struct", exported: true, line: 2 },
+        { name: "Visible", kind: "trait", exported: true, line: 3 },
+        { name: "VALUE", kind: "constant", exported: true, line: 4 },
+        { name: "namespace", kind: "module", line: 1 },
+      ]),
+    ).toEqual([
+      { name: "run", kind: "function", exported: false, line: 8 },
+      { name: "State", kind: "class", exported: true, line: 2 },
+      { name: "Visible", kind: "interface", exported: true, line: 3 },
+      { name: "VALUE", kind: "const", exported: true, line: 4 },
+      { name: "namespace", kind: "unknown", line: 1 },
+    ]);
+  });
+
+  it("uses parser symbol hints only outside the JavaScript family", () => {
+    expect(shouldUseTreeSitterSymbolHints("src/example.py")).toBe(true);
+    expect(shouldUseTreeSitterSymbolHints("src/example.java")).toBe(true);
+    expect(shouldUseTreeSitterSymbolHints("src/example.ts")).toBe(false);
+    expect(shouldUseTreeSitterSymbolHints("src/example.tsx")).toBe(false);
+    expect(shouldUseTreeSitterSymbolHints("src/example.js")).toBe(false);
+    expect(shouldUseTreeSitterSymbolHints("src/example.jsx")).toBe(false);
+    expect(shouldUseTreeSitterSymbolHints("src/example.mjs")).toBe(false);
+    expect(shouldUseTreeSitterSymbolHints("src/example.cjs")).toBe(false);
+  });
+
+  it("merges non-JavaScript parser symbols but preserves JavaScript extraction", () => {
+    const python = extract("src/example.py", "def run():\n    return True");
+    const pythonWithHints = extractStructuralFile({
+      content: "def run():\n    return True",
+      absPath: path.join(workspaceRoot, "src/example.py"),
+      relPath: "src/example.py",
+      workspaceRoot,
+      hash: python.hash,
+      symbolHints: [
+        { name: "run", kind: "function", exported: false, line: 1 },
+      ],
+    });
+    expect(pythonWithHints.symbols).toEqual([
+      { name: "run", kind: "function", exported: false, line: 1 },
+    ]);
+
+    const typescriptContent = "export const value = 1;";
+    const typescript = extract("src/hints.ts", typescriptContent);
+    const ignoredHints = extractStructuralFile({
+      content: typescriptContent,
+      absPath: path.join(workspaceRoot, "src/hints.ts"),
+      relPath: "src/hints.ts",
+      workspaceRoot,
+      hash: typescript.hash,
+      symbolHints: [{ name: "wrong", kind: "class", line: 99 }],
+    });
+    expect(ignoredHints.symbols).toEqual(typescript.symbols);
+  });
+
   it("records metadata and language", () => {
     const content = "export const value = 1;";
     const entry = extract("src/foo.ts", content);
@@ -419,5 +534,6 @@ describe("extractStructuralFile", () => {
     expect(entry.size).toBeGreaterThan(0);
     expect(entry.mtimeMs).toBeGreaterThan(0);
     expect(entry.language).toBe("typescript");
+    expect(entry.extractorVersion).toBe(STRUCTURAL_EXTRACTOR_VERSION);
   });
 });

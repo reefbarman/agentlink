@@ -15,6 +15,7 @@ import {
 } from "./scripts/browser-gateway-bundle-report.mjs";
 
 import { resolveBrowserGatewayDevBuild } from "./scripts/browser-gateway-build-env.mjs";
+import { stageRetrievalRuntime } from "./scripts/package-retrieval-runtime.mjs";
 import { stageSandboxRuntime } from "./scripts/package-sandbox-runtime.mjs";
 
 const watch = process.argv.includes("--watch");
@@ -42,7 +43,7 @@ const extensionOptions = {
   entryPoints: ["src/extension.ts"],
   bundle: true,
   outfile: "dist/extension.js",
-  external: ["vscode"],
+  external: ["vscode", "@lancedb/lancedb", "apache-arrow"],
   format: "cjs",
   platform: "node",
   target: "node22",
@@ -58,6 +59,7 @@ const composeRuntimeOptions = {
   entryPoints: ["src/agent/compose/composeRuntime.ts"],
   bundle: true,
   outfile: "dist/compose-runtime.mjs",
+  external: ["@lancedb/lancedb", "apache-arrow"],
   format: "esm",
   platform: "node",
   target: "node22",
@@ -191,7 +193,7 @@ const indexerOptions = {
   entryPoints: ["src/indexer/worker.ts"],
   bundle: true,
   outfile: "dist/indexer-worker.js",
-  external: ["vscode"],
+  external: ["vscode", "@lancedb/lancedb", "apache-arrow"],
   format: "cjs",
   platform: "node",
   target: "node22",
@@ -214,7 +216,7 @@ const browserGatewayHelperOptions = {
   entryPoints: ["src/browser-gateway/helper/browserGatewayHelper.ts"],
   bundle: true,
   outfile: "dist/browser-gateway-helper.js",
-  external: ["vscode"],
+  external: ["vscode", "@lancedb/lancedb", "apache-arrow"],
   format: "cjs",
   platform: "node",
   target: "node22",
@@ -349,7 +351,16 @@ if (watch) {
     }
   }
 
-  await stageSandboxRuntime();
+  const [sandboxRuntime, retrievalRuntime] = await Promise.all([
+    stageSandboxRuntime(),
+    stageRetrievalRuntime(),
+  ]);
+  console.log(
+    `Retrieval runtime: ${retrievalRuntime.target} (${retrievalRuntime.nativePackage}); ${retrievalRuntime.packages.length} packages staged`,
+  );
+  console.log(
+    `Sandbox runtime: ${sandboxRuntime.staged.length} entries staged`,
+  );
 
   console.log("Build complete.");
 }

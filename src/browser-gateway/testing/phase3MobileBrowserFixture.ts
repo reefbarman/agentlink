@@ -772,6 +772,7 @@ function createReadSet(): MutableReadSet {
       lastInputTokens: 0,
       lastOutputTokens: 0,
       lastCacheReadTokens: 0,
+      contextHealth: null,
       restoringSession: false,
       revertRecoveryNotice: null,
       messages: [message],

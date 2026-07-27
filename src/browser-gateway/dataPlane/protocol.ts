@@ -1,3 +1,4 @@
+import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
 import { utf8ByteLength } from "../../shared/streamingBaselineMetrics.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./limits.js";
 
@@ -139,6 +140,7 @@ export interface BrowserGatewayForegroundControlState {
   lastOutputTokens?: number;
   lastCacheReadTokens?: number;
   contextBudget?: BrowserGatewayContextBudget;
+  contextHealth?: ContextHealthSnapshot | null;
   condenseThreshold?: number;
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
   commandApprovalPolicy?: "manual" | "safe" | "approve-for-me" | "sensitive";
@@ -1315,6 +1317,7 @@ function parseForeground(
     "lastOutputTokens",
     "lastCacheReadTokens",
     "contextBudget",
+    "contextHealth",
     "condenseThreshold",
     "agentWriteApproval",
     "commandApprovalPolicy",
@@ -1361,6 +1364,12 @@ function parseForeground(
     "contextBudget",
     path,
     parseContextBudget,
+  );
+  const contextHealth = parseOptionalNullableObject(
+    object,
+    "contextHealth",
+    path,
+    parseContextHealth,
   );
   const revertRecoveryNotice = parseOptionalNullableObject(
     object,
@@ -1440,6 +1449,7 @@ function parseForeground(
     ...(lastOutputTokens !== undefined ? { lastOutputTokens } : {}),
     ...(lastCacheReadTokens !== undefined ? { lastCacheReadTokens } : {}),
     ...(contextBudget ? { contextBudget } : {}),
+    ...(contextHealth.present ? { contextHealth: contextHealth.value } : {}),
     ...(object.condenseThreshold !== undefined
       ? {
           condenseThreshold: unitIntervalNumber(
@@ -1614,6 +1624,166 @@ function parseContextBudget(
     safetyBufferTokens,
     softThresholdBudget,
     hardBudget,
+  };
+}
+
+function parseContextHealth(
+  value: unknown,
+  path: string,
+): ContextHealthSnapshot {
+  const object = strictRecord(value, path, ["memory", "retrieval", "index"]);
+  const memory = strictRecord(object.memory, `${path}.memory`, [
+    "status",
+    "retrieval",
+    "activeRecordCount",
+    "reason",
+  ]);
+  const retrieval = strictRecord(object.retrieval, `${path}.retrieval`, [
+    "status",
+    "lexical",
+    "vector",
+    "structural",
+    "sourceCount",
+    "chunkCount",
+    "staleSourceCount",
+    "reason",
+  ]);
+  const index = strictRecord(object.index, `${path}.index`, [
+    "status",
+    "state",
+    "current",
+    "total",
+    "totalFilesInIndex",
+    "totalChunksInIndex",
+    "reason",
+  ]);
+  const statusValues = new Set([
+    "ready",
+    "working",
+    "degraded",
+    "unavailable",
+    "disabled",
+    "not_measured",
+  ]);
+  const optionalCount = (
+    record: Record<string, unknown>,
+    key: string,
+    base: string,
+  ) => optionalNonNegativeInteger(record, key, base);
+  const optionalReason = (record: Record<string, unknown>, base: string) =>
+    optionalString(record, "reason", base, 240);
+  const memoryActiveRecordCount = optionalCount(
+    memory,
+    "activeRecordCount",
+    `${path}.memory`,
+  );
+  const memoryReason = optionalReason(memory, `${path}.memory`);
+  const retrievalSourceCount = optionalCount(
+    retrieval,
+    "sourceCount",
+    `${path}.retrieval`,
+  );
+  const retrievalChunkCount = optionalCount(
+    retrieval,
+    "chunkCount",
+    `${path}.retrieval`,
+  );
+  const retrievalStaleSourceCount = optionalCount(
+    retrieval,
+    "staleSourceCount",
+    `${path}.retrieval`,
+  );
+  const retrievalReason = optionalReason(retrieval, `${path}.retrieval`);
+  const indexCurrent = optionalCount(index, "current", `${path}.index`);
+  const indexTotal = optionalCount(index, "total", `${path}.index`);
+  const indexTotalFiles = optionalCount(
+    index,
+    "totalFilesInIndex",
+    `${path}.index`,
+  );
+  const indexTotalChunks = optionalCount(
+    index,
+    "totalChunksInIndex",
+    `${path}.index`,
+  );
+  const indexReason = optionalReason(index, `${path}.index`);
+  return {
+    memory: {
+      status: enumValue(
+        memory.status,
+        `${path}.memory.status`,
+        statusValues,
+      ) as ContextHealthSnapshot["memory"]["status"],
+      retrieval: enumValue(
+        memory.retrieval,
+        `${path}.memory.retrieval`,
+        new Set(["lexical-only", "hybrid", "unavailable", "not_measured"]),
+      ) as ContextHealthSnapshot["memory"]["retrieval"],
+      ...(memoryActiveRecordCount !== undefined
+        ? { activeRecordCount: memoryActiveRecordCount }
+        : {}),
+      ...(memoryReason ? { reason: memoryReason } : {}),
+    },
+    retrieval: {
+      status: enumValue(
+        retrieval.status,
+        `${path}.retrieval.status`,
+        statusValues,
+      ) as ContextHealthSnapshot["retrieval"]["status"],
+      lexical: enumValue(
+        retrieval.lexical,
+        `${path}.retrieval.lexical`,
+        new Set(["ready", "unavailable", "not_measured"]),
+      ) as ContextHealthSnapshot["retrieval"]["lexical"],
+      vector: enumValue(
+        retrieval.vector,
+        `${path}.retrieval.vector`,
+        new Set(["ready", "unavailable", "not_configured", "not_measured"]),
+      ) as ContextHealthSnapshot["retrieval"]["vector"],
+      structural: enumValue(
+        retrieval.structural,
+        `${path}.retrieval.structural`,
+        new Set(["ready", "unavailable", "not_measured"]),
+      ) as ContextHealthSnapshot["retrieval"]["structural"],
+      ...(retrievalSourceCount !== undefined
+        ? { sourceCount: retrievalSourceCount }
+        : {}),
+      ...(retrievalChunkCount !== undefined
+        ? { chunkCount: retrievalChunkCount }
+        : {}),
+      ...(retrievalStaleSourceCount !== undefined
+        ? { staleSourceCount: retrievalStaleSourceCount }
+        : {}),
+      ...(retrievalReason ? { reason: retrievalReason } : {}),
+    },
+    index: {
+      status: enumValue(
+        index.status,
+        `${path}.index.status`,
+        statusValues,
+      ) as ContextHealthSnapshot["index"]["status"],
+      state: enumValue(
+        index.state,
+        `${path}.index.state`,
+        new Set([
+          "idle",
+          "discovering",
+          "indexing",
+          "error",
+          "disabled",
+          "not_measured",
+        ]),
+      ) as ContextHealthSnapshot["index"]["state"],
+      ...(indexCurrent !== undefined ? { current: indexCurrent } : {}),
+      ...(indexTotal !== undefined ? { total: indexTotal } : {}),
+      ...(indexTotalFiles !== undefined
+        ? { totalFilesInIndex: indexTotalFiles }
+        : {}),
+      ...(indexTotalChunks !== undefined
+        ? { totalChunksInIndex: indexTotalChunks }
+        : {}),
+      ...(indexReason ? { reason: indexReason } : {}),
+    },
   };
 }
 

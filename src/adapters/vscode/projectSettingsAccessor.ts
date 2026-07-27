@@ -9,7 +9,6 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "masterBypass",
   "diagnosticDelay",
   "semanticSearchEnabled",
-  "qdrantUrl",
   "bgSummary.mode",
   "background.defaultAgent",
   "background.acpAgents",
@@ -23,6 +22,7 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "agentModel",
   "modeModelPreferences",
   "modeReasoningEffortPreferences",
+  "modelPromptProfiles",
   "agentMaxTokens",
   "thinkingBudget",
   "autoCondense",
@@ -32,6 +32,7 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
   "codexStatefulResponses",
   "codexStoreResponses",
   "codexProMode",
+  "skills.disabledIds",
 ] as const;
 
 export const MACHINE_SCOPED_AGENTLINK_SETTINGS = [
@@ -61,6 +62,7 @@ export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
   "openaiCompatible.apiKey",
   "openaiCompatible.timeoutMs",
   "questionDetection.mode",
+  "memory.mode",
   "showThinking",
   "anthropic.dynamicModelCapabilities",
 ] as const;
@@ -81,6 +83,10 @@ type ProjectSettingsTarget =
   | Pick<WorkspaceProject, "uri">
   | Pick<SessionProjectScope, "workspaceFolderUri">;
 
+export interface ProjectSettingChangeEvent {
+  affectsConfiguration(section: string, resource?: vscode.Uri): boolean;
+}
+
 export interface ProjectSettingsAccessor {
   getConfiguration(
     project: ProjectSettingsTarget,
@@ -96,6 +102,19 @@ function projectUri(project: ProjectSettingsTarget): vscode.Uri {
   return vscode.Uri.parse(
     "workspaceFolderUri" in project ? project.workspaceFolderUri : project.uri,
   );
+}
+
+export function getAffectedProjectSettingIds(
+  event: ProjectSettingChangeEvent,
+  setting: ProjectScopedAgentLinkSetting,
+  projects: readonly WorkspaceProject[],
+): string[] {
+  const section = `agentlink.${setting}`;
+  return projects
+    .filter((project) =>
+      event.affectsConfiguration(section, projectUri(project)),
+    )
+    .map((project) => project.id);
 }
 
 export function createProjectSettingsAccessor(): ProjectSettingsAccessor {

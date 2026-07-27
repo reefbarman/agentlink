@@ -144,7 +144,7 @@ describe("Phase3MobileBrowserFixture", () => {
 
     await fixture.stop();
     expect(await fixture.listRegistryInstances()).toEqual([]);
-  });
+  }, 15_000);
 });
 
 async function distinctAvailablePorts(): Promise<[number, number]> {

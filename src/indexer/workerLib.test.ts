@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { IndexCache } from "./types.js";
 import type { StructuralGraphCache } from "./structuralGraph.js";
+import { createCodeIndexFingerprint } from "./retrievalFingerprint.js";
 import { createIndexWorkerMetrics } from "./workerMetrics.js";
 
 const ioMocks = vi.hoisted(() => ({
@@ -146,22 +147,120 @@ describe("loadCache / writeCache", () => {
     expect(cache).toEqual({ version: 1, files: {} });
   });
 
-  it("round-trips a cache through write then load", () => {
+  it("round-trips a cache while dual-writing legacy ownership aliases", () => {
     const cachePath = path.join(tmpDir, "cache.json");
     const cache: IndexCache = {
       version: 1,
       files: {
         "src/foo.ts": {
           hash: "abc123",
-          pointIds: ["p1", "p2"],
+          recordIds: ["p1", "p2"],
+          indexedAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+    };
+
+    const persistedBytes = writeCache(cachePath, cache);
+    const persistedRaw = fs.readFileSync(cachePath, "utf8");
+    const persisted = JSON.parse(persistedRaw) as {
+      files: Record<string, { recordIds: string[]; pointIds: string[] }>;
+    };
+    expect(persistedBytes).toBe(Buffer.byteLength(persistedRaw, "utf8"));
+    expect(persisted.files["src/foo.ts"]).toMatchObject({
+      recordIds: ["p1", "p2"],
+      pointIds: ["p1", "p2"],
+    });
+    expect(loadCache(cachePath)).toEqual(cache);
+  });
+
+  it.each([
+    ["legacy", { pointIds: ["record-1"] }],
+    ["canonical", { recordIds: ["record-1"] }],
+    ["matching aliases", { recordIds: ["record-1"], pointIds: ["record-1"] }],
+  ])("normalizes %s cache ownership", (_name, ownership) => {
+    const cachePath = path.join(tmpDir, "ownership.json");
+    fs.writeFileSync(
+      cachePath,
+      JSON.stringify({
+        version: 1,
+        files: {
+          "src/foo.ts": {
+            hash: "hash",
+            indexedAt: "2026-01-01T00:00:00.000Z",
+            ...ownership,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    expect(loadIndexCache(cachePath)).toEqual({
+      status: "valid",
+      cache: {
+        version: 1,
+        files: {
+          "src/foo.ts": {
+            hash: "hash",
+            recordIds: ["record-1"],
+            indexedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects conflicting cache ownership aliases", () => {
+    const cachePath = path.join(tmpDir, "conflicting-ownership.json");
+    fs.writeFileSync(
+      cachePath,
+      JSON.stringify({
+        version: 1,
+        files: {
+          "src/foo.ts": {
+            hash: "hash",
+            recordIds: ["record-1"],
+            pointIds: ["record-2"],
+            indexedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    expect(loadIndexCache(cachePath)).toMatchObject({ status: "corrupt" });
+  });
+
+  it("round-trips a complete retrieval fingerprint without changing ownership", () => {
+    const cachePath = path.join(tmpDir, "fingerprinted.json");
+    const cache: IndexCache = {
+      version: 1,
+      granularity: "fine",
+      fingerprint: createCodeIndexFingerprint("fine"),
+      files: {
+        "src/foo.ts": {
+          hash: "abc123",
+          recordIds: ["point-1"],
           indexedAt: "2026-01-01T00:00:00.000Z",
         },
       },
     };
 
     writeCache(cachePath, cache);
-    const loaded = loadCache(cachePath);
-    expect(loaded).toEqual(cache);
+
+    expect(loadIndexCache(cachePath)).toEqual({ status: "valid", cache });
+  });
+
+  it("keeps a legacy cache without a fingerprint syntactically valid", () => {
+    const cachePath = path.join(tmpDir, "legacy.json");
+    const cache: IndexCache = {
+      version: 1,
+      granularity: "standard",
+      files: {},
+    };
+
+    writeCache(cachePath, cache);
+
+    expect(loadIndexCache(cachePath)).toEqual({ status: "valid", cache });
   });
 
   it("creates nested directories for cache path", () => {
@@ -215,7 +314,7 @@ describe("loadCache / writeCache", () => {
       },
     ],
     [
-      "duplicate point ownership",
+      "duplicate record ownership",
       {
         version: 1,
         files: {
@@ -228,7 +327,7 @@ describe("loadCache / writeCache", () => {
       },
     ],
     [
-      "cross-file point ownership",
+      "cross-file record ownership",
       {
         version: 1,
         files: {
@@ -255,6 +354,20 @@ describe("loadCache / writeCache", () => {
             pointIds: ["point-1"],
             indexedAt: "2026-01-01T00:00:00.000Z",
             visibility: "published",
+          },
+        },
+      },
+    ],
+    [
+      "malformed fingerprint",
+      {
+        version: 1,
+        files: {},
+        fingerprint: {
+          ...createCodeIndexFingerprint("standard"),
+          embedding: {
+            ...createCodeIndexFingerprint("standard").embedding,
+            dimensions: 0,
           },
         },
       },
@@ -294,12 +407,12 @@ describe("loadStructuralCache / writeStructuralCache", () => {
     });
   });
 
-  it("round-trips a structural cache through write then load", () => {
+  it("round-trips canonical state without writing the legacy v1 alias", () => {
     const cachePath = path.join(tmpDir, "cache.structural.json");
     const cache: StructuralGraphCache = {
       version: 1,
       workspaceRoot: tmpDir,
-      collectionName: "al-test",
+      indexName: "al-test",
       generatedAt: "2026-01-01T00:00:00.000Z",
       files: {
         "src/foo.ts": {
@@ -321,8 +434,58 @@ describe("loadStructuralCache / writeStructuralCache", () => {
     };
 
     writeStructuralCache(cachePath, cache);
-    const loaded = loadStructuralCache(cachePath, tmpDir);
-    expect(loaded).toEqual(cache);
+    expect(JSON.parse(fs.readFileSync(cachePath, "utf8"))).toEqual(cache);
+    expect(JSON.parse(fs.readFileSync(cachePath, "utf8"))).not.toHaveProperty(
+      "collectionName",
+    );
+    expect(loadStructuralCache(cachePath, tmpDir)).toEqual(cache);
+  });
+
+  it.each([
+    ["canonical", { indexName: "al-test" }],
+    ["legacy", { collectionName: "al-test" }],
+    ["matching aliases", { indexName: "al-test", collectionName: "al-test" }],
+  ])("normalizes a %s structural cache identity", (_, identity) => {
+    const cachePath = path.join(tmpDir, "identity.structural.json");
+    fs.writeFileSync(
+      cachePath,
+      JSON.stringify({
+        version: 1,
+        workspaceRoot: tmpDir,
+        generatedAt: "2026-01-01T00:00:00.000Z",
+        files: {},
+        ...identity,
+      }),
+      "utf8",
+    );
+
+    expect(loadStructuralCache(cachePath, tmpDir)).toEqual({
+      version: 1,
+      workspaceRoot: tmpDir,
+      indexName: "al-test",
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      files: {},
+    });
+  });
+
+  it("rejects conflicting structural cache identity aliases", () => {
+    const cachePath = path.join(tmpDir, "conflict.structural.json");
+    fs.writeFileSync(
+      cachePath,
+      JSON.stringify({
+        version: 1,
+        workspaceRoot: tmpDir,
+        indexName: "canonical",
+        collectionName: "legacy",
+        generatedAt: "2026-01-01T00:00:00.000Z",
+        files: {},
+      }),
+      "utf8",
+    );
+
+    expect(loadStructuralCache(cachePath, tmpDir)).toEqual(
+      emptyStructuralCache(tmpDir),
+    );
   });
 
   it("creates nested directories for structural cache path", () => {
@@ -402,11 +565,78 @@ describe("scanFiles / readFilesBatch", () => {
     );
 
     expect(result.toIndexPaths).toEqual([
-      { absPath: validPath, relPath: "valid.ts" },
+      { absPath: fs.realpathSync(validPath), relPath: "valid.ts" },
     ]);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("missing.ts");
     expect(progress).toEqual([[2, 2]]);
+  });
+
+  it("deduplicates aliases that resolve to one canonical file identity", async () => {
+    const target = writeFile(
+      path.join("src", "target.ts"),
+      "export const target = true;",
+    );
+    const alias = path.join(tmpDir, "src", "alias.ts");
+    fs.symlinkSync(target, alias, "file");
+
+    const result = await scanFiles([alias, target, alias], tmpDir, {
+      version: 1,
+      files: {},
+    });
+
+    expect(result.toIndexPaths).toEqual([
+      {
+        absPath: fs.realpathSync(target),
+        relPath: path.join("src", "target.ts"),
+      },
+    ]);
+    expect(ioMocks.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects symlink escapes during scan before content is read", async () => {
+    const outsideDirectory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "workerlib-outside-"),
+    );
+    try {
+      const outside = path.join(outsideDirectory, "outside.ts");
+      fs.writeFileSync(outside, "export const outside = true;", "utf8");
+      const alias = path.join(tmpDir, "src", "outside.ts");
+      fs.mkdirSync(path.dirname(alias), { recursive: true });
+      fs.symlinkSync(outside, alias, "file");
+
+      await expect(
+        scanFiles([alias], tmpDir, { version: 1, files: {} }),
+      ).resolves.toEqual({
+        toIndexPaths: [],
+        removedRelPaths: [],
+        staleRelPaths: [],
+        cacheMetadataChanged: false,
+        errors: [],
+      });
+      expect(ioMocks.stat).not.toHaveBeenCalled();
+      expect(ioMocks.open).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(outsideDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a batch path paired with a different workspace key", async () => {
+    const file = writeFile(path.join("src", "actual.ts"), "content");
+    const errors: string[] = [];
+
+    await expect(
+      readFilesBatch(
+        [{ absPath: file, relPath: path.join("src", "other.ts") }],
+        errors,
+        { workspaceRoot: tmpDir },
+      ),
+    ).resolves.toEqual([]);
+    expect(errors).toEqual([
+      expect.stringContaining("canonical workspace identity"),
+    ]);
+    expect(ioMocks.stat).not.toHaveBeenCalled();
+    expect(ioMocks.open).not.toHaveBeenCalled();
   });
 
   it("admits at most ten reads and starts queued work in input order", async () => {
@@ -439,7 +669,10 @@ describe("scanFiles / readFilesBatch", () => {
     ioMocks.readFile.mockResolvedValue("content");
 
     const metrics = createIndexWorkerMetrics();
-    const resultPromise = readFilesBatch(paths, [], { metrics });
+    const resultPromise = readFilesBatch(paths, [], {
+      workspaceRoot: tmpDir,
+      metrics,
+    });
     await vi.waitFor(() => expect(pendingStats).toHaveLength(10));
     expect(pendingStats.map(({ path: file }) => path.basename(file))).toEqual(
       paths.slice(0, 10).map(({ relPath }) => relPath),
@@ -471,19 +704,21 @@ describe("scanFiles / readFilesBatch", () => {
       files: {
         "changed.ts": {
           hash: hashContent("export const value = 1;"),
-          pointIds: ["changed-point"],
+          recordIds: ["changed-point"],
           indexedAt: "2026-01-01T00:00:00.000Z",
         },
         "removed.ts": {
           hash: "removed-hash",
-          pointIds: ["removed-point"],
+          recordIds: ["removed-point"],
           indexedAt: "2026-01-01T00:00:00.000Z",
         },
       },
     };
 
     await expect(scanFiles([changed], tmpDir, cache)).resolves.toEqual({
-      toIndexPaths: [{ absPath: changed, relPath: "changed.ts" }],
+      toIndexPaths: [
+        { absPath: fs.realpathSync(changed), relPath: "changed.ts" },
+      ],
       removedRelPaths: ["removed.ts"],
       staleRelPaths: ["changed.ts", "removed.ts"],
       cacheMetadataChanged: false,
@@ -510,7 +745,9 @@ describe("scanFiles / readFilesBatch", () => {
     });
     expect(progress).toHaveBeenCalledOnce();
     expect(progress).toHaveBeenCalledWith(0, 0);
-    await expect(readFilesBatch([], [])).resolves.toEqual([]);
+    await expect(
+      readFilesBatch([], [], { workspaceRoot: tmpDir }),
+    ).resolves.toEqual([]);
   });
 
   it("propagates progress callback errors after releasing worker permits", async () => {
@@ -562,11 +799,12 @@ describe("scanFiles / readFilesBatch", () => {
         { absPath: validPath, relPath: "valid.ts" },
       ],
       errors,
+      { workspaceRoot: tmpDir },
     );
 
     expect(result).toEqual([
       expect.objectContaining({
-        absPath: validPath,
+        absPath: fs.realpathSync(validPath),
         relPath: "valid.ts",
         content: "export const valid = true;",
       }),
@@ -589,17 +827,17 @@ describe("scanFiles / readFilesBatch", () => {
       files: {
         "changed.ts": {
           hash: "old-hash",
-          pointIds: ["changed"],
+          recordIds: ["changed"],
           indexedAt: "2026-01-01T00:00:00.000Z",
         },
         "unchanged.ts": {
           hash: hashContent(unchangedContent),
-          pointIds: ["unchanged"],
+          recordIds: ["unchanged"],
           indexedAt: "2026-01-01T00:00:00.000Z",
         },
         "unrelated.ts": {
           hash: "unrelated-hash",
-          pointIds: ["unrelated"],
+          recordIds: ["unrelated"],
           indexedAt: "2026-01-01T00:00:00.000Z",
         },
       },
@@ -613,6 +851,7 @@ describe("scanFiles / readFilesBatch", () => {
     );
     const readErrors: string[] = [];
     const files = await readFilesBatch(scan.toIndexPaths, readErrors, {
+      workspaceRoot: tmpDir,
       cache,
     });
 
@@ -645,7 +884,7 @@ describe("scanFiles / readFilesBatch", () => {
           hash: "stale-hash",
           mtimeMs: stat.mtimeMs,
           size: stat.size,
-          pointIds: ["old-point"],
+          recordIds: ["old-point"],
           indexedAt: "2026-01-01T00:00:00.000Z",
         },
       },
@@ -658,7 +897,7 @@ describe("scanFiles / readFilesBatch", () => {
 
     expect(full.toIndexPaths).toEqual([]);
     expect(incremental.toIndexPaths).toEqual([
-      { absPath: changed, relPath: "changed.ts" },
+      { absPath: fs.realpathSync(changed), relPath: "changed.ts" },
     ]);
   });
 
@@ -671,7 +910,7 @@ describe("scanFiles / readFilesBatch", () => {
       files: {
         "stable.ts": {
           hash: hashContent(content),
-          pointIds: ["stable"],
+          recordIds: ["stable"],
           indexedAt: "2026-01-01T00:00:00.000Z",
         },
       },
@@ -763,6 +1002,7 @@ describe("scanFiles / readFilesBatch", () => {
 
     const errors: string[] = [];
     const resultPromise = readFilesBatch(paths, errors, {
+      workspaceRoot: tmpDir,
       isCancelled: () => cancelled,
     });
     await vi.waitFor(() => expect(pendingStats).toHaveLength(10));
@@ -809,6 +1049,7 @@ describe("scanFiles / readFilesBatch", () => {
     const result = await readFilesBatch(
       [{ absPath: file, relPath: "racing.ts" }],
       errors,
+      { workspaceRoot: tmpDir },
     );
 
     expect(result).toEqual([
@@ -836,6 +1077,7 @@ describe("scanFiles / readFilesBatch", () => {
     const result = await readFilesBatch(
       [{ absPath: file, relPath: "path-racing.ts" }],
       errors,
+      { workspaceRoot: tmpDir },
     );
 
     expect(result).toEqual([
@@ -878,7 +1120,7 @@ describe("scanFiles / readFilesBatch", () => {
     const result = await readFilesBatch(
       [{ absPath: file, relPath: "growing.ts" }],
       errors,
-      { metrics },
+      { workspaceRoot: tmpDir, metrics },
     );
 
     expect(result).toEqual([]);
@@ -896,7 +1138,7 @@ describe("scanFiles / readFilesBatch", () => {
       files: {
         "reverted.ts": {
           hash: hashContent(revertedContent),
-          pointIds: ["reverted"],
+          recordIds: ["reverted"],
           indexedAt: "2026-01-01T00:00:00.000Z",
         },
       },
@@ -912,6 +1154,7 @@ describe("scanFiles / readFilesBatch", () => {
     const onCacheMetadataChanged = vi.fn();
     await expect(
       readFilesBatch(scan.toIndexPaths, errors, {
+        workspaceRoot: tmpDir,
         cache,
         onCacheMetadataChanged,
       }),
@@ -945,7 +1188,7 @@ describe("scanFiles / readFilesBatch", () => {
     const files = await readFilesBatch(
       [{ absPath: file, relPath: "malformed.ts" }],
       [],
-      { metrics },
+      { workspaceRoot: tmpDir, metrics },
     );
 
     expect(files).toEqual([

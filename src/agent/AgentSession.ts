@@ -4,7 +4,10 @@ import type {
   AgentRuntimeError,
   SessionStatus,
 } from "./types.js";
-import type { RequestContextBreakdown } from "../shared/types.js";
+import type {
+  RequestContextBreakdown,
+  ToolResultContextAttribution,
+} from "../shared/types.js";
 import type {
   ContentBlock,
   ReasoningEffort,
@@ -19,10 +22,23 @@ import {
 import type { AgentMode } from "./modes.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
-import type { SkillEntry } from "./skillLoader.js";
+import {
+  normalizePromptProfileOverrides,
+  resolvePromptProfile,
+  type PromptProfile,
+  type PromptProfileResolution,
+} from "../core/promptProfile.js";
+import {
+  composeSkillCapabilityPolicy,
+  type SkillCapabilityPolicySnapshot,
+  type SkillEntry,
+} from "./skillLoader.js";
+import type { SkillLoadActivation } from "../core/tools/types.js";
 import type { ProjectActiveFileResolution } from "./configLoader.js";
 import type { McpToolDisclosurePartition } from "./mcpToolDisclosure.js";
+import type { SkillCatalogProjection } from "./skillCatalogProjection.js";
 import type {
+  PersistedActiveSkillState,
   PersistedFleetMetadata,
   PersistedSessionRunState,
 } from "./persistenceContracts.js";
@@ -106,6 +122,9 @@ export class AgentSession {
   /** Full mode definition (for tool filtering). Falls back to built-in 'code'. */
   agentMode: AgentMode;
   model: string;
+  /** Frozen evidence describing the prompt profile rendered for this session. */
+  promptProfile: Readonly<PromptProfileResolution>;
+  private promptProfileOverrides: Readonly<Record<string, PromptProfile>>;
   maxTokens: number;
   thinkingBudget: number;
   reasoningEffort: ReasoningEffort;
@@ -114,6 +133,9 @@ export class AgentSession {
   codexStatefulResponses: boolean;
   codexStoreResponses: boolean;
   codexProMode: boolean;
+  disabledSkillIds: string[];
+  /** Frozen metadata budget keeps the session prompt catalog byte-stable. */
+  skillCatalogBudgetChars?: number;
   private _status: SessionStatus = "idle";
   private _statusListeners = new Set<() => void>();
   title: string = "New Chat";
@@ -142,14 +164,16 @@ export class AgentSession {
   private messagesRevision = 0;
   /** Files read during this session (for folded file context on condense) */
   readonly filesRead = new Set<string>();
-  /** Skills advertised in the current system prompt, keyed by path for allowlist validation. */
+  /** Complete canonical skill catalog for activation authorization, keyed by path. */
   private advertisedSkills = new Map<string, SkillEntry>();
+  /** Bounded prompt projection paired with the complete canonical skill catalog. */
+  private skillCatalogProjection: SkillCatalogProjection | undefined;
   /** Deferred rules advertised in the current system prompt, keyed by path for allowlist validation. */
   private advertisedRules = new Map<string, AdvertisedRuleEntry>();
-  /** Skill names explicitly loaded during this session and kept alive across condense. */
+  /** Skill names loaded during this session and kept alive across condense. */
   readonly loadedSkills = new Set<string>();
-  /** Most recently loaded advertised skill, used for allowed-tools restriction. */
-  private activeSkillName: string | undefined;
+  /** Canonical skill identities restricting the current user turn. */
+  private readonly activeSkillIds = new Set<string>();
   /** Total input tokens from the most recent API response: uncached + cache_read + cache_creation.
    *  This represents actual context window usage (used for condense threshold check & context bar). */
   lastInputTokens = 0;
@@ -165,6 +189,9 @@ export class AgentSession {
   /** Per-source split of estimatedAccumulatedTokens (e.g. "tool:read_file"),
    *  used to attribute large context-usage jumps in telemetry. Reset alongside it. */
   estimatedAccumulationBySource: Record<string, number> = {};
+  /** Bounded per-result detail behind aggregate tool source attribution. */
+  toolResultContextAttributions: ToolResultContextAttribution[] = [];
+  omittedToolResultContextAttributions = 0;
 
   /** Active file path at session creation — used for subfolder AGENTS.md and hot-reload. */
   activeFilePath: string | undefined;
@@ -254,6 +281,7 @@ export class AgentSession {
     config: AgentConfig;
     systemPrompt: string;
     promptBreakdown: RequestContextBreakdown["prompt"];
+    promptProfile: Readonly<PromptProfileResolution>;
     background?: boolean;
     projectScope: SessionProjectScope;
     projectAvailability: SessionProjectAvailabilityStatus;
@@ -263,6 +291,7 @@ export class AgentSession {
     providerId?: string;
     workspaceFolders?: WorkspaceFolderInfo[];
     mcpToolDisclosure?: McpToolDisclosurePartition;
+    skillCatalogBudgetChars?: number;
   }) {
     this.id = randomUUID();
     this.mode = opts.mode;
@@ -270,6 +299,10 @@ export class AgentSession {
     this.projectScope = Object.freeze({ ...opts.projectScope });
     this.projectAvailability = opts.projectAvailability;
     this.model = opts.config.model;
+    this.promptProfile = opts.promptProfile;
+    this.promptProfileOverrides = normalizePromptProfileOverrides(
+      opts.config.promptProfileOverrides,
+    );
     this.maxTokens = opts.config.maxTokens;
     this.thinkingBudget = opts.config.thinkingBudget;
     this.reasoningEffort = "high";
@@ -278,6 +311,8 @@ export class AgentSession {
     this.codexStatefulResponses = opts.config.codexStatefulResponses ?? true;
     this.codexStoreResponses = opts.config.codexStoreResponses ?? false;
     this.codexProMode = opts.config.codexProMode ?? false;
+    this.disabledSkillIds = [...(opts.config.disabledSkillIds ?? [])];
+    this.skillCatalogBudgetChars = opts.skillCatalogBudgetChars;
     this.background = opts.background ?? false;
     this.createdAt = Date.now();
     this.lastActiveAt = this.createdAt;
@@ -336,11 +371,13 @@ export class AgentSession {
       activeFilePath: opts.activeFilePath,
       providerId: opts.providerId,
       model: opts.config.model,
+      promptProfileOverrides: opts.config.promptProfileOverrides,
       isBackground: opts.isBackground,
       lightweight: opts.lightweight,
       workspaceFolders: opts.workspaceFolders,
       mcpToolCatalog: opts.mcpToolDisclosure?.catalog,
       agentMode: opts.agentMode,
+      disabledSkillIds: opts.config.disabledSkillIds,
       modeInstructionPlacement,
     });
     const agentMode =
@@ -353,6 +390,7 @@ export class AgentSession {
       config: opts.config,
       systemPrompt: artifacts.systemPrompt,
       promptBreakdown: artifacts.promptBreakdown,
+      promptProfile: artifacts.promptProfile,
       projectScope: opts.projectScope,
       projectAvailability: "available",
       background: opts.background,
@@ -362,8 +400,10 @@ export class AgentSession {
       providerId: opts.providerId,
       workspaceFolders: opts.workspaceFolders,
       mcpToolDisclosure: opts.mcpToolDisclosure,
+      skillCatalogBudgetChars: artifacts.skillCatalog?.budgetChars,
     });
     session.setAdvertisedSkills(artifacts.skills);
+    session.setSkillCatalogProjection(artifacts.skillCatalog);
     session.setAdvertisedRules(artifacts.advertisedRules);
     session.modeInstructionPlacement = modeInstructionPlacement;
     await session.refreshModeInstructionAnchor();
@@ -386,11 +426,16 @@ export class AgentSession {
     if (agentMode.slug !== "ask") {
       throw new Error("Projectless sessions are available only in Ask mode.");
     }
+    const promptProfile = resolvePromptProfile({
+      providerId: opts.providerId,
+      modelId: opts.config.model,
+    });
     return new AgentSession({
       mode: "ask",
       agentMode,
-      config: opts.config,
+      config: { ...opts.config, promptProfileOverrides: undefined },
       systemPrompt: PROJECTLESS_ASK_SYSTEM_PROMPT,
+      promptProfile,
       promptBreakdown: {
         sections: [
           {
@@ -405,6 +450,9 @@ export class AgentSession {
         estimatedTokens: estimateTokensFromChars(
           PROJECTLESS_ASK_SYSTEM_PROMPT.length,
         ),
+        profile: promptProfile.profile,
+        profileSource: promptProfile.source,
+        profilePolicyRevision: promptProfile.policyRevision,
       },
       projectScope: opts.projectScope,
       projectAvailability: "unavailable",
@@ -447,12 +495,27 @@ export class AgentSession {
       opts.agentMode ??
       BUILT_IN_MODES.find((mode) => mode.slug === opts.mode) ??
       BUILT_IN_MODES[0];
+    const promptProfile = resolvePromptProfile({
+      providerId: opts.providerId,
+      modelId: opts.config.model,
+      overrides: normalizePromptProfileOverrides(
+        opts.config.promptProfileOverrides,
+      ),
+    });
     return new AgentSession({
       mode: opts.mode,
       agentMode,
       config: opts.config,
       systemPrompt: "",
-      promptBreakdown: { sections: [], totalChars: 0, estimatedTokens: 0 },
+      promptProfile,
+      promptBreakdown: {
+        sections: [],
+        totalChars: 0,
+        estimatedTokens: 0,
+        profile: promptProfile.profile,
+        profileSource: promptProfile.source,
+        profilePolicyRevision: promptProfile.policyRevision,
+      },
       projectScope: opts.projectScope,
       projectAvailability: opts.projectAvailability,
       background: opts.background,
@@ -479,8 +542,17 @@ export class AgentSession {
   async rebuildSystemPrompt(opts?: {
     devMode?: boolean;
     workspaceFolders?: WorkspaceFolderInfo[];
+    disabledSkillIds?: readonly string[];
+    promptProfileOverrides?: Readonly<Record<string, PromptProfile>>;
   }): Promise<void> {
-    if (opts?.workspaceFolders) this.workspaceFolders = opts.workspaceFolders;
+    const workspaceFolders = opts?.workspaceFolders ?? this.workspaceFolders;
+    const disabledSkillIds = opts?.disabledSkillIds
+      ? [...opts.disabledSkillIds]
+      : this.disabledSkillIds;
+    const promptProfileOverrides =
+      opts?.promptProfileOverrides !== undefined
+        ? normalizePromptProfileOverrides(opts.promptProfileOverrides)
+        : this.promptProfileOverrides;
     const artifacts = await buildPromptArtifacts(
       this.mode,
       this.requireProjectRoot(),
@@ -489,19 +561,42 @@ export class AgentSession {
         activeFilePath: this.activeFilePath,
         providerId: this.providerId,
         model: this.model,
+        promptProfileOverrides,
         isBackground: this.background,
-        workspaceFolders: this.workspaceFolders,
+        workspaceFolders,
         mcpToolCatalog: this.mcpToolDisclosure?.catalog,
         agentMode: this.agentMode,
+        disabledSkillIds,
+        skillCatalogBudgetChars: this.skillCatalogBudgetChars,
         approveForMe: this.approveForMe,
         modeInstructionPlacement: this.modeInstructionPlacement,
       },
     );
+    const modeInstructionBlock =
+      this.modeInstructionPlacement === "conversation"
+        ? await buildModeInstructionBlock(
+            this.mode,
+            this.requireProjectRoot(),
+            {
+              agentMode: this.agentMode,
+              approveForMe: this.approveForMe,
+              promptProfile: artifacts.promptProfile.profile,
+            },
+          )
+        : undefined;
+    this.workspaceFolders = workspaceFolders;
+    this.disabledSkillIds = disabledSkillIds;
+    this.promptProfileOverrides = promptProfileOverrides;
     this.systemPrompt = artifacts.systemPrompt;
+    this.promptProfile = artifacts.promptProfile;
     this.contextBreakdown = { prompt: artifacts.promptBreakdown };
     this.activeFileContext = artifacts.activeFileContext;
     this.setAdvertisedSkills(artifacts.skills);
+    this.setSkillCatalogProjection(artifacts.skillCatalog);
     this.setAdvertisedRules(artifacts.advertisedRules);
+    if (modeInstructionBlock !== undefined) {
+      this.applyModeInstructionAnchor(modeInstructionBlock);
+    }
     this.resetProviderResponseState();
   }
 
@@ -510,8 +605,17 @@ export class AgentSession {
    */
   async setMode(
     mode: string,
-    opts?: { agentMode?: AgentMode; devMode?: boolean },
+    opts?: {
+      agentMode?: AgentMode;
+      devMode?: boolean;
+      promptProfileOverrides?: Readonly<Record<string, PromptProfile>>;
+    },
   ): Promise<void> {
+    if (opts?.promptProfileOverrides !== undefined) {
+      this.promptProfileOverrides = normalizePromptProfileOverrides(
+        opts.promptProfileOverrides,
+      );
+    }
     const artifacts = await buildPromptArtifacts(
       mode,
       this.requireProjectRoot(),
@@ -520,10 +624,13 @@ export class AgentSession {
         activeFilePath: this.activeFilePath,
         providerId: this.providerId,
         model: this.model,
+        promptProfileOverrides: this.promptProfileOverrides,
         isBackground: this.background,
         workspaceFolders: this.workspaceFolders,
         mcpToolCatalog: this.mcpToolDisclosure?.catalog,
         agentMode: opts?.agentMode,
+        disabledSkillIds: this.disabledSkillIds,
+        skillCatalogBudgetChars: this.skillCatalogBudgetChars,
         approveForMe: this.approveForMe,
         modeInstructionPlacement: this.modeInstructionPlacement,
       },
@@ -536,9 +643,11 @@ export class AgentSession {
     this.mode = mode;
     this.agentMode = agentMode;
     this.systemPrompt = artifacts.systemPrompt;
+    this.promptProfile = artifacts.promptProfile;
     this.contextBreakdown = { prompt: artifacts.promptBreakdown };
     this.activeFileContext = artifacts.activeFileContext;
     this.setAdvertisedSkills(artifacts.skills);
+    this.setSkillCatalogProjection(artifacts.skillCatalog);
     this.setAdvertisedRules(artifacts.advertisedRules);
     await this.refreshModeInstructionAnchor();
     this.resetProviderResponseState();
@@ -558,7 +667,7 @@ export class AgentSession {
   /**
    * Effective history to send to the API.
    * Filters out messages tagged with condenseParent whose summary still exists,
-   * plus persisted runtime-error notes that are for local context only.
+   * plus persisted runtime-error and diagnostic notes that are for local context only.
    */
   getMessages(): AgentMessage[] {
     // enforceToolResultAdjacency is the last line of defense: after all
@@ -568,7 +677,9 @@ export class AgentSession {
     // reject the request with a 400.
     return enforceToolResultAdjacency(
       injectSyntheticToolResults(
-        getEffectiveHistory(this.messages).filter((m) => !m.runtimeError),
+        getEffectiveHistory(this.messages).filter(
+          (message) => !message.runtimeError && !message.diagnosticOnly,
+        ),
       ),
     );
   }
@@ -601,7 +712,7 @@ export class AgentSession {
       documents?: Array<{ name: string; mimeType: string; base64: string }>;
     },
   ): void {
-    this.activeSkillName = undefined;
+    this.activeSkillIds.clear();
     this.messagesRevision++;
     this.messages.push({
       role: "user",
@@ -757,8 +868,16 @@ export class AgentSession {
     const blockText = await buildModeInstructionBlock(
       this.mode,
       this.requireProjectRoot(),
-      { agentMode: this.agentMode, approveForMe: this.approveForMe },
+      {
+        agentMode: this.agentMode,
+        approveForMe: this.approveForMe,
+        promptProfile: this.promptProfile.profile,
+      },
     );
+    this.applyModeInstructionAnchor(blockText);
+  }
+
+  private applyModeInstructionAnchor(blockText: string): void {
     this.currentModeBlockText = blockText;
     const ordinal = countStringUserMessages(this.getMessages());
     const last =
@@ -832,6 +951,7 @@ export class AgentSession {
     lastCacheReadTokens?: number;
     reasoningEffort?: ReasoningEffort;
     loadedSkills?: string[];
+    activeSkillState?: PersistedActiveSkillState;
     runState?: PersistedSessionRunState;
     fleetMetadata?: PersistedFleetMetadata;
     messages: AgentMessage[];
@@ -866,6 +986,7 @@ export class AgentSession {
     for (const skill of data.loadedSkills ?? []) {
       if (skill.trim()) this.loadedSkills.add(skill.trim());
     }
+    this.restoreActiveSkillState(data.activeSkillState);
   }
 
   /** Record that a file was read during this session */
@@ -874,20 +995,114 @@ export class AgentSession {
   }
 
   setAdvertisedSkills(skills: SkillEntry[]): void {
+    const previouslyAdvertisedById = new Map(
+      Array.from(this.advertisedSkills.values()).map((skill) => [
+        skill.id,
+        skill,
+      ]),
+    );
     this.advertisedSkills = new Map(
       skills.map((skill) => [skill.skillPath, skill]),
     );
+    const nextById = new Map(skills.map((skill) => [skill.id, skill]));
+    for (const skillId of this.activeSkillIds) {
+      const previous = previouslyAdvertisedById.get(skillId);
+      const next = nextById.get(skillId);
+      if (
+        !previous ||
+        !next?.enabled ||
+        next.name !== previous.name ||
+        next.revision !== previous.revision
+      ) {
+        this.activeSkillIds.delete(skillId);
+      }
+    }
   }
 
   getAdvertisedSkills(): SkillEntry[] {
     return Array.from(this.advertisedSkills.values());
   }
 
+  setSkillCatalogProjection(
+    projection: SkillCatalogProjection | undefined,
+  ): void {
+    this.skillCatalogProjection = projection;
+  }
+
+  getSkillCatalogProjection(): SkillCatalogProjection | undefined {
+    return this.skillCatalogProjection;
+  }
+
+  getActiveSkillPolicy(): SkillCapabilityPolicySnapshot {
+    const activeSkills = Array.from(this.advertisedSkills.values()).filter(
+      (skill) => this.activeSkillIds.has(skill.id) && skill.enabled,
+    );
+    return composeSkillCapabilityPolicy(activeSkills);
+  }
+
   getActiveSkillAllowedTools(): string[] | undefined {
-    if (!this.activeSkillName) return undefined;
-    return Array.from(this.advertisedSkills.values()).find(
-      (skill) => skill.name === this.activeSkillName,
-    )?.allowedTools;
+    return this.getActiveSkillPolicy().allowedTools;
+  }
+
+  getActiveSkillState(): PersistedActiveSkillState | undefined {
+    if (this.activeSkillIds.size === 0) return undefined;
+    const projection = this.skillCatalogProjection;
+    if (!projection) return undefined;
+    const byId = new Map(
+      Array.from(this.advertisedSkills.values()).map((skill) => [
+        skill.id,
+        skill,
+      ]),
+    );
+    const activeSkills = [...this.activeSkillIds]
+      .map((id) => byId.get(id))
+      .filter((skill): skill is SkillEntry => Boolean(skill?.enabled))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    if (activeSkills.length !== this.activeSkillIds.size) return undefined;
+    return {
+      schemaVersion: 1,
+      catalogRevision: projection.revision,
+      activations: activeSkills.map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        revision: skill.revision,
+      })),
+      policy: composeSkillCapabilityPolicy(activeSkills),
+    };
+  }
+
+  private restoreActiveSkillState(
+    state: PersistedActiveSkillState | undefined,
+  ): void {
+    this.activeSkillIds.clear();
+    if (state?.schemaVersion !== 1 || state.activations.length === 0) return;
+    if (
+      new Set(state.activations.map((activation) => activation.id)).size !==
+      state.activations.length
+    ) {
+      return;
+    }
+    const byId = new Map(
+      Array.from(this.advertisedSkills.values()).map((skill) => [
+        skill.id,
+        skill,
+      ]),
+    );
+    const activeSkills = state.activations.flatMap((activation) => {
+      const skill = byId.get(activation.id);
+      return skill?.enabled &&
+        skill.name === activation.name &&
+        skill.revision === activation.revision
+        ? [skill]
+        : [];
+    });
+    if (activeSkills.length !== state.activations.length) return;
+    const policy = composeSkillCapabilityPolicy(activeSkills);
+    if (policy.revision !== state.policy.revision) return;
+    for (const skill of activeSkills) {
+      this.activeSkillIds.add(skill.id);
+      this.loadedSkills.add(skill.name);
+    }
   }
 
   setAdvertisedRules(rules: AdvertisedRuleEntry[] = []): void {
@@ -902,11 +1117,20 @@ export class AgentSession {
     return [...this.loadedSkills];
   }
 
-  trackLoadedSkill(skillName: string): void {
-    const trimmed = skillName.trim();
-    if (!trimmed) return;
-    this.loadedSkills.add(trimmed);
-    this.activeSkillName = trimmed;
+  trackLoadedSkill(activation: SkillLoadActivation): boolean {
+    const advertised = this.advertisedSkills.get(activation.skillPath);
+    if (
+      !advertised ||
+      !advertised.enabled ||
+      advertised.id !== activation.id ||
+      advertised.name !== activation.name ||
+      advertised.revision !== activation.revision
+    ) {
+      return false;
+    }
+    this.loadedSkills.add(advertised.name);
+    this.activeSkillIds.add(advertised.id);
+    return true;
   }
 
   addUsage(
@@ -927,6 +1151,8 @@ export class AgentSession {
     // Fresh API data replaces any local estimates.
     this.estimatedAccumulatedTokens = 0;
     this.estimatedAccumulationBySource = {};
+    this.toolResultContextAttributions = [];
+    this.omittedToolResultContextAttributions = 0;
   }
 
   /**
@@ -944,6 +1170,28 @@ export class AgentSession {
     this.estimatedAccumulatedTokens += tokens;
     this.estimatedAccumulationBySource[source] =
       (this.estimatedAccumulationBySource[source] ?? 0) + tokens;
+  }
+
+  addToolResultContextAttribution(
+    toolCallId: string,
+    toolName: string,
+    retainedContent: string,
+    estimatedTokens = estimateTokensFromChars([...retainedContent].length),
+  ): void {
+    const chars = [...retainedContent].length;
+    const bytes = Buffer.byteLength(retainedContent, "utf8");
+    this.addKnownTokens(estimatedTokens, `tool:${toolName}`);
+    if (this.toolResultContextAttributions.length >= 64) {
+      this.omittedToolResultContextAttributions += 1;
+      return;
+    }
+    this.toolResultContextAttributions.push({
+      toolCallId,
+      toolName,
+      chars,
+      bytes,
+      estimatedTokens,
+    });
   }
 
   /**

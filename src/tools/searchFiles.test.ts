@@ -285,7 +285,7 @@ describe("handleSearchFiles ripgrep args", () => {
     expect(execRipgrepSearch).not.toHaveBeenCalled();
   });
 
-  it("uses parent directory for semantic search when path is a file", async () => {
+  it("preserves exact-file scope for semantic search", async () => {
     const filePath = path.resolve("src/tools/searchFiles.ts");
     resolveAndValidatePath.mockReturnValue({
       absolutePath: filePath,
@@ -307,9 +307,11 @@ describe("handleSearchFiles ripgrep args", () => {
 
     expect(semanticSearch).toHaveBeenCalledTimes(1);
     expect(semanticSearch).toHaveBeenCalledWith(
-      path.dirname(filePath),
+      filePath,
       "semantic query",
       undefined,
+      undefined,
+      { exactFile: true },
     );
     expect(execRipgrepSearch).not.toHaveBeenCalled();
   });

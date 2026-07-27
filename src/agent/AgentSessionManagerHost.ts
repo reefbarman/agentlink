@@ -49,6 +49,8 @@ import type {
   SessionProjectScope,
 } from "../core/workspaceProjects.js";
 import { WorkspaceMutationCoordinator } from "./WorkspaceMutationCoordinator.js";
+import type { SkillCatalogFallbackProvider } from "./skillCatalogFallbackProvider.js";
+import { normalizePromptProfileOverrides } from "../core/promptProfile.js";
 
 export interface AgentWorkspaceHost {
   getWorkspaceFolders(): WorkspaceFolderInfo[];
@@ -161,6 +163,7 @@ export interface AgentSessionManagerOptions {
   projectCatalog?: ProjectScopeResolver;
   projectCustomizationRegistry?: ProjectCustomizationRegistry;
   projectMcpHubRegistry?: ProjectMcpHubRegistry;
+  skillCatalogFallbackProvider?: SkillCatalogFallbackProvider;
   browserPreferredProjectId?: string;
   onBrowserPreferredProjectChanged?: (
     projectId: string,
@@ -197,6 +200,15 @@ export function createDefaultAgentSessionManagerHost(args: {
     config: {
       resolveAgentConfig: (base, scope) => {
         const config = configurationFor(scope);
+        const configuredDisabledSkillIds =
+          config.get<unknown>("skills.disabledIds");
+        const disabledSkillIds =
+          Array.isArray(configuredDisabledSkillIds) &&
+          configuredDisabledSkillIds.every(
+            (skillId): skillId is string => typeof skillId === "string",
+          )
+            ? configuredDisabledSkillIds
+            : [];
         return {
           ...base,
           maxTokens: config.get<number>("agentMaxTokens") ?? 8192,
@@ -207,6 +219,10 @@ export function createDefaultAgentSessionManagerHost(args: {
           codexStoreResponses:
             config.get<boolean>("codexStoreResponses") ?? false,
           codexProMode: config.get<boolean>("codexProMode") ?? false,
+          promptProfileOverrides: normalizePromptProfileOverrides(
+            config.get<unknown>("modelPromptProfiles"),
+          ),
+          disabledSkillIds,
         };
       },
       getCondenseThresholdForModel: (model, scope) => {
@@ -289,7 +305,10 @@ export function createDefaultAgentSessionManagerHost(args: {
         ...ctx,
         semanticSearchProvider:
           ctx.semanticSearchProvider ??
-          createVscodeSemanticSearchProvider(ctx.projectRoot),
+          createVscodeSemanticSearchProvider(
+            ctx.projectRoot,
+            ctx.globalStorageUri,
+          ),
         editorRevealProvider:
           ctx.editorRevealProvider ?? createVscodeEditorRevealProvider(),
         editReviewProvider:

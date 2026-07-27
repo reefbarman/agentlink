@@ -39,18 +39,21 @@ describe("executeCodexResponsesStream", () => {
       },
     } as CodexResponsesClient;
     const signal = new AbortController().signal;
+    const attempts: string[] = [];
 
     const events = [];
     for await (const event of executeCodexResponsesStream({
       client,
       body: requestBody,
       signal,
+      onProviderRequestAttempt: ({ model }) => attempts.push(model),
     })) {
       events.push(event);
     }
 
     expect(capturedBody).toBe(requestBody);
     expect(capturedOptions).toEqual({ signal });
+    expect(attempts).toEqual(["gpt-5.5"]);
     expect(events).toEqual([
       { type: "text_delta", text: "hello" },
       {
@@ -183,14 +186,17 @@ describe("executeCodexResponsesStream", () => {
       },
     } as CodexResponsesClient;
 
+    const attempts: string[] = [];
     await expect(async () => {
       for await (const _event of executeCodexResponsesStream({
         client,
         body: requestBody,
+        onProviderRequestAttempt: ({ model }) => attempts.push(model),
       })) {
         // Iteration triggers the request.
       }
     }).rejects.toBeInstanceOf(CodexResponsesAuthError);
+    expect(attempts).toEqual(["gpt-5.5"]);
   });
 
   it("wraps auth failures from the response stream", async () => {

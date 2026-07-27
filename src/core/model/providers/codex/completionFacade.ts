@@ -2,6 +2,7 @@ import type { CoreReasoningEffort } from "../../../modelCatalog.js";
 import type {
   CoreModelContentBlock,
   CoreModelMessage,
+  CoreModelProviderRequestAttempt,
   CoreModelStopReason,
   CoreModelStreamEvent,
   CoreModelToolDefinition,
@@ -140,6 +141,7 @@ export async function executeCodexResolvedCompletion(args: {
   signal?: AbortSignal;
   onTextDelta?: (delta: string) => void;
   onStreamEvent?: (event: CoreModelStreamEvent) => void;
+  onProviderRequestAttempt?: (attempt: CoreModelProviderRequestAttempt) => void;
   trimText?: boolean;
 }): Promise<CodexCompletionResult> {
   const request = buildCodexResolvedRequestBody({
@@ -161,6 +163,7 @@ export async function executeCodexResolvedCompletion(args: {
         client: args.client,
         body: request.body,
         signal: args.signal,
+        onProviderRequestAttempt: args.onProviderRequestAttempt,
       }),
       {
         trimText: args.trimText,

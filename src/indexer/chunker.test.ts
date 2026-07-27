@@ -1,5 +1,7 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { chunkFile, setChunkGranularity } from "./chunker.js";
+
+import { MAX_CODE_INDEX_CHUNK_CHARS } from "./chunkQuality.js";
 
 describe("chunkFile", () => {
   const fp = "/workspace/test.ts";
@@ -24,6 +26,29 @@ describe("chunkFile", () => {
     expect(chunks[0].endLine).toBe(50);
     expect(chunks[0].filePath).toBe(fp);
     expect(chunks[0].relPath).toBe(rp);
+  });
+
+  it("hard-splits a one-line minified fallback with path retrieval context", () => {
+    const content = "x".repeat(MAX_CODE_INDEX_CHUNK_CHARS * 2 + 1);
+    const chunks = chunkFile(
+      content,
+      "/workspace/src/minified.js",
+      "src/minified.js",
+    );
+
+    expect(chunks).toHaveLength(3);
+    expect(chunks.map((chunk) => chunk.content).join("")).toBe(content);
+    expect(
+      chunks.every(
+        (chunk) =>
+          chunk.content.length <= MAX_CODE_INDEX_CHUNK_CHARS &&
+          chunk.startLine === 1 &&
+          chunk.endLine === 1 &&
+          chunk.language === "javascript" &&
+          chunk.embeddingContent?.startsWith("// src/minified.js\n"),
+      ),
+    ).toBe(true);
+    expect(chunks[0].embeddingContent).not.toContain("/workspace/");
   });
 
   it("returns single chunk for exactly 50 lines", () => {

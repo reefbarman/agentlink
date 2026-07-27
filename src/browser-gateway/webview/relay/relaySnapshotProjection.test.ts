@@ -85,6 +85,25 @@ function checkpoint(
         softThresholdBudget: 144_000,
         hardBudget: 175_904,
       },
+      contextHealth: {
+        memory: { status: "ready", retrieval: "hybrid", activeRecordCount: 4 },
+        retrieval: {
+          status: "degraded",
+          lexical: "ready",
+          vector: "unavailable",
+          structural: "ready",
+          sourceCount: 8,
+          chunkCount: 32,
+          staleSourceCount: 1,
+          reason: "Vector retrieval is unavailable.",
+        },
+        index: {
+          status: "working",
+          state: "indexing",
+          current: 3,
+          total: 10,
+        },
+      },
       condenseThreshold: 0.8,
       agentWriteApproval: "session",
       commandApprovalPolicy: "approve-for-me",
@@ -196,6 +215,11 @@ describe("RelaySnapshotProjector", () => {
       lastCacheReadTokens: 33,
       estimatedTotalUsed: 12,
       contextBudget: { hardBudget: 175_904 },
+      contextHealth: {
+        memory: { status: "ready", activeRecordCount: 4 },
+        retrieval: { status: "degraded", staleSourceCount: 1 },
+        index: { status: "working", current: 3, total: 10 },
+      },
       condenseThreshold: 0.8,
       restoringSession: true,
       revertRecoveryNotice: {
@@ -261,6 +285,7 @@ describe("RelaySnapshotProjector", () => {
       lastOutputTokens: 0,
       lastCacheReadTokens: 0,
       estimatedTotalUsed: 0,
+      contextHealth: null,
       restoringSession: false,
       revertRecoveryNotice: null,
       agentWriteApproval: "prompt",
@@ -297,6 +322,7 @@ describe("RelaySnapshotProjector", () => {
 
     expect(projected.statusOverride).toBeNull();
     expect(projected.revertRecoveryNotice).toBeNull();
+    expect(projected.contextHealth).toBeNull();
     expect(projected).not.toHaveProperty("contextBudget");
     expect(projected).not.toHaveProperty("condenseThreshold");
   });

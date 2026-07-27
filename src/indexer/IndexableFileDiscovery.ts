@@ -3,6 +3,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 import picomatch from "picomatch";
+import { resolveContainedCodeIndexPath } from "./codeIndexPaths.js";
 import { spawn } from "child_process";
 
 const MAX_FILE_SIZE = 1_000_000;
@@ -85,13 +86,16 @@ export class IndexableFileDiscovery {
     exclusions: string[] = DEFAULT_INDEX_EXCLUSIONS,
   ): Promise<string[]> {
     const exclusionMatcher = buildExclusionMatcher(workspaceRoot, exclusions);
-    const existingFiles = files.filter((filePath) => {
+    const existingFiles = files.flatMap((filePath) => {
+      const identity = resolveContainedCodeIndexPath(workspaceRoot, filePath);
+      if (!identity || exclusionMatcher(identity)) return [];
       try {
-        if (exclusionMatcher(filePath)) return false;
-        const stat = this.statFile(filePath);
-        return stat.isFile() && stat.size > 0 && stat.size <= MAX_FILE_SIZE;
+        const stat = this.statFile(identity.absolutePath);
+        return stat.isFile() && stat.size > 0 && stat.size <= MAX_FILE_SIZE
+          ? [identity.absolutePath]
+          : [];
       } catch {
-        return false;
+        return [];
       }
     });
 
@@ -117,7 +121,12 @@ export class IndexableFileDiscovery {
   ): Promise<string[]> {
     if (files.length === 0) return files;
     const exclusionMatcher = buildExclusionMatcher(workspaceRoot, exclusions);
-    return files.filter((filePath) => !exclusionMatcher(filePath));
+    return files.flatMap((filePath) => {
+      const identity = resolveContainedCodeIndexPath(workspaceRoot, filePath);
+      return identity && !exclusionMatcher(identity)
+        ? [identity.absolutePath]
+        : [];
+    });
   }
 
   private async filterGitIgnoredPaths(
@@ -127,18 +136,17 @@ export class IndexableFileDiscovery {
   ): Promise<string[]> {
     if (files.length === 0) return files;
 
-    const relPathEntries = files
-      .map((filePath) => {
-        const relPath = path.relative(workspaceRoot, filePath);
-        if (!relPath || relPath.startsWith("..") || path.isAbsolute(relPath)) {
-          return null;
-        }
-        return { filePath, relPath: relPath.split(path.sep).join("/") };
-      })
-      .filter(
-        (entry): entry is { filePath: string; relPath: string } =>
-          entry !== null,
-      );
+    const relPathEntries = files.flatMap((filePath) => {
+      const identity = resolveContainedCodeIndexPath(workspaceRoot, filePath);
+      return identity
+        ? [
+            {
+              filePath: identity.absolutePath,
+              relPath: identity.portableRelativePath,
+            },
+          ]
+        : [];
+    });
 
     if (relPathEntries.length === 0) return [];
 
@@ -156,7 +164,10 @@ export class IndexableFileDiscovery {
 function buildExclusionMatcher(
   workspaceRoot: string,
   exclusions: string[],
-): (filePath: string) => boolean {
+): (identity: {
+  absolutePath: string;
+  portableRelativePath: string;
+}) => boolean {
   const relativeMatchers = exclusions.map((pattern) =>
     picomatch(pattern, { dot: true }),
   );
@@ -164,15 +175,12 @@ function buildExclusionMatcher(
     .filter((pattern) => path.isAbsolute(pattern))
     .map((pattern) => picomatch(pattern, { dot: true }));
 
-  return (filePath: string) => {
-    const relPath = path
-      .relative(workspaceRoot, filePath)
-      .split(path.sep)
-      .join("/");
-    if (!relPath || relPath.startsWith("../") || relPath === "..") return true;
-    if (relativeMatchers.some((matcher) => matcher(relPath))) return true;
+  return ({ absolutePath, portableRelativePath }) => {
+    if (relativeMatchers.some((matcher) => matcher(portableRelativePath))) {
+      return true;
+    }
 
-    const normalizedAbsPath = filePath.split(path.sep).join("/");
+    const normalizedAbsPath = absolutePath.split(path.sep).join("/");
     return absoluteMatchers.some((matcher) => matcher(normalizedAbsPath));
   };
 }
@@ -181,12 +189,12 @@ function isExplicitlyIndexedIgnoredPath(
   filePath: string,
   workspaceRoot: string,
 ): boolean {
-  const relPath = path
-    .relative(workspaceRoot, filePath)
-    .split(path.sep)
-    .join("/");
-  return EXPLICITLY_INDEXED_IGNORED_PATHS.some((pattern) =>
-    picomatch(pattern, { dot: true })(relPath),
+  const identity = resolveContainedCodeIndexPath(workspaceRoot, filePath);
+  return (
+    identity !== undefined &&
+    EXPLICITLY_INDEXED_IGNORED_PATHS.some((pattern) =>
+      picomatch(pattern, { dot: true })(identity.portableRelativePath),
+    )
   );
 }
 

@@ -12,9 +12,14 @@ import type { JsonSchema, ToolDefinition } from "./providers/types.js";
 import type {
   AgentToolExecutionRequest,
   AgentToolRuntime,
+  ResolvedAgentToolCall,
 } from "../core/tools/types.js";
 import type { BackgroundAgentStatusResult } from "../core/capabilities/background.js";
 import { PARALLEL_SAFE_TOOLS } from "../core/tools/toolCapabilities.js";
+import {
+  discoverNativeTools,
+  getDeferredNativeTool,
+} from "../core/tools/nativeToolDisclosure.js";
 import type {
   SpawnBackgroundRequest,
   SpawnBackgroundResult,
@@ -123,6 +128,10 @@ import { handleOpenFile } from "../tools/openFile.js";
 import type { GuardianOutsideReadOptions } from "../tools/pathAccessUI.js";
 import { createGuardianOutsideWriteAuthorizationPreparer } from "../tools/actionWriteApproval.js";
 import { handleProposeMemory } from "../tools/proposeMemory.js";
+import {
+  handleManageMemory,
+  handleRecallMemory,
+} from "../tools/autonomousMemory.js";
 // --- Handler imports ---
 import { handleReadFile } from "../tools/readFile.js";
 import { handleRenameSymbol } from "../tools/renameSymbol.js";
@@ -154,7 +163,15 @@ import type {
   LanguageReferencesProvider,
   LanguageSymbolsProvider,
 } from "../core/capabilities/language.js";
-import type { SemanticSearchProvider } from "../core/capabilities/readSearch.js";
+import type {
+  SemanticSearchProvider,
+  SemanticSearchResult,
+} from "../core/capabilities/readSearch.js";
+import type {
+  ManageMemoryToolInput,
+  MemoryToolProvider,
+  RecallMemoryToolInput,
+} from "../core/capabilities/memory.js";
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import type { WorktreeAgentLaunchProvider } from "../core/capabilities/worktree.js";
 
@@ -192,6 +209,7 @@ import {
   withWorkspaceRoots,
 } from "../util/paths.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
+import { getRetrievalStoreRoot } from "../storage/retrieval/retrievalStorePaths.js";
 import { createComposeExecutionScope } from "./compose/composeScope.js";
 import type { ComposeParams } from "./compose/composeRuntime.js";
 import { loadComposeRuntime } from "./compose/composeRuntimeLoader.js";
@@ -201,6 +219,11 @@ import { loadComposeRuntime } from "./compose/composeRuntimeLoader.js";
 export const READ_ONLY_TOOLS = new Set(PARALLEL_SAFE_TOOLS);
 
 // --- Tools excluded from the agent (MCP-only or not applicable) ---
+
+const NATIVE_DISCOVERY_BRIDGE_TOOLS = new Set([
+  "find_native_tools",
+  "call_native_tool",
+]);
 
 const EXCLUDED_TOOLS = new Set([
   "handshake",
@@ -249,6 +272,8 @@ function cachedJsonSchemaFor(
 // --- Tool name → zod schema mapping ---
 
 const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
+  find_native_tools: schemas.findNativeToolsSchema,
+  call_native_tool: schemas.callNativeToolSchema,
   web_search: schemas.webSearchSchema,
   web_fetch: schemas.webFetchSchema,
   read_file: schemas.readFileSchema,
@@ -266,6 +291,8 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   write_file: schemas.writeFileSchema,
   generate_image: schemas.generateImageSchema,
   present_images: schemas.presentImagesSchema,
+  manage_memory: schemas.manageMemorySchema,
+  recall_memory: schemas.recallMemorySchema,
   apply_diff: schemas.applyDiffSchema,
   find_and_replace: schemas.findAndReplaceSchema,
   rename_symbol: schemas.renameSymbolSchema,
@@ -333,6 +360,15 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
       }
     : {}),
 };
+
+/**
+ * Read-only inventory of native adapter schemas. Stage 0 evaluation baselines
+ * use this to detect drift across the currently fragmented tool registries
+ * without making this adapter mapping a second mutable registry.
+ */
+export const NATIVE_TOOL_SCHEMA_NAMES: ReadonlySet<string> = new Set(
+  Object.keys(TOOL_SCHEMAS),
+);
 
 const CALL_MCP_TOOL: ToolDefinition = CALL_MCP_TOOL_DEFINITION;
 
@@ -1092,6 +1128,7 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "search_session_history",
     "read_session_excerpt",
     "diagnose_activity",
+    "recall_memory",
   ]),
   "readonly-research": new Set([
     "read_file",
@@ -1114,6 +1151,7 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "search_session_history",
     "read_session_excerpt",
     "diagnose_activity",
+    "recall_memory",
   ]),
   btw: new Set([
     "read_file",
@@ -1166,7 +1204,7 @@ export function getAgentTools(
   mcpToolDefs?: ToolDefinition[],
   isBackground?: boolean,
   toolProfile?: string,
-  skillAllowedTools?: string[],
+  skillAllowedTools?: readonly string[],
   allMcpToolDefsForSkillAllowlist?: ToolDefinition[],
   backgroundExpectedResult?: ExpectedBackgroundResult,
   nativeWebToolKinds: readonly import("../core/webAccess.js").CoreWebToolKind[] = [],
@@ -1207,10 +1245,21 @@ export function getAgentTools(
         Boolean(profileAllowlist) ||
         !allowed ||
         allowed.has(name) ||
+        NATIVE_DISCOVERY_BRIDGE_TOOLS.has(name) ||
         (__DEV_BUILD__ && TOOL_REGISTRY[name]?.devOnly),
     )
-    .filter(([name]) => !profileAllowlist || profileAllowlist.has(name))
-    .filter(([name]) => !skillAllowlist || skillAllowlist.has(name))
+    .filter(
+      ([name]) =>
+        !profileAllowlist ||
+        profileAllowlist.has(name) ||
+        NATIVE_DISCOVERY_BRIDGE_TOOLS.has(name),
+    )
+    .filter(
+      ([name]) =>
+        !skillAllowlist ||
+        skillAllowlist.has(name) ||
+        NATIVE_DISCOVERY_BRIDGE_TOOLS.has(name),
+    )
     .map(([name, zodSchema]) => ({
       name,
       description:
@@ -1442,8 +1491,25 @@ const SEMANTIC_SEARCH_UNAVAILABLE_MESSAGE =
 export function createUnavailableSemanticSearchProvider(): SemanticSearchProvider {
   return {
     async search() {
-      return errorResult(SEMANTIC_SEARCH_UNAVAILABLE_MESSAGE);
+      return {
+        payload: { error: SEMANTIC_SEARCH_UNAVAILABLE_MESSAGE },
+        isError: true,
+        error: {
+          kind: "tool_error",
+          message: SEMANTIC_SEARCH_UNAVAILABLE_MESSAGE,
+        },
+      };
     },
+  };
+}
+
+function semanticSearchResultToToolResult(
+  result: SemanticSearchResult,
+): ToolResult {
+  return {
+    ...jsonResult(result.payload, true),
+    ...(result.isError ? { isError: true } : {}),
+    ...(result.error ? { error: result.error } : {}),
   };
 }
 
@@ -1845,7 +1911,7 @@ export interface ToolDispatchContext {
   /** Returns bounded, redacted operation evidence for the executing session. */
   sessionActivityDiagnosticsProvider?: import("../core/sessionActivityDiagnostics.js").SessionActivityDiagnosticsProvider;
   /** Returns the set of skills explicitly advertised to the current session. */
-  getAdvertisedSkills?: () => Array<{ name: string; skillPath: string }>;
+  getAdvertisedSkills?: AgentToolExecutionRequest["context"]["getAdvertisedSkills"];
   /** Returns the set of deferred rules explicitly advertised to the current session. */
   getAdvertisedRules?: () => Array<{
     source: string;
@@ -1853,11 +1919,12 @@ export interface ToolDispatchContext {
     summary?: string;
   }>;
   /** Called whenever the agent loads a skill so the session can preserve it across condense. */
-  onSkillLoad?: (skillName: string) => void;
+  onSkillLoad?: AgentToolExecutionRequest["context"]["onSkillLoad"];
   /** Spawn a background agent session. Returns routing metadata and new session ID. */
   onSpawnBackground?: (
     callerSessionId: string,
     request: SpawnBackgroundRequest,
+    inheritedSkillAuthority: AgentToolExecutionRequest["context"]["skillAuthority"],
   ) => Promise<SpawnBackgroundResult>;
   /** Non-blocking status check for a background session. */
   onGetBackgroundStatus?: (
@@ -1887,6 +1954,7 @@ export interface ToolDispatchContext {
   onStartFleetWorkflow?: (
     callerSessionId: string,
     request: FleetWorkflowRequest,
+    inheritedSkillAuthority: AgentToolExecutionRequest["context"]["skillAuthority"],
   ) => Promise<{
     workflowId: string;
     goalId?: string;
@@ -1907,7 +1975,9 @@ export interface ToolDispatchContext {
     id?: string;
   }) => Promise<unknown>;
   /** Active skill tool allowlist, enforced for direct and deferred MCP dispatch. */
-  skillAllowedTools?: string[];
+  skillAllowedTools?: readonly string[];
+  /** Exact immutable authority used only for internal descendant handoff. */
+  skillAuthority?: AgentToolExecutionRequest["context"]["skillAuthority"];
   /** Abort signal for the current tool call, used to cancel in-flight MCP SDK requests. */
   toolAbortSignal?: AbortSignal;
   /** Durable recovery context for a foreground ask_user call waiting on input. */
@@ -1971,8 +2041,167 @@ export interface ToolDispatchContext {
   mcpToolInvocationProvider?: McpToolInvocationProvider;
   /** User-question implementation for runtimes that can ask structured questions. */
   userQuestionProvider?: UserQuestionProvider;
+  /** Typed low-authority memory implementation for autonomous management and recall. */
+  memoryToolProvider?: MemoryToolProvider;
   /** Local aggregate usage recorder for tool/parameter deprecation analysis. */
   toolUsageTelemetry?: ToolUsageTelemetry;
+}
+
+export function resolveAgentToolCall(
+  request: AgentToolExecutionRequest,
+): ResolvedAgentToolCall {
+  if (request.name !== "call_native_tool") {
+    if (request.context.providerToolName === "call_native_tool") {
+      const snapshot = request.context.nativeToolDisclosure;
+      const target = snapshot
+        ? getDeferredNativeTool(snapshot, request.name)
+        : undefined;
+      const targetSchema = target ? TOOL_SCHEMAS[target.name] : undefined;
+      const parsedTarget = targetSchema
+        ? z.object(targetSchema).safeParse(request.input)
+        : undefined;
+      if (!target || !parsedTarget?.success) {
+        return nativeToolResolutionError(
+          {
+            ...request,
+            name: "call_native_tool",
+            input: {
+              name: request.name,
+              input: request.input,
+            },
+          },
+          `Pre-resolved native tool '${request.name}' was not valid for this provider request`,
+          "invalid_resolved_native_tool",
+          parsedTarget && !parsedTarget.success
+            ? parsedTarget.error.issues
+            : undefined,
+        );
+      }
+      return {
+        providerName: "call_native_tool",
+        providerInput: request.context.providerToolInput ?? {
+          name: request.name,
+          input: request.input,
+        },
+        canonicalName: target.name,
+        canonicalInput: parsedTarget.data,
+        route: "native-deferred",
+      };
+    }
+    return {
+      providerName: request.name,
+      providerInput: request.input,
+      canonicalName: request.name,
+      canonicalInput: request.input,
+      route: "direct",
+    };
+  }
+
+  const parsedBridge = z
+    .object(schemas.callNativeToolSchema)
+    .safeParse(request.input);
+  if (!parsedBridge.success) {
+    return nativeToolResolutionError(
+      request,
+      "Invalid call_native_tool input",
+      "invalid_bridge_input",
+      parsedBridge.error.issues,
+    );
+  }
+
+  const snapshot = request.context.nativeToolDisclosure;
+  if (!snapshot) {
+    return nativeToolResolutionError(
+      request,
+      "No deferred native tool catalog was captured for this provider request",
+      "missing_native_catalog",
+    );
+  }
+
+  const target = getDeferredNativeTool(snapshot, parsedBridge.data.name);
+  if (!target) {
+    return nativeToolResolutionError(
+      request,
+      `Native tool '${parsedBridge.data.name}' was not available in the deferred catalog for this provider request`,
+      "native_tool_not_available",
+    );
+  }
+
+  const targetSchema = TOOL_SCHEMAS[target.name];
+  if (!targetSchema) {
+    return nativeToolResolutionError(
+      request,
+      `Native tool '${target.name}' cannot be invoked through call_native_tool because it has no canonical runtime validator`,
+      "native_tool_not_invocable",
+    );
+  }
+  const parsedTarget = z
+    .object(targetSchema)
+    .safeParse(parsedBridge.data.input);
+  if (!parsedTarget.success) {
+    return nativeToolResolutionError(
+      request,
+      `Invalid input for native tool '${target.name}'`,
+      "invalid_native_tool_input",
+      parsedTarget.error.issues,
+    );
+  }
+
+  return {
+    providerName: request.name,
+    providerInput: request.input,
+    canonicalName: target.name,
+    canonicalInput: parsedTarget.data,
+    route: "native-deferred",
+  };
+}
+
+function nativeToolResolutionError(
+  request: AgentToolExecutionRequest,
+  message: string,
+  status: string,
+  issues?: readonly z.core.$ZodIssue[],
+): ResolvedAgentToolCall {
+  return {
+    providerName: request.name,
+    providerInput: request.input,
+    canonicalName: request.name,
+    canonicalInput: request.input,
+    route: "direct",
+    resolutionError: errorResult(message, {
+      status,
+      tool: request.name,
+      ...(issues ? { issues } : {}),
+    }),
+  };
+}
+
+function executeNativeToolDiscovery(
+  request: AgentToolExecutionRequest,
+): ToolResult {
+  const parsed = z
+    .object(schemas.findNativeToolsSchema)
+    .safeParse(request.input);
+  if (!parsed.success) {
+    return errorResult("Invalid find_native_tools input", {
+      status: "invalid_native_discovery_input",
+      issues: parsed.error.issues,
+    });
+  }
+  if (!request.context.nativeToolDisclosure) {
+    return errorResult(
+      "No deferred native tool catalog was captured for this provider request",
+      { status: "missing_native_catalog" },
+    );
+  }
+  const result = discoverNativeTools(request.context.nativeToolDisclosure, {
+    query: parsed.data.query,
+    limit: parsed.data.limit,
+    offset: parsed.data.offset,
+    includeSchemas: parsed.data.include_schemas,
+    schemaLimit: parsed.data.schema_limit,
+  });
+  return jsonResult(result);
 }
 
 export function createAgentToolRuntime(
@@ -1991,18 +2220,37 @@ export function createAgentToolRuntime(
         request.nativeWebToolKinds ?? ctx.nativeWebToolKinds,
       );
     },
-    async executeTool(request: AgentToolExecutionRequest) {
+    resolveToolCall(request) {
+      return resolveAgentToolCall(request);
+    },
+    async executeTool(originalRequest: AgentToolExecutionRequest) {
       const startedAt = Date.now();
+      const resolved = resolveAgentToolCall(originalRequest);
+      const request: AgentToolExecutionRequest = {
+        name: resolved.canonicalName,
+        input: { ...resolved.canonicalInput },
+        context: {
+          ...originalRequest.context,
+          ...(resolved.route === "native-deferred"
+            ? {
+                providerToolName: resolved.providerName,
+                providerToolInput: resolved.providerInput,
+              }
+            : {}),
+        },
+      };
+      const providerToolName = request.context.providerToolName ?? request.name;
       try {
+        if (resolved.resolutionError) return resolved.resolutionError;
         if (
           request.context.availableToolNames &&
-          !request.context.availableToolNames.has(request.name)
+          !request.context.availableToolNames.has(providerToolName)
         ) {
           return errorResult(
-            `Tool '${request.name}' was not available in the provider request that emitted this call`,
+            `Tool '${providerToolName}' was not available in the provider request that emitted this call`,
             {
               status: "tool_not_available",
-              tool: request.name,
+              tool: providerToolName,
             },
           );
         }
@@ -2061,52 +2309,55 @@ export function createAgentToolRuntime(
           if (denied) return denied;
         }
         const execute = async () =>
-          request.name === "compose"
-            ? __DEV_BUILD__
-              ? await (
-                  await loadComposeRuntime(ctx.extensionUri.fsPath)
-                ).handleCompose({
-                  params: request.input as unknown as ComposeParams,
-                  scope: createComposeExecutionScope({
-                    runtime: this,
-                    parentContext: request.context,
-                  }),
-                  signal:
-                    request.context.toolAbortSignal ??
-                    new AbortController().signal,
-                  wasmPath: path.join(
-                    ctx.extensionUri.fsPath,
-                    "dist",
-                    "wasm",
-                    "quickjs-release-asyncify.wasm",
-                  ),
-                })
-              : errorResult("Tool 'compose' is available only in dev builds")
-            : await dispatchToolCall(request.name, request.input, {
-                ...ctx,
-                sessionId: request.context.sessionId,
-                mode: request.context.mode,
-                commandExecutionPolicy:
-                  request.context.commandExecutionPolicy ??
-                  ctx.commandExecutionPolicy,
-                backgroundExpectedResult:
-                  request.context.backgroundExpectedResult,
-                trackerCtx: request.context
-                  .trackerCtx as ToolDispatchContext["trackerCtx"],
-                toolAbortSignal: request.context.toolAbortSignal,
-                getAdvertisedSkills: request.context.getAdvertisedSkills,
-                getAdvertisedRules: request.context.getAdvertisedRules,
-                onSkillLoad: request.context.onSkillLoad,
-                skillAllowedTools: request.context.skillAllowedTools,
-                onFinalStatus: request.context.onFinalStatus,
-                onCompleteTodos: request.context.onCompleteTodos as
-                  | ToolDispatchContext["onCompleteTodos"]
-                  | undefined,
-                getSessionImages: request.context.getSessionImages,
-                getSessionTranscript: request.context.getSessionTranscript,
-                pendingQuestionRecovery:
-                  request.context.pendingQuestionRecovery,
-              });
+          request.name === "find_native_tools"
+            ? executeNativeToolDiscovery(request)
+            : request.name === "compose"
+              ? __DEV_BUILD__
+                ? await (
+                    await loadComposeRuntime(ctx.extensionUri.fsPath)
+                  ).handleCompose({
+                    params: request.input as unknown as ComposeParams,
+                    scope: createComposeExecutionScope({
+                      runtime: this,
+                      parentContext: request.context,
+                    }),
+                    signal:
+                      request.context.toolAbortSignal ??
+                      new AbortController().signal,
+                    wasmPath: path.join(
+                      ctx.extensionUri.fsPath,
+                      "dist",
+                      "wasm",
+                      "quickjs-release-asyncify.wasm",
+                    ),
+                  })
+                : errorResult("Tool 'compose' is available only in dev builds")
+              : await dispatchToolCall(request.name, request.input, {
+                  ...ctx,
+                  sessionId: request.context.sessionId,
+                  mode: request.context.mode,
+                  commandExecutionPolicy:
+                    request.context.commandExecutionPolicy ??
+                    ctx.commandExecutionPolicy,
+                  backgroundExpectedResult:
+                    request.context.backgroundExpectedResult,
+                  trackerCtx: request.context
+                    .trackerCtx as ToolDispatchContext["trackerCtx"],
+                  toolAbortSignal: request.context.toolAbortSignal,
+                  getAdvertisedSkills: request.context.getAdvertisedSkills,
+                  getAdvertisedRules: request.context.getAdvertisedRules,
+                  onSkillLoad: request.context.onSkillLoad,
+                  skillAllowedTools: request.context.skillAllowedTools,
+                  skillAuthority: request.context.skillAuthority,
+                  onFinalStatus: request.context.onFinalStatus,
+                  onCompleteTodos: request.context.onCompleteTodos as
+                    | ToolDispatchContext["onCompleteTodos"]
+                    | undefined,
+                  getSessionImages: request.context.getSessionImages,
+                  getSessionTranscript: request.context.getSessionTranscript,
+                  pendingQuestionRecovery:
+                    request.context.pendingQuestionRecovery,
+                });
         const result = operationRoots
           ? await withWorkspaceRoots(operationRoots, execute)
           : await execute();
@@ -2155,6 +2406,8 @@ export function createAgentToolRuntime(
       }
     },
     isParallelSafe(toolName, input) {
+      if (toolName === "find_native_tools") return true;
+      if (toolName === "call_native_tool") return false;
       if (READ_ONLY_TOOLS.has(toolName)) return true;
       if (toolName === "call_mcp_tool") {
         const serverName =
@@ -2986,44 +3239,49 @@ export async function dispatchToolCall(
         ctx.getAdvertisedSkills?.() ?? [],
         createVscodeReadFileEnrichmentProvider(),
         toolAbortSignal,
-        ...(ctx.actionApprovalReviewer
-          ? [
-              createGuardianOutsideReadOptions(ctx, sessionId, "read_file", {
-                kind: "read-file",
-                offset: params.offset,
-                limit: params.limit,
-                includeSymbols: params.include_symbols !== false,
-                autoFollowSuggestion: params.auto_follow_suggestion === true,
-                ...(params.offset === undefined
-                  ? params.anchor !== undefined
+        ctx.actionApprovalReviewer
+          ? createGuardianOutsideReadOptions(ctx, sessionId, "read_file", {
+              kind: "read-file",
+              offset: params.offset,
+              limit: params.limit,
+              includeSymbols: params.include_symbols !== false,
+              autoFollowSuggestion: params.auto_follow_suggestion === true,
+              ...(params.offset === undefined
+                ? params.anchor !== undefined
+                  ? {
+                      selector: {
+                        kind: "anchor" as const,
+                        value: params.anchor,
+                        offset: params.anchor_offset,
+                      },
+                    }
+                  : params.anchor_regex !== undefined
                     ? {
                         selector: {
-                          kind: "anchor" as const,
-                          value: params.anchor,
+                          kind: "regex" as const,
+                          value: params.anchor_regex,
                           offset: params.anchor_offset,
                         },
                       }
-                    : params.anchor_regex !== undefined
+                    : params.query !== undefined
                       ? {
                           selector: {
-                            kind: "regex" as const,
-                            value: params.anchor_regex,
+                            kind: "query" as const,
+                            value: params.query,
                             offset: params.anchor_offset,
                           },
                         }
-                      : params.query !== undefined
-                        ? {
-                            selector: {
-                              kind: "query" as const,
-                              value: params.query,
-                              offset: params.anchor_offset,
-                            },
-                          }
-                        : {}
-                  : {}),
-              })!,
-            ]
-          : []),
+                      : {}
+                : {}),
+            })
+          : undefined,
+        ctx.globalStorageUri
+          ? {
+              retrievalStoreRoot: getRetrievalStoreRoot(
+                ctx.globalStorageUri.fsPath,
+              ),
+            }
+          : {},
       );
     case "get_context":
       if (ctx.onFileRead && typeof params.path === "string") {
@@ -3044,7 +3302,12 @@ export async function dispatchToolCall(
       }
       return handleGetRepoMap(
         params,
-        createVscodeStructuralGraphProvider(ctx.globalStorageUri),
+        createVscodeStructuralGraphProvider(
+          ctx.globalStorageUri,
+          vscode.workspace
+            .getConfiguration("agentlink")
+            .get<"standard" | "fine">("chunkGranularity", "fine"),
+        ),
       );
     case "get_module_neighbors":
       if (ctx.onFileRead && typeof params.path === "string") {
@@ -3052,7 +3315,12 @@ export async function dispatchToolCall(
       }
       return handleGetModuleNeighbors(
         params,
-        createVscodeStructuralGraphProvider(ctx.globalStorageUri),
+        createVscodeStructuralGraphProvider(
+          ctx.globalStorageUri,
+          vscode.workspace
+            .getConfiguration("agentlink")
+            .get<"standard" | "fine">("chunkGranularity", "fine"),
+        ),
       );
     case "load_rule":
       if (ctx.onFileRead && typeof params.path === "string") {
@@ -3078,8 +3346,25 @@ export async function dispatchToolCall(
       try {
         const text = result.content.find((c) => c.type === "text")?.text;
         if (text && ctx.onSkillLoad) {
-          const parsed = JSON.parse(text) as { skill_name?: string };
-          if (parsed.skill_name) ctx.onSkillLoad(parsed.skill_name);
+          const parsed = JSON.parse(text) as {
+            skill_id?: string;
+            skill_name?: string;
+            revision?: string;
+            skillPath?: string;
+          };
+          if (
+            parsed.skill_id &&
+            parsed.skill_name &&
+            parsed.revision &&
+            parsed.skillPath
+          ) {
+            ctx.onSkillLoad({
+              id: parsed.skill_id,
+              name: parsed.skill_name,
+              revision: parsed.revision,
+              skillPath: parsed.skillPath,
+            });
+          }
         }
       } catch {
         // ignore malformed/non-JSON results
@@ -3107,6 +3392,13 @@ export async function dispatchToolCall(
               query: params.query,
             }),
           ),
+          semanticQueryOptions: ctx.globalStorageUri
+            ? {
+                retrievalStoreRoot: getRetrievalStoreRoot(
+                  ctx.globalStorageUri.fsPath,
+                ),
+              }
+            : undefined,
         },
       );
     case "search_files":
@@ -3136,6 +3428,13 @@ export async function dispatchToolCall(
               outputMode: params.output_mode,
             }),
           ),
+          semanticQueryOptions: ctx.globalStorageUri
+            ? {
+                retrievalStoreRoot: getRetrievalStoreRoot(
+                  ctx.globalStorageUri.fsPath,
+                ),
+              }
+            : undefined,
         },
       );
     case "search_session_history":
@@ -3279,6 +3578,28 @@ export async function dispatchToolCall(
             }),
           ),
         },
+      );
+    case "manage_memory":
+      return handleManageMemory(
+        params as unknown as ManageMemoryToolInput,
+        {
+          sessionId,
+          projectId: ctx.projectScope?.projectId,
+          isBackground: ctx.isBackgroundSession === true,
+          observedAt: new Date().toISOString(),
+        },
+        ctx.memoryToolProvider,
+      );
+    case "recall_memory":
+      return handleRecallMemory(
+        params as unknown as RecallMemoryToolInput,
+        {
+          sessionId,
+          projectId: ctx.projectScope?.projectId,
+          isBackground: ctx.isBackgroundSession === true,
+          observedAt: new Date().toISOString(),
+        },
+        ctx.memoryToolProvider,
       );
     case "propose_memory":
       return handleProposeMemory(
@@ -3432,7 +3753,7 @@ export async function dispatchToolCall(
     case "codebase_search": {
       const provider =
         ctx.semanticSearchProvider ?? createUnavailableSemanticSearchProvider();
-      return provider.search({
+      const result = await provider.search({
         query: String(params.query),
         path: params.path ? String(params.path) : undefined,
         limit: typeof params.limit === "number" ? params.limit : undefined,
@@ -3440,6 +3761,7 @@ export async function dispatchToolCall(
           ? params.exclude_globs.map(String)
           : undefined,
       });
+      return semanticSearchResultToToolResult(result);
     }
 
     case "find_mcp_tools": {
@@ -3853,7 +4175,7 @@ export async function dispatchToolCall(
             ctx.backgroundAgentProvider!.spawn(request)
         : ctx.onSpawnBackground
           ? (request: SpawnBackgroundRequest) =>
-              ctx.onSpawnBackground!(ctx.sessionId, request)
+              ctx.onSpawnBackground!(ctx.sessionId, request, ctx.skillAuthority)
           : undefined;
       if (!spawnBackground) {
         return {
@@ -4164,17 +4486,21 @@ export async function dispatchToolCall(
                 typeof item.provider === "string" ? item.provider : undefined,
             }))
         : undefined;
-      const result = await ctx.onStartFleetWorkflow(ctx.sessionId, {
-        kind,
-        task: String(params.task ?? ""),
-        message: String(params.message ?? ""),
-        goalId: typeof params.goalId === "string" ? params.goalId : undefined,
-        candidates,
-        budget:
-          typeof params.budget === "object" && params.budget !== null
-            ? (params.budget as FleetWorkflowRequest["budget"])
-            : undefined,
-      });
+      const result = await ctx.onStartFleetWorkflow(
+        ctx.sessionId,
+        {
+          kind,
+          task: String(params.task ?? ""),
+          message: String(params.message ?? ""),
+          goalId: typeof params.goalId === "string" ? params.goalId : undefined,
+          candidates,
+          budget:
+            typeof params.budget === "object" && params.budget !== null
+              ? (params.budget as FleetWorkflowRequest["budget"])
+              : undefined,
+        },
+        ctx.skillAuthority,
+      );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     }
 

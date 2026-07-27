@@ -14,13 +14,17 @@ interface ProjectCustomizationEntry {
 
 export interface ProjectCustomizationRegistryDependencies {
   loadCustomModes(rootPath: string): Promise<AgentMode[]>;
-  loadSlashCommands(rootPath: string, mode: string): Promise<SlashCommand[]>;
+  loadSlashCommands(
+    rootPath: string,
+    mode: string,
+    disabledSkillIds: readonly string[],
+  ): Promise<SlashCommand[]>;
 }
 
 const defaultDependencies: ProjectCustomizationRegistryDependencies = {
   loadCustomModes,
-  async loadSlashCommands(rootPath, mode) {
-    const registry = new SlashCommandRegistry(rootPath, mode);
+  async loadSlashCommands(rootPath, mode, disabledSkillIds) {
+    const registry = new SlashCommandRegistry(rootPath, mode, disabledSkillIds);
     await registry.reload();
     return registry.getAll();
   },
@@ -36,6 +40,9 @@ export class ProjectCustomizationRegistry {
 
   constructor(
     private readonly dependencies: ProjectCustomizationRegistryDependencies = defaultDependencies,
+    private readonly getDisabledSkillIds: (
+      scope: SessionProjectScope,
+    ) => readonly string[] = () => [],
   ) {}
 
   async getModes(scope: SessionProjectScope): Promise<AgentMode[]> {
@@ -53,12 +60,14 @@ export class ProjectCustomizationRegistry {
     mode: string,
   ): Promise<SlashCommand[]> {
     const entry = this.getEntry(scope);
-    let commands = entry.slashCommandsByMode.get(mode);
+    const disabledSkillIds = [...this.getDisabledSkillIds(scope)].sort();
+    const cacheKey = `${mode}\0${disabledSkillIds.join("\0")}`;
+    let commands = entry.slashCommandsByMode.get(cacheKey);
     if (!commands) {
       commands = this.dependencies
-        .loadSlashCommands(entry.rootPath, mode)
+        .loadSlashCommands(entry.rootPath, mode, disabledSkillIds)
         .then((loaded) => Object.freeze(loaded.map(cloneSlashCommand)));
-      entry.slashCommandsByMode.set(mode, commands);
+      entry.slashCommandsByMode.set(cacheKey, commands);
     }
     return (await commands).map(cloneSlashCommand);
   }

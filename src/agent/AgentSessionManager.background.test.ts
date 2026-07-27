@@ -848,6 +848,42 @@ describe("AgentSessionManager background agents", () => {
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
   });
 
+  it("rejects restrictive skill authority at the ACP boundary", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    const acpBackgroundRunner = { run: vi.fn() };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    const parent = await mgr.createSession("code");
+    mgr.setToolContext(toolCtx);
+
+    await expect(
+      mgr.spawnBackground(
+        {
+          task: "external review",
+          message: "review this",
+          provider: "acp:claude",
+        },
+        parent.id,
+        {
+          schemaVersion: 1,
+          sources: [],
+          allowedTools: ["read_file"],
+        },
+      ),
+    ).rejects.toThrow(/cannot inherit active skill tool restrictions/);
+    expect(acpBackgroundRunner.run).not.toHaveBeenCalled();
+  });
+
   it("preserves ACP message and tool images for the caller", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       acpAgents: [{ id: "image-agent", command: "image-agent-acp" }],
@@ -2628,8 +2664,8 @@ describe("AgentSessionManager background agents", () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext({
       ...toolCtx,
-      onSpawnBackground: (callerSessionId, request) =>
-        mgr.spawnBackground(request, callerSessionId),
+      onSpawnBackground: (callerSessionId, request, skillAuthority) =>
+        mgr.spawnBackground(request, callerSessionId, skillAuthority),
       onGetBackgroundStatus: (callerSessionId, sessionId) =>
         mgr.getAuthorizedBackgroundStatus(callerSessionId, sessionId),
       onGetBackgroundResult: (callerSessionId, sessionId) =>
@@ -2672,6 +2708,69 @@ describe("AgentSessionManager background agents", () => {
         context: { sessionId: childId },
       }),
     ).rejects.toThrow(/maximum fleet depth reached/);
+  });
+
+  it("carries immutable parent skill authority into native descendants", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext({
+      ...toolCtx,
+      onSpawnBackground: (callerSessionId, request, skillAuthority) =>
+        mgr.spawnBackground(request, callerSessionId, skillAuthority),
+    });
+    await mgr.createSession("code");
+    const parent = await mgr.spawnBackground({
+      task: "parent",
+      message: "coordinate",
+      mode: "code",
+    });
+    const parentRuntime = mocks.setToolRuntime.mock.calls.at(-1)?.[0];
+    const skillAuthority = {
+      schemaVersion: 1 as const,
+      sources: [
+        {
+          catalogRevision: "parent-catalog",
+          activations: [
+            {
+              id: "project:agentlink:.agentlink/skills/parent-review",
+              name: "parent-review",
+              revision: "skill-revision",
+            },
+          ],
+          policyRevision: "parent-policy",
+        },
+      ],
+      allowedTools: ["read_file"],
+    };
+
+    const result = await parentRuntime.executeTool({
+      name: "spawn_background_agent",
+      input: {
+        task: "child",
+        message: "inspect",
+        mode: "review",
+        permissionProfile: "review-only",
+      },
+      context: { sessionId: parent.sessionId, skillAuthority },
+    });
+    const childId = JSON.parse(result.content[0].text).sessionId;
+    await waitFor(
+      () => mocks.runArgs.mock.calls.length,
+      (calls) => calls >= 2,
+    );
+    const child = (mgr as any).sessions.get(childId);
+    const childRunOptions = mocks.runArgs.mock.calls.find(
+      ([session]) => session.id === childId,
+    )?.[1];
+
+    expect(child.fleetMetadata.skillAuthority).toEqual(skillAuthority);
+    expect(child.fleetMetadata.skillAuthority).not.toBe(skillAuthority);
+    expect(childRunOptions.inheritedSkillAuthority).toEqual(skillAuthority);
+    expect(Object.isFrozen(childRunOptions.inheritedSkillAuthority)).toBe(true);
+    expect(
+      Object.isFrozen(
+        childRunOptions.inheritedSkillAuthority.sources[0].activations,
+      ),
+    ).toBe(true);
   });
 
   it("prevents background agents from managing sibling subtrees", async () => {

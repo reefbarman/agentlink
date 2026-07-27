@@ -29,6 +29,14 @@ const FORBIDDEN_IMPORT_PATTERNS = [
   },
 ];
 
+const FORBIDDEN_STORAGE_TERMS = [
+  { pattern: /\bQdrant\b/i, label: "Qdrant" },
+  { pattern: /\bLanceDB\b/i, label: "LanceDB" },
+  { pattern: /\bcollectionName\b/, label: "backend collection identity" },
+  { pattern: /\bqdrantUrl\b/, label: "backend URL" },
+  { pattern: /\bpointIds?\b/i, label: "backend point identity" },
+];
+
 describe("core import boundary", () => {
   it("keeps src/core free of VS Code and UI-surface imports", () => {
     const violations: string[] = [];
@@ -39,6 +47,23 @@ describe("core import boundary", () => {
       for (const rule of FORBIDDEN_IMPORT_PATTERNS) {
         if (rule.pattern.test(source)) {
           violations.push(`${rel}: imports ${rule.label}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps production core contracts storage-neutral", () => {
+    const violations: string[] = [];
+
+    for (const filePath of walkTypeScriptFiles(CORE_DIR)) {
+      if (filePath.endsWith(".test.ts")) continue;
+      const rel = path.relative(path.resolve(__dirname, "..", ".."), filePath);
+      const source = fs.readFileSync(filePath, "utf-8");
+      for (const rule of FORBIDDEN_STORAGE_TERMS) {
+        if (rule.pattern.test(source)) {
+          violations.push(`${rel}: contains ${rule.label}`);
         }
       }
     }

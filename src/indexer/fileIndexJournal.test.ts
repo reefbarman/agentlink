@@ -25,10 +25,10 @@ function replacement(
     kind: "replace",
     generation: "generation-2",
     targetHash: "target-hash",
-    oldPointIds: ["old-1"],
+    oldRecordIds: ["old-1"],
     intendedBatches: [
-      { batch: 0, pointIds: ["new-1", "new-2"] },
-      { batch: 1, pointIds: ["new-3"] },
+      { batch: 0, recordIds: ["new-1", "new-2"] },
+      { batch: 1, recordIds: ["new-3"] },
     ],
     ...overrides,
   };
@@ -75,7 +75,7 @@ describe("fileIndexJournal", () => {
           kind: "remove" as const,
           generation: "generation-2",
           targetHash: null,
-          oldPointIds: ["removed-1", "removed-2"],
+          oldRecordIds: ["removed-1", "removed-2"],
           intendedBatches: [],
         },
       ],
@@ -83,6 +83,27 @@ describe("fileIndexJournal", () => {
 
     writeFileIndexJournal(journalPath, journal);
 
+    const persisted = JSON.parse(fs.readFileSync(journalPath, "utf8")) as {
+      operations: Array<{
+        oldRecordIds: string[];
+        oldPointIds: string[];
+        intendedBatches: Array<{
+          recordIds: string[];
+          pointIds: string[];
+        }>;
+      }>;
+    };
+    expect(persisted.operations[0]).toMatchObject({
+      oldRecordIds: ["old-1"],
+      oldPointIds: ["old-1"],
+      intendedBatches: [
+        {
+          recordIds: ["new-1", "new-2"],
+          pointIds: ["new-1", "new-2"],
+        },
+        { recordIds: ["new-3"], pointIds: ["new-3"] },
+      ],
+    });
     expect(loadFileIndexJournal(journalPath)).toEqual({
       status: "valid",
       journal,
@@ -90,6 +111,100 @@ describe("fileIndexJournal", () => {
     expect(
       fs.readdirSync(directory).filter((file) => file.includes(".tmp-")),
     ).toEqual([]);
+  });
+
+  it.each([
+    [
+      "legacy",
+      {
+        oldPointIds: ["old-1"],
+        intendedBatches: [{ batch: 0, pointIds: ["new-1"] }],
+      },
+    ],
+    [
+      "canonical",
+      {
+        oldRecordIds: ["old-1"],
+        intendedBatches: [{ batch: 0, recordIds: ["new-1"] }],
+      },
+    ],
+    [
+      "matching aliases",
+      {
+        oldRecordIds: ["old-1"],
+        oldPointIds: ["old-1"],
+        intendedBatches: [
+          {
+            batch: 0,
+            recordIds: ["new-1"],
+            pointIds: ["new-1"],
+          },
+        ],
+      },
+    ],
+  ])("normalizes %s journal ownership", (_name, ownership) => {
+    expect(
+      validateFileIndexJournal({
+        version: FILE_INDEX_JOURNAL_VERSION,
+        operations: [
+          {
+            operationId: "operation-1",
+            file: "src/example.ts",
+            kind: "replace",
+            generation: "generation-2",
+            targetHash: "target-hash",
+            ...ownership,
+          },
+        ],
+      }),
+    ).toEqual({
+      version: FILE_INDEX_JOURNAL_VERSION,
+      operations: [
+        {
+          operationId: "operation-1",
+          file: "src/example.ts",
+          kind: "replace",
+          generation: "generation-2",
+          targetHash: "target-hash",
+          oldRecordIds: ["old-1"],
+          intendedBatches: [{ batch: 0, recordIds: ["new-1"] }],
+        },
+      ],
+    });
+  });
+
+  it.each([
+    {
+      oldRecordIds: ["old-1"],
+      oldPointIds: ["old-2"],
+      intendedBatches: [{ batch: 0, recordIds: ["new-1"] }],
+    },
+    {
+      oldRecordIds: ["old-1"],
+      intendedBatches: [
+        {
+          batch: 0,
+          recordIds: ["new-1"],
+          pointIds: ["new-2"],
+        },
+      ],
+    },
+  ])("rejects conflicting journal ownership aliases", (ownership) => {
+    expect(() =>
+      validateFileIndexJournal({
+        version: FILE_INDEX_JOURNAL_VERSION,
+        operations: [
+          {
+            operationId: "operation-1",
+            file: "src/example.ts",
+            kind: "replace",
+            generation: "generation-2",
+            targetHash: "target-hash",
+            ...ownership,
+          },
+        ],
+      }),
+    ).toThrow("aliases conflict");
   });
 
   it("preserves corrupt bytes for operator-assisted recovery", () => {
@@ -165,7 +280,7 @@ describe("fileIndexJournal", () => {
     expect(fs.readFileSync(journalPath, "utf8")).toBe(original);
   });
 
-  it("rejects duplicate operation IDs and point ownership", () => {
+  it("rejects duplicate operation IDs and record ownership", () => {
     expect(() =>
       validateFileIndexJournal({
         version: FILE_INDEX_JOURNAL_VERSION,
@@ -176,9 +291,9 @@ describe("fileIndexJournal", () => {
     expect(() =>
       validateFileIndexJournal({
         version: FILE_INDEX_JOURNAL_VERSION,
-        operations: [replacement({ oldPointIds: ["old-1", "old-1"] })],
+        operations: [replacement({ oldRecordIds: ["old-1", "old-1"] })],
       }),
-    ).toThrow("Journal old point IDs must be unique");
+    ).toThrow("Journal old record IDs must be unique");
 
     expect(() =>
       validateFileIndexJournal({
@@ -186,25 +301,25 @@ describe("fileIndexJournal", () => {
         operations: [
           replacement({
             intendedBatches: [
-              { batch: 0, pointIds: ["new-1"] },
-              { batch: 1, pointIds: ["new-1"] },
+              { batch: 0, recordIds: ["new-1"] },
+              { batch: 1, recordIds: ["new-1"] },
             ],
           }),
         ],
       }),
-    ).toThrow("Journal intended point IDs must be unique");
+    ).toThrow("Journal intended record IDs must be unique");
 
     expect(() =>
       validateFileIndexJournal({
         version: FILE_INDEX_JOURNAL_VERSION,
         operations: [
           replacement({
-            oldPointIds: ["shared"],
-            intendedBatches: [{ batch: 0, pointIds: ["shared"] }],
+            oldRecordIds: ["shared"],
+            intendedBatches: [{ batch: 0, recordIds: ["shared"] }],
           }),
         ],
       }),
-    ).toThrow("Journal intended point IDs cannot reuse old point IDs");
+    ).toThrow("Journal intended record IDs cannot reuse old record IDs");
 
     expect(() =>
       validateFileIndexJournal({
@@ -214,12 +329,12 @@ describe("fileIndexJournal", () => {
           replacement({
             operationId: "operation-2",
             file: "src/other.ts",
-            oldPointIds: ["new-3"],
-            intendedBatches: [{ batch: 0, pointIds: ["other-new"] }],
+            oldRecordIds: ["new-3"],
+            intendedBatches: [{ batch: 0, recordIds: ["other-new"] }],
           }),
         ],
       }),
-    ).toThrow("Journal point IDs must have one owner");
+    ).toThrow("Journal record IDs must have one owner");
   });
 
   it.each([
@@ -250,8 +365,8 @@ describe("fileIndexJournal", () => {
           replacement({
             operationId: "operation-2",
             file: "src/example.ts/",
-            oldPointIds: ["other-old"],
-            intendedBatches: [{ batch: 0, pointIds: ["other-new"] }],
+            oldRecordIds: ["other-old"],
+            intendedBatches: [{ batch: 0, recordIds: ["other-new"] }],
           }),
         ],
       }),
@@ -281,6 +396,6 @@ describe("fileIndexJournal", () => {
         version: FILE_INDEX_JOURNAL_VERSION,
         operations: [replacement({ intendedBatches: [] })],
       }),
-    ).toThrow("Replacement journal operations require intended point IDs");
+    ).toThrow("Replacement journal operations require intended record IDs");
   });
 });

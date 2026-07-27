@@ -103,7 +103,7 @@ function eventData(text: string, eventName: string): Record<string, unknown> {
 }
 
 describe("BrowserGatewayHelper relay integration", () => {
-  it("authenticates, stores owner publications, streams selected state, and preserves proxy fallback", async () => {
+  it("authenticates, stores owner publications, and streams selected state", async () => {
     const extensionRootPath = await makeExtensionRoot();
     const storeDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "agentlink-relay-integration-store-"),
@@ -502,16 +502,6 @@ describe("BrowserGatewayHelper relay integration", () => {
       expect(detailRead.status).toBe(200);
       expect(detailRead.headers.get("content-type")).toBe("text/plain");
       await expect(detailRead.text()).resolves.toBe("relay detail");
-
-      const legacyFallback = await fetch(`${base}/api/unmatched`, {
-        headers: { Cookie: cookie },
-      });
-      expect(legacyFallback.status).toBe(503);
-      await expect(legacyFallback.json()).resolves.toEqual({
-        error: "no_instances_available",
-        currentInstanceId: "",
-        instances: [],
-      });
     } finally {
       await reader?.cancel().catch(() => undefined);
       await commandReader?.cancel().catch(() => undefined);

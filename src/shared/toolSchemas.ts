@@ -50,6 +50,57 @@ export const webFetchSchema = {
     .describe("Optional text or pattern to locate within the opened page"),
 };
 
+// ─── Native tool discovery ───────────────────────────────────────────────────
+
+export const findNativeToolsSchema = {
+  query: z
+    .string()
+    .max(500)
+    .optional()
+    .describe(
+      "Optional text matched against deferred native tool names and descriptions",
+    ),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .optional()
+    .describe("Maximum tools to return (default 10, maximum 50)"),
+  offset: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Zero-based result offset for deterministic pagination"),
+  include_schemas: z
+    .boolean()
+    .optional()
+    .describe("Include input schemas for returned tools. Default false."),
+  schema_limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(10)
+    .optional()
+    .describe(
+      "Maximum returned tools that include schemas (default 1, maximum 10)",
+    ),
+};
+
+export const callNativeToolSchema = {
+  name: z
+    .string()
+    .min(1)
+    .max(128)
+    .describe("Exact deferred native tool name returned by find_native_tools"),
+  input: z
+    .record(z.string(), z.unknown())
+    .describe(
+      "Arguments object validated against the resolved native tool schema",
+    ),
+};
+
 // ─── File tools ──────────────────────────────────────────────────────────────
 
 export const readFileSchema = {
@@ -461,11 +512,95 @@ export const presentImagesSchema = {
     ),
 };
 
+export const manageMemorySchema = {
+  operation: z
+    .enum(["remember", "update", "supersede", "forget", "restore", "undo"])
+    .describe("Typed low-authority memory operation."),
+  scope: z
+    .enum(["global", "project"])
+    .describe("Global user scope or current project scope."),
+  source_evidence: z
+    .string()
+    .min(1)
+    .max(500)
+    .describe(
+      "Concise evidence supporting this mutation. Do not include secrets, credentials, raw tool output, or transient status.",
+    ),
+  kind: z
+    .enum([
+      "preference",
+      "project_fact",
+      "gotcha",
+      "decision",
+      "workflow_hint",
+      "correction",
+    ])
+    .optional()
+    .describe("Required when remembering a new record."),
+  statement: z
+    .string()
+    .min(1)
+    .max(1000)
+    .optional()
+    .describe("Concise durable statement for remember, update, or supersede."),
+  target_id: z
+    .string()
+    .optional()
+    .describe("Target record ID for update, supersede, forget, or restore."),
+  conflict_key: z
+    .string()
+    .max(200)
+    .optional()
+    .describe("Stable exact conflict/deduplication key when known."),
+  confidence: z.coerce
+    .number()
+    .min(0)
+    .max(1)
+    .optional()
+    .describe("Evidence confidence from 0 to 1."),
+  expires_at: z.string().optional().describe("Optional ISO-8601 expiry time."),
+  expected_revision: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(
+      "Required compare-and-set revision when mutating an existing record.",
+    ),
+  undo_audit_event_id: z
+    .string()
+    .optional()
+    .describe("Audit event ID to compensate when operation is undo."),
+};
+
+export const recallMemorySchema = {
+  query: z.string().min(1).max(1000).describe("Memory search query."),
+  scope: z
+    .enum(["global", "project", "all"])
+    .optional()
+    .describe(
+      "Scope filter. Defaults to all scopes available to this session.",
+    ),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(20)
+    .optional()
+    .describe("Maximum eligible records to return (default: 10, maximum: 20)."),
+  minimum_score: z.coerce
+    .number()
+    .min(0)
+    .max(1)
+    .optional()
+    .describe("Minimum lexical relevance score (default: 0.2)."),
+};
+
 export const proposeMemorySchema = {
   tier: z
-    .enum(["instructions", "skill", "command", "memory"])
+    .enum(["instructions", "skill", "command"])
     .describe(
-      "Destination tier: instructions for durable rules, skill for reusable workflows, command for slash-command prompts, memory for lower-authority facts/gotchas.",
+      "Authoritative destination tier: instructions for durable rules, skill for reusable workflows, or command for slash-command prompts.",
     ),
   scope: z
     .enum(["global", "project"])
@@ -482,7 +617,7 @@ export const proposeMemorySchema = {
   content: z
     .string()
     .describe(
-      "Markdown content to add or the replacement body for update/remove operations. For skills, pass the complete SKILL.md content.",
+      "Markdown content to add or the replacement body for update/remove operations. For skills, pass the complete SKILL.md content. Use manage_memory for low-authority memory.",
     ),
   name: z
     .string()

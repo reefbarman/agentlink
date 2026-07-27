@@ -1,8 +1,8 @@
 /**
  * Indexer worker — runs as a child process via child_process.fork().
  *
- * Handles file reading, hashing, chunking, embedding (OpenAI), and
- * Qdrant upsert/delete. Communicates with the extension host via IPC.
+ * Handles file reading, hashing, chunking, embedding (OpenAI), and durable
+ * retrieval publication. Communicates with the extension host via IPC.
  *
  * Memory-efficient: processes files in batches of FILE_BATCH_SIZE through
  * the full pipeline (read → chunk → embed → upsert → release), bounding
@@ -24,9 +24,10 @@ try {
 }
 import {
   initTreeSitter,
-  treeSitterChunkFile,
+  treeSitterChunkFileDetailed,
   isTreeSitterSupported,
   setChunkGranularity as setTreeSitterGranularity,
+  type TreeSitterSymbolHint,
 } from "./treeSitterChunker.js";
 import {
   chunkFile,
@@ -38,7 +39,6 @@ import {
   setChunkGranularity as setMarkdownGranularity,
 } from "./markdownChunker.js";
 import {
-  buildPathSegments,
   emptyStructuralCache,
   getStructuralCachePath,
   loadIndexCache,
@@ -50,27 +50,33 @@ import {
   type FileWithContent,
 } from "./workerLib.js";
 import { CacheCheckpointCoordinator } from "./CacheCheckpointCoordinator.js";
+import { runBoundedReadAheadPipeline } from "./boundedReadAheadPipeline.js";
 import {
-  emptyFileIndexJournal,
   getFileIndexJournalPath,
   loadFileIndexJournal,
   resetFileIndexJournal,
-  writeFileIndexJournal,
   type FileIndexJournal,
 } from "./fileIndexJournal.js";
-import { executeJournaledRemovedFileDeletes } from "./journaledRemovedFileDeletion.js";
 import {
-  executeJournaledFileReplacements,
-  recoverJournaledFileReplacements,
+  executeJournaledRepositoryDeletions,
+  type RepositorySourceDeletion,
+} from "./journaledRepositoryDeletion.js";
+import {
+  executeJournaledRepositoryPublications,
+  recoverJournaledRepositoryPublications,
   type FileReplacementStore,
-} from "./journaledFileReplacement.js";
-import { extractStructuralFile } from "./structuralExtractor.js";
+} from "./journaledRepositoryPublication.js";
 import {
-  beginCollectionReset,
-  completeCollectionReset,
-  getCollectionResetStatePath,
-  loadCollectionResetState,
-  type CollectionResetTarget,
+  extractStructuralFile,
+  shouldUseTreeSitterSymbolHints,
+  STRUCTURAL_EXTRACTOR_VERSION,
+} from "./structuralExtractor.js";
+import {
+  beginIndexReset,
+  completeIndexReset,
+  getIndexResetStatePath,
+  loadIndexResetState,
+  type IndexResetTarget,
 } from "./collectionResetState.js";
 import type { StructuralGraphCache } from "./structuralGraph.js";
 import type {
@@ -82,18 +88,22 @@ import type {
   Chunk,
   ChunkGranularity,
 } from "./types.js";
+import type { RetrievalRepository } from "../core/retrieval/contracts.js";
+import { classifyRetrievalFingerprint } from "../core/retrieval/fingerprint.js";
+import { LanceDbRetrievalRepository } from "../storage/retrieval/LanceDbRetrievalRepository.js";
 import { EMBEDDING_DIM } from "./embeddingConfig.js";
 import { requestEmbeddings } from "./embeddingClient.js";
 import {
-  deleteQdrantCollection as deleteQdrantCollectionRequest,
-  deleteQdrantPoints as deleteQdrantPointsRequest,
-  ensureQdrantCollection as ensureQdrantCollectionRequest,
-  normalizeQdrantUrl,
-  setQdrantPointVisibility as setQdrantPointVisibilityRequest,
-  upsertQdrantPoints as upsertQdrantPointsRequest,
-  type QdrantPoint,
-  type QdrantPayloadIndex,
-} from "./qdrantClient.js";
+  CODE_INDEX_REBUILD_REQUIRED_ERROR,
+  createCodeIndexFingerprint,
+  MAX_CODE_INDEX_EMBEDDING_CHARS,
+} from "./retrievalFingerprint.js";
+import { prepareCodeFilePublication } from "./retrievalPublicationTranslation.js";
+import { resolveContainedCodeIndexPath } from "./codeIndexPaths.js";
+import {
+  getCodeSourceId,
+  getCodeWorkspaceScopeId,
+} from "./codeRetrievalIdentity.js";
 import { sleep } from "../util/sleep.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import {
@@ -106,7 +116,6 @@ import {
 
 const EMBEDDING_BATCH_SIZE = 100;
 const EMBEDDING_CONCURRENCY = 3;
-const QDRANT_UPSERT_BATCH = 100;
 const MAX_RETRIES = 3;
 /**
  * Token limit per embedding batch. Estimated via chars/4.
@@ -115,12 +124,7 @@ const MAX_RETRIES = 3;
  * that drastically reduces the number of API calls vs our old 7.5K limit.
  */
 const MAX_BATCH_TOKENS = 50_000;
-/**
- * Max characters per individual embedding text.
- * text-embedding-3-small has an 8192 token limit. Code averages ~2.5-3
- * chars/token, so 20k chars ≈ 6700-8000 tokens — safe with margin.
- */
-const MAX_EMBEDDING_CHARS = 20_000;
+
 /**
  * Number of files to process through the full pipeline (chunk → embed → upsert)
  * per batch. Bounds peak memory to ~7.5MB per batch instead of O(total_files).
@@ -140,8 +144,8 @@ const pendingEmbeddingAuthRefreshRequests = new Map<
 >();
 
 function writeCache(cachePath: string, cache: IndexCache): void {
-  writeCacheFile(cachePath, cache);
-  metrics.recordOperation("cache.writeVector", serializedByteLength(cache));
+  const persistedBytes = writeCacheFile(cachePath, cache);
+  metrics.recordOperation("cache.writeRetrieval", persistedBytes);
 }
 
 function writeStructuralCache(
@@ -175,52 +179,24 @@ function scheduleCacheMetadataCheckpoint(args: {
   granularity: ChunkGranularity;
   checkpoints: CacheCheckpointCoordinator;
 }): void {
-  if (args.cache.granularity === args.granularity) return;
+  const fingerprint = createCodeIndexFingerprint(args.granularity);
+  const fingerprintChanged =
+    classifyRetrievalFingerprint(
+      args.cache.fingerprint ?? null,
+      fingerprint,
+    ) !== "compatible";
+  if (args.cache.granularity === args.granularity && !fingerprintChanged)
+    return;
   args.cache.granularity = args.granularity;
+  args.cache.fingerprint = fingerprint;
   args.checkpoints.scheduleVector();
 }
 
-async function deleteQdrantCollection(
-  qdrantUrl: string,
-  collectionName: string,
-): Promise<void> {
-  metrics.recordOperation("qdrant.deleteCollection");
-  await deleteQdrantCollectionRequest(qdrantUrl, collectionName);
-}
-
-async function deleteQdrantPoints(
-  qdrantUrl: string,
-  collectionName: string,
-  pointIds: string[],
-): Promise<void> {
-  metrics.recordOperation("qdrant.deletePoints");
-  await deleteQdrantPointsRequest(qdrantUrl, collectionName, pointIds);
-}
-
-async function upsertQdrantPoints(
-  qdrantUrl: string,
-  collectionName: string,
-  points: QdrantPoint[],
-): Promise<void> {
-  metrics.recordOperation("qdrant.upsertPoints");
-  await upsertQdrantPointsRequest(qdrantUrl, collectionName, points);
-}
-
-async function setQdrantPointVisibility(
-  qdrantUrl: string,
-  collectionName: string,
-  pointIds: string[],
-  visible: boolean,
-): Promise<void> {
-  for (let index = 0; index < pointIds.length; index += QDRANT_UPSERT_BATCH) {
-    metrics.recordOperation("qdrant.setPointVisibility");
-    await setQdrantPointVisibilityRequest(
-      qdrantUrl,
-      collectionName,
-      pointIds.slice(index, index + QDRANT_UPSERT_BATCH),
-      visible,
-    );
-  }
+function createRetrievalRepository(root: string): LanceDbRetrievalRepository {
+  return new LanceDbRetrievalRepository({
+    root,
+    embeddingDimensions: EMBEDDING_DIM,
+  });
 }
 
 // --- IPC helpers ---
@@ -251,6 +227,16 @@ function sendError(message: string, fatal: boolean): void {
   send({ type: "error", message, fatal });
 }
 
+async function closeRetrievalRepository(
+  repository: LanceDbRetrievalRepository | undefined,
+): Promise<void> {
+  try {
+    await repository?.close();
+  } catch (error) {
+    console.error(`Failed to close retrieval repository: ${error}`);
+  }
+}
+
 async function requestEmbeddingAuthRefresh(): Promise<string> {
   const requestId = randomUUID();
   return new Promise<string>((resolve, reject) => {
@@ -279,7 +265,7 @@ async function requestEmbeddingAuthRefresh(): Promise<string> {
 function countCachedChunks(cache: IndexCache): number {
   let total = 0;
   for (const entry of Object.values(cache.files)) {
-    total += entry.pointIds.length;
+    total += entry.recordIds.length;
   }
   return total;
 }
@@ -289,17 +275,15 @@ function loadWorkerOwnership(
   allowCorruptReset: boolean,
 ): {
   cache: IndexCache;
-  resetTarget: CollectionResetTarget | null;
+  interruptedResetTarget: IndexResetTarget | null;
 } {
   const loadedCache = loadIndexCache(cachePath);
   const loadedJournal = loadFileIndexJournal(
     getFileIndexJournalPath(cachePath),
   );
-  const loadedReset = loadCollectionResetState(
-    getCollectionResetStatePath(cachePath),
-  );
+  const loadedReset = loadIndexResetState(getIndexResetStatePath(cachePath));
   if (loadedReset.status === "corrupt") {
-    throw new Error(`Collection reset state is corrupt: ${loadedReset.error}`);
+    throw new Error(`Index reset state is corrupt: ${loadedReset.error}`);
   }
   if (
     loadedReset.status === "valid" &&
@@ -308,19 +292,19 @@ function loadWorkerOwnership(
     if (allowCorruptReset) {
       return {
         cache: { version: 1, files: {} },
-        resetTarget: {
-          qdrantUrl: loadedReset.state.qdrantUrl,
-          collectionName: loadedReset.state.collectionName,
-        },
+        interruptedResetTarget: loadedReset.state.target,
       };
     }
     throw new Error(
-      "Collection reset state requires a forced re-index: A collection reset did not complete",
+      "Index reset state requires a forced re-index: An index reset did not complete",
     );
   }
   if (loadedCache.status === "corrupt") {
     if (allowCorruptReset) {
-      return { cache: { version: 1, files: {} }, resetTarget: null };
+      return {
+        cache: { version: 1, files: {} },
+        interruptedResetTarget: null,
+      };
     }
     throw new Error(
       `Vector cache is corrupt; run a forced re-index to rebuild ownership: ${loadedCache.error}`,
@@ -328,7 +312,10 @@ function loadWorkerOwnership(
   }
   if (loadedJournal.status === "corrupt") {
     if (allowCorruptReset) {
-      return { cache: { version: 1, files: {} }, resetTarget: null };
+      return {
+        cache: { version: 1, files: {} },
+        interruptedResetTarget: null,
+      };
     }
     throw new Error(
       `File index journal is corrupt; run a forced re-index to rebuild ownership: ${loadedJournal.error}`,
@@ -338,11 +325,14 @@ function loadWorkerOwnership(
     validateJournalCacheOwnership(loadedCache.cache, loadedJournal.journal);
   } catch (error) {
     if (allowCorruptReset) {
-      return { cache: { version: 1, files: {} }, resetTarget: null };
+      return {
+        cache: { version: 1, files: {} },
+        interruptedResetTarget: null,
+      };
     }
     throw error;
   }
-  return { cache: loadedCache.cache, resetTarget: null };
+  return { cache: loadedCache.cache, interruptedResetTarget: null };
 }
 
 function validateJournalCacheOwnership(
@@ -351,35 +341,35 @@ function validateJournalCacheOwnership(
 ): void {
   const owners = new Map<string, string>();
   for (const [file, entry] of Object.entries(cache.files)) {
-    for (const pointId of entry.pointIds)
-      owners.set(pointId, toJournalPath(file));
+    for (const recordId of entry.recordIds)
+      owners.set(recordId, toJournalPath(file));
   }
   for (const operation of journal.operations) {
-    const intendedPointIds = operation.intendedBatches.flatMap(
-      (batch) => batch.pointIds,
+    const intendedRecordIds = operation.intendedBatches.flatMap(
+      (batch) => batch.recordIds,
     );
-    const pointIds = [...operation.oldPointIds, ...intendedPointIds];
-    const conflictingPointId = pointIds.find((pointId) => {
-      const owner = owners.get(pointId);
+    const recordIds = [...operation.oldRecordIds, ...intendedRecordIds];
+    const conflictingRecordId = recordIds.find((recordId) => {
+      const owner = owners.get(recordId);
       return owner !== undefined && owner !== operation.file;
     });
-    if (conflictingPointId) {
+    if (conflictingRecordId) {
       throw new Error(
-        `File index journal point ${conflictingPointId} conflicts with vector cache ownership`,
+        `File index journal record ${conflictingRecordId} conflicts with vector cache ownership`,
       );
     }
 
     const entry = cache.files[fromJournalPath(operation.file)];
     if (!entry) continue;
-    const exactOldOwnership = samePointIds(
-      entry.pointIds,
-      operation.oldPointIds,
+    const exactOldOwnership = sameRecordIds(
+      entry.recordIds,
+      operation.oldRecordIds,
     );
     const exactIntendedOwnership =
       operation.kind === "replace" &&
       entry.generation === operation.generation &&
       entry.hash === operation.targetHash &&
-      samePointIds(entry.pointIds, intendedPointIds) &&
+      sameRecordIds(entry.recordIds, intendedRecordIds) &&
       (entry.visibility === "pending" || entry.visibility === "current");
     if (!exactOldOwnership && !exactIntendedOwnership) {
       throw new Error(
@@ -389,117 +379,135 @@ function validateJournalCacheOwnership(
   }
 }
 
-function samePointIds(left: string[], right: string[]): boolean {
+function sameRecordIds(left: string[], right: string[]): boolean {
   return (
     left.length === right.length &&
-    left.every((pointId) => right.includes(pointId))
+    left.every((recordId) => right.includes(recordId))
   );
-}
-
-function groupPointIds(
-  pointIds: string[],
-  batchSize: number,
-): Array<{ batch: number; pointIds: string[] }> {
-  const batches: Array<{ batch: number; pointIds: string[] }> = [];
-  for (let index = 0; index < pointIds.length; index += batchSize) {
-    batches.push({
-      batch: batches.length,
-      pointIds: pointIds.slice(index, index + batchSize),
-    });
-  }
-  return batches;
 }
 
 function loadWorkerStructuralCache(args: {
   cachePath: string;
   workspaceRoot: string;
-  collectionName: string;
+  indexName: string;
 }): { path: string; cache: StructuralGraphCache } {
   const structuralCachePath = getStructuralCachePath(args.cachePath);
   const cache = loadStructuralCache(structuralCachePath, args.workspaceRoot);
   cache.workspaceRoot = args.workspaceRoot;
-  cache.collectionName = args.collectionName;
+  cache.indexName = args.indexName;
   return { path: structuralCachePath, cache };
 }
 
 function resetStructuralCache(
   structuralCache: StructuralGraphCache,
   workspaceRoot: string,
-  collectionName: string,
+  indexName: string,
 ): void {
-  const fresh = emptyStructuralCache(workspaceRoot, collectionName);
+  const fresh = emptyStructuralCache(workspaceRoot, indexName);
   structuralCache.version = fresh.version;
   structuralCache.workspaceRoot = fresh.workspaceRoot;
-  structuralCache.collectionName = fresh.collectionName;
+  structuralCache.indexName = fresh.indexName;
   structuralCache.generatedAt = fresh.generatedAt;
   structuralCache.files = fresh.files;
 }
 
-async function resetCollectionOwnership(args: {
+async function resetIndexOwnership(args: {
   cachePath: string;
   cache: IndexCache;
   structuralCache: StructuralGraphCache;
   workspaceRoot: string;
-  qdrantUrl: string;
-  collectionName: string;
+  indexName: string;
+  retrievalStoreRoot: string;
+  workspaceScopeId: string;
+  repository: Pick<RetrievalRepository, "deleteScope">;
   granularity: ChunkGranularity;
-  interruptedTarget: CollectionResetTarget | null;
+  fingerprint: IndexCache["fingerprint"];
+  interruptedTarget: IndexResetTarget | null;
   checkpoints: CacheCheckpointCoordinator;
 }): Promise<void> {
-  const resetStatePath = getCollectionResetStatePath(args.cachePath);
-  const currentTarget = {
-    qdrantUrl: normalizeQdrantUrl(args.qdrantUrl),
-    collectionName: args.collectionName,
+  const resetStatePath = getIndexResetStatePath(args.cachePath);
+  const currentTarget: IndexResetTarget = {
+    storeRoot: path.resolve(args.retrievalStoreRoot),
+    workspaceScopeId: args.workspaceScopeId,
   };
   if (
     args.interruptedTarget &&
-    (normalizeQdrantUrl(args.interruptedTarget.qdrantUrl) !==
-      currentTarget.qdrantUrl ||
-      args.interruptedTarget.collectionName !== currentTarget.collectionName)
+    (path.resolve(args.interruptedTarget.storeRoot) !==
+      currentTarget.storeRoot ||
+      args.interruptedTarget.workspaceScopeId !==
+        currentTarget.workspaceScopeId)
   ) {
-    await deleteQdrantCollection(
-      args.interruptedTarget.qdrantUrl,
-      args.interruptedTarget.collectionName,
+    throw new Error(
+      "Index reset state targets a different retrieval store or workspace scope",
     );
   }
-  beginCollectionReset(resetStatePath, currentTarget);
-  await deleteQdrantCollection(
-    currentTarget.qdrantUrl,
-    currentTarget.collectionName,
-  );
+  beginIndexReset(resetStatePath, currentTarget);
+  metrics.recordOperation("retrieval.deleteIndex");
+  await args.repository.deleteScope({
+    namespaces: ["code"],
+    metadata: { scopeId: args.workspaceScopeId },
+    sourceIdPrefix: `code:${args.workspaceScopeId}:`,
+  });
   resetFileIndexJournal(getFileIndexJournalPath(args.cachePath));
   args.cache.version = 1;
   args.cache.files = {};
   args.cache.granularity = args.granularity;
+  args.cache.fingerprint = args.fingerprint;
   resetStructuralCache(
     args.structuralCache,
     args.workspaceRoot,
-    args.collectionName,
+    args.indexName,
   );
   args.checkpoints.checkpointBoth(["vector", "structural"]);
-  completeCollectionReset(resetStatePath, currentTarget);
+  completeIndexReset(resetStatePath, currentTarget);
 }
 
-function updateStructuralCacheForFiles(
+async function updateStructuralCacheForFiles(
   structuralCache: StructuralGraphCache,
   files: FileWithContent[],
   workspaceRoot: string,
-): number {
+): Promise<number> {
   const indexedAt = new Date().toISOString();
   let updated = 0;
   for (const file of files) {
+    if (aborted) break;
     const existing = structuralCache.files[file.relPath];
-    if (existing?.hash === file.hash) continue;
-    structuralCache.files[file.relPath] = extractStructuralFile({
-      content: file.content,
-      absPath: file.absPath,
-      relPath: file.relPath,
-      workspaceRoot,
-      hash: file.hash,
-      indexedAt,
-      mtimeMs: file.mtimeMs,
-      size: file.size,
-    });
+    if (
+      existing?.hash === file.hash &&
+      existing.extractorVersion === STRUCTURAL_EXTRACTOR_VERSION
+    ) {
+      continue;
+    }
+    const symbolHints =
+      isTreeSitterSupported(file.absPath) &&
+      shouldUseTreeSitterSymbolHints(file.absPath)
+        ? (
+            await treeSitterChunkFileDetailed(
+              file.content,
+              file.absPath,
+              file.relPath,
+            )
+          ).symbols
+        : [];
+    structuralCache.files[file.relPath] = {
+      ...extractStructuralFile({
+        content: file.content,
+        absPath: file.absPath,
+        relPath: file.relPath,
+        workspaceRoot,
+        hash: file.hash,
+        indexedAt,
+        mtimeMs: file.mtimeMs,
+        size: file.size,
+        symbolHints,
+      }),
+      ...(existing?.hash === file.hash && existing.generation
+        ? { generation: existing.generation }
+        : {}),
+      ...(existing?.hash === file.hash && existing.status
+        ? { status: existing.status }
+        : {}),
+    };
     updated++;
   }
   if (updated > 0) {
@@ -513,24 +521,36 @@ async function removeFilesFromIndex(args: {
   cachePath: string;
   cache: IndexCache;
   structuralCache: StructuralGraphCache;
-  qdrantUrl: string;
-  collectionName: string;
+  workspaceScopeId: string;
+  repository: Pick<RetrievalRepository, "deleteSource">;
   checkpoints: CacheCheckpointCoordinator;
 }): Promise<{
   completed: number;
   errors: string[];
-  pointsDeleted: number;
+  recordsDeleted: number;
   cancelled: boolean;
   pending: boolean;
 }> {
-  const result = await executeJournaledRemovedFileDeletes({
+  const resolveSource = (file: string): RepositorySourceDeletion => {
+    const relPath = fromJournalPath(file);
+    const cached = args.cache.files[relPath];
+    return {
+      sourceId: getCodeSourceId(args.workspaceScopeId, file),
+      ...(cached?.hash ? { expectedRevisionId: cached.hash } : {}),
+    };
+  };
+  const result = await executeJournaledRepositoryDeletions({
     journalPath: getFileIndexJournalPath(args.cachePath),
-    requestedFiles: args.relPaths.map((relPath) => ({
-      relPath: toJournalPath(relPath),
-      pointIds: args.cache.files[relPath]?.pointIds ?? [],
-    })),
-    deleteBatch: (pointIds) =>
-      deleteQdrantPoints(args.qdrantUrl, args.collectionName, pointIds),
+    requestedFiles: args.relPaths.map((relPath) => {
+      const cached = args.cache.files[relPath];
+      return {
+        file: toJournalPath(relPath),
+        oldRecordIds: cached?.recordIds ?? [],
+        generation: cached?.generation ?? randomUUID(),
+      };
+    }),
+    repository: args.repository,
+    resolveSource,
     checkpointCompleted: (journalPaths) => {
       for (const journalPath of journalPaths) {
         const relPath = fromJournalPath(journalPath);
@@ -545,9 +565,9 @@ async function removeFilesFromIndex(args: {
   });
 
   return {
-    completed: result.completedRelPaths.length,
-    errors: result.errors,
-    pointsDeleted: result.pointsDeleted,
+    completed: result.completedFiles.length,
+    errors: result.failure ? [result.failure] : [],
+    recordsDeleted: result.recordsDeleted,
     cancelled: result.cancelled,
     pending: result.pending,
   };
@@ -561,17 +581,6 @@ function fromJournalPath(journalPath: string): string {
   return journalPath.split(path.posix.sep).join(path.sep);
 }
 
-function hasDurableIndexOperations(
-  cachePath: string,
-  cache: IndexCache,
-): boolean {
-  const loaded = loadFileIndexJournal(getFileIndexJournalPath(cachePath));
-  return (
-    (loaded.status === "valid" && loaded.journal.operations.length > 0) ||
-    Object.values(cache.files).some((entry) => entry.visibility === "pending")
-  );
-}
-
 function createFileReplacementStore(args: {
   cache: IndexCache;
   structuralCache: StructuralGraphCache;
@@ -583,11 +592,6 @@ function createFileReplacementStore(args: {
     },
     getStructural(file) {
       return args.structuralCache.files[fromJournalPath(file)];
-    },
-    getPendingVectors() {
-      return Object.entries(args.cache.files)
-        .filter(([, entry]) => entry.visibility === "pending")
-        .map(([file, entry]) => [toJournalPath(file), entry]);
     },
     checkpointVector(file, entry) {
       const relPath = fromJournalPath(file);
@@ -626,31 +630,29 @@ async function recoverChangedFileReplacements(args: {
   cachePath: string;
   cache: IndexCache;
   structuralCache: StructuralGraphCache;
-  qdrantUrl: string;
-  collectionName: string;
+  repository: RetrievalRepository;
   checkpoints: CacheCheckpointCoordinator;
-}): Promise<{ cancelled: boolean; pointsDeleted: number }> {
-  const recovered = await recoverJournaledFileReplacements({
-    journalPath: getFileIndexJournalPath(args.cachePath),
+}): Promise<{ cancelled: boolean; pending: boolean; recordsDeleted: number }> {
+  const journalPath = getFileIndexJournalPath(args.cachePath);
+  const loaded = loadFileIndexJournal(journalPath);
+  if (loaded.status === "corrupt") {
+    throw new Error(`File index journal is corrupt: ${loaded.error}`);
+  }
+  if (
+    !loaded.journal.operations.some((operation) => operation.kind === "replace")
+  ) {
+    return { cancelled: false, pending: false, recordsDeleted: 0 };
+  }
+  const recovered = await recoverJournaledRepositoryPublications({
+    journalPath,
     store: createFileReplacementStore(args),
-    remote: {
-      deletePoints: (pointIds) =>
-        deleteQdrantPoints(args.qdrantUrl, args.collectionName, pointIds),
-      upsertPoints: (points) =>
-        upsertQdrantPoints(args.qdrantUrl, args.collectionName, points),
-      setVisibility: (pointIds, visible) =>
-        setQdrantPointVisibility(
-          args.qdrantUrl,
-          args.collectionName,
-          pointIds,
-          visible,
-        ),
-    },
+    repository: args.repository,
     isCancelled: () => aborted,
   });
   return {
     cancelled: recovered.cancelled,
-    pointsDeleted: recovered.pointsDeleted,
+    pending: recovered.pending,
+    recordsDeleted: recovered.recordsDeleted,
   };
 }
 
@@ -664,16 +666,24 @@ async function backfillStructuralCacheForCachedFiles(args: {
   const missingStructuralPaths: Array<{ absPath: string; relPath: string }> =
     [];
 
-  for (const absPath of args.files) {
-    if (!absPath.startsWith(args.workspaceRoot)) continue;
-    const relPath = path.relative(args.workspaceRoot, absPath);
-    if (relPath.startsWith("..")) continue;
+  for (const candidatePath of args.files) {
+    const identity = resolveContainedCodeIndexPath(
+      args.workspaceRoot,
+      candidatePath,
+    );
+    if (!identity) continue;
+    const { absolutePath: absPath, relativePath: relPath } = identity;
 
     const cached = args.cache.files[relPath];
     if (!cached) continue;
 
     const structuralEntry = args.structuralCache.files[relPath];
-    if (structuralEntry?.hash === cached.hash) continue;
+    if (
+      structuralEntry?.hash === cached.hash &&
+      structuralEntry.extractorVersion === STRUCTURAL_EXTRACTOR_VERSION
+    ) {
+      continue;
+    }
 
     missingStructuralPaths.push({ absPath, relPath });
   }
@@ -684,7 +694,11 @@ async function backfillStructuralCacheForCachedFiles(args: {
     const files = await readFilesBatch(
       missingStructuralPaths.slice(i, i + FILE_BATCH_SIZE),
       readErrors,
-      { metrics, isCancelled: () => aborted },
+      {
+        workspaceRoot: args.workspaceRoot,
+        metrics,
+        isCancelled: () => aborted,
+      },
     );
     args.errors.push(...readErrors);
 
@@ -694,7 +708,7 @@ async function backfillStructuralCacheForCachedFiles(args: {
     );
     try {
       if (aborted) return updated;
-      updated += updateStructuralCacheForFiles(
+      updated += await updateStructuralCacheForFiles(
         args.structuralCache,
         files.filter(
           (file) => args.cache.files[file.relPath]?.hash === file.hash,
@@ -759,9 +773,8 @@ const treeSitterReady = initTreeSitter(wasmDir).catch((err) => {
 // --- File batch pipeline ---
 
 interface BatchConfig {
-  qdrantUrl: string;
-  collectionName: string;
-  embeddingBearerToken: string;
+  repository: RetrievalRepository;
+  embeddingBearerToken: string | undefined;
   cachePath: string;
   workspaceRoot: string;
   granularity: ChunkGranularity;
@@ -771,8 +784,8 @@ interface BatchConfig {
 interface BatchResult {
   filesIndexed: number;
   chunksCreated: number;
-  pointsUpserted: number;
-  pointsDeleted: number;
+  recordsUpserted: number;
+  recordsDeleted: number;
   errors: string[];
   pendingOwnership: boolean;
 }
@@ -791,12 +804,13 @@ async function processFileBatch(
   const errors: string[] = [];
   let filesIndexed = 0;
   let chunksCreated = 0;
-  let pointsUpserted = 0;
-  let pointsDeleted = 0;
+  let recordsUpserted = 0;
+  let recordsDeleted = 0;
   const priorEntries = files.map((file) => cache.files[file.relPath]);
 
   // 1. Chunk all files in this batch (yield every ~15ms to avoid CPU saturation)
   const allChunks: Array<{ chunk: Chunk; fileIdx: number }> = [];
+  const structuralSymbolHints = new Map<number, TreeSitterSymbolHint[]>();
   let lastYield = Date.now();
   for (let i = 0; i < files.length; i++) {
     if (aborted) break;
@@ -811,12 +825,17 @@ async function processFileBatch(
     if (isMarkdownFile(file.absPath)) {
       chunks = markdownChunkFile(file.content, file.absPath, file.relPath);
     } else if (isTreeSitterSupported(file.absPath)) {
-      chunks = await treeSitterChunkFile(
+      const treeSitterResult = await treeSitterChunkFileDetailed(
         file.content,
         file.absPath,
         file.relPath,
       );
+      chunks = treeSitterResult.chunks;
+      structuralSymbolHints.set(i, treeSitterResult.symbols);
       if (chunks.length === 0) {
+        if (treeSitterResult.fallbackReason) {
+          metrics.recordChunkingFallback(treeSitterResult.fallbackReason);
+        }
         chunks = chunkFile(file.content, file.absPath, file.relPath);
       }
     } else {
@@ -838,8 +857,8 @@ async function processFileBatch(
     return {
       filesIndexed,
       chunksCreated: 0,
-      pointsUpserted,
-      pointsDeleted,
+      recordsUpserted,
+      recordsDeleted,
       errors,
       pendingOwnership: false,
     };
@@ -856,279 +875,109 @@ async function processFileBatch(
     return {
       filesIndexed,
       chunksCreated,
-      pointsUpserted,
-      pointsDeleted,
+      recordsUpserted,
+      recordsDeleted,
       errors,
       pendingOwnership: false,
     };
   }
 
-  // 3. Build points (filter out failed embeddings)
-  const filePointIds = new Map<number, string[]>();
-  const filePoints = new Map<number, QdrantPoint[]>();
-
+  // 3. Keep every chunk in the revision. Missing embeddings degrade those chunks
+  // to lexical-only retrieval instead of suppressing the source publication.
+  const publicationChunks = new Map<
+    number,
+    Array<{ chunk: Chunk; embedding: number[] | null }>
+  >();
   for (let i = 0; i < allChunks.length; i++) {
-    const embedding = embeddings[i];
-    if (!embedding) continue;
-
     const { chunk, fileIdx } = allChunks[i];
-    const pointId = randomUUID();
-
-    if (!filePointIds.has(fileIdx)) filePointIds.set(fileIdx, []);
-    filePointIds.get(fileIdx)!.push(pointId);
-
-    const point: QdrantPoint = {
-      id: pointId,
-      vector: embedding,
-      payload: {
-        filePath: chunk.relPath,
-        codeChunk: chunk.content,
-        startLine: chunk.startLine,
-        endLine: chunk.endLine,
-        pathSegments: buildPathSegments(chunk.relPath),
-        indexVisible: false,
-      },
-    };
-    const ownedPoints = filePoints.get(fileIdx) ?? [];
-    ownedPoints.push(point);
-    filePoints.set(fileIdx, ownedPoints);
+    const ownedChunks = publicationChunks.get(fileIdx) ?? [];
+    ownedChunks.push({ chunk, embedding: embeddings[i] ?? null });
+    publicationChunks.set(fileIdx, ownedChunks);
   }
 
-  // 4. Journal new-file ownership before any upsert, then publish the whole
-  // addition set with coalesced cache checkpoints.
-  const additions = files.flatMap((file, fileIndex) => {
-    if (priorEntries[fileIndex]) return [];
-    const points = filePoints.get(fileIndex) ?? [];
-    if (points.length === 0) return [];
-    const indexedAt = new Date().toISOString();
-    return [
-      {
-        file,
-        points,
+  const publications = [];
+  for (const [fileIndex, chunks] of publicationChunks) {
+    const file = files[fileIndex];
+    try {
+      const structuralEntry = extractStructuralFile({
+        content: file.content,
+        absPath: file.absPath,
+        relPath: file.relPath,
+        workspaceRoot: config.workspaceRoot,
+        hash: file.hash,
+        indexedAt: new Date().toISOString(),
+        mtimeMs: file.mtimeMs,
+        size: file.size,
+        symbolHints: structuralSymbolHints.get(fileIndex),
+      });
+      const publication = prepareCodeFilePublication({
+        publicationId: randomUUID(),
         generation: randomUUID(),
+        workspaceRoot: config.workspaceRoot,
+        sourcePath: file.relPath,
+        contentHash: file.hash,
+        observedAt: structuralEntry.indexedAt,
+        sourceContent: file.content,
+        chunks,
+        structuralEntry,
+      });
+      publications.push({
+        file: toJournalPath(file.relPath),
+        publication,
+        oldRecordIds: priorEntries[fileIndex]?.recordIds ?? [],
         cacheEntry: {
           hash: file.hash,
-          pointIds: points.map((point) => point.id),
-          indexedAt,
+          recordIds: publication.expectedChunkIds,
+          indexedAt: publication.source.revision.observedAt,
           mtimeMs: file.mtimeMs,
           size: file.size,
         },
-        structuralEntry: extractStructuralFile({
-          content: file.content,
-          absPath: file.absPath,
-          relPath: file.relPath,
-          workspaceRoot: config.workspaceRoot,
-          hash: file.hash,
-          indexedAt,
-          mtimeMs: file.mtimeMs,
-          size: file.size,
-        }),
-      },
-    ];
-  });
-  if (additions.length > 0) {
-    const journalPath = getFileIndexJournalPath(config.cachePath);
-    writeFileIndexJournal(journalPath, {
-      ...emptyFileIndexJournal(),
-      operations: additions.map((addition) => ({
-        operationId: randomUUID(),
-        file: toJournalPath(addition.file.relPath),
-        kind: "replace",
-        generation: addition.generation,
-        targetHash: addition.file.hash,
-        oldPointIds: [],
-        intendedBatches: groupPointIds(
-          addition.points.map((point) => point.id),
-          QDRANT_UPSERT_BATCH,
-        ),
-      })),
-    });
-    try {
-      const additionPoints = additions.flatMap((addition) => addition.points);
-      for (let i = 0; i < additionPoints.length; i += QDRANT_UPSERT_BATCH) {
-        if (aborted) break;
-        const batch = additionPoints.slice(i, i + QDRANT_UPSERT_BATCH);
-        await upsertQdrantPoints(
-          config.qdrantUrl,
-          config.collectionName,
-          batch,
-        );
-        pointsUpserted += batch.length;
-      }
-      if (aborted) {
-        return {
-          filesIndexed,
-          chunksCreated,
-          pointsUpserted,
-          pointsDeleted,
-          errors,
-          pendingOwnership: true,
-        };
-      }
-      for (const addition of additions) {
-        cache.files[addition.file.relPath] = {
-          ...addition.cacheEntry,
-          generation: addition.generation,
-          visibility: "pending",
-        };
-        structuralCache.files[addition.file.relPath] = {
-          ...addition.structuralEntry,
-          generation: addition.generation,
-          status: "current",
-        };
-      }
-      structuralCache.generatedAt = new Date().toISOString();
-      config.checkpoints.scheduleStructural();
-      config.checkpoints.checkpointBoth(["vector", "structural"]);
-      const additionPointIds = additions.flatMap((addition) =>
-        addition.points.map((point) => point.id),
-      );
-      for (let i = 0; i < additionPointIds.length; i += QDRANT_UPSERT_BATCH) {
-        if (aborted) {
-          return {
-            filesIndexed,
-            chunksCreated,
-            pointsUpserted,
-            pointsDeleted,
-            errors,
-            pendingOwnership: true,
-          };
-        }
-        await setQdrantPointVisibility(
-          config.qdrantUrl,
-          config.collectionName,
-          additionPointIds.slice(i, i + QDRANT_UPSERT_BATCH),
-          true,
-        );
-        if (aborted) {
-          return {
-            filesIndexed,
-            chunksCreated,
-            pointsUpserted,
-            pointsDeleted,
-            errors,
-            pendingOwnership: true,
-          };
-        }
-      }
-      for (const addition of additions) {
-        cache.files[addition.file.relPath] = {
-          ...cache.files[addition.file.relPath],
-          visibility: "current",
-        };
-      }
-      config.checkpoints.checkpointVector();
-      writeFileIndexJournal(journalPath, emptyFileIndexJournal());
-      filesIndexed += additions.length;
+        structuralEntry: {
+          ...structuralEntry,
+          sourceId: publication.source.id,
+        },
+      });
     } catch (error) {
-      errors.push(`Qdrant upsert failed: ${error}`);
-      config.checkpoints.checkpointBoth(["vector", "structural"]);
-      return {
-        filesIndexed,
-        chunksCreated,
-        pointsUpserted,
-        pointsDeleted,
-        errors,
-        pendingOwnership: true,
-      };
+      errors.push(
+        `Publication preparation failed for ${file.relPath}: ${String(error)}`,
+      );
     }
   }
 
-  // 5. Durably replace changed files as one bounded ownership batch.
-  const replacements = files.flatMap((file, fileIndex) => {
-    const prior = priorEntries[fileIndex];
-    const points = filePoints.get(fileIndex) ?? [];
-    if (!prior || points.length === 0) return [];
-    const indexedAt = new Date().toISOString();
-    return [
-      {
-        file: toJournalPath(file.relPath),
-        generation: randomUUID(),
-        targetHash: file.hash,
-        oldPointIds: prior.pointIds,
-        points,
-        structuralEntry: extractStructuralFile({
-          content: file.content,
-          absPath: file.absPath,
-          relPath: file.relPath,
-          workspaceRoot: config.workspaceRoot,
-          hash: file.hash,
-          indexedAt,
-          mtimeMs: file.mtimeMs,
-          size: file.size,
-        }),
-        cacheEntry: {
-          hash: file.hash,
-          pointIds: points.map((point) => point.id),
-          indexedAt,
-          mtimeMs: file.mtimeMs,
-          size: file.size,
-        },
-      },
-    ];
-  });
-  if (replacements.length > 0) {
-    let completedDeletes = 0;
-    let completedUpserts = 0;
+  if (publications.length > 0) {
     try {
-      const replacement = await executeJournaledFileReplacements({
+      metrics.recordOperation("retrieval.upsertRecords");
+      const publicationResult = await executeJournaledRepositoryPublications({
         journalPath: getFileIndexJournalPath(config.cachePath),
-        replacements,
+        publications,
         store: createFileReplacementStore({
           cache,
           structuralCache,
           checkpoints: config.checkpoints,
         }),
-        remote: {
-          async deletePoints(pointIds) {
-            await deleteQdrantPoints(
-              config.qdrantUrl,
-              config.collectionName,
-              pointIds,
-            );
-            completedDeletes += pointIds.length;
-          },
-          async upsertPoints(replacementPoints) {
-            await upsertQdrantPoints(
-              config.qdrantUrl,
-              config.collectionName,
-              replacementPoints,
-            );
-            completedUpserts += replacementPoints.length;
-          },
-          setVisibility: (pointIds, visible) =>
-            setQdrantPointVisibility(
-              config.qdrantUrl,
-              config.collectionName,
-              pointIds,
-              visible,
-            ),
-        },
+        repository: config.repository,
         isCancelled: () => aborted,
-        createId: randomUUID,
       });
-      pointsDeleted += completedDeletes;
-      pointsUpserted += completedUpserts;
-      filesIndexed += replacement.committedFiles;
-      if (replacement.cancelled) {
+      filesIndexed += publicationResult.committedFiles;
+      recordsUpserted += publicationResult.recordsUpserted;
+      recordsDeleted += publicationResult.recordsDeleted;
+      if (publicationResult.cancelled || publicationResult.pending) {
         return {
           filesIndexed,
           chunksCreated,
-          pointsUpserted,
-          pointsDeleted,
+          recordsUpserted,
+          recordsDeleted,
           errors,
           pendingOwnership: true,
         };
       }
     } catch (error) {
-      pointsDeleted += completedDeletes;
-      pointsUpserted += completedUpserts;
-      errors.push(`Qdrant upsert failed: ${error}`);
+      errors.push(`Retrieval publication failed: ${error}`);
       return {
         filesIndexed,
         chunksCreated,
-        pointsUpserted,
-        pointsDeleted,
+        recordsUpserted,
+        recordsDeleted,
         errors,
         pendingOwnership: true,
       };
@@ -1137,11 +986,90 @@ async function processFileBatch(
   return {
     filesIndexed,
     chunksCreated,
-    pointsUpserted,
-    pointsDeleted,
+    recordsUpserted,
+    recordsDeleted,
     errors,
     pendingOwnership: false,
   };
+}
+
+async function processFilePaths(
+  paths: Array<{ absPath: string; relPath: string }>,
+  config: BatchConfig,
+  cache: IndexCache,
+  structuralCache: StructuralGraphCache,
+  onBatch?: (
+    batchStart: number,
+    batchNumber: number,
+    totalBatches: number,
+  ) => void,
+): Promise<BatchResult> {
+  const result: BatchResult = {
+    filesIndexed: 0,
+    chunksCreated: 0,
+    recordsUpserted: 0,
+    recordsDeleted: 0,
+    errors: [],
+    pendingOwnership: false,
+  };
+
+  await runBoundedReadAheadPipeline({
+    inputs: paths,
+    batchSize: FILE_BATCH_SIZE,
+    isCancelled: () => aborted,
+    async readBatch(batchPaths) {
+      const errors: string[] = [];
+      const files = await measureIndexWorkerPhase(metrics, "read", () =>
+        readFilesBatch([...batchPaths], errors, {
+          workspaceRoot: config.workspaceRoot,
+          cache,
+          metrics,
+          isCancelled: () => aborted,
+          onCacheMetadataChanged: () => config.checkpoints.scheduleVector(),
+        }),
+      );
+      return {
+        files,
+        errors,
+        errorsReported: false,
+        retainedBytes: files.reduce(
+          (total, file) => total + file.contentBytes,
+          0,
+        ),
+      };
+    },
+    async processBatch(batch, batchStart, batchNumber, totalBatches) {
+      if (!batch.errorsReported) {
+        result.errors.push(...batch.errors);
+        batch.errorsReported = true;
+      }
+      if (batch.files.length === 0) return true;
+      onBatch?.(batchStart, batchNumber, totalBatches);
+
+      const batchResult = await measureIndexWorkerPhase(
+        metrics,
+        "process",
+        () => processFileBatch(batch.files, config, cache, structuralCache),
+      );
+      result.filesIndexed += batchResult.filesIndexed;
+      result.chunksCreated += batchResult.chunksCreated;
+      result.recordsUpserted += batchResult.recordsUpserted;
+      result.recordsDeleted += batchResult.recordsDeleted;
+      result.errors.push(...batchResult.errors);
+      result.pendingOwnership ||= batchResult.pendingOwnership;
+      return !batchResult.pendingOwnership;
+    },
+    releaseBatch(batch) {
+      if (!batch.errorsReported) {
+        result.errors.push(...batch.errors);
+        batch.errorsReported = true;
+      }
+      metrics.contentReleased(batch.retainedBytes);
+      sampleHeapUsed();
+    },
+  });
+
+  return result;
 }
 
 // --- Main indexing pipeline ---
@@ -1152,9 +1080,10 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
   const errors: string[] = [];
   let filesIndexed = 0;
   let chunksCreated = 0;
-  let pointsUpserted = 0;
-  let pointsDeleted = 0;
+  let recordsUpserted = 0;
+  let recordsDeleted = 0;
   let checkpoints: CacheCheckpointCoordinator | undefined;
+  let repository: LanceDbRetrievalRepository | undefined;
 
   // Distribute granularity to all chunkers
   setTreeSitterGranularity(msg.granularity);
@@ -1162,17 +1091,26 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
   setMarkdownGranularity(msg.granularity);
 
   try {
+    const expectedScopeId = getCodeWorkspaceScopeId(msg.workspaceRoot);
+    if (msg.workspaceScopeId !== expectedScopeId) {
+      throw new Error("Workspace scope identity does not match workspace root");
+    }
+    const { cache, interruptedResetTarget } = loadWorkerOwnership(
+      msg.cachePath,
+      msg.force,
+    );
     const { path: structuralCachePath, cache: structuralCache } =
       loadWorkerStructuralCache({
         cachePath: msg.cachePath,
         workspaceRoot: msg.workspaceRoot,
-        collectionName: msg.collectionName,
+        indexName: msg.indexName,
       });
-
-    const { cache, resetTarget } = loadWorkerOwnership(
-      msg.cachePath,
-      msg.force,
-    );
+    repository = createRetrievalRepository(msg.retrievalStoreRoot);
+    const expectedFingerprint = createCodeIndexFingerprint(msg.granularity);
+    const migration = await repository.migrate(expectedFingerprint);
+    if (migration.status === "rebuild_required") {
+      throw new Error(CODE_INDEX_REBUILD_REQUIRED_ERROR);
+    }
     const checkpointCoordinator = createCacheCheckpointCoordinator({
       cachePath: msg.cachePath,
       structuralCachePath,
@@ -1180,33 +1118,33 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       structuralCache,
     });
     checkpoints = checkpointCoordinator;
+    const fingerprintDisposition = classifyRetrievalFingerprint(
+      cache.fingerprint ?? null,
+      expectedFingerprint,
+    );
     const rebuildRequested =
-      msg.force || (cache.granularity ?? "standard") !== msg.granularity;
+      msg.force ||
+      fingerprintDisposition !== "compatible" ||
+      (cache.granularity ?? "standard") !== msg.granularity;
 
-    // Recovery mutations are idempotent but still require the collection to exist.
-    // Rebuilds discard all prior ownership after deleting the collection.
-    if (!rebuildRequested && hasDurableIndexOperations(msg.cachePath, cache)) {
-      await ensureQdrantCollectionForIndex(msg.qdrantUrl, msg.collectionName);
-    }
     const replacementRecovery = rebuildRequested
-      ? { cancelled: false, pointsDeleted: 0 }
+      ? { cancelled: false, pending: false, recordsDeleted: 0 }
       : await recoverChangedFileReplacements({
           cachePath: msg.cachePath,
           cache,
           structuralCache,
-          qdrantUrl: msg.qdrantUrl,
-          collectionName: msg.collectionName,
+          repository,
           checkpoints,
         });
-    pointsDeleted += replacementRecovery.pointsDeleted;
-    if (replacementRecovery.cancelled) {
+    recordsDeleted += replacementRecovery.recordsDeleted;
+    if (replacementRecovery.pending || replacementRecovery.cancelled) {
       sendComplete({
         filesIndexed,
         totalFilesInIndex: Object.keys(cache.files).length,
         chunksCreated,
         totalChunksInIndex: countCachedChunks(cache),
-        pointsUpserted,
-        pointsDeleted,
+        recordsUpserted,
+        recordsDeleted,
         durationMs: Date.now() - startTime,
         errors,
         cancelled: true,
@@ -1217,7 +1155,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       ? {
           completed: 0,
           errors: [],
-          pointsDeleted: 0,
+          recordsDeleted: 0,
           cancelled: false,
           pending: false,
         }
@@ -1226,11 +1164,11 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
           cachePath: msg.cachePath,
           cache,
           structuralCache,
-          qdrantUrl: msg.qdrantUrl,
-          collectionName: msg.collectionName,
+          workspaceScopeId: msg.workspaceScopeId,
+          repository,
           checkpoints,
         });
-    pointsDeleted += recovery.pointsDeleted;
+    recordsDeleted += recovery.recordsDeleted;
     errors.push(...recovery.errors);
     if (recovery.pending || recovery.cancelled) {
       sendComplete({
@@ -1238,8 +1176,8 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         totalFilesInIndex: Object.keys(cache.files).length,
         chunksCreated,
         totalChunksInIndex: countCachedChunks(cache),
-        pointsUpserted,
-        pointsDeleted,
+        recordsUpserted,
+        recordsDeleted,
         durationMs: Date.now() - startTime,
         errors,
         cancelled: recovery.cancelled || undefined,
@@ -1247,23 +1185,23 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       return;
     }
 
-    // Force and granularity rebuilds share one durable collection/cache reset.
+    // Force and granularity rebuilds share one durable retrieval index/cache reset.
     if (rebuildRequested) {
-      await resetCollectionOwnership({
+      await resetIndexOwnership({
         cachePath: msg.cachePath,
         cache,
         structuralCache,
         workspaceRoot: msg.workspaceRoot,
-        qdrantUrl: msg.qdrantUrl,
-        collectionName: msg.collectionName,
+        indexName: msg.indexName,
+        retrievalStoreRoot: msg.retrievalStoreRoot,
+        workspaceScopeId: msg.workspaceScopeId,
+        repository,
         granularity: msg.granularity,
-        interruptedTarget: resetTarget,
+        fingerprint: expectedFingerprint,
+        interruptedTarget: interruptedResetTarget,
         checkpoints,
       });
     }
-
-    // Ensure Qdrant collection exists after any reset.
-    await ensureQdrantCollectionForIndex(msg.qdrantUrl, msg.collectionName);
 
     // Phase 1: Scan files to determine what changed (paths only, no content held)
     sendProgress("reading", 0, msg.files.length);
@@ -1290,8 +1228,8 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         totalFilesInIndex: Object.keys(cache.files).length,
         chunksCreated,
         totalChunksInIndex: countCachedChunks(cache),
-        pointsUpserted,
-        pointsDeleted,
+        recordsUpserted,
+        recordsDeleted,
         durationMs: Date.now() - startTime,
         errors,
         cancelled: true,
@@ -1308,11 +1246,11 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         cachePath: msg.cachePath,
         cache,
         structuralCache,
-        qdrantUrl: msg.qdrantUrl,
-        collectionName: msg.collectionName,
+        workspaceScopeId: msg.workspaceScopeId,
+        repository,
         checkpoints,
       });
-      pointsDeleted += removal.pointsDeleted;
+      recordsDeleted += removal.recordsDeleted;
       errors.push(...removal.errors);
       sendProgress("cleanup", removal.completed, removedRelPaths.length);
       if (removal.pending || removal.cancelled) {
@@ -1321,8 +1259,8 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
           totalFilesInIndex: Object.keys(cache.files).length,
           chunksCreated,
           totalChunksInIndex: countCachedChunks(cache),
-          pointsUpserted,
-          pointsDeleted,
+          recordsUpserted,
+          recordsDeleted,
           durationMs: Date.now() - startTime,
           errors,
           cancelled: removal.cancelled || undefined,
@@ -1362,8 +1300,8 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         totalFilesInIndex: Object.keys(cache.files).length,
         chunksCreated: 0,
         totalChunksInIndex: countCachedChunks(cache),
-        pointsUpserted,
-        pointsDeleted,
+        recordsUpserted,
+        recordsDeleted,
         durationMs: Date.now() - startTime,
         errors,
         cancelled: aborted || undefined,
@@ -1371,71 +1309,33 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       return;
     }
 
-    // Phase 2: Process files in batches through the full pipeline
+    // Phase 2: Read one batch ahead while serially processing the current batch.
     const totalFiles = toIndexPaths.length;
-    const totalBatches = Math.ceil(totalFiles / FILE_BATCH_SIZE);
-    const batchConfig: BatchConfig = {
-      qdrantUrl: msg.qdrantUrl,
-      collectionName: msg.collectionName,
-      embeddingBearerToken: msg.embeddingBearerToken,
-      cachePath: msg.cachePath,
-      workspaceRoot: msg.workspaceRoot,
-      granularity: msg.granularity,
-      checkpoints,
-    };
-
-    for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
-      if (aborted) break;
-
-      const batchStart = batchNum * FILE_BATCH_SIZE;
-      const batchPaths = toIndexPaths.slice(
-        batchStart,
-        batchStart + FILE_BATCH_SIZE,
-      );
-
-      // Read content for this batch only
-      const batchErrors: string[] = [];
-      const batchFiles = await measureIndexWorkerPhase(metrics, "read", () =>
-        readFilesBatch(batchPaths, batchErrors, {
-          cache,
-          metrics,
-          isCancelled: () => aborted,
-          onCacheMetadataChanged: () => checkpointCoordinator.scheduleVector(),
-        }),
-      );
-      errors.push(...batchErrors);
-
-      const retainedBytes = batchFiles.reduce(
-        (total, file) => total + file.contentBytes,
-        0,
-      );
-      try {
-        if (aborted || batchFiles.length === 0) continue;
-
-        // Process batch through chunk → embed → journaled replacement pipeline
+    const result = await processFilePaths(
+      toIndexPaths,
+      {
+        repository,
+        embeddingBearerToken: msg.embeddingBearerToken,
+        cachePath: msg.cachePath,
+        workspaceRoot: msg.workspaceRoot,
+        granularity: msg.granularity,
+        checkpoints,
+      },
+      cache,
+      structuralCache,
+      (batchStart, batchNumber, totalBatches) =>
         sendProgress(
           "indexing",
           batchStart,
           totalFiles,
-          `batch ${batchNum + 1}/${totalBatches}`,
-        );
-
-        const result = await measureIndexWorkerPhase(metrics, "process", () =>
-          processFileBatch(batchFiles, batchConfig, cache, structuralCache),
-        );
-        filesIndexed += result.filesIndexed;
-        chunksCreated += result.chunksCreated;
-        pointsUpserted += result.pointsUpserted;
-        pointsDeleted += result.pointsDeleted;
-        errors.push(...result.errors);
-        if (result.pendingOwnership) break;
-      } finally {
-        metrics.contentReleased(retainedBytes);
-        sampleHeapUsed();
-      }
-
-      // batchFiles, result, and all intermediate arrays are now out of scope
-    }
+          `batch ${batchNumber + 1}/${totalBatches}`,
+        ),
+    );
+    filesIndexed += result.filesIndexed;
+    chunksCreated += result.chunksCreated;
+    recordsUpserted += result.recordsUpserted;
+    recordsDeleted += result.recordsDeleted;
+    errors.push(...result.errors);
 
     scheduleCacheMetadataCheckpoint({
       cache,
@@ -1449,8 +1349,8 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       totalFilesInIndex: Object.keys(cache.files).length,
       chunksCreated,
       totalChunksInIndex: countCachedChunks(cache),
-      pointsUpserted,
-      pointsDeleted,
+      recordsUpserted,
+      recordsDeleted,
       durationMs: Date.now() - startTime,
       errors,
       cancelled: aborted || undefined,
@@ -1468,6 +1368,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     sendError(`Indexing failed: ${err}`, true);
   } finally {
     checkpoints?.cancelScheduled();
+    await closeRetrievalRepository(repository);
   }
 }
 
@@ -1481,9 +1382,10 @@ async function handleIncrementalUpdate(
   const errors: string[] = [];
   let filesIndexed = 0;
   let chunksCreated = 0;
-  let pointsUpserted = 0;
-  let pointsDeleted = 0;
+  let recordsUpserted = 0;
+  let recordsDeleted = 0;
   let checkpoints: CacheCheckpointCoordinator | undefined;
+  let repository: LanceDbRetrievalRepository | undefined;
 
   // Distribute granularity to all chunkers
   setTreeSitterGranularity(msg.granularity);
@@ -1491,13 +1393,32 @@ async function handleIncrementalUpdate(
   setMarkdownGranularity(msg.granularity);
 
   try {
+    const expectedScopeId = getCodeWorkspaceScopeId(msg.workspaceRoot);
+    if (msg.workspaceScopeId !== expectedScopeId) {
+      throw new Error("Workspace scope identity does not match workspace root");
+    }
     const { cache } = loadWorkerOwnership(msg.cachePath, false);
+    const expectedFingerprint = createCodeIndexFingerprint(msg.granularity);
+    if (
+      classifyRetrievalFingerprint(
+        cache.fingerprint ?? null,
+        expectedFingerprint,
+      ) !== "compatible" ||
+      (cache.granularity ?? "standard") !== msg.granularity
+    ) {
+      throw new Error(CODE_INDEX_REBUILD_REQUIRED_ERROR);
+    }
     const { path: structuralCachePath, cache: structuralCache } =
       loadWorkerStructuralCache({
         cachePath: msg.cachePath,
         workspaceRoot: msg.workspaceRoot,
-        collectionName: msg.collectionName,
+        indexName: msg.indexName,
       });
+    repository = createRetrievalRepository(msg.retrievalStoreRoot);
+    const migration = await repository.migrate(expectedFingerprint);
+    if (migration.status === "rebuild_required") {
+      throw new Error(CODE_INDEX_REBUILD_REQUIRED_ERROR);
+    }
     const checkpointCoordinator = createCacheCheckpointCoordinator({
       cachePath: msg.cachePath,
       structuralCachePath,
@@ -1505,26 +1426,22 @@ async function handleIncrementalUpdate(
       structuralCache,
     });
     checkpoints = checkpointCoordinator;
-    if (hasDurableIndexOperations(msg.cachePath, cache)) {
-      await ensureQdrantCollectionForIndex(msg.qdrantUrl, msg.collectionName);
-    }
     const replacementRecovery = await recoverChangedFileReplacements({
       cachePath: msg.cachePath,
       cache,
       structuralCache,
-      qdrantUrl: msg.qdrantUrl,
-      collectionName: msg.collectionName,
+      repository,
       checkpoints,
     });
-    pointsDeleted += replacementRecovery.pointsDeleted;
-    if (replacementRecovery.cancelled) {
+    recordsDeleted += replacementRecovery.recordsDeleted;
+    if (replacementRecovery.pending || replacementRecovery.cancelled) {
       sendComplete({
         filesIndexed,
         totalFilesInIndex: Object.keys(cache.files).length,
         chunksCreated,
         totalChunksInIndex: countCachedChunks(cache),
-        pointsUpserted,
-        pointsDeleted,
+        recordsUpserted,
+        recordsDeleted,
         durationMs: Date.now() - startTime,
         errors,
         cancelled: true,
@@ -1536,11 +1453,11 @@ async function handleIncrementalUpdate(
       cachePath: msg.cachePath,
       cache,
       structuralCache,
-      qdrantUrl: msg.qdrantUrl,
-      collectionName: msg.collectionName,
+      workspaceScopeId: msg.workspaceScopeId,
+      repository,
       checkpoints,
     });
-    pointsDeleted += recovery.pointsDeleted;
+    recordsDeleted += recovery.recordsDeleted;
     errors.push(...recovery.errors);
     if (recovery.pending || recovery.cancelled) {
       sendComplete({
@@ -1548,8 +1465,8 @@ async function handleIncrementalUpdate(
         totalFilesInIndex: Object.keys(cache.files).length,
         chunksCreated,
         totalChunksInIndex: countCachedChunks(cache),
-        pointsUpserted,
-        pointsDeleted,
+        recordsUpserted,
+        recordsDeleted,
         durationMs: Date.now() - startTime,
         errors,
         cancelled: recovery.cancelled || undefined,
@@ -1557,26 +1474,24 @@ async function handleIncrementalUpdate(
       return;
     }
 
-    // Handle removed files. Cache ownership is released only after every
-    // bounded Qdrant delete batch for that file succeeds.
+    // Handle removed files. Cache ownership is released only after the
+    // repository confirms source deletion or idempotent absence.
     const removal = await removeFilesFromIndex({
-      relPaths: msg.removed
-        .map((absPath) => path.relative(msg.workspaceRoot, absPath))
-        .filter(
-          (relPath) =>
-            relPath !== "" &&
-            relPath !== ".." &&
-            !relPath.startsWith(`..${path.sep}`) &&
-            !path.isAbsolute(relPath),
-        ),
+      relPaths: msg.removed.flatMap((candidatePath) => {
+        const identity = resolveContainedCodeIndexPath(
+          msg.workspaceRoot,
+          candidatePath,
+        );
+        return identity ? [identity.relativePath] : [];
+      }),
       cachePath: msg.cachePath,
       cache,
       structuralCache,
-      qdrantUrl: msg.qdrantUrl,
-      collectionName: msg.collectionName,
+      workspaceScopeId: msg.workspaceScopeId,
+      repository,
       checkpoints,
     });
-    pointsDeleted += removal.pointsDeleted;
+    recordsDeleted += removal.recordsDeleted;
     errors.push(...removal.errors);
     if (removal.pending || removal.cancelled) {
       sendComplete({
@@ -1584,8 +1499,8 @@ async function handleIncrementalUpdate(
         totalFilesInIndex: Object.keys(cache.files).length,
         chunksCreated,
         totalChunksInIndex: countCachedChunks(cache),
-        pointsUpserted,
-        pointsDeleted,
+        recordsUpserted,
+        recordsDeleted,
         durationMs: Date.now() - startTime,
         errors,
         cancelled: removal.cancelled || undefined,
@@ -1610,57 +1525,27 @@ async function handleIncrementalUpdate(
     errors.push(...scanErrors);
     if (cacheMetadataChanged) checkpoints.scheduleVector();
 
-    // Read and process one bounded batch at a time. Existing ownership remains
-    // intact until each replacement intent is durable.
+    // Existing ownership remains intact until each serial replacement intent is
+    // durable; file I/O for the next batch may overlap the current consumer.
     if (toIndexPaths.length > 0 && !aborted) {
-      const batchConfig: BatchConfig = {
-        qdrantUrl: msg.qdrantUrl,
-        collectionName: msg.collectionName,
-        embeddingBearerToken: msg.embeddingBearerToken,
-        cachePath: msg.cachePath,
-        workspaceRoot: msg.workspaceRoot,
-        granularity: msg.granularity,
-        checkpoints,
-      };
-
-      for (let i = 0; i < toIndexPaths.length; i += FILE_BATCH_SIZE) {
-        if (aborted) break;
-        const batchErrors: string[] = [];
-        const batch = await measureIndexWorkerPhase(metrics, "read", () =>
-          readFilesBatch(
-            toIndexPaths.slice(i, i + FILE_BATCH_SIZE),
-            batchErrors,
-            {
-              cache,
-              metrics,
-              isCancelled: () => aborted,
-              onCacheMetadataChanged: () =>
-                checkpointCoordinator.scheduleVector(),
-            },
-          ),
-        );
-        errors.push(...batchErrors);
-
-        const retainedBytes = batch.reduce(
-          (total, file) => total + file.contentBytes,
-          0,
-        );
-        try {
-          if (aborted || batch.length === 0) continue;
-          const result = await measureIndexWorkerPhase(metrics, "process", () =>
-            processFileBatch(batch, batchConfig, cache, structuralCache),
-          );
-          filesIndexed += result.filesIndexed;
-          chunksCreated += result.chunksCreated;
-          pointsUpserted += result.pointsUpserted;
-          pointsDeleted += result.pointsDeleted;
-          errors.push(...result.errors);
-          if (result.pendingOwnership) break;
-        } finally {
-          metrics.contentReleased(retainedBytes);
-          sampleHeapUsed();
-        }
-      }
+      const result = await processFilePaths(
+        toIndexPaths,
+        {
+          repository,
+          embeddingBearerToken: msg.embeddingBearerToken,
+          cachePath: msg.cachePath,
+          workspaceRoot: msg.workspaceRoot,
+          granularity: msg.granularity,
+          checkpoints,
+        },
+        cache,
+        structuralCache,
+      );
+      filesIndexed += result.filesIndexed;
+      chunksCreated += result.chunksCreated;
+      recordsUpserted += result.recordsUpserted;
+      recordsDeleted += result.recordsDeleted;
+      errors.push(...result.errors);
     }
 
     scheduleCacheMetadataCheckpoint({
@@ -1675,8 +1560,8 @@ async function handleIncrementalUpdate(
       totalFilesInIndex: Object.keys(cache.files).length,
       chunksCreated,
       totalChunksInIndex: countCachedChunks(cache),
-      pointsUpserted,
-      pointsDeleted,
+      recordsUpserted,
+      recordsDeleted,
       durationMs: Date.now() - startTime,
       errors,
       cancelled: aborted || undefined,
@@ -1694,6 +1579,7 @@ async function handleIncrementalUpdate(
     sendError(`Incremental update failed: ${err}`, true);
   } finally {
     checkpoints?.cancelScheduled();
+    await closeRetrievalRepository(repository);
   }
 }
 
@@ -1705,76 +1591,117 @@ async function handleIncrementalUpdate(
  * Split texts into token-aware batches that respect both the count limit
  * (EMBEDDING_BATCH_SIZE) and the token limit (MAX_BATCH_TOKENS).
  */
-function buildTokenAwareBatches(
+function takeTokenAwareBatch(
   texts: string[],
   startIdx: number,
-): Array<{ startIdx: number; batch: string[] }> {
-  const batches: Array<{ startIdx: number; batch: string[] }> = [];
-  let i = startIdx;
-  while (i < texts.length && batches.length < EMBEDDING_CONCURRENCY) {
-    const batch: string[] = [];
-    let batchTokens = 0;
-    const batchStart = i;
-    while (i < texts.length && batch.length < EMBEDDING_BATCH_SIZE) {
-      const tokens = estimateTokensFromChars(texts[i].length);
-      if (batch.length > 0 && batchTokens + tokens > MAX_BATCH_TOKENS) break;
-      batch.push(texts[i]);
-      batchTokens += tokens;
-      i++;
-    }
-    if (batch.length > 0) {
-      batches.push({ startIdx: batchStart, batch });
-    }
+): { startIdx: number; batch: string[] } | null {
+  if (startIdx >= texts.length) return null;
+
+  const batch: string[] = [];
+  let batchTokens = 0;
+  let cursor = startIdx;
+  while (cursor < texts.length && batch.length < EMBEDDING_BATCH_SIZE) {
+    const tokens = estimateTokensFromChars(texts[cursor].length);
+    if (batch.length > 0 && batchTokens + tokens > MAX_BATCH_TOKENS) break;
+    batch.push(texts[cursor]);
+    batchTokens += tokens;
+    cursor++;
   }
-  return batches;
+  return batch.length > 0 ? { startIdx, batch } : null;
+}
+
+function createEmbeddingFetchLimiter(
+  fetchImpl: typeof fetch,
+  concurrency: number,
+): typeof fetch {
+  let activeRequests = 0;
+  const waiters: Array<() => void> = [];
+
+  const acquire = async (): Promise<void> => {
+    if (activeRequests < concurrency) {
+      activeRequests++;
+      return;
+    }
+    await new Promise<void>((resolve) => waiters.push(resolve));
+  };
+  const release = (): void => {
+    const next = waiters.shift();
+    if (next) {
+      next();
+    } else {
+      activeRequests--;
+    }
+  };
+
+  return async (input, init) => {
+    await acquire();
+    try {
+      return await fetchImpl(input, init);
+    } finally {
+      release();
+    }
+  };
 }
 
 async function batchEmbed(
   texts: string[],
-  bearerToken: string,
+  bearerToken: string | undefined,
   errors: string[],
   onProgress?: (done: number, total: number) => void,
 ): Promise<(number[] | null)[]> {
+  if (!bearerToken) {
+    onProgress?.(texts.length, texts.length);
+    return Array.from({ length: texts.length }, () => null);
+  }
+
   // Truncate oversized texts to fit within the embedding model's context window
   const safeTexts = texts.map((t) =>
-    t.length > MAX_EMBEDDING_CHARS ? t.slice(0, MAX_EMBEDDING_CHARS) : t,
+    t.length > MAX_CODE_INDEX_EMBEDDING_CHARS
+      ? t.slice(0, MAX_CODE_INDEX_EMBEDDING_CHARS)
+      : t,
   );
   const results: (number[] | null)[] = Array.from<number[] | null>({
     length: safeTexts.length,
   }).fill(null);
   let done = 0;
   let cursor = 0;
+  const embeddingFetch = createEmbeddingFetchLimiter(
+    fetch,
+    EMBEDDING_CONCURRENCY,
+  );
 
-  while (cursor < safeTexts.length) {
-    if (aborted) break;
+  const processNextBatch = async (): Promise<void> => {
+    while (!aborted) {
+      const next = takeTokenAwareBatch(safeTexts, cursor);
+      if (!next) return;
+      const { startIdx, batch } = next;
+      cursor = startIdx + batch.length;
 
-    const concurrentBatches = buildTokenAwareBatches(safeTexts, cursor);
-    if (concurrentBatches.length === 0) break;
+      try {
+        const vectors = await embedBatchWithRetry(
+          batch,
+          bearerToken,
+          embeddingFetch,
+        );
+        for (let index = 0; index < vectors.length; index++) {
+          results[startIdx + index] = vectors[index];
+        }
+      } catch (err) {
+        errors.push(
+          `Embedding batch failed (${batch.length} chunks at offset ${startIdx}): ${err}`,
+        );
+      }
+      done += batch.length;
+      onProgress?.(done, safeTexts.length);
+    }
+  };
 
-    // Advance cursor past all batches we're about to process
-    const lastBatch = concurrentBatches[concurrentBatches.length - 1];
-    cursor = lastBatch.startIdx + lastBatch.batch.length;
-
-    const promises = concurrentBatches.map(({ startIdx, batch }) =>
-      embedBatchWithRetry(batch, bearerToken)
-        .then((vectors) => {
-          for (let k = 0; k < vectors.length; k++) {
-            results[startIdx + k] = vectors[k];
-          }
-          done += batch.length;
-          onProgress?.(done, safeTexts.length);
-        })
-        .catch((err) => {
-          errors.push(
-            `Embedding batch failed (${batch.length} chunks at offset ${startIdx}): ${err}`,
-          );
-          done += batch.length;
-          onProgress?.(done, safeTexts.length);
-        }),
-    );
-
-    await Promise.all(promises);
-  }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(EMBEDDING_CONCURRENCY, safeTexts.length) },
+      () => processNextBatch(),
+    ),
+  );
 
   return results;
 }
@@ -1782,51 +1709,19 @@ async function batchEmbed(
 async function embedBatchWithRetry(
   texts: string[],
   bearerToken: string,
+  fetchImpl: typeof fetch,
   retries = MAX_RETRIES,
 ): Promise<number[][]> {
   return requestEmbeddings(texts, bearerToken, {
     maxRetries: retries,
-    shouldRetryStatus: (status) => status === 429,
-    retryDelayMs: (attempt, random) =>
-      Math.min(1000 * 2 ** attempt + random * 500, 30000),
+    retryFetchErrors: true,
+    shouldRetryStatus: (status) =>
+      status === 408 || status === 429 || (status >= 500 && status < 600),
+    retryDelayMs: (attempt, random, retryAfterMs) =>
+      Math.min(retryAfterMs ?? 1000 * 2 ** attempt + random * 500, 30_000),
     refreshBearerToken: requestEmbeddingAuthRefresh,
     bisectOnBadRequest: true,
     sortByIndex: true,
-  });
-}
-
-// ============================================================
-// Qdrant REST API
-// ============================================================
-
-const QDRANT_PAYLOAD_INDEXES: QdrantPayloadIndex[] = [
-  { field_name: "filePath", field_schema: "keyword" },
-  { field_name: "type", field_schema: "keyword" },
-  { field_name: "pathSegments.0", field_schema: "keyword" },
-  { field_name: "pathSegments.1", field_schema: "keyword" },
-  { field_name: "pathSegments.2", field_schema: "keyword" },
-  { field_name: "pathSegments.3", field_schema: "keyword" },
-  { field_name: "pathSegments.4", field_schema: "keyword" },
-  {
-    field_name: "codeChunk",
-    field_schema: {
-      type: "text",
-      tokenizer: "word",
-      min_token_len: 2,
-      max_token_len: 40,
-    },
-  },
-];
-
-async function ensureQdrantCollectionForIndex(
-  qdrantUrl: string,
-  collectionName: string,
-): Promise<void> {
-  metrics.recordOperation("qdrant.ensureCollection");
-  await ensureQdrantCollectionRequest({
-    qdrantUrl,
-    collectionName,
-    vectorSize: EMBEDDING_DIM,
-    payloadIndexes: QDRANT_PAYLOAD_INDEXES,
+    fetch: fetchImpl,
   });
 }

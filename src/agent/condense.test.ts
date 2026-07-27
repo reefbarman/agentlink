@@ -12,6 +12,7 @@ import {
   enforceToolResultAdjacency,
   extractCondenseRecallAnchors,
   getEffectiveHistory,
+  getMessagesSinceLastSummary,
   injectSyntheticToolResults,
   summarizeConversation,
 } from "./condense.js";
@@ -33,8 +34,9 @@ const TEST_CAPABILITIES: ModelCapabilities = {
 function makeProvider(
   onComplete?: (request: CompleteRequest) => CompleteResult,
 ) {
-  const complete = vi.fn(async (request: CompleteRequest) =>
-    onComplete
+  const complete = vi.fn(async (request: CompleteRequest) => {
+    request.onProviderRequestAttempt?.({ model: request.model });
+    return onComplete
       ? onComplete(request)
       : {
           text: `<summary>
@@ -49,8 +51,8 @@ function makeProvider(
 9. **Current Work**: Inspecting condense behavior.
 10. **Optional Next Step**: Continue.
 </summary>`,
-        },
-  );
+        };
+  });
 
   const provider: ModelProvider = {
     id: "mock",
@@ -104,8 +106,9 @@ function makeMessages(): AgentMessage[] {
 function makeCodexProvider(
   onComplete?: (request: CompleteRequest) => CompleteResult,
 ) {
-  const complete = vi.fn(async (request: CompleteRequest) =>
-    onComplete
+  const complete = vi.fn(async (request: CompleteRequest) => {
+    request.onProviderRequestAttempt?.({ model: request.model });
+    return onComplete
       ? onComplete(request)
       : {
           text: `<summary>
@@ -120,8 +123,8 @@ function makeCodexProvider(
 9. **Current Work**: Inspecting condense behavior.
 10. **Optional Next Step**: Continue.
 </summary>`,
-        },
-  );
+        };
+  });
 
   const provider: ModelProvider = {
     id: "codex",
@@ -310,8 +313,9 @@ describe("summarizeConversation", () => {
     expect(second.metadata?.hadPriorSummaryInInput).toBe(true);
     expect(second.summary).toContain("stale cache key remains the root cause");
     const effective = getEffectiveHistory(second.messages);
-    expect(effective[0]?.isSummary).toBe(true);
-    expect(JSON.stringify(effective[0]?.content)).toContain(
+    expect(effective[0]?.content).toBe("Investigate the cache bug");
+    expect(effective[1]?.isSummary).toBe(true);
+    expect(JSON.stringify(effective[1]?.content)).toContain(
       "stale cache key remains the root cause",
     );
   });
@@ -654,11 +658,15 @@ User wants to fix the condense resume bug for Codex after summarization.
 
     expect(result.error).toBeUndefined();
     const effective = getEffectiveHistory(result.messages);
-    expect(effective).toHaveLength(2);
-    expect(effective[0]?.isSummary).toBe(true);
-    expect(effective[1]?.isResumeContext).toBe(true);
-    expect(Array.isArray(effective[1]?.content)).toBe(true);
-    const injected = effective[1]?.content as Array<{
+    expect(effective).toHaveLength(3);
+    expect(effective[0]).toMatchObject({
+      role: "user",
+      content: "Investigate condense",
+    });
+    expect(effective[1]?.isSummary).toBe(true);
+    expect(effective[2]?.isResumeContext).toBe(true);
+    expect(Array.isArray(effective[2]?.content)).toBe(true);
+    const injected = effective[2]?.content as Array<{
       type: string;
       text?: string;
     }>;
@@ -666,6 +674,25 @@ User wants to fix the condense resume bug for Codex after summarization.
     expect(injected[0]?.text).toContain(
       'Continue from this task: "Continue fixing the condense resume bug for Codex after summarization."',
     );
+  });
+
+  it("excludes transcript-only diagnostics from effective and condensation history", () => {
+    const diagnostic: AgentMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "# Context Doctor" }],
+      diagnosticOnly: true,
+    };
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Original task" } as AgentMessage,
+      diagnostic,
+      { role: "assistant", content: [{ type: "text", text: "Working" }] },
+    ];
+
+    expect(getEffectiveHistory(messages)).toEqual([messages[0], messages[2]]);
+    expect(getMessagesSinceLastSummary(messages)).toEqual([
+      messages[0],
+      messages[2],
+    ]);
   });
 
   it("places the injected resume-context message immediately before the next real user message", () => {
@@ -910,15 +937,32 @@ User wants to fix the condense resume bug for Codex after summarization.
       };
     });
 
+    const providerRequests: Array<{
+      requestId: string;
+      model: string;
+      estimatedInputTokens: number;
+    }> = [];
     const result = await summarizeConversation({
       messages: makeMessages(),
       provider,
       activeModel: "gpt-5.4",
       systemPrompt: "system prompt",
       isAutomatic: true,
+      onProviderRequest: (request) => providerRequests.push(request),
     });
 
     expect(result.error).toBeUndefined();
+    expect(providerRequests).toHaveLength(2);
+    expect(
+      new Set(providerRequests.map((request) => request.requestId)).size,
+    ).toBe(2);
+    expect(providerRequests.map((request) => request.model)).toEqual([
+      CODEX_CONDENSE_MODEL,
+      "gpt-5.4",
+    ]);
+    expect(
+      providerRequests.every((request) => request.estimatedInputTokens > 0),
+    ).toBe(true);
     // Cheap model fails, then falls through to gpt-5.4 (active model), then
     // remaining fallbacks. The first non-cheap candidate that succeeds wins.
     expect(complete).toHaveBeenCalledTimes(2);

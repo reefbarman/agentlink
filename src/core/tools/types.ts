@@ -1,5 +1,6 @@
 import type { CoreModelContentBlock } from "../modelRuntime.js";
 import type { FinalMessageMarker } from "../../shared/finalStatus.js";
+import type { NativeToolDisclosureSnapshot } from "./nativeToolDisclosure.js";
 import type { SessionTranscriptSnapshot } from "../sessionTranscriptRecall.js";
 import type { ToolCallBudget } from "./toolCallBudget.js";
 import type { ToolResult } from "../../shared/types.js";
@@ -36,7 +37,7 @@ export interface AgentToolListRequest {
     | "patch"
     | "verification";
   toolProfile?: string;
-  skillAllowedTools?: string[];
+  skillAllowedTools?: readonly string[];
   allMcpToolDefsForSkillAllowlist?: CoreToolDefinition[];
 }
 
@@ -50,8 +51,34 @@ export interface SessionImageReference {
 }
 
 export interface AdvertisedSkillReference {
+  id: string;
   name: string;
+  revision: string;
   skillPath: string;
+  realSkillPath: string;
+}
+
+export interface SkillLoadActivation {
+  id: string;
+  name: string;
+  revision: string;
+  skillPath: string;
+}
+
+/** Exact, immutable skill authority inherited across agent boundaries. */
+export interface SkillAuthoritySnapshot {
+  schemaVersion: 1;
+  sources: ReadonlyArray<{
+    catalogRevision: string;
+    activations: ReadonlyArray<{
+      id: string;
+      name: string;
+      revision: string;
+    }>;
+    policyRevision: string;
+  }>;
+  /** Undefined means the active skills impose no additional tool restriction. */
+  allowedTools?: readonly string[];
 }
 
 export interface AdvertisedRuleReference {
@@ -80,6 +107,11 @@ export interface AgentToolExecutionContext {
    * Dispatch rejects advertised-but-out-of-mode tools with a structured error.
    */
   modeAllowedToolNames?: ReadonlySet<string>;
+  /** Exact deferred native catalog authorized for this provider request. */
+  nativeToolDisclosure?: NativeToolDisclosureSnapshot;
+  /** Original provider-facing identity when a generic bridge resolved this call. */
+  providerToolName?: string;
+  providerToolInput?: Readonly<Record<string, unknown>>;
   /** Run-scoped accounting shared by top-level and nested tool dispatch. */
   toolCallBudget?: ToolCallBudget;
   /** Current tool-call identity, used as the parent for nested activity. */
@@ -107,8 +139,10 @@ export interface AgentToolExecutionContext {
   toolAbortSignal?: AbortSignal;
   getAdvertisedSkills?: () => AdvertisedSkillReference[];
   getAdvertisedRules?: () => AdvertisedRuleReference[];
-  onSkillLoad?: (skillName: string) => void;
-  skillAllowedTools?: string[];
+  onSkillLoad?: (activation: SkillLoadActivation) => void;
+  skillAllowedTools?: readonly string[];
+  /** Exact request-boundary authority forwarded only to internal descendants. */
+  skillAuthority?: Readonly<SkillAuthoritySnapshot>;
   onFinalStatus?: (marker: FinalMessageMarker) => void;
   backgroundExpectedResult?:
     | "text"
@@ -127,6 +161,15 @@ export interface AgentToolExecutionRequest {
   context: AgentToolExecutionContext;
 }
 
+export interface ResolvedAgentToolCall {
+  readonly providerName: string;
+  readonly providerInput: Readonly<Record<string, unknown>>;
+  readonly canonicalName: string;
+  readonly canonicalInput: Readonly<Record<string, unknown>>;
+  readonly route: "direct" | "native-deferred";
+  readonly resolutionError?: ToolResult;
+}
+
 export interface AgentToolCallTracker<TTrackerContext = unknown> {
   registerAgentCall(
     callId: string,
@@ -142,6 +185,7 @@ export interface AgentToolCallTracker<TTrackerContext = unknown> {
 
 export interface AgentToolRuntime {
   listTools(request: AgentToolListRequest): CoreToolDefinition[];
+  resolveToolCall?(request: AgentToolExecutionRequest): ResolvedAgentToolCall;
   executeTool(request: AgentToolExecutionRequest): Promise<ToolResult>;
   isParallelSafe(toolName: string, input?: Record<string, unknown>): boolean;
   getToolCallTracker?(): AgentToolCallTracker | undefined;

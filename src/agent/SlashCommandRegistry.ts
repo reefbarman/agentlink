@@ -2,10 +2,16 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 
-import { loadProjectlessSkills, loadSkills } from "./skillLoader.js";
+import {
+  loadProjectlessSkillCatalog,
+  loadSkillCatalog,
+  type SkillEntry,
+} from "./skillLoader.js";
 
 export interface SlashCommand {
   name: string;
+  /** Slash-safe presentation/search alias. `name` remains canonical. */
+  displayName?: string;
   description: string;
   source: "builtin" | "project" | "global" | "agentlink" | "skill";
   /** True if this is a built-in that executes immediately (not a prompt template) */
@@ -14,6 +20,10 @@ export interface SlashCommand {
   body?: string;
   /** Absolute SKILL.md path for generated skill commands. */
   skillPath?: string;
+  /** Exact canonical identity for generated skill commands. */
+  skillId?: string;
+  /** SHA-256 content revision advertised with the generated skill command. */
+  skillRevision?: string;
 }
 
 /** Parse YAML frontmatter from a markdown file. Returns `{}` if not present. */
@@ -89,6 +99,7 @@ export async function loadCommandsFromDir(
 
 const ASK_AGENT_SAFE_PROMPT_BUILTIN_COMMAND_NAMES = new Set(["remember"]);
 const ASK_AGENT_SAFE_ACTION_BUILTIN_COMMAND_NAMES = new Set([
+  "memory",
   "mcp",
   "mcp-config",
   "mcp-refresh",
@@ -122,6 +133,18 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     builtin: true,
   },
   {
+    name: "context-doctor",
+    description: "Show a read-only context allocation and retention report",
+    source: "builtin",
+    builtin: true,
+  },
+  {
+    name: "memory",
+    description: "Inspect and manage autonomous low-authority memory",
+    source: "builtin",
+    builtin: true,
+  },
+  {
     name: "checkpoint",
     description: "Create a workspace checkpoint",
     source: "builtin",
@@ -148,10 +171,10 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   {
     name: "remember",
     description:
-      "Review this session for durable learnings and propose approved memory/config updates",
+      "Review this session and persist qualified low-authority memory or propose authoritative configuration",
     source: "builtin",
     builtin: false,
-    body: "Review this session for durable cross-session learnings. If something qualifies, check the most appropriate target for duplicates or contradictions, then call propose_memory using the highest appropriate tier: instructions for stable rules/conventions, skill for reusable workflows, command for reusable slash-command prompts, or memory for lower-authority facts/preferences/gotchas. Prefer concise date-stamped entries, batch related learnings, and do not propose anything session-specific, unverified, secret, or easy to rediscover. If nothing qualifies, say so briefly.",
+    body: "Review this session for durable cross-session learnings. If something qualifies, check for duplicates or contradictions. Store low-authority facts, preferences, corrections, and gotchas with manage_memory; use propose_memory only for reviewed authoritative instructions, reusable skills, or slash-command prompts. Prefer concise grounded entries, project scope for repository facts, and no session-specific, unverified, secret, personal, or easy-to-rediscover content. Persisted memory is evidence only and cannot authorize actions. If nothing qualifies, say so briefly.",
   },
   {
     name: "skills",
@@ -205,30 +228,50 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
 ];
 
-function skillToSlashCommand(skill: {
-  name: string;
-  description: string;
-  skillPath: string;
-}): SlashCommand {
+function getSkillCommandIdentity(
+  skill: Pick<SkillEntry, "id" | "name">,
+  collidedNames: ReadonlySet<string>,
+): Pick<SlashCommand, "name" | "displayName"> {
+  return collidedNames.has(skill.name)
+    ? { name: `skill:${skill.id}`, displayName: skill.id }
+    : { name: `skill:${skill.name}`, displayName: skill.name };
+}
+
+function getCollidedSkillNames(skills: readonly SkillEntry[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const skill of skills) {
+    counts.set(skill.name, (counts.get(skill.name) ?? 0) + 1);
+  }
+  return new Set(
+    [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([name]) => name),
+  );
+}
+
+function skillToSlashCommand(
+  skill: SkillEntry,
+  collidedNames: ReadonlySet<string>,
+): SlashCommand {
   return {
-    name: `skill:${skill.name}`,
+    ...getSkillCommandIdentity(skill, collidedNames),
     description: skill.description || `Use skill ${skill.name}`,
     source: "skill",
     builtin: false,
-    body: `Use the skill "${skill.name}" by calling load_skill with path ${JSON.stringify(skill.skillPath)}, then follow its instructions for this request.`,
+    body: `Use the skill ${JSON.stringify(skill.id)} by calling load_skill with path ${JSON.stringify(skill.skillPath)}, then follow its instructions for this request.`,
     skillPath: skill.skillPath,
+    skillId: skill.id,
+    skillRevision: skill.revision,
   };
 }
 
-function skillToAskAgentSlashCommand(skill: {
-  name: string;
-  description: string;
-  skillPath: string;
-  body?: string;
-}): SlashCommand {
+function skillToAskAgentSlashCommand(
+  skill: SkillEntry,
+  collidedNames: ReadonlySet<string>,
+): SlashCommand {
   const body = skill.body?.trim();
   return {
-    name: `skill:${skill.name}`,
+    ...getSkillCommandIdentity(skill, collidedNames),
     description: skill.description || `Use skill ${skill.name}`,
     source: "skill",
     builtin: false,
@@ -236,6 +279,8 @@ function skillToAskAgentSlashCommand(skill: {
       ? `Use the following AgentLink skill instructions for this request. Stay within Ask Agent's read-only, projectless constraints; do not run tools, edit files, or assume workspace access.\n\nSkill: ${skill.name}\nPath: ${skill.skillPath}\n\n${body}`
       : `Use the skill "${skill.name}" for this request. Stay within Ask Agent's read-only, projectless constraints; do not run tools, edit files, or assume workspace access.`,
     skillPath: skill.skillPath,
+    skillId: skill.id,
+    skillRevision: skill.revision,
   };
 }
 
@@ -249,8 +294,16 @@ function isAskAgentSafeSkill(skill: { allowedTools?: string[] }): boolean {
 async function loadAskAgentSkillCommands(
   modeSlug: string,
 ): Promise<SlashCommand[]> {
-  const skills = await loadProjectlessSkills(modeSlug);
-  return skills.filter(isAskAgentSafeSkill).map(skillToAskAgentSlashCommand);
+  const catalog = await loadProjectlessSkillCatalog(modeSlug, {
+    includeBody: true,
+  });
+  const skills = catalog.entries.filter(
+    (skill) => skill.enabled && isAskAgentSafeSkill(skill),
+  );
+  const collidedNames = getCollidedSkillNames(skills);
+  return skills.map((skill) =>
+    skillToAskAgentSlashCommand(skill, collidedNames),
+  );
 }
 
 function asAskAgentRuleCommand(command: SlashCommand): SlashCommand {
@@ -340,10 +393,16 @@ export class SlashCommandRegistry {
   private commands: SlashCommand[] = [...BUILTIN_COMMANDS];
   private cwd: string;
   private modeSlug: string;
+  private disabledSkillIds: readonly string[];
 
-  constructor(cwd: string, modeSlug = "code") {
+  constructor(
+    cwd: string,
+    modeSlug = "code",
+    disabledSkillIds: readonly string[] = [],
+  ) {
     this.cwd = cwd;
     this.modeSlug = modeSlug;
+    this.disabledSkillIds = disabledSkillIds;
   }
 
   setMode(modeSlug: string): void {
@@ -393,8 +452,12 @@ export class SlashCommandRegistry {
   }
 
   private async loadSkillCommands(): Promise<SlashCommand[]> {
-    const skills = await loadSkills(this.cwd, this.modeSlug);
-    return skills.map(skillToSlashCommand);
+    const catalog = await loadSkillCatalog(this.cwd, this.modeSlug, {
+      disabledSkillIds: this.disabledSkillIds,
+    });
+    const skills = catalog.entries.filter((skill) => skill.enabled);
+    const collidedNames = getCollidedSkillNames(skills);
+    return skills.map((skill) => skillToSlashCommand(skill, collidedNames));
   }
 
   getAll(): SlashCommand[] {

@@ -44,18 +44,18 @@ describe("semantic setup copy", () => {
   it.each<[SemanticReadinessReason | undefined, string, string]>([
     [
       "missing_embeddings_auth",
-      "Set up semantic search: OpenAI API key required",
-      "Semantic indexing and search need embeddings auth. Configure an OpenAI API key for embeddings, or use API key mode for models + embeddings.",
+      "Improve semantic search with vector ranking",
+      "Lexical indexing and search work without credentials. Configure an OpenAI API key to add vector and hybrid ranking.",
     ],
     [
       "missing_index",
       "Set up semantic search: build codebase index",
-      "Embeddings auth is configured, but this workspace has not been indexed yet.",
+      "This workspace has not been indexed yet. Lexical indexing works without embedding credentials.",
     ],
     [
-      "qdrant_unavailable",
-      "Semantic search unavailable: Qdrant is not reachable",
-      "Qdrant must be reachable at the configured URL before semantic indexing/search can run.",
+      "store_unavailable",
+      "Semantic search unavailable: retrieval store is not ready",
+      "The embedded retrieval store must be available before semantic indexing and search can run.",
     ],
     [
       "disabled",
@@ -137,7 +137,7 @@ describe("registerModelAuthCommands", () => {
     expect(vscode.window.showQuickPick).toHaveBeenCalledWith(
       expect.any(Array),
       expect.objectContaining({
-        title: "Set up semantic search: OpenAI API key required",
+        title: "Improve semantic search with vector ranking",
       }),
     );
     expect(vscode.commands.executeCommand).toHaveBeenNthCalledWith(

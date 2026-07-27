@@ -1,13 +1,14 @@
 import * as fs from "fs";
 import * as path from "path";
 
-import type { AgentEvent } from "./types.js";
-import type { ToolResult } from "../shared/types.js";
 import type {
   SessionActivityDiagnosis,
   SessionActivityEvidence,
   SessionActivityQuery,
 } from "../core/sessionActivityDiagnostics.js";
+
+import type { AgentEvent } from "./types.js";
+import type { ToolResult } from "../shared/types.js";
 import { randomUUID } from "crypto";
 
 export type ActivityTraceSource =
@@ -425,7 +426,11 @@ export class ActivityTraceRecorder {
             : "Manual condense started",
           payload: { isAutomatic: event.isAutomatic },
         };
-      case "condense":
+      case "condense": {
+        const forensicMetadata =
+          event.metadata && "providerId" in event.metadata
+            ? event.metadata
+            : undefined;
         return {
           sessionId,
           kind: "condense_complete",
@@ -436,10 +441,11 @@ export class ActivityTraceRecorder {
             newInputTokens: event.newInputTokens,
             durationMs: event.durationMs,
             validationWarningCount: event.validationWarnings?.length ?? 0,
-            sourceUserMessageCount: event.metadata?.sourceUserMessageCount,
-            requestMessageCount: event.metadata?.requestMessageCount,
+            sourceUserMessageCount: forensicMetadata?.sourceUserMessageCount,
+            requestMessageCount: forensicMetadata?.requestMessageCount,
           },
         };
+      }
       case "condense_error":
         return {
           sessionId,

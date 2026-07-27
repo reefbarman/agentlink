@@ -12,7 +12,7 @@ describe("removed-file deletion", () => {
         [
           {
             relPath: "src/removed.ts",
-            pointIds: ["point-1", "point-2", "point-3", "point-4", "point-5"],
+            recordIds: ["point-1", "point-2", "point-3", "point-4", "point-5"],
           },
         ],
         2,
@@ -20,7 +20,7 @@ describe("removed-file deletion", () => {
     ).toEqual([
       {
         relPath: "src/removed.ts",
-        pointIds: ["point-1", "point-2", "point-3", "point-4", "point-5"],
+        recordIds: ["point-1", "point-2", "point-3", "point-4", "point-5"],
         batches: [["point-1", "point-2"], ["point-3", "point-4"], ["point-5"]],
       },
     ]);
@@ -51,8 +51,8 @@ describe("removed-file deletion", () => {
   it("deduplicates repeated removed-file plans", () => {
     expect(
       planRemovedFileDeletes([
-        { relPath: "src/removed.ts", pointIds: ["point-1"] },
-        { relPath: "src/removed.ts", pointIds: ["point-1"] },
+        { relPath: "src/removed.ts", recordIds: ["point-1"] },
+        { relPath: "src/removed.ts", recordIds: ["point-1"] },
       ]),
     ).toHaveLength(1);
   });
@@ -72,9 +72,9 @@ describe("removed-file deletion", () => {
         [
           {
             relPath: "src/removed.ts",
-            pointIds: ["point-1", "point-2", "point-3"],
+            recordIds: ["point-1", "point-2", "point-3"],
           },
-          { relPath: "src/empty.ts", pointIds: [] },
+          { relPath: "src/empty.ts", recordIds: [] },
         ],
         2,
       ),
@@ -88,23 +88,23 @@ describe("removed-file deletion", () => {
     expect(result).toEqual({
       completedRelPaths: ["src/removed.ts", "src/empty.ts"],
       errors: [],
-      pointsDeleted: 3,
+      recordsDeleted: 3,
       cancelled: false,
     });
   });
 
   it("retains file ownership after a partial batch failure and continues to later files", async () => {
-    const deleteBatch = vi.fn(async (pointIds: string[]) => {
-      if (pointIds.includes("point-3")) throw new Error("injected failure");
+    const deleteBatch = vi.fn(async (recordIds: string[]) => {
+      if (recordIds.includes("point-3")) throw new Error("injected failure");
     });
     const result = await executeRemovedFileDeletes(
       planRemovedFileDeletes(
         [
           {
             relPath: "src/failed.ts",
-            pointIds: ["point-1", "point-2", "point-3", "point-4"],
+            recordIds: ["point-1", "point-2", "point-3", "point-4"],
           },
-          { relPath: "src/complete.ts", pointIds: ["point-5"] },
+          { relPath: "src/complete.ts", recordIds: ["point-5"] },
         ],
         2,
       ),
@@ -121,7 +121,7 @@ describe("removed-file deletion", () => {
       errors: [
         "Failed to delete points for src/failed.ts: Error: injected failure",
       ],
-      pointsDeleted: 3,
+      recordsDeleted: 3,
       cancelled: false,
     });
   });
@@ -136,7 +136,7 @@ describe("removed-file deletion", () => {
         [
           {
             relPath: "src/removed.ts",
-            pointIds: ["point-1", "point-2", "point-3"],
+            recordIds: ["point-1", "point-2", "point-3"],
           },
         ],
         2,
@@ -148,7 +148,7 @@ describe("removed-file deletion", () => {
     expect(result).toEqual({
       completedRelPaths: [],
       errors: [],
-      pointsDeleted: 2,
+      recordsDeleted: 2,
       cancelled: true,
     });
   });

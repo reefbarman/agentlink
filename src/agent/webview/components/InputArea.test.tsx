@@ -144,6 +144,41 @@ describe("InputArea slash popup", () => {
     expect(container.querySelectorAll(".slash-cmd-option").length).toBe(3);
   });
 
+  it("executes context-doctor immediately without sending prompt text", () => {
+    const onExecuteBuiltinCommand = vi.fn();
+    const onSend = vi.fn();
+    const { container } = renderInputArea(
+      [
+        {
+          name: "context-doctor",
+          description: "Show context diagnostics",
+          source: "builtin",
+          builtin: true,
+        },
+      ],
+      { onExecuteBuiltinCommand, onSend },
+    );
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    input.value = "/";
+    input.selectionStart = 1;
+    input.selectionEnd = 1;
+    fireEvent.input(input);
+
+    input.value = "/context";
+    input.selectionStart = input.value.length;
+    input.selectionEnd = input.value.length;
+    fireEvent.input(input);
+    const option =
+      container.querySelector<HTMLButtonElement>(".slash-cmd-option");
+    expect(option).toBeTruthy();
+    fireEvent.click(option!);
+
+    expect(onExecuteBuiltinCommand).toHaveBeenCalledWith("context-doctor", "");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(input.value).toBe("");
+  });
+
   it("shows skill commands without the skill prefix and sends their body", () => {
     const onSend = vi.fn();
     const slashCommands: SlashCommandInfo[] = [

@@ -606,6 +606,7 @@ export function InputArea({
   const ZERO_ARG_BUILTINS = new Set([
     "new",
     "condense",
+    "context-doctor",
     "checkpoint",
     "revert",
     "help",

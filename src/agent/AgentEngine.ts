@@ -19,8 +19,18 @@ import {
 import type {
   AgentToolRuntime,
   AgentToolExecutionContext,
+  ResolvedAgentToolCall,
+  SkillAuthoritySnapshot,
 } from "../core/tools/types.js";
 import { ToolCallBudget } from "../core/tools/toolCallBudget.js";
+import { createNativeToolDisclosureSnapshot } from "../core/tools/nativeToolDisclosure.js";
+import {
+  buildContextLedger,
+  DEFAULT_CONTEXT_SAFETY_BUFFER_RATIO,
+  getContextLedgerLayer,
+  ORDINARY_TURN_RETRIEVED_MEMORY_TOKEN_BUDGET,
+  type ContextLedgerSnapshot,
+} from "../core/contextLedger.js";
 import { BUILT_IN_MODES, buildUnionAgentMode } from "./modes.js";
 import { buildToolContextBreakdown } from "./contextBreakdown.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
@@ -29,7 +39,11 @@ import type { CoreResolvedWebAccessPolicy } from "../core/webAccess.js";
 import { CORE_NATIVE_WEB_MAX_PAUSE_TURNS } from "../core/nativeWebTools.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { handleToolError } from "../shared/types.js";
-import type { McpApprovalPromotionMeta, ToolResult } from "../shared/types.js";
+import type {
+  McpApprovalPromotionMeta,
+  PostCondenseProjection,
+  ToolResult,
+} from "../shared/types.js";
 import {
   TODO_TOOL_NAME,
   todoTool,
@@ -73,6 +87,8 @@ import type {
   SessionTranscriptSnapshot,
 } from "../core/sessionTranscriptRecall.js";
 import { truncateMiddle } from "../util/truncateMiddle.js";
+import { estimateTokensFromChars } from "../util/tokenEstimation.js";
+import type { AutomaticMemoryContext } from "../core/capabilities/memory.js";
 import { getAgentLinkHttpDiagnostics } from "../util/httpDispatcher.js";
 import { collectSessionImages } from "./sessionImages.js";
 import { resolveProjectAttachments } from "./attachmentResolver.js";
@@ -208,7 +224,7 @@ const isAuthError = isAgentAuthError;
  * the hard-fit budget. This mirrors Roo Code's buffer concept and absorbs
  * mismatch between our local estimate and the provider's real token accounting.
  */
-const CONTEXT_WINDOW_SAFETY_BUFFER = 0.05;
+const CONTEXT_WINDOW_SAFETY_BUFFER = DEFAULT_CONTEXT_SAFETY_BUFFER_RATIO;
 
 function normalizeReasoningEffort(
   effort: ReasoningEffort,
@@ -256,6 +272,18 @@ function estimateToolResultContentChars(
   );
 }
 
+export function measureToolResultContentForAttribution(
+  content: string | ContentBlock[],
+): { retainedContent: string; estimatedTokens: number } {
+  return {
+    retainedContent:
+      typeof content === "string" ? content : JSON.stringify(content),
+    estimatedTokens: estimateTokensFromChars(
+      estimateToolResultContentChars([content]),
+    ),
+  };
+}
+
 /**
  * Compute the effective output-token reservation for a model.
  *
@@ -275,6 +303,277 @@ function getOutputReservation(
   );
 }
 
+function estimateProviderMessageTokens(messages: MessageParam[]): number {
+  return estimateTokensFromChars(
+    messages.reduce(
+      (chars, message) =>
+        chars + estimateContentCharsForTokens(message.content),
+      0,
+    ),
+  );
+}
+
+function buildProviderMessages(
+  effectiveMessages: AgentMessage[],
+  modeInsertions: Array<{ beforeIndex: number; blockText: string }>,
+  log?: (message: string) => void,
+): MessageParam[] {
+  const apiMessages: MessageParam[] = effectiveMessages.map(
+    (msg, effectiveIdx) => {
+      const { role, content, media, providerReplay } = msg;
+      if (media) {
+        log?.(
+          `[media] found attached media at effectiveIdx=${effectiveIdx} role=${role} contentType=${typeof content === "string" ? "string" : Array.isArray(content) ? `array(${content.length})` : "other"} images=${media.images.length} documents=${media.documents.length}`,
+        );
+      }
+      if (media && role === "user") {
+        const imageBlocks: ImageBlock[] = media.images
+          .map((img) => {
+            let mediaType = toSupportedImageMediaType(img.mimeType);
+            if (!mediaType && img.name) {
+              const ext = img.name.split(".").pop()?.toLowerCase();
+              const extMap: Record<string, string> = {
+                png: "image/png",
+                jpg: "image/jpeg",
+                jpeg: "image/jpeg",
+                gif: "image/gif",
+                webp: "image/webp",
+              };
+              if (ext && extMap[ext]) {
+                mediaType = toSupportedImageMediaType(extMap[ext]);
+                log?.(
+                  `[media] inferred mimeType="${extMap[ext]}" from filename "${img.name}" (original mimeType="${img.mimeType}")`,
+                );
+              }
+            }
+            if (!mediaType) {
+              log?.(
+                `[media] skipping unsupported image type: "${img.mimeType}" name="${img.name}"`,
+              );
+              return null;
+            }
+            return {
+              type: "image" as const,
+              source: {
+                type: "base64" as const,
+                media_type: mediaType,
+                data: img.base64,
+              },
+            };
+          })
+          .filter((block): block is ImageBlock => block !== null);
+        const textContent =
+          typeof content === "string"
+            ? content
+            : Array.isArray(content)
+              ? content
+                  .filter(
+                    (block): block is { type: "text"; text: string } =>
+                      block.type === "text",
+                  )
+                  .map((block) => block.text)
+                  .join("\n")
+              : "";
+        const existingBlocks: ContentBlock[] = Array.isArray(content)
+          ? (content.filter((block) => block.type !== "text") as ContentBlock[])
+          : [];
+        const blocks: ContentBlock[] = [
+          ...(textContent
+            ? [{ type: "text" as const, text: textContent }]
+            : []),
+          ...imageBlocks,
+          ...media.documents.flatMap((doc) => {
+            const mediaType = toCoreModelDocumentMediaType(doc.mimeType);
+            if (!mediaType) {
+              log?.(
+                `[media] skipping unsupported document type: "${doc.mimeType}" name="${doc.name}"`,
+              );
+              return [];
+            }
+            return [
+              {
+                type: "document" as const,
+                source: {
+                  type: "base64" as const,
+                  media_type: mediaType,
+                  data: doc.base64,
+                },
+                title: doc.name,
+              },
+            ];
+          }),
+          ...existingBlocks,
+        ];
+        log?.(
+          `[media] injected media into user message: blockTypes=[${blocks.map((block) => block.type).join(",")}] imageBlocks=${imageBlocks.length} existingBlocks=${existingBlocks.length}`,
+        );
+        return { role, content: blocks };
+      }
+      return {
+        role,
+        content,
+        ...(role === "assistant" && providerReplay ? { providerReplay } : {}),
+      };
+    },
+  );
+  for (let i = modeInsertions.length - 1; i >= 0; i--) {
+    const insertion = modeInsertions[i]!;
+    apiMessages.splice(insertion.beforeIndex, 0, {
+      role: "user",
+      content: insertion.blockText,
+    });
+  }
+  return apiMessages;
+}
+
+function isToolResultCarrier(message: AgentMessage): boolean {
+  return (
+    message.role === "user" &&
+    Array.isArray(message.content) &&
+    message.content.some((block) => block.type === "tool_result")
+  );
+}
+
+function insertAutomaticMemoryContext(
+  apiMessages: MessageParam[],
+  effectiveMessages: AgentMessage[],
+  modeInsertions: Array<{ beforeIndex: number; blockText: string }>,
+  automaticMemoryContext: Readonly<AutomaticMemoryContext>,
+  logicalTurnUserMessage?: AgentMessage,
+): void {
+  let sourceIndex = logicalTurnUserMessage
+    ? effectiveMessages.indexOf(logicalTurnUserMessage)
+    : -1;
+  if (sourceIndex < 0) {
+    for (let index = effectiveMessages.length - 1; index >= 0; index -= 1) {
+      const message = effectiveMessages[index]!;
+      if (message.role === "user" && !isToolResultCarrier(message)) {
+        sourceIndex = index;
+        break;
+      }
+    }
+  }
+  if (sourceIndex < 0) sourceIndex = 0;
+  const modeInsertionsBeforeAnchor = modeInsertions.filter(
+    (insertion) => insertion.beforeIndex <= sourceIndex,
+  ).length;
+  apiMessages.splice(sourceIndex + modeInsertionsBeforeAnchor, 0, {
+    role: "user",
+    content: automaticMemoryContext.rendering,
+  });
+}
+
+function buildRequestContextLedger(
+  session: AgentSession,
+  capabilities: ModelCapabilities,
+  messageTokens: number,
+  modeInstructionTokens: number,
+  toolTokens: number,
+  retrievedMemoryTokens: number,
+): Readonly<ContextLedgerSnapshot> {
+  return buildContextLedger({
+    capabilities,
+    outputReservationTokens: Math.min(
+      Math.max(session.maxTokens, session.thinkingBudget + 4096),
+      capabilities.maxOutputTokens,
+    ),
+    safetyBufferRatio: CONTEXT_WINDOW_SAFETY_BUFFER,
+    layers: [
+      {
+        layer: "system_prompt",
+        requestedTokens: session.contextBreakdown.prompt.estimatedTokens,
+      },
+      { layer: "workspace_instructions", requestedTokens: 0 },
+      { layer: "mode_instructions", requestedTokens: modeInstructionTokens },
+      { layer: "pinned_memory", requestedTokens: 0 },
+      { layer: "tool_definitions", requestedTokens: toolTokens },
+      {
+        layer: "conversation_history",
+        requestedTokens: Math.max(0, messageTokens - modeInstructionTokens),
+      },
+      { layer: "working_set", requestedTokens: 0 },
+      {
+        layer: "retrieved_context",
+        requestedTokens: retrievedMemoryTokens,
+        budgetTokens: ORDINARY_TURN_RETRIEVED_MEMORY_TOKEN_BUDGET,
+        required: false,
+        allOrNothing: true,
+      },
+    ],
+  });
+}
+
+function buildCurrentRequestContextLedger(
+  session: AgentSession,
+  provider: ModelProvider,
+  model: string,
+  tools?: ToolDefinition[],
+  automaticMemoryContext?: Readonly<AutomaticMemoryContext>,
+): {
+  ledger: Readonly<ContextLedgerSnapshot>;
+  toolBreakdown: ReturnType<typeof buildToolContextBreakdown>;
+} {
+  const effectiveMessages = session.getMessages();
+  const modeInsertions =
+    session.buildModeInstructionInsertions?.(effectiveMessages) ?? [];
+  const modeInstructionTokens = estimateProviderMessageTokens(
+    modeInsertions.map((insertion) => ({
+      role: "user",
+      content: insertion.blockText,
+    })),
+  );
+  const providerMessageTokens = estimateProviderMessageTokens(
+    buildProviderMessages(effectiveMessages, modeInsertions),
+  );
+  const toolBreakdown = tools
+    ? buildToolContextBreakdown(tools)
+    : (session.contextBreakdown.tools ?? buildToolContextBreakdown(undefined));
+  return {
+    ledger: buildRequestContextLedger(
+      session,
+      provider.getCapabilities(model),
+      providerMessageTokens,
+      modeInstructionTokens,
+      toolBreakdown.estimatedTokens,
+      automaticMemoryContext?.estimatedTokens ?? 0,
+    ),
+    toolBreakdown,
+  };
+}
+
+function buildPostCondenseProjection(
+  session: AgentSession,
+  provider: ModelProvider,
+  model: string,
+  tools?: ToolDefinition[],
+  automaticMemoryContext?: Readonly<AutomaticMemoryContext>,
+): PostCondenseProjection {
+  const { ledger, toolBreakdown } = buildCurrentRequestContextLedger(
+    session,
+    provider,
+    model,
+    tools,
+    automaticMemoryContext,
+  );
+  const allocated = (layer: Parameters<typeof getContextLedgerLayer>[1]) =>
+    getContextLedgerLayer(ledger, layer)?.allocatedTokens ?? 0;
+
+  return {
+    estimatedInputTokens: ledger.allocatedInputTokens,
+    promptTokens: allocated("system_prompt"),
+    historyTokens: allocated("conversation_history"),
+    modeInstructionTokens: allocated("mode_instructions"),
+    toolTokens: allocated("tool_definitions"),
+    nativeToolTokens: toolBreakdown.native.estimatedTokens,
+    mcpToolTokens: toolBreakdown.mcp.estimatedTokens,
+    pinnedMemoryTokens: allocated("pinned_memory"),
+    retrievedMemoryTokens: allocated("retrieved_context"),
+    outputReservationTokens: ledger.outputReservationTokens,
+    safetyBufferTokens: ledger.safetyBufferTokens,
+    contextLedger: ledger,
+  };
+}
+
 function hasVisibleOrActionableOutput(blocks: ContentBlock[]): boolean {
   return blocks.some((block) => {
     if (block.type === "text") return block.text.trim().length > 0;
@@ -288,6 +587,7 @@ function getCondenseBudgetSnapshot(
   session: AgentSession,
   provider: ModelProvider,
   model = session.model,
+  projectedLedger?: Readonly<ContextLedgerSnapshot>,
 ): {
   usedTokens: number;
   contextWindow: number;
@@ -311,7 +611,10 @@ function getCondenseBudgetSnapshot(
   );
   // Providers reject oversized prompts based on request input, not previous output.
   // For fixed-envelope models, usable input is contextWindow - maxOutputTokens.
-  const usedTokens = session.estimatedInputUsed;
+  const usedTokens = Math.max(
+    session.estimatedInputUsed,
+    projectedLedger?.allocatedInputTokens ?? 0,
+  );
   const cacheHitRatio =
     session.lastInputTokens > 0
       ? session.lastCacheReadTokens / session.lastInputTokens
@@ -346,10 +649,12 @@ function isOverCondenseThresholdInternal(
   session: AgentSession,
   provider: ModelProvider,
   model = session.model,
+  projectedLedger?: Readonly<ContextLedgerSnapshot>,
 ): boolean {
   if (!session.autoCondense || session.lastInputTokens === 0) return false;
   return (
-    getCondenseBudgetSnapshot(session, provider, model).triggerReason !== null
+    getCondenseBudgetSnapshot(session, provider, model, projectedLedger)
+      .triggerReason !== null
   );
 }
 
@@ -367,6 +672,11 @@ function hasUnansweredUserTurn(session: AgentSession): boolean {
 }
 
 /** Internal result from a single tool call execution. */
+interface ResolvedToolUseBlock extends ToolUseBlock {
+  providerName: string;
+  providerInput: Record<string, unknown>;
+}
+
 interface ToolCallResult {
   tool_use_id: string;
   toolName: string;
@@ -472,10 +782,26 @@ const TOOL_RESULT_CHAR_LIMITS: Record<string, number> = {
   list_files: 12_000, // ~3k tokens — just file paths
 };
 const DEFAULT_TOOL_RESULT_CHARS = 32_000; // ~8k tokens
+const TOOL_RESULT_RETENTION_MIN_CHARS = 8_000; // ~2k tokens
 
-// Truncated tool results are saved here so the agent can read_file the full
-// output when needed. Allowlisted in handleReadFile to bypass the approval gate.
+// Truncated and retained tool results are saved here so the agent can read_file
+// the full output when needed. Allowlisted in handleReadFile to bypass the
+// approval gate.
 const AGENTLINK_TMP_DIR = "/tmp/agentlink-results";
+const RETAINED_TOOL_RESULT_DIR = path.join(AGENTLINK_TMP_DIR, "retained");
+
+interface RetainedToolResultArtifact {
+  hash: string;
+  path: string;
+  originalToolCallId: string;
+  originalToolName: string;
+  chars: number;
+}
+
+type ToolResultRetentionIndex = Map<
+  string,
+  Promise<RetainedToolResultArtifact | null>
+>;
 
 /**
  * Head+tail truncation with line-boundary snapping. Keeps the first and last
@@ -507,6 +833,82 @@ export function truncateToolText(
   });
 }
 
+function getRetainableToolResultText(result: ToolResult): string | null {
+  if (
+    result.content.some(
+      (content) => content.type === "image" || content.type === "document",
+    )
+  ) {
+    return null;
+  }
+  const text = result.content
+    .filter((content) => content.type === "text")
+    .map((content) => content.text)
+    .join("\n");
+  return text.length >= TOOL_RESULT_RETENTION_MIN_CHARS ? text : null;
+}
+
+function buildRetainedToolResultReference(
+  artifact: RetainedToolResultArtifact,
+): string {
+  return [
+    `[Unchanged large tool result; exact content retained from ${artifact.originalToolName} call ${artifact.originalToolCallId}.]`,
+    `SHA-256: ${artifact.hash}`,
+    `Original size: ${artifact.chars} characters`,
+    `Full output: ${artifact.path} — use read_file to access the exact result.`,
+  ].join("\n");
+}
+
+async function retainToolResultHistoryContent(
+  result: ToolResult,
+  canonicalContent: CoreModelToolResultBlock["content"],
+  toolCallId: string,
+  toolName: string,
+  runArtifactId: string,
+  index: ToolResultRetentionIndex,
+): Promise<CoreModelToolResultBlock["content"]> {
+  if (typeof canonicalContent !== "string") return canonicalContent;
+  const exactText = getRetainableToolResultText(result);
+  if (exactText === null) return canonicalContent;
+
+  const hash = createHash("sha256").update(exactText).digest("hex");
+  const existing = index.get(hash);
+  if (existing) {
+    const artifact = await existing;
+    return artifact
+      ? buildRetainedToolResultReference(artifact)
+      : canonicalContent;
+  }
+
+  const artifactPath = path.join(
+    RETAINED_TOOL_RESULT_DIR,
+    runArtifactId,
+    `${hash}.txt`,
+  );
+  const write = (async (): Promise<RetainedToolResultArtifact | null> => {
+    try {
+      await fs.mkdir(path.dirname(artifactPath), { recursive: true });
+      await fs.writeFile(artifactPath, exactText, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+      return {
+        hash,
+        path: artifactPath,
+        originalToolCallId: toolCallId,
+        originalToolName: toolName,
+        chars: exactText.length,
+      };
+    } catch {
+      return null;
+    }
+  })();
+  index.set(hash, write);
+  const artifact = await write;
+  if (!artifact && index.get(hash) === write) index.delete(hash);
+  return canonicalContent;
+}
+
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
@@ -514,6 +916,61 @@ function stableStringify(value: unknown): string {
     ([a], [b]) => a.localeCompare(b),
   );
   return `{${entries.map(([key, val]) => `${JSON.stringify(key)}:${stableStringify(val)}`).join(",")}}`;
+}
+
+function intersectToolAllowlist(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (!left) return right ? [...new Set(right)].sort() : undefined;
+  if (!right) return [...new Set(left)].sort();
+  const rightSet = new Set(right);
+  return [...new Set(left)].filter((tool) => rightSet.has(tool)).sort();
+}
+
+function buildSkillAuthoritySnapshot(
+  inherited: Readonly<SkillAuthoritySnapshot> | undefined,
+  activeState: ReturnType<AgentSession["getActiveSkillState"]>,
+  activeAllowedTools: readonly string[] | undefined,
+): Readonly<SkillAuthoritySnapshot> | undefined {
+  if (!inherited && !activeState && !activeAllowedTools) return undefined;
+  const sources = [
+    ...(inherited?.sources ?? []),
+    ...(activeState
+      ? [
+          {
+            catalogRevision: activeState.catalogRevision,
+            activations: activeState.activations.map((activation) => ({
+              ...activation,
+            })),
+            policyRevision: activeState.policy.revision,
+          },
+        ]
+      : []),
+  ];
+  // Inherited allowlists may come from persisted fleet metadata, but they are
+  // authority only as a narrowing ceiling: intersection can never grant a tool
+  // that the active skill, mode, or permission profile would otherwise deny.
+  const allowedTools = intersectToolAllowlist(
+    inherited?.allowedTools,
+    activeAllowedTools,
+  );
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    sources: Object.freeze(
+      sources.map((source) =>
+        Object.freeze({
+          ...source,
+          activations: Object.freeze(
+            source.activations.map((activation) =>
+              Object.freeze({ ...activation }),
+            ),
+          ),
+        }),
+      ),
+    ),
+    ...(allowedTools ? { allowedTools: Object.freeze([...allowedTools]) } : {}),
+  });
 }
 
 function buildToolFingerprint(tools: ToolDefinition[] | undefined): string {
@@ -613,6 +1070,8 @@ export class AgentEngine {
       toolProfile?: string;
       maxApiTurns?: number;
       maxToolCalls?: number;
+      /** Immutable low-authority memory evidence prepared once for this logical invocation. */
+      automaticMemoryContext?: Readonly<AutomaticMemoryContext>;
       /** Immutable web backend/tool selection prepared at the logical turn boundary. */
       webAccessPolicy?: Readonly<CoreResolvedWebAccessPolicy>;
       /** MCP disclosure prepared from the same immutable tool-catalog snapshot. */
@@ -621,6 +1080,8 @@ export class AgentEngine {
       >;
       /** Exact cloned MCP catalog used to build the prepared disclosure/policy. */
       mcpToolDefinitions?: readonly ToolDefinition[];
+      /** Immutable skill authority inherited from the spawning request. */
+      inheritedSkillAuthority?: Readonly<SkillAuthoritySnapshot>;
       /**
        * Persists a provider-complete assistant tool turn before dispatch starts.
        * The turn remains outside canonical live history until every tool result
@@ -638,6 +1099,14 @@ export class AgentEngine {
       onProviderAdmissionPhase?: (
         phase: "queued_for_provider" | "running",
       ) => void;
+      /**
+       * Reconciles trusted provider/profile/prompt state after a transport-owned
+       * model fallback and before this run can issue another provider request.
+       */
+      onModelFallback?: (fallback: {
+        requestedModel: string;
+        effectiveModel: string;
+      }) => void | Promise<void>;
       /** Time to first raw transport activity (normally response headers). */
       providerFirstEventTimeoutMs?: number;
       /** Maximum silence between raw response body chunks/provider events. */
@@ -661,6 +1130,11 @@ export class AgentEngine {
     // fallback updates activeModel explicitly below.
     let activeModel = session.model;
     const provider = this.registry.resolveProvider(activeModel);
+    const logicalTurnUserMessage = [...session.getMessages()]
+      .reverse()
+      .find(
+        (message) => message.role === "user" && !isToolResultCarrier(message),
+      );
 
     // Cache assembled tool list across turns — rebuild only when the tool set changes.
     let cachedTools: ToolDefinition[] | undefined;
@@ -679,6 +1153,8 @@ export class AgentEngine {
     let pendingFinalMarker: FinalMessageMarker | null = null;
     let pendingCompletedTodoUpdate: TodoItem[] | null = null;
     let currentTodos: TodoItem[] = getLatestTodoState(session.getAllMessages());
+    const retainedToolResults: ToolResultRetentionIndex = new Map();
+    const retainedToolResultRunId = randomUUID();
 
     try {
       let requestRetryCount = 0;
@@ -754,12 +1230,19 @@ export class AgentEngine {
           backgroundExpectedResult === "verification"
             ? backgroundExpectedResult
             : undefined;
+        const activeSkillAllowedTools = session.getActiveSkillAllowedTools();
+        const requestSkillAuthority = buildSkillAuthoritySnapshot(
+          opts?.inheritedSkillAuthority,
+          session.getActiveSkillState(),
+          activeSkillAllowedTools,
+        );
+        const requestSkillAllowedTools = requestSkillAuthority?.allowedTools;
         const listToolsRequestBase = {
           mcpToolDefs: providerMcpToolDefs,
           nativeWebToolKinds: opts?.webAccessPolicy?.enabledKinds,
           isBackground: opts?.isBackground,
           toolProfile: opts?.toolProfile,
-          skillAllowedTools: session.getActiveSkillAllowedTools(),
+          skillAllowedTools: requestSkillAllowedTools,
           allMcpToolDefsForSkillAllowlist: connectedMcpToolDefs,
           backgroundExpectedResult: narrowedExpectedResult,
         };
@@ -774,7 +1257,7 @@ export class AgentEngine {
         const advertisedMode = useUnionToolAdvertisement
           ? buildUnionAgentMode([...BUILT_IN_MODES, session.agentMode])
           : session.agentMode;
-        const rawTools = this.toolRuntime
+        const advertisedTools = this.toolRuntime
           ? [
               ...this.toolRuntime.listTools({
                 ...listToolsRequestBase,
@@ -783,17 +1266,33 @@ export class AgentEngine {
               todoTool,
             ]
           : undefined;
+        const currentModeTools = this.toolRuntime
+          ? useUnionToolAdvertisement
+            ? [
+                ...this.toolRuntime.listTools({
+                  ...listToolsRequestBase,
+                  mode: session.agentMode,
+                }),
+                todoTool,
+              ]
+            : advertisedTools
+          : undefined;
+        const advertisedDisclosure = advertisedTools
+          ? createNativeToolDisclosureSnapshot(advertisedTools)
+          : undefined;
+        const nativeToolDisclosure = currentModeTools
+          ? createNativeToolDisclosureSnapshot(currentModeTools)
+          : undefined;
+        const inlineToolNames = advertisedDisclosure
+          ? new Set(advertisedDisclosure.inlineTools.map((tool) => tool.name))
+          : undefined;
+        const rawTools =
+          advertisedTools && inlineToolNames
+            ? advertisedTools.filter((tool) => inlineToolNames.has(tool.name))
+            : undefined;
         const modeAllowedToolNames =
-          useUnionToolAdvertisement && this.toolRuntime
-            ? new Set([
-                ...this.toolRuntime
-                  .listTools({
-                    ...listToolsRequestBase,
-                    mode: session.agentMode,
-                  })
-                  .map((tool) => tool.name),
-                todoTool.name,
-              ])
+          useUnionToolAdvertisement && currentModeTools
+            ? new Set(currentModeTools.map((tool) => tool.name))
             : undefined;
         const preservedContext = {
           toolNames: rawTools?.map((t) => t.name) ?? [],
@@ -810,7 +1309,7 @@ export class AgentEngine {
         logTiming(
           "tool setup",
           toolSetupStartedAt,
-          `tools=${rawTools?.length ?? 0} mcp=${connectedMcpToolDefs.length}`,
+          `tools=${rawTools?.length ?? 0} deferred=${nativeToolDisclosure?.deferredTools.length ?? 0} mcp=${connectedMcpToolDefs.length}`,
         );
 
         // --- Auto-condense check ---
@@ -836,11 +1335,23 @@ export class AgentEngine {
           return resolved;
         };
 
+        const projectedRequestLedger = buildCurrentRequestContextLedger(
+          session,
+          provider,
+          activeModel,
+          rawTools,
+          opts?.automaticMemoryContext,
+        ).ledger;
         if (
-          isOverCondenseThresholdInternal(session, provider, activeModel) &&
+          isOverCondenseThresholdInternal(
+            session,
+            provider,
+            activeModel,
+            projectedRequestLedger,
+          ) &&
           !hasUnansweredUserTurn(session)
         ) {
-          yield* this.condenseSession(
+          const condensed = yield* this.condenseSession(
             session,
             true,
             provider,
@@ -850,8 +1361,11 @@ export class AgentEngine {
               isBackground: opts?.isBackground,
               signal,
               onProviderAdmissionPhase: opts?.onProviderAdmissionPhase,
+              tools: rawTools,
+              automaticMemoryContext: opts?.automaticMemoryContext,
             },
           );
+          if (condensed) retainedToolResults.clear();
           if (signal.aborted) break;
           // Drain every pending interjection FIFO so multiple queued messages
           // all land at this break, each as its own user message.
@@ -946,6 +1460,8 @@ export class AgentEngine {
         let usageEstimated: boolean | undefined;
         let providerResponseId: string | undefined;
         let assistantMessage: CoreModelMessage | undefined;
+        let contextLedger: Readonly<ContextLedgerSnapshot> | undefined;
+        let retrievedMemoryTokens = 0;
         let modelStopReason: CoreModelStopReason | undefined;
         let firstTokenReceived = false;
         let usedPreviousResponseId = false;
@@ -953,6 +1469,9 @@ export class AgentEngine {
         let promptCacheRetention: "in_memory" | "24h" | undefined;
         let storeResponseState = false;
         let transportMonitor: ProviderStreamActivityMonitor | undefined;
+        const pendingRequestAttributionEvents: Array<
+          Extract<AgentEvent, { type: "request_context_attribution" }>
+        > = [];
         // Tool stream events are provisional until the provider completes the
         // response. Publishing them immediately leaves a permanently-running
         // tool card when the stream disconnects partway through its JSON, and
@@ -980,128 +1499,13 @@ export class AgentEngine {
             `messages=${effectiveMessages.length}`,
           );
 
-          const apiMessages: MessageParam[] = effectiveMessages.map(
-            (msg, effectiveIdx) => {
-              const { role, content, media, providerReplay } = msg;
-              if (media) {
-                this.log?.(
-                  `[media] found attached media at effectiveIdx=${effectiveIdx} role=${role} contentType=${typeof content === "string" ? "string" : Array.isArray(content) ? `array(${content.length})` : "other"} images=${media.images.length} documents=${media.documents.length}`,
-                );
-              }
-              if (media && role === "user") {
-                const imageBlocks: ImageBlock[] = media.images
-                  .map((img) => {
-                    // Try the declared mimeType first; if empty/unsupported,
-                    // infer from the filename extension as a fallback.
-                    let mediaType = toSupportedImageMediaType(img.mimeType);
-                    if (!mediaType && img.name) {
-                      const ext = img.name.split(".").pop()?.toLowerCase();
-                      const extMap: Record<string, string> = {
-                        png: "image/png",
-                        jpg: "image/jpeg",
-                        jpeg: "image/jpeg",
-                        gif: "image/gif",
-                        webp: "image/webp",
-                      };
-                      if (ext && extMap[ext]) {
-                        mediaType = toSupportedImageMediaType(extMap[ext]);
-                        this.log?.(
-                          `[media] inferred mimeType="${extMap[ext]}" from filename "${img.name}" (original mimeType="${img.mimeType}")`,
-                        );
-                      }
-                    }
-                    if (!mediaType) {
-                      this.log?.(
-                        `[media] skipping unsupported image type: "${img.mimeType}" name="${img.name}"`,
-                      );
-                      return null;
-                    }
-                    return {
-                      type: "image" as const,
-                      source: {
-                        type: "base64" as const,
-                        media_type: mediaType,
-                        data: img.base64,
-                      },
-                    };
-                  })
-                  .filter((b): b is ImageBlock => b !== null);
-
-                const textContent =
-                  typeof content === "string"
-                    ? content
-                    : Array.isArray(content)
-                      ? content
-                          .filter(
-                            (b): b is { type: "text"; text: string } =>
-                              b.type === "text",
-                          )
-                          .map((b) => b.text)
-                          .join("\n")
-                      : "";
-
-                // Preserve any existing non-text blocks (e.g. tool_result
-                // injected by injectSyntheticToolResults) alongside new media.
-                const existingBlocks: ContentBlock[] = Array.isArray(content)
-                  ? (content.filter((b) => b.type !== "text") as ContentBlock[])
-                  : [];
-
-                const blocks: ContentBlock[] = [
-                  ...(textContent
-                    ? [{ type: "text" as const, text: textContent }]
-                    : []),
-                  ...imageBlocks,
-                  ...media.documents.flatMap((doc) => {
-                    const mediaType = toCoreModelDocumentMediaType(
-                      doc.mimeType,
-                    );
-                    if (!mediaType) {
-                      this.log?.(
-                        `[media] skipping unsupported document type: "${doc.mimeType}" name="${doc.name}"`,
-                      );
-                      return [];
-                    }
-                    return [
-                      {
-                        type: "document" as const,
-                        source: {
-                          type: "base64" as const,
-                          media_type: mediaType,
-                          data: doc.base64,
-                        },
-                        title: doc.name,
-                      },
-                    ];
-                  }),
-                  ...existingBlocks,
-                ];
-                this.log?.(
-                  `[media] injected media into user message: blockTypes=[${blocks.map((b) => b.type).join(",")}] imageBlocks=${imageBlocks.length} existingBlocks=${existingBlocks.length}`,
-                );
-                return { role, content: blocks };
-              }
-              return {
-                role,
-                content,
-                ...(role === "assistant" && providerReplay
-                  ? { providerReplay }
-                  : {}),
-              };
-            },
-          );
-          // Mode instruction blocks are request-local user messages pinned to
-          // fixed conversation positions (see AgentSession.modeInstructionAnchors)
-          // so the system prompt and prompt-cache prefix stay stable across
-          // mode switches. Splice descending so earlier indices stay valid.
           const modeInsertions =
             session.buildModeInstructionInsertions?.(effectiveMessages) ?? [];
-          for (let i = modeInsertions.length - 1; i >= 0; i--) {
-            const insertion = modeInsertions[i]!;
-            apiMessages.splice(insertion.beforeIndex, 0, {
-              role: "user",
-              content: insertion.blockText,
-            });
-          }
+          const apiMessages = buildProviderMessages(
+            effectiveMessages,
+            modeInsertions,
+            this.log,
+          );
 
           // Empty-response recovery input is request-local. It must reach the
           // provider without becoming a persisted/user-visible chat message.
@@ -1111,6 +1515,39 @@ export class AgentEngine {
               content:
                 "Your previous response was empty. Continue from where you left off and provide the full response.",
             });
+          }
+
+          const modeInstructionTokens = estimateProviderMessageTokens(
+            modeInsertions.map((insertion) => ({
+              role: "user",
+              content: insertion.blockText,
+            })),
+          );
+          contextLedger = buildRequestContextLedger(
+            session,
+            capabilities,
+            estimateProviderMessageTokens(apiMessages),
+            modeInstructionTokens,
+            contextBreakdown.tools?.estimatedTokens ?? 0,
+            opts?.automaticMemoryContext?.estimatedTokens ?? 0,
+          );
+          const retrievedMemoryAllocation = getContextLedgerLayer(
+            contextLedger,
+            "retrieved_context",
+          );
+          if (
+            opts?.automaticMemoryContext?.rendering &&
+            retrievedMemoryAllocation?.allocatedTokens ===
+              opts.automaticMemoryContext.estimatedTokens
+          ) {
+            insertAutomaticMemoryContext(
+              apiMessages,
+              effectiveMessages,
+              modeInsertions,
+              opts.automaticMemoryContext,
+              logicalTurnUserMessage,
+            );
+            retrievedMemoryTokens = retrievedMemoryAllocation.allocatedTokens;
           }
 
           // Summary: count image/document blocks across all apiMessages only
@@ -1198,6 +1635,11 @@ export class AgentEngine {
               DEFAULT_PROVIDER_NO_PROGRESS_TIMEOUT_MS,
             requestController,
           );
+          const estimatedInputTokens = contextLedger.allocatedInputTokens;
+          const toolResultContextAttributions =
+            session.toolResultContextAttributions.map((item) => ({ ...item }));
+          const omittedToolResultContextAttributions =
+            session.omittedToolResultContextAttributions;
           const streamGen = provider.stream({
             model: activeModel,
             systemPrompt: session.systemPrompt,
@@ -1212,6 +1654,20 @@ export class AgentEngine {
             cache: currentCache,
             state: currentState,
             signal: requestController.signal,
+            onProviderRequestAttempt: ({ model }) => {
+              pendingRequestAttributionEvents.push({
+                type: "request_context_attribution",
+                requestId: randomUUID(),
+                requestKind: "agent",
+                model,
+                estimatedInputTokens,
+                toolResultContextAttributions,
+                omittedToolResultContextAttributions,
+                pinnedMemoryTokens: 0,
+                retrievedMemoryTokens,
+                contextLedger,
+              });
+            },
             onTransportActivity: transportMonitor.recordActivity,
           });
           const streamIterator = streamGen[Symbol.asyncIterator]();
@@ -1219,6 +1675,9 @@ export class AgentEngine {
           try {
             while (true) {
               const next = await transportMonitor.next(streamIterator);
+              while (pendingRequestAttributionEvents.length > 0) {
+                yield pendingRequestAttributionEvents.shift()!;
+              }
               if (next.done) break;
               const event = next.value;
               if (signal.aborted) break;
@@ -1237,6 +1696,10 @@ export class AgentEngine {
                 case "model_fallback":
                   activeModel = event.effectiveModel;
                   session.model = activeModel;
+                  await opts?.onModelFallback?.({
+                    requestedModel: event.requestedModel,
+                    effectiveModel: event.effectiveModel,
+                  });
                   yield {
                     type: "warning",
                     message: `${event.requestedModel} is unavailable for this account. Switched to ${event.effectiveModel}.`,
@@ -1340,6 +1803,9 @@ export class AgentEngine {
             }
           }
         } catch (streamErr: unknown) {
+          while (pendingRequestAttributionEvents.length > 0) {
+            yield pendingRequestAttributionEvents.shift()!;
+          }
           if (signal.aborted) break;
           const streamErrMsg = buildErrorMessage(streamErr);
           if (streamErr instanceof ProviderStreamTimeoutError) {
@@ -1441,10 +1907,13 @@ export class AgentEngine {
                   isBackground: opts?.isBackground,
                   signal,
                   onProviderAdmissionPhase: opts?.onProviderAdmissionPhase,
+                  tools: rawTools,
+                  automaticMemoryContext: opts?.automaticMemoryContext,
                 },
               );
               if (signal.aborted) break;
               if (condensed) {
+                retainedToolResults.clear();
                 continue;
               }
             }
@@ -1542,6 +2011,10 @@ export class AgentEngine {
         const accumulatedEstimatedTokensBySource = {
           ...session.estimatedAccumulationBySource,
         };
+        const toolResultContextAttributions =
+          session.toolResultContextAttributions.map((item) => ({ ...item }));
+        const omittedToolResultContextAttributions =
+          session.omittedToolResultContextAttributions;
         session.addUsage(
           inputTokens,
           outputTokens,
@@ -1554,6 +2027,10 @@ export class AgentEngine {
         // For context window tracking, report the total: uncached + cache reads + cache writes.
         const totalInputTokens =
           inputTokens + cacheReadTokens + cacheCreationTokens;
+        session.contextBreakdown = {
+          ...contextBreakdown,
+          contextLedger,
+        };
 
         yield {
           type: "api_request",
@@ -1575,9 +2052,16 @@ export class AgentEngine {
           promptCacheRetention,
           storeResponseState,
           providerResponseId,
-          contextBreakdown,
+          contextBreakdown: {
+            ...contextBreakdown,
+            contextLedger,
+          },
           accumulatedEstimatedTokens,
           accumulatedEstimatedTokensBySource,
+          toolResultContextAttributions,
+          omittedToolResultContextAttributions,
+          pinnedMemoryTokens: 0,
+          retrievedMemoryTokens,
         };
 
         const committedAssistantMessage: CoreModelMessage =
@@ -1738,10 +2222,13 @@ export class AgentEngine {
                 isBackground: opts?.isBackground,
                 signal,
                 onProviderAdmissionPhase: opts?.onProviderAdmissionPhase,
+                tools: rawTools,
+                automaticMemoryContext: opts?.automaticMemoryContext,
               },
             );
             if (signal.aborted) break;
             if (condensed) {
+              retainedToolResults.clear();
               emptyResponseRetryCount = 0;
               continue;
             }
@@ -1826,24 +2313,6 @@ export class AgentEngine {
             structuredClone(committedAssistantMessage as AgentMessage),
           );
         }
-        for (const block of toolUseBlocks) {
-          session.currentTool = block.name;
-          yield {
-            type: "tool_start",
-            toolCallId: block.id,
-            toolName: block.name,
-            input: block.input,
-          };
-          for (const partialJson of pendingToolInputDeltas.get(block.id) ??
-            []) {
-            yield {
-              type: "tool_input_delta",
-              toolCallId: block.id,
-              partialJson,
-            };
-          }
-        }
-
         // Arm recovery for the turn's ask_user call even when the model issued
         // sibling tool calls in parallel — the whole turn lives only in memory
         // until every tool resolves, so a reload while the question is pending
@@ -1874,6 +2343,9 @@ export class AgentEngine {
           toolProfile: opts?.toolProfile,
           availableToolNames: new Set(rawTools?.map((tool) => tool.name) ?? []),
           modeAllowedToolNames,
+          nativeToolDisclosure,
+          skillAllowedTools: requestSkillAllowedTools,
+          skillAuthority: requestSkillAuthority,
           toolCallBudget,
           commandExecutionPolicy:
             session.agentMode.toolGroups.includes("read-only-command") ||
@@ -1902,14 +2374,57 @@ export class AgentEngine {
           getSessionImages: () =>
             collectSessionImages(session.getAllMessages()),
         };
+        const resolvedToolUseBlocks: ResolvedToolUseBlock[] = toolUseBlocks.map(
+          (block) => {
+            const providerInput = block.input as Record<string, unknown>;
+            const resolved: ResolvedAgentToolCall =
+              this.toolRuntime?.resolveToolCall?.({
+                name: block.name,
+                input: providerInput,
+                context: sessionToolContext,
+              }) ?? {
+                providerName: block.name,
+                providerInput,
+                canonicalName: block.name,
+                canonicalInput: providerInput,
+                route: "direct",
+              };
+            return {
+              ...block,
+              name: resolved.canonicalName,
+              input: resolved.canonicalInput,
+              providerName: block.name,
+              providerInput,
+            };
+          },
+        );
+        for (const block of resolvedToolUseBlocks) {
+          session.currentTool = block.name;
+          yield {
+            type: "tool_start",
+            toolCallId: block.id,
+            toolName: block.name,
+            input: block.input,
+          };
+          if (block.providerName === block.name) {
+            for (const partialJson of pendingToolInputDeltas.get(block.id) ??
+              []) {
+              yield {
+                type: "tool_input_delta",
+                toolCallId: block.id,
+                partialJson,
+              };
+            }
+          }
+        }
 
         // Execute tools (parallel for read-only, sequential for write)
         session.status = "tool_executing";
 
         // Separate internal tools (todo_write) from dispatch tools
         const internalResults: ToolCallResult[] = [];
-        const dispatchBlocks: ToolUseBlock[] = [];
-        for (const block of toolUseBlocks) {
+        const dispatchBlocks: ResolvedToolUseBlock[] = [];
+        for (const block of resolvedToolUseBlocks) {
           if (block.name === TODO_TOOL_NAME) {
             const start = Date.now();
             const { content, todos } = handleTodoWrite(
@@ -1939,7 +2454,7 @@ export class AgentEngine {
         }
 
         const toolUseBlocksById = new Map(
-          toolUseBlocks.map((block) => [block.id, block]),
+          resolvedToolUseBlocks.map((block) => [block.id, block]),
         );
         let dispatchResults: ToolCallResult[] = [];
         if (dispatchBlocks.length > 0) {
@@ -1984,17 +2499,11 @@ export class AgentEngine {
             session,
             (tr) => {
               const toolUseBlock = toolUseBlocksById.get(tr.tool_use_id);
-              tr.historyContent = toolResultToContent(
-                tr.result,
-                tr.tool_use_id,
-                tr.toolName,
-              );
               pushDispatchEvent({
                 type: "tool_result" as const,
                 toolCallId: tr.tool_use_id,
                 toolName: tr.toolName,
                 result: tr.result.content,
-                historyContent: tr.historyContent,
                 durationMs: tr.durationMs,
                 input: toolUseBlock?.input,
                 mcpApprovalPromotion: tr.mcpApprovalPromotion,
@@ -2088,6 +2597,24 @@ export class AgentEngine {
           return dispatchResultsById.get(block.id)!;
         });
 
+        // Finalize retained history before the atomic assistant/tool-result commit
+        // so artifact I/O can never leave orphaned tool_use blocks in the session.
+        const toolResultContents: CoreModelToolResultBlock["content"][] = [];
+        for (const tr of toolResults) {
+          const canonicalContent =
+            tr.historyContent ??
+            toolResultToContent(tr.result, tr.tool_use_id, tr.toolName);
+          tr.historyContent = await retainToolResultHistoryContent(
+            tr.result,
+            canonicalContent,
+            tr.tool_use_id,
+            tr.toolName,
+            retainedToolResultRunId,
+            retainedToolResults,
+          );
+          toolResultContents.push(tr.historyContent);
+        }
+
         // Append assistant turn + tool results atomically — no async gap between
         // them so the session is never left with orphaned tool_use blocks.
         const finalMarkerForTurn = pendingFinalMarker;
@@ -2097,11 +2624,6 @@ export class AgentEngine {
           yield { type: "final_marker", marker: finalMarkerForTurn };
           pendingFinalMarker = null;
         }
-        const toolResultContents = toolResults.map(
-          (tr) =>
-            tr.historyContent ??
-            toolResultToContent(tr.result, tr.tool_use_id, tr.toolName),
-        );
         session.appendToolResults(
           toolResults.map((tr, index) => ({
             type: "tool_result" as const,
@@ -2116,9 +2638,14 @@ export class AgentEngine {
         // Feed estimated token size of tool results to the running accumulator,
         // attributed per tool so jump telemetry can name the contributors.
         toolResults.forEach((tr, index) => {
-          session.addEstimatedTokens(
-            estimateToolResultContentChars([toolResultContents[index]!]),
-            `tool:${tr.toolName}`,
+          const measurement = measureToolResultContentForAttribution(
+            toolResultContents[index]!,
+          );
+          session.addToolResultContextAttribution(
+            tr.tool_use_id,
+            tr.toolName,
+            measurement.retainedContent,
+            measurement.estimatedTokens,
           );
         });
 
@@ -2165,7 +2692,7 @@ export class AgentEngine {
           !signal.aborted &&
           isOverCondenseThresholdInternal(session, provider, activeModel)
         ) {
-          yield* this.condenseSession(
+          const condensed = yield* this.condenseSession(
             session,
             true,
             provider,
@@ -2175,8 +2702,11 @@ export class AgentEngine {
               isBackground: opts?.isBackground,
               signal,
               onProviderAdmissionPhase: opts?.onProviderAdmissionPhase,
+              tools: rawTools,
+              automaticMemoryContext: opts?.automaticMemoryContext,
             },
           );
+          if (condensed) retainedToolResults.clear();
         }
 
         // Inject any pending user interjections between tool batches,
@@ -2280,12 +2810,13 @@ export class AgentEngine {
   }
 
   private async executeToolCalls(
-    calls: ToolUseBlock[],
+    calls: ResolvedToolUseBlock[],
     signal: AbortSignal,
     ctx: AgentToolExecutionContext,
     session: AgentSession,
     onToolComplete?: (result: ToolCallResult) => void,
   ): Promise<Array<ToolCallResult>> {
+    const batchSkillAllowedTools = ctx.skillAllowedTools;
     const resultSlots = Array.from<ToolCallResult | null>({
       length: calls.length,
     }).fill(null);
@@ -2347,7 +2878,7 @@ export class AgentEngine {
     }
 
     const runTrackedToolCall = async (
-      call: ToolUseBlock,
+      call: ResolvedToolUseBlock,
       start: number,
     ): Promise<ToolCallResult> => {
       const trackedCall = trackedCalls.get(call.id);
@@ -2365,13 +2896,26 @@ export class AgentEngine {
                   ...ctx,
                   sessionId: session.id,
                   toolCallId: call.id,
+                  ...(call.providerName !== call.name
+                    ? {
+                        providerToolName: call.providerName,
+                        providerToolInput: call.providerInput,
+                      }
+                    : {}),
                   trackerCtx,
                   toolAbortSignal: controller?.signal,
-                  getAdvertisedSkills: () => session.getAdvertisedSkills(),
+                  getAdvertisedSkills: () =>
+                    session.getAdvertisedSkills().map((skill) => ({
+                      id: skill.id,
+                      name: skill.name,
+                      revision: skill.revision,
+                      skillPath: skill.skillPath,
+                      realSkillPath: skill.provenance.realSkillPath,
+                    })),
                   getAdvertisedRules: () => session.getAdvertisedRules(),
-                  onSkillLoad: (skillName: string) =>
-                    session.trackLoadedSkill(skillName),
-                  skillAllowedTools: session.getActiveSkillAllowedTools(),
+                  onSkillLoad: (activation) =>
+                    session.trackLoadedSkill(activation),
+                  skillAllowedTools: batchSkillAllowedTools,
                 },
               }),
               forcePromise,
@@ -2383,13 +2927,26 @@ export class AgentEngine {
                 ...ctx,
                 sessionId: session.id,
                 toolCallId: call.id,
+                ...(call.providerName !== call.name
+                  ? {
+                      providerToolName: call.providerName,
+                      providerToolInput: call.providerInput,
+                    }
+                  : {}),
                 trackerCtx,
                 toolAbortSignal: controller?.signal,
-                getAdvertisedSkills: () => session.getAdvertisedSkills(),
+                getAdvertisedSkills: () =>
+                  session.getAdvertisedSkills().map((skill) => ({
+                    id: skill.id,
+                    name: skill.name,
+                    revision: skill.revision,
+                    skillPath: skill.skillPath,
+                    realSkillPath: skill.provenance.realSkillPath,
+                  })),
                 getAdvertisedRules: () => session.getAdvertisedRules(),
-                onSkillLoad: (skillName: string) =>
-                  session.trackLoadedSkill(skillName),
-                skillAllowedTools: session.getActiveSkillAllowedTools(),
+                onSkillLoad: (activation) =>
+                  session.trackLoadedSkill(activation),
+                skillAllowedTools: batchSkillAllowedTools,
               },
             }));
         return {
@@ -2529,9 +3086,11 @@ export class AgentEngine {
     opts?: {
       isBackground?: boolean;
       signal?: AbortSignal;
+      automaticMemoryContext?: Readonly<AutomaticMemoryContext>;
       onProviderAdmissionPhase?: (
         phase: "queued_for_provider" | "running",
       ) => void;
+      tools?: ToolDefinition[];
     },
   ): AsyncGenerator<AgentEvent, boolean> {
     const condenseStartedAt = Date.now();
@@ -2562,7 +3121,12 @@ export class AgentEngine {
       opts?.onProviderAdmissionPhase?.("running");
     }
 
-    let result: Awaited<ReturnType<typeof summarizeConversation>>;
+    const requestAttributionEvents: Array<
+      Extract<AgentEvent, { type: "request_context_attribution" }>
+    > = [];
+    let result: Awaited<ReturnType<typeof summarizeConversation>> | undefined;
+    let summarizeError: unknown;
+    let summarizeThrew = false;
     try {
       result = await summarizeConversation(
         {
@@ -2574,12 +3138,34 @@ export class AgentEngine {
           filesRead: [...session.filesRead],
           cwd: session.requireProjectRoot(),
           preservedContext,
+          onProviderRequest: (request) => {
+            requestAttributionEvents.push({
+              type: "request_context_attribution",
+              requestId: request.requestId,
+              requestKind: "condense",
+              model: request.model,
+              estimatedInputTokens: request.estimatedInputTokens,
+              // Condense converts tool carriers into bounded summary-source text,
+              // so original call-level detail would not describe this request exactly.
+              toolResultContextAttributions: [],
+              omittedToolResultContextAttributions: 0,
+              pinnedMemoryTokens: 0,
+              retrievedMemoryTokens: 0,
+            });
+          },
         },
         prevInputTokens,
       );
+    } catch (error) {
+      summarizeThrew = true;
+      summarizeError = error;
     } finally {
       permit.release();
     }
+
+    for (const event of requestAttributionEvents) yield event;
+    if (summarizeThrew) throw summarizeError;
+    if (!result) throw new Error("Condense summarizer returned no result.");
 
     if (result.error) {
       yield {
@@ -2609,15 +3195,33 @@ export class AgentEngine {
           }
         : msg,
     );
-
     session.replaceMessages(messagesWithUiHints);
-    // Reset token accounting to the estimated post-condense request size so we
-    // don't immediately re-trigger from stale post-response estimates.
-    session.lastInputTokens = result.newInputTokens;
+    const projection = buildPostCondenseProjection(
+      session,
+      resolvedProvider,
+      activeModel,
+      opts?.tools,
+      opts?.automaticMemoryContext,
+    );
+    result.newInputTokens = projection.estimatedInputTokens;
+    const metadata = result.metadata
+      ? { ...result.metadata, postCondenseProjection: projection }
+      : { postCondenseProjection: projection };
+    for (const message of messagesWithUiHints) {
+      if (message.isSummary && message.uiHint?.condense) {
+        message.uiHint.condense.newInputTokens =
+          projection.estimatedInputTokens;
+      }
+    }
+    // Reset token accounting to the provider-comparable projected request input
+    // so we don't immediately re-trigger from a summary-only underestimate.
+    session.lastInputTokens = projection.estimatedInputTokens;
     session.lastOutputTokens = 0;
     session.lastCacheReadTokens = 0;
     session.estimatedAccumulatedTokens = 0;
     session.estimatedAccumulationBySource = {};
+    session.toolResultContextAttributions = [];
+    session.omittedToolResultContextAttributions = 0;
 
     yield {
       type: "condense",
@@ -2625,7 +3229,7 @@ export class AgentEngine {
       prevInputTokens: result.prevInputTokens,
       newInputTokens: result.newInputTokens,
       validationWarnings: result.validationWarnings,
-      metadata: result.metadata,
+      metadata,
       durationMs: condenseDurationMs,
     };
     return true;

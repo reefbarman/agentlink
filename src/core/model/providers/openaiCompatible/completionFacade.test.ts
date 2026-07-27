@@ -220,6 +220,7 @@ describe("streamOpenAiCompatibleCompletion", () => {
 
   it("retries retryable failures before output and honors Retry-After", async () => {
     const delays: number[] = [];
+    const attempts: string[] = [];
     const fetch = vi
       .fn<OpenAiCompatibleFetch>()
       .mockResolvedValueOnce(
@@ -243,7 +244,9 @@ describe("streamOpenAiCompatibleCompletion", () => {
       streamOpenAiCompatibleCompletion({
         profile: profile(),
         apiKey: "secret",
-        request: streamRequest(),
+        request: streamRequest({
+          onProviderRequestAttempt: ({ model }) => attempts.push(model),
+        }),
         fetch,
         retryDelay: async (delay) => {
           delays.push(delay);
@@ -252,6 +255,7 @@ describe("streamOpenAiCompatibleCompletion", () => {
     );
 
     expect(fetch).toHaveBeenCalledTimes(2);
+    expect(attempts).toEqual(["wire/model", "wire/model"]);
     expect(delays).toEqual([42]);
     expect(events).toContainEqual({ type: "text_delta", text: "ok" });
   });
@@ -457,15 +461,19 @@ describe("streamOpenAiCompatibleCompletion", () => {
   });
 
   it("rejects missing credentials, unknown models, and bodyless success responses", async () => {
+    const attempts: string[] = [];
     await expect(
       collectEvents(
         streamOpenAiCompatibleCompletion({
           profile: profile(),
-          request: streamRequest(),
+          request: streamRequest({
+            onProviderRequestAttempt: ({ model }) => attempts.push(model),
+          }),
           fetch: async () => sseResponse(["data: [DONE]\n\n"]),
         }),
       ),
     ).rejects.toMatchObject({ authentication: true, retryable: false });
+    expect(attempts).toEqual([]);
 
     await expect(
       collectEvents(
@@ -483,12 +491,15 @@ describe("streamOpenAiCompatibleCompletion", () => {
         streamOpenAiCompatibleCompletion({
           profile: profile(),
           apiKey: "secret",
-          request: streamRequest(),
+          request: streamRequest({
+            onProviderRequestAttempt: ({ model }) => attempts.push(model),
+          }),
           fetch: async () => new Response(null, { status: 200 }),
           maxRetries: 0,
         }),
       ),
     ).rejects.toThrow("did not include a stream body");
+    expect(attempts).toEqual(["wire/model"]);
   });
 });
 

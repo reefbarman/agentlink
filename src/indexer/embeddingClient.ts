@@ -1,18 +1,24 @@
 import { createEmbeddingRequest } from "./embeddingConfig.js";
+import { parseRetryAfterMs } from "../core/model/providers/openaiCompatible/errors.js";
 import { sleep } from "../util/sleep.js";
 
 const EMBEDDING_URL = "https://api.openai.com/v1/embeddings";
 
 interface EmbeddingResponseItem {
   index?: number;
-  embedding: number[];
+  embedding?: unknown;
 }
 
 export interface EmbeddingClientOptions {
   maxRetries: number;
   retryFetchErrors?: boolean;
   shouldRetryStatus?: (status: number) => boolean;
-  retryDelayMs?: (attempt: number, random: number) => number;
+  retryDelayMs?: (
+    attempt: number,
+    random: number,
+    retryAfterMs?: number,
+  ) => number;
+  now?: () => number;
   refreshBearerToken?: () => Promise<string>;
   bisectOnBadRequest?: boolean;
   sortByIndex?: boolean;
@@ -59,14 +65,17 @@ export async function requestEmbeddings(
       if (options.sortByIndex && Array.isArray(input)) {
         return getIndexedEmbeddings(data.data, input.length);
       }
-      return data.data.map((item) => item.embedding);
+      return data.data.map((item) => requireFiniteEmbedding(item.embedding));
     }
 
     if (
       attempt < options.maxRetries &&
       options.shouldRetryStatus?.(response.status)
     ) {
-      await sleepImpl(getRetryDelay(options, attempt, random));
+      const retryAfterMs = response.headers
+        ? parseRetryAfterMs(response.headers, options.now?.() ?? Date.now())
+        : undefined;
+      await sleepImpl(getRetryDelay(options, attempt, random, retryAfterMs));
       continue;
     }
 
@@ -115,20 +124,31 @@ function getIndexedEmbeddings(
       item.index === undefined ||
       item.index < 0 ||
       item.index >= expectedCount ||
-      !Array.isArray(item.embedding) ||
       embeddings[item.index] !== undefined
     ) {
       throw new Error("OpenAI API returned invalid indexed embedding data");
     }
-    embeddings[item.index] = item.embedding;
+    embeddings[item.index] = requireFiniteEmbedding(item.embedding);
   }
   return embeddings;
+}
+
+function requireFiniteEmbedding(value: unknown): number[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((item) => typeof item !== "number" || !Number.isFinite(item))
+  ) {
+    throw new Error("OpenAI API returned invalid embedding data");
+  }
+  return value;
 }
 
 function getRetryDelay(
   options: EmbeddingClientOptions,
   attempt: number,
   random: () => number,
+  retryAfterMs?: number,
 ): number {
-  return options.retryDelayMs?.(attempt, random()) ?? 0;
+  return options.retryDelayMs?.(attempt, random(), retryAfterMs) ?? 0;
 }

@@ -8,7 +8,7 @@ import {
   confirmCacheCheckpoint,
   confirmCollectionDeleted,
   confirmCollectionRecreated,
-  confirmOldPointDeletion,
+  confirmOldRecordDeletion,
   confirmRecoveryCleanup,
   confirmRecoveryInvalidation,
   confirmStructuralCheckpoint,
@@ -27,7 +27,7 @@ function indexedState(): FileIndexState {
     committed: {
       generation: "generation-1",
       hash: "old-hash",
-      pointIds: ["old-1", "old-2"],
+      recordIds: ["old-1", "old-2"],
     },
     operation: null,
     structuralGeneration: "generation-1",
@@ -43,29 +43,29 @@ describe("per-file index state", () => {
       generation: "generation-1",
     });
 
-    expect(prepared.committed?.pointIds).toEqual(["old-1", "old-2"]);
+    expect(prepared.committed?.recordIds).toEqual(["old-1", "old-2"]);
     expect(getJournalIntent(prepared)).toEqual({
       operationId: "remove-1",
       file: "src/example.ts",
       kind: "remove",
       generation: "generation-1",
       targetHash: null,
-      oldPointIds: ["old-1", "old-2"],
+      oldRecordIds: ["old-1", "old-2"],
       intendedBatches: [],
     });
     expect(planFileRecovery(prepared)).toEqual({
-      deletePointIds: ["old-1", "old-2"],
+      deleteRecordIds: ["old-1", "old-2"],
       finalizeRemoval: true,
       repairStructural: false,
       reindex: false,
     });
 
-    const deleted = confirmOldPointDeletion(prepared);
-    expect(deleted.committed?.pointIds).toEqual(["old-1", "old-2"]);
+    const deleted = confirmOldRecordDeletion(prepared);
+    expect(deleted.committed?.recordIds).toEqual(["old-1", "old-2"]);
     expect(getVisibleCommittedFile(deleted)).toBeNull();
     expect(deleted.structuralStatus).toBe("unavailable");
     expect(planFileRecovery(deleted)).toEqual({
-      deletePointIds: ["old-1", "old-2"],
+      deleteRecordIds: ["old-1", "old-2"],
       finalizeRemoval: true,
       repairStructural: false,
       reindex: false,
@@ -74,7 +74,7 @@ describe("per-file index state", () => {
     const checkpointed = confirmCacheCheckpoint(deleted);
     expect(checkpointed.committed).toBeNull();
     expect(planFileRecovery(checkpointed)).toEqual({
-      deletePointIds: ["old-1", "old-2"],
+      deleteRecordIds: ["old-1", "old-2"],
       finalizeRemoval: true,
       repairStructural: false,
       reindex: false,
@@ -91,14 +91,14 @@ describe("per-file index state", () => {
       generation: "generation-2",
       targetHash: "new-hash",
       intendedBatches: [
-        { batch: 0, pointIds: ["new-1", "new-2"] },
-        { batch: 1, pointIds: ["new-3"] },
+        { batch: 0, recordIds: ["new-1", "new-2"] },
+        { batch: 1, recordIds: ["new-3"] },
       ],
     });
 
     expect(prepared.committed?.hash).toBe("old-hash");
     expect(getVisibleCommittedFile(prepared)).toBeNull();
-    const deleted = confirmOldPointDeletion(prepared);
+    const deleted = confirmOldRecordDeletion(prepared);
     expect(deleted.committed?.hash).toBe("old-hash");
     expect(getVisibleCommittedFile(deleted)).toBeNull();
     expect(deleted.structuralStatus).toBe("stale");
@@ -107,10 +107,10 @@ describe("per-file index state", () => {
     expect(partial.committed?.hash).toBe("old-hash");
     expect(getVisibleCommittedFile(partial)).toBeNull();
     expect(() => confirmCacheCheckpoint(partial)).toThrow(
-      "All intended point batches must be confirmed",
+      "All intended record batches must be confirmed",
     );
     expect(planFileRecovery(partial)).toEqual({
-      deletePointIds: ["old-1", "old-2", "new-1", "new-2", "new-3"],
+      deleteRecordIds: ["old-1", "old-2", "new-1", "new-2", "new-3"],
       finalizeRemoval: false,
       repairStructural: false,
       reindex: true,
@@ -121,7 +121,7 @@ describe("per-file index state", () => {
     expect(checkpointed.committed).toEqual({
       generation: "generation-2",
       hash: "new-hash",
-      pointIds: ["new-1", "new-2", "new-3"],
+      recordIds: ["new-1", "new-2", "new-3"],
     });
     expect(checkpointed.structuralStatus).toBe("stale");
     expect(getVisibleCommittedFile(checkpointed)).toBeNull();
@@ -136,18 +136,18 @@ describe("per-file index state", () => {
     ).toEqual(checkpointed.committed);
   });
 
-  it("uses every predeclared point ID for recovery at each replacement crash prefix", () => {
+  it("uses every predeclared record ID for recovery at each replacement crash prefix", () => {
     const prepared = beginFileOperation(indexedState(), {
       operationId: "replace-crash",
       kind: "replace",
       generation: "generation-2",
       targetHash: "new-hash",
       intendedBatches: [
-        { batch: 0, pointIds: ["new-1"] },
-        { batch: 1, pointIds: ["new-2"] },
+        { batch: 0, recordIds: ["new-1"] },
+        { batch: 1, recordIds: ["new-2"] },
       ],
     });
-    const afterOldDelete = confirmOldPointDeletion(prepared);
+    const afterOldDelete = confirmOldRecordDeletion(prepared);
     const afterFirstUpsert = confirmUpsertBatch(afterOldDelete, 0);
     const afterAllUpserts = confirmUpsertBatch(afterFirstUpsert, 1);
 
@@ -158,7 +158,7 @@ describe("per-file index state", () => {
       afterAllUpserts,
     ]) {
       expect(planFileRecovery(state)).toEqual({
-        deletePointIds: ["old-1", "old-2", "new-1", "new-2"],
+        deleteRecordIds: ["old-1", "old-2", "new-1", "new-2"],
         finalizeRemoval: false,
         repairStructural: false,
         reindex: true,
@@ -167,7 +167,7 @@ describe("per-file index state", () => {
 
     const checkpointed = confirmCacheCheckpoint(afterAllUpserts);
     expect(planFileRecovery(checkpointed)).toEqual({
-      deletePointIds: [],
+      deleteRecordIds: [],
       finalizeRemoval: false,
       repairStructural: true,
       reindex: false,
@@ -190,14 +190,14 @@ describe("per-file index state", () => {
         kind: "replace",
         generation: "generation-2",
         targetHash: "new-hash",
-        intendedBatches: [{ batch: 0, pointIds: ["new-1", "new-2"] }],
+        intendedBatches: [{ batch: 0, recordIds: ["new-1", "new-2"] }],
       });
       const recovered: FileIndexState = {
         ...prepared,
         committed: {
           generation: "generation-2",
           hash: "new-hash",
-          pointIds: ["new-1", "new-2"],
+          recordIds: ["new-1", "new-2"],
         },
         structuralGeneration,
         structuralStatus,
@@ -208,7 +208,7 @@ describe("per-file index state", () => {
         false,
       );
       expect(planFileRecovery(recovered)).toEqual({
-        deletePointIds: [],
+        deleteRecordIds: [],
         finalizeRemoval: false,
         repairStructural: true,
         reindex: false,
@@ -219,7 +219,7 @@ describe("per-file index state", () => {
       const repaired = confirmStructuralCheckpoint(recovered);
       expect(repaired.structuralGeneration).toBe("generation-2");
       expect(planFileRecovery(repaired)).toEqual({
-        deletePointIds: [],
+        deleteRecordIds: [],
         finalizeRemoval: false,
         repairStructural: false,
         reindex: false,
@@ -236,14 +236,14 @@ describe("per-file index state", () => {
       kind: "replace",
       generation: "generation-2",
       targetHash: "new-hash",
-      intendedBatches: [{ batch: 0, pointIds: ["new-1"] }],
+      intendedBatches: [{ batch: 0, recordIds: ["new-1"] }],
     });
     const recovered: FileIndexState = {
       ...prepared,
       committed: {
         generation: "generation-2",
         hash: "new-hash",
-        pointIds: ["new-1"],
+        recordIds: ["new-1"],
       },
       structuralGeneration: "generation-2",
       structuralStatus: "current",
@@ -252,7 +252,7 @@ describe("per-file index state", () => {
     expect(recovered.operation?.oldDeleteConfirmed).toBe(false);
     expect(recovered.operation?.intendedBatches[0].upsertConfirmed).toBe(false);
     expect(planFileRecovery(recovered)).toEqual({
-      deletePointIds: [],
+      deleteRecordIds: [],
       finalizeRemoval: false,
       repairStructural: false,
       reindex: false,
@@ -275,7 +275,7 @@ describe("per-file index state", () => {
 
     expect(recovered.operation?.oldDeleteConfirmed).toBe(false);
     expect(planFileRecovery(recovered)).toEqual({
-      deletePointIds: ["old-1", "old-2"],
+      deleteRecordIds: ["old-1", "old-2"],
       finalizeRemoval: true,
       repairStructural: false,
       reindex: false,
@@ -283,47 +283,47 @@ describe("per-file index state", () => {
     expect(() => clearCheckpointedOperation(recovered)).toThrow(
       "Cannot clear an operation before cache checkpoint",
     );
-    const replayed = confirmOldPointDeletion(recovered);
+    const replayed = confirmOldRecordDeletion(recovered);
     expect(clearCheckpointedOperation(replayed).operation).toBeNull();
   });
 
   it.each([
     ["generation", { generation: "generation-3" }],
     ["hash", { hash: "other-hash" }],
-    ["point IDs", { pointIds: ["new-2", "new-1"] }],
+    ["record IDs", { recordIds: ["new-2", "new-1"] }],
   ])("cleans up when recovered cache %s do not prove commit", (_, patch) => {
     const prepared = beginFileOperation(indexedState(), {
       operationId: "replace-cache-mismatch",
       kind: "replace",
       generation: "generation-2",
       targetHash: "new-hash",
-      intendedBatches: [{ batch: 0, pointIds: ["new-1", "new-2"] }],
+      intendedBatches: [{ batch: 0, recordIds: ["new-1", "new-2"] }],
     });
     const recovered = {
       ...prepared,
       committed: {
         generation: "generation-2",
         hash: "new-hash",
-        pointIds: ["new-1", "new-2"],
+        recordIds: ["new-1", "new-2"],
         ...patch,
       },
     };
 
     expect(planFileRecovery(recovered)).toEqual({
-      deletePointIds: ["old-1", "old-2", "new-1", "new-2"],
+      deleteRecordIds: ["old-1", "old-2", "new-1", "new-2"],
       finalizeRemoval: false,
       repairStructural: false,
       reindex: true,
     });
   });
 
-  it("checkpoints conservative replacement invalidation before clearing its journal", () => {
+  it("checkrecords conservative replacement invalidation before clearing its journal", () => {
     const prepared = beginFileOperation(indexedState(), {
       operationId: "replace-invalidate",
       kind: "replace",
       generation: "generation-2",
       targetHash: "new-hash",
-      intendedBatches: [{ batch: 0, pointIds: ["new-1"] }],
+      intendedBatches: [{ batch: 0, recordIds: ["new-1"] }],
     });
     expect(() => confirmRecoveryInvalidation(prepared)).toThrow(
       "Full recovery cleanup must be confirmed before invalidation",
@@ -343,7 +343,7 @@ describe("per-file index state", () => {
       kind: "replace",
       generation: "generation-2",
       targetHash: "new-hash",
-      intendedBatches: [{ batch: 0, pointIds: ["new-1"] }],
+      intendedBatches: [{ batch: 0, recordIds: ["new-1"] }],
     });
     const restarted: FileIndexState = {
       ...prepared,
@@ -354,7 +354,7 @@ describe("per-file index state", () => {
 
     expect(restarted.operation?.recoveryInvalidationConfirmed).toBe(false);
     expect(planFileRecovery(restarted)).toEqual({
-      deletePointIds: ["old-1", "old-2", "new-1"],
+      deleteRecordIds: ["old-1", "old-2", "new-1"],
       finalizeRemoval: false,
       repairStructural: false,
       reindex: true,
@@ -375,11 +375,11 @@ describe("per-file index state", () => {
       generation: "generation-2",
       targetHash: "new-hash",
       intendedBatches: [
-        { batch: 0, pointIds: ["new-1"] },
-        { batch: 1, pointIds: ["new-2"] },
+        { batch: 0, recordIds: ["new-1"] },
+        { batch: 1, recordIds: ["new-2"] },
       ],
     });
-    const oldDeleted = confirmOldPointDeletion(prepared);
+    const oldDeleted = confirmOldRecordDeletion(prepared);
     const partial = confirmUpsertBatch(oldDeleted, 0);
 
     expect(partial.operation?.oldDeleteConfirmed).toBe(true);
@@ -399,9 +399,9 @@ describe("per-file index state", () => {
       kind: "replace",
       generation: "generation-2",
       targetHash: "new-hash",
-      intendedBatches: [{ batch: 0, pointIds: ["new-1"] }],
+      intendedBatches: [{ batch: 0, recordIds: ["new-1"] }],
     });
-    const cleaned = confirmRecoveryCleanup(confirmOldPointDeletion(prepared));
+    const cleaned = confirmRecoveryCleanup(confirmOldRecordDeletion(prepared));
     const invalidated = confirmRecoveryInvalidation(cleaned);
     expect(invalidated.operation?.recoveryCleanupConfirmed).toBe(true);
     expect(invalidated.operation?.recoveryInvalidationConfirmed).toBe(true);
@@ -424,7 +424,7 @@ describe("per-file index state", () => {
       kind: "replace",
       generation: "generation-2",
       targetHash: "new-hash",
-      intendedBatches: [{ batch: 0, pointIds: ["new-1"] }],
+      intendedBatches: [{ batch: 0, recordIds: ["new-1"] }],
     });
     const intent = getJournalIntent(prepared)!;
     expect(intent).not.toHaveProperty("oldDeleteConfirmed");
@@ -444,7 +444,7 @@ describe("per-file index state", () => {
       },
     };
     expect(planFileRecovery(restarted)).toEqual({
-      deletePointIds: ["old-1", "old-2", "new-1"],
+      deleteRecordIds: ["old-1", "old-2", "new-1"],
       finalizeRemoval: false,
       repairStructural: false,
       reindex: true,
@@ -460,46 +460,46 @@ describe("per-file index state", () => {
         generation: "generation-2",
         targetHash: "new-hash",
       }),
-    ).toThrow("Replacement requires predeclared point IDs");
+    ).toThrow("Replacement requires predeclared record IDs");
     expect(() =>
       beginFileOperation(state, {
-        operationId: "remove-with-points",
+        operationId: "remove-with-records",
         kind: "remove",
         generation: "generation-1",
-        intendedBatches: [{ batch: 0, pointIds: ["new-1"] }],
+        intendedBatches: [{ batch: 0, recordIds: ["new-1"] }],
       }),
-    ).toThrow("Removal cannot declare replacement point IDs");
+    ).toThrow("Removal cannot declare replacement record IDs");
     expect(() =>
       beginFileOperation(state, {
-        operationId: "replace-duplicate-points",
+        operationId: "replace-duplicate-records",
         kind: "replace",
         generation: "generation-2",
         targetHash: "new-hash",
         intendedBatches: [
-          { batch: 0, pointIds: ["new-1"] },
-          { batch: 1, pointIds: ["new-1"] },
+          { batch: 0, recordIds: ["new-1"] },
+          { batch: 1, recordIds: ["new-1"] },
         ],
       }),
-    ).toThrow("Intended point IDs must be unique");
+    ).toThrow("Intended record IDs must be unique");
     expect(() =>
       beginFileOperation(state, {
         operationId: "replace-reused-point",
         kind: "replace",
         generation: "generation-2",
         targetHash: "new-hash",
-        intendedBatches: [{ batch: 0, pointIds: ["old-1"] }],
+        intendedBatches: [{ batch: 0, recordIds: ["old-1"] }],
       }),
-    ).toThrow("Replacement point IDs cannot reuse committed IDs");
+    ).toThrow("Replacement record IDs cannot reuse committed IDs");
 
     const prepared = beginFileOperation(state, {
       operationId: "replace-invalid",
       kind: "replace",
       generation: "generation-2",
       targetHash: "new-hash",
-      intendedBatches: [{ batch: 0, pointIds: ["new-1"] }],
+      intendedBatches: [{ batch: 0, recordIds: ["new-1"] }],
     });
     expect(() => confirmUpsertBatch(prepared, 0)).toThrow(
-      "Old point deletion must be confirmed",
+      "Old record deletion must be confirmed",
     );
     expect(() => clearCheckpointedOperation(prepared)).toThrow(
       "Cannot clear an operation before cache checkpoint",

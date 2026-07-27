@@ -3,6 +3,9 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 import { AsyncLocalStorage } from "async_hooks";
+import { canonicalizePath } from "./canonicalPath.js";
+
+export { canonicalizePath } from "./canonicalPath.js";
 
 const workspaceRootScope = new AsyncLocalStorage<readonly string[]>();
 
@@ -87,27 +90,6 @@ export function getWorkspaceRootForPath(
 export interface ResolvedPath {
   absolutePath: string;
   inWorkspace: boolean;
-}
-
-/** Canonicalize an existing path, or its nearest existing parent for new files. */
-export function canonicalizePath(inputPath: string): string {
-  const resolved = path.resolve(inputPath);
-  const missingSegments: string[] = [];
-  let candidate = resolved;
-
-  while (true) {
-    try {
-      return path.resolve(
-        fs.realpathSync(candidate),
-        ...missingSegments.reverse(),
-      );
-    } catch {
-      const parent = path.dirname(candidate);
-      if (parent === candidate) return resolved;
-      missingSegments.push(path.basename(candidate));
-      candidate = parent;
-    }
-  }
 }
 
 export function isPathWithinRoot(filePath: string, rootPath: string): boolean {

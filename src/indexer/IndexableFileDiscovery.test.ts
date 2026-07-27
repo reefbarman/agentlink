@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 
 import {
@@ -82,6 +84,30 @@ describe("IndexableFileDiscovery", () => {
       ["src/index.ts"],
       workspaceRoot,
     );
+  });
+
+  it("rejects symlink escapes before stat and Git-ignore checks", async () => {
+    const directory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "discovery-paths-"),
+    );
+    try {
+      const root = path.join(directory, "project");
+      const outside = path.join(directory, "outside.ts");
+      const alias = path.join(root, "src", "outside.ts");
+      fs.mkdirSync(path.dirname(alias), { recursive: true });
+      fs.writeFileSync(outside, "outside", "utf8");
+      fs.symlinkSync(outside, alias, "file");
+      const { discovery, getGitIgnoredRelativePaths, statFile } =
+        createDiscovery();
+
+      await expect(
+        discovery.filterIndexableFiles([alias], root, []),
+      ).resolves.toEqual([]);
+      expect(statFile).not.toHaveBeenCalled();
+      expect(getGitIgnoredRelativePaths).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("keeps only explicitly included ignored fixture paths and deduplicates them", async () => {

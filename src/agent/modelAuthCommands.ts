@@ -27,11 +27,11 @@ export function getSemanticSetupTitle(
 ): string {
   switch (reason) {
     case "missing_embeddings_auth":
-      return "Set up semantic search: OpenAI API key required";
+      return "Improve semantic search with vector ranking";
     case "missing_index":
       return "Set up semantic search: build codebase index";
-    case "qdrant_unavailable":
-      return "Semantic search unavailable: Qdrant is not reachable";
+    case "store_unavailable":
+      return "Semantic search unavailable: retrieval store is not ready";
     case "disabled":
       return "Semantic search is disabled";
     case "no_workspace":
@@ -46,11 +46,11 @@ export function getSemanticSetupDetail(
 ): string {
   switch (reason) {
     case "missing_embeddings_auth":
-      return "Semantic indexing and search need embeddings auth. Configure an OpenAI API key for embeddings, or use API key mode for models + embeddings.";
+      return "Lexical indexing and search work without credentials. Configure an OpenAI API key to add vector and hybrid ranking.";
     case "missing_index":
-      return "Embeddings auth is configured, but this workspace has not been indexed yet.";
-    case "qdrant_unavailable":
-      return "Qdrant must be reachable at the configured URL before semantic indexing/search can run.";
+      return "This workspace has not been indexed yet. Lexical indexing works without embedding credentials.";
+    case "store_unavailable":
+      return "The embedded retrieval store must be available before semantic indexing and search can run.";
     case "disabled":
       return "Enable agentlink.semanticSearchEnabled in settings to use semantic indexing and search.";
     case "no_workspace":
@@ -93,25 +93,25 @@ export function registerModelAuthCommands({
             {
               label: "Set OpenAI API key for embeddings only",
               description:
-                "Best when model chat already uses OAuth and only embeddings setup is missing",
+                "Optional: add vector and hybrid ranking when model chat already uses OAuth",
               value: "embeddingsKey",
             },
             {
               label: "Set OpenAI API key for models + embeddings",
               description:
-                "Use one API key for model chat and semantic search/indexing",
+                "Use one API key for model chat and optional vector/hybrid ranking",
               value: "modelsAndEmbeddingsKey",
             },
             {
               label: "Sign in with ChatGPT/Codex (OAuth)",
               description:
-                "Model-chat auth only. Embeddings still require an API key",
+                "Model-chat auth only; lexical codebase retrieval remains available",
               value: "oauth",
             },
             {
               label: "Build/Rebuild codebase index",
               description:
-                "Use after embeddings auth is configured for this workspace",
+                "Build the lexical index now; embeddings are optional",
               value: "rebuild",
             },
             {

@@ -4,7 +4,7 @@
  * Implements the "fresh start" model:
  * - All messages get tagged with condenseParent (pointing to the summary's UUID)
  * - A new summary user-message is appended
- * - getEffectiveHistory() returns only the summary + messages after it
+ * - getEffectiveHistory() retains the original first message, then the latest summary and later messages
  * - Original messages are preserved in full history for potential rewind
  *
  * Key design decisions vs Roo Code:
@@ -50,6 +50,7 @@ import {
   type CondenseRecallAnchors,
 } from "./condensePrompt.js";
 import { getLatestTodoState } from "./todoTool.js";
+import type { CondenseForensicMetadata } from "../shared/types.js";
 
 export { renderDeterministicSections } from "./condensePrompt.js";
 
@@ -363,9 +364,11 @@ export function getMessagesSinceLastSummary(
   messages: AgentMessage[],
 ): AgentMessage[] {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].isSummary) return messages.slice(i + 1);
+    if (messages[i].isSummary) {
+      return messages.slice(i + 1).filter((message) => !message.diagnosticOnly);
+    }
   }
-  return messages;
+  return messages.filter((message) => !message.diagnosticOnly);
 }
 
 /**
@@ -379,6 +382,10 @@ export function getMessagesSinceLastSummary(
  */
 export function getEffectiveHistory(messages: AgentMessage[]): AgentMessage[] {
   if (messages.length === 0) return messages;
+  const effectiveMessages = messages.filter(
+    (message) => !message.diagnosticOnly,
+  );
+  if (effectiveMessages.length === 0) return effectiveMessages;
 
   const filterOrphanToolResults = (window: AgentMessage[]): AgentMessage[] => {
     const toolUseIds = new Set<string>();
@@ -413,30 +420,35 @@ export function getEffectiveHistory(messages: AgentMessage[]): AgentMessage[] {
 
   // Find the most recent summary
   let lastSummaryIdx = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].isSummary) {
+  for (let i = effectiveMessages.length - 1; i >= 0; i--) {
+    if (effectiveMessages[i].isSummary) {
       lastSummaryIdx = i;
       break;
     }
   }
 
-  if (lastSummaryIdx === -1) return messages; // no summary yet
+  if (lastSummaryIdx === -1) return effectiveMessages; // no summary yet
 
-  const fromSummary = filterOrphanToolResults(messages.slice(lastSummaryIdx));
+  const fromSummary = filterOrphanToolResults(
+    effectiveMessages.slice(lastSummaryIdx),
+  );
   const summary = fromSummary[0];
   if (!summary?.isSummary) {
     return fromSummary;
   }
 
+  const firstMessage = effectiveMessages[0];
+  const retainedFirstMessage =
+    firstMessage && firstMessage !== summary ? [firstMessage] : [];
   const laterMessages = fromSummary.slice(1);
-  const canonicalUserMessages = extractCanonicalUserMessages(messages);
-  const pendingTasks = extractPendingTasksHeuristic(messages);
+  const canonicalUserMessages = extractCanonicalUserMessages(effectiveMessages);
+  const pendingTasks = extractPendingTasksHeuristic(effectiveMessages);
   const resumeAnchor = extractCondenseResumeAnchor({
     userMessages: canonicalUserMessages,
     pendingTasks,
   });
 
-  const latestTodos = getLatestTodoState(messages);
+  const latestTodos = getLatestTodoState(effectiveMessages);
   const preservedContext = summary.preservedContext
     ? { ...summary.preservedContext, todos: latestTodos }
     : latestTodos.length > 0
@@ -474,6 +486,7 @@ export function getEffectiveHistory(messages: AgentMessage[]): AgentMessage[] {
   }
 
   return [
+    ...retainedFirstMessage,
     summary,
     ...laterMessages.slice(0, insertionIndex),
     resumeContextMessage,
@@ -573,6 +586,11 @@ export interface SummarizeOptions {
   filesRead?: string[];
   cwd?: string;
   preservedContext?: PreservedRuntimeContext;
+  onProviderRequest?: (request: {
+    requestId: string;
+    model: string;
+    estimatedInputTokens: number;
+  }) => void;
 }
 
 export interface SummarizeResult {
@@ -584,27 +602,7 @@ export interface SummarizeResult {
   /** Non-fatal validator/retry warnings */
   validationWarnings?: string[];
   /** Structured condense metadata for debugging/forensics */
-  metadata?: {
-    inputMessageCount: number;
-    sourceUserMessageCount: number;
-    hadPriorSummaryInInput: boolean;
-    sourceHash: string;
-    providerId: string;
-    condenseModel: string;
-    modelCandidates: string[];
-    skippedModelCandidates?: Array<{
-      model: string;
-      reason: string;
-    }>;
-    selectedModel: string;
-    latestUserMessage: string;
-    currentTask: string;
-    pendingTasks: string[];
-    canonicalUserMessages: string[];
-    requestMessageCount: number;
-    effectiveHistoryMessageCount: number;
-    effectiveHistoryRoles: string[];
-  };
+  metadata?: CondenseForensicMetadata;
   error?: string;
   errorRetryable?: boolean;
   errorCode?: string;
@@ -1203,6 +1201,10 @@ export async function summarizeConversation(
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), CONDENSE_TIMEOUT_MS);
         try {
+          const estimatedInputTokens = estimateCondenseInputTokens({
+            systemPrompt: CONDENSE_SYSTEM_PROMPT,
+            messages: requestMessages,
+          });
           const result = await provider.complete({
             model,
             systemPrompt: CONDENSE_SYSTEM_PROMPT,
@@ -1211,6 +1213,13 @@ export async function summarizeConversation(
             temperature: 0,
             reasoningEffort: "low",
             signal: controller.signal,
+            onProviderRequestAttempt: ({ model: effectiveModel }) => {
+              options.onProviderRequest?.({
+                requestId: randomUUID(),
+                model: effectiveModel,
+                estimatedInputTokens,
+              });
+            },
           });
           selectedModel = model;
           return { text: result.text };

@@ -65,7 +65,16 @@ import {
   type ComposerMedia,
 } from "./components/InputArea";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
+import { ContextHealthPanel } from "../../shared/ui/ContextHealthPanel";
+import { MemoryPanel } from "../../shared/ui/MemoryPanel";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
+import type {
+  ManageMemoryToolInput,
+  MemoryInspectionQueryRequest,
+  MemoryPanelSnapshot,
+  MemoryToolScope,
+} from "../../core/capabilities/memory.js";
+import type { MemoryArchiveV1 } from "../../core/memory/contracts.js";
 import type {
   McpElicitationValues,
   McpFormElicitationRequest,
@@ -325,6 +334,32 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
   const dragCounterRef = useRef(0);
   const [mcpManagerSnapshot, setMcpManagerSnapshot] =
     useState<McpConfigSnapshot | null>(null);
+  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
+  const [memoryPanelSnapshot, setMemoryPanelSnapshot] =
+    useState<MemoryPanelSnapshot | null>(null);
+  const [memoryPanelScope, setMemoryPanelScope] =
+    useState<MemoryToolScope>("global");
+  const [memoryPanelAvailableScopes, setMemoryPanelAvailableScopes] = useState<
+    MemoryToolScope[]
+  >(["global"]);
+  const [memoryPanelLoading, setMemoryPanelLoading] = useState(false);
+  const [memoryPanelError, setMemoryPanelError] = useState<string | null>(null);
+  const memoryPanelQueryRef = useRef<MemoryInspectionQueryRequest>({
+    scope: "global",
+    limit: 100,
+  });
+  const memoryPanelRequestIdRef = useRef<string | null>(null);
+  const memoryPanelMutationRequestIdsRef = useRef(new Set<string>());
+  const beginMemoryPanelRequest = () => {
+    const requestId = randomId();
+    memoryPanelRequestIdRef.current = requestId;
+    return requestId;
+  };
+  const beginMemoryPanelMutation = () => {
+    const requestId = beginMemoryPanelRequest();
+    memoryPanelMutationRequestIdsRef.current.add(requestId);
+    return requestId;
+  };
   const mcpMutationResolversRef = useRef(
     new Map<
       string,
@@ -791,6 +826,39 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
             mcpMutationResolversRef.current.delete(msg.result.operationId);
             clearTimeout(pending.timer);
             pending.resolve(msg.result);
+          }
+          break;
+        }
+        case "agentMemoryPanelUpdate": {
+          const mutationResponse = Boolean(
+            msg.requestId &&
+            memoryPanelMutationRequestIdsRef.current.delete(msg.requestId),
+          );
+          if (
+            msg.requestId &&
+            msg.requestId !== memoryPanelRequestIdRef.current
+          ) {
+            if (mutationResponse) {
+              const requestId = beginMemoryPanelRequest();
+              vscodeApi.postMessage({
+                command: "agentMemoryQuery",
+                requestId,
+                request: memoryPanelQueryRef.current,
+              });
+            }
+            break;
+          }
+          setMemoryPanelLoading(false);
+          setMemoryPanelScope(msg.scope);
+          setMemoryPanelAvailableScopes(msg.availableScopes);
+          setMemoryPanelError(msg.error ?? null);
+          if (msg.open) setMemoryPanelOpen(true);
+          if (msg.snapshot) {
+            setMemoryPanelSnapshot(msg.snapshot);
+          } else if ("selected" in msg) {
+            setMemoryPanelSnapshot((current) =>
+              current ? { ...current, selected: msg.selected } : current,
+            );
           }
           break;
         }
@@ -2193,6 +2261,25 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
         case "fleet":
           setShowFleetRequest((request) => request + 1);
           break;
+        case "memory": {
+          const request: MemoryInspectionQueryRequest = {
+            scope: "global",
+            limit: 100,
+          };
+          memoryPanelQueryRef.current = request;
+          setMemoryPanelOpen(true);
+          setMemoryPanelLoading(true);
+          setMemoryPanelError(null);
+          setMcpManagerSnapshot(null);
+          setProviderUsage(null);
+          vscodeApi.postMessage({
+            command: "agentMemoryQuery",
+            requestId: beginMemoryPanelRequest(),
+            request,
+            open: true,
+          });
+          return;
+        }
       }
 
       if (isForwardedBuiltinCommand("vscode", name)) {
@@ -3038,6 +3125,80 @@ export function App({ vscodeApi: hostVscodeApi }: { vscodeApi: VsCodeApi }) {
                 condenseThreshold={state.chatState.condenseThreshold}
                 defaultMaxTokens={DEFAULT_MAX_TOKENS}
               />
+              {state.contextHealth && (
+                <ContextHealthPanel health={state.contextHealth} />
+              )}
+              {memoryPanelOpen && (
+                <MemoryPanel
+                  snapshot={memoryPanelSnapshot}
+                  scope={memoryPanelScope}
+                  availableScopes={memoryPanelAvailableScopes}
+                  loading={memoryPanelLoading}
+                  error={memoryPanelError}
+                  onClose={() => setMemoryPanelOpen(false)}
+                  onQuery={(request) => {
+                    memoryPanelQueryRef.current = request;
+                    setMemoryPanelScope(
+                      request.scope === "project" ? "project" : "global",
+                    );
+                    setMemoryPanelLoading(true);
+                    setMemoryPanelError(null);
+                    vscodeApi.postMessage({
+                      command: "agentMemoryQuery",
+                      requestId: beginMemoryPanelRequest(),
+                      request,
+                    });
+                  }}
+                  onDetail={(recordId) => {
+                    setMemoryPanelLoading(true);
+                    setMemoryPanelError(null);
+                    vscodeApi.postMessage({
+                      command: "agentMemoryDetail",
+                      requestId: beginMemoryPanelRequest(),
+                      recordId,
+                      scope: memoryPanelScope,
+                    });
+                  }}
+                  onManage={(input: ManageMemoryToolInput) => {
+                    setMemoryPanelLoading(true);
+                    setMemoryPanelError(null);
+                    vscodeApi.postMessage({
+                      command: "agentMemoryManage",
+                      requestId: beginMemoryPanelMutation(),
+                      input,
+                      request: memoryPanelQueryRef.current,
+                    });
+                  }}
+                  onClear={(scope) => {
+                    setMemoryPanelLoading(true);
+                    setMemoryPanelError(null);
+                    vscodeApi.postMessage({
+                      command: "agentMemoryClear",
+                      requestId: beginMemoryPanelMutation(),
+                      scope,
+                      confirm: true,
+                      request: memoryPanelQueryRef.current,
+                    });
+                  }}
+                  onExport={(scope) =>
+                    vscodeApi.postMessage({
+                      command: "agentMemoryExport",
+                      scope,
+                    })
+                  }
+                  onImport={(archive: MemoryArchiveV1, scope) => {
+                    setMemoryPanelLoading(true);
+                    setMemoryPanelError(null);
+                    vscodeApi.postMessage({
+                      command: "agentMemoryImport",
+                      requestId: beginMemoryPanelMutation(),
+                      archive,
+                      scope,
+                      request: memoryPanelQueryRef.current,
+                    });
+                  }}
+                />
+              )}
               {mcpManagerSnapshot && (
                 <McpManagerPanel
                   snapshot={mcpManagerSnapshot}

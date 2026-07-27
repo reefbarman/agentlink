@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createVscodeAdvertisedArtifactProvider,
   createVscodeContextDocumentProvider,
@@ -9,6 +13,11 @@ import {
   createVscodeSemanticSearchProvider,
   createVscodeStructuralGraphProvider,
 } from "./readSearchCapabilities.js";
+
+import { LanceDbRetrievalRepository } from "../../storage/retrieval/LanceDbRetrievalRepository.js";
+import { createCodeIndexFingerprint } from "../../indexer/retrievalFingerprint.js";
+import { getCodeWorkspaceScopeId } from "../../indexer/codeRetrievalIdentity.js";
+import { prepareCodeFilePublication } from "../../indexer/retrievalPublicationTranslation.js";
 
 vi.mock("../../util/agentlinkTmpArtifacts.js", () => ({
   isAgentlinkTmpArtifact: (filePath: string) =>
@@ -22,15 +31,13 @@ vi.mock("../../tools/pathAccessUI.js", () => ({
 
 const semanticSearch = vi.hoisted(() => vi.fn());
 vi.mock("../../services/semanticSearch.js", () => ({ semanticSearch }));
-vi.mock("../../indexer/collectionName.js", () => ({
-  getAlCollectionName: vi.fn((workspaceRoot: string) => `al-${workspaceRoot}`),
-}));
 
+const getWorkspaceRoots = vi.hoisted(() => vi.fn(() => ["/workspace"]));
 const resolveAndValidatePath = vi.hoisted(() => vi.fn());
 const tryGetFirstWorkspaceRoot = vi.hoisted(() => vi.fn());
 const resolveAndOpenDocument = vi.hoisted(() => vi.fn());
 vi.mock("../../util/paths.js", () => ({
-  getWorkspaceRootForPath: vi.fn(() => "/workspace"),
+  getWorkspaceRoots,
   resolveAndValidatePath,
   tryGetFirstWorkspaceRoot,
 }));
@@ -68,7 +75,12 @@ describe("createVscodeSemanticSearchProvider", () => {
     }));
     tryGetFirstWorkspaceRoot.mockReturnValue("/workspace");
     semanticSearch.mockResolvedValue({
-      content: [{ type: "text", text: "semantic results" }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ query: "auth flow", total_results: 1 }),
+        },
+      ],
     });
   });
 
@@ -90,9 +102,8 @@ describe("createVscodeSemanticSearchProvider", () => {
       ["**/dist/**"],
       { includeAllWorkspaceRoots: false },
     );
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: "semantic results",
+    expect(result).toEqual({
+      payload: { query: "auth flow", total_results: 1 },
     });
   });
 
@@ -166,6 +177,14 @@ describe("createVscodeContext providers", () => {
 });
 
 describe("createVscodeStructuralGraphProvider", () => {
+  const directories: string[] = [];
+
+  afterEach(() => {
+    for (const directory of directories.splice(0)) {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("returns undefined without global storage", () => {
     expect(createVscodeStructuralGraphProvider(undefined)).toBeUndefined();
   });
@@ -182,6 +201,133 @@ describe("createVscodeStructuralGraphProvider", () => {
       loadGraph: expect.any(Function),
       getTargetFreshness: expect.any(Function),
     });
+  });
+
+  it("reports a missing unified retrieval store without creating one", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "graph-storage-"));
+    directories.push(directory);
+    const storeRoot = path.join(directory, "retrieval-store");
+    fs.mkdirSync(storeRoot);
+    const before = fs.readdirSync(storeRoot);
+    const provider = createVscodeStructuralGraphProvider({
+      fsPath: directory,
+    } as never)!;
+
+    await expect(provider.loadGraph("workspace")).resolves.toMatchObject({
+      workspaceRoot: "workspace",
+      indexName: getCodeWorkspaceScopeId("workspace"),
+      structuralStorePath: storeRoot,
+      graphExists: false,
+      graph: { files: {} },
+    });
+    expect(fs.readdirSync(storeRoot)).toEqual(before);
+  });
+
+  it("projects only the requested workspace from committed retrieval records", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "graph-store-"));
+    directories.push(directory);
+    const storeRoot = path.join(directory, "retrieval-store");
+    const repository = new LanceDbRetrievalRepository({ root: storeRoot });
+    await repository.migrate(createCodeIndexFingerprint("standard"));
+
+    const publish = async (
+      workspaceRoot: string,
+      sourcePath: string,
+      imports: Array<{
+        specifier: string;
+        kind: "static";
+        resolvedRelPath: string;
+        line: number;
+      }> = [],
+    ) => {
+      const publication = prepareCodeFilePublication({
+        publicationId: `publication:${workspaceRoot}:${sourcePath}`,
+        generation: `generation:${workspaceRoot}:${sourcePath}`,
+        workspaceRoot,
+        sourcePath,
+        contentHash: `hash:${workspaceRoot}:${sourcePath}`,
+        observedAt: "2026-07-25T01:00:00.000Z",
+        sourceContent: "export const value = true;",
+        chunks: [],
+        structuralEntry: {
+          relPath: sourcePath,
+          hash: `hash:${workspaceRoot}:${sourcePath}`,
+          indexedAt: "2026-07-25T01:00:00.000Z",
+          language: "typescript",
+          imports,
+          exports: [{ name: "value", kind: "named", line: 1 }],
+          symbols: [{ name: "value", kind: "const", exported: true, line: 1 }],
+        },
+      });
+      await repository.preparePublication(publication);
+      await repository.commitPublication(publication.publicationId);
+    };
+
+    try {
+      await publish("workspace", "src/helper.ts");
+      await publish("workspace", "src/main.ts", [
+        {
+          specifier: "./helper.js",
+          kind: "static",
+          resolvedRelPath: "src/helper.ts",
+          line: 1,
+        },
+      ]);
+      await publish("other-workspace", "src/main.ts");
+    } finally {
+      await repository.close();
+    }
+
+    const provider = createVscodeStructuralGraphProvider(
+      { fsPath: directory } as never,
+      "standard",
+    )!;
+    const snapshot = await provider.loadGraph("workspace");
+
+    expect(snapshot).toMatchObject({
+      workspaceRoot: "workspace",
+      indexName: getCodeWorkspaceScopeId("workspace"),
+      structuralStorePath: storeRoot,
+      graphExists: true,
+      graph: {
+        files: {
+          "src/main.ts": {
+            hash: "hash:workspace:src/main.ts",
+            imports: [
+              expect.objectContaining({
+                specifier: "./helper.js",
+                resolvedRelPath: "src/helper.ts",
+              }),
+            ],
+          },
+          "src/helper.ts": expect.any(Object),
+        },
+      },
+    });
+    expect(Object.keys(snapshot.graph.files)).toEqual([
+      "src/helper.ts",
+      "src/main.ts",
+    ]);
+  });
+
+  it("returns the raw symlinked workspace root for canonical file paths", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "graph-provider-"));
+    directories.push(directory);
+    const physicalRoot = path.join(directory, "physical");
+    const rawRoot = path.join(directory, "workspace-link");
+    const target = path.join(physicalRoot, "src", "index.ts");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "export {};", "utf8");
+    fs.symlinkSync(physicalRoot, rawRoot, "dir");
+    getWorkspaceRoots.mockReturnValueOnce([rawRoot]);
+
+    const provider = createVscodeStructuralGraphProvider({
+      fsPath: "/global-storage",
+    } as never)!;
+
+    expect(provider.getWorkspaceRootForPath(fs.realpathSync(target))).toBe(
+      rawRoot,
+    );
   });
 });
 

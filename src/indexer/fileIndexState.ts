@@ -5,12 +5,12 @@ export type DurableRecordStatus = "valid" | "absent" | "corrupt";
 export interface CommittedFileIndex {
   generation: string;
   hash: string;
-  pointIds: string[];
+  recordIds: string[];
 }
 
-export interface FilePointBatchIntent {
+export interface FileRecordBatchIntent {
   batch: number;
-  pointIds: string[];
+  recordIds: string[];
 }
 
 export interface FileIndexJournalIntent {
@@ -19,17 +19,17 @@ export interface FileIndexJournalIntent {
   kind: FileIndexOperationKind;
   generation: string;
   targetHash: string | null;
-  oldPointIds: string[];
-  intendedBatches: FilePointBatchIntent[];
+  oldRecordIds: string[];
+  intendedBatches: FileRecordBatchIntent[];
 }
 
-export interface FilePointBatchState extends FilePointBatchIntent {
+export interface FileRecordBatchState extends FileRecordBatchIntent {
   upsertConfirmed: boolean;
 }
 
 export interface FileIndexOperationState {
   intent: FileIndexJournalIntent;
-  intendedBatches: FilePointBatchState[];
+  intendedBatches: FileRecordBatchState[];
   oldDeleteConfirmed: boolean;
   recoveryCleanupConfirmed: boolean;
   recoveryInvalidationConfirmed: boolean;
@@ -44,7 +44,7 @@ export interface FileIndexState {
 }
 
 export interface FileRecoveryPlan {
-  deletePointIds: string[];
+  deleteRecordIds: string[];
   finalizeRemoval: boolean;
   repairStructural: boolean;
   reindex: boolean;
@@ -75,14 +75,14 @@ export function beginFileOperation(
     kind: FileIndexOperationKind;
     generation: string;
     targetHash?: string;
-    intendedBatches?: Array<{ batch: number; pointIds: string[] }>;
+    intendedBatches?: FileRecordBatchIntent[];
   },
 ): FileIndexState {
   if (state.operation) {
     throw new Error(`File operation already active for ${state.file}`);
   }
   if (input.kind === "replace" && !input.intendedBatches?.length) {
-    throw new Error("Replacement requires predeclared point IDs");
+    throw new Error("Replacement requires predeclared record IDs");
   }
   if (input.kind === "replace" && !input.targetHash) {
     throw new Error("Replacement requires a target hash");
@@ -91,23 +91,23 @@ export function beginFileOperation(
     throw new Error("Removal cannot declare a target hash");
   }
   if (input.kind === "remove" && input.intendedBatches?.length) {
-    throw new Error("Removal cannot declare replacement point IDs");
+    throw new Error("Removal cannot declare replacement record IDs");
   }
   const intendedBatches = input.intendedBatches ?? [];
   const batchNumbers = intendedBatches.map((batch) => batch.batch);
   if (new Set(batchNumbers).size !== batchNumbers.length) {
-    throw new Error("Point batch numbers must be unique");
+    throw new Error("Record batch numbers must be unique");
   }
-  const intendedPointIds = intendedBatches.flatMap((batch) => batch.pointIds);
-  if (intendedPointIds.some((pointId) => pointId.length === 0)) {
-    throw new Error("Point IDs cannot be empty");
+  const intendedRecordIds = intendedBatches.flatMap((batch) => batch.recordIds);
+  if (intendedRecordIds.some((recordId) => recordId.length === 0)) {
+    throw new Error("Record IDs cannot be empty");
   }
-  if (new Set(intendedPointIds).size !== intendedPointIds.length) {
-    throw new Error("Intended point IDs must be unique");
+  if (new Set(intendedRecordIds).size !== intendedRecordIds.length) {
+    throw new Error("Intended record IDs must be unique");
   }
-  const oldPointIds = state.committed?.pointIds ?? [];
-  if (intendedPointIds.some((pointId) => oldPointIds.includes(pointId))) {
-    throw new Error("Replacement point IDs cannot reuse committed IDs");
+  const oldRecordIds = state.committed?.recordIds ?? [];
+  if (intendedRecordIds.some((recordId) => oldRecordIds.includes(recordId))) {
+    throw new Error("Replacement record IDs cannot reuse committed IDs");
   }
 
   return {
@@ -119,15 +119,15 @@ export function beginFileOperation(
         kind: input.kind,
         generation: input.generation,
         targetHash: input.targetHash ?? null,
-        oldPointIds: [...oldPointIds],
+        oldRecordIds: [...oldRecordIds],
         intendedBatches: intendedBatches.map((batch) => ({
           batch: batch.batch,
-          pointIds: [...batch.pointIds],
+          recordIds: [...batch.recordIds],
         })),
       },
       intendedBatches: intendedBatches.map((batch) => ({
         batch: batch.batch,
-        pointIds: [...batch.pointIds],
+        recordIds: [...batch.recordIds],
         upsertConfirmed: false,
       })),
       oldDeleteConfirmed: state.committed === null,
@@ -137,7 +137,9 @@ export function beginFileOperation(
   };
 }
 
-export function confirmOldPointDeletion(state: FileIndexState): FileIndexState {
+export function confirmOldRecordDeletion(
+  state: FileIndexState,
+): FileIndexState {
   const operation = requireOperation(state);
   return {
     ...state,
@@ -156,10 +158,10 @@ export function confirmUpsertBatch(
     throw new Error("Removal has no upsert batches");
   }
   if (!operation.oldDeleteConfirmed) {
-    throw new Error("Old point deletion must be confirmed before upsert");
+    throw new Error("Old record deletion must be confirmed before upsert");
   }
   if (!operation.intendedBatches.some((entry) => entry.batch === batch)) {
-    throw new Error(`Unknown point batch ${batch}`);
+    throw new Error(`Unknown record batch ${batch}`);
   }
 
   return {
@@ -184,7 +186,7 @@ export function getVisibleCommittedFile(
 export function confirmCacheCheckpoint(state: FileIndexState): FileIndexState {
   const operation = requireOperation(state);
   if (!operation.oldDeleteConfirmed) {
-    throw new Error("Old point deletion is not confirmed");
+    throw new Error("Old record deletion is not confirmed");
   }
 
   if (operation.intent.kind === "remove") {
@@ -199,7 +201,7 @@ export function confirmCacheCheckpoint(state: FileIndexState): FileIndexState {
     throw new Error("Replacement operation has no target hash");
   }
   if (operation.intendedBatches.some((batch) => !batch.upsertConfirmed)) {
-    throw new Error("All intended point batches must be confirmed");
+    throw new Error("All intended record batches must be confirmed");
   }
 
   return {
@@ -207,7 +209,7 @@ export function confirmCacheCheckpoint(state: FileIndexState): FileIndexState {
     committed: {
       generation: operation.intent.generation,
       hash: operation.intent.targetHash,
-      pointIds: operation.intendedBatches.flatMap((batch) => batch.pointIds),
+      recordIds: operation.intendedBatches.flatMap((batch) => batch.recordIds),
     },
     operation,
     structuralStatus: "stale",
@@ -287,7 +289,7 @@ export function planFileRecovery(
   if (!operation) return null;
   if (replacementCacheProvesCommit(state, operation)) {
     return {
-      deletePointIds: [],
+      deleteRecordIds: [],
       finalizeRemoval: false,
       repairStructural: !structuralCacheProvesCommit(state, operation),
       reindex: false,
@@ -295,9 +297,9 @@ export function planFileRecovery(
   }
 
   return {
-    deletePointIds: unique([
-      ...operation.intent.oldPointIds,
-      ...operation.intent.intendedBatches.flatMap((batch) => batch.pointIds),
+    deleteRecordIds: unique([
+      ...operation.intent.oldRecordIds,
+      ...operation.intent.intendedBatches.flatMap((batch) => batch.recordIds),
     ]),
     finalizeRemoval: operation.intent.kind === "remove",
     repairStructural: false,
@@ -386,15 +388,15 @@ function replacementCacheProvesCommit(
   operation: FileIndexOperationState,
 ): boolean {
   if (operation.intent.kind !== "replace" || !state.committed) return false;
-  const intendedPointIds = operation.intent.intendedBatches.flatMap(
-    (batch) => batch.pointIds,
+  const intendedRecordIds = operation.intent.intendedBatches.flatMap(
+    (batch) => batch.recordIds,
   );
   return (
     state.committed.generation === operation.intent.generation &&
     state.committed.hash === operation.intent.targetHash &&
-    state.committed.pointIds.length === intendedPointIds.length &&
-    state.committed.pointIds.every(
-      (pointId, index) => pointId === intendedPointIds[index],
+    state.committed.recordIds.length === intendedRecordIds.length &&
+    state.committed.recordIds.every(
+      (recordId, index) => recordId === intendedRecordIds[index],
     )
   );
 }

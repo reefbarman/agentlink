@@ -17,11 +17,21 @@ import { providerRegistry } from "./providers/index.js";
 const mocks = vi.hoisted(() => ({
   mockBuildPromptArtifacts: vi.fn().mockResolvedValue({
     systemPrompt: "mock system prompt",
+    promptProfile: {
+      profile: "compatibility",
+      source: "compatibility-default",
+      policyRevision: "prompt-profile-policy-v1",
+      providerId: "btw-test-provider",
+      modelId: "btw-test-model",
+    },
     skills: [],
     promptBreakdown: {
       sections: [{ label: "test", chars: 18, estimatedTokens: 5 }],
       totalChars: 18,
       estimatedTokens: 5,
+      profile: "compatibility",
+      profileSource: "compatibility-default",
+      profilePolicyRevision: "prompt-profile-policy-v1",
     },
   }),
   getConfiguration: vi.fn(),

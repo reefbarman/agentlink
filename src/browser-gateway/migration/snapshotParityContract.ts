@@ -279,6 +279,11 @@ export const BROWSER_GATEWAY_SNAPSHOT_PARITY_CONTRACT = {
         "checkpoint",
         "owner_event",
       ),
+      contextHealth: covered(
+        "Projected into checkpoint.foreground.contextHealth with bounded enums, counts, reasons, and legacy omission normalized to null.",
+        "checkpoint",
+        "owner_event",
+      ),
       condenseThreshold: covered(
         "Projected into checkpoint.foreground.condenseThreshold and validated as a unit interval.",
         "checkpoint",

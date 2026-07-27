@@ -40,13 +40,21 @@ export const BUILT_IN_MODES: AgentMode[] = [
     slug: "code",
     name: "Code",
     icon: "code",
-    toolGroups: ["read", "edit", "command", "language", "search", "mcp"],
+    toolGroups: [
+      "read",
+      "edit",
+      "command",
+      "language",
+      "search",
+      "memory",
+      "mcp",
+    ],
   },
   {
     slug: "architect",
     name: "Architect",
     icon: "organization",
-    toolGroups: ["read", "language", "search", "mcp", "plan"],
+    toolGroups: ["read", "language", "search", "memory", "mcp", "plan"],
   },
   {
     slug: "ask",
@@ -58,7 +66,7 @@ export const BUILT_IN_MODES: AgentMode[] = [
     slug: "debug",
     name: "Debug",
     icon: "debug",
-    toolGroups: ["read", "command", "language", "search", "mcp"],
+    toolGroups: ["read", "command", "language", "search", "memory", "mcp"],
   },
   {
     slug: "review",

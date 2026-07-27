@@ -78,6 +78,8 @@ export async function* streamOpenAiCompatibleCompletion(
           body,
           fetch: fetchImpl,
           signal: abort.signal,
+          onProviderRequestAttempt: () =>
+            args.request.onProviderRequestAttempt?.({ model: model.model }),
           onHeaders: () =>
             args.request.onTransportActivity?.({
               kind: "headers",
@@ -251,6 +253,7 @@ async function executeFetch(args: {
   body: unknown;
   fetch: OpenAiCompatibleFetch;
   signal: AbortSignal;
+  onProviderRequestAttempt: () => void;
   onHeaders: () => void;
 }): Promise<Response> {
   if (args.profile.authRequired && !args.apiKey) {
@@ -269,6 +272,7 @@ async function executeFetch(args: {
     headers.set("X-OpenRouter-Title", "AgentLink");
     headers.set("X-OpenRouter-Categories", "ide-extension");
   }
+  args.onProviderRequestAttempt();
   const response = await args.fetch(
     `${args.profile.baseUrl.replace(/\/$/, "")}/chat/completions`,
     {

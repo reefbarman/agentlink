@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "fixtureRevision": "unified-context-v1",
+  "activationStatus": "future-oracle",
+  "triggerCases": [
+    {
+      "id": "explicit-rfc",
+      "cohort": "explicit-domain-language",
+      "prompt": "Draft an RFC for replacing the cache protocol.",
+      "expectedSkill": "rfc-writing",
+      "shouldLoad": true
+    },
+    {
+      "id": "explicit-pr-description",
+      "cohort": "explicit-domain-language",
+      "prompt": "Write the pull request description for these changes.",
+      "expectedSkill": "pr-description-writing",
+      "shouldLoad": true
+    },
+    {
+      "id": "ambiguous-ui-toolkit",
+      "cohort": "ambiguous-domain-language",
+      "prompt": "The Unity settings list loses focus after scrolling; debug it.",
+      "expectedSkill": "unity-ui-toolkit",
+      "shouldLoad": true
+    },
+    {
+      "id": "negative-generic-typescript",
+      "cohort": "negative-neighbor-tasks",
+      "prompt": "Fix this TypeScript type error in the extension.",
+      "expectedSkill": null,
+      "shouldLoad": false
+    },
+    {
+      "id": "negative-markdown",
+      "cohort": "negative-neighbor-tasks",
+      "prompt": "Correct the spelling in README.md.",
+      "expectedSkill": null,
+      "shouldLoad": false
+    },
+    {
+      "id": "manual-only-not-invoked",
+      "cohort": "negative-neighbor-tasks",
+      "prompt": "Explain how extension-host smoke testing works.",
+      "expectedSkill": null,
+      "shouldLoad": false
+    }
+  ],
+  "catalogCases": [
+    {
+      "id": "duplicate-name",
+      "sources": [
+        "global/.agents/skills/review/SKILL.md",
+        "project/.agentlink/skills/review/SKILL.md"
+      ],
+      "currentOutcome": "higher-priority-name-wins",
+      "targetOutcome": "collision-diagnostic-and-path-qualified-identity"
+    },
+    {
+      "id": "mode-incompatible-shadow",
+      "sources": ["global-compatible", "project-higher-priority-incompatible"],
+      "currentOutcome": "lower-priority-compatible-remains-visible",
+      "targetOutcome": "same-with-identity-and-provenance"
+    },
+    {
+      "id": "two-allowed-tools",
+      "skills": [
+        {
+          "identity": "skill-a",
+          "allowedTools": ["read_file", "search_files"]
+        },
+        {
+          "identity": "skill-b",
+          "allowedTools": ["get_context", "search_files"]
+        }
+      ],
+      "currentOutcome": "most-recent-skill-replaces-restriction",
+      "targetOutcome": "intersection-with-runtime-ceiling-and-audit"
+    },
+    {
+      "id": "restriction-mid-batch",
+      "skills": [{ "identity": "restrictor", "allowedTools": ["read_file"] }],
+      "currentOutcome": "restriction-applies-to-subsequent-turn",
+      "targetOutcome": "captured-batch-finishes-then-restriction-applies; no-broadening-retroactivity"
+    }
+  ]
+}

@@ -5,6 +5,7 @@ import * as os from "os";
 import * as path from "path";
 import { PassThrough, Writable } from "stream";
 import { randomUUID } from "crypto";
+import { z } from "zod";
 import {
   buildAgentErrorMessage,
   getAgentErrorActions,
@@ -67,7 +68,9 @@ import {
   type BrowserGatewayModelCredentialClearRequest,
   type BrowserGatewayModelCredentialClearResponse,
   type BrowserGatewayOpenAiCompatibleRuntimeProfiles,
+  type BrowserGatewayPromptProfileResolutions,
   type BrowserGatewayModelCredentialGrantRequest,
+  type BrowserGatewayMemoryRuntimeDescriptor,
   type BrowserGatewayDevicesListResponse,
   type BrowserGatewayHelperDiscoveryRecord,
   type BrowserGatewayHelperHealthResponse,
@@ -137,6 +140,11 @@ import {
   type CoreModelUsage,
 } from "../../core/modelRuntime.js";
 import type { OpenAiCompatibleRuntimeProfile } from "../../core/model/providers/openaiCompatible/types.js";
+import {
+  isCurrentPromptProfileResolution,
+  resolvePromptProfile,
+  type PromptProfileResolution,
+} from "../../core/promptProfile.js";
 import { getCodexModelCapabilities } from "../../core/model/providers/codex/models.js";
 import { normalizeUserQuestionAttachments } from "../../core/capabilities/sessionControl.js";
 import { ANTHROPIC_HOSTED_WEB_CAPABILITIES } from "../../core/model/providers/anthropic/anthropicModels.js";
@@ -156,27 +164,55 @@ import {
   type CoreNativeWebToolResult,
 } from "../../core/nativeWebTools.js";
 import { runAgentToolLoop } from "../../core/agentToolLoop.js";
+import {
+  createNativeToolDisclosureSnapshot,
+  discoverNativeTools,
+  getDeferredNativeTool,
+  type NativeToolDisclosureSnapshot,
+} from "../../core/tools/nativeToolDisclosure.js";
 import type {
   FinalMessageMarker,
   FinalMessageStatus,
 } from "../../shared/finalStatus.js";
 import { handleTodoWrite, type TodoToolInput } from "../../agent/todoTool.js";
 import { handlePresentImages } from "../../tools/presentImages.js";
+import {
+  handleManageMemory,
+  handleRecallMemory,
+} from "../../tools/autonomousMemory.js";
+import type {
+  ManageMemoryToolInput,
+  RecallMemoryToolInput,
+} from "../../core/capabilities/memory.js";
+import type {
+  MemoryArchiveV1,
+  MemoryHealthSnapshot,
+} from "../../core/memory/contracts.js";
+import {
+  callNativeToolSchema,
+  findNativeToolsSchema,
+  manageMemorySchema,
+} from "../../shared/toolSchemas.js";
 import { MCP_TOOL_BRIDGE_TOOL_NAMES } from "../../shared/mcpToolDefinitions.js";
 import {
+  ASK_AGENT_NATIVE_DISCLOSURE_BRIDGE_TOOLS,
   ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
   ASK_AGENT_SAFE_PROJECTLESS_TOOL_NAMES,
   BrowserGatewayAskAgentModelClient,
+  parseAskAgentDeferredNativeToolInput,
   type BrowserGatewayAskAgentToolCall,
 } from "./askAgentModelClient.js";
 import {
   BrowserGatewayAskAgentMemoryStore,
   getAskAgentMemorySourceRevision,
   hasAskAgentMemoryPastIntent,
-  type BrowserGatewayAskAgentMemoryChunk,
   type BrowserGatewayAskAgentMemorySearchResult,
   type BrowserGatewayAskAgentSessionMemory,
 } from "../browserGatewayAskAgentMemory.js";
+import type {
+  DerivedSessionChunk,
+  DerivedSessionSummary,
+} from "../../core/session/DerivedSessionRetrievalService.js";
 import {
   ASK_AGENT_TRANSCRIPT_EXCERPT_MAX_MESSAGES,
   formatAskAgentMemoryContext,
@@ -248,6 +284,8 @@ import {
   HelperLifecycleCoordinator,
   type HelperLivenessReason,
 } from "./HelperLifecycleCoordinator.js";
+import { BrowserGatewayAutonomousMemoryRuntime } from "./BrowserGatewayAutonomousMemoryRuntime.js";
+import { BrowserGatewayDerivedSessionRuntime } from "./BrowserGatewayDerivedSessionRuntime.js";
 
 export interface PreparedAskAgentWebAccess {
   target: BrowserGatewayInstanceRecord | null;
@@ -263,6 +301,7 @@ const ASK_AGENT_PARALLEL_SAFE_TOOL_NAMES = new Set([
   "read_file",
   "list_files",
   "search_files",
+  "recall_memory",
   "find_mcp_tools",
   "list_mcp_resources",
   "read_mcp_resource",
@@ -300,6 +339,90 @@ const DEFAULT_HELPER_VERSION = "dev";
 const DEFAULT_MDNS_NAME = "agentlink";
 const DEFAULT_ASK_AGENT_LOG_FILE = "browser-gateway-ask-agent.log";
 const DEFAULT_CORE_OWNER_HEARTBEAT_TTL_MS = 45_000;
+const ASK_AGENT_AUTONOMOUS_MEMORY_MANAGE_SCHEMA = z.object({
+  ...manageMemorySchema,
+  scope: z.literal("global").optional(),
+  nudgeId: z.string().min(1).max(200).optional(),
+});
+const ASK_AGENT_AUTONOMOUS_MEMORY_QUERY_SCHEMA = z.object({
+  query: z.string().max(1_000).optional(),
+  kinds: z
+    .array(
+      z.enum([
+        "preference",
+        "project_fact",
+        "gotcha",
+        "decision",
+        "workflow_hint",
+        "correction",
+      ]),
+    )
+    .max(6)
+    .optional(),
+  statuses: z
+    .array(
+      z.enum(["active", "superseded", "contested", "forgotten", "expired"]),
+    )
+    .max(5)
+    .optional(),
+  sources: z
+    .array(
+      z.enum([
+        "current_user",
+        "repository",
+        "foreground_agent",
+        "background_agent",
+        "import",
+      ]),
+    )
+    .max(5)
+    .optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+const ASK_AGENT_AUTONOMOUS_MEMORY_DETAIL_SCHEMA = z.object({
+  recordId: z.string().min(1).max(200),
+});
+const ASK_AGENT_AUTONOMOUS_MEMORY_CLEAR_SCHEMA = z.object({
+  confirm: z.literal(true),
+});
+const PUBLIC_AUTONOMOUS_MEMORY_REASONS = new Set([
+  "no-connected-owner",
+  "missing-owner-descriptor",
+  "disabled-by-owner",
+  "conflicting-store-roots",
+  "disabled",
+]);
+
+function sanitizeAutonomousMemoryHealth(
+  health: MemoryHealthSnapshot,
+): MemoryHealthSnapshot {
+  const reason =
+    health.reason && PUBLIC_AUTONOMOUS_MEMORY_REASONS.has(health.reason)
+      ? health.reason
+      : undefined;
+  return { ...health, reason };
+}
+
+function sanitizeAutonomousMemoryResult<
+  T extends { health: MemoryHealthSnapshot },
+>(result: T): T {
+  return { ...result, health: sanitizeAutonomousMemoryHealth(result.health) };
+}
+
+const ASK_AGENT_AUTONOMOUS_MEMORY_IMPORT_SCHEMA = z.object({
+  archive: z.object({
+    schema: z.literal("agentlink-memory"),
+    version: z.literal(1),
+    archiveId: z.string().min(1).max(200),
+    exportedAt: z.string().min(1).max(100),
+    scope: z.object({
+      kind: z.enum(["global", "workspace"]),
+      id: z.string().min(1).max(500),
+    }),
+    records: z.array(z.unknown()).max(10_000),
+    warning: z.string().min(1).max(2_000),
+  }),
+});
 const ASK_AGENT_LOG_FIELD_LIMIT = 32;
 const ASK_AGENT_MEMORY_SUMMARY_DEBOUNCE_MS = 750;
 const ASK_AGENT_MEMORY_DISCLOSURE_SOURCE_LIMIT = 5;
@@ -722,6 +845,16 @@ type AskAgentToolExecutionResult = {
   modelResult?: string;
 };
 
+type ResolvedAskAgentToolCall = {
+  providerCall: BrowserGatewayAskAgentToolCall;
+  canonicalCall: BrowserGatewayAskAgentToolCall;
+  resolutionError?: {
+    message: string;
+    status: string;
+    issues?: readonly z.core.$ZodIssue[];
+  };
+};
+
 function askAgentMediaFromToolResult(result: ToolResult | undefined): {
   content: string;
   modelContent: string | CoreModelContentBlock[];
@@ -765,6 +898,7 @@ type AskAgentSessionResponse = { readonly ok: true } & AskAgentControllerState;
 type BrowserGatewayPrivateModelCatalogSnapshot = CoreModelCatalogSnapshot & {
   publishedByOwnerGenerationId: string;
   openAiCompatibleRuntimeProfiles: BrowserGatewayOpenAiCompatibleRuntimeProfiles;
+  promptProfileResolutions: BrowserGatewayPromptProfileResolutions;
 };
 
 type AskAgentModelExecutionContext = {
@@ -773,6 +907,7 @@ type AskAgentModelExecutionContext = {
   ownerGenerationId: string;
   providerId: string;
   model: string;
+  promptProfile: Readonly<PromptProfileResolution>;
   credential?: BrowserGatewayModelCredentialRecord;
   openAiCompatibleRuntimeProfile?: OpenAiCompatibleRuntimeProfile;
 };
@@ -817,7 +952,16 @@ export class BrowserGatewayHelper {
   private readonly askAgentLogPath: string;
   private readonly askAgentPreferencesStore: BrowserGatewayAskAgentPreferencesStore;
   private readonly askAgentHistoryStore: BrowserGatewayAskAgentHistoryStore;
-  private readonly askAgentMemoryStore: BrowserGatewayAskAgentMemoryStore;
+  /** Test compatibility seam; production uses askAgentDerivedSessionRuntime. */
+  private readonly askAgentMemoryStore:
+    | BrowserGatewayAskAgentMemoryStore
+    | undefined;
+  private readonly askAgentDerivedSessionRuntime: BrowserGatewayDerivedSessionRuntime;
+  private readonly askAgentAutonomousMemoryRuntime: BrowserGatewayAutonomousMemoryRuntime;
+  private readonly askAgentMemoryRuntimeByOwner = new Map<
+    string,
+    BrowserGatewayMemoryRuntimeDescriptor
+  >();
   private readonly askAgentMemoryProposalBridge: BrowserGatewayAskAgentMemoryProposalBridge;
   private readonly askAgentSummarizer: BrowserGatewayAskAgentSummarizer;
   private readonly askAgentMemorySummaryDebounceMs: number;
@@ -876,6 +1020,8 @@ export class BrowserGatewayHelper {
         >;
       askAgentSummarizer?: BrowserGatewayAskAgentSummarizer;
       askAgentMemoryStore?: BrowserGatewayAskAgentMemoryStore;
+      askAgentDerivedSessionRuntime?: BrowserGatewayDerivedSessionRuntime;
+      askAgentAutonomousMemoryRuntime?: BrowserGatewayAutonomousMemoryRuntime;
       askAgentMemorySummaryDebounceMs?: number;
       askAgentPreferencesStore?: BrowserGatewayAskAgentPreferencesStore;
       askAgentHistoryStore?: BrowserGatewayAskAgentHistoryStore;
@@ -1085,9 +1231,13 @@ export class BrowserGatewayHelper {
       new BrowserGatewayAskAgentModelClient({
         sessionId: BROWSER_GATEWAY_ASK_AGENT_SESSION_ID,
       });
-    this.askAgentMemoryStore =
-      injectables.askAgentMemoryStore ??
-      new BrowserGatewayAskAgentMemoryStore();
+    this.askAgentMemoryStore = injectables.askAgentMemoryStore;
+    this.askAgentDerivedSessionRuntime =
+      injectables.askAgentDerivedSessionRuntime ??
+      new BrowserGatewayDerivedSessionRuntime();
+    this.askAgentAutonomousMemoryRuntime =
+      injectables.askAgentAutonomousMemoryRuntime ??
+      new BrowserGatewayAutonomousMemoryRuntime();
     this.askAgentMemoryProposalBridge =
       new BrowserGatewayAskAgentMemoryProposalBridge();
     this.askAgentSummarizer =
@@ -1376,6 +1526,22 @@ export class BrowserGatewayHelper {
         return this.handleAskAgentMemoryStatusRequest(res);
       case "memoryClear":
         return this.handleAskAgentMemoryClearRequest(req, res);
+      case "autonomousMemoryHealth":
+        return this.handleAskAgentAutonomousMemoryHealthRequest(res);
+      case "autonomousMemoryActivity":
+        return this.handleAskAgentAutonomousMemoryActivityRequest(res);
+      case "autonomousMemoryQuery":
+        return this.handleAskAgentAutonomousMemoryQueryRequest(req, res);
+      case "autonomousMemoryDetail":
+        return this.handleAskAgentAutonomousMemoryDetailRequest(req, res);
+      case "autonomousMemoryManage":
+        return this.handleAskAgentAutonomousMemoryManageRequest(req, res);
+      case "autonomousMemoryClear":
+        return this.handleAskAgentAutonomousMemoryClearRequest(req, res);
+      case "autonomousMemoryExport":
+        return this.handleAskAgentAutonomousMemoryExportRequest(res);
+      case "autonomousMemoryImport":
+        return this.handleAskAgentAutonomousMemoryImportRequest(req, res);
       case "log":
         return this.handleAskAgentUiLogRequest(req, res);
       case "model":
@@ -1890,7 +2056,12 @@ export class BrowserGatewayHelper {
       const body = (await readJsonBody(req)) as { sessionId?: unknown } | null;
       const sessionId =
         typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
-      if (!sessionId || !this.askAgentSessionStore.deleteSession(sessionId)) {
+      if (
+        !sessionId ||
+        !this.askAgentSessionStore
+          .getHistorySnapshot()
+          .sessions.some((session) => session.id === sessionId)
+      ) {
         writeJson(res, 404, {
           ok: false,
           error: "ask_agent_session_not_found",
@@ -1898,9 +2069,12 @@ export class BrowserGatewayHelper {
         });
         return;
       }
-      await this.persistAskAgentHistory();
-      await this.askAgentMemoryStore.deleteSessionMemory(sessionId);
       this.cancelAskAgentMemorySummary(sessionId);
+      await this.deleteAskAgentDerivedSession(sessionId);
+      if (!this.askAgentSessionStore.deleteSession(sessionId)) {
+        throw new Error("ask_agent_session_delete_race");
+      }
+      await this.persistAskAgentHistory();
       this.askAgentController.clearMemoryCandidateNudgeForSession(sessionId);
       const response = await this.buildAskAgentResponse();
       await this.publishAskAgentSnapshot(response.snapshot);
@@ -2298,39 +2472,6 @@ export class BrowserGatewayHelper {
     );
   }
 
-  private globalDurableMemoryCache: {
-    mtimeMs: number;
-    size: number;
-    content: string;
-  } | null = null;
-
-  private readGlobalDurableMemoryContent(): string | undefined {
-    const memoryPath = path.join(os.homedir(), ".agentlink", "memory.md");
-    try {
-      // Called per processed user message — a full synchronous read would block
-      // the helper's event loop every time, so re-read only when the file changed.
-      const stat = fsSync.statSync(memoryPath);
-      const cached = this.globalDurableMemoryCache;
-      if (
-        cached &&
-        cached.mtimeMs === stat.mtimeMs &&
-        cached.size === stat.size
-      ) {
-        return cached.content;
-      }
-      const content = fsSync.readFileSync(memoryPath, "utf-8");
-      this.globalDurableMemoryCache = {
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-        content,
-      };
-      return content;
-    } catch {
-      this.globalDurableMemoryCache = null;
-      return undefined;
-    }
-  }
-
   private maybeCreateAskAgentMemoryCandidateNudge(params: {
     text: string;
     priorUserTexts: string[];
@@ -2338,11 +2479,9 @@ export class BrowserGatewayHelper {
     now: number;
   }): void {
     const candidate =
-      detectMemoryCandidates(
-        params.text,
-        params.priorUserTexts,
-        this.readGlobalDurableMemoryContent(),
-      ).find((item) => item.suggestedScope === "global") ?? null;
+      detectMemoryCandidates(params.text, params.priorUserTexts).find(
+        (item) => item.suggestedScope === "global",
+      ) ?? null;
     this.askAgentController.considerMemoryCandidate({
       sessionId: params.sessionId,
       now: params.now,
@@ -2373,6 +2512,151 @@ export class BrowserGatewayHelper {
     await this.askAgentHistoryStore.write(
       this.askAgentSessionStore.getHistorySnapshot(),
     );
+  }
+
+  private async refreshAskAgentDerivedSessionRuntime(): Promise<void> {
+    const connected = this.coreOwnerRegistry
+      .list(Date.now())
+      .filter(
+        (registration) =>
+          registration.status === "connected" &&
+          registration.owner.ownerId !== BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+      )
+      .map((registration) => {
+        const ownerId = registration.owner.ownerId;
+        const descriptor = this.askAgentMemoryRuntimeByOwner.get(ownerId);
+        return descriptor
+          ? { ownerId, retrievalStoreRoot: descriptor.retrievalStoreRoot }
+          : { ownerId };
+      });
+    await this.askAgentDerivedSessionRuntime.setOwners(connected);
+  }
+
+  private async getAskAgentDerivedSession(
+    sessionId: string,
+  ): Promise<DerivedSessionSummary | undefined> {
+    if (this.askAgentMemoryStore) {
+      const session = (await this.askAgentMemoryStore.read()).sessions.find(
+        (candidate) => candidate.sessionId === sessionId,
+      );
+      return session
+        ? {
+            ...session,
+            surface: "browser-ask-agent",
+            scope: { kind: "global", id: "agentlink-user" },
+          }
+        : undefined;
+    }
+    await this.refreshAskAgentDerivedSessionRuntime();
+    return (
+      await this.askAgentDerivedSessionRuntime.inspect({
+        scopes: [{ kind: "global", id: "agentlink-user" }],
+        surfaces: ["browser-ask-agent"],
+      })
+    ).sessions.find((session) => session.sessionId === sessionId);
+  }
+
+  private async upsertAskAgentDerivedSession(
+    session: DerivedSessionSummary,
+    chunk: DerivedSessionChunk,
+  ): Promise<void> {
+    if (this.askAgentMemoryStore) {
+      await this.askAgentMemoryStore.update((snapshot) => {
+        const sessions = snapshot.sessions.filter(
+          (candidate) => candidate.sessionId !== session.sessionId,
+        );
+        const chunks = snapshot.chunks.filter(
+          (candidate) => candidate.id !== chunk.id,
+        );
+        sessions.push(session);
+        chunks.push(chunk);
+        return {
+          ...snapshot,
+          updatedAt: Math.max(snapshot.updatedAt, session.updatedAt),
+          sessions,
+          chunks,
+        };
+      });
+      return;
+    }
+    await this.refreshAskAgentDerivedSessionRuntime();
+    await this.askAgentDerivedSessionRuntime.publish({
+      session,
+      chunks: [chunk],
+    });
+  }
+
+  private async searchAskAgentDerivedSessions(params: {
+    query: string;
+    activeSessionId: string;
+    recentMessageIds: readonly string[];
+    limit: number;
+  }): Promise<BrowserGatewayAskAgentMemorySearchResult[]> {
+    if (this.askAgentMemoryStore) {
+      return await this.askAgentMemoryStore.search(params.query, {
+        activeSessionId: params.activeSessionId,
+        recentMessageIds: params.recentMessageIds,
+        limit: params.limit,
+      });
+    }
+    await this.refreshAskAgentDerivedSessionRuntime();
+    return await this.askAgentDerivedSessionRuntime.recall({
+      query: params.query,
+      scopes: [{ kind: "global", id: "agentlink-user" }],
+      surfaces: ["browser-ask-agent"],
+      activeSessionId: params.activeSessionId,
+      visibleMessageIds: params.recentMessageIds,
+      limit: params.limit,
+    });
+  }
+
+  private async listAskAgentDerivedSessions(): Promise<{
+    sessions: BrowserGatewayAskAgentSessionMemory[];
+    chunkCount: number;
+  }> {
+    if (this.askAgentMemoryStore) {
+      const snapshot = await this.askAgentMemoryStore.read();
+      return {
+        sessions: snapshot.sessions,
+        chunkCount: snapshot.chunks.length,
+      };
+    }
+    await this.refreshAskAgentDerivedSessionRuntime();
+    const inspection = await this.askAgentDerivedSessionRuntime.inspect({
+      scopes: [{ kind: "global", id: "agentlink-user" }],
+      surfaces: ["browser-ask-agent"],
+    });
+    return {
+      sessions: inspection.sessions.map(
+        ({ surface: _surface, scope: _scope, ...session }) => session,
+      ),
+      chunkCount: inspection.chunkCount,
+    };
+  }
+
+  private async deleteAskAgentDerivedSession(sessionId: string): Promise<void> {
+    if (this.askAgentMemoryStore) {
+      await this.askAgentMemoryStore.deleteSessionMemory(sessionId);
+      return;
+    }
+    await this.refreshAskAgentDerivedSessionRuntime();
+    await this.askAgentDerivedSessionRuntime.deleteSession({
+      sessionId,
+      surface: "browser-ask-agent",
+      scope: { kind: "global", id: "agentlink-user" },
+    });
+  }
+
+  private async clearAskAgentDerivedSessions(): Promise<void> {
+    if (this.askAgentMemoryStore) {
+      await this.askAgentMemoryStore.clear();
+      return;
+    }
+    await this.refreshAskAgentDerivedSessionRuntime();
+    await this.askAgentDerivedSessionRuntime.clearScope({
+      scope: { kind: "global", id: "agentlink-user" },
+      surface: "browser-ask-agent",
+    });
   }
 
   private scheduleAskAgentMemorySummary(sessionId: string): void {
@@ -2461,10 +2745,7 @@ export class BrowserGatewayHelper {
     const controller = new AbortController();
     this.askAgentMemorySummaryControllers.set(session.id, controller);
     try {
-      const existingSnapshot = await this.askAgentMemoryStore.read();
-      const existingSession = existingSnapshot.sessions.find(
-        (candidate) => candidate.sessionId === session.id,
-      );
+      const existingSession = await this.getAskAgentDerivedSession(session.id);
       if (existingSession?.sourceRevision === revision) {
         this.logAskAgentEvent("ask-agent.memory.summary.skipped", {
           sessionId: session.id,
@@ -2490,7 +2771,7 @@ export class BrowserGatewayHelper {
       if (controller.signal.aborted) return;
       if (secretFinding) {
         this.askAgentMemorySecretSkippedRevisions.set(session.id, revision);
-        await this.askAgentMemoryStore.deleteSessionMemory(session.id);
+        await this.deleteAskAgentDerivedSession(session.id);
         this.logAskAgentEvent("ask-agent.memory.summary.skipped", {
           sessionId: session.id,
           reason: "secret_like_content",
@@ -2523,8 +2804,10 @@ export class BrowserGatewayHelper {
       }
 
       const now = Date.now();
-      const sessionMemory: BrowserGatewayAskAgentSessionMemory = {
+      const sessionMemory: DerivedSessionSummary = {
         sessionId: session.id,
+        surface: "browser-ask-agent",
+        scope: { kind: "global", id: "agentlink-user" },
         title: summary.title || session.title || "Ask Agent",
         createdAt: session.createdAt,
         lastActiveAt: session.lastActiveAt,
@@ -2537,7 +2820,7 @@ export class BrowserGatewayHelper {
         durableCandidateHints: summary.durableCandidateHints,
         updatedAt: now,
       };
-      const chunk: BrowserGatewayAskAgentMemoryChunk = {
+      const chunk: DerivedSessionChunk = {
         id: `${session.id}:${latestTurn.startMessageIndex}-${latestTurn.endMessageIndex}`,
         sessionId: session.id,
         sourceMessageIds: latestTurn.sourceMessageIds,
@@ -2552,22 +2835,7 @@ export class BrowserGatewayHelper {
       };
       if (controller.signal.aborted) return;
       this.askAgentMemorySecretSkippedRevisions.delete(session.id);
-      await this.askAgentMemoryStore.update((snapshot) => {
-        const sessions = snapshot.sessions.filter(
-          (candidate) => candidate.sessionId !== sessionMemory.sessionId,
-        );
-        const chunks = snapshot.chunks.filter(
-          (candidate) => candidate.id !== chunk.id,
-        );
-        sessions.push(sessionMemory);
-        chunks.push(chunk);
-        return {
-          ...snapshot,
-          updatedAt: Math.max(snapshot.updatedAt, now),
-          sessions,
-          chunks,
-        };
-      });
+      await this.upsertAskAgentDerivedSession(sessionMemory, chunk);
       this.logAskAgentEvent("ask-agent.memory.summary.complete", {
         sessionId: session.id,
         messageCount: session.messages.length,
@@ -2604,7 +2872,8 @@ export class BrowserGatewayHelper {
         .map((message) => message.id)
         .filter(Boolean);
       const pastIntent = hasAskAgentMemoryPastIntent(params.query);
-      const results = await this.askAgentMemoryStore.search(params.query, {
+      const results = await this.searchAskAgentDerivedSessions({
+        query: params.query,
         activeSessionId: params.activeSessionId,
         recentMessageIds,
         limit: 5,
@@ -2764,8 +3033,8 @@ export class BrowserGatewayHelper {
   private async buildAskAgentMemoryIndexSessions(params: {
     activeSessionId: string;
   }): Promise<BrowserGatewayAskAgentSessionMemory[]> {
-    const snapshot = await this.askAgentMemoryStore.read();
-    return snapshot.sessions
+    const { sessions } = await this.listAskAgentDerivedSessions();
+    return sessions
       .filter((session) => session.sessionId !== params.activeSessionId)
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, ASK_AGENT_MEMORY_INDEX_SESSION_LIMIT);
@@ -2988,6 +3257,19 @@ export class BrowserGatewayHelper {
     );
   }
 
+  private resolvePromptProfileFromSnapshot(
+    snapshot: BrowserGatewayPrivateModelCatalogSnapshot,
+    model: string,
+    providerId: string,
+  ): Readonly<PromptProfileResolution> {
+    const publishedPromptProfile = snapshot.promptProfileResolutions[model];
+    return publishedPromptProfile &&
+      publishedPromptProfile.modelId === model &&
+      publishedPromptProfile.providerId === providerId
+      ? publishedPromptProfile
+      : resolvePromptProfile({ providerId, modelId: model });
+  }
+
   private getAskAgentModelExecutionContextFromSnapshot(params: {
     snapshot: BrowserGatewayPrivateModelCatalogSnapshot;
     model: string;
@@ -3000,6 +3282,11 @@ export class BrowserGatewayHelper {
     }
     const openAiCompatibleRuntimeProfile =
       snapshot.openAiCompatibleRuntimeProfiles[providerId];
+    const promptProfile = this.resolvePromptProfileFromSnapshot(
+      snapshot,
+      model,
+      providerId,
+    );
     const credential = this.modelCredentialCache.getCredential({
       grantedByOwnerId: snapshot.publishedByOwnerId,
       grantedByOwnerGenerationId: snapshot.publishedByOwnerGenerationId,
@@ -3020,6 +3307,7 @@ export class BrowserGatewayHelper {
       ownerGenerationId: snapshot.publishedByOwnerGenerationId,
       providerId,
       model,
+      promptProfile,
       credential: credential ?? undefined,
       openAiCompatibleRuntimeProfile,
     };
@@ -3037,6 +3325,11 @@ export class BrowserGatewayHelper {
       return null;
     }
 
+    const selectedPromptProfile = this.resolvePromptProfileFromSnapshot(
+      snapshot,
+      model,
+      providerId,
+    );
     const selectedOwnerContext =
       this.getAskAgentModelExecutionContextFromSnapshot({
         snapshot,
@@ -3070,6 +3363,7 @@ export class BrowserGatewayHelper {
         return {
           ...candidateContext,
           modelOwnerId: snapshot.publishedByOwnerId,
+          promptProfile: selectedPromptProfile,
         };
       }
     }
@@ -3384,8 +3678,8 @@ export class BrowserGatewayHelper {
   }
 
   private async buildAskAgentDerivedMemoryStatus(): Promise<AskAgentDerivedMemoryStatus> {
-    const snapshot = await this.askAgentMemoryStore.read();
-    const recentSessions = [...snapshot.sessions]
+    const { sessions, chunkCount } = await this.listAskAgentDerivedSessions();
+    const recentSessions = [...sessions]
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, 5)
       .map((session) => ({
@@ -3395,14 +3689,14 @@ export class BrowserGatewayHelper {
         updatedAt: session.updatedAt,
       }));
     const lastUpdatedAt =
-      snapshot.sessions.length > 0 || snapshot.chunks.length > 0
-        ? snapshot.updatedAt
+      sessions.length > 0
+        ? Math.max(...sessions.map((session) => session.updatedAt))
         : null;
 
     return {
-      sessionSummaryCount: snapshot.sessions.length,
-      chunkSummaryCount: snapshot.chunks.length,
-      totalSummaryCount: snapshot.sessions.length + snapshot.chunks.length,
+      sessionSummaryCount: sessions.length,
+      chunkSummaryCount: chunkCount,
+      totalSummaryCount: sessions.length + chunkCount,
       lastUpdatedAt,
       recentSessions,
     };
@@ -3448,7 +3742,7 @@ export class BrowserGatewayHelper {
       for (const sessionId of pendingSummarySessionIds) {
         this.cancelAskAgentMemorySummary(sessionId);
       }
-      await this.askAgentMemoryStore.clear();
+      await this.clearAskAgentDerivedSessions();
       const memory = await this.buildAskAgentDerivedMemoryStatus();
       this.logAskAgentEvent("ask-agent.memory.clear", {
         ok: true,
@@ -3467,6 +3761,269 @@ export class BrowserGatewayHelper {
     }
   }
 
+  private async handleAskAgentAutonomousMemoryHealthRequest(
+    res: http.ServerResponse,
+  ): Promise<void> {
+    await this.refreshAskAgentAutonomousMemoryRuntime();
+    const health = await this.askAgentAutonomousMemoryRuntime.health();
+    writeJson(res, 200, {
+      ok: true,
+      health: sanitizeAutonomousMemoryHealth(health),
+    });
+  }
+
+  private async handleAskAgentAutonomousMemoryActivityRequest(
+    res: http.ServerResponse,
+  ): Promise<void> {
+    await this.refreshAskAgentAutonomousMemoryRuntime();
+    const health = await this.askAgentAutonomousMemoryRuntime.health();
+    if (health.status === "unavailable") {
+      writeJson(res, 200, {
+        ok: true,
+        events: [],
+        health: sanitizeAutonomousMemoryHealth(health),
+      });
+      return;
+    }
+    const activity = await this.askAgentAutonomousMemoryRuntime.activity({
+      scope: "global",
+      limit: 50,
+    });
+    writeJson(res, 200, {
+      ok: true,
+      ...sanitizeAutonomousMemoryResult(activity),
+    });
+  }
+
+  private async handleAskAgentAutonomousMemoryQueryRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const parsed = ASK_AGENT_AUTONOMOUS_MEMORY_QUERY_SCHEMA.safeParse(
+        await readJsonBody(req),
+      );
+      if (!parsed.success) {
+        writeJson(res, 400, { error: "invalid_request" });
+        return;
+      }
+      await this.refreshAskAgentAutonomousMemoryRuntime();
+      const result = await this.askAgentAutonomousMemoryRuntime.query({
+        scope: "global",
+        ...parsed.data,
+      });
+      writeJson(res, 200, {
+        ok: true,
+        ...sanitizeAutonomousMemoryResult(result),
+      });
+    } catch (err) {
+      const invalidJson =
+        err instanceof Error && err.message === "invalid_json";
+      this.logAskAgentEvent("ask-agent.autonomous-memory.query", {
+        ok: false,
+        error: invalidJson ? "invalid_json" : String(err),
+      });
+      writeJson(res, invalidJson ? 400 : 409, {
+        error: invalidJson ? "invalid_json" : "memory_unavailable",
+      });
+    }
+  }
+
+  private async handleAskAgentAutonomousMemoryDetailRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const parsed = ASK_AGENT_AUTONOMOUS_MEMORY_DETAIL_SCHEMA.safeParse(
+        await readJsonBody(req),
+      );
+      if (!parsed.success) {
+        writeJson(res, 400, { error: "invalid_request" });
+        return;
+      }
+      await this.refreshAskAgentAutonomousMemoryRuntime();
+      const result = await this.askAgentAutonomousMemoryRuntime.detail({
+        recordId: parsed.data.recordId,
+        scope: "global",
+      });
+      writeJson(res, 200, {
+        ok: true,
+        ...sanitizeAutonomousMemoryResult(result),
+      });
+    } catch (err) {
+      const invalidJson =
+        err instanceof Error && err.message === "invalid_json";
+      this.logAskAgentEvent("ask-agent.autonomous-memory.detail", {
+        ok: false,
+        error: invalidJson ? "invalid_json" : String(err),
+      });
+      writeJson(res, invalidJson ? 400 : 409, {
+        error: invalidJson ? "invalid_json" : "memory_unavailable",
+      });
+    }
+  }
+
+  private async handleAskAgentAutonomousMemoryManageRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const parsed = ASK_AGENT_AUTONOMOUS_MEMORY_MANAGE_SCHEMA.safeParse(
+        await readJsonBody(req),
+      );
+      if (!parsed.success) {
+        writeJson(res, 400, { error: "invalid_request" });
+        return;
+      }
+      const { scope: _scope, nudgeId, ...validated } = parsed.data;
+      const sourceEvidence = validated.source_evidence.trim();
+      if (!sourceEvidence) {
+        writeJson(res, 400, { error: "invalid_request" });
+        return;
+      }
+      const input: ManageMemoryToolInput = {
+        ...validated,
+        scope: "global",
+        source_evidence: sourceEvidence,
+      };
+      await this.refreshAskAgentAutonomousMemoryRuntime();
+      const result = await this.askAgentAutonomousMemoryRuntime.manageAsUser(
+        input,
+        {
+          observedAt: new Date().toISOString(),
+          evidence: sourceEvidence,
+        },
+      );
+      if (
+        nudgeId &&
+        ["created", "updated", "same-fact", "superseded", "contested"].includes(
+          result.result.disposition,
+        )
+      ) {
+        this.askAgentController.dismissMemoryCandidateNudge(nudgeId);
+      }
+      const response = await this.buildAskAgentResponse();
+      await this.publishAskAgentSnapshot(response.snapshot);
+      this.logAskAgentEvent("ask-agent.autonomous-memory.manage", {
+        ok: true,
+        operation: input.operation,
+        disposition: result.result.disposition,
+        auditEventId: result.result.auditEventId,
+        fromNudge: Boolean(nudgeId),
+      });
+      writeJson(res, 200, {
+        ok: true,
+        result: result.result,
+        health: sanitizeAutonomousMemoryHealth(result.health),
+        snapshot: response.snapshot,
+      });
+    } catch (err) {
+      const invalidJson =
+        err instanceof Error && err.message === "invalid_json";
+      this.logAskAgentEvent("ask-agent.autonomous-memory.manage", {
+        ok: false,
+        error: invalidJson ? "invalid_json" : String(err),
+      });
+      writeJson(res, invalidJson ? 400 : 409, {
+        error: invalidJson ? "invalid_json" : "memory_unavailable",
+      });
+    }
+  }
+
+  private async handleAskAgentAutonomousMemoryClearRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const parsed = ASK_AGENT_AUTONOMOUS_MEMORY_CLEAR_SCHEMA.safeParse(
+        await readJsonBody(req),
+      );
+      if (!parsed.success) {
+        writeJson(res, 400, { error: "confirmation_required" });
+        return;
+      }
+      await this.refreshAskAgentAutonomousMemoryRuntime();
+      const result = await this.askAgentAutonomousMemoryRuntime.clearScope({
+        scope: "global",
+        observedAt: new Date().toISOString(),
+        evidence: "Browser user confirmed clearing global autonomous memory.",
+      });
+      writeJson(res, 200, {
+        ok: true,
+        ...sanitizeAutonomousMemoryResult(result),
+      });
+    } catch (err) {
+      const invalidJson =
+        err instanceof Error && err.message === "invalid_json";
+      this.logAskAgentEvent("ask-agent.autonomous-memory.clear", {
+        ok: false,
+        error: invalidJson ? "invalid_json" : String(err),
+      });
+      writeJson(res, invalidJson ? 400 : 409, {
+        error: invalidJson ? "invalid_json" : "memory_unavailable",
+      });
+    }
+  }
+
+  private async handleAskAgentAutonomousMemoryExportRequest(
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      await this.refreshAskAgentAutonomousMemoryRuntime();
+      const result = await this.askAgentAutonomousMemoryRuntime.exportArchive({
+        scope: "global",
+      });
+      writeJson(res, 200, {
+        ok: true,
+        ...sanitizeAutonomousMemoryResult(result),
+      });
+    } catch (err) {
+      this.logAskAgentEvent("ask-agent.autonomous-memory.export", {
+        ok: false,
+        error: String(err),
+      });
+      writeJson(res, 409, { error: "memory_unavailable" });
+    }
+  }
+
+  private async handleAskAgentAutonomousMemoryImportRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const parsed = ASK_AGENT_AUTONOMOUS_MEMORY_IMPORT_SCHEMA.safeParse(
+        await readJsonBody(req),
+      );
+      if (!parsed.success) {
+        writeJson(res, 400, { error: "invalid_request" });
+        return;
+      }
+      await this.refreshAskAgentAutonomousMemoryRuntime();
+      const result = await this.askAgentAutonomousMemoryRuntime.importArchive(
+        parsed.data.archive as MemoryArchiveV1,
+        {
+          scope: "global",
+          observedAt: new Date().toISOString(),
+          evidence: "Browser user imported an autonomous-memory archive.",
+        },
+      );
+      writeJson(res, 200, {
+        ok: true,
+        ...sanitizeAutonomousMemoryResult(result),
+      });
+    } catch (err) {
+      const invalidJson =
+        err instanceof Error && err.message === "invalid_json";
+      this.logAskAgentEvent("ask-agent.autonomous-memory.import", {
+        ok: false,
+        error: invalidJson ? "invalid_json" : String(err),
+      });
+      writeJson(res, invalidJson ? 400 : 409, {
+        error: invalidJson ? "invalid_json" : "memory_unavailable",
+      });
+    }
+  }
+
   private async handleAskAgentMemoryProposalRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -3475,10 +4032,19 @@ export class BrowserGatewayHelper {
       const body = (await readJsonBody(
         req,
       )) as BrowserGatewayAskAgentMemoryProposalRequest | null;
-      const nudgeId = typeof body?.nudgeId === "string" ? body.nudgeId : "";
+      if (
+        !body ||
+        (body.tier !== "instructions" &&
+          body.tier !== "skill" &&
+          body.tier !== "command")
+      ) {
+        writeJson(res, 400, { error: "invalid_memory_tier" });
+        return;
+      }
+      const nudgeId = typeof body.nudgeId === "string" ? body.nudgeId : "";
       const approval = await this.askAgentMemoryProposalBridge.propose({
-        tier: body?.tier ?? "memory",
-        scope: body?.scope ?? "global",
+        tier: body.tier,
+        scope: body.scope ?? "global",
         operation: body?.operation ?? "add",
         title: typeof body?.title === "string" ? body.title : "Remember this",
         rationale:
@@ -4196,6 +4762,11 @@ export class BrowserGatewayHelper {
       params.modelContext,
       params.signal,
     );
+    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
+      ...ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
+      ...preparedWebAccess.tools,
+      ...ASK_AGENT_NATIVE_DISCLOSURE_BRIDGE_TOOLS,
+    ]);
     const modelTranscriptMessages =
       this.askAgentSessionStore.getModelTranscriptMessages(
         params.assistantMessageId,
@@ -4208,6 +4779,7 @@ export class BrowserGatewayHelper {
         openAiCompatibleRuntimeProfile:
           params.modelContext.openAiCompatibleRuntimeProfile,
         model: params.modelContext.model,
+        promptProfile: params.modelContext.promptProfile.profile,
         reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
         messages: [],
         memoryContext: params.memoryContext,
@@ -4245,15 +4817,13 @@ export class BrowserGatewayHelper {
           openAiCompatibleRuntimeProfile:
             params.modelContext.openAiCompatibleRuntimeProfile,
           model: params.modelContext.model,
+          promptProfile: params.modelContext.promptProfile.profile,
           reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
           messages: [],
           memoryContext: params.memoryContext,
           iterationMessages: [...modelTranscriptMessages, ...iterationMessages],
           toolMessages,
-          tools: [
-            ...ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
-            ...preparedWebAccess.tools,
-          ],
+          tools: nativeToolDisclosure.inlineTools,
           signal: params.signal,
           onDelta: (delta) => {
             onText(delta);
@@ -4291,53 +4861,80 @@ export class BrowserGatewayHelper {
           );
         }
       },
-      isParallelSafe: (toolCall) => {
-        if (ASK_AGENT_PARALLEL_SAFE_TOOL_NAMES.has(toolCall.name)) return true;
+      isParallelSafe: (providerCall) => {
+        const { canonicalCall, resolutionError } = this.resolveAskAgentToolCall(
+          providerCall,
+          nativeToolDisclosure,
+        );
+        if (resolutionError) return false;
+        if (ASK_AGENT_PARALLEL_SAFE_TOOL_NAMES.has(canonicalCall.name)) {
+          return true;
+        }
         if (
-          preparedWebAccess.parallelSafeMcpToolNames.includes(toolCall.name)
+          preparedWebAccess.parallelSafeMcpToolNames.includes(
+            canonicalCall.name,
+          )
         ) {
           return true;
         }
-        if (toolCall.name !== "call_mcp_tool") return false;
+        if (canonicalCall.name !== "call_mcp_tool") return false;
         const serverName =
-          typeof toolCall.input.server === "string"
-            ? toolCall.input.server.trim()
+          typeof canonicalCall.input.server === "string"
+            ? canonicalCall.input.server.trim()
             : "";
         return preparedWebAccess.parallelSafeMcpServerNames.includes(
           serverName,
         );
       },
-      runTool: async (toolCall) => {
+      runTool: async (providerCall) => {
         const toolStartedAt = Date.now();
+        const resolved = this.resolveAskAgentToolCall(
+          providerCall,
+          nativeToolDisclosure,
+        );
+        const { canonicalCall } = resolved;
         this.recordAskAgentSemanticDelta();
         this.askAgentController.startAssistantToolCall({
           messageId: params.assistantMessageId,
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          input: toolCall.input,
+          toolCallId: canonicalCall.id,
+          toolName: canonicalCall.name,
+          input: canonicalCall.input,
         });
         await publishTurnSnapshot();
-        const executed = await this.executeAskAgentSafeProjectlessTool(
-          toolCall,
-          preparedWebAccess,
-          params.modelContext.credential,
-          params.modelContext.model,
-          params.modelContext.ownerId,
-          params.signal,
-        );
+        const executed = resolved.resolutionError
+          ? this.buildAskAgentToolResolutionError(
+              canonicalCall,
+              resolved.resolutionError,
+            )
+          : canonicalCall.name === "find_native_tools"
+            ? this.executeAskAgentNativeToolDiscovery(
+                canonicalCall,
+                nativeToolDisclosure,
+              )
+            : await this.executeAskAgentSafeProjectlessTool(
+                canonicalCall,
+                preparedWebAccess,
+                params.modelContext.credential,
+                params.modelContext.model,
+                params.modelContext.ownerId,
+                params.signal,
+              );
         this.recordAskAgentSemanticDelta();
         this.askAgentController.completeAssistantToolCall({
           messageId: params.assistantMessageId,
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          input: toolCall.input,
+          toolCallId: canonicalCall.id,
+          toolName: canonicalCall.name,
+          input: canonicalCall.input,
           result: executed.modelResult ?? executed.content,
           resultImages: executed.resultImages,
           durationMs: Date.now() - toolStartedAt,
         });
         await publishTurnSnapshot();
         return {
-          toolMessage: executed.toolMessage,
+          toolMessage: this.rebindAskAgentToolResultMessage(
+            executed.toolMessage,
+            providerCall,
+          ),
           stop: executed.stop,
           content: executed.content,
           outcome: executed.outcome,
@@ -4350,6 +4947,194 @@ export class BrowserGatewayHelper {
         return { outcome: "model_empty", assistantText: "" };
       },
     });
+  }
+
+  private resolveAskAgentToolCall(
+    providerCall: BrowserGatewayAskAgentToolCall,
+    disclosure: NativeToolDisclosureSnapshot,
+  ): ResolvedAskAgentToolCall {
+    if (providerCall.name === "find_native_tools") {
+      const parsed = z
+        .object(findNativeToolsSchema)
+        .strict()
+        .safeParse(providerCall.input);
+      return parsed.success
+        ? {
+            providerCall,
+            canonicalCall: { ...providerCall, input: parsed.data },
+          }
+        : {
+            providerCall,
+            canonicalCall: providerCall,
+            resolutionError: {
+              message: "Invalid find_native_tools input",
+              status: "invalid_native_discovery_input",
+              issues: parsed.error.issues,
+            },
+          };
+    }
+
+    if (providerCall.name === "call_native_tool") {
+      const parsedBridge = z
+        .object(callNativeToolSchema)
+        .strict()
+        .safeParse(providerCall.input);
+      if (!parsedBridge.success) {
+        return {
+          providerCall,
+          canonicalCall: providerCall,
+          resolutionError: {
+            message: "Invalid call_native_tool input",
+            status: "invalid_bridge_input",
+            issues: parsedBridge.error.issues,
+          },
+        };
+      }
+      const requestedCanonicalCall = {
+        id: providerCall.id,
+        name: parsedBridge.data.name,
+        input: parsedBridge.data.input,
+      };
+      const target = getDeferredNativeTool(disclosure, parsedBridge.data.name);
+      if (!target) {
+        return {
+          providerCall,
+          canonicalCall: requestedCanonicalCall,
+          resolutionError: {
+            message: `Native tool '${parsedBridge.data.name}' was not available in the deferred catalog for this Browser Ask Agent turn`,
+            status: "native_tool_not_available",
+          },
+        };
+      }
+      const parsedTarget = parseAskAgentDeferredNativeToolInput(
+        target.name,
+        parsedBridge.data.input,
+      );
+      if (!parsedTarget.success) {
+        return {
+          providerCall,
+          canonicalCall: requestedCanonicalCall,
+          resolutionError: {
+            message:
+              parsedTarget.status === "native_tool_not_invocable"
+                ? `Native tool '${target.name}' has no Browser Ask Agent validator`
+                : `Invalid input for native tool '${target.name}'`,
+            status: parsedTarget.status,
+            issues: parsedTarget.issues,
+          },
+        };
+      }
+      return {
+        providerCall,
+        canonicalCall: {
+          id: providerCall.id,
+          name: target.name,
+          input: parsedTarget.data,
+        },
+      };
+    }
+
+    if (getDeferredNativeTool(disclosure, providerCall.name)) {
+      return {
+        providerCall,
+        canonicalCall: providerCall,
+        resolutionError: {
+          message: `Native tool '${providerCall.name}' must be invoked through call_native_tool`,
+          status: "direct_deferred_native_tool_call",
+        },
+      };
+    }
+
+    const directTool = disclosure.inlineTools.find(
+      (tool) => tool.name === providerCall.name,
+    );
+    if (!directTool) {
+      return {
+        providerCall,
+        canonicalCall: providerCall,
+        resolutionError: {
+          message: `Native tool '${providerCall.name}' was not available in the authorized Browser Ask Agent catalog`,
+          status: "native_tool_not_available",
+        },
+      };
+    }
+    return { providerCall, canonicalCall: providerCall };
+  }
+
+  private buildAskAgentToolResolutionError(
+    toolCall: BrowserGatewayAskAgentToolCall,
+    error: NonNullable<ResolvedAskAgentToolCall["resolutionError"]>,
+  ): AskAgentToolExecutionResult {
+    const content = JSON.stringify({
+      error: error.message,
+      status: error.status,
+      tool: toolCall.name,
+      ...(error.issues ? { issues: error.issues } : {}),
+    });
+    this.logAskAgentEvent("ask-agent.tool.denied", {
+      toolName: toolCall.name,
+      ok: false,
+      error: error.status,
+    });
+    const stop =
+      error.status === "native_tool_not_available" ||
+      error.status === "direct_deferred_native_tool_call";
+    return {
+      content,
+      stop,
+      ...(stop ? { outcome: "model_final" as const } : {}),
+      toolMessage: this.buildAskAgentToolResultMessage(toolCall, content, true),
+    };
+  }
+
+  private executeAskAgentNativeToolDiscovery(
+    toolCall: BrowserGatewayAskAgentToolCall,
+    disclosure: NativeToolDisclosureSnapshot,
+  ): AskAgentToolExecutionResult {
+    const input = toolCall.input as {
+      query?: string;
+      limit?: number;
+      offset?: number;
+      include_schemas?: boolean;
+      schema_limit?: number;
+    };
+    const content = JSON.stringify(
+      discoverNativeTools(disclosure, {
+        query: input.query,
+        limit: input.limit,
+        offset: input.offset,
+        includeSchemas: input.include_schemas,
+        schemaLimit: input.schema_limit,
+      }),
+    );
+    this.logAskAgentEvent("ask-agent.tool.find_native_tools", {
+      ok: true,
+      deferredTools: disclosure.deferredTools.length,
+    });
+    return {
+      content,
+      stop: false,
+      toolMessage: this.buildAskAgentToolResultMessage(toolCall, content),
+    };
+  }
+
+  private rebindAskAgentToolResultMessage(
+    toolMessage: CoreModelMessage | undefined,
+    providerCall: BrowserGatewayAskAgentToolCall,
+  ): CoreModelMessage | undefined {
+    if (!toolMessage || !Array.isArray(toolMessage.content)) return toolMessage;
+    return {
+      ...toolMessage,
+      content: toolMessage.content.map((block) =>
+        block.type === "tool_use" && block.id === providerCall.id
+          ? {
+              ...block,
+              name: providerCall.name,
+              input: providerCall.input,
+            }
+          : block,
+      ),
+    };
   }
 
   private finishAskAgentSuccess(
@@ -5141,6 +5926,13 @@ export class BrowserGatewayHelper {
       );
     }
 
+    if (
+      toolCall.name === "manage_memory" ||
+      toolCall.name === "recall_memory"
+    ) {
+      return await this.executeAskAgentAutonomousMemoryTool(toolCall);
+    }
+
     if (toolCall.name === "present_images") {
       return this.executeAskAgentPresentImagesTool(toolCall);
     }
@@ -5210,6 +6002,61 @@ export class BrowserGatewayHelper {
     }
 
     return this.executeAskAgentFinalStatusTool(toolCall, startedAt);
+  }
+
+  private async executeAskAgentAutonomousMemoryTool(
+    toolCall: BrowserGatewayAskAgentToolCall,
+  ): Promise<AskAgentToolExecutionResult> {
+    await this.refreshAskAgentAutonomousMemoryRuntime();
+    const context = {
+      sessionId: this.askAgentSessionStore.getActiveSessionId(),
+      isBackground: false,
+      observedAt: new Date().toISOString(),
+    };
+    const result =
+      toolCall.name === "manage_memory"
+        ? await handleManageMemory(
+            toolCall.input as unknown as ManageMemoryToolInput,
+            context,
+            this.askAgentAutonomousMemoryRuntime,
+          )
+        : await handleRecallMemory(
+            toolCall.input as unknown as RecallMemoryToolInput,
+            context,
+            this.askAgentAutonomousMemoryRuntime,
+          );
+    const media = askAgentMediaFromToolResult(result);
+    this.logAskAgentEvent(`ask-agent.tool.${toolCall.name}`, {
+      ok: result.isError !== true,
+      memoryMode: this.askAgentAutonomousMemoryRuntime.getResolution().mode,
+    });
+    return {
+      content: media.content,
+      modelContent: media.modelContent,
+      stop: false,
+      toolMessage: this.buildAskAgentToolResultMessage(
+        toolCall,
+        media.content,
+        result.isError === true,
+        media.modelContent,
+      ),
+    };
+  }
+
+  private async refreshAskAgentAutonomousMemoryRuntime(): Promise<void> {
+    const connected = this.coreOwnerRegistry
+      .list(Date.now())
+      .filter(
+        (registration) =>
+          registration.status === "connected" &&
+          registration.owner.ownerId !== BROWSER_GATEWAY_ASK_AGENT_OWNER_ID,
+      )
+      .map((registration) => {
+        const ownerId = registration.owner.ownerId;
+        const descriptor = this.askAgentMemoryRuntimeByOwner.get(ownerId);
+        return descriptor ? { ownerId, ...descriptor } : { ownerId };
+      });
+    await this.askAgentAutonomousMemoryRuntime.setOwners(connected);
   }
 
   private async resolveAskAgentGrantedPath(inputPath: unknown): Promise<{
@@ -6269,6 +7116,8 @@ export class BrowserGatewayHelper {
   async dispose(): Promise<void> {
     await this.askAgentController.dispose();
     await this.askAgentOwnerAdapter.dispose();
+    await this.askAgentDerivedSessionRuntime.dispose();
+    await this.askAgentAutonomousMemoryRuntime.dispose();
   }
 
   private broadcastAskAgentPublication(
@@ -6694,6 +7543,7 @@ export class BrowserGatewayHelper {
           ownerRegistration = this.coreOwnerRegistry.markDisconnected(
             body.ownerId.trim(),
           );
+          this.askAgentMemoryRuntimeByOwner.delete(body.ownerId.trim());
         }
       }
       this.lastLeaseActivityAtMs = Date.now();
@@ -6733,6 +7583,14 @@ export class BrowserGatewayHelper {
         processId: body.processId,
         now,
       });
+      if (body.memoryRuntime) {
+        this.askAgentMemoryRuntimeByOwner.set(
+          registration.effectiveOwnerId,
+          body.memoryRuntime,
+        );
+      } else {
+        this.askAgentMemoryRuntimeByOwner.delete(registration.effectiveOwnerId);
+      }
       this.dataPlaneRoutes.ownerRegistered(
         registration.effectiveOwnerId,
         registration.registration.ownerGenerationId,
@@ -6783,7 +7641,8 @@ export class BrowserGatewayHelper {
         !body.ownerId.trim() ||
         typeof body.ownerGenerationId !== "string" ||
         !body.ownerGenerationId.trim() ||
-        !this.isCoreCapabilities(body.capabilities)
+        !this.isCoreCapabilities(body.capabilities) ||
+        !this.isMemoryRuntimeDescriptor(body.memoryRuntime)
       ) {
         writeJson(res, 400, { error: "invalid_request" });
         return;
@@ -6797,6 +7656,14 @@ export class BrowserGatewayHelper {
       if (!ownerRegistration) {
         writeJson(res, 404, { error: "owner_not_registered" });
         return;
+      }
+      if (body.memoryRuntime) {
+        this.askAgentMemoryRuntimeByOwner.set(
+          body.ownerId.trim(),
+          body.memoryRuntime,
+        );
+      } else {
+        this.askAgentMemoryRuntimeByOwner.delete(body.ownerId.trim());
       }
       this.relayRoutes.ownerCatalogChanged();
       writeJson(res, 200, { ok: true, ownerRegistration });
@@ -6829,7 +7696,22 @@ export class BrowserGatewayHelper {
       typeof body.ownerGenerationId === "string" &&
       body.ownerGenerationId.trim() &&
       this.isCoreSessionScope(body.scope) &&
-      this.isCoreCapabilities(body.capabilities),
+      this.isCoreCapabilities(body.capabilities) &&
+      this.isMemoryRuntimeDescriptor(body.memoryRuntime),
+    );
+  }
+
+  private isMemoryRuntimeDescriptor(
+    value: unknown,
+  ): value is BrowserGatewayMemoryRuntimeDescriptor | undefined {
+    if (value === undefined) return true;
+    if (!value || typeof value !== "object") return false;
+    const descriptor = value as Partial<BrowserGatewayMemoryRuntimeDescriptor>;
+    return Boolean(
+      (descriptor.mode === "off" || descriptor.mode === "autonomous") &&
+      typeof descriptor.retrievalStoreRoot === "string" &&
+      descriptor.retrievalStoreRoot.trim() &&
+      path.isAbsolute(descriptor.retrievalStoreRoot),
     );
   }
 
@@ -6922,6 +7804,7 @@ export class BrowserGatewayHelper {
         })),
         openAiCompatibleRuntimeProfiles:
           body.openAiCompatibleRuntimeProfiles ?? {},
+        promptProfileResolutions: body.promptProfileResolutions ?? {},
       };
       this.modelCatalogSnapshots.set(
         candidateSnapshot.publishedByOwnerId,
@@ -6974,6 +7857,10 @@ export class BrowserGatewayHelper {
       this.isValidOpenAiCompatibleRuntimeProfiles(
         body.openAiCompatibleRuntimeProfiles,
         body.models,
+      ) &&
+      this.isValidPromptProfileResolutions(
+        body.promptProfileResolutions,
+        body.models,
       ),
     );
   }
@@ -6999,6 +7886,27 @@ export class BrowserGatewayHelper {
           model.reasoningEfforts.every(isCoreReasoningEffort))) &&
       (model.defaultReasoningEffort === undefined ||
         isCoreReasoningEffort(model.defaultReasoningEffort)),
+    );
+  }
+
+  private isValidPromptProfileResolutions(
+    value: BrowserGatewayPromptProfileResolutions | undefined,
+    models: readonly CoreModelCatalogEntry[],
+  ): boolean {
+    if (value === undefined) return true;
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return false;
+    const advertisedProviders = new Map(
+      models.map((model) => [
+        model.id,
+        normalizeBrowserGatewayModelCredentialProviderId(model.providerId),
+      ]),
+    );
+    return Object.entries(value).every(
+      ([modelId, resolution]) =>
+        advertisedProviders.get(modelId) === resolution.providerId &&
+        resolution.modelId === modelId &&
+        isCurrentPromptProfileResolution(resolution),
     );
   }
 

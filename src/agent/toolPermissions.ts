@@ -17,6 +17,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "read_session_excerpt",
     "diagnose_activity",
     "present_images",
+    "recall_memory",
     "compose",
   ],
   edit: [
@@ -46,6 +47,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "apply_code_action",
   ],
   search: ["web_search", "codebase_search", "search_files"],
+  memory: ["manage_memory"],
   "read-only-command": ["execute_command"],
   plan: ["write_file", "apply_diff", "execute_command", "get_terminal_output"],
   mcp: [], // populated dynamically from McpClientHub

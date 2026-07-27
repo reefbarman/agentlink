@@ -31,6 +31,14 @@ export interface BrowserGatewayAskAgentMemoryProposalRequest extends MemoryPropo
   nudgeId?: string;
 }
 
+function assertAuthoritativeTier(tier: MemoryTier): void {
+  if (tier === "memory") {
+    throw new Error(
+      "Low-authority memory must use autonomous memory management, not an approval proposal",
+    );
+  }
+}
+
 interface PendingMemoryProposal {
   id: string;
   params: MemoryProposalParams;
@@ -165,6 +173,7 @@ export class BrowserGatewayAskAgentMemoryProposalBridge {
       throw new Error("A memory proposal is already awaiting approval");
     }
     const params = this.normalizeRequest(request);
+    assertAuthoritativeTier(params.tier);
     validateProposal(params);
     const target = await resolveMemoryProposalTarget(params, {
       homeDir: this.homeDir,
@@ -209,6 +218,7 @@ export class BrowserGatewayAskAgentMemoryProposalBridge {
       decision,
       pending.params.content,
     );
+    assertAuthoritativeTier(retargeted.tier);
     validateProposal({
       ...retargeted,
       content: editedContent ?? retargeted.content,

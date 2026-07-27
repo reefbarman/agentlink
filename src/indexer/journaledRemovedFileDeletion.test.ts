@@ -18,7 +18,7 @@ function removal(file: string, pointIds: string[]) {
     kind: "remove" as const,
     generation: `generation-${file}`,
     targetHash: null,
-    oldPointIds: pointIds,
+    oldRecordIds: pointIds,
     intendedBatches: [],
   };
 }
@@ -39,15 +39,15 @@ describe("journaled removed-file deletion", () => {
   });
 
   function execute(options: {
-    requestedFiles?: Array<{ relPath: string; pointIds: string[] }>;
-    deleteBatch?: (pointIds: string[]) => Promise<void>;
+    requestedFiles?: Array<{ relPath: string; recordIds: string[] }>;
+    deleteRecords?: (pointIds: string[]) => Promise<void>;
     checkpointCompleted?: (relPaths: string[]) => void;
     isCancelled?: () => boolean;
   }) {
     return executeJournaledRemovedFileDeletes({
       journalPath,
       requestedFiles: options.requestedFiles ?? [],
-      deleteBatch: options.deleteBatch ?? (async () => undefined),
+      deleteRecords: options.deleteRecords ?? (async () => undefined),
       checkpointCompleted: options.checkpointCompleted ?? (() => undefined),
       isCancelled: options.isCancelled ?? (() => false),
       createId: () => `id-${++id}`,
@@ -58,8 +58,8 @@ describe("journaled removed-file deletion", () => {
     const events: string[] = [];
 
     const result = await execute({
-      requestedFiles: [{ relPath: "src/removed.ts", pointIds: ["point-1"] }],
-      deleteBatch: async () => {
+      requestedFiles: [{ relPath: "src/removed.ts", recordIds: ["point-1"] }],
+      deleteRecords: async () => {
         expect(loadFileIndexJournal(journalPath)).toMatchObject({
           status: "valid",
           journal: {
@@ -67,7 +67,7 @@ describe("journaled removed-file deletion", () => {
               {
                 file: "src/removed.ts",
                 kind: "remove",
-                oldPointIds: ["point-1"],
+                oldRecordIds: ["point-1"],
               },
             ],
           },
@@ -88,7 +88,7 @@ describe("journaled removed-file deletion", () => {
     expect(result).toEqual({
       completedRelPaths: ["src/removed.ts"],
       errors: [],
-      pointsDeleted: 1,
+      recordsDeleted: 1,
       cancelled: false,
       pending: false,
     });
@@ -107,10 +107,10 @@ describe("journaled removed-file deletion", () => {
 
     const result = await execute({
       requestedFiles: [
-        { relPath: "src/recover.ts", pointIds: ["stale-cache-point"] },
-        { relPath: "src/new.ts", pointIds: ["new-point"] },
+        { relPath: "src/recover.ts", recordIds: ["stale-cache-point"] },
+        { relPath: "src/new.ts", recordIds: ["new-point"] },
       ],
-      deleteBatch: async (pointIds) => {
+      deleteRecords: async (pointIds) => {
         deleted.push(pointIds);
       },
     });
@@ -125,8 +125,8 @@ describe("journaled removed-file deletion", () => {
 
   it("retains unresolved ownership after delete failure", async () => {
     const result = await execute({
-      requestedFiles: [{ relPath: "src/removed.ts", pointIds: ["point-1"] }],
-      deleteBatch: async () => {
+      requestedFiles: [{ relPath: "src/removed.ts", recordIds: ["point-1"] }],
+      deleteRecords: async () => {
         throw new Error("delete failed");
       },
     });
@@ -143,8 +143,8 @@ describe("journaled removed-file deletion", () => {
     let cancelled = false;
 
     const result = await execute({
-      requestedFiles: [{ relPath: "src/removed.ts", pointIds: ["point-1"] }],
-      deleteBatch: async () => {
+      requestedFiles: [{ relPath: "src/removed.ts", recordIds: ["point-1"] }],
+      deleteRecords: async () => {
         cancelled = true;
       },
       isCancelled: () => cancelled,
@@ -153,7 +153,7 @@ describe("journaled removed-file deletion", () => {
     expect(result).toEqual({
       completedRelPaths: ["src/removed.ts"],
       errors: [],
-      pointsDeleted: 1,
+      recordsDeleted: 1,
       cancelled: true,
       pending: false,
     });
@@ -166,7 +166,7 @@ describe("journaled removed-file deletion", () => {
   it("retains ownership when cache checkpointing fails", async () => {
     await expect(
       execute({
-        requestedFiles: [{ relPath: "src/removed.ts", pointIds: ["point-1"] }],
+        requestedFiles: [{ relPath: "src/removed.ts", recordIds: ["point-1"] }],
         checkpointCompleted: () => {
           throw new Error("checkpoint failed");
         },
@@ -204,8 +204,8 @@ describe("journaled removed-file deletion", () => {
     const deleted: string[][] = [];
 
     const result = await execute({
-      requestedFiles: [{ relPath: "src/new.ts", pointIds: ["new-point"] }],
-      deleteBatch: async (pointIds) => {
+      requestedFiles: [{ relPath: "src/new.ts", recordIds: ["new-point"] }],
+      deleteRecords: async (pointIds) => {
         deleted.push(pointIds);
         throw new Error("recovery failed");
       },
@@ -233,8 +233,8 @@ describe("journaled removed-file deletion", () => {
           kind: "replace",
           generation: "generation-2",
           targetHash: "hash-2",
-          oldPointIds: ["old-point"],
-          intendedBatches: [{ batch: 0, pointIds: ["new-point"] }],
+          oldRecordIds: ["old-point"],
+          intendedBatches: [{ batch: 0, recordIds: ["new-point"] }],
         },
       ],
     });

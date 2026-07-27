@@ -26,6 +26,7 @@ export interface BrowserForegroundSnapshot {
   loadedInstructions: AppState["loadedInstructions"];
   restoringSession: AppState["restoringSession"];
   contextBudget?: AppState["chatState"]["contextBudget"];
+  contextHealth: AppState["contextHealth"];
   condenseThreshold?: AppState["chatState"]["condenseThreshold"];
   commandApprovalPolicy?: CommandApprovalPolicy;
   approvalPolicy?: AppState["chatState"]["approvalPolicy"];
@@ -99,6 +100,13 @@ export function createBrowserForegroundSnapshot(
     contextBudget: state.chatState.contextBudget
       ? { ...state.chatState.contextBudget }
       : undefined,
+    contextHealth: state.contextHealth
+      ? {
+          memory: { ...state.contextHealth.memory },
+          retrieval: { ...state.contextHealth.retrieval },
+          index: { ...state.contextHealth.index },
+        }
+      : null,
     condenseThreshold: state.chatState.condenseThreshold,
     commandApprovalPolicy: state.chatState.commandApprovalPolicy,
     approvalPolicy: state.chatState.approvalPolicy,

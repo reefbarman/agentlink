@@ -1,11 +1,10 @@
-import * as path from "path";
-
 import type { StructuralGraphProvider } from "../core/capabilities/readSearch.js";
 import type {
   StructuralFileEntry,
   StructuralGraphCache,
   StructuralImport,
 } from "../indexer/structuralGraph.js";
+import { resolveContainedCodeIndexPath } from "../indexer/codeIndexPaths.js";
 import {
   errorResult,
   handleToolError,
@@ -71,12 +70,16 @@ export async function handleGetModuleNeighbors(
       });
     }
 
-    const { graph, collectionName, structuralCachePath, graphExists } =
-      structuralGraphProvider.loadGraph(workspaceRoot);
+    const { graph, indexName, structuralStorePath, graphExists } =
+      await structuralGraphProvider.loadGraph(workspaceRoot);
 
-    const targetRelPath = normalizeRelPath(
-      path.relative(workspaceRoot, absolutePath),
-    );
+    const identity = resolveContainedCodeIndexPath(workspaceRoot, absolutePath);
+    if (!identity) {
+      return errorResult("No workspace folder owns this path.", {
+        path: params.path,
+      });
+    }
+    const targetRelPath = identity.portableRelativePath;
     const target = findEntry(graph, targetRelPath);
     const dependents = findDependents(graph, targetRelPath);
     const targetFreshness = structuralGraphProvider.getTargetFreshness(
@@ -88,8 +91,8 @@ export async function handleGetModuleNeighbors(
       path: targetRelPath,
       workspace_root: workspaceRoot,
       cache: {
-        collection_name: collectionName,
-        structural_cache_path: structuralCachePath,
+        index_name: indexName,
+        structural_store_path: structuralStorePath,
       },
       freshness: {
         target: targetFreshness,
@@ -194,7 +197,7 @@ function buildNote(
   targetStatus: unknown,
 ): string | undefined {
   if (!graphExists) {
-    return "Structural sidecar cache is missing. Build or refresh the codebase index before relying on module neighbors.";
+    return "Structural index is unavailable. Build or refresh the codebase index before relying on module neighbors.";
   }
   if (!target) {
     return "Target file is not present in the structural graph. It may be unindexed, ignored, too large, unsupported, or awaiting the next index refresh.";

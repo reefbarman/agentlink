@@ -7,6 +7,7 @@ import type {
   CheckpointState,
   PersistDurability,
   PersistResult,
+  PersistedActiveSkillState,
   PersistedFleetMetadata,
   PersistedSessionMetadata,
   PersistedSessionRecord,
@@ -71,6 +72,7 @@ interface MetadataFile {
   activeContextResourceUri?: string;
   mode: string;
   model: string;
+  promptProfile?: import("../core/promptProfile.js").PromptProfileResolution;
   commandApprovalPolicy?: import("../core/capabilities/terminal.js").TerminalCommandApprovalPolicySnapshot;
   approvalPolicy?: import("../core/capabilities/terminal.js").TerminalApprovalPolicy;
   approvalReviewer?: import("../core/capabilities/terminal.js").TerminalApprovalReviewer;
@@ -83,6 +85,7 @@ interface MetadataFile {
   lastCacheReadTokens?: number;
   reasoningEffort?: import("./providers/types.js").ReasoningEffort;
   loadedSkills?: string[];
+  activeSkillState?: PersistedActiveSkillState;
   checkpoints?: Checkpoint[];
   checkpointState?: CheckpointState;
   revertPending?: RevertRecoveryState;
@@ -625,6 +628,7 @@ export class SessionStore implements SessionPersistenceProvider {
     id: string;
     mode: string;
     model: string;
+    promptProfile?: import("../core/promptProfile.js").PromptProfileResolution;
     title: string;
     createdAt: number;
     lastActiveAt: number;
@@ -643,6 +647,7 @@ export class SessionStore implements SessionPersistenceProvider {
     projectScope?: SessionProjectScope;
     activeContextResourceUri?: string;
     getLoadedSkills?(): string[];
+    getActiveSkillState?(): PersistedActiveSkillState | undefined;
     getAllMessages(): AgentMessage[];
     checkpoints?: Checkpoint[];
   }): void {
@@ -668,6 +673,7 @@ export class SessionStore implements SessionPersistenceProvider {
         activeContextResourceUri: session.activeContextResourceUri,
         mode: session.mode,
         model: session.model,
+        promptProfile: session.promptProfile,
         commandApprovalPolicy: session.commandApprovalPolicy,
         approvalPolicy: session.approvalPolicy,
         approvalReviewer: session.approvalReviewer,
@@ -680,6 +686,7 @@ export class SessionStore implements SessionPersistenceProvider {
         lastCacheReadTokens: session.lastCacheReadTokens,
         reasoningEffort: session.reasoningEffort,
         loadedSkills: session.getLoadedSkills?.() ?? [],
+        activeSkillState: session.getActiveSkillState?.(),
         checkpointState: session.checkpoints
           ? { baseCommit: null, checkpoints: session.checkpoints }
           : undefined,
@@ -957,6 +964,7 @@ export class SessionStore implements SessionPersistenceProvider {
       activeContextResourceUri: file.activeContextResourceUri,
       mode: file.mode,
       model: file.model,
+      promptProfile: file.promptProfile,
       commandApprovalPolicy: file.commandApprovalPolicy,
       approvalPolicy: file.approvalPolicy,
       approvalReviewer: file.approvalReviewer,
@@ -969,6 +977,7 @@ export class SessionStore implements SessionPersistenceProvider {
       lastCacheReadTokens: file.lastCacheReadTokens,
       reasoningEffort: file.reasoningEffort,
       loadedSkills: file.loadedSkills,
+      activeSkillState: file.activeSkillState,
       checkpointState: file.checkpointState ?? {
         baseCommit: null,
         checkpoints: file.checkpoints ?? [],
@@ -999,6 +1008,7 @@ export class SessionStore implements SessionPersistenceProvider {
       activeContextResourceUri: metadata.activeContextResourceUri,
       mode: metadata.mode,
       model: metadata.model,
+      promptProfile: metadata.promptProfile,
       commandApprovalPolicy: metadata.commandApprovalPolicy,
       approvalPolicy: metadata.approvalPolicy,
       approvalReviewer: metadata.approvalReviewer,
@@ -1011,6 +1021,7 @@ export class SessionStore implements SessionPersistenceProvider {
       lastCacheReadTokens: metadata.lastCacheReadTokens,
       reasoningEffort: metadata.reasoningEffort,
       loadedSkills: metadata.loadedSkills,
+      activeSkillState: metadata.activeSkillState,
       checkpoints,
       checkpointState: metadata.checkpointState,
       revertPending: metadata.revertPending,
