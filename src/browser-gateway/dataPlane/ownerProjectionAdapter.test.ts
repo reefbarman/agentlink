@@ -702,6 +702,32 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
     });
   });
 
+  it("projects explicit surface changes for browser transcript dividers", () => {
+    const sources = new ProjectionSources(readSet());
+    const adapter = makeAdapter(sources);
+    sources.readSet.foreground!.messages = [
+      message("message-change", "assistant", "", 950),
+    ];
+    sources.readSet.foreground!.messages[0].surfaceChange = {
+      model: { previousModel: "gpt-5.4", model: "gpt-5.6-sol" },
+      reasoning: {
+        previousReasoningEffort: "high",
+        reasoningEffort: "low",
+      },
+    };
+
+    expect(adapter.getCheckpoint().transcript.messages[0]).toMatchObject({
+      role: "assistant",
+      surfaceChange: {
+        model: { previousModel: "gpt-5.4", model: "gpt-5.6-sol" },
+        reasoning: {
+          previousReasoningEffort: "high",
+          reasoningEffort: "low",
+        },
+      },
+    });
+  });
+
   it("projects apiRequest mode and command approval policy for browser change dividers", () => {
     const sources = new ProjectionSources(readSet());
     const adapter = makeAdapter(sources);

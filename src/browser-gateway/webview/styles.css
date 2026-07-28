@@ -299,51 +299,6 @@ textarea {
     var(--vscode-editorGroupHeader-tabsBorder, var(--ag-border));
 }
 
-.browser-instance-group {
-  display: flex;
-  flex: 0 1 auto;
-  align-items: stretch;
-  min-width: 0;
-  border: 1px solid
-    color-mix(in srgb, var(--instance-group-color) 35%, var(--ag-border));
-  border-bottom: 0;
-  background: color-mix(
-    in srgb,
-    var(--instance-group-color) 10%,
-    var(--vscode-editorGroupHeader-tabsBackground, var(--ag-panel-2))
-  );
-}
-
-.browser-instance-group.active {
-  box-shadow: inset 0 2px 0 var(--instance-group-color);
-}
-
-.browser-instance-group-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 180px;
-  padding: 0 8px;
-  overflow: hidden;
-  border-right: 1px solid
-    color-mix(in srgb, var(--instance-group-color) 35%, var(--ag-border));
-  color: var(--ag-muted);
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.browser-instance-group-label span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.browser-logical-tabs {
-  display: flex;
-  align-items: stretch;
-  min-width: 0;
-}
-
 .logical-tab {
   min-width: 145px;
   max-width: 230px;
@@ -412,6 +367,46 @@ textarea {
   left: 0;
   height: 1px;
   background: var(--vscode-tab-activeBorderTop, var(--ag-accent));
+}
+
+.instance-tab.logical-tab {
+  border-color: color-mix(
+    in srgb,
+    var(--instance-group-color) 32%,
+    var(--vscode-tab-border, var(--ag-border))
+  );
+  background: color-mix(
+    in srgb,
+    var(--instance-group-color) 10%,
+    var(--vscode-tab-inactiveBackground, var(--ag-panel-2))
+  );
+}
+
+.instance-tab.logical-tab:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--instance-group-color) 14%,
+    var(--vscode-tab-hoverBackground, var(--ag-panel))
+  );
+}
+
+.instance-tab.logical-tab.active {
+  background: color-mix(
+    in srgb,
+    var(--instance-group-color) 18%,
+    var(--vscode-tab-activeBackground, var(--ag-panel))
+  );
+}
+
+.instance-tab.logical-tab-group-start,
+.instance-tab.logical-tab-group-single {
+  border-left: 2px solid var(--instance-group-color);
+}
+
+.instance-tab.logical-tab-group-end,
+.instance-tab.logical-tab-group-single {
+  margin-right: 4px;
+  border-right-color: var(--instance-group-color);
 }
 
 .instance-tab-main,
@@ -1572,10 +1567,6 @@ pre {
     min-width: 150px;
   }
 
-  .browser-instance-group {
-    max-width: 100%;
-  }
-
   .browser-layout {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, auto) minmax(0, 1fr);
@@ -1657,29 +1648,10 @@ pre {
   }
 
   .browser-instance-tabs {
+    align-content: flex-start;
     min-height: 32px;
-  }
-
-  .browser-instance-group {
-    flex: 1 1 100%;
-    max-width: 100%;
-    overflow-x: auto;
-  }
-
-  .browser-instance-group-label {
-    position: sticky;
-    left: 0;
-    z-index: 1;
-    max-width: 112px;
-    background: color-mix(
-      in srgb,
-      var(--instance-group-color) 10%,
-      var(--vscode-editorGroupHeader-tabsBackground, var(--ag-panel-2))
-    );
-  }
-
-  .browser-logical-tabs {
-    flex: 0 0 auto;
+    max-height: 96px;
+    overflow-y: auto;
   }
 
   .instance-tab {

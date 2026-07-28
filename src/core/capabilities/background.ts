@@ -1,3 +1,5 @@
+import type { CoreReasoningEffort } from "../modelCatalog.js";
+
 export interface AgentBudget {
   maxTokens?: number;
   maxToolCalls?: number;
@@ -63,6 +65,7 @@ export interface SpawnBackgroundResult {
   resolvedMode: string;
   resolvedModel: string;
   resolvedProvider: string;
+  reasoningEffort?: CoreReasoningEffort;
   taskClass: string;
   routingReason: string;
   fallbackUsed: boolean;
@@ -114,6 +117,7 @@ export interface BackgroundAgentStatusResult {
   resolvedMode?: string;
   resolvedModel?: string;
   resolvedProvider?: string;
+  reasoningEffort?: CoreReasoningEffort;
   taskClass?: string;
   toolCalls?: number;
   tokenUsage?: number;

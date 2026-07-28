@@ -125,7 +125,12 @@ describe("approveOutsideWorkspaceAccess Guardian review", () => {
     );
 
     expect(result).toEqual({ approved: true });
-    expect(enqueuePathApproval).toHaveBeenCalledOnce();
+    expect(enqueuePathApproval).toHaveBeenCalledWith(
+      filePath,
+      "session-1",
+      undefined,
+      "guardian-denied",
+    );
     expect(addPathRule).toHaveBeenCalledWith(
       "session-1",
       { pattern: filePath, mode: "exact" },

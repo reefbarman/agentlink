@@ -3,6 +3,7 @@ import type {
   ContentBlock,
   TodoItem,
 } from "../../agent/webview/types.js";
+import { isCoreReasoningEffort } from "../../core/modelCatalog.js";
 import { utf8ByteLength } from "../../shared/streamingBaselineMetrics.js";
 import {
   BROWSER_GATEWAY_COMMAND_IDEMPOTENCY,
@@ -1158,6 +1159,26 @@ function projectMessage(
           },
         }
       : {}),
+    ...(message.surfaceChange
+      ? {
+          surfaceChange: {
+            ...(message.surfaceChange.model
+              ? {
+                  model: {
+                    previousModel: bounded(
+                      message.surfaceChange.model.previousModel,
+                      256,
+                    ),
+                    model: bounded(message.surfaceChange.model.model, 256),
+                  },
+                }
+              : {}),
+            ...(message.surfaceChange.reasoning
+              ? { reasoning: { ...message.surfaceChange.reasoning } }
+              : {}),
+          },
+        }
+      : {}),
     ...(message.error
       ? {
           error: {
@@ -1345,6 +1366,9 @@ function projectBlock(
           : {}),
         ...(block.resolvedProvider
           ? { resolvedProvider: bounded(block.resolvedProvider, 256) }
+          : {}),
+        ...(isCoreReasoningEffort(block.reasoningEffort)
+          ? { reasoningEffort: block.reasoningEffort }
           : {}),
         ...(block.resolvedMode
           ? { resolvedMode: bounded(block.resolvedMode, 128) }

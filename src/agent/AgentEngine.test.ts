@@ -5866,6 +5866,37 @@ describe("AgentEngine", () => {
       expect(retainedImageMessage).toBeDefined();
     });
 
+    it("retains transcript-only surface changes appended while condensing", async () => {
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const surfaceChange = {
+        reasoning: {
+          previousReasoningEffort: "high" as const,
+          reasoningEffort: "low" as const,
+        },
+      };
+      mocks.mockSummarizeConversation.mockImplementation(async () => {
+        session.appendSurfaceChange(surfaceChange);
+        return {
+          messages: [{ role: "user", content: "summary", isSummary: true }],
+          summary: "summary",
+          prevInputTokens: 1_000,
+          newInputTokens: 100,
+        };
+      });
+
+      const engine = new AgentEngine(makeRegistry());
+      await collectEvents(engine.condenseSession(session, true));
+
+      expect(
+        session
+          .getAllMessages()
+          .find((message) => message.uiHint?.surfaceChange)?.uiHint
+          ?.surfaceChange,
+      ).toEqual(surfaceChange);
+      expect(session.getMessages()).toHaveLength(1);
+    });
+
     it("clears stale token accounting after successful condense", async () => {
       mocks.mockSummarizeConversation.mockImplementation(async (options) => {
         options.onProviderRequest?.({

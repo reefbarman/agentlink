@@ -86,9 +86,7 @@ describe("useGatewaySnapshotConnection", () => {
     );
     expect(options.fetchSessions).toHaveBeenCalledWith("instance-1", false);
     expect(options.fetchDebugInfo).toHaveBeenCalledWith("instance-1");
-    expect(options.fetchInstances).toHaveBeenCalledWith({
-      commitSelection: false,
-    });
+    expect(options.fetchInstances).toHaveBeenCalledWith();
 
     view.unmount();
 

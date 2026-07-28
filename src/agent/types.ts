@@ -77,6 +77,13 @@ export type AgentMessage = MessageParam & {
       errorMessage?: string;
       condensing?: boolean;
     };
+    surfaceChange?: {
+      model?: { previousModel: string; model: string };
+      reasoning?: {
+        previousReasoningEffort: ReasoningEffort;
+        reasoningEffort: ReasoningEffort;
+      };
+    };
     finalMarker?: FinalMessageMarker;
   };
 };

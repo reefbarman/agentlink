@@ -636,15 +636,15 @@ The tools below are available to the built-in agent according to its active mode
 
 Discover native AgentLink tools whose schemas were deferred from the current provider request. The always-visible tool description includes the exact deferred tool names authorized for that request, so agents can recognize capabilities such as image generation without carrying every full schema. Search the catalog before concluding that a capability is unavailable. The result is bounded, stable, and derived only from the immutable request catalog; discovery cannot broaden mode, profile, skill, background, web, or surface restrictions.
 
-| Parameter         | Type     | Description                                                         |
-| ----------------- | -------- | ------------------------------------------------------------------- |
-| `query`           | string?  | Match text against deferred tool names and descriptions.            |
-| `limit`           | number?  | Maximum results, from 1 to 50; defaults to 10.                      |
-| `offset`          | number?  | Zero-based offset for deterministic pagination.                     |
-| `include_schemas` | boolean? | Include input schemas; defaults to false.                           |
-| `schema_limit`    | number?  | Maximum returned schemas, from 1 to 10; defaults to 1 when enabled. |
+| Parameter         | Type     | Description                                                                                                        |
+| ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `query`           | string?  | Match names/descriptions; exact names come first, then remaining conceptual terms add relevance-ranked OR matches. |
+| `limit`           | number?  | Maximum results, from 1 to 50; defaults to 10.                                                                     |
+| `offset`          | number?  | Zero-based offset for deterministic pagination.                                                                    |
+| `include_schemas` | boolean? | Include input schemas; defaults to false.                                                                          |
+| `schema_limit`    | number?  | Maximum returned schemas, from 1 to 10; defaults to 1 when enabled.                                                |
 
-The response includes the matching tools, total count, applied offset and limit, and `nextOffset` when another page exists. Results preserve the authorized catalog's deterministic order. Foreground sessions use a cache-stable union catalog across built-in modes; invoking a discovered tool still passes the active mode gate and can require switching modes. Restricted profiles, background sessions, and Browser Ask Agent receive their own narrower catalogs.
+The response includes the matching tools, total count, applied offset and limit, and `nextOffset` when another page exists. Explicit tool-name matches come first in authorized catalog order; remaining conceptual matches rank by name/description relevance and use catalog order as the deterministic tie-breaker. Queries with no useful terms return the authorized catalog rather than an empty result. `total` counts all ranked candidates, including low-confidence OR matches. Foreground sessions use a cache-stable union catalog across built-in modes; invoking a discovered tool still passes the active mode gate and can require switching modes. Restricted profiles, background sessions, and Browser Ask Agent receive their own narrower catalogs.
 
 ### call_native_tool
 
@@ -1475,7 +1475,7 @@ Budgets are optional. Review task classes receive automatic complexity-based sof
 Returns structured JSON including:
 
 - `sessionId`
-- `resolvedMode`, `resolvedModel`, `resolvedProvider`
+- `resolvedMode`, `resolvedModel`, `resolvedProvider`, `reasoningEffort`
 - `taskClass`
 - `routingReason`
 - `fallbackUsed`
@@ -1492,7 +1492,7 @@ Returns JSON with:
 
 - `status`, `currentTool`, `displayStatus`, `done`
 - `streamingPreview` and `progressSummary` for running sessions when available
-- `resolvedMode`, `resolvedModel`, `resolvedProvider`, `taskClass`
+- `resolvedMode`, `resolvedModel`, `resolvedProvider`, `reasoningEffort`, `taskClass`
 - `phase`, `phaseStartedAt`, `startedAt`, `lastProgressAt`, `elapsedMs`, `idleMs`
 - `resultState` (`running`, `completed`, `incomplete_expected_result`, `failed`, `cancelled`, `budget_exhausted`, `interrupted`, or `authorization_lost`)
 - `terminalReason`, `retrySafe`, and `agentRetryable` for terminal sessions
@@ -1682,7 +1682,7 @@ AgentLink includes static routing policy for background agents (`src/agent/backg
 - **Default behavior**: non-review tasks stay on the foreground model when policy says `useForegroundModelByDefault`.
 - **Provider admission**: streaming agent turns and native web tool requests share a provider-aware scheduler. All requests consume the same per-provider capacity (24 active request slots by default, configurable with `agentlink.provider.maxConcurrentRequests`); when saturated, foreground sessions queue visibly with cancellation and are admitted ahead of background and maintenance work. Status-summary requests run only when that provider is otherwise idle. Active requests are not preempted, and lowering the setting lets existing requests finish before enforcing the new limit.
 - **Status summaries**: heuristic summaries are the default and make no model call. The optional `agent` and `openai` modes are traced as background-summary activity; same-provider `agent` summaries use maintenance-priority admission.
-- **Coordinator behavior**: background agents are intended for parallel lanes. Native background `ask_user` calls are routed first to the root foreground coordinator, which answers them with `respond_to_background_question` from existing task/delegation/workspace context or deliberately escalates with its own `ask_user` when human input is necessary. While blocked, the agent reports `phase: "awaiting_coordinator"` and the fleet UI says **Waiting on coordinator**. Use `get_background_status` for non-blocking progress and health telemetry while continuing foreground work. Judge quiet runs by `phase` and `idleMs`, not elapsed time alone; steer a useful run to return early or kill one that is no longer worth waiting for. Use `get_background_result` only when ready to block and integrate.
+- **Coordinator behavior**: background agents are intended for parallel lanes. Native background `ask_user` calls are routed first to the root foreground coordinator, which answers them with `respond_to_background_question` from existing task/delegation/workspace context or deliberately escalates with its own `ask_user` when human input is necessary. Under **Approve for Me**, eligible native background command, outside-path read, and in-workspace file-write approvals also go to the root coordinator first. The coordinator may approve or reject only that exact operation once, or escalate it; escalation opens the original standard command/path/write approval card with its normal persistent choices. Coordinator mediation itself does not create a pending human approval, show a card, or trigger status-bar attention—those begin only after escalation. Human-only targets, manual approval mode, specialized/quota write cards, and outside-write fallback go directly to the standard card. While blocked on either question or approval coordination, the agent reports `phase: "awaiting_coordinator"` and the fleet UI says **Waiting on coordinator**. Use `get_background_status` for non-blocking progress and health telemetry while continuing foreground work. Judge quiet runs by `phase` and `idleMs`, not elapsed time alone; steer a useful run to return early or kill one that is no longer worth waiting for. Use `get_background_result` only when ready to block and integrate.
 - **Writable lanes**: background agents may write code/tests/docs when delegated a non-conflicting scope and remain subject to normal approval gates. Native children inherit the parent's effective command policy (including **Approve for Me**) plus session-scoped write, path, command, network, and MCP approvals at spawn; later approval-mode changes and newly granted parent approvals are also propagated to active descendants in that tab's agent tree. ACP children receive the same stored session snapshot, and inherited write/path authority is reused when an ACP edit request supplies complete structured file locations; provider-defined opaque command and MCP permission requests still require review. Background agents cannot launch or request worktrees. Child-only grants remain isolated, and revoking parent trust does not interrupt an already-running child. Use explicit owned/forbidden paths in the spawn message.
 - **Read-only lanes**: `readonly-research` routes to ask mode with the `readonly-research` tool profile for pure lookup/exploration. Both `readonly-research` and `review` profiles can run classifier-approved, non-mutating shell commands for workspace inspection. They may run alongside a foreground writer in the same agent tree and only receive MCP tools whose servers explicitly mark them with `readOnlyHint: true`; unannotated MCP tools are neither advertised nor callable.
 - **Review behavior**: review task classes (e.g. `review_code`, `review_plan`) prefer opposite-provider routing when available and use provider-specific model preferences for each tier. Balanced Anthropic reviews prefer Claude Opus 5, then Opus 4.8, Sonnet 4.6, and Sonnet 5 as fallbacks (a reduced 6,000-token thinking budget applies only to models without adaptive thinking); balanced Codex reviews prefer GPT-5.6 Sol. Deep Anthropic reviews use the same model order. Claude Fable 5 is foreground-only and is never routed to a background agent.
@@ -1735,7 +1735,7 @@ Runtime behavior:
 - ACP agents are launched as local stdio subprocesses with the workspace root as `cwd`.
 - Additional VS Code workspace folders are passed as ACP `additionalDirectories`.
 - Client capabilities are read-only in this first implementation (`fs.readTextFile=false`, `fs.writeTextFile=false`, `terminal=false`).
-- With `readonlyOnly: true` (default), write/move/delete/execute/unknown permission requests are rejected before showing approval UI.
+- With `readonlyOnly: true` (default), AgentLink automatically allows only classifier-approved non-mutating `execute` requests whose Claude-style Bash input is constrained to the workspace. Write/move/delete, unsafe or ambiguous execution, background execution, unknown input fields, and unknown tool kinds are rejected before showing approval UI.
 - ACP text, image content (including tool-result images), tool status, stop reason, and final usage are mapped into AgentLink's existing background status/result UI. Images are persisted in the background transcript and returned to the foreground through `get_background_result`.
 - `kill_background_agent` aborts the ACP request and terminates the subprocess.
 
@@ -1756,7 +1756,7 @@ Use this when wiring a real ACP stdio agent:
 - **Initialization timeout** — increase `initTimeoutMs`, verify the command is installed on VS Code's environment `PATH`, and make sure the ACP agent writes protocol messages to stdout rather than human logs.
 - **Completed without output** — the ACP agent reached a stop response without sending `agent_message_chunk` text; check the agent's ACP implementation and stderr logs.
 - **Refusal / max token / max turn result** — AgentLink surfaces non-`end_turn` ACP stop reasons in the background result and marks the background session as an error.
-- **Permission request cancelled** — read-only ACP backends reject writes, deletes, moves, command execution, and unknown tool kinds. Keep ACP background agents focused on review/research until writable ACP support is designed.
+- **Permission request cancelled** — read-only ACP backends allow only classifier-approved non-mutating Bash commands inside the workspace. Writes, deletes, moves, external-path reads, unsafe or ambiguous shell commands, background execution, unknown execution metadata, and unknown tool kinds remain rejected without approval UI.
 - **Native routing unexpectedly used** — confirm `agentlink.background.defaultAgent` is exactly `acp:<id>` or the spawn request uses `provider: "acp:<id>"`.
 - **Review ACP routing unexpectedly skipped** — confirm `agentlink.background.reviewAgent` references an ACP entry whose `provider` differs from the foreground provider. Matching providers deliberately fall through to native adversarial routing.
 
@@ -1919,7 +1919,7 @@ A shared local helper process serves the browser UI on a stable configured port 
 
 The helper-owned browser data plane is controlled by `agentlink.browserGateway.dataPlane`: `on` is the dogfood default and selects the helper relay/browser client, `shadow` dual-publishes while browsers stay on legacy traffic, and `off` restores the complete legacy snapshot/proxy client. The helper remains authoritative across open VS Code windows: any explicitly configured `off` window forces the effective helper mode to `off`, while `shadow` takes precedence over `on`. A stale or version-skewed registry record that does not advertise a recognized mode also fails safely to `off` and is logged by the helper. Restart the affected VS Code windows/helper after changing the mode so all protocol-v1 participants use the same extension build.
 
-When multiple VS Code windows are open, each registers with the helper so the browser can switch between them from a single URL. The browser keeps **Ask Agent** pinned above non-collapsible, color-coded instance/workspace groups that contain each window's T1/T2+ logical chat tabs. Selecting a browser tab is client-local and routes by the owning instance, tab, and session without changing VS Code focus or editor layout; docked and popped-out tabs are both reflected in their owning group. The per-window API/SSE bridge remains available during staged coexistence as the complete legacy rollback path.
+When multiple VS Code windows are open, each registers with the helper so the browser can switch between them from a single URL. The browser keeps **Ask Agent** pinned first, then renders every window's T1/T2+ logical chat tabs directly; tabs from the same workspace stay adjacent and share a tint. Selecting a browser tab is client-local and routes by the owning instance, tab, and session without changing VS Code focus or editor layout; docked and popped-out tabs are both reflected. The per-window API/SSE bridge remains available during staged coexistence as the complete legacy rollback path.
 
 The browser surface supports:
 
@@ -1944,7 +1944,7 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 
 - **Correct window routing** — diffs, approvals, command execution, and file access happen in the window that owns the workspace.
 - **Workspace-scoped identity** — instance IDs are persisted per workspace window so multiple open windows remain distinct.
-- **Shared browser entry point** — the helper groups every healthy window's logical tabs and routes browser actions to the selected owning instance and session without stealing VS Code focus.
+- **Shared browser entry point** — the helper exposes every healthy window's adjacent, workspace-tinted logical tabs and routes browser actions to the selected owning instance and session without stealing VS Code focus.
 
 ## Extension Settings
 

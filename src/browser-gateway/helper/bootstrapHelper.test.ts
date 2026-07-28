@@ -6,6 +6,7 @@ import * as path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bootstrapBrowserGatewayHelper,
+  compareHelperReleaseVersions,
   discoveryMatchesDesiredConfig,
   fetchHelperHealth,
   resolveHealthyDiscoveredHelper,
@@ -23,6 +24,17 @@ afterEach(async () => {
 });
 
 describe("browser gateway helper bootstrap", () => {
+  it.each([
+    ["1.17.99", "1.17.103", -1],
+    ["1.17.103", "1.17.99", 1],
+    ["1.17.103", "1.17.103", 0],
+    ["1.18.0-beta.2", "1.18.0-beta.10", -1],
+    ["1.18.0", "1.18.0-beta.10", 1],
+    ["development", "1.18.0", null],
+  ])("orders helper release %s against %s", (left, right, expected) => {
+    expect(compareHelperReleaseVersions(left, right)).toBe(expected);
+  });
+
   it("accepts LAN helpers that fell back to direct IP URLs when mDNS is unavailable", () => {
     expect(
       discoveryMatchesDesiredConfig(
@@ -134,7 +146,65 @@ describe("browser gateway helper bootstrap", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  it("accepts a healthy helper from a different extension version when protocol matches", async () => {
+  it.each([
+    ["1.17.103", "1.17.103", true],
+    ["1.17.103", "1.17.99", true],
+    ["1.17.99", "1.17.103", false],
+    ["development", "1.17.103", true],
+  ])(
+    "reuses running helper %s for requester %s: %s",
+    async (runningVersion, requestedVersion, expectedReuse) => {
+      const server = http.createServer((req, res) => {
+        if (req.url === "/health") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              status: "ok",
+              protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+              helperVersion: runningVersion,
+              startedAt: new Date().toISOString(),
+              now: new Date().toISOString(),
+              uptimeMs: 123,
+              activeClientLeases: 1,
+            }),
+          );
+          return;
+        }
+        res.writeHead(404);
+        res.end();
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      const discovery = {
+        pid: process.pid,
+        port,
+        url: `http://127.0.0.1:${port}`,
+        protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+        startedAt: new Date().toISOString(),
+        lastHeartbeatAt: new Date().toISOString(),
+        helperVersion: runningVersion,
+        browserBootstrapToken: "token",
+        clientSharedSecret: "secret",
+        lanAccess: false,
+      };
+      await writeBrowserGatewayHelperDiscovery(discovery);
+
+      const resolved = await resolveHealthyDiscoveredHelper(port, {
+        lanAccess: false,
+        helperVersion: requestedVersion,
+      });
+
+      expect(resolved).toEqual(expectedReuse ? discovery : null);
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  );
+
+  it("rejects discovery when health reports a different helper version", async () => {
     const server = http.createServer((req, res) => {
       if (req.url === "/health") {
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -142,7 +212,56 @@ describe("browser gateway helper bootstrap", () => {
           JSON.stringify({
             status: "ok",
             protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
-            helperVersion: "older-extension-version",
+            helperVersion: "1.17.104",
+            startedAt: new Date().toISOString(),
+            now: new Date().toISOString(),
+            uptimeMs: 123,
+            activeClientLeases: 1,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    await writeBrowserGatewayHelperDiscovery({
+      pid: process.pid,
+      port,
+      url: `http://127.0.0.1:${port}`,
+      protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+      startedAt: new Date().toISOString(),
+      lastHeartbeatAt: new Date().toISOString(),
+      helperVersion: "1.17.103",
+      browserBootstrapToken: "token",
+      clientSharedSecret: "secret",
+      lanAccess: false,
+    });
+
+    await expect(
+      resolveHealthyDiscoveredHelper(port, {
+        lanAccess: false,
+        helperVersion: "1.17.103",
+      }),
+    ).resolves.toBeNull();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("preserves a newer helper when an older requester wants different config", async () => {
+    const server = http.createServer((req, res) => {
+      if (req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            status: "ok",
+            protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+            helperVersion: "1.17.104",
             startedAt: new Date().toISOString(),
             now: new Date().toISOString(),
             uptimeMs: 123,
@@ -168,18 +287,26 @@ describe("browser gateway helper bootstrap", () => {
       protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
       startedAt: new Date().toISOString(),
       lastHeartbeatAt: new Date().toISOString(),
-      helperVersion: "older-extension-version",
+      helperVersion: "1.17.104",
       browserBootstrapToken: "token",
       clientSharedSecret: "secret",
       lanAccess: false,
     };
     await writeBrowserGatewayHelperDiscovery(discovery);
+    const log = vi.fn();
 
-    const resolved = await resolveHealthyDiscoveredHelper(port, {
-      lanAccess: false,
+    const result = await bootstrapBrowserGatewayHelper({
+      extensionRootPath: process.cwd(),
+      browserGatewayPort: port,
+      helperVersion: "1.17.103",
+      lanAccess: true,
+      log,
     });
 
-    expect(resolved).toEqual(discovery);
+    expect(result).toEqual({ source: "existing", discovery });
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("preserving newer helper"),
+    );
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 

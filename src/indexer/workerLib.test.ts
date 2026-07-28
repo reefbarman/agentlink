@@ -611,6 +611,7 @@ describe("scanFiles / readFilesBatch", () => {
         toIndexPaths: [],
         removedRelPaths: [],
         staleRelPaths: [],
+        alreadyCurrentFiles: 0,
         cacheMetadataChanged: false,
         errors: [],
       });
@@ -721,6 +722,7 @@ describe("scanFiles / readFilesBatch", () => {
       ],
       removedRelPaths: ["removed.ts"],
       staleRelPaths: ["changed.ts", "removed.ts"],
+      alreadyCurrentFiles: 0,
       cacheMetadataChanged: false,
       errors: [],
     });
@@ -740,6 +742,7 @@ describe("scanFiles / readFilesBatch", () => {
       toIndexPaths: [],
       removedRelPaths: [],
       staleRelPaths: [],
+      alreadyCurrentFiles: 0,
       cacheMetadataChanged: false,
       errors: [],
     });
@@ -896,6 +899,7 @@ describe("scanFiles / readFilesBatch", () => {
     });
 
     expect(full.toIndexPaths).toEqual([]);
+    expect(full.alreadyCurrentFiles).toBe(1);
     expect(incremental.toIndexPaths).toEqual([
       { absPath: fs.realpathSync(changed), relPath: "changed.ts" },
     ]);
@@ -921,6 +925,7 @@ describe("scanFiles / readFilesBatch", () => {
     });
 
     expect(result.toIndexPaths).toEqual([]);
+    expect(result.alreadyCurrentFiles).toBe(1);
     expect(result.cacheMetadataChanged).toBe(true);
     expect(cache.files["stable.ts"]).toMatchObject({
       mtimeMs: stat.mtimeMs,

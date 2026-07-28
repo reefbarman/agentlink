@@ -2170,6 +2170,10 @@ describe("ChatViewProvider session state sync", () => {
       { fsPath: "/tmp/ext" } as never,
       { get: vi.fn(), update: vi.fn() } as never,
     );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
     const session = {
       id: "session-1",
       title: "Session 1",
@@ -2185,7 +2189,13 @@ describe("ChatViewProvider session state sync", () => {
         workspaceFolderUri: "file:///workspace/project",
         rootPath: "/workspace/project",
       },
-      getAllMessages: () => [],
+      getAllMessages: () => [
+        {
+          role: "user" as const,
+          content: "Existing turn",
+        },
+      ],
+      appendSurfaceChange: vi.fn(),
     };
     const setSessionReasoningEffort = vi.fn(
       (sessionId: string, effort: string) => {
@@ -2201,6 +2211,7 @@ describe("ChatViewProvider session state sync", () => {
       getConfig: vi.fn(() => ({ thinkingBudget: 1024 })),
       getSessionInfos: vi.fn(() => []),
       getBgSessionInfos: vi.fn(() => []),
+      saveSession: vi.fn(),
     } as never);
 
     await expect(
@@ -2210,6 +2221,30 @@ describe("ChatViewProvider session state sync", () => {
     });
     expect(setSessionReasoningEffort).toHaveBeenCalledWith(session.id, "max");
     expect(session.reasoningEffort).toBe("max");
+    expect(session.appendSurfaceChange).toHaveBeenCalledWith({
+      reasoning: {
+        previousReasoningEffort: "high",
+        reasoningEffort: "max",
+      },
+    });
+    expect(mockPostMessage).toHaveBeenCalledWith({
+      type: "agentSurfaceChange",
+      sessionId: session.id,
+      change: {
+        reasoning: {
+          previousReasoningEffort: "high",
+          reasoningEffort: "max",
+        },
+      },
+    });
+    expect(
+      provider
+        .getBrowserProjectedForegroundState()
+        ?.projectedMessages.some(
+          (message) =>
+            message.surfaceChange?.reasoning?.reasoningEffort === "max",
+        ),
+    ).toBe(true);
     expect(provider.getBrowserProjectedForegroundState()?.reasoningEffort).toBe(
       "max",
     );

@@ -277,7 +277,7 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
       void fetchSessions(instanceId, false);
       void fetchDebugInfo(instanceId);
     }
-    void fetchInstances({ commitSelection: false });
+    void fetchInstances();
     instanceRefreshTimer = setInterval(() => {
       void fetchInstances();
     }, 5_000);

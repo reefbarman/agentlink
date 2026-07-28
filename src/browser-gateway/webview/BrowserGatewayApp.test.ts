@@ -621,12 +621,18 @@ function getInstanceTabs(): HTMLElement[] {
 }
 
 async function selectWorkspaceTab(): Promise<HTMLElement> {
-  const workspaceTab = await screen.findByRole("tab", { name: /Workspace/ });
+  const workspaceTab = await screen.findByRole("tab", { name: /^Workspace/ });
   fireEvent.click(workspaceTab);
+  let selectedWorkspaceTab: HTMLElement | undefined;
   await waitFor(() => {
-    expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
+    selectedWorkspaceTab = getInstanceTabs().find(
+      (tab) =>
+        !tab.textContent?.includes("Ask Agent") &&
+        tab.getAttribute("aria-selected") === "true",
+    );
+    expect(selectedWorkspaceTab).toBeTruthy();
   });
-  return workspaceTab;
+  return selectedWorkspaceTab!;
 }
 
 describe("detached session detail cache", () => {
@@ -712,6 +718,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     vi.clearAllMocks();
     MockEventSource.instances = [];
     installLocalStorageMock();
+    window.sessionStorage.clear();
     installMatchMediaMock(false);
     document.documentElement.removeAttribute("style");
 
@@ -840,6 +847,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
   afterEach(() => {
     cleanup();
     window.localStorage.clear();
+    window.sessionStorage.clear();
     document.documentElement.removeAttribute("style");
   });
 
@@ -2064,6 +2072,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           String(input).includes("/api/ui-state"),
         ),
       ).toBe(true);
+      expect(screen.queryByText("Loading session…")).toBeNull();
     });
     fireEvent.click(await screen.findByTestId("trigger-send"));
 
@@ -2686,7 +2695,310 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     ).toBe(false);
   });
 
-  it("keeps every visited instance's logical tabs visible in labeled groups", async () => {
+  it("restores the selected workspace and logical tab after remount", async () => {
+    const groupedSnapshot = createGroupedSnapshot();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/ask-agent/session")) {
+        return jsonResponse(createAskAgentSessionResponse());
+      }
+      if (url.includes("/api/ui-state")) return jsonResponse(groupedSnapshot);
+      if (url.includes("/api/session-detail")) {
+        return directSessionDetailResponse(
+          groupedSnapshot,
+          "Restored T2 transcript",
+        );
+      }
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/slash-commands")) {
+        return jsonResponse({ commands: [] });
+      }
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const props = {
+      authToken: "test-token",
+      currentInstanceId: "instance-1",
+      workspaceName: "Workspace",
+      routeByInstance: true,
+      dataPlaneMode: "off" as const,
+    };
+
+    render(h(BrowserGatewayApp, props));
+    await selectWorkspaceTab();
+    fireEvent.click(
+      await screen.findByRole("tab", { name: /T2.*Detached chat/ }),
+    );
+    await screen.findByText("Restored T2 transcript");
+
+    cleanup();
+    MockEventSource.instances = [];
+    render(h(BrowserGatewayApp, props));
+
+    const workspaceTab = await screen.findByRole("tab", { name: /Workspace/ });
+    const logicalTab = await screen.findByRole("tab", {
+      name: /T2.*Detached chat/,
+    });
+    await screen.findByText("Restored T2 transcript");
+    expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
+    expect(logicalTab.getAttribute("aria-selected")).toBe("true");
+    expect(MockEventSource.instances.at(-1)?.url).toContain(
+      "instanceId=instance-1",
+    );
+  });
+
+  it("discards a stale restored logical tab identity", async () => {
+    const groupedSnapshot = createGroupedSnapshot();
+    const fallbackFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes("/api/ui-state")) {
+          return jsonResponse(groupedSnapshot);
+        }
+        return fallbackFetch(input, init);
+      },
+    );
+    window.sessionStorage.setItem(
+      "agentlink.browserGateway.selection.v1",
+      JSON.stringify({
+        kind: "workspace",
+        instanceId: "instance-1",
+        logical: {
+          instanceId: "instance-1",
+          controllerEpoch: "stale-controller",
+          tabId: "tab-2",
+          sessionId: "session-2",
+        },
+      }),
+    );
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        dataPlaneMode: "off",
+      }),
+    );
+
+    await waitFor(() => {
+      const canonicalTab = screen.getByRole("tab", {
+        name: /T1.*Foreground chat.*Workspace/,
+      });
+      expect(canonicalTab.getAttribute("aria-selected")).toBe("true");
+      expect(
+        JSON.parse(
+          window.sessionStorage.getItem(
+            "agentlink.browserGateway.selection.v1",
+          ) ?? "{}",
+        ),
+      ).toEqual({
+        kind: "workspace",
+        instanceId: "instance-1",
+        workspacePath: "/workspace",
+        logical: {
+          instanceId: "instance-1",
+          controllerEpoch: "controller-1",
+          tabId: "tab-1",
+          sessionId: "session-1",
+        },
+      });
+    });
+    expect(
+      screen
+        .getByRole("tab", { name: /T2.*Detached chat.*Workspace/ })
+        .getAttribute("aria-selected"),
+    ).toBe("false");
+  });
+
+  it("rebinds a restored logical tab to a replacement workspace activation", async () => {
+    const groupedSnapshot = createGroupedSnapshot();
+    const fallbackFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/ui-state")) {
+          return jsonResponse(groupedSnapshot);
+        }
+        if (url.includes("/api/session-detail")) {
+          return directSessionDetailResponse(
+            groupedSnapshot,
+            "Rebound T2 transcript",
+          );
+        }
+        return fallbackFetch(input, init);
+      },
+    );
+    window.sessionStorage.setItem(
+      "agentlink.browserGateway.selection.v1",
+      JSON.stringify({
+        kind: "workspace",
+        instanceId: "old-instance",
+        workspacePath: "/workspace",
+        logical: {
+          instanceId: "old-instance",
+          controllerEpoch: "controller-1",
+          tabId: "tab-2",
+          sessionId: "session-2",
+        },
+      }),
+    );
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        dataPlaneMode: "off",
+      }),
+    );
+
+    await screen.findByText("Rebound T2 transcript");
+    expect(
+      screen
+        .getByRole("tab", { name: /T2.*Detached chat.*Workspace/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      JSON.parse(
+        window.sessionStorage.getItem(
+          "agentlink.browserGateway.selection.v1",
+        ) ?? "{}",
+      ),
+    ).toEqual({
+      kind: "workspace",
+      instanceId: "instance-1",
+      workspacePath: "/workspace",
+      logical: {
+        instanceId: "instance-1",
+        controllerEpoch: "controller-1",
+        tabId: "tab-2",
+        sessionId: "session-2",
+      },
+    });
+  });
+
+  it("preserves a detached tab across a temporary workspace-less snapshot", async () => {
+    const groupedSnapshot = createGroupedSnapshot();
+    const fallbackFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/ui-state")) return jsonResponse(groupedSnapshot);
+        if (url.includes("/api/session-detail")) {
+          return directSessionDetailResponse(
+            groupedSnapshot,
+            "Durable T2 transcript",
+          );
+        }
+        return fallbackFetch(input, init);
+      },
+    );
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        dataPlaneMode: "off",
+      }),
+    );
+    await selectWorkspaceTab();
+    const logicalTab = await screen.findByRole("tab", {
+      name: /T2.*Detached chat.*Workspace/,
+    });
+    fireEvent.click(logicalTab);
+    await screen.findByText("Durable T2 transcript");
+
+    const workspaceLessSnapshot = createSnapshot();
+    workspaceLessSnapshot.session.chatWorkspace = null;
+    await act(async () => {
+      MockEventSource.instances.at(-1)?.emit("update", workspaceLessSnapshot);
+    });
+
+    const liveLogicalTab = screen.getByRole("tab", {
+      name: /T2.*Detached chat.*Workspace/,
+    });
+    expect(liveLogicalTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("Durable T2 transcript")).toBeTruthy();
+    const tabPanel = screen.getByRole("tabpanel");
+    expect(
+      document.getElementById(tabPanel.getAttribute("aria-labelledby")!),
+    ).toBe(liveLogicalTab);
+    expect(
+      JSON.parse(
+        window.sessionStorage.getItem(
+          "agentlink.browserGateway.selection.v1",
+        ) ?? "{}",
+      ),
+    ).toMatchObject({
+      kind: "workspace",
+      instanceId: "instance-1",
+      workspacePath: "/workspace",
+      logical: { tabId: "tab-2", sessionId: "session-2" },
+    });
+  });
+
+  it("recovers from a stored instance that is no longer registered", async () => {
+    window.sessionStorage.setItem(
+      "agentlink.browserGateway.selection.v1",
+      JSON.stringify({ kind: "workspace", instanceId: "dead-instance" }),
+    );
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        dataPlaneMode: "off",
+      }),
+    );
+
+    const workspaceTab = await screen.findByRole("tab", { name: /Workspace/ });
+    await waitFor(() => {
+      expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
+    });
+    const instancesRequests = fetchMock.mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => url.includes("/api/instances"));
+    expect(instancesRequests.length).toBeGreaterThan(0);
+    expect(
+      instancesRequests.every((url) =>
+        url.startsWith("/api/instances?instanceId="),
+      ),
+    ).toBe(true);
+    expect(
+      JSON.parse(
+        window.sessionStorage.getItem(
+          "agentlink.browserGateway.selection.v1",
+        ) ?? "{}",
+      ),
+    ).toMatchObject({ kind: "workspace", instanceId: "instance-1" });
+  });
+
+  it("hydrates every advertised workspace and renders adjacent tinted logical tabs", async () => {
     const workspaceSnapshot = createGroupedSnapshot();
     const workerSnapshot = createGroupedSnapshot();
     workerSnapshot.session.foreground.sessionId = "worker-session-1";
@@ -2770,23 +3082,43 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
-    await selectWorkspaceTab();
-    await screen.findByRole("tab", { name: /T2.*Detached chat/ });
-    fireEvent.click(await screen.findByRole("tab", { name: /Worker/ }));
-    await screen.findByRole("tab", { name: /T2.*Worker detached/ });
+    const workerT1 = await screen.findByRole("tab", {
+      name: /T1.*Worker foreground/,
+    });
+    const workerT2 = await screen.findByRole("tab", {
+      name: /T2.*Worker detached/,
+    });
+    const workspaceT1 = await screen.findByRole("tab", {
+      name: /T1.*Foreground chat/,
+    });
+    const workspaceT2 = await screen.findByRole("tab", {
+      name: /T2.*Detached chat/,
+    });
 
-    const groups = Array.from(
-      container.querySelectorAll<HTMLElement>(".browser-instance-group"),
-    );
-    expect(groups).toHaveLength(2);
-    expect(groups.map((group) => group.textContent)).toEqual([
-      expect.stringMatching(/Worker.*T1.*T2/),
-      expect.stringMatching(/Workspace.*T1.*T2/),
+    const tabs = getInstanceTabs();
+    expect(tabs).toEqual([
+      screen.getByRole("tab", { name: /Ask Agent/ }),
+      workerT1,
+      workerT2,
+      workspaceT1,
+      workspaceT2,
     ]);
-    expect(screen.getByRole("tab", { name: /T2.*Detached chat/ })).toBeTruthy();
+    expect(container.querySelector(".browser-instance-group")).toBeNull();
+    expect(container.querySelector(".browser-instance-group-label")).toBeNull();
+    expect(workerT1.style.getPropertyValue("--instance-group-color")).toBe(
+      workerT2.style.getPropertyValue("--instance-group-color"),
+    );
+    expect(workspaceT1.style.getPropertyValue("--instance-group-color")).toBe(
+      workspaceT2.style.getPropertyValue("--instance-group-color"),
+    );
+    expect(workerT1.style.getPropertyValue("--instance-group-color")).not.toBe(
+      workspaceT1.style.getPropertyValue("--instance-group-color"),
+    );
     expect(
-      screen.getByRole("tab", { name: /T2.*Worker detached/ }),
-    ).toBeTruthy();
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/api/ui-state?instanceId=instance-2"),
+      ),
+    ).toBe(true);
   });
 
   it("refreshes detached session detail after accepted rapid sends", async () => {
@@ -4600,7 +4932,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }
       if (url.includes("/api/ui-state?instanceId=instance-1")) {
         workspaceRequests += 1;
-        if (workspaceRequests === 1) return jsonResponse(firstSnapshot);
+        if (workspaceRequests <= 2) return jsonResponse(firstSnapshot);
         return await new Promise<Response>((resolve) => {
           resolveLateWorkspace = resolve;
         });
@@ -4623,13 +4955,13 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     await selectWorkspaceTab();
     const workspaceInput = await screen.findByDisplayValue("echo workspace");
     fireEvent.input(workspaceInput, { target: { value: "edited workspace" } });
-    fireEvent.click(screen.getByRole("tab", { name: /Worker/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: /^Worker/ }));
 
     expect(await screen.findByDisplayValue("echo worker")).toBeTruthy();
     expect(screen.queryByDisplayValue("edited workspace")).toBeNull();
 
-    fireEvent.click(screen.getByRole("tab", { name: /Workspace/ }));
-    fireEvent.click(screen.getByRole("tab", { name: /Worker/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /^Workspace/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /^Worker/ }));
     resolveLateWorkspace?.(jsonResponse(firstSnapshot));
 
     await waitFor(() => {
@@ -4794,12 +5126,11 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
-    await selectWorkspaceTab();
-    await screen.findByText("Stale cached workspace transcript");
+    const workspaceTab = await selectWorkspaceTab();
+    expect(screen.queryByText("Stale cached workspace transcript")).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: /Ask Agent/ }));
     expect(screen.queryByText("Stale cached workspace transcript")).toBeNull();
 
-    const workspaceTab = screen.getByRole("tab", { name: /Workspace/ });
     fireEvent.click(workspaceTab);
     expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
     expect(screen.getByText("Loading session…")).toBeTruthy();

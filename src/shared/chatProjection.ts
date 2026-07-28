@@ -1,5 +1,6 @@
 import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
 import type { ApprovalRequest } from "../approvals/webview/types.js";
+import { isCoreReasoningEffort } from "../core/modelCatalog.js";
 import type { CoreWebActivity, CoreWebCitation } from "../core/webAccess.js";
 import type {
   ChatMessage,
@@ -595,6 +596,10 @@ export type AppAction =
   | { type: "THINKING_END"; thinkingId: string }
   | { type: "TEXT_DELTA"; text: string }
   | {
+      type: "ADD_SURFACE_CHANGE";
+      change: NonNullable<ChatMessage["surfaceChange"]>;
+    }
+  | {
       type: "API_REQUEST";
       requestId: string;
       model: string;
@@ -911,6 +916,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           errorMessage?: string;
           condensing?: boolean;
         };
+        surfaceChange?: ChatMessage["surfaceChange"];
         finalMarker?: FinalMessageMarker;
       };
       runtimeError?: {
@@ -1163,6 +1169,11 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
                   typeof parsedResult?.resolvedProvider === "string"
                     ? parsedResult.resolvedProvider
                     : undefined,
+                reasoningEffort: isCoreReasoningEffort(
+                  parsedResult?.reasoningEffort,
+                )
+                  ? parsedResult.reasoningEffort
+                  : undefined,
                 resolvedMode:
                   typeof parsedResult?.resolvedMode === "string"
                     ? parsedResult.resolvedMode
@@ -1290,6 +1301,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
         generatedDisplayImages.length > 0 ||
         messagePresentedImages.length > 0 ||
         hasRuntimeError ||
+        m.uiHint?.surfaceChange ||
         finalMarker
       ) {
         const generatedDisplayMedia = resultImagesToDisplayMedia(
@@ -1314,6 +1326,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
             ? { displayMedia: { images: displayImages, documents: [] } }
             : {}),
           finalMarker,
+          surfaceChange: m.uiHint?.surfaceChange,
           ...(hasRuntimeError
             ? {
                 error: {
@@ -2222,6 +2235,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
                 message,
                 resolvedModel: parsed.resolvedModel,
                 resolvedProvider: parsed.resolvedProvider,
+                reasoningEffort: isCoreReasoningEffort(parsed.reasoningEffort)
+                  ? parsed.reasoningEffort
+                  : undefined,
                 resolvedMode: parsed.resolvedMode,
                 taskClass: parsed.taskClass,
                 routingReason: parsed.routingReason,
@@ -2253,6 +2269,35 @@ export function reducer(state: AppState, action: AppAction): AppState {
         last.blocks.push({ type: "text", text: action.text });
       }
       return { ...state, messages: msgs };
+    }
+
+    case "ADD_SURFACE_CHANGE": {
+      const marker: ChatMessage = {
+        id: randomId(),
+        role: "assistant",
+        content: "",
+        timestamp: Date.now(),
+        blocks: [],
+        surfaceChange: action.change,
+      };
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          marker,
+          ...(state.streaming
+            ? [
+                {
+                  id: randomId(),
+                  role: "assistant" as const,
+                  content: "",
+                  timestamp: Date.now(),
+                  blocks: [],
+                },
+              ]
+            : []),
+        ],
+      };
     }
 
     case "API_REQUEST": {
@@ -2415,7 +2460,8 @@ export function reducer(state: AppState, action: AppAction): AppState {
         last?.role === "assistant" &&
         last.blocks.length === 0 &&
         !last.error &&
-        secondToLast?.role === "condense"
+        (secondToLast?.role === "condense" ||
+          Boolean(secondToLast?.surfaceChange))
           ? doneMessages.slice(0, -1)
           : doneMessages;
 
@@ -2861,7 +2907,10 @@ export function reducer(state: AppState, action: AppAction): AppState {
       }
       const tail = state.messages[state.messages.length - 1];
       const base =
-        tail?.role === "assistant" && tail.blocks.length === 0 && !tail.error
+        tail?.role === "assistant" &&
+        tail.blocks.length === 0 &&
+        !tail.error &&
+        !tail.surfaceChange
           ? state.messages.slice(0, -1)
           : state.messages;
       return {
@@ -2886,28 +2935,42 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "ADD_CONDENSE": {
-      // Remove any trailing empty assistant placeholder (added optimistically by ADD_USER_MESSAGE)
-      // Also remove the pending condense row (condensing: true) if present
-      const filtered = state.messages.filter(
-        (m) => !(m.role === "condense" && m.condenseInfo?.condensing),
+      const pendingIndex = state.messages.findIndex(
+        (message) =>
+          message.role === "condense" && message.condenseInfo?.condensing,
       );
+      const completedCondense: ChatMessage = {
+        id: randomId(),
+        role: "condense",
+        content: "",
+        timestamp: Date.now(),
+        blocks: [],
+        condenseInfo: {
+          prevInputTokens: action.prevInputTokens,
+          newInputTokens: action.newInputTokens,
+          durationMs: action.durationMs,
+          validationWarnings: action.validationWarnings,
+        },
+      };
+      const messagesBeforeCondense = [...state.messages];
+      const trailingMessage = messagesBeforeCondense.at(-1);
+      if (
+        trailingMessage?.role === "assistant" &&
+        trailingMessage.blocks.length === 0 &&
+        !trailingMessage.error
+      ) {
+        messagesBeforeCondense.pop();
+      }
+      const completedMessages =
+        pendingIndex >= 0
+          ? messagesBeforeCondense.map((message, index) =>
+              index === pendingIndex ? completedCondense : message,
+            )
+          : [...messagesBeforeCondense, completedCondense];
       return {
         ...state,
         messages: [
-          ...filtered,
-          {
-            id: randomId(),
-            role: "condense" as const,
-            content: "",
-            timestamp: Date.now(),
-            blocks: [],
-            condenseInfo: {
-              prevInputTokens: action.prevInputTokens,
-              newInputTokens: action.newInputTokens,
-              durationMs: action.durationMs,
-              validationWarnings: action.validationWarnings,
-            },
-          },
+          ...completedMessages,
           // Add an empty assistant placeholder so the streaming dots appear
           // immediately after condensing while waiting for the next API response.
           // DONE strips this if the agent ends without producing any content.

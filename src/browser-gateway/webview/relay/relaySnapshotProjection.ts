@@ -393,6 +393,7 @@ function projectMessage(message: BrowserGatewayTranscriptMessage): ChatMessage {
     ...(message.origin ? { origin: message.origin } : {}),
     ...(message.checkpointId ? { checkpointId: message.checkpointId } : {}),
     ...(message.finalMarker ? { finalMarker: message.finalMarker } : {}),
+    ...(message.surfaceChange ? { surfaceChange: message.surfaceChange } : {}),
     ...(message.error ? { error: message.error } : {}),
     ...(message.apiRequest ? { apiRequest: message.apiRequest } : {}),
     ...(message.condenseInfo ? { condenseInfo: message.condenseInfo } : {}),
@@ -457,6 +458,9 @@ function projectBlock(
             : {}),
           ...(block.resolvedProvider
             ? { resolvedProvider: block.resolvedProvider }
+            : {}),
+          ...(block.reasoningEffort
+            ? { reasoningEffort: block.reasoningEffort }
             : {}),
           ...(block.resolvedMode ? { resolvedMode: block.resolvedMode } : {}),
           ...(block.taskClass ? { taskClass: block.taskClass } : {}),

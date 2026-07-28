@@ -3225,6 +3225,7 @@ export class AgentEngine {
       opts?.onProviderAdmissionPhase?.("running");
     }
 
+    const condenseInputMessages = [...session.getAllMessages()];
     const requestAttributionEvents: Array<
       Extract<AgentEvent, { type: "request_context_attribution" }>
     > = [];
@@ -3234,7 +3235,7 @@ export class AgentEngine {
     try {
       result = await summarizeConversation(
         {
-          messages: session.getAllMessages(),
+          messages: condenseInputMessages,
           provider: resolvedProvider,
           activeModel,
           systemPrompt: session.systemPrompt,
@@ -3283,22 +3284,31 @@ export class AgentEngine {
     }
 
     const condenseDurationMs = Date.now() - condenseStartedAt;
-    const messagesWithUiHints = result.messages.map((msg) =>
-      msg.isSummary
-        ? {
-            ...msg,
-            uiHint: {
-              ...msg.uiHint,
-              condense: {
-                prevInputTokens: result.prevInputTokens,
-                newInputTokens: result.newInputTokens,
-                durationMs: condenseDurationMs,
-                validationWarnings: result.validationWarnings,
+    const inputMessageSet = new Set(condenseInputMessages);
+    const concurrentTranscriptMessages = session
+      .getAllMessages()
+      .filter(
+        (message) => message.diagnosticOnly && !inputMessageSet.has(message),
+      );
+    const messagesWithUiHints = [
+      ...result.messages.map((msg) =>
+        msg.isSummary
+          ? {
+              ...msg,
+              uiHint: {
+                ...msg.uiHint,
+                condense: {
+                  prevInputTokens: result.prevInputTokens,
+                  newInputTokens: result.newInputTokens,
+                  durationMs: condenseDurationMs,
+                  validationWarnings: result.validationWarnings,
+                },
               },
-            },
-          }
-        : msg,
-    );
+            }
+          : msg,
+      ),
+      ...concurrentTranscriptMessages,
+    ];
     session.replaceMessages(messagesWithUiHints);
     const projection = buildPostCondenseProjection(
       session,

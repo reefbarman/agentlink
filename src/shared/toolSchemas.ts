@@ -58,7 +58,7 @@ export const findNativeToolsSchema = {
     .max(500)
     .optional()
     .describe(
-      "Optional text matched against deferred native tool names and descriptions",
+      "Optional search text matched against deferred native tool names and descriptions. Multiple exact tool names may be supplied together and are returned first in authorized catalog order; remaining conceptual terms add relevance-ranked OR matches.",
     ),
   limit: z.coerce
     .number()

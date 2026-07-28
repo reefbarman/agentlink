@@ -1974,6 +1974,7 @@ export async function activate(
     lanAccess: getConfig<boolean>("browserGatewayLanAccess") === true,
     mdnsName:
       getConfig<string>("browserGatewayMdnsName")?.trim() || "agentlink",
+    helperVersion,
   });
 
   const isBrowserGatewayBridgeHealthy = async (
@@ -2365,6 +2366,8 @@ export async function activate(
     resolveApprovalProjectContext,
   );
   context.subscriptions.push(builtinApprovalPanel);
+  builtinApprovalPanel.onBeforeApproval = (forwarded) =>
+    agentSessionManager.coordinateBackgroundApproval(forwarded);
   builtinApprovalPanel.onForwardApproval = (...args) =>
     chatViewProvider.forwardApproval(...args);
   builtinApprovalPanel.onForwardApprovalCancelled = (...args) =>

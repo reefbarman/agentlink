@@ -181,6 +181,78 @@ describe("session projection isolation", () => {
   });
 });
 
+describe("surface change projection", () => {
+  const change = {
+    model: { previousModel: "gpt-5.4", model: "gpt-5.6-sol" },
+    reasoning: {
+      previousReasoningEffort: "high" as const,
+      reasoningEffort: "low" as const,
+    },
+  };
+
+  it("keeps a fresh assistant shell after an in-turn marker", () => {
+    const streaming = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "Start",
+    });
+    const changed = reducer(streaming, {
+      type: "ADD_SURFACE_CHANGE",
+      change,
+    });
+
+    expect(changed.messages.at(-2)?.surfaceChange).toEqual(change);
+    expect(changed.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      blocks: [],
+    });
+    expect(changed.messages.at(-1)?.surfaceChange).toBeUndefined();
+  });
+
+  it("keeps a marker after the condense row when the change happens during condense", () => {
+    const condensing = reducer(initialState, { type: "CONDENSE_START" });
+    const changed = reducer(condensing, {
+      type: "ADD_SURFACE_CHANGE",
+      change,
+    });
+    const completed = reducer(changed, {
+      type: "ADD_CONDENSE",
+      prevInputTokens: 10_000,
+      newInputTokens: 2_000,
+      durationMs: 25,
+    });
+
+    const condenseIndex = completed.messages.findIndex(
+      (message) => message.role === "condense",
+    );
+    const markerIndex = completed.messages.findIndex(
+      (message) => message.surfaceChange,
+    );
+    expect(condenseIndex).toBeGreaterThanOrEqual(0);
+    expect(markerIndex).toBeGreaterThan(condenseIndex);
+    expect(
+      completed.messages[condenseIndex]?.condenseInfo?.condensing,
+    ).toBeFalsy();
+  });
+
+  it("restores persisted transcript-only surface changes", () => {
+    const messages = agentMessagesToChatMessages([
+      {
+        role: "assistant",
+        content: [],
+        diagnosticOnly: true,
+        uiHint: { surfaceChange: change },
+      },
+    ]);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      blocks: [],
+      surfaceChange: change,
+    });
+  });
+});
+
 describe("legacy web activity chat projection", () => {
   it("assigns distinct fallback IDs to malformed persisted activities", () => {
     const messages = agentMessagesToChatMessages([

@@ -213,6 +213,7 @@ export class IndexerManager implements vscode.Disposable {
       };
       const startTime = Date.now();
       let completedRoots = 0;
+      let completedDiscoveredFiles = 0;
 
       for (const workspaceRoot of workspaceRoots) {
         if (this.cancelRequested) break;
@@ -230,7 +231,7 @@ export class IndexerManager implements vscode.Disposable {
         );
         this.updateStatus({
           state: "indexing",
-          current: aggregateStats.filesIndexed,
+          current: completedDiscoveredFiles,
           total: totalFiles,
           detail: `workspace ${completedRoots + 1}/${workspaceRoots.length}: ${label}`,
         });
@@ -253,7 +254,7 @@ export class IndexerManager implements vscode.Disposable {
               granularity,
             },
             {
-              currentOffset: aggregateStats.filesIndexed,
+              currentOffset: completedDiscoveredFiles,
               total: totalFiles,
               detailPrefix: `workspace ${completedRoots + 1}/${workspaceRoots.length}: ${label}`,
             },
@@ -271,6 +272,8 @@ export class IndexerManager implements vscode.Disposable {
             error instanceof Error ? error.message : String(error);
           aggregateStats.errors.push(`${label}: ${message}`);
           this.log(`Indexing failed for workspace folder ${label}: ${message}`);
+        } finally {
+          completedDiscoveredFiles += files.length;
         }
       }
 
@@ -723,11 +726,17 @@ export class IndexerManager implements vscode.Disposable {
           activeJob.lastTotal = msg.total;
           activeJob.lastDetail = msg.detail;
         }
+        const usesDiscoveredInventory =
+          msg.phase === "reading" || msg.phase === "upserting";
         this.updateStatus({
           state: "indexing",
           phase: msg.phase,
-          current: (activeJob?.currentOffset ?? 0) + msg.current,
-          total: activeJob?.total ?? msg.total,
+          current:
+            (usesDiscoveredInventory ? (activeJob?.currentOffset ?? 0) : 0) +
+            msg.current,
+          total: usesDiscoveredInventory
+            ? (activeJob?.total ?? msg.total)
+            : msg.total,
           detail: activeJob?.detailPrefix
             ? msg.detail
               ? `${activeJob.detailPrefix} — ${msg.detail}`

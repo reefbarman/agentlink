@@ -3,9 +3,12 @@ import * as fs from "node:fs";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import {
+  actionApprovalActionKey,
+  actionApprovalPolicyKey,
   createOneShotActionApproval,
   type ActionApprovalPolicySnapshot,
   type ActionApprovalReviewer,
+  type ActionReviewHumanOnlyReason,
   type OutsideReadActionApprovalReviewInput,
   type OutsideReadOperation,
 } from "../approvals/actionApprovalReview.js";
@@ -53,41 +56,87 @@ function buildOutsideReadAction(
   };
 }
 
-async function guardianAllowsOutsideRead(
+async function reviewOutsideRead(
   filePath: string,
   sessionId: string,
   options: GuardianOutsideReadOptions | undefined,
   signal?: AbortSignal,
-): Promise<boolean> {
-  if (!options?.reviewer) return false;
+): Promise<{
+  approved: boolean;
+  humanOnlyReason?: ActionReviewHumanOnlyReason | "guardian-denied";
+  binding?: { actionKey: string; policyKey: string };
+}> {
+  if (!options?.reviewer) {
+    return { approved: false, humanOnlyReason: "invalid-action" };
+  }
   const reviewedAction = buildOutsideReadAction(
     filePath,
     sessionId,
     options,
     signal,
   );
-  if (!reviewedAction) return false;
+  if (!reviewedAction) {
+    return { approved: false, humanOnlyReason: "invalid-action" };
+  }
+  const actionKey = actionApprovalActionKey(reviewedAction);
   let outcome;
   try {
     outcome = await options.reviewer.review(reviewedAction);
   } catch {
-    return false;
+    return { approved: false, humanOnlyReason: "invalid-action" };
   }
+  if (outcome.disposition === "human-only") {
+    return { approved: false, humanOnlyReason: outcome.reason };
+  }
+  if (!actionKey) {
+    return { approved: false, humanOnlyReason: "invalid-action" };
+  }
+  const binding = {
+    actionKey,
+    policyKey: actionApprovalPolicyKey(reviewedAction.policy),
+  };
   const approval = createOneShotActionApproval(outcome);
-  if (!approval) return false;
+  if (!approval) {
+    return { approved: false, humanOnlyReason: "guardian-denied", binding };
+  }
   const currentAction = buildOutsideReadAction(
     filePath,
     sessionId,
     options,
     signal,
   );
-  if (!currentAction) return false;
-  return approval.consume({
+  if (!currentAction) return { approved: false, binding };
+  return {
+    approved: approval.consume({
+      sessionId,
+      sessionActive: options.isSessionActive(),
+      policy: currentAction.policy,
+      action: currentAction,
+    }).valid,
+    binding,
+  };
+}
+
+function outsideReadBindingMatches(
+  filePath: string,
+  sessionId: string,
+  options: GuardianOutsideReadOptions | undefined,
+  binding: { actionKey: string; policyKey: string } | undefined,
+  signal?: AbortSignal,
+): boolean {
+  if (!binding || !options) return false;
+  const currentAction = buildOutsideReadAction(
+    filePath,
     sessionId,
-    sessionActive: options.isSessionActive(),
-    policy: currentAction.policy,
-    action: currentAction,
-  }).valid;
+    options,
+    signal,
+  );
+  return Boolean(
+    currentAction &&
+    actionApprovalActionKey(currentAction) === binding.actionKey &&
+    actionApprovalPolicyKey(currentAction.policy) === binding.policyKey &&
+    options.isSessionActive(),
+  );
 }
 
 /**
@@ -103,16 +152,35 @@ export async function approveOutsideWorkspaceAccess(
   signal?: AbortSignal,
   guardian?: GuardianOutsideReadOptions,
 ): Promise<{ approved: boolean; reason?: string }> {
-  if (await guardianAllowsOutsideRead(filePath, sessionId, guardian, signal)) {
-    return { approved: true };
-  }
+  const review = await reviewOutsideRead(filePath, sessionId, guardian, signal);
+  if (review.approved) return { approved: true };
 
   const { promise } = approvalPanel.enqueuePathApproval(
     filePath,
     sessionId,
     signal,
+    review.humanOnlyReason,
   );
-  const response = await promise;
+  let response = await promise;
+  if (
+    response.coordinatorApproval &&
+    response.decision !== "reject" &&
+    review.binding &&
+    !outsideReadBindingMatches(
+      filePath,
+      sessionId,
+      guardian,
+      review.binding,
+      signal,
+    )
+  ) {
+    response = await approvalPanel.enqueuePathApproval(
+      filePath,
+      sessionId,
+      signal,
+      "canonical-target-drift",
+    ).promise;
+  }
 
   if (response.decision === "reject") {
     return { approved: false, reason: response.rejectionReason };

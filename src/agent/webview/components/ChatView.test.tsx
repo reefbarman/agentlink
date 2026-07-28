@@ -9,6 +9,7 @@ import {
   within,
 } from "@testing-library/preact";
 
+import { BgAgentBlock } from "./BgAgentBlock";
 import { BgAgentResultBlock } from "./BgAgentResultBlock";
 import type { ChatMessage } from "../types";
 import { ChatView } from "./ChatView";
@@ -147,7 +148,24 @@ describe("ChatView message windowing", () => {
     expect(screen.getByText("Waiting for provider…")).toBeTruthy();
   });
 
-  it("shows the resolved provider and model in background transcript and result headers", () => {
+  it("shows the resolved provider, model, and thinking level in background agent metadata", () => {
+    const { container } = render(
+      h(BgAgentBlock, {
+        sessionId: "background-1",
+        task: "Review implementation",
+        resolvedProvider: "anthropic",
+        resolvedModel: "claude-sonnet-4-6",
+        reasoningEffort: "high",
+      }),
+    );
+
+    expect(screen.getByText("anthropic/claude-sonnet-4-6 · high")).toBeTruthy();
+    fireEvent.click(container.querySelector(".tool-call-header")!);
+    expect(screen.getByText("Thinking level")).toBeTruthy();
+    expect(screen.getByText("high")).toBeTruthy();
+  });
+
+  it("shows the resolved provider, model, and thinking level in background transcript and result headers", () => {
     const { unmount } = render(
       h(TranscriptView, {
         task: "Review implementation",
@@ -155,15 +173,18 @@ describe("ChatView message windowing", () => {
         messages: makeMessages(1),
         runtimeStatus: {
           phase: "responding",
-          resolvedProvider: "acp",
-          resolvedModel: "acp:claude",
+          resolvedProvider: "anthropic",
+          resolvedModel: "claude-sonnet-4-6",
+          reasoningEffort: "high",
         },
         onClose: vi.fn(),
       }),
     );
 
     expect(
-      screen.getByText("Review implementation — acp / acp:claude"),
+      screen.getByText(
+        "Review implementation — anthropic / claude-sonnet-4-6 · high",
+      ),
     ).toBeTruthy();
     unmount();
 
@@ -173,12 +194,15 @@ describe("ChatView message windowing", () => {
         task: "Review implementation",
         status: "completed",
         resultText: "No issues found.",
-        resolvedProvider: "acp",
-        resolvedModel: "acp:claude",
+        resolvedProvider: "anthropic",
+        resolvedModel: "claude-sonnet-4-6",
+        reasoningEffort: "high",
       }),
     );
 
-    expect(screen.getByText("acp / acp:claude")).toBeTruthy();
+    expect(
+      screen.getByText("anthropic / claude-sonnet-4-6 · high"),
+    ).toBeTruthy();
   });
 
   it("renders explicit background terminal result families and preserved output", () => {

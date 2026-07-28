@@ -427,6 +427,11 @@ export type ExtensionToWebview =
       badge: "follow-up" | "rejection";
     }
   | {
+      type: "agentSurfaceChange";
+      sessionId: string;
+      change: NonNullable<ChatMessage["surfaceChange"]>;
+    }
+  | {
       type: "agentTodoUpdate";
       sessionId: string;
       todos: TodoItem[];
@@ -4191,8 +4196,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): Promise<{ ok: boolean }> {
     if (sessionId) return this.submitSessionSetModel(sessionId, model);
     if (!model || !this.sessionManager) return { ok: false };
+    const foregroundBefore = this.sessionManager.getForegroundSession();
+    const previousModel = foregroundBefore?.model;
     const selectedModel = await this.sessionManager.setModel(model);
     const foreground = this.sessionManager.getForegroundSession();
+    if (foreground && previousModel && previousModel !== selectedModel) {
+      this.recordSurfaceChange(foreground, {
+        model: { previousModel, model: selectedModel },
+      });
+    }
     const foregroundMode =
       foreground?.mode ?? (this.hasWorkspaceProjects() ? "code" : "ask");
     const { config, target, scopeLabel } =
@@ -4220,10 +4232,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): Promise<{ ok: boolean }> {
     const session = this.sessionManager?.getSession(sessionId);
     if (!model || !session || !this.sessionManager) return { ok: false };
+    const previousModel = session.model;
     const selectedModel = await this.sessionManager.setSessionModel(
       sessionId,
       model,
     );
+    if (previousModel !== selectedModel) {
+      this.recordSurfaceChange(session, {
+        model: { previousModel, model: selectedModel },
+      });
+    }
     const { config, target, scopeLabel } =
       this.getPreferenceConfigurationTarget(session.projectScope);
     const modePrefs = getModeModelPreferences(config);
@@ -4338,6 +4356,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return this.submitSessionSetReasoningEffort(sessionId, effort);
     const foreground = this.sessionManager?.getForegroundSession();
     if (!foreground || !this.sessionManager) return { ok: false };
+    const previousReasoningEffort = foreground.reasoningEffort;
     this.ensureProjectedForegroundSession(foreground);
     const updated =
       this.sessionManager.setSessionReasoningEffort?.(foreground.id, effort) ??
@@ -4353,6 +4372,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       { ...preferences, [foreground.mode]: effort },
       target,
     );
+    if (previousReasoningEffort !== effort) {
+      this.recordSurfaceChange(foreground, {
+        reasoning: { previousReasoningEffort, reasoningEffort: effort },
+      });
+    }
     this.applyProjectedAction({ type: "SET_REASONING_EFFORT", effort });
     this.sendInitialState();
     this.log(
@@ -4367,6 +4391,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): Promise<{ ok: boolean }> {
     const session = this.sessionManager?.getSession(sessionId);
     if (!session || !this.sessionManager) return { ok: false };
+    const previousReasoningEffort = session.reasoningEffort;
     if (!this.sessionManager.setSessionReasoningEffort(sessionId, effort)) {
       return { ok: false };
     }
@@ -4379,6 +4404,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       { ...preferences, [session.mode]: effort },
       target,
     );
+    if (previousReasoningEffort !== effort) {
+      this.recordSurfaceChange(session, {
+        reasoning: { previousReasoningEffort, reasoningEffort: effort },
+      });
+    }
     if (this.sessionManager.getForegroundSession()?.id === sessionId) {
       this.ensureProjectedForegroundSession(session);
       this.applyProjectedAction({ type: "SET_REASONING_EFFORT", effort });
@@ -4391,6 +4421,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       `Reasoning effort changed: ${effort} (saved for mode: ${session.mode})`,
     );
     return { ok: true };
+  }
+
+  private recordSurfaceChange(
+    session: AgentSession,
+    change: NonNullable<ChatMessage["surfaceChange"]>,
+  ): void {
+    if (session.getAllMessages().every((message) => message.diagnosticOnly))
+      return;
+    session.appendSurfaceChange(change);
+    this.sessionManager?.saveSession(session.id);
+    if (this.sessionManager?.getForegroundSession()?.id === session.id) {
+      this.postMessage({
+        type: "agentSurfaceChange",
+        sessionId: session.id,
+        change,
+      });
+    }
   }
 
   public async submitBrowserNewSession(
@@ -8892,6 +8939,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           type: "ADD_ANNOTATION",
           text: extMsg.text,
           badge: extMsg.badge,
+        });
+        break;
+
+      case "agentSurfaceChange":
+        this.applyProjectedAction({
+          type: "ADD_SURFACE_CHANGE",
+          change: extMsg.change,
         });
         break;
 

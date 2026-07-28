@@ -71,10 +71,12 @@ const SAFE_COMMANDS = new Set([
   "pwd",
   "rg",
   "shasum",
+  "sort",
   "stat",
   "strings",
   "true",
   "uname",
+  "uniq",
   "wc",
   "which",
   "whoami",
@@ -337,6 +339,28 @@ export class StaticCommandTierClassifier implements CommandTierClassifier {
       );
     }
 
+    if (
+      command === "sort" &&
+      args.some((arg) =>
+        /^(?:-o(?:.+|$)|--output(?:=|$)|--compress-program(?:=|$)|--random-source(?:=|$)|--files0-from(?:=|$)|-T(?:.+|$)|--temporary-directory(?:=|$))/.test(
+          arg,
+        ),
+      )
+    ) {
+      return sensitive(
+        "sort option may write or execute",
+        "workspace_mutation",
+        command,
+      );
+    }
+    if (command === "uniq" && args.some((arg) => !arg.startsWith("-"))) {
+      return sensitive(
+        "uniq positional files may include output",
+        "workspace_mutation",
+        command,
+      );
+    }
+
     if (command === "npm" || command === "pnpm" || command === "yarn") {
       return classifyPackageManager(command, args);
     }
@@ -445,6 +469,7 @@ function validateReadOnlyCommandOptions(
     md5sum: /^(?:-c|--check)$/,
     rg: /^(?:-L|--follow|--hostname-bin(?:=|$)|--ignore-file(?:=|$)|--file(?:=|$)|-f(?:.+|$))/,
     shasum: /^(?:-c|--check)$/,
+    sort: /^(?:-o(?:.+|$)|--output(?:=|$)|--compress-program(?:=|$)|--random-source(?:=|$)|--files0-from(?:=|$)|-T(?:.+|$)|--temporary-directory(?:=|$))/,
   };
   const unsafeFlag = args.find((arg) => unsafeFlags[command]?.test(arg));
   return unsafeFlag

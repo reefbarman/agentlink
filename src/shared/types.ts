@@ -3,6 +3,8 @@ import type {
   BackgroundResultState,
 } from "../core/capabilities/background.js";
 
+import type { CoreReasoningEffort } from "../core/modelCatalog.js";
+
 /**
  * Inline approval request — passed as a callback through the tool dispatch
  * pipeline so tools can request user approval via the chat webview instead
@@ -354,6 +356,8 @@ export interface BgSessionInfo {
   resolvedModel?: string;
   /** Resolved provider id after route selection. */
   resolvedProvider?: string;
+  /** Thinking level selected for the background session. */
+  reasoningEffort?: CoreReasoningEffort;
   /** Background task class used for routing profile selection. */
   taskClass?: string;
   /** Human-readable reason for the selected route. */

@@ -86,6 +86,7 @@ type CommandApprovalAudit =
   | { by: "master_bypass" }
   | { by: "explicit_rule" }
   | { by: "recent_approval" }
+  | { by: "coordinator" }
   | { by: "tier"; tier: CommandTier; threshold: "safe" | "sensitive" }
   | {
       by: "model_reviewer";
@@ -1984,13 +1985,6 @@ async function approveSubCommands(
   });
 
   // Show dialog with full command + enriched sub-command entries
-  if (options?.security && options.providers?.terminalProvider) {
-    recordExecutionAudit(
-      options.providers.terminalProvider,
-      "human_approval_requested",
-      options.security,
-    );
-  }
   const { promise, commitApprovalRecording = () => {} } =
     approvalPanel.enqueueCommandApproval(
       options?.displayCommand ?? fullCommand,
@@ -2010,6 +2004,17 @@ async function approveSubCommands(
       },
     );
   const response = await promise;
+  if (
+    !response.coordinatorApproval &&
+    options?.security &&
+    options.providers?.terminalProvider
+  ) {
+    recordExecutionAudit(
+      options.providers.terminalProvider,
+      "human_approval_requested",
+      options.security,
+    );
+  }
 
   if (isCommandApprovalCancelled(sessionId, reviewProviders)) {
     return { approved: false, cancelled: true };
@@ -2063,12 +2068,16 @@ async function approveSubCommands(
   }
   // A direct human approval outranks an earlier guardian denial of the same
   // action, so stop the retained denial from blocking fast paths on repeats.
-  reviewProviders?.retainedCommandReviewDenials?.clear(sessionId, actionKey);
+  if (!response.coordinatorApproval) {
+    reviewProviders?.retainedCommandReviewDenials?.clear(sessionId, actionKey);
+  }
   return {
     approved: true,
-    approval: response.recentApproval
-      ? { by: "recent_approval" }
-      : { by: "human" },
+    approval: response.coordinatorApproval
+      ? { by: "coordinator" }
+      : response.recentApproval
+        ? { by: "recent_approval" }
+        : { by: "human" },
     followUp: response.followUp,
     commitMutations,
   };

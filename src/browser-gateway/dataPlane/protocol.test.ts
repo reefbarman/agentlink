@@ -834,6 +834,7 @@ describe("browser gateway owner protocol", () => {
           task: "Review",
           resolvedModel: "gpt-5.6-sol",
           resolvedProvider: "codex",
+          reasoningEffort: "high",
           resolvedMode: "review",
           taskClass: "review_code",
         },
@@ -882,6 +883,13 @@ describe("browser gateway owner protocol", () => {
         continueAction: { label: "Continue", prompt: "Continue work" },
         continueActionConsumed: false,
         autoContinueStopReason: "none",
+      },
+      surfaceChange: {
+        model: { previousModel: "gpt-5.4", model: "gpt-5.6-sol" },
+        reasoning: {
+          previousReasoningEffort: "high",
+          reasoningEffort: "low",
+        },
       },
       error: {
         message: "Recoverable",

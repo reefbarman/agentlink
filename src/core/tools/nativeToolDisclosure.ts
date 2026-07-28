@@ -101,10 +101,46 @@ export function discoverNativeTools(
   request: NativeToolDiscoveryRequest = {},
 ): NativeToolDiscoveryResult {
   const query = normalizeSearchText(request.query ?? "");
-  const queryTokens = query ? query.split(" ") : [];
-  const matches = snapshot.deferredTools.filter((tool) =>
-    matchesQuery(tool, query, queryTokens),
+  const explicitNameMatches = query
+    ? snapshot.deferredTools.filter((tool) =>
+        containsSearchPhrase(query, normalizeSearchText(tool.name)),
+      )
+    : [];
+  const remainingQuery = explicitNameMatches.reduce(
+    (value, tool) => removeSearchPhrase(value, normalizeSearchText(tool.name)),
+    query,
   );
+  const remainingQueryTokens = discoveryQueryTokens(remainingQuery);
+  const directNameMatches =
+    query && explicitNameMatches.length === 0
+      ? snapshot.deferredTools.filter((tool) =>
+          normalizeSearchText(tool.name).includes(query),
+        )
+      : [];
+  const rankedMatches =
+    remainingQueryTokens.length > 0
+      ? snapshot.deferredTools
+          .map((tool, index) => ({
+            tool,
+            index,
+            score: explicitNameMatches.includes(tool)
+              ? 0
+              : scoreDiscoveryMatch(tool, remainingQuery, remainingQueryTokens),
+          }))
+          .filter((candidate) => candidate.score > 0)
+          .sort(
+            (left, right) =>
+              right.score - left.score || left.index - right.index,
+          )
+          .map((candidate) => candidate.tool)
+      : [];
+  const matches = explicitNameMatches.length
+    ? [...explicitNameMatches, ...rankedMatches]
+    : directNameMatches.length
+      ? directNameMatches
+      : remainingQueryTokens.length === 0
+        ? [...snapshot.deferredTools]
+        : rankedMatches;
   const limit = clampInteger(
     request.limit,
     NATIVE_TOOL_DISCOVERY_DEFAULT_LIMIT,
@@ -149,26 +185,66 @@ export function getDeferredNativeTool(
   return snapshot.deferredTools.find((tool) => tool.name === name);
 }
 
-function matchesQuery(
+const DISCOVERY_QUERY_STOP_WORDS = new Set([
+  "and",
+  "deferred",
+  "for",
+  "from",
+  "native",
+  "please",
+  "the",
+  "tool",
+  "tools",
+  "with",
+]);
+
+function scoreDiscoveryMatch(
   tool: CoreToolDefinition,
   normalizedQuery: string,
   queryTokens: readonly string[],
-): boolean {
-  if (!normalizedQuery) return true;
+): number {
+  if (!normalizedQuery) return 1;
   const name = normalizeSearchText(tool.name);
-  const haystack = `${name} ${normalizeSearchText(tool.description)}`;
-  return (
-    name.includes(normalizedQuery) ||
-    queryTokens.every((token) => haystack.includes(token))
-  );
+  const description = normalizeSearchText(tool.description);
+  if (name.includes(normalizedQuery)) return 1_000;
+
+  let score = 0;
+  for (const token of queryTokens) {
+    if (name.split(" ").includes(token)) score += 20;
+    else if (name.includes(token)) score += 12;
+    else if (description.includes(token)) score += 4;
+  }
+  return score;
+}
+
+function discoveryQueryTokens(normalizedQuery: string): string[] {
+  return [
+    ...new Set(
+      normalizedQuery
+        .split(" ")
+        .filter(
+          (token) =>
+            token.length >= 3 && !DISCOVERY_QUERY_STOP_WORDS.has(token),
+        ),
+    ),
+  ];
+}
+
+function containsSearchPhrase(haystack: string, phrase: string): boolean {
+  return ` ${haystack} `.includes(` ${phrase} `);
+}
+
+function removeSearchPhrase(value: string, phrase: string): string {
+  return normalizeSearchText(` ${value} `.replace(` ${phrase} `, " "));
 }
 
 function normalizeSearchText(value: string): string {
   return value
     .trim()
     .toLocaleLowerCase("en-US")
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ");
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function clampInteger(

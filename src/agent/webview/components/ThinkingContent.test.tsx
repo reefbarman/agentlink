@@ -1,13 +1,51 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, render } from "@testing-library/preact";
+import {
+  ThinkingContent,
+  normalizeThinkingText,
+  parseThinkingSteps,
+} from "./ThinkingContent";
 import { afterEach, describe, expect, it } from "vitest";
-
-import { parseThinkingSteps, ThinkingContent } from "./ThinkingContent";
+import { cleanup, render } from "@testing-library/preact";
 
 afterEach(cleanup);
 
 describe("ThinkingContent", () => {
+  it("repairs tokenized newline runs from OpenAI-compatible reasoning", () => {
+    expect(
+      normalizeThinkingText(
+        "Let\n me\n read\n the\n Open\nRouter\n reasoning\n docs.\n\nA real paragraph remains.",
+      ),
+    ).toBe(
+      "Let me read the OpenRouter reasoning docs.\n\nA real paragraph remains.",
+    );
+    expect(
+      normalizeThinkingText(
+        "Search\n\n\n results\n\n\n are\n\n\n mostly\n\n\n noise\n\n\n today.",
+      ),
+    ).toBe("Search results are mostly noise today.");
+    expect(
+      normalizeThinkingText("Uses\n COD\nEX\n_DEF\nAULT\n_MODEL\n in\n tests."),
+    ).toBe("Uses CODEX_DEFAULT_MODEL in tests.");
+  });
+
+  it("preserves ordinary line breaks, paragraphs, lists, and code", () => {
+    const ordinary = [
+      "One token",
+      "per line",
+      "is valid prose.",
+      "",
+      "- first item",
+      "- second item",
+      "",
+      "const value = 1;",
+    ].join("\n");
+    expect(normalizeThinkingText(ordinary)).toBe(ordinary);
+    expect(normalizeThinkingText("One\nword\nper\nline\nhere")).toBe(
+      "One\nword\nper\nline\nhere",
+    );
+  });
+
   it("recognizes escaped and raw adjacent OpenAI summary shapes", () => {
     expect(
       parseThinkingSteps(
@@ -48,6 +86,16 @@ describe("ThinkingContent", () => {
       ),
     ).toEqual(["Clarifying the phase", "Outlining options"]);
     expect(container.querySelector("pre")).toBeNull();
+  });
+
+  it("renders normalized reasoning without changing the source text", () => {
+    const text = "Let\n me\n inspect\n this\n captured\n response.";
+    const { container } = render(<ThinkingContent text={text} />);
+
+    expect(container.querySelector("pre")?.textContent).toBe(
+      "Let me inspect this captured response.",
+    );
+    expect(text).toBe("Let\n me\n inspect\n this\n captured\n response.");
   });
 
   it("renders non-matching reasoning text unchanged", () => {

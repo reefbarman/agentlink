@@ -140,7 +140,7 @@ describe("native tool disclosure snapshots", () => {
     expect(second.nextOffset).toBeUndefined();
   });
 
-  it("matches normalized names and all description query terms", () => {
+  it("matches normalized names and ranks description query terms", () => {
     const snapshot = createNativeToolDisclosureSnapshot([
       definition("get_call_hierarchy", "Inspect incoming and outgoing calls"),
       definition("get_type_hierarchy", "Inspect type inheritance"),
@@ -157,6 +157,101 @@ describe("native tool disclosure snapshots", () => {
         (tool) => tool.name,
       ),
     ).toEqual(["manage_memory"]);
+  });
+
+  it("resolves punctuated explicit tool names and includes conceptual matches", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("codebase_search", "Semantic codebase search"),
+      definition("get_repo_map", "Repository module map"),
+      definition("get_module_neighbors", "Inspect neighboring modules"),
+      definition("open_file", "Open a file in the editor"),
+      definition("get_diagnostics", "Show diagnostics and errors"),
+      definition("manage_memory", "Create durable memory"),
+    ]);
+
+    expect(
+      discoverNativeTools(snapshot, {
+        query: "`codebase_search`, get_repo_map.",
+      }).tools.map((tool) => tool.name),
+    ).toEqual(["codebase_search", "get_repo_map"]);
+    expect(
+      discoverNativeTools(snapshot, {
+        query: "open_file and show diagnostics for src/x.ts",
+      }).tools.map((tool) => tool.name),
+    ).toEqual(["open_file", "get_diagnostics"]);
+    expect(
+      discoverNativeTools(snapshot, {
+        query: "codebase_search get_repo_map get_module_neighbors open_file",
+      }).tools.map((tool) => tool.name),
+    ).toEqual([
+      "codebase_search",
+      "get_repo_map",
+      "get_module_neighbors",
+      "open_file",
+    ]);
+  });
+
+  it("uses ranked OR matching when no explicit tool name is present", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("get_repo_map", "Repository module skeleton and imports"),
+      definition("codebase_search", "Semantic code search by meaning"),
+      definition("manage_memory", "Create durable memory"),
+    ]);
+
+    expect(
+      discoverNativeTools(snapshot, {
+        query: "semantic repository map",
+      }).tools.map((tool) => tool.name),
+    ).toEqual(["get_repo_map", "codebase_search"]);
+
+    const firstPage = discoverNativeTools(snapshot, {
+      query: "semantic repository map",
+      limit: 1,
+    });
+    expect(firstPage.tools.map((tool) => tool.name)).toEqual(["get_repo_map"]);
+    expect(firstPage).toMatchObject({ total: 2, offset: 0, nextOffset: 1 });
+    expect(
+      discoverNativeTools(snapshot, {
+        query: "semantic repository map",
+        limit: 1,
+        offset: firstPage.nextOffset,
+      }),
+    ).toMatchObject({
+      tools: [expect.objectContaining({ name: "codebase_search" })],
+      total: 2,
+      offset: 1,
+    });
+  });
+
+  it("falls back to the authorized catalog when no useful query terms remain", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("get_repo_map", "Repository module map"),
+      definition("manage_memory", "Create durable memory"),
+    ]);
+
+    expect(
+      discoverNativeTools(snapshot, { query: "native tools" }).tools.map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["get_repo_map", "manage_memory"]);
+    expect(
+      discoverNativeTools(snapshot, { query: "ui" }).tools.map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["get_repo_map", "manage_memory"]);
+  });
+
+  it("prefers a direct partial-name match over conceptual ranking", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("get_repo_map", "Repository module map"),
+      definition("codebase_search", "Search repo content"),
+    ]);
+
+    expect(
+      discoverNativeTools(snapshot, { query: "repo map" }).tools.map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["get_repo_map"]);
   });
 
   it("omits schemas by default and returns only frozen captured schemas on request", () => {

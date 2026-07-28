@@ -36,6 +36,7 @@ export interface GetContextParams {
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 400;
+const SYMBOL_TIMEOUT_MS = 5_000;
 const CONTAINER_KINDS = new Set([
   vscode.SymbolKind.Class,
   vscode.SymbolKind.Interface,
@@ -49,6 +50,7 @@ export interface GetContextProviders {
   documentProvider: ContextDocumentProvider;
   workingSetProvider: ContextWorkingSetProvider;
   enrichmentProvider: ContextEnrichmentProvider;
+  symbolTimeoutMs?: number;
 }
 
 export async function handleGetContext(
@@ -138,8 +140,11 @@ export async function handleGetContext(
     const gitStatus = providers.enrichmentProvider.getGitStatus(absolutePath);
     if (gitStatus) result.git_status = gitStatus;
 
-    const symbols =
-      await providers.enrichmentProvider.getDocumentSymbols(document);
+    const symbols = await getDocumentSymbolsWithTimeout(
+      providers.enrichmentProvider,
+      document,
+      providers.symbolTimeoutMs ?? SYMBOL_TIMEOUT_MS,
+    );
     if (symbols) result.symbols = symbols;
 
     const diagnostics =
@@ -191,6 +196,27 @@ function buildWorkingSetPayload(
     last_read_at: workingSet.lastReadAt,
     ...(workingSet.note ? { note: workingSet.note } : {}),
   };
+}
+
+async function getDocumentSymbolsWithTimeout(
+  provider: ContextEnrichmentProvider,
+  document: ContextResolvedDocument,
+  timeoutMs: number,
+): Promise<Record<string, string[]> | undefined> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = Symbol("timeout");
+  try {
+    const symbols = await Promise.race([
+      provider.getDocumentSymbols(document),
+      new Promise<typeof timedOut>((resolve) => {
+        timeout = setTimeout(() => resolve(timedOut), timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+    return symbols === timedOut ? undefined : symbols;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 export async function getContextDocumentSymbols(

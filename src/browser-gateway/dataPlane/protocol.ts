@@ -1,4 +1,8 @@
 import type { BackgroundResultState } from "../../core/capabilities/background.js";
+import {
+  CORE_REASONING_EFFORTS,
+  type CoreReasoningEffort,
+} from "../../core/modelCatalog.js";
 import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
 import { utf8ByteLength } from "../../shared/streamingBaselineMetrics.js";
 import {
@@ -263,6 +267,7 @@ export type BrowserGatewayTranscriptBlock =
       task: string;
       resolvedModel?: string;
       resolvedProvider?: string;
+      reasoningEffort?: CoreReasoningEffort;
       resolvedMode?: string;
       taskClass?: string;
     }
@@ -317,6 +322,27 @@ export interface BrowserGatewayTranscriptMessage {
     continueAction?: { label: string; prompt: string };
     continueActionConsumed?: boolean;
     autoContinueStopReason?: string;
+  };
+  surfaceChange?: {
+    model?: { previousModel: string; model: string };
+    reasoning?: {
+      previousReasoningEffort:
+        | "none"
+        | "minimal"
+        | "low"
+        | "medium"
+        | "high"
+        | "xhigh"
+        | "max";
+      reasoningEffort:
+        | "none"
+        | "minimal"
+        | "low"
+        | "medium"
+        | "high"
+        | "xhigh"
+        | "max";
+    };
   };
   error?: {
     message: string;
@@ -2197,6 +2223,7 @@ function parseMessage(
     "origin",
     "checkpointId",
     "finalMarker",
+    "surfaceChange",
     "error",
     "apiRequest",
     "condenseInfo",
@@ -2228,6 +2255,12 @@ function parseMessage(
     "finalMarker",
     path,
     parseFinalMarker,
+  );
+  const surfaceChange = optionalObject(
+    object,
+    "surfaceChange",
+    path,
+    parseSurfaceChange,
   );
   const error = optionalObject(object, "error", path, parseMessageError);
   const apiRequest = optionalObject(
@@ -2268,6 +2301,7 @@ function parseMessage(
     ...(origin ? { origin } : {}),
     ...(checkpointId ? { checkpointId } : {}),
     ...(finalMarker ? { finalMarker } : {}),
+    ...(surfaceChange ? { surfaceChange } : {}),
     ...(error ? { error } : {}),
     ...(apiRequest ? { apiRequest } : {}),
     ...(condenseInfo ? { condenseInfo } : {}),
@@ -2395,6 +2429,7 @@ function parseTranscriptBlock(
         "task",
         "resolvedModel",
         "resolvedProvider",
+        "reasoningEffort",
         "resolvedMode",
         "taskClass",
       ]);
@@ -2405,6 +2440,12 @@ function parseTranscriptBlock(
         path,
         256,
       );
+      const reasoningEffort = optionalEnum(
+        object,
+        "reasoningEffort",
+        path,
+        new Set(CORE_REASONING_EFFORTS),
+      ) as CoreReasoningEffort | undefined;
       const resolvedMode = optionalString(object, "resolvedMode", path, 128);
       const taskClass = optionalString(object, "taskClass", path, 256);
       return {
@@ -2414,6 +2455,7 @@ function parseTranscriptBlock(
         task: boundedString(object.task, `${path}.task`, 4_000),
         ...(resolvedModel ? { resolvedModel } : {}),
         ...(resolvedProvider ? { resolvedProvider } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(resolvedMode ? { resolvedMode } : {}),
         ...(taskClass ? { taskClass } : {}),
       };
@@ -2626,6 +2668,76 @@ function parseFinalMarker(
     ...(continueAction ? { continueAction } : {}),
     ...(continueActionConsumed !== undefined ? { continueActionConsumed } : {}),
     ...(autoContinueStopReason ? { autoContinueStopReason } : {}),
+  };
+}
+
+function parseSurfaceChange(
+  value: unknown,
+  path: string,
+): NonNullable<BrowserGatewayTranscriptMessage["surfaceChange"]> {
+  const object = strictRecord(value, path, ["model", "reasoning"]);
+  const model = optionalObject(
+    object,
+    "model",
+    path,
+    (candidate, candidatePath) => {
+      const change = strictRecord(candidate, candidatePath, [
+        "previousModel",
+        "model",
+      ]);
+      return {
+        previousModel: nonEmptyString(
+          change.previousModel,
+          `${candidatePath}.previousModel`,
+          256,
+        ),
+        model: nonEmptyString(change.model, `${candidatePath}.model`, 256),
+      };
+    },
+  );
+  const reasoning = optionalObject(
+    object,
+    "reasoning",
+    path,
+    (candidate, candidatePath) => {
+      const change = strictRecord(candidate, candidatePath, [
+        "previousReasoningEffort",
+        "reasoningEffort",
+      ]);
+      const efforts = new Set([
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+      ]);
+      return {
+        previousReasoningEffort: enumValue(
+          change.previousReasoningEffort,
+          `${candidatePath}.previousReasoningEffort`,
+          efforts,
+        ) as NonNullable<
+          NonNullable<
+            BrowserGatewayTranscriptMessage["surfaceChange"]
+          >["reasoning"]
+        >["previousReasoningEffort"],
+        reasoningEffort: enumValue(
+          change.reasoningEffort,
+          `${candidatePath}.reasoningEffort`,
+          efforts,
+        ) as NonNullable<
+          NonNullable<
+            BrowserGatewayTranscriptMessage["surfaceChange"]
+          >["reasoning"]
+        >["reasoningEffort"],
+      };
+    },
+  );
+  return {
+    ...(model ? { model } : {}),
+    ...(reasoning ? { reasoning } : {}),
   };
 }
 

@@ -1,4 +1,4 @@
-import type { JSX } from "preact";
+import { Fragment, type JSX } from "preact";
 import type {
   ChatMessage,
   ModeInfo,
@@ -153,6 +153,7 @@ const AUTO_CONTINUE_MAX_TURNS = 10;
 const AUTO_CONTINUE_BROWSER_SETTLE_MS = 500;
 const THEME_CACHE_KEY = "agentlink.browserGateway.themeSnapshot.v1";
 const SIDE_PANE_WIDTH_KEY = "agentlink.browserGateway.sidePaneWidth.v1";
+const SELECTION_CACHE_KEY = "agentlink.browserGateway.selection.v1";
 const TAB_FLASH_INTERVAL_MS = 1_000;
 const TAB_FLASH_TITLE = "⚠ Action needed — AgentLink";
 const DEFAULT_SIDE_PANE_PERCENT = 36;
@@ -412,6 +413,15 @@ type BrowserGatewayInstanceOption = {
 
 type BrowserLogicalTabSelection = BrowserGatewaySessionDetailRequest;
 
+type StoredBrowserSelection =
+  | { kind: "ask-agent" }
+  | {
+      kind: "workspace";
+      instanceId: string;
+      workspacePath?: string;
+      logical?: BrowserLogicalTabSelection;
+    };
+
 type AskAgentSessionResponse = {
   ok: true;
   ownerRegistration?: {
@@ -568,6 +578,56 @@ function logicalTabSelectionKey(selection: BrowserLogicalTabSelection): string {
     selection.tabId,
     selection.sessionId,
   ].join("\u0000");
+}
+
+function readStoredBrowserSelection(): StoredBrowserSelection {
+  try {
+    const raw = window.sessionStorage.getItem(SELECTION_CACHE_KEY);
+    if (!raw) return { kind: "ask-agent" };
+    const parsed = JSON.parse(raw) as Partial<StoredBrowserSelection>;
+    if (parsed.kind === "ask-agent") return { kind: "ask-agent" };
+    if (
+      parsed.kind !== "workspace" ||
+      typeof parsed.instanceId !== "string" ||
+      !parsed.instanceId.trim()
+    ) {
+      return { kind: "ask-agent" };
+    }
+    const logical = parsed.logical as
+      | Partial<BrowserLogicalTabSelection>
+      | undefined;
+    return {
+      kind: "workspace",
+      instanceId: parsed.instanceId,
+      ...(typeof parsed.workspacePath === "string" &&
+      parsed.workspacePath.trim()
+        ? { workspacePath: parsed.workspacePath.trim() }
+        : {}),
+      ...(logical &&
+      logical.instanceId === parsed.instanceId &&
+      typeof logical.controllerEpoch === "string" &&
+      Boolean(logical.controllerEpoch.trim()) &&
+      typeof logical.tabId === "string" &&
+      Boolean(logical.tabId.trim()) &&
+      typeof logical.sessionId === "string" &&
+      Boolean(logical.sessionId.trim())
+        ? { logical: logical as BrowserLogicalTabSelection }
+        : {}),
+    };
+  } catch {
+    return { kind: "ask-agent" };
+  }
+}
+
+function writeStoredBrowserSelection(selection: StoredBrowserSelection): void {
+  try {
+    window.sessionStorage.setItem(
+      SELECTION_CACHE_KEY,
+      JSON.stringify(selection),
+    );
+  } catch {
+    // Best-effort browser-tab-local preference only.
+  }
 }
 
 export function cacheDetachedSessionDetail(
@@ -1155,7 +1215,14 @@ export function BrowserGatewayApp({
   >([]);
   const instanceOptionsRef = useRef<BrowserGatewayInstanceOption[]>([]);
   const authRecoveryPendingRef = useRef(false);
-  const initialSelectedTabId = BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
+  const storedSelectionRef = useRef<StoredBrowserSelection | null>(null);
+  if (storedSelectionRef.current === null) {
+    storedSelectionRef.current = readStoredBrowserSelection();
+  }
+  const initialSelectedTabId =
+    routeByInstance && storedSelectionRef.current.kind === "workspace"
+      ? storedSelectionRef.current.instanceId
+      : BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
   const [selectedTabId, setSelectedTabId] =
     useState<string>(initialSelectedTabId);
   const selectedTabIdRef = useRef(initialSelectedTabId);
@@ -1163,13 +1230,24 @@ export function BrowserGatewayApp({
   const snapshotCacheRef = useRef<
     Map<string, { generation: number; snapshot: GatewaySnapshot }>
   >(new Map());
+  const workspaceHydrationInFlightRef = useRef<Set<string>>(new Set());
   const [ownerSnapshotRevision, setOwnerSnapshotRevision] = useState(0);
+  const initialLogicalSelection =
+    routeByInstance && storedSelectionRef.current.kind === "workspace"
+      ? (storedSelectionRef.current.logical ?? null)
+      : null;
   const logicalSelectionByInstanceRef = useRef<
     Map<string, BrowserLogicalTabSelection>
-  >(new Map());
+  >(
+    initialLogicalSelection
+      ? new Map([[initialLogicalSelection.instanceId, initialLogicalSelection]])
+      : new Map(),
+  );
   const [selectedLogicalTab, setSelectedLogicalTab] =
-    useState<BrowserLogicalTabSelection | null>(null);
-  const selectedLogicalTabRef = useRef<BrowserLogicalTabSelection | null>(null);
+    useState<BrowserLogicalTabSelection | null>(initialLogicalSelection);
+  const selectedLogicalTabRef = useRef<BrowserLogicalTabSelection | null>(
+    initialLogicalSelection,
+  );
   const logicalSelectionGenerationRef = useRef(0);
   const detachedDetailCacheRef = useRef<
     Map<string, BrowserGatewayDetachedSessionDetail>
@@ -1211,6 +1289,28 @@ export function BrowserGatewayApp({
       },
       body: JSON.stringify({ event, fields }),
     }).catch(() => undefined);
+  }
+
+  function persistStoredBrowserSelection(
+    selection: StoredBrowserSelection,
+  ): void {
+    storedSelectionRef.current = selection;
+    writeStoredBrowserSelection(selection);
+  }
+
+  function storedWorkspaceSelection(
+    instanceId: string,
+    logical?: BrowserLogicalTabSelection | null,
+  ): StoredBrowserSelection {
+    const workspacePath = instanceOptionsRef.current
+      .find((instance) => instance.instanceId === instanceId)
+      ?.workspacePath.trim();
+    return {
+      kind: "workspace",
+      instanceId,
+      ...(workspacePath ? { workspacePath } : {}),
+      ...(logical ? { logical } : {}),
+    };
   }
 
   function selectTab(tabId: string): void {
@@ -1259,6 +1359,11 @@ export function BrowserGatewayApp({
     setTranscriptView(null);
     forwardedFollowUpRef.current = "";
     setSelectedTabId(tabId);
+    persistStoredBrowserSelection(
+      tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+        ? { kind: "ask-agent" }
+        : storedWorkspaceSelection(tabId, logicalSelection),
+    );
     logAskAgentBrowserEvent("tab.select", {
       previousTabId,
       nextTabId: tabId,
@@ -1314,8 +1419,22 @@ export function BrowserGatewayApp({
       sourceEventPaint?: RelaySourceEventPaintMarker,
     ): boolean => {
       const cached = snapshotCacheRef.current.get(tabId);
+      const normalizedNext =
+        next.session.chatWorkspace == null &&
+        cached?.snapshot.session.chatWorkspace
+          ? {
+              ...next,
+              session: {
+                ...next.session,
+                chatWorkspace: cached.snapshot.session.chatWorkspace,
+              },
+            }
+          : next;
       if (!cached || generation >= cached.generation) {
-        snapshotCacheRef.current.set(tabId, { generation, snapshot: next });
+        snapshotCacheRef.current.set(tabId, {
+          generation,
+          snapshot: normalizedNext,
+        });
         setOwnerSnapshotRevision((revision) => revision + 1);
       }
       if (
@@ -1326,13 +1445,36 @@ export function BrowserGatewayApp({
       }
       snapshotOriginRef.current = { tabId, generation };
       const logicalSelection = selectedLogicalTabRef.current;
+      const workspace = normalizedNext.session.chatWorkspace;
+      const logicalSelectionIsCurrent = Boolean(
+        logicalSelection &&
+        workspace &&
+        logicalSelection.instanceId === tabId &&
+        logicalSelection.controllerEpoch === workspace.controllerEpoch &&
+        workspace.tabs.some(
+          (tab) =>
+            tab.tabId === logicalSelection.tabId &&
+            tab.sessionId === logicalSelection.sessionId,
+        ),
+      );
+      const logicalSelectionIsInvalid = Boolean(
+        logicalSelection && workspace && !logicalSelectionIsCurrent,
+      );
+      if (logicalSelectionIsInvalid) {
+        logicalSelectionByInstanceRef.current.delete(tabId);
+        selectedLogicalTabRef.current = null;
+        logicalSelectionGenerationRef.current += 1;
+        setSelectedLogicalTab(null);
+      }
       if (
         tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID ||
         !logicalSelection ||
-        logicalSelection.instanceId !== tabId ||
-        logicalSelection.sessionId === next.session.foreground?.sessionId
+        logicalSelectionIsInvalid ||
+        (logicalSelectionIsCurrent &&
+          logicalSelection.sessionId ===
+            normalizedNext.session.foreground?.sessionId)
       ) {
-        setSnapshot(next);
+        setSnapshot(normalizedNext);
       }
       queueAcceptedRelaySourceEventPaint(
         true,
@@ -1715,11 +1857,17 @@ export function BrowserGatewayApp({
       selectedLogicalTabRef.current = next;
       logicalSelectionGenerationRef.current += 1;
       setSelectedLogicalTab(next);
+      persistStoredBrowserSelection(
+        storedWorkspaceSelection(selectedTabId, next),
+      );
       return;
     }
 
     const selection = current!;
     logicalSelectionByInstanceRef.current.set(selectedTabId, selection);
+    persistStoredBrowserSelection(
+      storedWorkspaceSelection(selectedTabId, selection),
+    );
     if (ownerSnapshot.session.foreground?.sessionId === selection.sessionId) {
       setSnapshot(ownerSnapshot);
       return;
@@ -2322,18 +2470,23 @@ export function BrowserGatewayApp({
       ) {
         return currentSelectedTabId;
       }
+      const storedSelection = storedSelectionRef.current;
+      const selectedWorkspacePath =
+        currentSelectedInstance?.workspacePath.trim() ||
+        (storedSelection?.kind === "workspace" &&
+        storedSelection.instanceId === currentSelectedTabId
+          ? storedSelection.workspacePath?.trim()
+          : undefined);
+      const liveReplacement = selectedWorkspacePath
+        ? liveInstances.find(
+            (instance) =>
+              instance.workspacePath.trim() === selectedWorkspacePath,
+          )
+        : undefined;
+      if (liveReplacement) {
+        return liveReplacement.instanceId;
+      }
       if (currentSelectedInstance) {
-        const selectedWorkspacePath =
-          currentSelectedInstance.workspacePath.trim();
-        const liveReplacement = selectedWorkspacePath
-          ? liveInstances.find(
-              (instance) =>
-                instance.workspacePath.trim() === selectedWorkspacePath,
-            )
-          : undefined;
-        if (liveReplacement) {
-          return liveReplacement.instanceId;
-        }
         if (liveCurrentServerInstance) {
           return liveCurrentServerInstance.instanceId;
         }
@@ -2350,6 +2503,44 @@ export function BrowserGatewayApp({
       instances[0]?.instanceId ||
       BROWSER_GATEWAY_ASK_AGENT_TAB_ID
     );
+  }
+
+  async function hydrateInstanceWorkspace(instanceId: string): Promise<void> {
+    if (
+      workspaceHydrationInFlightRef.current.has(instanceId) ||
+      selectedTabIdRef.current === instanceId
+    ) {
+      return;
+    }
+    const cachedAtStart = snapshotCacheRef.current.get(instanceId);
+    workspaceHydrationInFlightRef.current.add(instanceId);
+    try {
+      const response = await fetch(
+        buildApiPathForInstance("/api/ui-state", instanceId),
+        {
+          credentials: "same-origin",
+          headers: { Authorization: `Bearer ${authToken}` },
+        },
+      );
+      if (!response.ok) return;
+      const data = await readGatewaySnapshotResponse(response);
+      if (
+        selectedTabIdRef.current === instanceId ||
+        snapshotCacheRef.current.get(instanceId) !== cachedAtStart
+      ) {
+        return;
+      }
+      snapshotCacheRef.current.set(instanceId, {
+        generation:
+          cachedAtStart?.generation ?? selectedTabGenerationRef.current,
+        snapshot: data.snapshot,
+      });
+      setOwnerSnapshotRevision((revision) => revision + 1);
+    } catch {
+      // Best-effort tab-strip hydration; the selected instance connection retries.
+    } finally {
+      workspaceHydrationInFlightRef.current.delete(instanceId);
+    }
   }
 
   async function fetchInstances(
@@ -2435,21 +2626,49 @@ export function BrowserGatewayApp({
       const nextSelectedTabId = routeByInstance
         ? selectPreferredInstanceId(instances, data.currentInstanceId)
         : BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
+      // Make fresh instance metadata available before reconciling selection so a
+      // replacement activation can persist its stable workspace identity.
+      const previousInstances = instanceOptionsRef.current;
+      instanceOptionsRef.current = instances;
       if (
         options.commitSelection !== false &&
         nextSelectedTabId !== selectedTabIdRef.current
       ) {
+        const storedSelection = storedSelectionRef.current;
+        if (
+          storedSelection?.kind === "workspace" &&
+          storedSelection.logical &&
+          storedSelection.workspacePath &&
+          instances.some(
+            (instance) =>
+              instance.instanceId === nextSelectedTabId &&
+              instance.workspacePath.trim() === storedSelection.workspacePath,
+          )
+        ) {
+          const reboundLogicalSelection = {
+            ...storedSelection.logical,
+            instanceId: nextSelectedTabId,
+          };
+          logicalSelectionByInstanceRef.current.delete(
+            storedSelection.instanceId,
+          );
+          logicalSelectionByInstanceRef.current.set(
+            nextSelectedTabId,
+            reboundLogicalSelection,
+          );
+        }
         selectTab(nextSelectedTabId);
       }
       // The 5s refresh usually returns an identical list; skip the app-wide
       // re-render then. `lastSeenAt` changes every poll but nothing renders it.
-      const previousInstances = instanceOptionsRef.current;
-      instanceOptionsRef.current = instances;
       if (
         serializeInstancesIgnoringLastSeen(previousInstances) !==
         serializeInstancesIgnoringLastSeen(instances)
       ) {
         setInstanceOptions(instances);
+      }
+      for (const instance of liveInstances) {
+        void hydrateInstanceWorkspace(instance.instanceId);
       }
       return nextSelectedTabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
         ? null
@@ -3883,6 +4102,7 @@ export function BrowserGatewayApp({
     logicalSelectionGenerationRef.current += 1;
     selectedLogicalTabRef.current = next;
     setSelectedLogicalTab(next);
+    persistStoredBrowserSelection(storedWorkspaceSelection(instanceId, next));
     setSnapshot(null);
     setLocalDismissedApprovalId(null);
     setLocalDismissedQuestionId(null);
@@ -5936,86 +6156,81 @@ export function BrowserGatewayApp({
               </button>
             );
           }
+          const groupColor = instanceGroupColor(instance.instanceId);
           return (
-            <section
-              key={instance.instanceId}
-              class={`browser-instance-group${activeInstance ? " active" : ""}`}
-              role="presentation"
-              style={
-                {
-                  "--instance-group-color": instanceGroupColor(
-                    instance.instanceId,
-                  ),
-                } as unknown as JSX.CSSProperties
-              }
-            >
-              <div class="browser-instance-group-label">
-                <i class="codicon codicon-window" />
-                <span>{instance.workspaceName}</span>
-                {instance.disconnectedAt !== undefined && (
-                  <i
-                    aria-label="Disconnected"
-                    class="codicon codicon-debug-disconnect"
-                  />
-                )}
-              </div>
-              <div class="browser-logical-tabs" role="presentation">
-                {workspace.tabs.map((tab) => {
-                  const selection = logicalTabSelection(
-                    instance.instanceId,
-                    workspace,
-                    tab,
-                  );
-                  const active = Boolean(
-                    activeInstance &&
-                    selection &&
-                    selectedLogicalTab &&
-                    logicalTabSelectionKey(selection) ===
-                      logicalTabSelectionKey(selectedLogicalTab),
-                  );
-                  const tabStatus = getLogicalTabStatus(tab.status);
-                  return (
-                    <button
-                      key={tab.tabId}
-                      aria-controls="browser-instance-panel"
-                      aria-selected={active}
-                      class={`instance-tab logical-tab instance-tab-${tabStatus.kind}${active ? " active" : ""}`}
-                      disabled={!selection}
-                      id={logicalTabDomId(instance.instanceId, tab.tabId)}
-                      onClick={() =>
-                        handleLogicalTabSelect(
-                          instance.instanceId,
-                          workspace,
-                          tab,
-                        )
-                      }
-                      role="tab"
-                      title={`${tab.label} · ${tab.title ?? "Empty chat"} · ${tab.placement} · ${tabStatus.label}`}
-                      type="button"
-                    >
-                      <span class="instance-tab-main">
-                        <span class="logical-tab-label">{tab.label}</span>
-                        <span class="instance-tab-name">
-                          {tab.title ?? "Empty chat"}
-                        </span>
-                        {tab.placement === "popped" && (
-                          <i
-                            aria-label="Popped out"
-                            class="codicon codicon-opened-editors"
-                          />
-                        )}
+            <Fragment key={instance.instanceId}>
+              {workspace.tabs.map((tab, tabIndex) => {
+                const selection = logicalTabSelection(
+                  instance.instanceId,
+                  workspace,
+                  tab,
+                );
+                const active = Boolean(
+                  activeInstance &&
+                  selection &&
+                  selectedLogicalTab &&
+                  logicalTabSelectionKey(selection) ===
+                    logicalTabSelectionKey(selectedLogicalTab),
+                );
+                const tabStatus =
+                  instance.disconnectedAt === undefined
+                    ? getLogicalTabStatus(tab.status)
+                    : instanceStatus;
+                const groupPosition =
+                  workspace.tabs.length === 1
+                    ? "single"
+                    : tabIndex === 0
+                      ? "start"
+                      : tabIndex === workspace.tabs.length - 1
+                        ? "end"
+                        : "middle";
+                return (
+                  <button
+                    key={`${instance.instanceId}:${tab.tabId}`}
+                    aria-controls="browser-instance-panel"
+                    aria-label={`${tab.label} · ${tab.title ?? "Empty chat"} · ${instance.workspaceName} · ${tab.placement === "popped" ? "Popped out" : "Docked"} · ${tabStatus.label}`}
+                    aria-selected={active}
+                    class={`instance-tab logical-tab logical-tab-group-${groupPosition} instance-tab-${tabStatus.kind}${active ? " active" : ""}`}
+                    disabled={!selection}
+                    id={logicalTabDomId(instance.instanceId, tab.tabId)}
+                    onClick={() =>
+                      handleLogicalTabSelect(
+                        instance.instanceId,
+                        workspace,
+                        tab,
+                      )
+                    }
+                    role="tab"
+                    style={
+                      {
+                        "--instance-group-color": groupColor,
+                      } as unknown as JSX.CSSProperties
+                    }
+                    title={`${instance.workspaceName} · ${tab.label} · ${tab.title ?? "Empty chat"} · ${tab.placement} · ${tabStatus.label}`}
+                    type="button"
+                  >
+                    <span class="instance-tab-main">
+                      <span class="logical-tab-label">{tab.label}</span>
+                      <span class="instance-tab-name">
+                        {tab.title ?? "Empty chat"}
                       </span>
-                      <span class="instance-tab-status">
+                      {tab.placement === "popped" && (
                         <i
-                          class={`codicon codicon-${tabStatus.kind === "idle" ? "check" : getInstanceStatusIcon(tabStatus.kind)}${tabStatus.kind === "working" ? " codicon-modifier-spin" : ""}`}
+                          aria-label="Popped out"
+                          class="codicon codicon-opened-editors"
                         />
-                        <span>{tabStatus.label}</span>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
+                      )}
+                    </span>
+                    <span class="instance-tab-status">
+                      <i
+                        class={`codicon codicon-${instance.disconnectedAt !== undefined ? "debug-disconnect" : tabStatus.kind === "idle" ? "check" : getInstanceStatusIcon(tabStatus.kind)}${tabStatus.kind === "working" ? " codicon-modifier-spin" : ""}`}
+                      />
+                      <span>{tabStatus.label}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </Fragment>
           );
         })}
       </div>

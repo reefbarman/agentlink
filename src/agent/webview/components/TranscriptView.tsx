@@ -14,7 +14,10 @@ interface TranscriptViewProps {
   streaming?: boolean;
   statusOverride?: string | null;
   runtimeStatus?: BackgroundRuntimeStatus &
-    Pick<BgSessionInfoProps, "resolvedModel" | "resolvedProvider">;
+    Pick<
+      BgSessionInfoProps,
+      "resolvedModel" | "resolvedProvider" | "reasoningEffort"
+    >;
   todos?: TodoItem[];
   onOpenFile?: (path: string, line?: number) => void;
   onOpenSpecialBlockPanel?: (block: {
@@ -50,8 +53,9 @@ export function TranscriptView({
 }: TranscriptViewProps) {
   const resolvedModel = runtimeStatus?.resolvedModel;
   const resolvedProvider = runtimeStatus?.resolvedProvider;
+  const reasoningEffort = runtimeStatus?.reasoningEffort;
   const title = resolvedModel
-    ? `${task} — ${resolvedProvider ? `${resolvedProvider} / ` : ""}${resolvedModel}`
+    ? `${task} — ${resolvedProvider ? `${resolvedProvider} / ` : ""}${resolvedModel}${reasoningEffort ? ` · ${reasoningEffort}` : ""}`
     : task;
 
   return (

@@ -3,6 +3,7 @@ import type {
   ContentBlock,
   TodoItem,
 } from "../../agent/webview/types.js";
+import type { CoreReasoningEffort } from "../../core/modelCatalog.js";
 import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
 import type { BrowserGatewaySnapshotState } from "../BrowserGatewayService.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "../dataPlane/limits.js";
@@ -193,6 +194,7 @@ export type BrowserGatewayNormalizedTranscriptBlock =
       readonly task: string;
       readonly resolvedModel?: string;
       readonly resolvedProvider?: string;
+      readonly reasoningEffort?: CoreReasoningEffort;
       readonly resolvedMode?: string;
       readonly taskClass?: string;
     }
@@ -675,6 +677,9 @@ function normalizeLegacyBlock(
         ...(block.resolvedModel ? { resolvedModel: block.resolvedModel } : {}),
         ...(block.resolvedProvider
           ? { resolvedProvider: block.resolvedProvider }
+          : {}),
+        ...(block.reasoningEffort
+          ? { reasoningEffort: block.reasoningEffort }
           : {}),
         ...(block.resolvedMode ? { resolvedMode: block.resolvedMode } : {}),
         ...(block.taskClass ? { taskClass: block.taskClass } : {}),

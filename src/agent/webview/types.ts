@@ -262,6 +262,11 @@ export type ExtensionMessage =
       badge: "follow-up" | "rejection";
     }
   | {
+      type: "agentSurfaceChange";
+      sessionId: string;
+      change: NonNullable<ChatMessage["surfaceChange"]>;
+    }
+  | {
       type: "agentApiRequest";
       sessionId: string;
       requestId: string;
@@ -589,6 +594,7 @@ export type ExtensionMessage =
         resolvedMode?: string;
         resolvedModel?: string;
         resolvedProvider?: string;
+        reasoningEffort?: ReasoningEffort;
         taskClass?: string;
         routingReason?: string;
         fallbackUsed?: boolean;
@@ -961,6 +967,8 @@ export type ContentBlock =
       resolvedModel?: string;
       /** Resolved provider */
       resolvedProvider?: string;
+      /** Thinking level selected for the background agent */
+      reasoningEffort?: ReasoningEffort;
       /** Resolved mode */
       resolvedMode?: string;
       /** Task class used for routing */
@@ -1048,6 +1056,14 @@ export interface ChatMessage {
   checkpointId?: string;
   /** Final-turn status marker rendered on the last assistant response. */
   finalMarker?: import("../../shared/finalStatus.js").FinalMessageMarker;
+  /** Explicit user-facing control change rendered at the point it occurred. */
+  surfaceChange?: {
+    model?: { previousModel: string; model: string };
+    reasoning?: {
+      previousReasoningEffort: ReasoningEffort;
+      reasoningEffort: ReasoningEffort;
+    };
+  };
   error?: {
     message: string;
     retryable: boolean;

@@ -202,6 +202,34 @@ describe("handleGetContext", () => {
     vscodeMock.getExtension.mockReturnValue(undefined);
   });
 
+  it("returns core context when symbol enrichment does not settle", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "stalled.ts");
+    const content = "export const value = 1;\n";
+    fs.writeFileSync(filePath, content);
+    const providers = {
+      ...makeProviders(filePath, "stalled.ts", content),
+      symbolTimeoutMs: 10,
+    };
+    providers.enrichmentProvider.getDocumentSymbols = vi.fn(
+      () => new Promise<Record<string, string[]> | undefined>(() => undefined),
+    );
+
+    const { handleGetContext } = await import("./getContext.js");
+    const result = await handleGetContext(
+      { path: "stalled.ts" },
+      "session-stalled-symbols",
+      providers,
+    );
+
+    const payload = JSON.parse(getText(result));
+    expect(payload).toMatchObject({
+      path: "stalled.ts",
+      content: "1 | export const value = 1;\n2 | ",
+    });
+    expect(payload.symbols).toBeUndefined();
+  }, 10_000);
+
   it("returns a compact context pack and tracks the first range as new", async () => {
     const workspace = makeTempWorkspace();
     const filePath = path.join(workspace, "example.ts");

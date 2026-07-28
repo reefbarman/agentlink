@@ -1,4 +1,5 @@
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
+import type { ReasoningEffort } from "../types";
 import { useState } from "preact/hooks";
 
 interface BgAgentBlockProps {
@@ -8,6 +9,7 @@ interface BgAgentBlockProps {
   message?: string;
   resolvedModel?: string;
   resolvedProvider?: string;
+  reasoningEffort?: ReasoningEffort;
   resolvedMode?: string;
   taskClass?: string;
   routingReason?: string;
@@ -65,6 +67,7 @@ export function BgAgentBlock({
   message,
   resolvedModel,
   resolvedProvider,
+  reasoningEffort,
   resolvedMode,
   taskClass,
   routingReason,
@@ -76,6 +79,7 @@ export function BgAgentBlock({
   // If bg session metadata is missing, treat it as completed rather than
   // indefinitely pending to avoid stuck spinners after session cleanup.
   const status = bgSession?.status ?? "idle";
+  const selectedReasoningEffort = reasoningEffort ?? bgSession?.reasoningEffort;
   const isRunning =
     status === "pending" ||
     status === "streaming" ||
@@ -107,6 +111,7 @@ export function BgAgentBlock({
           <span class="tool-call-meta">
             {resolvedProvider ? `${resolvedProvider}/` : ""}
             {resolvedModel}
+            {selectedReasoningEffort ? ` · ${selectedReasoningEffort}` : ""}
           </span>
         )}
         {isRunning && (
@@ -152,6 +157,12 @@ export function BgAgentBlock({
                 {resolvedProvider ? `${resolvedProvider} / ` : ""}
                 {resolvedModel}
               </pre>
+            </div>
+          )}
+          {selectedReasoningEffort && (
+            <div class="tool-call-section">
+              <div class="tool-call-section-label">Thinking level</div>
+              <pre class="tool-call-code">{selectedReasoningEffort}</pre>
             </div>
           )}
           {taskClass && (

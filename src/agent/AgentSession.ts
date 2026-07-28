@@ -862,10 +862,21 @@ export class AgentSession {
     this.lastActiveAt = Date.now();
   }
 
+  appendSurfaceChange(
+    change: NonNullable<NonNullable<AgentMessage["uiHint"]>["surfaceChange"]>,
+  ): void {
+    this.appendAssistantMessage({
+      role: "assistant",
+      content: [],
+      diagnosticOnly: true,
+      uiHint: { surfaceChange: change },
+    });
+  }
+
   applyFinalMarker(marker: FinalMessageMarker): boolean {
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const msg = this.messages[i];
-      if (msg.role !== "assistant") continue;
+      if (msg.role !== "assistant" || msg.diagnosticOnly) continue;
       msg.uiHint = {
         ...msg.uiHint,
         finalMarker: marker,

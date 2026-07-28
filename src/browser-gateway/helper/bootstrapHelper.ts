@@ -67,6 +67,62 @@ export async function fetchHelperHealth(
 export interface DesiredHelperConfig {
   lanAccess: boolean;
   mdnsName?: string;
+  helperVersion?: string;
+}
+
+type ReleaseVersion = {
+  core: [number, number, number];
+  prerelease: Array<number | string>;
+};
+
+function parseReleaseVersion(value: string): ReleaseVersion | null {
+  const match = value
+    .trim()
+    .match(
+      /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/,
+    );
+  if (!match) return null;
+  return {
+    core: [Number(match[1]), Number(match[2]), Number(match[3])],
+    prerelease: match[4]
+      ? match[4]
+          .split(".")
+          .map((part) => (/^\d+$/.test(part) ? Number(part) : part))
+      : [],
+  };
+}
+
+export function compareHelperReleaseVersions(
+  left: string,
+  right: string,
+): number | null {
+  const leftVersion = parseReleaseVersion(left);
+  const rightVersion = parseReleaseVersion(right);
+  if (!leftVersion || !rightVersion) return null;
+  for (let index = 0; index < leftVersion.core.length; index += 1) {
+    const difference = leftVersion.core[index] - rightVersion.core[index];
+    if (difference !== 0) return Math.sign(difference);
+  }
+  if (leftVersion.prerelease.length === 0) {
+    return rightVersion.prerelease.length === 0 ? 0 : 1;
+  }
+  if (rightVersion.prerelease.length === 0) return -1;
+  const length = Math.max(
+    leftVersion.prerelease.length,
+    rightVersion.prerelease.length,
+  );
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = leftVersion.prerelease[index];
+    const rightPart = rightVersion.prerelease[index];
+    if (leftPart === undefined) return -1;
+    if (rightPart === undefined) return 1;
+    if (leftPart === rightPart) continue;
+    if (typeof leftPart === "number" && typeof rightPart === "string")
+      return -1;
+    if (typeof leftPart === "string" && typeof rightPart === "number") return 1;
+    return leftPart < rightPart ? -1 : 1;
+  }
+  return 0;
 }
 
 export function discoveryMatchesDesiredConfig(
@@ -106,11 +162,15 @@ export async function resolveHealthyDiscoveredHelper(
   if (health.protocolVersion !== BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION) {
     return null;
   }
-  // `helperVersion` is build metadata, not a wire-compatibility boundary.
-  // Multiple VS Code windows can run different AgentLink extension versions
-  // while sharing the same stable helper port; rejecting a healthy helper here
-  // causes newer/older windows to terminate each other's browser gateway.
-  // `protocolVersion` above is the compatibility gate.
+  if (health.helperVersion !== discovery.helperVersion) return null;
+  const versionOrder = desired.helperVersion
+    ? compareHelperReleaseVersions(health.helperVersion, desired.helperVersion)
+    : null;
+  // Protocol compatibility permits reuse across versions, but helper-owned UI
+  // assets and runtime behavior must upgrade monotonically. Non-semver development
+  // labels opt out of ordering in both directions. An older window may
+  // reuse a newer helper; only a provably newer requester replaces the process.
+  if (versionOrder !== null && versionOrder < 0) return null;
   if (!discoveryMatchesDesiredConfig(discovery, desired)) {
     return null;
   }
@@ -146,16 +206,35 @@ export async function waitForHelperReady(
  * wrong lanAccess flag, different mDNS name) we have to replace it. The old
  * process is still bound to the port, so spawn-then-listen would fail with
  * EADDRINUSE. SIGTERM the stale pid and wait for the socket to actually close.
+ * A newer same-protocol helper wins if discovery changed between resolution and
+ * termination, preserving monotonic helper-owned assets across racing windows.
  */
 async function terminateStaleHelper(
   log: (message: string) => void,
-): Promise<void> {
+  requestedVersion?: string,
+): Promise<BrowserGatewayHelperDiscoveryRecord | null> {
   const discovery = await readBrowserGatewayHelperDiscovery();
-  if (!discovery) return;
-  if (!isPidLikelyAlive(discovery.pid)) return;
+  if (!discovery) return null;
+  if (!isPidLikelyAlive(discovery.pid)) return null;
+  const versionOrder = requestedVersion
+    ? compareHelperReleaseVersions(discovery.helperVersion, requestedVersion)
+    : null;
+  if (
+    discovery.protocolVersion === BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION &&
+    versionOrder !== null &&
+    versionOrder > 0
+  ) {
+    log(
+      `[browser-gateway-helper] preserving newer helper pid=${discovery.pid} runningVersion=${discovery.helperVersion} requestedVersion=${requestedVersion}`,
+    );
+    return discovery;
+  }
 
+  const versionDetail = requestedVersion
+    ? ` runningVersion=${discovery.helperVersion} requestedVersion=${requestedVersion}`
+    : "";
   log(
-    `[browser-gateway-helper] terminating stale helper pid=${discovery.pid} (config changed)`,
+    `[browser-gateway-helper] terminating stale helper pid=${discovery.pid}${versionDetail} (protocol, version, or config changed)`,
   );
   try {
     process.kill(discovery.pid, "SIGTERM");
@@ -165,7 +244,7 @@ async function terminateStaleHelper(
 
   const deadline = Date.now() + HELPER_TERMINATION_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    if (!isPidLikelyAlive(discovery.pid)) return;
+    if (!isPidLikelyAlive(discovery.pid)) return null;
     await sleep(100);
   }
 
@@ -180,6 +259,7 @@ async function terminateStaleHelper(
   }
   // Give the OS a beat to release the port.
   await sleep(250);
+  return null;
 }
 
 export async function bootstrapBrowserGatewayHelper(
@@ -190,6 +270,7 @@ export async function bootstrapBrowserGatewayHelper(
   const desired: DesiredHelperConfig = {
     lanAccess: Boolean(options.lanAccess),
     mdnsName: options.mdnsName,
+    helperVersion: options.helperVersion,
   };
 
   const existing = await resolveHealthyDiscoveredHelper(
@@ -215,9 +296,18 @@ export async function bootstrapBrowserGatewayHelper(
     throw new Error(`helper_bundle_missing:${helperPath}`);
   }
 
-  // A helper is present but mismatched (protocol, lanAccess, or mDNS config
-  // changed). Before spawning, terminate the stale process so the port is free.
-  await terminateStaleHelper(options.log);
+  // A helper is present but mismatched (protocol, version freshness, lanAccess,
+  // or mDNS config). Before spawning, terminate it so the port is free.
+  const newerHelper = await terminateStaleHelper(
+    options.log,
+    options.helperVersion,
+  );
+  if (newerHelper) {
+    return {
+      source: "existing",
+      discovery: newerHelper,
+    };
+  }
 
   const args = [
     helperPath,

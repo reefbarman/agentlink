@@ -107,6 +107,42 @@ describe("command tier classifier", () => {
     ).toEqual({ eligible: true });
   });
 
+  it("allows read-only stream processing without output files", () => {
+    expect(
+      isCommandEligibleForReadOnlyExecution(
+        'grep -o "m_SourcePrefab" src/scene.unity | sort | uniq -c',
+        ctx,
+      ),
+    ).toEqual({ eligible: true });
+  });
+
+  it.each([
+    ["sort src/input.txt -o generated.txt", "sort option"],
+    ["sort --temporary-directory=tmp src/input.txt", "sort option"],
+    ["sort --files0-from=config/paths", "sort option"],
+    ["uniq src/input.txt", "uniq positional files"],
+  ])(
+    "rejects stream processing with possible output files: %s",
+    (command, reason) => {
+      expect(isCommandEligibleForReadOnlyExecution(command, ctx)).toEqual({
+        eligible: false,
+        reason: expect.stringContaining(reason),
+      });
+    },
+  );
+
+  it.each([
+    "sort src/input.txt -o generated.txt",
+    "sort --temporary-directory=tmp src/input.txt",
+    "sort --files0-from=config/paths",
+    "uniq src/input.txt",
+  ])(
+    "does not auto-approve output-capable stream processing: %s",
+    (command) => {
+      expect(tier(command)).toBe("sensitive");
+    },
+  );
+
   it.each([
     ["ls *", "shell path expansion"],
     ["find src/{one,two}", "shell path expansion"],

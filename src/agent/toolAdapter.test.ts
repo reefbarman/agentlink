@@ -404,6 +404,44 @@ describe("tool usage telemetry project attribution", () => {
     expect(JSON.stringify(result.data)).not.toContain("read_file");
   });
 
+  it("discovers multiple exact deferred tool names through the runtime bridge", async () => {
+    const runtime = createAgentToolRuntime(mockCtx);
+    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
+      getAgentTools().find((tool) => tool.name === "codebase_search")!,
+      getAgentTools().find((tool) => tool.name === "get_repo_map")!,
+      getAgentTools().find((tool) => tool.name === "manage_memory")!,
+    ]);
+
+    const result = await runtime.executeTool({
+      name: "find_native_tools",
+      input: {
+        query: "codebase_search get_repo_map",
+        include_schemas: true,
+        schema_limit: 2,
+      },
+      context: {
+        sessionId: "test-session",
+        mode: "code",
+        availableToolNames: new Set(["find_native_tools", "call_native_tool"]),
+        nativeToolDisclosure,
+      },
+    });
+
+    expect(result.data).toMatchObject({
+      total: 2,
+      tools: [
+        {
+          name: "codebase_search",
+          input_schema: expect.objectContaining({ type: "object" }),
+        },
+        {
+          name: "get_repo_map",
+          input_schema: expect.objectContaining({ type: "object" }),
+        },
+      ],
+    });
+  });
+
   it("invokes an exact deferred target with canonical validation and telemetry", async () => {
     const record = vi.fn();
     const runtime = createAgentToolRuntime({

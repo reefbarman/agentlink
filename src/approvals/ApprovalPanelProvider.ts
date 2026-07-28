@@ -32,6 +32,8 @@ export interface CommandApprovalResponse {
   decision: "run-once" | "edit" | "session" | "project" | "global" | "reject";
   /** True when the provider resolved this request from its attributed recent cache. */
   recentApproval?: boolean;
+  /** Host-only marker for an exact coordinator one-shot decision. */
+  coordinatorApproval?: true;
   editedCommand?: string;
   rejectionReason?: string;
   rulePattern?: string;
@@ -50,6 +52,8 @@ export interface NetworkApprovalResponse {
     | "allow-global"
     | "reject";
   rejectionReason?: string;
+  /** Host-only marker for a coordinator decision. */
+  coordinatorApproval?: true;
   followUp?: string;
 }
 
@@ -63,6 +67,8 @@ export interface PathApprovalResponse {
   rejectionReason?: string;
   rulePattern?: string;
   ruleMode?: "glob" | "prefix" | "exact";
+  /** Host-only marker for a coordinator decision that still needs action revalidation. */
+  coordinatorApproval?: true;
   /** Optional follow-up message from the user */
   followUp?: string;
 }
@@ -75,6 +81,8 @@ export interface WriteApprovalResponse {
     | "accept-project"
     | "accept-always";
   rejectionReason?: string;
+  /** Host-only marker for an exact coordinator one-shot decision. */
+  coordinatorApproval?: true;
   /** For trust decisions: scope of the rule */
   trustScope?: "all-files" | "this-file" | "pattern";
   rulePattern?: string;
@@ -91,6 +99,8 @@ export interface RenameApprovalResponse {
     | "accept-project"
     | "accept-always";
   rejectionReason?: string;
+  /** Host-only marker for a coordinator decision. */
+  coordinatorApproval?: true;
   trustScope?: "all-files" | "this-file" | "pattern";
   rulePattern?: string;
   ruleMode?: "glob" | "prefix" | "exact";
@@ -101,6 +111,8 @@ export interface RenameApprovalResponse {
 export interface MemoryApprovalResponse {
   decision: "accept" | "reject";
   rejectionReason?: string;
+  /** Host-only marker for a coordinator decision. */
+  coordinatorApproval?: true;
   editedContent?: string;
   memoryTier?: MemoryTier;
   memoryScope?: MemoryScope;
@@ -109,10 +121,24 @@ export interface MemoryApprovalResponse {
   followUp?: string;
 }
 
+export type ApprovalPreflightResult =
+  | {
+      action: "resolve";
+      decision: "approve-once" | "reject";
+      rejectionReason?: string;
+    }
+  | {
+      action: "escalate";
+      backgroundTask?: string;
+      /** True when the coordinator route already recorded human attention. */
+      attentionRecorded?: true;
+    };
+
 // ── Internal types ──────────────────────────────────────────────────────────
 
 interface InternalRequest {
   kind: "command" | "network" | "path" | "write" | "rename" | "memory";
+  backgroundTask?: string;
   deferApprovalRecording?: boolean;
   bypassRecentApproval?: boolean;
   id: string;
@@ -159,6 +185,11 @@ interface QueueEntry {
   resolve: (value: unknown) => void;
 }
 
+interface PreflightEntry {
+  request: InternalRequest;
+  cancel: (rejectionReason?: string) => void;
+}
+
 // ── Provider ────────────────────────────────────────────────────────────────
 
 export class ApprovalPanelProvider implements vscode.Disposable {
@@ -167,6 +198,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   // Queue
   private queue: QueueEntry[] = [];
   private currentEntry: QueueEntry | undefined;
+  private preflightEntries = new Map<string, PreflightEntry>();
 
   // Recent single-use approvals cache (key → timestamp)
   // When a user approves a request once, repeat matching requests within the
@@ -188,6 +220,16 @@ export class ApprovalPanelProvider implements vscode.Disposable {
 
   // Track whether the Preact app has signalled it's ready
   private webviewReady = false;
+
+  /**
+   * Gives the root coordinator first refusal before an approval enters the
+   * human-facing queue. Coordinator resolutions are exact and one-shot.
+   */
+  public onBeforeApproval?: (forwarded: {
+    sessionId: string;
+    request: ApprovalRequest;
+    signal?: AbortSignal;
+  }) => Promise<ApprovalPreflightResult>;
 
   /** When set, route approvals to this callback instead of showing the approval webview. */
   public onForwardApproval?: (
@@ -273,7 +315,10 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       commitApprovalRecording: () => {
         if (recordingCommitted || !pendingRecording) return;
         recordingCommitted = true;
-        if (!pendingRecording.response.editedCommand) {
+        if (
+          !pendingRecording.response.editedCommand &&
+          !pendingRecording.response.coordinatorApproval
+        ) {
           this.recordApproval(
             pendingRecording.request,
             pendingRecording.response,
@@ -312,6 +357,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     filePath: string,
     sessionId?: string,
     signal?: AbortSignal,
+    humanOnlyReason?: string,
   ): {
     promise: Promise<PathApprovalResponse>;
     id: string;
@@ -324,6 +370,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       sessionId,
       targetPath: filePath,
       signal,
+      humanOnlyReason,
     }) as Promise<PathApprovalResponse>;
     return { promise, id };
   }
@@ -403,6 +450,15 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   }
 
   cancelApproval(id: string): void {
+    const preflight = this.preflightEntries.get(id);
+    if (preflight) {
+      this.preflightEntries.delete(id);
+      if (preflight.request.sessionId) {
+        this.onForwardApprovalCancelled?.(preflight.request.sessionId, id);
+      }
+      preflight.cancel();
+      return;
+    }
     if (this.currentEntry?.request.id === id) {
       this.alertDisposable?.dispose();
       this.alertDisposable = undefined;
@@ -439,13 +495,22 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     sessionId: string,
     rejectionReason: string,
   ): number {
-    const matches = (entry: QueueEntry) =>
-      entry.request.kind === "command" && entry.request.sessionId === sessionId;
+    const matchesRequest = (request: InternalRequest) =>
+      request.kind === "command" && request.sessionId === sessionId;
+    const matches = (entry: QueueEntry) => matchesRequest(entry.request);
     const makeResponse = (): CommandApprovalResponse => ({
       decision: "reject",
       rejectionReason,
     });
     let resolved = 0;
+
+    for (const [id, entry] of this.preflightEntries) {
+      if (!matchesRequest(entry.request)) continue;
+      this.preflightEntries.delete(id);
+      this.onForwardApprovalCancelled?.(sessionId, id);
+      entry.cancel(rejectionReason);
+      resolved += 1;
+    }
 
     const queued = this.queue.filter(matches);
     if (queued.length > 0) {
@@ -492,7 +557,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
 
   // ── Queue management ────────────────────────────────────────────────────
 
-  private enqueue(
+  private async enqueue(
     request: InternalRequest,
     deferRecording?: (request: InternalRequest, response: unknown) => void,
   ): Promise<unknown> {
@@ -518,9 +583,66 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       attributedRequest.kind !== "path" &&
       this.isRecentlyApprovedRequest(attributedRequest)
     ) {
-      return Promise.resolve(
-        this.makeAutoApproveResponse(attributedRequest.kind),
-      );
+      return this.makeAutoApproveResponse(attributedRequest.kind);
+    }
+
+    if (attributedRequest.sessionId && this.onBeforeApproval) {
+      const controller = new AbortController();
+      const signal = attributedRequest.signal
+        ? AbortSignal.any([attributedRequest.signal, controller.signal])
+        : controller.signal;
+      let preflightCancelled = false;
+      let cancellationReason: string | undefined;
+      const cancelled = new Promise<ApprovalPreflightResult>((resolve) => {
+        this.preflightEntries.set(attributedRequest.id, {
+          request: attributedRequest,
+          cancel: (rejectionReason) => {
+            preflightCancelled = true;
+            cancellationReason = rejectionReason;
+            controller.abort();
+            resolve({ action: "resolve", decision: "reject", rejectionReason });
+          },
+        });
+      });
+      const handleAbort = () => this.cancelApproval(attributedRequest.id);
+      attributedRequest.signal?.addEventListener("abort", handleAbort, {
+        once: true,
+      });
+      const preflight = await Promise.race([
+        this.onBeforeApproval({
+          sessionId: attributedRequest.sessionId,
+          request: this.toApprovalRequest(attributedRequest, 1, 1),
+          signal,
+        }),
+        cancelled,
+      ]);
+      attributedRequest.signal?.removeEventListener("abort", handleAbort);
+      this.preflightEntries.delete(attributedRequest.id);
+      if (preflightCancelled || attributedRequest.signal?.aborted) {
+        return Object.assign(this.makeRejectResponse(attributedRequest.kind), {
+          rejectionReason: cancellationReason,
+        });
+      }
+      if (preflight.action === "resolve") {
+        if (
+          preflight.decision === "approve-once" &&
+          !["command", "path", "write"].includes(attributedRequest.kind)
+        ) {
+          return this.makeRejectResponse(attributedRequest.kind);
+        }
+        return preflight.decision === "approve-once"
+          ? Object.assign(
+              this.makeAutoApproveResponse(attributedRequest.kind),
+              {
+                coordinatorApproval: true as const,
+              },
+            )
+          : Object.assign(this.makeRejectResponse(attributedRequest.kind), {
+              coordinatorApproval: true as const,
+              rejectionReason: preflight.rejectionReason,
+            });
+      }
+      attributedRequest.backgroundTask = preflight.backgroundTask;
     }
 
     return new Promise((resolve) => {
@@ -604,40 +726,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       }
       const queuePosition = 1;
       const queueTotal = 1 + this.queue.length;
-      const msg: ApprovalRequest = {
-        kind: request.kind,
-        id: request.id,
-        sourceProject: request.sourceProject,
-        targetProject: request.targetProject,
-        targetPath: request.targetPath,
-        command: request.command,
-        subCommands: request.subCommands,
-        inlineFiles: request.inlineFiles,
-        reason: request.reason,
-        cwd: request.cwd,
-        commandReview: request.commandReview,
-        humanOnlyReason: request.humanOnlyReason,
-        security: request.security,
-        managedNetwork: request.managedNetwork,
-        networkReview: request.networkReview,
-        filePath: request.filePath,
-        writeOperation: request.writeOperation,
-        outsideWorkspace: request.outsideWorkspace,
-        oldName: request.oldName,
-        newName: request.newName,
-        affectedFiles: request.affectedFiles,
-        totalChanges: request.totalChanges,
-        memoryTier: request.memoryTier,
-        memoryScope: request.memoryScope,
-        memoryOperation: request.memoryOperation,
-        memoryName: request.memoryName,
-        memoryTitle: request.memoryTitle,
-        memoryRationale: request.memoryRationale,
-        memoryTargetPath: request.memoryTargetPath,
-        memoryContent: request.memoryContent,
-        queuePosition,
-        queueTotal,
-      };
+      const msg = this.toApprovalRequest(request, queuePosition, queueTotal);
       this.onForwardApproval(
         { sessionId: request.sessionId, request: msg },
         (decision) => this.handleMessage(decision),
@@ -660,9 +749,20 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     const queuePosition = 1;
     const queueTotal = 1 + this.queue.length;
 
-    const msg: ApprovalRequest = {
+    const msg = this.toApprovalRequest(request, queuePosition, queueTotal);
+
+    webview.postMessage({ type: "showApproval", request: msg });
+  }
+
+  private toApprovalRequest(
+    request: InternalRequest,
+    queuePosition: number,
+    queueTotal: number,
+  ): ApprovalRequest {
+    return {
       kind: request.kind,
       id: request.id,
+      backgroundTask: request.backgroundTask,
       sourceProject: request.sourceProject,
       targetProject: request.targetProject,
       targetPath: request.targetPath,
@@ -694,8 +794,6 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       queuePosition,
       queueTotal,
     };
-
-    webview.postMessage({ type: "showApproval", request: msg });
   }
 
   private handleMessage(message: {
@@ -938,6 +1036,10 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   }
 
   private rejectAll(): void {
+    for (const [id, entry] of this.preflightEntries) {
+      this.preflightEntries.delete(id);
+      entry.cancel();
+    }
     this.rejectCurrent();
     for (const entry of this.queue) {
       entry.resolve(this.makeRejectResponse(entry.request.kind));

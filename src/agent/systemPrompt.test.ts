@@ -212,6 +212,9 @@ describe("buildSystemPrompt", () => {
     expect(accepted.systemPrompt).toContain(
       "You are AgentLink, a software engineering agent operating in a VS Code workspace.",
     );
+    expect(accepted.systemPrompt).toContain(
+      "Keep routine capability plumbing internal, including deferred-tool discovery, query reformulation, retries, and equivalent-tool fallback",
+    );
   });
 
   it("rejects stale or mismatched prompt-profile evidence", async () => {
@@ -1226,6 +1229,12 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain(
       "If task alignment is clear and you believe you know where the change should go",
     );
+    expect(result).toContain(
+      "Keep routine discovery misses, retries, query reformulation, and fallback attempts internal",
+    );
+    expect(result).toContain(
+      "Do not use a progress update solely to announce deferred-tool discovery",
+    );
   });
 
   it("includes provider section for anthropic provider", async () => {
@@ -1236,9 +1245,30 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Visible progress and rationale");
     expect(result).toContain("interactive, collaborative partner");
     expect(result).toContain("do not rely on hidden thinking");
-    expect(result).toContain("After at most 2-3 consecutive tool calls");
+    expect(result).toContain(
+      "After at most 2-3 consecutive substantive tool calls",
+    );
     expect(result).toContain(
       "do not bundle investigation, implementation, and validation into one silent tool-only sequence",
+    );
+    expect(result).toContain(
+      "Keep routine capability plumbing internal, including deferred-tool discovery, query reformulation, retries, and fallback attempts",
+    );
+    expect(result).toContain(
+      "Routine capability-plumbing calls do not count toward this budget and should remain silent",
+    );
+  });
+
+  it("keeps routine capability plumbing internal for anthropic reasoning profiles", async () => {
+    const result = await buildPromptArtifacts("code", tmpDir, {
+      providerId: "anthropic",
+      model: "claude-opus-4-8",
+      promptProfileOverrides: { "claude-opus-4-8": "reasoning" },
+    });
+
+    expect(result.promptProfile.profile).toBe("reasoning");
+    expect(result.systemPrompt).toContain(
+      "Keep routine capability plumbing internal, including deferred-tool discovery, query reformulation, retries, and equivalent-tool fallback",
     );
   });
 

@@ -800,6 +800,10 @@ export function App({
           });
           break;
 
+        case "agentSurfaceChange":
+          dispatch({ type: "ADD_SURFACE_CHANGE", change: msg.change });
+          break;
+
         case "agentTextDelta":
           if (dropIfNotStreaming()) break;
           streamingBaselineMetrics?.record({

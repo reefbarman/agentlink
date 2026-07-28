@@ -229,6 +229,7 @@ export interface TerminalCommandResult {
     | { by: "master_bypass" }
     | { by: "explicit_rule" }
     | { by: "recent_approval" }
+    | { by: "coordinator" }
     | {
         by: "tier";
         tier: "safe" | "sensitive" | "dangerous";

@@ -84,6 +84,7 @@ import type {
   ExtensionToWorkerMessage,
   StartIndexMessage,
   IncrementalUpdateMessage,
+  IndexPhase,
   IndexStats,
   IndexCache,
   Chunk,
@@ -290,7 +291,7 @@ function send(msg: unknown): void {
 }
 
 function sendProgress(
-  phase: string,
+  phase: IndexPhase,
   current: number,
   total: number,
   detail?: string,
@@ -1217,8 +1218,8 @@ async function processFilePaths(
   config: BatchConfig,
   cache: IndexCache,
   structuralCache: StructuralGraphCache,
-  onBatch?: (
-    batchStart: number,
+  onBatchCommitted?: (
+    committedFiles: number,
     batchNumber: number,
     totalBatches: number,
   ) => void,
@@ -1257,13 +1258,12 @@ async function processFilePaths(
         ),
       };
     },
-    async processBatch(batch, batchStart, batchNumber, totalBatches) {
+    async processBatch(batch, _batchStart, batchNumber, totalBatches) {
       if (!batch.errorsReported) {
         result.errors.push(...batch.errors);
         batch.errorsReported = true;
       }
       if (batch.files.length === 0) return true;
-      onBatch?.(batchStart, batchNumber, totalBatches);
 
       const batchResult = await measureIndexWorkerPhase(
         metrics,
@@ -1276,6 +1276,7 @@ async function processFilePaths(
       result.recordsDeleted += batchResult.recordsDeleted;
       result.errors.push(...batchResult.errors);
       result.pendingOwnership ||= batchResult.pendingOwnership;
+      onBatchCommitted?.(result.filesIndexed, batchNumber, totalBatches);
       return !batchResult.pendingOwnership;
     },
     releaseBatch(batch) {
@@ -1500,6 +1501,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     const {
       toIndexPaths,
       removedRelPaths,
+      alreadyCurrentFiles,
       cacheMetadataChanged,
       errors: scanErrors,
     } = await measureIndexWorkerPhase(metrics, "scan", () =>
@@ -1611,8 +1613,8 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       ) {
         await refreshRetrievalIndexes(
           repository,
-          filesIndexed,
-          Object.keys(cache.files).length,
+          msg.files.length,
+          msg.files.length,
         );
       }
       terminalMessage = deferComplete(
@@ -1634,6 +1636,13 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
 
     // Phase 2: Read one batch ahead while serially processing the current batch.
     const totalFiles = toIndexPaths.length;
+    const totalBatches = Math.ceil(totalFiles / FILE_BATCH_SIZE);
+    sendProgress(
+      "upserting",
+      alreadyCurrentFiles,
+      msg.files.length,
+      `${alreadyCurrentFiles} already current; ${totalFiles} remaining in ${totalBatches} batches`,
+    );
     const result = await processFilePaths(
       toIndexPaths,
       {
@@ -1649,12 +1658,12 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       },
       cache,
       structuralCache,
-      (batchStart, batchNumber, totalBatches) =>
+      (committedFiles, batchNumber, totalBatches) =>
         sendProgress(
-          "indexing",
-          batchStart,
-          totalFiles,
-          `batch ${batchNumber + 1}/${totalBatches}`,
+          "upserting",
+          alreadyCurrentFiles + committedFiles,
+          msg.files.length,
+          `committed batch ${batchNumber + 1}/${totalBatches}; ${alreadyCurrentFiles} already current`,
         ),
     );
     filesIndexed += result.filesIndexed;
@@ -1679,8 +1688,8 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     ) {
       await refreshRetrievalIndexes(
         repository,
-        filesIndexed,
-        Object.keys(cache.files).length,
+        msg.files.length,
+        msg.files.length,
       );
     }
 

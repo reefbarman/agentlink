@@ -131,6 +131,7 @@ function messageRevision(message: ChatMessage): string {
     objectRevision(message.finalMarker),
     objectRevision(message.error),
     objectRevision(message.memoryDisclosure),
+    objectRevision(message.surfaceChange),
     objectRevision(message.apiRequest),
     objectRevision(message.condenseInfo),
     objectRevision(message.warningRetry),
@@ -308,6 +309,8 @@ function buildTranscriptRows(
   const rows: TranscriptRow[] = [];
   let previousModel: string | undefined;
   let previousReasoningEffort: ReasoningEffort | undefined;
+  let pendingExplicitModel: string | undefined;
+  let pendingExplicitReasoningEffort: ReasoningEffort | undefined;
   let previousMode: string | undefined;
   let previousCommandApprovalPolicy: CommandApprovalPolicy | undefined;
 
@@ -334,6 +337,27 @@ function buildTranscriptRows(
     }
 
     const messageRows = splitTopLevelChatBlocks(message);
+    if (message.surfaceChange) {
+      if (messageRows.length > 0) {
+        messageRows[0] = {
+          ...messageRows[0],
+          modelChange: message.surfaceChange.model,
+          reasoningChange: message.surfaceChange.reasoning,
+        };
+      }
+      if (message.surfaceChange.model) {
+        previousModel = message.surfaceChange.model.model;
+        pendingExplicitModel = message.surfaceChange.model.model;
+      }
+      if (message.surfaceChange.reasoning) {
+        previousReasoningEffort =
+          message.surfaceChange.reasoning.reasoningEffort;
+        pendingExplicitReasoningEffort =
+          message.surfaceChange.reasoning.reasoningEffort;
+      }
+      rows.push(...messageRows);
+      continue;
+    }
     const model =
       message.role === "assistant" ? message.apiRequest?.model : null;
     const reasoningEffort =
@@ -348,11 +372,15 @@ function buildTranscriptRows(
         : undefined;
     if (model || reasoningEffort || mode || commandApprovalPolicy) {
       const modelChange =
-        model && previousModel && previousModel !== model
+        model &&
+        !pendingExplicitModel &&
+        previousModel &&
+        previousModel !== model
           ? { previousModel, model }
           : undefined;
       const reasoningChange =
         reasoningEffort &&
+        !pendingExplicitReasoningEffort &&
         previousReasoningEffort &&
         previousReasoningEffort !== reasoningEffort
           ? { previousReasoningEffort, reasoningEffort }
@@ -382,8 +410,15 @@ function buildTranscriptRows(
           approvalChange,
         };
       }
-      if (model) previousModel = model;
-      if (reasoningEffort) previousReasoningEffort = reasoningEffort;
+      if (model) {
+        if (pendingExplicitModel) pendingExplicitModel = undefined;
+        else previousModel = model;
+      }
+      if (reasoningEffort) {
+        if (pendingExplicitReasoningEffort)
+          pendingExplicitReasoningEffort = undefined;
+        else previousReasoningEffort = reasoningEffort;
+      }
       if (mode) previousMode = mode;
       if (commandApprovalPolicy)
         previousCommandApprovalPolicy = commandApprovalPolicy;
@@ -471,131 +506,135 @@ function renderTranscriptRow({
 }: MemoizedTranscriptRowProps) {
   const { key, message, sourceMessage, bgAgentResultOnly, warningMessages } =
     row;
-  const content =
-    message.role === "condense" ? (
-      <CondenseRow message={message} />
-    ) : message.role === "warning" ? (
-      <WarningRow
-        messages={warningMessages ?? [message]}
-        resolved={!isLatest && !lastMessageHasError}
+  const markerOnly =
+    Boolean(message.surfaceChange) &&
+    message.blocks.length === 0 &&
+    !message.error &&
+    !message.finalMarker;
+  const content = markerOnly ? null : message.role === "condense" ? (
+    <CondenseRow message={message} />
+  ) : message.role === "warning" ? (
+    <WarningRow
+      messages={warningMessages ?? [message]}
+      resolved={!isLatest && !lastMessageHasError}
+      onRetry={
+        isLatest && message.error && actions.onRetry
+          ? () => actions.onRetry?.()
+          : undefined
+      }
+    />
+  ) : (
+    <Fragment>
+      {message.role === "user" &&
+        message.checkpointId &&
+        actions.onRevertCheckpoint && (
+          <CheckpointRow
+            checkpointId={message.checkpointId}
+            sessionId={sessionId ?? null}
+            onRevert={(...args) => actions.onRevertCheckpoint?.(...args)}
+            onViewDiff={
+              actions.onViewCheckpointDiff
+                ? (...args) => actions.onViewCheckpointDiff?.(...args)
+                : undefined
+            }
+          />
+        )}
+      <MessageBubble
+        message={message}
+        streaming={active && message.role === "assistant"}
+        detectedQuestion={
+          message.role === "assistant" && !bgAgentResultOnly
+            ? detectedQuestion
+            : null
+        }
+        onDetectedQuestionAnswer={
+          actions.onDetectedQuestionAnswer
+            ? (payload) => actions.onDetectedQuestionAnswer?.(payload)
+            : undefined
+        }
+        onDismissDetectedQuestion={
+          actions.onDismissDetectedQuestion
+            ? detectedQuestion
+              ? () => actions.onDismissDetectedQuestion?.(sourceMessage.id)
+              : (messageId) => actions.onDismissDetectedQuestion?.(messageId)
+            : undefined
+        }
+        onOpenFile={
+          actions.onOpenFile
+            ? (...args) => actions.onOpenFile?.(...args)
+            : undefined
+        }
+        onRevealToolCallTerminal={
+          actions.onRevealToolCallTerminal
+            ? (id) => actions.onRevealToolCallTerminal?.(id)
+            : undefined
+        }
+        onContinueToolCallInBackground={
+          actions.onContinueToolCallInBackground
+            ? (id) => actions.onContinueToolCallInBackground?.(id)
+            : undefined
+        }
+        onCompleteToolCall={
+          actions.onCompleteToolCall
+            ? (id) => actions.onCompleteToolCall?.(id)
+            : undefined
+        }
+        onCancelToolCall={
+          actions.onCancelToolCall
+            ? (id) => actions.onCancelToolCall?.(id)
+            : undefined
+        }
+        onPromoteMcpToolApproval={
+          actions.onPromoteMcpToolApproval
+            ? (promotion) => actions.onPromoteMcpToolApproval?.(promotion)
+            : undefined
+        }
+        onOpenSpecialBlockPanel={
+          canOpenSpecialBlockPanel(message) && actions.onOpenSpecialBlockPanel
+            ? (block) => actions.onOpenSpecialBlockPanel?.(block)
+            : undefined
+        }
         onRetry={
           isLatest && message.error && actions.onRetry
             ? () => actions.onRetry?.()
             : undefined
         }
+        onSignIn={
+          isLatest && message.error && actions.onSignIn
+            ? () => actions.onSignIn?.()
+            : undefined
+        }
+        onSignInAnotherAccount={
+          isLatest && message.error && actions.onSignInAnotherAccount
+            ? () => actions.onSignInAnotherAccount?.()
+            : undefined
+        }
+        onCondense={
+          isLatest && message.error && actions.onCondense
+            ? () => actions.onCondense?.()
+            : undefined
+        }
+        bgSessions={bgSessions}
+        onStopBackground={
+          actions.onStopBackground
+            ? (backgroundSessionId) =>
+                actions.onStopBackground?.(backgroundSessionId)
+            : undefined
+        }
+        onOpenTranscript={
+          actions.onOpenTranscript
+            ? (backgroundSessionId) =>
+                actions.onOpenTranscript?.(backgroundSessionId)
+            : undefined
+        }
+        onFinalMarkerContinue={
+          actions.onFinalMarkerContinue
+            ? (prompt) => actions.onFinalMarkerContinue?.(prompt)
+            : undefined
+        }
       />
-    ) : (
-      <Fragment>
-        {message.role === "user" &&
-          message.checkpointId &&
-          actions.onRevertCheckpoint && (
-            <CheckpointRow
-              checkpointId={message.checkpointId}
-              sessionId={sessionId ?? null}
-              onRevert={(...args) => actions.onRevertCheckpoint?.(...args)}
-              onViewDiff={
-                actions.onViewCheckpointDiff
-                  ? (...args) => actions.onViewCheckpointDiff?.(...args)
-                  : undefined
-              }
-            />
-          )}
-        <MessageBubble
-          message={message}
-          streaming={active && message.role === "assistant"}
-          detectedQuestion={
-            message.role === "assistant" && !bgAgentResultOnly
-              ? detectedQuestion
-              : null
-          }
-          onDetectedQuestionAnswer={
-            actions.onDetectedQuestionAnswer
-              ? (payload) => actions.onDetectedQuestionAnswer?.(payload)
-              : undefined
-          }
-          onDismissDetectedQuestion={
-            actions.onDismissDetectedQuestion
-              ? detectedQuestion
-                ? () => actions.onDismissDetectedQuestion?.(sourceMessage.id)
-                : (messageId) => actions.onDismissDetectedQuestion?.(messageId)
-              : undefined
-          }
-          onOpenFile={
-            actions.onOpenFile
-              ? (...args) => actions.onOpenFile?.(...args)
-              : undefined
-          }
-          onRevealToolCallTerminal={
-            actions.onRevealToolCallTerminal
-              ? (id) => actions.onRevealToolCallTerminal?.(id)
-              : undefined
-          }
-          onContinueToolCallInBackground={
-            actions.onContinueToolCallInBackground
-              ? (id) => actions.onContinueToolCallInBackground?.(id)
-              : undefined
-          }
-          onCompleteToolCall={
-            actions.onCompleteToolCall
-              ? (id) => actions.onCompleteToolCall?.(id)
-              : undefined
-          }
-          onCancelToolCall={
-            actions.onCancelToolCall
-              ? (id) => actions.onCancelToolCall?.(id)
-              : undefined
-          }
-          onPromoteMcpToolApproval={
-            actions.onPromoteMcpToolApproval
-              ? (promotion) => actions.onPromoteMcpToolApproval?.(promotion)
-              : undefined
-          }
-          onOpenSpecialBlockPanel={
-            canOpenSpecialBlockPanel(message) && actions.onOpenSpecialBlockPanel
-              ? (block) => actions.onOpenSpecialBlockPanel?.(block)
-              : undefined
-          }
-          onRetry={
-            isLatest && message.error && actions.onRetry
-              ? () => actions.onRetry?.()
-              : undefined
-          }
-          onSignIn={
-            isLatest && message.error && actions.onSignIn
-              ? () => actions.onSignIn?.()
-              : undefined
-          }
-          onSignInAnotherAccount={
-            isLatest && message.error && actions.onSignInAnotherAccount
-              ? () => actions.onSignInAnotherAccount?.()
-              : undefined
-          }
-          onCondense={
-            isLatest && message.error && actions.onCondense
-              ? () => actions.onCondense?.()
-              : undefined
-          }
-          bgSessions={bgSessions}
-          onStopBackground={
-            actions.onStopBackground
-              ? (backgroundSessionId) =>
-                  actions.onStopBackground?.(backgroundSessionId)
-              : undefined
-          }
-          onOpenTranscript={
-            actions.onOpenTranscript
-              ? (backgroundSessionId) =>
-                  actions.onOpenTranscript?.(backgroundSessionId)
-              : undefined
-          }
-          onFinalMarkerContinue={
-            actions.onFinalMarkerContinue
-              ? (prompt) => actions.onFinalMarkerContinue?.(prompt)
-              : undefined
-          }
-        />
-      </Fragment>
-    );
+    </Fragment>
+  );
 
   return (
     <Fragment>

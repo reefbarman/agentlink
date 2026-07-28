@@ -256,6 +256,103 @@ describe("TranscriptMessageList model change rendering", () => {
     );
   });
 
+  it("renders an explicit in-turn control change without an empty assistant bubble", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "Still working" }],
+        apiRequest: apiRequest("gpt-5.4", "high"),
+      },
+      {
+        id: "change",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [],
+        surfaceChange: {
+          model: { previousModel: "gpt-5.4", model: "gpt-5.6-sol" },
+          reasoning: {
+            previousReasoningEffort: "high",
+            reasoningEffort: "low",
+          },
+        },
+      },
+      {
+        id: "tail",
+        role: "assistant",
+        content: "",
+        timestamp: 3,
+        blocks: [{ type: "text", text: "Continued response" }],
+        apiRequest: apiRequest("gpt-5.4", "high"),
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: true }),
+    );
+
+    const dividers = container.querySelectorAll(".model-change-divider");
+    expect(dividers).toHaveLength(1);
+    expect(dividers[0]?.textContent).toContain("gpt-5.6-sol");
+    expect(dividers[0]?.textContent).toContain("Low");
+    expect(container.querySelectorAll(".assistant-message")).toHaveLength(2);
+  });
+
+  it("does not infer a reverse change from an in-flight request completed after an explicit change", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "First response" }],
+        apiRequest: apiRequest("gpt-5.4", "high"),
+      },
+      {
+        id: "change",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [],
+        surfaceChange: {
+          reasoning: {
+            previousReasoningEffort: "high",
+            reasoningEffort: "low",
+          },
+        },
+      },
+      {
+        id: "old-request",
+        role: "assistant",
+        content: "",
+        timestamp: 3,
+        blocks: [{ type: "text", text: "Old request finished" }],
+        apiRequest: apiRequest("gpt-5.4", "high"),
+      },
+      {
+        id: "new-request",
+        role: "assistant",
+        content: "",
+        timestamp: 4,
+        blocks: [{ type: "text", text: "New request finished" }],
+        apiRequest: apiRequest("gpt-5.4", "low"),
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    const dividers = container.querySelectorAll(".model-change-divider");
+    expect(dividers).toHaveLength(1);
+    expect(dividers[0]?.getAttribute("aria-label")).toBe(
+      "Thinking level changed from High to Low",
+    );
+  });
+
   it("combines model and thinking changes into one divider", () => {
     const messages: ChatMessage[] = [
       {

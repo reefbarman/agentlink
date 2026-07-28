@@ -492,6 +492,7 @@ export function MessageBubble({
                   message={block.message}
                   resolvedModel={block.resolvedModel}
                   resolvedProvider={block.resolvedProvider}
+                  reasoningEffort={block.reasoningEffort}
                   resolvedMode={block.resolvedMode}
                   taskClass={block.taskClass}
                   routingReason={block.routingReason}
@@ -516,6 +517,7 @@ export function MessageBubble({
                   summary={block.summary}
                   resolvedModel={bgSession?.resolvedModel}
                   resolvedProvider={bgSession?.resolvedProvider}
+                  reasoningEffort={bgSession?.reasoningEffort}
                   onOpenTranscript={onOpenTranscript}
                   onOpenFile={onOpenFile}
                 />

@@ -191,6 +191,229 @@ describe("ApprovalPanelProvider webview shell", () => {
   });
 });
 
+describe("ApprovalPanelProvider coordinator preflight", () => {
+  it("resolves a coordinator one-shot decision before human UI or status attention", async () => {
+    vi.mocked(vscode.commands.executeCommand).mockClear();
+    const { provider, statusBarManager } = createProvider();
+    const forwarded = vi.fn();
+    provider.onForwardApproval = forwarded;
+    provider.onBeforeApproval = vi.fn(async ({ request }) => {
+      expect(request).toMatchObject({
+        kind: "path",
+        filePath: "/outside/file.txt",
+      });
+      return { action: "resolve", decision: "approve-once" } as const;
+    });
+
+    await expect(
+      provider.enqueuePathApproval("/outside/file.txt", "background-1").promise,
+    ).resolves.toEqual({
+      decision: "allow-once",
+      coordinatorApproval: true,
+    });
+
+    expect(forwarded).not.toHaveBeenCalled();
+    expect(statusBarManager.showAlert).not.toHaveBeenCalled();
+    expect(statusBarManager.setPendingCount).not.toHaveBeenCalled();
+    expect(vscode.commands.executeCommand).not.toHaveBeenCalled();
+    provider.dispose();
+  });
+
+  it("cancels an unresolved coordinator preflight without later showing human attention", async () => {
+    const { provider, statusBarManager } = createProvider();
+    let finishPreflight!: (result: {
+      action: "escalate";
+      backgroundTask?: string;
+    }) => void;
+    provider.onBeforeApproval = () =>
+      new Promise((resolve) => {
+        finishPreflight = resolve;
+      });
+    provider.onForwardApproval = vi.fn();
+
+    const approval = provider.enqueuePathApproval(
+      "/outside/file.txt",
+      "background-1",
+    );
+    await Promise.resolve();
+    provider.cancelApproval(approval.id);
+
+    await expect(approval.promise).resolves.toEqual({ decision: "reject" });
+    finishPreflight({ action: "escalate", backgroundTask: "late task" });
+    await Promise.resolve();
+    expect(provider.onForwardApproval).not.toHaveBeenCalled();
+    expect(statusBarManager.showAlert).not.toHaveBeenCalled();
+    expect(statusBarManager.setPendingCount).not.toHaveBeenCalled();
+    provider.dispose();
+  });
+
+  it("disposes an unresolved coordinator preflight without later showing human attention", async () => {
+    const { provider, statusBarManager } = createProvider();
+    let finishPreflight!: (result: { action: "escalate" }) => void;
+    provider.onBeforeApproval = () =>
+      new Promise((resolve) => {
+        finishPreflight = resolve;
+      });
+    provider.onForwardApproval = vi.fn();
+
+    const approval = provider.enqueuePathApproval(
+      "/outside/file.txt",
+      "background-1",
+    );
+    await Promise.resolve();
+    provider.dispose();
+
+    await expect(approval.promise).resolves.toEqual({ decision: "reject" });
+    finishPreflight({ action: "escalate" });
+    await Promise.resolve();
+    expect(provider.onForwardApproval).not.toHaveBeenCalled();
+    expect(statusBarManager.showAlert).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when preflight tries to auto-approve an unsupported kind", async () => {
+    const { provider, statusBarManager } = createProvider();
+    provider.onBeforeApproval = vi.fn(async () => ({
+      action: "resolve" as const,
+      decision: "approve-once" as const,
+    }));
+    provider.onForwardApproval = vi.fn();
+
+    await expect(
+      provider.enqueueMemoryApproval({
+        tier: "memory",
+        scope: "project",
+        operation: "add",
+        title: "Remember preference",
+        rationale: "Requested by the user",
+        targetPath: "/workspace/memory.md",
+        sessionId: "background-1",
+      }).promise,
+    ).resolves.toEqual({ decision: "reject" });
+    expect(provider.onForwardApproval).not.toHaveBeenCalled();
+    expect(statusBarManager.showAlert).not.toHaveBeenCalled();
+    provider.dispose();
+  });
+
+  it("does not enter the human queue when a coordinator wait is aborted", async () => {
+    const { provider, statusBarManager } = createProvider();
+    const controller = new AbortController();
+    const forwarded = vi.fn();
+    provider.onForwardApproval = forwarded;
+    provider.onBeforeApproval = ({ signal }) =>
+      new Promise((resolve) => {
+        signal?.addEventListener(
+          "abort",
+          () => resolve({ action: "resolve", decision: "reject" }),
+          { once: true },
+        );
+      });
+
+    const approval = provider.enqueuePathApproval(
+      "/outside/file.txt",
+      "background-1",
+      controller.signal,
+    );
+    controller.abort();
+
+    await expect(approval.promise).resolves.toEqual({ decision: "reject" });
+    expect(forwarded).not.toHaveBeenCalled();
+    expect(statusBarManager.showAlert).not.toHaveBeenCalled();
+    expect(statusBarManager.setPendingCount).not.toHaveBeenCalled();
+    provider.dispose();
+  });
+
+  it("shows the original standard card and status attention only after escalation", async () => {
+    const { provider, statusBarManager } = createProvider();
+    let pending:
+      | {
+          request: ApprovalRequest;
+          respond: (message: DecisionMessage) => boolean;
+        }
+      | undefined;
+    provider.onBeforeApproval = vi.fn(
+      async () =>
+        ({
+          action: "escalate",
+          backgroundTask: "Inspect outside docs",
+        }) as const,
+    );
+    provider.onForwardApproval = ({ request }, respond) => {
+      pending = { request, respond };
+    };
+
+    const approval = provider.enqueuePathApproval(
+      "/outside/file.txt",
+      "background-1",
+    );
+    await vi.waitFor(() => expect(pending).toBeDefined());
+
+    expect(pending!.request).toMatchObject({
+      id: approval.id,
+      kind: "path",
+      filePath: "/outside/file.txt",
+      backgroundTask: "Inspect outside docs",
+    });
+    expect(statusBarManager.showAlert).toHaveBeenCalledWith(
+      "Path access approval required",
+    );
+    expect(statusBarManager.setPendingCount).toHaveBeenCalledWith(1);
+
+    expect(
+      pending!.respond({
+        type: "decision",
+        id: approval.id,
+        approvalKind: "path",
+        decision: "allow-session",
+        rulePattern: "/outside/file.txt",
+        ruleMode: "exact",
+      }),
+    ).toBe(true);
+    await expect(approval.promise).resolves.toEqual(
+      expect.objectContaining({ decision: "allow-session" }),
+    );
+    provider.dispose();
+  });
+
+  it("passes human-only classification to preflight without coordinator resolution", async () => {
+    const { provider } = createProvider();
+    let pending:
+      | {
+          request: ApprovalRequest;
+          respond: (message: DecisionMessage) => boolean;
+        }
+      | undefined;
+    const onBeforeApproval = vi.fn(async ({ request }) => {
+      expect(request.humanOnlyReason).toBe("credential-store");
+      return { action: "escalate" as const };
+    });
+    provider.onBeforeApproval = onBeforeApproval;
+    provider.onForwardApproval = ({ request }, respond) => {
+      pending = { request, respond };
+    };
+
+    const approval = provider.enqueuePathApproval(
+      "/outside/.ssh/config",
+      "background-1",
+      undefined,
+      "credential-store",
+    );
+    await vi.waitFor(() => expect(pending).toBeDefined());
+
+    expect(onBeforeApproval).toHaveBeenCalledOnce();
+    expect(pending!.request.humanOnlyReason).toBe("credential-store");
+    pending!.respond({
+      type: "decision",
+      id: approval.id,
+      approvalKind: "path",
+      decision: "reject",
+    });
+    await expect(approval.promise).resolves.toEqual(
+      expect.objectContaining({ decision: "reject" }),
+    );
+    provider.dispose();
+  });
+});
+
 describe("ApprovalPanelProvider forwarded approval attention", () => {
   it("shows a status-bar alert until an inline chat approval is resolved", async () => {
     const { provider, statusBarManager, alertDisposable } = createProvider();

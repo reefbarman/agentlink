@@ -92,6 +92,9 @@ const mocks = vi.hoisted(() => {
             .join("");
           if (text) assistantText = text;
         }),
+        appendAssistantMessage: vi.fn((message: any) => {
+          messages.push(message);
+        }),
         appendToolResults: vi.fn((content: any[]) => {
           messages.push({ role: "user", content });
         }),
@@ -228,6 +231,164 @@ describe("AgentSessionManager background agents", () => {
         yield { type: "done" };
       })(),
     );
+  });
+
+  it("includes a live pending tool turn in background transcript snapshots", () => {
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 0 },
+    );
+    const pendingAssistant = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "tool_use" as const,
+          id: "context-running",
+          name: "get_context",
+          input: { path: "src/agent/AgentEngine.ts" },
+        },
+        {
+          type: "tool_use" as const,
+          id: "context-complete",
+          name: "get_context",
+          input: { path: "src/agent/AgentSessionManager.ts" },
+        },
+      ],
+    };
+    const session = {
+      id: "bg-live-tools",
+      background: true,
+      status: "tool_executing",
+      runState: {
+        phase: "running" as const,
+        startedAt: Date.now(),
+        pendingToolTurn: {
+          schemaVersion: 1 as const,
+          assistantMessage: pendingAssistant,
+          toolResults: [
+            {
+              type: "tool_result" as const,
+              tool_use_id: "context-complete",
+              content: "completed context",
+            },
+          ],
+        },
+      },
+      getAllMessages: vi.fn(() => [
+        { role: "user" as const, content: "Inspect both files" },
+      ]),
+    };
+    (mgr as any).sessions.set(session.id, session);
+
+    expect(mgr.getBackgroundTranscriptMessages(session.id)).toEqual([
+      { role: "user", content: "Inspect both files" },
+      pendingAssistant,
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "context-complete",
+            content: "completed context",
+          },
+        ],
+      },
+    ]);
+
+    session.status = "error";
+    expect(mgr.getBackgroundTranscriptMessages(session.id)).toEqual([
+      { role: "user", content: "Inspect both files" },
+    ]);
+  });
+
+  it("tracks and clears pending tool turns through the background run lifecycle", async () => {
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 1 },
+    );
+    mgr.setToolContext(toolCtx);
+    const pendingAssistant = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "tool_use" as const,
+          id: "context-live",
+          name: "get_context",
+          input: { path: "src/agent/AgentSessionManager.ts" },
+        },
+      ],
+    };
+    let releaseRun!: () => void;
+    const released = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    let toolStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      toolStarted = resolve;
+    });
+    mocks.runBehavior.mockImplementation(() =>
+      (async function* () {
+        const [session, options] = mocks.runArgs.mock.calls.at(-1) as [
+          any,
+          {
+            onPendingToolTurn: (
+              message: typeof pendingAssistant,
+            ) => Promise<void>;
+          },
+        ];
+        await options.onPendingToolTurn(pendingAssistant);
+        session.status = "tool_executing";
+        yield {
+          type: "tool_start",
+          toolCallId: "context-live",
+          toolName: "get_context",
+          input: { path: "src/agent/AgentSessionManager.ts" },
+        };
+        toolStarted();
+        await released;
+        throw new Error("background tool interrupted");
+      })(),
+    );
+
+    const spawned = await mgr.spawnBackground({
+      task: "inspect lifecycle",
+      message: "inspect context",
+    });
+    await started;
+
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual([
+      pendingAssistant,
+    ]);
+
+    releaseRun();
+    await mgr.waitForBackground(spawned.sessionId);
+    const session = mgr.getSession(spawned.sessionId)!;
+    expect(session.runState).toBeUndefined();
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual([
+      pendingAssistant,
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "context-live",
+            content:
+              "[Session was interrupted before this tool's result could be saved. The tool may or may not have completed; inspect current state and re-run it if the result is still needed.]",
+            is_error: true,
+          },
+        ],
+      },
+    ]);
   });
 
   it("inherits and live-syncs the parent's full approval mode for a shared child", async () => {
@@ -1978,34 +2139,66 @@ describe("AgentSessionManager background agents", () => {
     (mgr as any).releaseWorkspaceMutationLease(leaseHolder);
   });
 
-  it("cancels non-readonly ACP permission requests without surfacing approval", async () => {
+  it("allows only classifier-approved commands for read-only ACP agents", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       defaultAgent: "acp:claude",
       acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
     });
     const onApprovalRequest = vi.fn();
-    const permissionOutcome: unknown[] = [];
+    const permissionOutcomes: unknown[] = [];
+    const options = [
+      { optionId: "allow", name: "Allow", kind: "allow_once" },
+      { optionId: "reject", name: "Reject", kind: "reject_once" },
+    ];
     const acpBackgroundRunner = {
       run: vi.fn(async (request: any) => {
-        permissionOutcome.push(
-          await request.onRequestPermission({
-            toolCall: {
-              id: "tc-edit",
-              kind: "edit",
-              title: "Edit file",
-              rawInput: { path: "src/file.ts" },
+        for (const toolCall of [
+          {
+            toolCallId: "tc-read-command",
+            kind: "execute",
+            title: "Count scene instances per prefab",
+            rawInput: {
+              command: 'grep -o "m_SourcePrefab" scene.unity | sort | uniq -c',
+              description: "Count scene instances per prefab",
             },
-            options: [
-              { optionId: "allow", name: "Allow", kind: "allow_once" },
-              { optionId: "reject", name: "Reject", kind: "reject_once" },
-            ],
-          }),
-        );
+          },
+          {
+            toolCallId: "tc-edit",
+            kind: "edit",
+            title: "Edit file",
+            rawInput: { path: "src/file.ts" },
+          },
+          {
+            toolCallId: "tc-write-command",
+            kind: "execute",
+            title: "Remove generated files",
+            rawInput: { command: "rm -rf generated" },
+          },
+          {
+            toolCallId: "tc-background-command",
+            kind: "execute",
+            title: "Read in background",
+            rawInput: {
+              command: "grep token scene.unity",
+              run_in_background: true,
+            },
+          },
+          {
+            toolCallId: "tc-unknown-input",
+            kind: "execute",
+            title: "Read with unknown execution metadata",
+            rawInput: { command: "grep token scene.unity", cwd: "/tmp" },
+          },
+        ]) {
+          permissionOutcomes.push(
+            await request.onRequestPermission({ toolCall, options }),
+          );
+        }
         request.onEvent({
           type: "update",
           update: {
             sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "Permission handled" },
+            content: { type: "text", text: "Permissions handled" },
           },
         });
       }),
@@ -2028,7 +2221,13 @@ describe("AgentSessionManager background agents", () => {
     });
     await mgr.waitForBackground(spawned.sessionId);
 
-    expect(permissionOutcome).toEqual([{ outcome: { outcome: "cancelled" } }]);
+    expect(permissionOutcomes).toEqual([
+      { outcome: { outcome: "selected", optionId: "allow" } },
+      { outcome: { outcome: "cancelled" } },
+      { outcome: { outcome: "cancelled" } },
+      { outcome: { outcome: "cancelled" } },
+      { outcome: { outcome: "cancelled" } },
+    ]);
     expect(onApprovalRequest).not.toHaveBeenCalled();
   });
 
@@ -2998,6 +3197,226 @@ describe("AgentSessionManager background agents", () => {
     expect(mgr.getBackgroundStatus(spawned.sessionId)?.phase).not.toBe(
       "awaiting_coordinator",
     );
+  });
+
+  it("coordinates background approvals before escalating the original standard card", async () => {
+    const onApprovalRequest = vi.fn(async () => "accept-session");
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext({ ...toolCtx, onApprovalRequest });
+    const foreground = await mgr.createSession("code");
+    mgr.setSessionApprovalMode(foreground.id, {
+      commandApprovalPolicy: "approve-for-me",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
+    });
+    foreground.status = "streaming";
+    const setPendingInterjection = vi.mocked(foreground.setPendingInterjection);
+
+    const spawned = await mgr.spawnBackground(
+      { task: "edit implementation", message: "run" },
+      foreground.id,
+    );
+    const background = mgr.getSession(spawned.sessionId)!;
+    const overrides = (
+      mgr as unknown as {
+        buildBackgroundInteractionOverrides: (
+          session: unknown,
+          task: string,
+          context: ToolDispatchContext,
+        ) => Pick<ToolDispatchContext, "onApprovalRequest" | "onQuestion">;
+      }
+    ).buildBackgroundInteractionOverrides(background, "edit implementation", {
+      ...toolCtx,
+      onApprovalRequest,
+    });
+    const request = {
+      kind: "write" as const,
+      title: "Modify `src/output.ts`?",
+      targetPath: "/tmp/src/output.ts",
+      fileWrite: { operation: "modify" as const, outsideWorkspace: false },
+      choices: [
+        { label: "Accept", value: "accept", isPrimary: true },
+        { label: "Reject", value: "reject", isDanger: true },
+      ],
+    };
+
+    const oneShot = overrides.onApprovalRequest!(request, spawned.sessionId);
+    await waitFor(
+      () => setPendingInterjection.mock.calls.length,
+      (calls) => calls === 1,
+    );
+    const [firstPrompt, firstRequestId] = setPendingInterjection.mock.calls[0];
+    expect(firstPrompt).toContain("<background_agent_approval");
+    expect(firstPrompt).toContain("Do not call `ask_user`");
+    expect(firstPrompt).toContain("Escalate to user");
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+    expect(mgr.getBackgroundStatus(spawned.sessionId)?.phase).toBe(
+      "awaiting_coordinator",
+    );
+
+    expect(
+      mgr.respondToBackgroundQuestion({
+        callerSessionId: foreground.id,
+        requestId: firstRequestId,
+        answers: { approval: "Approve once" },
+        notes: {},
+      }),
+    ).toEqual({ accepted: true });
+    await expect(oneShot).resolves.toBe("accept");
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+
+    const escalated = overrides.onApprovalRequest!(request, spawned.sessionId);
+    await waitFor(
+      () => setPendingInterjection.mock.calls.length,
+      (calls) => calls === 2,
+    );
+    const [, secondRequestId] = setPendingInterjection.mock.calls[1];
+    expect(
+      mgr.respondToBackgroundQuestion({
+        callerSessionId: foreground.id,
+        requestId: secondRequestId,
+        answers: { approval: "Escalate to user" },
+        notes: {},
+      }),
+    ).toEqual({ accepted: true });
+    await expect(escalated).resolves.toBe("accept-session");
+    expect(onApprovalRequest).toHaveBeenCalledOnce();
+    expect(onApprovalRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: request.title,
+        backgroundTask: "edit implementation",
+      }),
+      spawned.sessionId,
+    );
+  });
+
+  it("routes manual-mode background approvals directly to the standard card", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    foreground.status = "streaming";
+    const spawned = await mgr.spawnBackground(
+      { task: "inspect outside docs", message: "run" },
+      foreground.id,
+    );
+
+    await expect(
+      mgr.coordinateBackgroundApproval({
+        sessionId: spawned.sessionId,
+        request: {
+          id: "path-approval",
+          kind: "path",
+          filePath: "/outside/docs/readme.md",
+        },
+      }),
+    ).resolves.toEqual({
+      action: "escalate",
+      backgroundTask: "inspect outside docs",
+    });
+    expect(foreground.setPendingInterjection).not.toHaveBeenCalled();
+  });
+
+  it("routes human-only background approvals directly to the standard card", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    foreground.status = "streaming";
+    const spawned = await mgr.spawnBackground(
+      { task: "inspect credentials", message: "run" },
+      foreground.id,
+    );
+
+    await expect(
+      mgr.coordinateBackgroundApproval({
+        sessionId: spawned.sessionId,
+        request: {
+          id: "path-approval",
+          kind: "path",
+          filePath: "/Users/test/.ssh/config",
+          humanOnlyReason: "credential-store",
+        },
+      }),
+    ).resolves.toEqual({
+      action: "escalate",
+      backgroundTask: "inspect credentials",
+    });
+    expect(foreground.setPendingInterjection).not.toHaveBeenCalled();
+  });
+
+  it("keeps Guardian denials, renames, and persistent-only choices human-reviewed", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    mgr.setSessionApprovalMode(foreground.id, {
+      commandApprovalPolicy: "approve-for-me",
+      approvalPolicy: "on-request",
+      approvalReviewer: "auto-review",
+      executionPreset: "workspace-write",
+    });
+    foreground.status = "streaming";
+    const spawned = await mgr.spawnBackground(
+      { task: "run denied command", message: "run" },
+      foreground.id,
+    );
+
+    await expect(
+      mgr.coordinateBackgroundApproval({
+        sessionId: spawned.sessionId,
+        request: {
+          id: "command-approval",
+          kind: "command",
+          command: "rm -rf generated",
+          commandReview: {
+            status: "reviewed",
+            outcome: "deny",
+            risk: "high",
+            userAuthorization: "unknown",
+            rationale: "Deletion was not authorized",
+            model: "guardian-model",
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      action: "escalate",
+      backgroundTask: "run denied command",
+    });
+    expect(foreground.setPendingInterjection).not.toHaveBeenCalled();
+
+    const getOneShot = (
+      mgr as unknown as {
+        getInlineApprovalOneShotDecision: (
+          request: Parameters<
+            NonNullable<ToolDispatchContext["onApprovalRequest"]>
+          >[0],
+        ) => unknown;
+      }
+    ).getInlineApprovalOneShotDecision.bind(mgr);
+    expect(
+      getOneShot({
+        kind: "write",
+        title: "Modify file?",
+        targetPath: "/tmp/file.ts",
+        fileWrite: { operation: "modify", outsideWorkspace: false },
+        choices: [
+          {
+            label: "Accept for session",
+            value: "accept-session",
+            isPrimary: true,
+          },
+        ],
+      }),
+    ).toBeUndefined();
+    expect(
+      getOneShot({
+        kind: "rename",
+        title: "Rename symbol?",
+        choices: [
+          { label: "Accept", value: "accept", isPrimary: true },
+          { label: "Reject", value: "reject", isDanger: true },
+        ],
+      }),
+    ).toBeUndefined();
   });
 
   it("starts an internal coordinator turn when the foreground is idle", async () => {
@@ -5072,6 +5491,8 @@ describe("AgentSessionManager background agents", () => {
     expect(status.resolvedMode).toBe("ask");
     expect(status.resolvedModel).toBe("claude-sonnet-4-6");
     expect(status.resolvedProvider).toBe("anthropic");
+    expect(status.reasoningEffort).toBe("high");
+    expect(spawned.reasoningEffort).toBe("high");
     expect(status.taskClass).toBe("readonly-research");
     expect(status.toolCalls).toBe(1);
     expect(status.tokenUsage).toBe(100);

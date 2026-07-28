@@ -1,4 +1,5 @@
 import type { BackgroundResultState } from "../../../core/capabilities/background";
+import type { ReasoningEffort } from "../types";
 import { StreamingText } from "./StreamingText";
 import { getBackgroundResultPresentation } from "../../../shared/backgroundResultPresentation";
 
@@ -13,6 +14,7 @@ interface BgAgentResultBlockProps {
   summary?: string;
   resolvedModel?: string;
   resolvedProvider?: string;
+  reasoningEffort?: ReasoningEffort;
   onOpenTranscript?: (sessionId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
 }
@@ -28,6 +30,7 @@ export function BgAgentResultBlock({
   summary,
   resolvedModel,
   resolvedProvider,
+  reasoningEffort,
   onOpenTranscript,
   onOpenFile,
 }: BgAgentResultBlockProps) {
@@ -57,6 +60,7 @@ export function BgAgentResultBlock({
           <span class="bg-agent-result-model">
             {resolvedProvider ? `${resolvedProvider} / ` : ""}
             {resolvedModel}
+            {reasoningEffort ? ` · ${reasoningEffort}` : ""}
           </span>
         )}
       </div>

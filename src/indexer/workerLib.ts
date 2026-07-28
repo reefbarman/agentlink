@@ -394,6 +394,8 @@ export interface ScanResult {
   removedRelPaths: string[];
   /** Relative paths removed or changed and therefore stale in the retrieval store. */
   staleRelPaths: string[];
+  /** Files proven current by cached stat metadata or content hash. */
+  alreadyCurrentFiles: number;
   /** Whether hash-equal files refreshed cache stat metadata. */
   cacheMetadataChanged: boolean;
   /** Non-fatal errors */
@@ -402,6 +404,7 @@ export interface ScanResult {
 
 interface ScanOutcome {
   toIndexPath?: { absPath: string; relPath: string };
+  alreadyCurrent?: boolean;
   cacheMetadataChanged?: boolean;
   error?: string;
 }
@@ -555,7 +558,7 @@ export async function scanFiles(
           cached.mtimeMs === stat.mtimeMs &&
           cached.size === stat.size
         ) {
-          outcomes[candidateIndex] = {};
+          outcomes[candidateIndex] = { alreadyCurrent: true };
           continue;
         }
 
@@ -578,7 +581,10 @@ export async function scanFiles(
               cached.size !== read.stat.size;
             cached.mtimeMs = read.stat.mtimeMs;
             cached.size = read.stat.size;
-            outcomes[candidateIndex] = { cacheMetadataChanged };
+            outcomes[candidateIndex] = {
+              alreadyCurrent: true,
+              cacheMetadataChanged,
+            };
             continue;
           }
 
@@ -618,6 +624,9 @@ export async function scanFiles(
   const errors = completedOutcomes.flatMap((outcome) =>
     outcome.error ? [outcome.error] : [],
   );
+  const alreadyCurrentFiles = completedOutcomes.filter(
+    (outcome) => outcome.alreadyCurrent,
+  ).length;
   const cacheMetadataChanged = completedOutcomes.some(
     (outcome) => outcome.cacheMetadataChanged,
   );
@@ -638,6 +647,7 @@ export async function scanFiles(
     toIndexPaths,
     removedRelPaths,
     staleRelPaths,
+    alreadyCurrentFiles,
     cacheMetadataChanged,
     errors,
   };

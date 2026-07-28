@@ -118,6 +118,24 @@ export async function showDiffMoreOptions(): Promise<void> {
 }
 
 const FORMAT_ON_SAVE_PATCH_LIMIT = 4_000;
+const APPROVAL_PATCH_LIMIT = 12_000;
+
+function createApprovalPatch(
+  relPath: string,
+  originalContent: string,
+  proposedContent: string,
+): string {
+  const patch = diffLib.createPatch(
+    relPath,
+    originalContent,
+    proposedContent,
+    "current",
+    "proposed",
+    { context: 3 },
+  );
+  if (patch.length <= APPROVAL_PATCH_LIMIT) return patch;
+  return `${patch.slice(0, APPROVAL_PATCH_LIMIT)}\n[patch truncated at ${APPROVAL_PATCH_LIMIT} characters]`;
+}
 
 export interface FormatOnSaveReport {
   format_on_save: true;
@@ -517,6 +535,11 @@ export class DiffViewProvider {
               kind: "write",
               id: this.requestId,
               title: `${operation} \`${this.relPath}\`?`,
+              detail: createApprovalPatch(
+                this.relPath!,
+                this.originalContent ?? "",
+                this.newContent ?? "",
+              ),
               targetPath: this.absolutePath,
               fileWrite: {
                 operation: this.editType === "create" ? "create" : "modify",

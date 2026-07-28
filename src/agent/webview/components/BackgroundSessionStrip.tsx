@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+
 import { LiveLinkIndicator } from "./LiveLinkIndicator";
+import type { ReasoningEffort } from "../types";
 import { formatBackgroundRuntimeStatus } from "./backgroundRuntimeStatus";
 
 export interface BgSessionInfoProps {
@@ -20,6 +22,7 @@ export interface BgSessionInfoProps {
   resolvedMode?: string;
   resolvedModel?: string;
   resolvedProvider?: string;
+  reasoningEffort?: ReasoningEffort;
   taskClass?: string;
   routingReason?: string;
   fallbackUsed?: boolean;
@@ -522,6 +525,9 @@ export function BackgroundSessionStrip({
                   : null,
                 s.resolvedProvider ? `provider: ${s.resolvedProvider}` : null,
                 s.resolvedModel ? `model: ${s.resolvedModel}` : null,
+                s.reasoningEffort
+                  ? `thinking level: ${s.reasoningEffort}`
+                  : null,
                 s.lifecycle ? `lifecycle: ${s.lifecycle}` : null,
                 s.phase ? `phase: ${s.phase}` : null,
                 s.elapsedMs !== undefined
