@@ -2080,7 +2080,8 @@ export class AgentEngine {
         const totalInputTokens =
           inputTokens + cacheReadTokens + cacheCreationTokens;
         session.contextBreakdown = {
-          ...contextBreakdown,
+          ...session.contextBreakdown,
+          tools: contextBreakdown.tools,
           contextLedger,
         };
 

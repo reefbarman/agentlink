@@ -247,6 +247,8 @@ export interface PersistedSessionMetadata {
   model: string;
   /** Rendered profile evidence for audit/debug only; current policy is recomputed on restore. */
   promptProfile?: import("../core/promptProfile.js").PromptProfileResolution;
+  /** Latest completed request ledger for read-only context diagnostics. */
+  contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
   /** Legacy bundled mode retained for backward compatibility and UI migration. */
   commandApprovalPolicy?: TerminalCommandApprovalPolicySnapshot;
   /** Independent Codex-style approval policy dimension. */

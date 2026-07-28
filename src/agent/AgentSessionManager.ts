@@ -3917,6 +3917,9 @@ export class AgentSessionManager {
         mode: session.mode,
         model: session.model,
         promptProfile: session.promptProfile,
+        contextLedger: session.contextBreakdown?.contextLedger
+          ? structuredClone(session.contextBreakdown.contextLedger)
+          : undefined,
         ...this.getSessionApprovalMode(session.id),
         totalInputTokens: session.totalInputTokens,
         totalOutputTokens: session.totalOutputTokens,
@@ -6263,6 +6266,20 @@ export class AgentSessionManager {
     return session;
   }
 
+  private restoreContextLedger(
+    session: AgentSession,
+    metadata: {
+      model: string;
+      contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
+    },
+  ): void {
+    if (!metadata.contextLedger || metadata.model !== session.model) return;
+    session.contextBreakdown = {
+      ...session.contextBreakdown,
+      contextLedger: structuredClone(metadata.contextLedger),
+    };
+  }
+
   private async restorePersistedSessionRecord(
     sessionId: string,
     readResult: Extract<
@@ -6325,6 +6342,7 @@ export class AgentSessionManager {
       messages: interruptedRunRecovery.messages,
       modeInstructionAnchors: readResult.value.modeInstructionAnchors,
     });
+    this.restoreContextLedger(session, metadata);
 
     if (!canCommit()) return null;
     const raced = this.sessions.get(sessionId);
@@ -6470,6 +6488,7 @@ export class AgentSessionManager {
         messages,
         fleetMetadata: metadata.fleet,
       });
+      this.restoreContextLedger(session, metadata);
 
       const fleet = session.fleetMetadata;
       const interruptedOnRestore = fleet?.lifecycle === "running";

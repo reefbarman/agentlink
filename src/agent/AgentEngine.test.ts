@@ -3099,6 +3099,31 @@ describe("AgentEngine", () => {
       expect(measurement.estimatedTokens).toBe(262);
     });
 
+    it("keeps a prompt rebuilt during a request when committing its completed ledger", async () => {
+      const provider = makeMockProvider();
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const rebuiltPrompt = {
+        sections: [{ label: "rebuilt", chars: 21, estimatedTokens: 6 }],
+        totalChars: 21,
+        estimatedTokens: 6,
+      };
+      provider.stream = async function* (request: StreamRequest) {
+        request.onProviderRequestAttempt?.({ model: request.model });
+        session.contextBreakdown = {
+          ...session.contextBreakdown,
+          prompt: rebuiltPrompt,
+        };
+        yield* makeProviderStream();
+      };
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      await collectEvents(engine.run(session));
+
+      expect(session.contextBreakdown.prompt).toEqual(rebuiltPrompt);
+      expect(session.contextBreakdown.contextLedger).toBeDefined();
+    });
+
     it("reports api_request inputTokens as uncached + cache_read + cache_creation", async () => {
       const provider = makeMockProvider(
         makeProviderStream({

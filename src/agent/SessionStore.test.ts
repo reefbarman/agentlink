@@ -2,6 +2,7 @@ import * as fs from "fs";
 import os from "os";
 import path from "path";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildContextLedger } from "../core/contextLedger.js";
 import type { SessionProjectScope } from "../core/workspaceProjects.js";
 import type { AgentMessage } from "./types.js";
 import { SessionStore, type SessionSummary } from "./SessionStore.js";
@@ -317,7 +318,7 @@ describe("SessionStore", () => {
     );
   });
 
-  it("round-trips optional prompt-profile evidence through both save APIs", async () => {
+  it("round-trips optional prompt-profile and completed-context evidence", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
     const store = new SessionStore(tmpDir);
     const promptProfile = {
@@ -327,10 +328,20 @@ describe("SessionStore", () => {
       providerId: "anthropic",
       modelId: "claude-sonnet-4-6",
     };
+    const contextLedger = buildContextLedger({
+      capabilities: {
+        contextWindow: 200_000,
+        maxInputTokens: 180_000,
+        maxOutputTokens: 20_000,
+      },
+      layers: [{ layer: "system_prompt", requestedTokens: 3 }],
+    });
 
     await expect(
       store.saveSession({
-        session: createRecord({ metadata: { promptProfile } }),
+        session: createRecord({
+          metadata: { promptProfile, contextLedger },
+        }),
         expectedRevision: null,
       }),
     ).resolves.toEqual({ ok: true, revision: "1" });
@@ -338,7 +349,10 @@ describe("SessionStore", () => {
       expect.objectContaining({
         ok: true,
         value: expect.objectContaining({
-          metadata: expect.objectContaining({ promptProfile }),
+          metadata: expect.objectContaining({
+            promptProfile,
+            contextLedger,
+          }),
         }),
       }),
     );
@@ -348,6 +362,7 @@ describe("SessionStore", () => {
       mode: "code",
       model: "claude-sonnet-4-6",
       promptProfile,
+      contextLedger,
       title: "Legacy API",
       createdAt: 1,
       lastActiveAt: 2,
@@ -364,7 +379,10 @@ describe("SessionStore", () => {
       expect.objectContaining({
         ok: true,
         value: expect.objectContaining({
-          metadata: expect.objectContaining({ promptProfile }),
+          metadata: expect.objectContaining({
+            promptProfile,
+            contextLedger,
+          }),
         }),
       }),
     );

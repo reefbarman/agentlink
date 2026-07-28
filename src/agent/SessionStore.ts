@@ -80,6 +80,7 @@ interface MetadataFile {
   mode: string;
   model: string;
   promptProfile?: import("../core/promptProfile.js").PromptProfileResolution;
+  contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
   commandApprovalPolicy?: import("../core/capabilities/terminal.js").TerminalCommandApprovalPolicySnapshot;
   approvalPolicy?: import("../core/capabilities/terminal.js").TerminalApprovalPolicy;
   approvalReviewer?: import("../core/capabilities/terminal.js").TerminalApprovalReviewer;
@@ -639,6 +640,7 @@ export class SessionStore implements SessionPersistenceProvider {
     mode: string;
     model: string;
     promptProfile?: import("../core/promptProfile.js").PromptProfileResolution;
+    contextLedger?: import("../core/contextLedger.js").ContextLedgerSnapshot;
     title: string;
     createdAt: number;
     lastActiveAt: number;
@@ -684,6 +686,7 @@ export class SessionStore implements SessionPersistenceProvider {
         mode: session.mode,
         model: session.model,
         promptProfile: session.promptProfile,
+        contextLedger: session.contextLedger,
         commandApprovalPolicy: session.commandApprovalPolicy,
         approvalPolicy: session.approvalPolicy,
         approvalReviewer: session.approvalReviewer,
@@ -1067,6 +1070,7 @@ export class SessionStore implements SessionPersistenceProvider {
       mode: file.mode,
       model: file.model,
       promptProfile: file.promptProfile,
+      contextLedger: file.contextLedger,
       commandApprovalPolicy: file.commandApprovalPolicy,
       approvalPolicy: file.approvalPolicy,
       approvalReviewer: file.approvalReviewer,
@@ -1111,6 +1115,7 @@ export class SessionStore implements SessionPersistenceProvider {
       mode: metadata.mode,
       model: metadata.model,
       promptProfile: metadata.promptProfile,
+      contextLedger: metadata.contextLedger,
       commandApprovalPolicy: metadata.commandApprovalPolicy,
       approvalPolicy: metadata.approvalPolicy,
       approvalReviewer: metadata.approvalReviewer,

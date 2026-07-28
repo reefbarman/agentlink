@@ -18,6 +18,7 @@ import type {
   PersistedSessionRunState,
 } from "./persistenceContracts.js";
 import { ProviderRegistry } from "./providers/index.js";
+import { buildContextLedger } from "../core/contextLedger.js";
 import {
   createWorkspaceProjectId,
   isProjectlessSessionScope,
@@ -78,6 +79,9 @@ const mocks = vi.hoisted(() => {
       lastInputTokens: 0,
       lastOutputTokens: 0,
       lastCacheReadTokens: 0,
+      contextBreakdown: {
+        prompt: { sections: [], totalChars: 7, estimatedTokens: 2 },
+      },
       currentTool: undefined,
       addUserMessage: vi.fn(),
       appendRuntimeError: vi.fn(),
@@ -1187,6 +1191,72 @@ describe("AgentSessionManager host injection", () => {
     expect(changes).toHaveBeenCalledOnce();
   });
 
+  it("restores completed context evidence for persisted background sessions", async () => {
+    const contextLedger = buildContextLedger({
+      capabilities: {
+        contextWindow: 200_000,
+        maxInputTokens: 180_000,
+        maxOutputTokens: 20_000,
+      },
+      layers: [{ layer: "system_prompt", requestedTokens: 123 }],
+    });
+    const summary = {
+      schemaVersion: 1,
+      id: "background-session",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Background",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 1,
+      lastActiveAt: 2,
+      background: true,
+    };
+    const readSession = vi.fn(async () => ({
+      ok: true as const,
+      revision: "revision-1",
+      value: {
+        summary,
+        messages: [{ role: "user" as const, content: "hello" }],
+        metadata: {
+          mode: summary.mode,
+          model: summary.model,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          contextLedger,
+          fleet: {
+            schemaVersion: 1 as const,
+            projectId: "project-1",
+            placement: "background" as const,
+            task: "Review",
+            depth: 1,
+            backend: "native" as const,
+            lifecycle: "completed" as const,
+          },
+        },
+      },
+    }));
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      {
+        readSession,
+        list: vi.fn(() => []),
+        listAll: vi.fn(() => [summary]),
+      } as any,
+    );
+
+    const [restored] = await mgr.restorePersistedBackgroundSessions();
+
+    expect(restored?.contextBreakdown).toEqual({
+      prompt: { sections: [], totalChars: 7, estimatedTokens: 2 },
+      contextLedger,
+    });
+  });
+
   it("deduplicates concurrent hydration and does not notify for cached reuse", async () => {
     const summary = {
       schemaVersion: 1,
@@ -1301,6 +1371,14 @@ describe("AgentSessionManager host injection", () => {
       createdAt: 1,
       lastActiveAt: 2,
     };
+    const restoredContextLedger = buildContextLedger({
+      capabilities: {
+        contextWindow: 200_000,
+        maxInputTokens: 180_000,
+        maxOutputTokens: 20_000,
+      },
+      layers: [{ layer: "system_prompt", requestedTokens: 123 }],
+    });
     const readSession = vi.fn(async () => ({
       ok: true as const,
       revision: "revision-1",
@@ -1316,6 +1394,7 @@ describe("AgentSessionManager host injection", () => {
           executionPreset: "workspace-write" as const,
           totalInputTokens: 0,
           totalOutputTokens: 0,
+          contextLedger: restoredContextLedger,
           loadedSkills: ["review"],
           activeSkillState,
           checkpointState: { baseCommit: null, checkpoints: [] },
@@ -1343,6 +1422,10 @@ describe("AgentSessionManager host injection", () => {
         activeSkillState,
       }),
     );
+    expect(restored?.contextBreakdown).toEqual({
+      prompt: { sections: [], totalChars: 7, estimatedTokens: 2 },
+      contextLedger: restoredContextLedger,
+    });
     expect(mgr.getSessionApprovalMode(summary.id)).toEqual({
       commandApprovalPolicy: "safe",
       approvalPolicy: "on-request",
@@ -1366,7 +1449,10 @@ describe("AgentSessionManager host injection", () => {
         },
       },
     } as any);
-    await mgr.loadPersistedSession("legacy-session");
+    const legacySession = await mgr.loadPersistedSession("legacy-session");
+    expect(legacySession?.contextBreakdown).toEqual({
+      prompt: { sections: [], totalChars: 7, estimatedTokens: 2 },
+    });
     expect(mgr.getSessionApprovalMode("legacy-session")).toEqual({
       commandApprovalPolicy: "approve-for-me",
       approvalPolicy: "on-request",

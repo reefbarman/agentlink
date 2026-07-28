@@ -7,6 +7,7 @@ import {
 } from "./systemPrompt.js";
 
 import { AgentSession } from "./AgentSession.js";
+import { buildContextLedger } from "../core/contextLedger.js";
 import type { ContentBlock } from "./providers/types.js";
 import type { PersistedActiveSkillState } from "./persistenceContracts.js";
 import type { SkillEntry } from "./skillLoader.js";
@@ -1428,6 +1429,49 @@ describe("AgentSession", () => {
   });
 
   describe("rebuildSystemPrompt", () => {
+    it("preserves completed request measurements only across same-identity prompt rebuilds", async () => {
+      const session = await makeSession({ providerId: "test" });
+      const contextLedger = buildContextLedger({
+        capabilities: {
+          contextWindow: 200_000,
+          maxInputTokens: 180_000,
+          maxOutputTokens: 20_000,
+        },
+        layers: [{ layer: "system_prompt", requestedTokens: 123 }],
+      });
+      session.contextBreakdown = {
+        ...session.contextBreakdown,
+        contextLedger,
+      };
+
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("rebuilt prompt"),
+      );
+      await session.rebuildSystemPrompt();
+      expect(session.contextBreakdown).toMatchObject({
+        prompt: { totalChars: "rebuilt prompt".length },
+        contextLedger,
+      });
+
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("mode prompt"),
+      );
+      await session.setMode("ask");
+      expect(session.contextBreakdown).toEqual({
+        prompt: expect.objectContaining({ totalChars: "mode prompt".length }),
+      });
+
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("provider prompt"),
+      );
+      await session.updateModelSelection("provider-model", "other-provider");
+      expect(session.contextBreakdown).toEqual({
+        prompt: expect.objectContaining({
+          totalChars: "provider prompt".length,
+        }),
+      });
+    });
+
     it("updates profile state and refreshes conversation mode instructions", async () => {
       const session = await makeSession({ providerId: "codex" });
       const reasoningProfile = {

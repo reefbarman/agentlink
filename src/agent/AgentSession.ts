@@ -649,7 +649,10 @@ export class AgentSession {
     this.promptProfileOverrides = promptProfileOverrides;
     this.systemPrompt = artifacts.systemPrompt;
     this.promptProfile = artifacts.promptProfile;
-    this.contextBreakdown = { prompt: artifacts.promptBreakdown };
+    this.contextBreakdown = {
+      ...this.contextBreakdown,
+      prompt: artifacts.promptBreakdown,
+    };
     this.activeFileContext = artifacts.activeFileContext;
     this.setAdvertisedSkills(artifacts.skills);
     this.setSkillCatalogProjection(artifacts.skillCatalog);
