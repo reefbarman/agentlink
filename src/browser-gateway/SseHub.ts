@@ -211,7 +211,14 @@ export class SseHub<T> {
     if (this.keepaliveIntervalMs > 0) {
       try {
         client.keepaliveTimer = this.scheduleInterval(() => {
-          this.writeChunk(client, `: keepalive ${this.now()}\n\n`);
+          // The comment frame keeps proxies from idling the connection; the
+          // named event is visible to EventSource so browser clients can
+          // detect a wedged origin (comments never reach the JS API).
+          this.writeChunk(
+            client,
+            `: keepalive ${this.now()}\n\n` +
+              this.formatEvent("heartbeat", String(this.now())),
+          );
         }, this.keepaliveIntervalMs);
       } catch (error) {
         this.remove(response, "scheduler_error");

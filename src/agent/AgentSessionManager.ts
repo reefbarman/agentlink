@@ -25,6 +25,7 @@ import {
   collectNativeWebToolResult,
   continueNativeWebProviderStream,
 } from "../core/nativeWebTools.js";
+import { hostFlightRecorder } from "../core/hostLiveness.js";
 import { runWatchedProviderStream } from "../core/providerStreamWatchdog.js";
 import {
   normalizePromptProfileOverrides,
@@ -870,6 +871,11 @@ export class AgentSessionManager {
   }
 
   /** Clear only the browser-projection visibility timer owned by A4 publication. */
+  /** Best-effort flush of buffered activity-trace writes (shutdown path). */
+  flushActivityTrace(): Promise<void> {
+    return this.activityTraceRecorder.flush?.() ?? Promise.resolve();
+  }
+
   disposeFleetVisibilityExpiry(): void {
     this.fleetVisibilityExpiryDisposed = true;
     if (!this.fleetVisibilityExpiryTimer) return;
@@ -3755,6 +3761,10 @@ export class AgentSessionManager {
 
     const expectedRevision = this.sessionRevisions.get(id) ?? null;
     const persistStartedAt = Date.now();
+    const flightOp = hostFlightRecorder.opStarted(
+      "session-persist",
+      `${id} ${durability}`,
+    );
     let result;
     try {
       result = await this.persistence.saveSession({
@@ -3768,6 +3778,7 @@ export class AgentSessionManager {
       );
       return;
     } finally {
+      flightOp.end();
       this.sessionPersistDurationsMs.set(id, Date.now() - persistStartedAt);
     }
 
@@ -3802,6 +3813,23 @@ export class AgentSessionManager {
   }
 
   /**
+   * When one persist takes longer than this, mid-turn checkpoints stop for the
+   * session: the 30 s cadence cap means the adaptive delay can no longer keep
+   * the duty cycle bounded, and the synchronous transcript stringify inside
+   * each save is what wedges the extension host on multi-hundred-MB sessions.
+   * Turn-boundary (durable) saves are unaffected, so at most one turn of
+   * progress is at risk on a crash.
+   */
+  private static readonly SKIP_INFLIGHT_PERSIST_DURATION_MS = 1_200;
+
+  private shouldSkipInFlightCheckpoint(sessionId: string): boolean {
+    const lastDurationMs = this.sessionPersistDurationsMs.get(sessionId) ?? 0;
+    return (
+      lastDurationMs > AgentSessionManager.SKIP_INFLIGHT_PERSIST_DURATION_MS
+    );
+  }
+
+  /**
    * Start the adaptive in-flight checkpoint loop for a running turn. Uses a
    * self-rescheduling timeout instead of a fixed interval so each tick can
    * pick its delay from the latest persistence cost. Returns a stop function.
@@ -3812,10 +3840,26 @@ export class AgentSessionManager {
   ): () => void {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let loggedSkip = false;
     const schedule = () => {
       timer = this.host.timers.setTimeout(() => {
         if (stopped) return;
-        persistCheckpoint();
+        if (this.shouldSkipInFlightCheckpoint(sessionId)) {
+          // Keep the loop alive: condensing or pruning can shrink the
+          // transcript, and a durable save updating the duration re-enables
+          // checkpoints on a later tick.
+          if (!loggedSkip) {
+            loggedSkip = true;
+            this.log?.(
+              `[session] in-flight checkpoints paused for ${sessionId}: last persist took ` +
+                `${this.sessionPersistDurationsMs.get(sessionId)}ms (> ${AgentSessionManager.SKIP_INFLIGHT_PERSIST_DURATION_MS}ms); ` +
+                `saving at turn boundaries only`,
+            );
+          }
+        } else {
+          loggedSkip = false;
+          persistCheckpoint();
+        }
         schedule();
       }, this.nextInFlightPersistDelayMs(sessionId));
     };
@@ -9911,9 +9955,10 @@ export class AgentSessionManager {
         }
         if (!this.getProjectedBgStatus(session).done) return false;
         const fleet = session.fleetMetadata;
-        // Already surfaced in the parent transcript (live or on a prior
-        // restore) — re-announcing on every reload would duplicate it.
-        if (fleet?.resultAnnouncedAt) return false;
+        // resultAnnouncedAt is the durable delivery cutoff. Cached tab
+        // projections preserve live results, while genuinely unannounced results
+        // remain eligible for recovery when their parent becomes active.
+        if (fleet?.resultAnnouncedAt !== undefined) return false;
         // Legacy reload interruptions predate durable delivery tracking and can
         // otherwise replay indefinitely. Newly recovered interruptions carry an
         // explicit marker and remain eligible until they are announced.

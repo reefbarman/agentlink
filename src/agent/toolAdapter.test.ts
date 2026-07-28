@@ -320,6 +320,55 @@ describe("tool usage telemetry project attribution", () => {
     expect(text).toContain("switch_mode");
   });
 
+  it("keeps deferred image generation behind the active mode gate", async () => {
+    const { handleGenerateImage } = await import("../tools/generateImage.js");
+    vi.mocked(handleGenerateImage).mockClear();
+    const runtime = createAgentToolRuntime(mockCtx);
+    const target = getAgentTools().find(
+      (tool) => tool.name === "generate_image",
+    )!;
+    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([target]);
+    const input = { prompt: "Generate a test image" };
+
+    const rejected = await runtime.executeTool({
+      name: "call_native_tool",
+      input: { name: "generate_image", input },
+      context: {
+        sessionId: "test-session",
+        mode: "ask",
+        availableToolNames: new Set(["call_native_tool"]),
+        modeAllowedToolNames: new Set(["read_file"]),
+        nativeToolDisclosure,
+      },
+    });
+    expect(rejected).toMatchObject({
+      isError: true,
+      data: { status: "tool_not_in_mode", tool: "generate_image" },
+    });
+    expect(handleGenerateImage).not.toHaveBeenCalled();
+
+    const accepted = await runtime.executeTool({
+      name: "call_native_tool",
+      input: { name: "generate_image", input },
+      context: {
+        sessionId: "test-session",
+        mode: "code",
+        availableToolNames: new Set(["call_native_tool"]),
+        modeAllowedToolNames: new Set(["generate_image"]),
+        nativeToolDisclosure,
+      },
+    });
+    expect(accepted.isError).not.toBe(true);
+    expect(handleGenerateImage).toHaveBeenCalledOnce();
+    expect(handleGenerateImage).toHaveBeenCalledWith(
+      input,
+      mockCtx.approvalManager,
+      "test-session",
+      mockCtx.onApprovalRequest,
+      mockCtx.getSessionImages,
+    );
+  });
+
   it("discovers only deferred tools from the frozen request snapshot", async () => {
     const runtime = createAgentToolRuntime(mockCtx);
     const nativeToolDisclosure = createNativeToolDisclosureSnapshot([

@@ -2683,6 +2683,10 @@ describe("AgentEngine", () => {
       expect(providerToolNames).toContain("call_native_tool");
       expect(providerToolNames).toContain("find_native_tools");
       expect(providerToolNames).not.toContain("get_call_hierarchy");
+      expect(
+        streamCalls[0]?.tools?.find((tool) => tool.name === "find_native_tools")
+          ?.description,
+      ).toContain("generate_image");
       expect(executeTool).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "get_call_hierarchy",
@@ -2804,6 +2808,49 @@ describe("AgentEngine", () => {
       expect(secondAlpha).toBe(firstAlpha);
     });
 
+    it("keeps the deferred native catalog stable across built-in mode switches", async () => {
+      const streamCalls: StreamRequest[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        streamCalls.push(request);
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const session = await makeSession();
+      const engine = new AgentEngine(makeRegistry(provider));
+      setEngineToolContext(engine, {
+        ...({} as ToolDispatchContext),
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "agent",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      });
+
+      session.addUserMessage("first turn");
+      await collectEvents(engine.run(session));
+      await session.setMode("ask");
+      session.addUserMessage("second turn");
+      await collectEvents(engine.run(session));
+
+      expect(streamCalls).toHaveLength(2);
+      expect(streamCalls[1]?.tools).toStrictEqual(streamCalls[0]?.tools);
+      const firstReadSchema = streamCalls[0]?.tools?.find(
+        (tool) => tool.name === "read_file",
+      )?.input_schema;
+      expect(
+        streamCalls[1]?.tools?.find((tool) => tool.name === "read_file")
+          ?.input_schema,
+      ).toBe(firstReadSchema);
+      const discoveryDescription = streamCalls[0]?.tools?.find(
+        (tool) => tool.name === "find_native_tools",
+      )?.description;
+      expect(discoveryDescription).toContain("generate_image");
+      expect(
+        streamCalls[1]?.tools?.find((tool) => tool.name === "find_native_tools")
+          ?.description,
+      ).toBe(discoveryDescription);
+    });
+
     it("advertises the mode union while gating dispatch to the current mode", async () => {
       const streamCalls: StreamRequest[] = [];
       let streamCount = 0;
@@ -2832,34 +2879,52 @@ describe("AgentEngine", () => {
       });
       session.addUserMessage("look something up");
       const engine = new AgentEngine(makeRegistry(provider));
-      const capturedGateSets: Array<ReadonlySet<string> | undefined> = [];
+      const capturedContexts: Array<{
+        modeAllowedToolNames?: ReadonlySet<string>;
+        nativeToolDisclosure?: {
+          deferredTools: ReadonlyArray<{ name: string }>;
+        };
+      }> = [];
       engine.setToolRuntime({
-        listTools: (request: { mode?: { slug: string } }) =>
-          request.mode?.slug === "all-modes"
+        listTools: (request: { mode?: { slug: string } }) => {
+          const sharedTools = [
+            {
+              name: "read_file",
+              description: "read",
+              input_schema: { type: "object" },
+            },
+            {
+              name: "find_native_tools",
+              description: "discover",
+              input_schema: { type: "object" },
+            },
+          ];
+          return request.mode?.slug === "all-modes"
             ? [
-                {
-                  name: "read_file",
-                  description: "read",
-                  input_schema: { type: "object" },
-                },
+                ...sharedTools,
                 {
                   name: "write_file",
                   description: "write",
                   input_schema: { type: "object" },
                 },
-              ]
-            : [
                 {
-                  name: "read_file",
-                  description: "read",
+                  name: "generate_image",
+                  description: "generate images",
                   input_schema: { type: "object" },
                 },
-              ],
+              ]
+            : sharedTools;
+        },
         isParallelSafe: () => true,
         executeTool: async (request: {
-          context: { modeAllowedToolNames?: ReadonlySet<string> };
+          context: {
+            modeAllowedToolNames?: ReadonlySet<string>;
+            nativeToolDisclosure?: {
+              deferredTools: ReadonlyArray<{ name: string }>;
+            };
+          };
         }) => {
-          capturedGateSets.push(request.context.modeAllowedToolNames);
+          capturedContexts.push(request.context);
           return { content: [{ type: "text", text: "ok" }] };
         },
       } as any);
@@ -2869,12 +2934,30 @@ describe("AgentEngine", () => {
       // The provider request advertises the union (cache-stable tool list)…
       const advertisedNames = streamCalls[0]?.tools?.map((t) => t.name) ?? [];
       expect(advertisedNames).toContain("write_file");
+      expect(advertisedNames).not.toContain("generate_image");
+      expect(
+        streamCalls[0]?.tools?.find((tool) => tool.name === "find_native_tools")
+          ?.description,
+      ).toContain("generate_image");
       // …while the dispatch seam receives the current mode's real allowance.
-      expect(capturedGateSets).toHaveLength(1);
-      expect(capturedGateSets[0]).toBeDefined();
-      expect(capturedGateSets[0]!.has("read_file")).toBe(true);
-      expect(capturedGateSets[0]!.has("write_file")).toBe(false);
-      expect(capturedGateSets[0]!.has("todo_write")).toBe(true);
+      expect(capturedContexts).toHaveLength(1);
+      const capturedContext = capturedContexts[0]!;
+      expect(capturedContext.modeAllowedToolNames).toBeDefined();
+      expect(capturedContext.modeAllowedToolNames!.has("read_file")).toBe(true);
+      expect(capturedContext.modeAllowedToolNames!.has("write_file")).toBe(
+        false,
+      );
+      expect(capturedContext.modeAllowedToolNames!.has("generate_image")).toBe(
+        false,
+      );
+      expect(capturedContext.modeAllowedToolNames!.has("todo_write")).toBe(
+        true,
+      );
+      expect(
+        capturedContext.nativeToolDisclosure?.deferredTools.map(
+          (tool) => tool.name,
+        ),
+      ).toContain("generate_image");
     });
 
     it("recomputes MCP disclosure at request time when tools connect after session creation", async () => {

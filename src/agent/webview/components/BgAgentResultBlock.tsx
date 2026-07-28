@@ -9,6 +9,7 @@ interface BgAgentResultBlockProps {
   resolvedModel?: string;
   resolvedProvider?: string;
   onOpenTranscript?: (sessionId: string) => void;
+  onOpenFile?: (path: string, line?: number) => void;
 }
 
 export function BgAgentResultBlock({
@@ -20,6 +21,7 @@ export function BgAgentResultBlock({
   resolvedModel,
   resolvedProvider,
   onOpenTranscript,
+  onOpenFile,
 }: BgAgentResultBlockProps) {
   const statusClass =
     status === "completed"
@@ -64,7 +66,11 @@ export function BgAgentResultBlock({
 
       <div class="bg-result-content">
         {visibleResult ? (
-          <StreamingText text={visibleResult} streaming={false} />
+          <StreamingText
+            text={visibleResult}
+            streaming={false}
+            onOpenFile={onOpenFile}
+          />
         ) : (
           <div class="bg-result-empty">No output available.</div>
         )}

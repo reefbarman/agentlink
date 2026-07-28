@@ -40,14 +40,16 @@ import {
   approveOutsideWorkspaceAccess,
   type GuardianOutsideReadOptions,
 } from "../../tools/pathAccessUI.js";
-import { getCodeWorkspaceScopeId } from "../../indexer/codeRetrievalIdentity.js";
+import {
+  getCodeRetrievalStoreRoot,
+  getCodeWorkspaceScopeId,
+} from "../../indexer/codeRetrievalIdentity.js";
 import { createCodeIndexFingerprint } from "../../indexer/retrievalFingerprint.js";
 import { projectStructuralRelations } from "../../indexer/structuralRelationProjection.js";
 import { isAgentlinkTmpArtifact } from "../../util/agentlinkTmpArtifacts.js";
 import { resolveAndOpenDocument } from "../../tools/languageFeatures.js";
 import { semanticSearch } from "../../services/semanticSearch.js";
 import { LanceDbRetrievalRepository } from "../../storage/retrieval/LanceDbRetrievalRepository.js";
-import { getRetrievalStoreRoot } from "../../storage/retrieval/retrievalStorePaths.js";
 
 export function createVscodeWorkspaceFileProvider(): WorkspaceFileProvider {
   return {
@@ -102,9 +104,11 @@ export function createVscodeSemanticSearchProvider(
           includeAllWorkspaceRoots: false,
           ...(globalStorageUri
             ? {
-                retrievalStoreRoot: getRetrievalStoreRoot(
-                  globalStorageUri.fsPath,
-                ),
+                retrievalStoreRootForWorkspace: (workspaceRoot: string) =>
+                  getCodeRetrievalStoreRoot(
+                    globalStorageUri.fsPath,
+                    workspaceRoot,
+                  ),
               }
             : {}),
         },
@@ -215,8 +219,9 @@ export function createVscodeStructuralGraphProvider(
     getWorkspaceRootForPath: getOwningWorkspaceRoot,
     async loadGraph(workspaceRoot) {
       const indexName = getCodeWorkspaceScopeId(workspaceRoot);
-      const structuralCachePath = getRetrievalStoreRoot(
+      const structuralCachePath = getCodeRetrievalStoreRoot(
         globalStorageUri.fsPath,
+        workspaceRoot,
       );
       const storeExists = fs.existsSync(structuralCachePath);
       if (!storeExists) {

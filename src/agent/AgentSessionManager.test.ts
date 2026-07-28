@@ -4299,6 +4299,33 @@ describe("AgentSessionManager in-flight persistence", () => {
     expect(ticks).toBe(3);
   });
 
+  it("pauses in-flight checkpoints while the last persist exceeded the skip threshold", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const anyMgr = mgr as any;
+    let ticks = 0;
+
+    // Above the 1 200 ms skip threshold: ticks keep firing (30 s cadence) but
+    // the checkpoint callback is suppressed.
+    anyMgr.sessionPersistDurationsMs.set("s1", 2_000);
+    const stop = anyMgr.startInFlightPersistLoop("s1", () => {
+      ticks += 1;
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(ticks).toBe(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(ticks).toBe(0);
+
+    // Once persistence gets cheap again (e.g. after condensing), the loop
+    // resumes checkpointing on its next tick.
+    anyMgr.sessionPersistDurationsMs.set("s1", 100);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(ticks).toBe(1);
+
+    stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(ticks).toBe(1);
+  });
+
   it("delivers checkpoint durability and the transcript-revision skip through production store wiring", async () => {
     const workspace = fs.mkdtempSync(
       path.join(os.tmpdir(), "agentlink-durability-"),
@@ -4541,6 +4568,7 @@ describe("AgentSessionManager activity tracing", () => {
       (mgr as any).host.createEngine = vi.fn(() => engine);
 
       await mgr.sendMessage(session.id, "start", session.mode);
+      await mgr.flushActivityTrace();
 
       const sessionDir = path.join(
         workspace,

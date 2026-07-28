@@ -8,9 +8,13 @@ Loaded in priority order (later overrides earlier):
 
 1. Global: `~/.agents/AGENTS.md` + `~/.agents/rules/*.md`, then `~/.claude/CLAUDE.md` + rules, then `~/.agentlink/CLAUDE.md` + rules
 2. Workspace root: first found of `AGENTS.md` / `AGENT.md` / `CLAUDE.md`
-3. Project dirs: `.agents/AGENTS.md`, `.claude/CLAUDE.md`, `.agentlink/CLAUDE.md`, each with `rules/*.md`
-4. Subfolder `AGENTS.md` / `AGENTS.local.md` files (apply from root down to the active file's directory)
+3. Project dirs: `.agents/AGENTS.md`, `.claude/CLAUDE.md`, then `.agentlink/AGENTS.md` (falling back to `.agentlink/CLAUDE.md`), each with `rules/*.md`
+4. Subfolder instructions: the first non-empty `AGENTS.md` / `AGENT.md` / `CLAUDE.md` in each directory from the root down to the active file's directory, plus `AGENTS.local.md`
 5. `AGENTS.local.md` in workspace root — personal overrides, gitignored by convention
+
+Use project `.agentlink/AGENTS.md` for AgentLink-specific shared instructions. AgentLink loads the first non-empty file between `.agentlink/AGENTS.md` and `.agentlink/CLAUDE.md`.
+
+For personal additions to committed root instructions, create a workspace-root `AGENTS.local.md` and keep it uncommitted. Prefer adding `/AGENTS.local.md` to `.git/info/exclude` when the exclusion should remain local rather than changing the project's shared `.gitignore`. Subfolder `AGENTS.local.md` files provide personal instructions scoped to files below those directories. Changes to workspace-root and project `.agentlink` instruction files are picked up automatically for subsequent agent requests; start a new session after changing global instructions or other sources that are not watched.
 
 Rules can also be advertised and loaded on demand via the `load_rule` tool.
 

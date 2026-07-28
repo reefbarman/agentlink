@@ -10,6 +10,7 @@ import { useEffect, useReducer } from "preact/hooks";
 
 import { ActiveToolCalls } from "./components/ActiveToolCalls.js";
 import { ActivityShortcuts } from "./components/ActivityShortcuts.js";
+import { ContextHealthPanel } from "../../shared/ui/ContextHealthPanel.js";
 import { FeedbackList } from "./components/FeedbackList.js";
 import { IndexStatus } from "./components/IndexStatus.js";
 import { TrustedCommands } from "./components/TrustedCommands.js";
@@ -36,6 +37,10 @@ type Action =
   | { type: "stateUpdate"; state: SidebarState }
   | { type: "updateToolCalls"; calls: TrackedCallInfo[] }
   | { type: "updateFeedback"; entries: FeedbackEntry[] }
+  | {
+      type: "updateContextHealth";
+      health: NonNullable<SidebarState["contextHealth"]>;
+    }
   | { type: "updateIndexStatus"; status: IndexStatusInfo };
 
 const initialState: State = {
@@ -55,6 +60,11 @@ function reducer(state: State, action: Action): State {
       return { ...state, toolCalls: action.calls };
     case "updateFeedback":
       return { ...state, feedbackEntries: action.entries };
+    case "updateContextHealth":
+      return {
+        ...state,
+        sidebar: { ...state.sidebar, contextHealth: action.health },
+      };
     case "updateIndexStatus":
       return {
         ...state,
@@ -79,6 +89,7 @@ export function App({ vscodeApi }: AppProps) {
         msg.type === "stateUpdate" ||
         msg.type === "updateToolCalls" ||
         msg.type === "updateFeedback" ||
+        msg.type === "updateContextHealth" ||
         msg.type === "updateIndexStatus"
       ) {
         dispatch(msg);
@@ -93,6 +104,9 @@ export function App({ vscodeApi }: AppProps) {
   return (
     <div>
       <ActiveToolCalls calls={state.toolCalls} postCommand={postCommand} />
+      {state.sidebar.contextHealth && (
+        <ContextHealthPanel health={state.sidebar.contextHealth} />
+      )}
       <IndexStatus state={state.sidebar} postCommand={postCommand} />
       <WriteApproval state={state.sidebar} postCommand={postCommand} />
       <TrustedPaths state={state.sidebar} postCommand={postCommand} />

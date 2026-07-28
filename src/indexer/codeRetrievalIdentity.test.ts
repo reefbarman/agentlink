@@ -4,7 +4,9 @@ import * as path from "path";
 
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  getCodeIndexCacheKey,
   getCodeRelationId,
+  getCodeRetrievalStoreRoot,
   getCodeSourceId,
   getCodeWorkspaceScopeId,
 } from "./codeRetrievalIdentity.js";
@@ -32,6 +34,33 @@ describe("code retrieval identity", () => {
     );
     expect(getCodeWorkspaceScopeId(other)).not.toBe(
       getCodeWorkspaceScopeId(physical),
+    );
+  });
+
+  it("creates stable reusable store roots per canonical workspace", () => {
+    const globalStorage = fs.mkdtempSync(
+      path.join(os.tmpdir(), "code-retrieval-storage-"),
+    );
+    roots.push(globalStorage);
+    const physical = fs.mkdtempSync(path.join(os.tmpdir(), "code-store-"));
+    roots.push(physical);
+    const alias = `${physical}-alias`;
+    fs.symlinkSync(physical, alias, "dir");
+    roots.push(alias);
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "code-store-other-"));
+    roots.push(other);
+
+    const storeRoot = getCodeRetrievalStoreRoot(globalStorage, physical);
+
+    expect(getCodeRetrievalStoreRoot(globalStorage, physical)).toBe(storeRoot);
+    expect(getCodeRetrievalStoreRoot(globalStorage, alias)).toBe(storeRoot);
+    expect(getCodeRetrievalStoreRoot(globalStorage, other)).not.toBe(storeRoot);
+    expect(getCodeIndexCacheKey(alias)).toBe(getCodeIndexCacheKey(physical));
+    expect(getCodeIndexCacheKey(other)).not.toBe(
+      getCodeIndexCacheKey(physical),
+    );
+    expect(path.dirname(storeRoot)).toBe(
+      path.join(globalStorage, "code-indexes-v3"),
     );
   });
 

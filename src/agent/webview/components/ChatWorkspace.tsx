@@ -16,9 +16,12 @@ const STATUS_LABELS: Record<ChatTabViewStatus, string> = {
   completed: "Completed",
 };
 
+const HOST_STALE_LABEL = "extension host not responding";
+
 export function ChatWorkspace({
   snapshot,
   showTabStrip = true,
+  hostStale = false,
   onFocus,
   onNewTab,
   onClose,
@@ -28,6 +31,8 @@ export function ChatWorkspace({
 }: {
   snapshot: ChatWorkspaceViewSnapshot | null;
   showTabStrip?: boolean;
+  /** True when the extension host has stopped sending heartbeats. */
+  hostStale?: boolean;
   onFocus(tabId: string): void;
   onNewTab(): void;
   onClose(tabId: string): void;
@@ -62,7 +67,10 @@ export function ChatWorkspace({
           <div class="chat-tab-strip-scroll">
             {dockedTabs.map((tab) => {
               const selected = tab.tabId === snapshot?.focusedTabId;
-              const statusLabel = STATUS_LABELS[tab.status];
+              const statusLabel = hostStale
+                ? `${STATUS_LABELS[tab.status]} — ${HOST_STALE_LABEL}`
+                : STATUS_LABELS[tab.status];
+              const staleClass = hostStale ? " host-stale" : "";
               return (
                 <div
                   key={tab.tabId}
@@ -81,7 +89,8 @@ export function ChatWorkspace({
                     onClick={() => onFocus(tab.tabId)}
                     title={`${tab.label}: ${tab.title ?? "New Chat"} — ${statusLabel}`}
                   >
-                    {tab.status === "idle" || tab.status === "completed" ? (
+                    {!hostStale &&
+                    (tab.status === "idle" || tab.status === "completed") ? (
                       <i
                         class={`chat-tab-status status-${tab.status} codicon codicon-check`}
                         title={statusLabel}
@@ -89,7 +98,7 @@ export function ChatWorkspace({
                       />
                     ) : (
                       <span
-                        class={`chat-tab-status status-${tab.status}`}
+                        class={`chat-tab-status status-${tab.status}${staleClass}`}
                         title={statusLabel}
                         aria-label={statusLabel}
                       />

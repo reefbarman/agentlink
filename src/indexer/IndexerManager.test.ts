@@ -1,12 +1,15 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { EventEmitter } from "events";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveEmbeddingAuth = vi.hoisted(() => vi.fn());
+const fork = vi.hoisted(() => vi.fn());
 
 vi.mock("vscode", async () => await import("../__mocks__/vscode.js"));
+vi.mock("child_process", () => ({ fork }));
 vi.mock("../agent/providers/index.js", () => ({
   openAiCodexAuthManager: { resolveEmbeddingAuth },
 }));
@@ -44,6 +47,8 @@ interface ManagerInternals {
   >;
   runWorkerJob: ReturnType<typeof vi.fn>;
   cacheRequiresFullReindex: ReturnType<typeof vi.fn>;
+  workerCircuitOpenedAt: number | null;
+  breakerRearmTimer: ReturnType<typeof setTimeout> | null;
   flushIncrementalUpdate(): Promise<void>;
   rearmPendingIncrementalUpdate(): void;
 }
@@ -71,6 +76,7 @@ async function runDebounce(): Promise<void> {
 describe("IndexerManager incremental ownership", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    fork.mockReset();
     resolveEmbeddingAuth.mockReset();
     resolveEmbeddingAuth.mockResolvedValue({ bearerToken: "embedding-token" });
     (
@@ -326,6 +332,155 @@ describe("IndexerManager incremental ownership", () => {
       manager.dispose();
     },
   );
+
+  it("terminates an active worker immediately and treats its exit as expected", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 1234,
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      send: vi.fn((_message, callback?: (error: Error | null) => void) =>
+        callback?.(null),
+      ),
+      kill: vi.fn(() => true),
+    });
+    fork.mockReturnValue(child);
+    const manager = new IndexerManager(
+      vscode.Uri.file("/extension"),
+      vscode.Uri.file("/storage"),
+      vi.fn(),
+    );
+    const internals = manager as unknown as {
+      status: IndexStatus;
+      activeWorkerJob: unknown;
+      terminatingWorker: unknown;
+      runWorkerJob(message: {
+        type: "start";
+        files: string[];
+        workspaceRoot: string;
+        indexName: string;
+        workspaceScopeId: string;
+        retrievalStoreRoot: string;
+        embeddingBearerToken: undefined;
+        cachePath: string;
+        force: boolean;
+        granularity: "standard";
+      }): Promise<IndexStats>;
+    };
+    internals.status = { state: "indexing" };
+    const job = internals.runWorkerJob({
+      type: "start",
+      files: [],
+      workspaceRoot,
+      indexName: "project",
+      workspaceScopeId: "scope",
+      retrievalStoreRoot: "/storage/retrieval",
+      embeddingBearerToken: undefined,
+      cachePath: "/storage/index.json",
+      force: false,
+      granularity: "standard",
+    });
+
+    manager.cancelIndexing();
+
+    await expect(job).resolves.toMatchObject({ cancelled: true, errors: [] });
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(internals.activeWorkerJob).toBeUndefined();
+    expect(internals.terminatingWorker).toBe(child);
+
+    child.emit("exit", null, "SIGTERM");
+    expect(internals.status.state).toBe("indexing");
+    expect(internals.terminatingWorker).toBeUndefined();
+    manager.dispose();
+  });
+
+  it("opens the crash-loop breaker after repeated abnormal worker exits", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 1234,
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      send: vi.fn((_message, callback?: (error: Error | null) => void) =>
+        callback?.(null),
+      ),
+      kill: vi.fn(() => true),
+    });
+    fork.mockReturnValue(child);
+    const manager = new IndexerManager(
+      vscode.Uri.file("/extension"),
+      vscode.Uri.file("/storage"),
+      vi.fn(),
+    );
+    const internals = manager as unknown as {
+      status: IndexStatus;
+      runWorkerJob(message: {
+        type: "start";
+        files: string[];
+        workspaceRoot: string;
+        indexName: string;
+        workspaceScopeId: string;
+        retrievalStoreRoot: string;
+        embeddingBearerToken: undefined;
+        cachePath: string;
+        force: boolean;
+        granularity: "standard";
+      }): Promise<IndexStats>;
+    };
+    const message = {
+      type: "start" as const,
+      files: [],
+      workspaceRoot,
+      indexName: "project",
+      workspaceScopeId: "scope",
+      retrievalStoreRoot: "/storage/retrieval",
+      embeddingBearerToken: undefined,
+      cachePath: "/storage/index.json",
+      force: false,
+      granularity: "standard" as const,
+    };
+
+    for (let i = 0; i < 5; i += 1) {
+      const job = internals.runWorkerJob(message);
+      child.emit("exit", null, "SIGABRT");
+      await expect(job).rejects.toThrow("exited unexpectedly");
+    }
+    expect(fork).toHaveBeenCalledTimes(5);
+
+    // The breaker refuses to fork a sixth crash-looping worker.
+    expect(() => internals.runWorkerJob(message)).toThrow(
+      /crash-loop breaker is open/,
+    );
+    expect(fork).toHaveBeenCalledTimes(5);
+    expect(internals.status.state).toBe("error");
+    manager.dispose();
+  });
+
+  it("parks incremental updates while the breaker is open and retries at half-open", async () => {
+    const { manager, internals } = createManager();
+    internals.status = { state: "error" };
+    internals.workerCircuitOpenedAt = Date.now();
+    internals.pendingAdded.add(file("src/parked.ts"));
+
+    await internals.flushIncrementalUpdate();
+
+    expect(internals.pendingAdded.size).toBe(1);
+    expect(internals.fileDiscovery.filterIndexableFiles).not.toHaveBeenCalled();
+    expect(internals.runWorkerJob).not.toHaveBeenCalled();
+    expect(internals.breakerRearmTimer).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 2_000);
+
+    expect(internals.runWorkerJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "incrementalUpdate",
+        added: [file("src/parked.ts")],
+      }),
+    );
+    expect(internals.pendingAdded.size).toBe(0);
+    manager.dispose();
+  });
 
   it("resumes watcher updates when a new event arrives after cancellation", async () => {
     const { manager, internals } = createManager();

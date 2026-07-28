@@ -62,11 +62,11 @@ const ALLOWLIST: Record<string, InventoryEntry> = {
   },
 
   "src/extension.ts": {
-    counts: { workspaceFolderIndex: 2 },
+    counts: { workspaceFolderIndex: 3 },
     classification: "mixed",
     ownerSlices: ["B", "C", "J"],
     rationale:
-      "Worktree intent is a narrow compatibility path; browser/window identity needs deterministic workspace ownership.",
+      "Worktree intent is a narrow compatibility path; browser/window identity needs deterministic workspace ownership; host-stall telemetry labels records with the first root's name purely for attribution.",
   },
   "src/services/semanticSearch.ts": {
     counts: { tryGetFirstWorkspaceRoot: 3 },
@@ -141,7 +141,7 @@ describe("project scope first-root source contract", () => {
     );
 
     expect(Object.keys(ALLOWLIST)).toHaveLength(10);
-    expect(counts.reduce((total, count) => total + count, 0)).toBe(24);
+    expect(counts.reduce((total, count) => total + count, 0)).toBe(25);
   });
 });
 

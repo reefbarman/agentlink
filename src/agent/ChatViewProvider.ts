@@ -358,11 +358,19 @@ function formatInstructionDebugInfo(
 }
 
 /**
+ * Cadence of the host→webview liveness beat. The webview flags the host as
+ * unresponsive after `HOST_HEARTBEAT_STALE_MS` (webview-side constant) without
+ * a beat, so this must stay comfortably below that threshold.
+ */
+export const HOST_HEARTBEAT_INTERVAL_MS = 2_000;
+
+/**
  * Webview protocol types — messages between extension and chat webview.
  * Mirrored in src/agent/webview/types.ts for the browser side.
  */
 export type ExtensionToWebview =
   | { type: "stateUpdate"; state: ChatState }
+  | { type: "hostHeartbeat"; at: number }
   | { type: "chatWorkspaceUpdate"; snapshot: ChatWorkspaceViewSnapshot }
   | {
       type: "chatTabActionConfirmationRequested";
@@ -463,6 +471,8 @@ export type ExtensionToWebview =
   | {
       type: "agentDone";
       sessionId: string;
+      /** Transcript revision after the completed turn's final deltas were committed. */
+      transcriptRevision?: number;
       totalInputTokens: number;
       totalOutputTokens: number;
       totalCacheReadTokens: number;
@@ -657,6 +667,8 @@ export type ExtensionToWebview =
   | {
       type: "agentSessionLoaded";
       sessionId: string;
+      /** Monotonic transcript mutation counter used to reject stale hydrations. */
+      transcriptRevision?: number;
       title: string;
       /** Original visible user prompt, independent of the paginated message tail. */
       originalPrompt?: string;
@@ -1210,6 +1222,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private condenseStartTimes = new Map<string, number>();
   private bgUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+  private hostHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private readonly deltaBufferFlusher: DeltaBufferFlusher;
   private streamDropCounts = {
     sessionMismatch: 0,
@@ -1232,6 +1245,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     index: { ...INITIAL_CONTEXT_HEALTH.index },
   };
   private contextHealthGeneration = 0;
+  private contextHealthListener:
+    | ((health: ContextHealthSnapshot) => void)
+    | undefined;
   private memoryHealthProvider:
     | { health(): Promise<MemoryHealthSnapshot> }
     | undefined;
@@ -1428,6 +1444,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this.pendingUrlElicitations.clear();
 
+    if (this.hostHeartbeatTimer) {
+      clearInterval(this.hostHeartbeatTimer);
+      this.hostHeartbeatTimer = null;
+    }
     this.outputChannel.dispose();
     this.uiEventHub.dispose();
     this.browserGatewaySurfaceChangeEmitter.dispose();
@@ -1793,6 +1813,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
   }
 
+  setContextHealthListener(
+    listener: (health: ContextHealthSnapshot) => void,
+  ): void {
+    this.contextHealthListener = listener;
+    listener(structuredClone(this.contextHealth));
+  }
+
   setContextHealthSources(sources: {
     memory: { health(): Promise<MemoryHealthSnapshot> };
     memoryInspection?: MemoryInspectionProvider;
@@ -1810,7 +1837,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         sources.semanticIndexEnabled,
       ),
     };
-    this.sendInitialState();
+    this.publishContextHealth();
     void this.refreshContextHealth();
   }
 
@@ -1822,6 +1849,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       ...this.contextHealth,
       index: projectIndexHealth(status, enabled),
     };
+    this.publishContextHealth();
+  }
+
+  private publishContextHealth(): void {
+    this.contextHealthListener?.(structuredClone(this.contextHealth));
     this.sendInitialState();
   }
 
@@ -2003,7 +2035,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       retrieval: retrievalHealth,
       index: this.contextHealth.index,
     };
-    this.sendInitialState();
+    this.publishContextHealth();
   }
 
   setBrowserGatewayAdminClient(
@@ -5971,7 +6003,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Watch instruction files for system prompt hot-reload
     const instructionPattern = new vscode.RelativePattern(
       cwd,
-      "{AGENTS.md,AGENT.md,CLAUDE.md,AGENTS.local.md,.claude/CLAUDE.md,.agentlink/CLAUDE.md,.agentlink/memory.md,.agents/rules/**/*.md,.agentlink/rules/**/*.md,.agentlink/rules-*/**/*.md,.agents/rules-*/**/*.md,**/AGENTS.md,**/AGENT.md,**/AGENTS.local.md}",
+      "{AGENTS.md,AGENT.md,CLAUDE.md,AGENTS.local.md,.claude/CLAUDE.md,.agentlink/AGENTS.md,.agentlink/CLAUDE.md,.agentlink/memory.md,.agents/rules/**/*.md,.agentlink/rules/**/*.md,.agentlink/rules-*/**/*.md,.agents/rules-*/**/*.md,**/AGENTS.md,**/AGENT.md,**/AGENTS.local.md}",
     );
     const instructionWatcher =
       vscode.workspace.createFileSystemWatcher(instructionPattern);
@@ -6748,6 +6780,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.updateBrowserGatewayThemeState(() => {
           this.webviewReady = true;
         });
+        this.startHostHeartbeat();
         void this.sendModesUpdate();
         void this.sendModelsUpdate();
         void this.sendSlashCommands();
@@ -7870,6 +7903,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.postMessage({
             type: "agentDone",
             sessionId: sourceSession.id,
+            transcriptRevision: sourceSession.transcriptRevision,
             totalInputTokens: sourceSession.totalInputTokens,
             totalOutputTokens: sourceSession.totalOutputTokens,
             totalCacheReadTokens: sourceSession.totalCacheReadTokens,
@@ -9642,9 +9676,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const backgroundResult = isBackground
           ? this.sessionManager?.getBackgroundResult(sessionId)
           : undefined;
+        const completedSession = this.sessionManager?.getSession(sessionId);
         this.postMessage({
           type: isBackground ? "agentBgDone" : "agentDone",
           sessionId,
+          ...(!isBackground && {
+            transcriptRevision: completedSession?.transcriptRevision,
+          }),
           ...(isBackground && {
             parentSessionId: parentSessionId ?? null,
           }),
@@ -11110,6 +11148,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessageToEditorPanes(msg);
   }
 
+  /**
+   * Periodic liveness beat to the sidebar webview so the UI can flag an
+   * unresponsive extension host (stale-heartbeat tab indicator). Sent directly
+   * to the webview — never queued, never projected to replay caches — because a
+   * buffered heartbeat is worse than a missed one.
+   */
+  private startHostHeartbeat(): void {
+    if (this.hostHeartbeatTimer) return;
+    this.hostHeartbeatTimer = setInterval(() => {
+      if (!this.webviewReady || !this.view) return;
+      void Promise.resolve(
+        this.view.webview.postMessage({
+          type: "hostHeartbeat",
+          at: Date.now(),
+        } satisfies ExtensionToWebview),
+      ).catch(() => {
+        // Delivery failures are already surfaced by the regular message path;
+        // the webview treats a missing beat as the signal.
+      });
+    }, HOST_HEARTBEAT_INTERVAL_MS);
+  }
+
   private postChatTabActionMessage(
     msg: ExtensionToWebview,
     address?: ChatTabActionAddress,
@@ -11249,6 +11309,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return {
       type: "agentSessionLoaded",
       sessionId: session.id,
+      transcriptRevision: session.transcriptRevision,
       title: session.title,
       originalPrompt: projectedAll.find((message) => message.role === "user")
         ?.content,

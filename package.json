@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.17.89",
+  "version": "1.17.101",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -810,11 +810,11 @@
             "autonomous"
           ],
           "enumDescriptions": [
-            "Disable typed autonomous memory tools while the feature is in dogfood.",
+            "Disable typed autonomous memory tools.",
             "Enable non-blocking, audited low-authority memory management and lexical recall. Authoritative instructions, skills, and commands still require reviewed proposals."
           ],
-          "default": "off",
-          "description": "Dogfood control for typed autonomous low-authority memory. Memory records are secret-scanned, quota-bound, revisioned, auditable, and treated as evidence rather than instructions."
+          "default": "autonomous",
+          "description": "Controls typed autonomous low-authority memory. Memory records are secret-scanned, quota-bound, revisioned, auditable, and treated as evidence rather than instructions."
         },
         "agentlink.autoIndex": {
           "scope": "resource",

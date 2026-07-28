@@ -91,3 +91,139 @@ describe("project active-file containment", () => {
     ).toBe(false);
   });
 });
+
+describe("project AgentLink instructions", () => {
+  it("loads .agentlink/AGENTS.md", async () => {
+    const project = await tempDir("agentlink-config-project-");
+    await fs.mkdir(path.join(project, ".agentlink"));
+    await fs.writeFile(
+      path.join(project, ".agentlink", "AGENTS.md"),
+      "AGENTLINK AGENTS",
+    );
+
+    const blocks = await loadAllInstructionBlocks(project);
+
+    expect(blocks).toContainEqual({
+      source: ".agentlink/AGENTS.md",
+      content: "AGENTLINK AGENTS",
+    });
+  });
+
+  it("falls back to .agentlink/CLAUDE.md", async () => {
+    const project = await tempDir("agentlink-config-project-");
+    await fs.mkdir(path.join(project, ".agentlink"));
+    await fs.writeFile(
+      path.join(project, ".agentlink", "CLAUDE.md"),
+      "AGENTLINK CLAUDE",
+    );
+
+    const blocks = await loadAllInstructionBlocks(project);
+
+    expect(blocks).toContainEqual({
+      source: ".agentlink/CLAUDE.md",
+      content: "AGENTLINK CLAUDE",
+    });
+  });
+
+  it("falls back to .agentlink/CLAUDE.md when AGENTS.md is empty", async () => {
+    const project = await tempDir("agentlink-config-project-");
+    await fs.mkdir(path.join(project, ".agentlink"));
+    await Promise.all([
+      fs.writeFile(path.join(project, ".agentlink", "AGENTS.md"), ""),
+      fs.writeFile(
+        path.join(project, ".agentlink", "CLAUDE.md"),
+        "AGENTLINK CLAUDE",
+      ),
+    ]);
+
+    const blocks = await loadAllInstructionBlocks(project);
+
+    expect(blocks).toContainEqual({
+      source: ".agentlink/CLAUDE.md",
+      content: "AGENTLINK CLAUDE",
+    });
+  });
+
+  it("loads .agentlink/AGENTS.md after Claude instructions and before its rules", async () => {
+    const project = await tempDir("agentlink-config-project-");
+    await Promise.all([
+      fs.mkdir(path.join(project, ".claude")),
+      fs.mkdir(path.join(project, ".agentlink", "rules"), { recursive: true }),
+    ]);
+    await Promise.all([
+      fs.writeFile(
+        path.join(project, ".claude", "CLAUDE.md"),
+        "PROJECT CLAUDE",
+      ),
+      fs.writeFile(
+        path.join(project, ".agentlink", "AGENTS.md"),
+        "AGENTLINK AGENTS",
+      ),
+      fs.writeFile(
+        path.join(project, ".agentlink", "rules", "test.md"),
+        "RULE",
+      ),
+    ]);
+
+    const blocks = await loadAllInstructionBlocks(project);
+    const sources = blocks.map((block) => block.source);
+
+    expect(sources.indexOf(".agentlink/AGENTS.md")).toBeGreaterThan(
+      sources.indexOf(".claude/CLAUDE.md"),
+    );
+    expect(sources.indexOf(".agentlink/AGENTS.md")).toBeLessThan(
+      sources.indexOf(".agentlink/rules/test.md"),
+    );
+  });
+
+  it("prefers .agentlink/AGENTS.md when both files exist", async () => {
+    const project = await tempDir("agentlink-config-project-");
+    await fs.mkdir(path.join(project, ".agentlink"));
+    await Promise.all([
+      fs.writeFile(
+        path.join(project, ".agentlink", "AGENTS.md"),
+        "AGENTLINK AGENTS",
+      ),
+      fs.writeFile(
+        path.join(project, ".agentlink", "CLAUDE.md"),
+        "AGENTLINK CLAUDE",
+      ),
+    ]);
+
+    const blocks = await loadAllInstructionBlocks(project);
+
+    expect(blocks).toContainEqual({
+      source: ".agentlink/AGENTS.md",
+      content: "AGENTLINK AGENTS",
+    });
+    expect(blocks).not.toContainEqual({
+      source: ".agentlink/CLAUDE.md",
+      content: "AGENTLINK CLAUDE",
+    });
+  });
+
+  it("does not duplicate .agentlink/AGENTS.md for active files under .agentlink", async () => {
+    const project = await tempDir("agentlink-config-project-");
+    await fs.mkdir(path.join(project, ".agentlink", "skills", "test"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(project, ".agentlink", "AGENTS.md"),
+      "AGENTLINK AGENTS",
+    );
+
+    const blocks = await loadAllInstructionBlocks(project, {
+      activeFilePath: path.join(
+        project,
+        ".agentlink",
+        "skills",
+        "test",
+        "SKILL.md",
+      ),
+    });
+
+    expect(
+      blocks.filter((block) => block.source === ".agentlink/AGENTS.md"),
+    ).toHaveLength(1);
+  });
+});

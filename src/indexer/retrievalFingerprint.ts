@@ -19,6 +19,7 @@ const CODE_INDEX_CHUNKER_VERSION = 2;
 const CODE_INDEX_SCHEMA_VERSION = 1;
 const CODE_INDEX_RECORD_SCHEMA_VERSION = 1;
 const CODE_INDEX_RELATION_SCHEMA_VERSION = 2;
+const CODE_INDEX_STORAGE_LAYOUT_VERSION = 2;
 
 export function createCodeIndexFingerprint(
   granularity: ChunkGranularity,
@@ -35,6 +36,7 @@ export function createCodeIndexFingerprint(
         maxChunkChars: MAX_CODE_INDEX_CHUNK_CHARS,
         maxEmbeddingChars: MAX_CODE_INDEX_EMBEDDING_CHARS,
         pathIdentityVersion: CODE_INDEX_PATH_IDENTITY_VERSION,
+        storageLayoutVersion: CODE_INDEX_STORAGE_LAYOUT_VERSION,
       }),
     },
     embedding: {
@@ -51,6 +53,7 @@ function hashConfiguration(configuration: {
   maxChunkChars: number;
   maxEmbeddingChars: number;
   pathIdentityVersion: number;
+  storageLayoutVersion: number;
 }): string {
   return createHash("sha256")
     .update(JSON.stringify(configuration))

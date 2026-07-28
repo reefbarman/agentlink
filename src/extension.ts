@@ -46,11 +46,15 @@ import {
 } from "./agent/clientFactory.js";
 import { IndexerManager } from "./indexer/IndexerManager.js";
 import { registerIndexCommands } from "./indexer/indexCommands.js";
+import { createCodeRetrievalHealthProvider } from "./indexer/codeRetrievalHealth.js";
 import { AutonomousMemoryToolProvider } from "./storage/retrieval/AutonomousMemoryToolProvider.js";
 import { LanceDbRetrievalRepository } from "./storage/retrieval/LanceDbRetrievalRepository.js";
 import { RetrievalSkillCatalogFallbackProvider } from "./storage/retrieval/RetrievalSkillCatalogFallbackProvider.js";
 import { getRetrievalStoreRoot } from "./storage/retrieval/retrievalStorePaths.js";
+import { cleanupLegacyCodeRetrievalStore } from "./storage/retrieval/legacyCodeRetrievalCleanup.js";
 import { SkillCatalogRetrievalService } from "./core/catalog/SkillCatalogRetrievalService.js";
+import { startHostLivenessMonitor } from "./core/hostLiveness.js";
+import { appendJsonlLinesWithLock } from "./telemetry/jsonlAppend.js";
 import { migrateLegacyMemoryFiles } from "./agent/legacyMemoryMigration.js";
 import { ChatViewProvider } from "./agent/ChatViewProvider.js";
 import { AgentSessionManager } from "./agent/AgentSessionManager.js";
@@ -377,7 +381,9 @@ async function consumeWorktreeStartupIntent(
   }
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(
+  context: vscode.ExtensionContext,
+): Promise<void> {
   installAgentLinkHttpDispatcher();
 
   outputChannel = vscode.window.createOutputChannel("AgentLink");
@@ -678,6 +684,59 @@ export function activate(context: vscode.ExtensionContext): void {
     log,
   });
   context.subscriptions.push(contextUsageTelemetry);
+
+  // Event-loop stall watchdog: reports extension-host lockups the moment the
+  // loop unblocks, with the flight-recorder ops that were running at the time
+  // (see src/core/hostLiveness.ts). Records land in the output channel and in
+  // ~/.agentlink/host-stall-telemetry.jsonl for post-mortem across windows.
+  const stallWorkspace =
+    vscode.workspace.workspaceFolders?.[0]?.name ?? "no-workspace";
+  const appendHostStallRecord = (record: Record<string, unknown>): void => {
+    void appendJsonlLinesWithLock(
+      path.join(os.homedir(), ".agentlink", "host-stall-telemetry.jsonl"),
+      [
+        JSON.stringify({
+          ...record,
+          atIso: new Date(Number(record["at"]) || Date.now()).toISOString(),
+          pid: process.pid,
+          workspace: stallWorkspace,
+          extensionVersion: extVersion,
+        }),
+      ],
+      {
+        lockTimeoutMs: 2_000,
+        staleLockMs: 30_000,
+        lockTimeoutError: "host-stall telemetry lock timeout",
+      },
+    ).catch(() => {
+      // Telemetry writes must never disturb the host; the output-channel line
+      // above is the fallback record.
+    });
+  };
+  const hostLivenessMonitor = startHostLivenessMonitor({
+    onStall: (record) => {
+      const inFlight = record.inFlightOps
+        .map((op) => `${op.label}${op.detail ? `(${op.detail})` : ""}`)
+        .join(", ");
+      const recent = record.recentOps
+        .slice(-5)
+        .map((op) => `${op.label}:${Math.round(op.durationMs)}ms`)
+        .join(", ");
+      log(
+        `[host-stall] event loop blocked ~${Math.round(record.lagMs)}ms ` +
+          `inFlight=[${inFlight}] recent=[${recent}]`,
+      );
+      appendHostStallRecord({ ...record });
+    },
+    onSummary: (record) => {
+      log(
+        `[host-stall] delay summary p50=${record.p50Ms.toFixed(1)}ms ` +
+          `p99=${record.p99Ms.toFixed(1)}ms max=${record.maxMs.toFixed(1)}ms`,
+      );
+      appendHostStallRecord({ ...record });
+    },
+  });
+  context.subscriptions.push({ dispose: () => hostLivenessMonitor.stop() });
   let tabTerminalProviders: TabTerminalProviderRegistry | undefined;
   toolCallTracker = new AgentToolCallTracker(log, (sessionId) => {
     const manager = agentSessionManager as AgentSessionManager | undefined;
@@ -969,12 +1028,21 @@ export function activate(context: vscode.ExtensionContext): void {
   const getAutonomousMemoryMode = () =>
     vscode.workspace
       .getConfiguration("agentlink")
-      .get<"off" | "autonomous">("memory.mode", "off");
+      .get<"off" | "autonomous">("memory.mode", "autonomous");
   let autonomousMemoryMigrationsPending = 0;
   let autonomousMemoryMigrationTail = Promise.resolve();
   const retrievalStoreRoot = getRetrievalStoreRoot(
     context.globalStorageUri.fsPath,
   );
+  try {
+    const result = await cleanupLegacyCodeRetrievalStore(retrievalStoreRoot);
+    log(
+      `[retrieval] Legacy code cleanup status=${result.status} rowsRemoved=${result.rowsRemoved}`,
+    );
+  } catch (error) {
+    log(`[retrieval] Legacy code cleanup failed: ${String(error)}`);
+    throw error;
+  }
   const autonomousMemoryToolProvider = new AutonomousMemoryToolProvider({
     root: retrievalStoreRoot,
     getMode: getAutonomousMemoryMode,
@@ -2758,10 +2826,20 @@ export function activate(context: vscode.ExtensionContext): void {
   const semanticEnabled = vscode.workspace
     .getConfiguration("agentlink")
     .get<boolean>("semanticSearchEnabled", false);
+  chatViewProvider.setContextHealthListener((health) =>
+    sidebarProvider.updateContextHealth(health),
+  );
   chatViewProvider.setContextHealthSources({
     memory: autonomousMemoryToolProvider,
     memoryInspection: autonomousMemoryToolProvider,
-    retrieval: skillCatalogRetrievalRepository,
+    retrieval: createCodeRetrievalHealthProvider({
+      globalStoragePath: context.globalStorageUri.fsPath,
+      enabled: semanticEnabled,
+      getWorkspaceRoots: () =>
+        (vscode.workspace.workspaceFolders ?? []).map(
+          (folder) => folder.uri.fsPath,
+        ),
+    }),
     semanticIndexEnabled: semanticEnabled,
   });
 
@@ -2842,6 +2920,7 @@ export function activate(context: vscode.ExtensionContext): void {
       chatTabPanelHost?.dispose();
       chatTabPanelHost = null;
       agentSessionManager.saveAllSessions();
+      void agentSessionManager.flushActivityTrace();
       agentSessionManager.disposeFleetVisibilityExpiry();
       disposeTerminalManager();
       void browserGatewayServer?.stop();

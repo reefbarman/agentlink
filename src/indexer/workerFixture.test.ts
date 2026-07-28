@@ -18,6 +18,7 @@ import type {
   IndexStats,
   WorkerToExtensionMessage,
 } from "./types.js";
+import type { RetrievalPublicationRequest } from "../core/retrieval/contracts.js";
 import {
   getCodeSourceId,
   getCodeWorkspaceScopeId,
@@ -27,12 +28,15 @@ import {
   createCodeIndexFingerprint,
 } from "./retrievalFingerprint.js";
 import {
+  beginIndexReset,
   getIndexResetStatePath,
   loadIndexResetState,
 } from "./collectionResetState.js";
 import {
+  emptyFileIndexJournal,
   getFileIndexJournalPath,
   loadFileIndexJournal,
+  writeFileIndexJournal,
 } from "./fileIndexJournal.js";
 import { STRUCTURAL_EXTRACTOR_VERSION } from "./structuralExtractor.js";
 import {
@@ -209,7 +213,7 @@ function incrementalMessage(
   };
 }
 
-async function createFixture(): Promise<WorkerFixture> {
+async function createFixture(maxOldSpaceSizeMb = 512): Promise<WorkerFixture> {
   const child = fork(workerPath, [], {
     cwd: process.cwd(),
     env: {
@@ -217,7 +221,11 @@ async function createFixture(): Promise<WorkerFixture> {
       NODE_PATH: path.resolve("node_modules"),
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
-    execArgv: ["--max-old-space-size=512", "--require", shimPath],
+    execArgv: [
+      `--max-old-space-size=${maxOldSpaceSizeMb}`,
+      "--require",
+      shimPath,
+    ],
   });
   onTestFinished(() => stopChild(child));
   const messages: FixtureMessage[] = [];
@@ -345,6 +353,25 @@ function expectEmptyJournal(workspace: WorkspaceFixture): void {
 }
 
 describe("indexer worker fixture", () => {
+  it(
+    "reports syntax initialization before starting a full indexing job",
+    async () => {
+      const fixture = await createFixture();
+      const workspace = createWorkspace();
+      const completion = fixture.waitFor("complete");
+      fixture.send(startMessage(workspace, { files: [] }));
+
+      await expect(
+        fixture.waitFor(
+          "progress",
+          (message) => message.detail === "initializing syntax parser",
+        ),
+      ).resolves.toMatchObject({ phase: "reading", current: 0, total: 0 });
+      await completion;
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it.each(["full", "incremental"] as const)(
     "fails closed before opening the retrieval store when a %s run finds a dangling cache",
     async (kind) => {
@@ -432,6 +459,245 @@ describe("indexer worker fixture", () => {
         });
       });
       expectEmptyJournal(workspace);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "recovers an interrupted publication with a large store under a constrained heap",
+    async () => {
+      const setupFixture = await createFixture();
+      const workspace = createWorkspace();
+      const file = writeSource(workspace.root, "recover.sql", sourceContent(7));
+      await setupFixture.complete(
+        startMessage(workspace, { files: [file], force: true }),
+      );
+      await stopChild(setupFixture.child);
+
+      const cache = requireCache(workspace);
+      const structural = loadStructuralCache(
+        getStructuralCachePath(workspace.cachePath),
+      );
+      const cached = cache.files["recover.sql"];
+      const structuralEntry = structural.files["recover.sql"];
+      if (!cached?.generation || !structuralEntry?.sourceId) {
+        throw new Error("Expected current recovery ownership");
+      }
+      const recoverySourceId = structuralEntry.sourceId;
+
+      const unrelatedSourceId = "code:workspace:unrelated:large.ts";
+      const unrelatedGeneration = "generation:unrelated-large";
+      // chunkRow includes the full source content in every chunk's search_text.
+      // A few large rows reproduce the old unbounded hydration pressure without
+      // spending most of this process-fixture test creating thousands of rows.
+      // Sized so full six-table hydration exceeds the 192MiB recovery heap:
+      // 512 chunks x ~527KB search_text is ~270MB logical, several times that
+      // in transient copies, while a filtered source lookup stays tiny.
+      const largeSourceContent = "unrelated large source payload ".repeat(
+        17_000,
+      );
+      const unrelatedChunks = Array.from({ length: 512 }, (_, index) => ({
+        id: `chunk:unrelated-large:${index}`,
+        sourceId: unrelatedSourceId,
+        revisionId: "revision:unrelated-large",
+        generation: unrelatedGeneration,
+        content: `unrelated chunk ${index}`,
+        embedding: null,
+        location: {
+          path: "large.ts",
+          startLine: index + 1,
+          endLine: index + 1,
+        },
+        metadata: {},
+      }));
+      const unrelatedPublication: RetrievalPublicationRequest = {
+        publicationId: "publication:unrelated-large",
+        generation: unrelatedGeneration,
+        source: {
+          id: unrelatedSourceId,
+          namespace: "code",
+          kind: "file",
+          revision: {
+            id: "revision:unrelated-large",
+            contentHash: "hash:unrelated-large",
+            observedAt: "2026-07-27T00:00:00.000Z",
+          },
+          path: "large.ts",
+          content: largeSourceContent,
+          metadata: { scopeType: "workspace", scopeId: "workspace:unrelated" },
+        },
+        chunks: unrelatedChunks,
+        relations: [],
+        expectedChunkIds: unrelatedChunks.map((chunk) => chunk.id),
+        expectedRelationIds: [],
+      };
+      const repository = new LanceDbRetrievalRepository({
+        root: workspace.retrievalStoreRoot,
+        embeddingDimensions: 1536,
+        deferNativeIndexRefresh: true,
+      });
+      try {
+        await repository.migrate(createCodeIndexFingerprint("standard"));
+        await repository.preparePublication(unrelatedPublication);
+        await repository.commitPublication(unrelatedPublication.publicationId);
+      } finally {
+        await repository.close();
+      }
+
+      writeFileIndexJournal(getFileIndexJournalPath(workspace.cachePath), {
+        ...emptyFileIndexJournal(),
+        operations: [
+          {
+            operationId: "publication:already-committed-recovery",
+            file: "recover.sql",
+            kind: "replace",
+            generation: cached.generation,
+            targetHash: cached.hash,
+            oldRecordIds: [],
+            intendedBatches: [{ batch: 0, recordIds: cached.recordIds }],
+          },
+        ],
+      });
+
+      const recoveryFixture = await createFixture(192);
+      const recoveryAdvanced = recoveryFixture.waitFor(
+        "progress",
+        (message) =>
+          message.detail?.startsWith("recovering interrupted deletions") ??
+          false,
+      );
+      const completion = recoveryFixture.waitFor("complete");
+      recoveryFixture.send(
+        startMessage(workspace, { files: [file], force: false }),
+      );
+
+      await expect(recoveryAdvanced).resolves.toMatchObject({
+        phase: "reading",
+        detail: expect.stringContaining("recovering interrupted deletions"),
+      });
+      await expect(completion).resolves.toMatchObject({
+        stats: { errors: [] },
+      });
+      await stopChild(recoveryFixture.child);
+      expectEmptyJournal(workspace);
+
+      const removalFixture = await createFixture(192);
+      await expect(
+        removalFixture.complete(
+          incrementalMessage(workspace, { removed: [file] }),
+        ),
+      ).resolves.toMatchObject({
+        totalFilesInIndex: 0,
+        recordsDeleted: cached.recordIds.length + 1,
+        errors: [],
+      });
+      await stopChild(removalFixture.child);
+
+      await withRepository(workspace.retrievalStoreRoot, async (reopened) => {
+        expect(await reopened.inspectSource(recoverySourceId)).toBeNull();
+        expect(await reopened.inspectSource(unrelatedSourceId)).toMatchObject({
+          source: { id: unrelatedSourceId },
+          generation: unrelatedGeneration,
+        });
+        expect(await reopened.lexicalReadiness()).toEqual({ status: "ready" });
+      });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "resumes an interrupted reset without hydrating the retrieval store",
+    async () => {
+      const fixture = await createFixture(192);
+      const workspace = createWorkspace();
+      const workspaceScopeId = getCodeWorkspaceScopeId(workspace.root);
+      const sourceId = getCodeSourceId(workspaceScopeId, "large.ts");
+      const generation = "generation:large-reset-fixture";
+      const sourceContent = "large reset payload ".repeat(3_200);
+      const chunks = Array.from({ length: 800 }, (_, index) => ({
+        id: `chunk:large-reset-fixture:${index}`,
+        sourceId,
+        revisionId: "revision:large-reset-fixture",
+        generation,
+        content: `chunk ${index}`,
+        embedding: null,
+        location: {
+          path: "large.ts",
+          startLine: index + 1,
+          endLine: index + 1,
+        },
+        metadata: {},
+      }));
+      const publication: RetrievalPublicationRequest = {
+        publicationId: "publication:large-reset-fixture",
+        generation,
+        source: {
+          id: sourceId,
+          namespace: "code",
+          kind: "file",
+          revision: {
+            id: "revision:large-reset-fixture",
+            contentHash: "hash:large-reset-fixture",
+            observedAt: "2026-07-27T00:00:00.000Z",
+          },
+          path: "large.ts",
+          content: sourceContent,
+          metadata: { scopeType: "workspace", scopeId: workspaceScopeId },
+        },
+        chunks,
+        relations: [],
+        expectedChunkIds: chunks.map((chunk) => chunk.id),
+        expectedRelationIds: [],
+      };
+      const repository = new LanceDbRetrievalRepository({
+        root: workspace.retrievalStoreRoot,
+        embeddingDimensions: 1536,
+        deferNativeIndexRefresh: true,
+      });
+      try {
+        await repository.migrate(createCodeIndexFingerprint("standard"));
+        await repository.preparePublication(publication);
+        await repository.commitPublication(publication.publicationId);
+      } finally {
+        await repository.close();
+      }
+      fs.mkdirSync(path.dirname(workspace.cachePath), { recursive: true });
+      beginIndexReset(getIndexResetStatePath(workspace.cachePath), {
+        storeRoot: workspace.retrievalStoreRoot,
+        workspaceScopeId,
+      });
+
+      const resetProgress = fixture.waitFor(
+        "progress",
+        (message) =>
+          message.detail?.startsWith("resetting workspace retrieval scope") ??
+          false,
+      );
+      const stats = await fixture.complete(
+        startMessage(workspace, { files: [], force: true }),
+      );
+
+      await expect(resetProgress).resolves.toMatchObject({
+        phase: "reading",
+        detail: expect.stringMatching(/heap=\d+MiB rss=\d+MiB/),
+      });
+      expect(stats).toMatchObject({ filesIndexed: 0, errors: [] });
+      expect(
+        loadIndexResetState(getIndexResetStatePath(workspace.cachePath)),
+      ).toMatchObject({
+        status: "valid",
+        state: { status: "complete" },
+      });
+      const reopened = new LanceDbRetrievalRepository({
+        root: workspace.retrievalStoreRoot,
+        embeddingDimensions: 1536,
+      });
+      try {
+        expect(await reopened.inspectSource(sourceId)).toBeNull();
+        expect(await reopened.lexicalReadiness()).toEqual({ status: "ready" });
+      } finally {
+        await reopened.close();
+      }
     },
     TEST_TIMEOUT_MS,
   );
@@ -604,15 +870,50 @@ describe("indexer worker fixture", () => {
         errors: [],
       });
       expect(stats.metrics?.operations["retrieval.deleteIndex"]).toBe(1);
-      expect(stats.metrics?.operations["retrieval.upsertRecords"]).toBe(2);
+      expect(stats.metrics?.operations["retrieval.upsertRecords"]).toBe(11);
       expect(
         stats.metrics?.operations["cache.writeRetrieval"],
-      ).toBeLessThanOrEqual(6);
+      ).toBeLessThanOrEqual(2 * 11 + 1);
       expect(
         stats.metrics?.operations["cache.writeStructural"],
-      ).toBeLessThanOrEqual(4);
+      ).toBeLessThanOrEqual(11 + 1);
       expect(stats.metrics?.maxActiveReads).toBeLessThanOrEqual(10);
       expect(stats.metrics?.maxRetainedContentBytes).toBeGreaterThan(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "publishes chunk-heavy files across bounded batches under the worker heap limit",
+    async () => {
+      const fixture = await createFixture();
+      const workspace = createWorkspace();
+      const files = Array.from({ length: 6 }, (_, fileIndex) =>
+        writeSource(
+          workspace.root,
+          `src/large-${fileIndex}.md`,
+          Array.from({ length: 250 }, (_, chunkIndex) =>
+            [
+              `# File ${fileIndex} section ${chunkIndex}`,
+              "",
+              `HEAP_BATCH_${fileIndex}_${chunkIndex} ${"chunk-heavy-body ".repeat(40)}`,
+            ].join("\n"),
+          ).join("\n\n"),
+        ),
+      );
+
+      const stats = await fixture.complete(startMessage(workspace, { files }));
+
+      expect(stats).toMatchObject({
+        filesIndexed: 6,
+        totalFilesInIndex: 6,
+        chunksCreated: 1_500,
+        recordsUpserted: 1_500,
+        errors: [],
+      });
+      expect(stats.metrics?.operations["retrieval.upsertRecords"]).toBe(2);
+      expect(stats.metrics?.maxRetainedContentBytes).toBeGreaterThan(1_000_000);
+      expect(stats.metrics?.maxHeapUsedBytes).toBeLessThan(512 * 1024 * 1024);
     },
     TEST_TIMEOUT_MS,
   );

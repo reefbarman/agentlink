@@ -205,6 +205,62 @@ export function describeRetrievalRepositoryContract(
       });
     });
 
+    it("rejects duplicate source IDs before batch preparation", async () => {
+      await withRepository(factory, async (repository) => {
+        const first = publication(
+          "batch-duplicate-first",
+          "revision-batch-duplicate-first",
+          "2026-07-25T00:00:00.000Z",
+          { sourceId: "source:batch:duplicate" },
+        );
+        const second = publication(
+          "batch-duplicate-second",
+          "revision-batch-duplicate-second",
+          "2026-07-25T00:01:00.000Z",
+          { sourceId: "source:batch:duplicate" },
+        );
+
+        await expect(
+          repository.preparePublicationBatch([first, second]),
+        ).rejects.toThrow(/source IDs must be unique/i);
+        expect(await repository.health()).toMatchObject({
+          pendingPublications: 0,
+          sourceCount: 0,
+        });
+      });
+    });
+
+    it("rejects duplicate source IDs before batch commit", async () => {
+      await withRepository(factory, async (repository) => {
+        const first = publication(
+          "commit-duplicate-first",
+          "revision-commit-duplicate-first",
+          "2026-07-25T00:00:00.000Z",
+          { sourceId: "source:commit:duplicate" },
+        );
+        const second = publication(
+          "commit-duplicate-second",
+          "revision-commit-duplicate-second",
+          "2026-07-25T00:01:00.000Z",
+          { sourceId: "source:commit:duplicate" },
+        );
+        await repository.preparePublication(first);
+        await repository.preparePublication(second);
+
+        await expect(
+          repository.commitPublicationBatch([
+            first.publicationId,
+            second.publicationId,
+          ]),
+        ).rejects.toThrow(/source IDs must be unique/i);
+        expect(await repository.listSources()).toEqual([]);
+        expect(await repository.health()).toMatchObject({
+          pendingPublications: 2,
+          sourceCount: 0,
+        });
+      });
+    });
+
     it("rejects an invalid publication batch without exposing any member", async () => {
       await withRepository(factory, async (repository) => {
         const complete = publication(
@@ -499,11 +555,37 @@ export function describeRetrievalRepositoryContract(
             metadata: { scopeType: "workspace", scopeId: "workspace-one" },
           },
         );
+        const samePrefixWrongMetadata = publication(
+          "workspace-one-wrong-metadata",
+          "revision-workspace-one-wrong-metadata",
+          "2026-07-25T01:00:00.000Z",
+          {
+            sourceId: "code:workspace-one:src/wrong-metadata.ts",
+            path: "src/wrong-metadata.ts",
+            chunkId: "chunk:workspace-one-wrong-metadata",
+            metadata: { scopeType: "workspace", scopeId: "workspace-two" },
+          },
+        );
+        const samePrefixWrongNamespace = publication(
+          "workspace-one-wrong-namespace",
+          "revision-workspace-one-wrong-namespace",
+          "2026-07-25T01:00:00.000Z",
+          {
+            sourceId: "code:workspace-one:memory/preference",
+            namespace: "memory",
+            kind: "memory",
+            path: "memory/preference",
+            chunkId: "chunk:workspace-one-wrong-namespace",
+            metadata: { scopeType: "workspace", scopeId: "workspace-one" },
+          },
+        );
         await publish(repository, tombstoned);
         await repository.deleteSource({ sourceId: tombstoned.source.id });
         await publish(repository, active);
         await publish(repository, otherWorkspace);
         await publish(repository, memory);
+        await publish(repository, samePrefixWrongMetadata);
+        await publish(repository, samePrefixWrongNamespace);
         const pending = publication(
           "workspace-one-pending",
           "revision-workspace-one-pending",
@@ -515,7 +597,19 @@ export function describeRetrievalRepositoryContract(
             metadata: { scopeType: "workspace", scopeId: "workspace-one" },
           },
         );
+        const pendingWrongMetadata = publication(
+          "workspace-one-pending-wrong-metadata",
+          "revision-workspace-one-pending-wrong-metadata",
+          "2026-07-25T02:00:00.000Z",
+          {
+            sourceId: "code:workspace-one:src/pending-wrong-metadata.ts",
+            path: "src/pending-wrong-metadata.ts",
+            chunkId: "chunk:workspace-one-pending-wrong-metadata",
+            metadata: { scopeType: "workspace", scopeId: "workspace-two" },
+          },
+        );
         await repository.preparePublication(pending);
+        await repository.preparePublication(pendingWrongMetadata);
 
         expect(
           await repository.deleteScope({
@@ -530,14 +624,62 @@ export function describeRetrievalRepositoryContract(
         ).not.toBeNull();
         expect(await repository.inspectSource(memory.source.id)).not.toBeNull();
         expect(
+          await repository.inspectSource(samePrefixWrongMetadata.source.id),
+        ).not.toBeNull();
+        expect(
+          await repository.inspectSource(samePrefixWrongNamespace.source.id),
+        ).not.toBeNull();
+        expect(
           await repository.commitPublication(pending.publicationId),
         ).toMatchObject({ status: "not_found" });
+        expect(
+          await repository.commitPublication(
+            pendingWrongMetadata.publicationId,
+          ),
+        ).toMatchObject({ status: "published" });
 
         await publish(repository, tombstoned);
         expect(await repository.inspectSource(tombstoned.source.id)).toEqual({
           source: tombstoned.source,
           generation: tombstoned.generation,
         });
+      });
+    });
+
+    it("treats wildcard characters in a scope prefix literally", async () => {
+      await withRepository(factory, async (repository) => {
+        const literalScope = publication(
+          "literal-wildcard-scope",
+          "revision-literal-wildcard-scope",
+          "2026-07-25T01:00:00.000Z",
+          {
+            sourceId: "code:workspace_%:src/literal.ts",
+            path: "src/literal.ts",
+            chunkId: "chunk:literal-wildcard-scope",
+          },
+        );
+        const neighboringScope = publication(
+          "neighboring-wildcard-scope",
+          "revision-neighboring-wildcard-scope",
+          "2026-07-25T01:00:00.000Z",
+          {
+            sourceId: "code:workspace-A:src/neighbor.ts",
+            path: "src/neighbor.ts",
+            chunkId: "chunk:neighboring-wildcard-scope",
+          },
+        );
+        await publish(repository, literalScope);
+        await publish(repository, neighboringScope);
+
+        await expect(
+          repository.deleteScope({ sourceIdPrefix: "code:workspace_%:" }),
+        ).resolves.toEqual({ sourcesDeleted: 1, recordsRemoved: 3 });
+        expect(
+          await repository.inspectSource(literalScope.source.id),
+        ).toBeNull();
+        expect(
+          await repository.inspectSource(neighboringScope.source.id),
+        ).not.toBeNull();
       });
     });
 

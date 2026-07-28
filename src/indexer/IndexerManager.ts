@@ -26,9 +26,11 @@ import {
 } from "../shared/semanticReadiness.js";
 import { getWorkspaceRootForPath, getWorkspaceRoots } from "../util/paths.js";
 import { classifyRetrievalFingerprint } from "../core/retrieval/fingerprint.js";
-import { getRetrievalStoreRoot } from "../storage/retrieval/retrievalStorePaths.js";
-import { getWorkspaceCacheKey } from "./workspaceCacheKey.js";
-import { getCodeWorkspaceScopeId } from "./codeRetrievalIdentity.js";
+import {
+  getCodeIndexCacheKey,
+  getCodeRetrievalStoreRoot,
+  getCodeWorkspaceScopeId,
+} from "./codeRetrievalIdentity.js";
 import {
   CODE_INDEX_REBUILD_REQUIRED_ERROR,
   createCodeIndexFingerprint,
@@ -38,6 +40,10 @@ import {
   DEFAULT_INDEX_EXCLUSIONS,
   IndexableFileDiscovery,
 } from "./IndexableFileDiscovery.js";
+import {
+  createWorkerJobWatchdog,
+  type WorkerJobWatchdog,
+} from "./workerJobWatchdog.js";
 
 // --- Public types ---
 
@@ -66,9 +72,13 @@ export interface IndexStatus {
 // --- Constants ---
 
 const WATCHER_DEBOUNCE_MS = 2000;
+const WORKER_JOB_INACTIVITY_TIMEOUT_MS = 120_000;
+const WORKER_TERMINATION_GRACE_MS = 5_000;
 
 export class IndexerManager implements vscode.Disposable {
   private worker: ChildProcess | null = null;
+  private terminatingWorker: ChildProcess | undefined;
+  private workerTerminationTimer: ReturnType<typeof setTimeout> | undefined;
   private status: IndexStatus = { state: "idle" };
   private disposables: vscode.Disposable[] = [];
   private cancelRequested = false;
@@ -79,6 +89,14 @@ export class IndexerManager implements vscode.Disposable {
         currentOffset?: number;
         total?: number;
         detailPrefix?: string;
+        jobType: "start" | "incrementalUpdate";
+        workspaceRoot: string;
+        retrievalStoreRoot: string;
+        watchdog: WorkerJobWatchdog;
+        lastPhase?: IndexPhase;
+        lastCurrent?: number;
+        lastTotal?: number;
+        lastDetail?: string;
       }
     | undefined;
 
@@ -120,9 +138,6 @@ export class IndexerManager implements vscode.Disposable {
         false,
       );
       const workspaceRoots = this.getWorkspaceRoots();
-      const retrievalStoreRoot = getRetrievalStoreRoot(
-        this.globalStorageUri.fsPath,
-      );
 
       const embeddingBearerToken = await this.getEmbeddingBearerToken();
 
@@ -202,7 +217,7 @@ export class IndexerManager implements vscode.Disposable {
       for (const workspaceRoot of workspaceRoots) {
         if (this.cancelRequested) break;
 
-        const indexName = getWorkspaceCacheKey(workspaceRoot);
+        const indexName = getCodeIndexCacheKey(workspaceRoot);
         const cachePath = this.getCachePath(indexName);
         const files = discoveredByRoot.get(workspaceRoot) ?? [];
         const folder = vscode.workspace.getWorkspaceFolder(
@@ -228,7 +243,10 @@ export class IndexerManager implements vscode.Disposable {
               workspaceRoot,
               indexName,
               workspaceScopeId: getCodeWorkspaceScopeId(workspaceRoot),
-              retrievalStoreRoot,
+              retrievalStoreRoot: getCodeRetrievalStoreRoot(
+                this.globalStorageUri.fsPath,
+                workspaceRoot,
+              ),
               embeddingBearerToken,
               cachePath,
               force,
@@ -318,8 +336,25 @@ export class IndexerManager implements vscode.Disposable {
     }
 
     if (this.worker && this.status.state === "indexing") {
-      this.worker.send({ type: "cancel" });
-      this.log("Sent cancel to indexer worker");
+      const worker = this.worker;
+      const activeJob = this.activeWorkerJob;
+      this.activeWorkerJob = undefined;
+      activeJob?.watchdog.dispose();
+      activeJob?.resolve({
+        filesIndexed: 0,
+        totalFilesInIndex: 0,
+        chunksCreated: 0,
+        totalChunksInIndex: 0,
+        recordsUpserted: 0,
+        recordsDeleted: 0,
+        durationMs: 0,
+        errors: [],
+        cancelled: true,
+      });
+      this.log(
+        `Cancelling indexer worker immediately (pid=${worker.pid ?? "unknown"})`,
+      );
+      this.terminateWorker(worker);
     } else if (this.status.state === "indexing" && !this.worker) {
       // Worker crashed but state is stuck — just reset
       this.log("Cancel requested but worker is dead, resetting state");
@@ -373,6 +408,14 @@ export class IndexerManager implements vscode.Disposable {
   dispose(): void {
     this.cancelRequested = true;
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    if (this.breakerRearmTimer) {
+      clearTimeout(this.breakerRearmTimer);
+      this.breakerRearmTimer = null;
+    }
+    const activeJob = this.activeWorkerJob;
+    this.activeWorkerJob = undefined;
+    activeJob?.watchdog.dispose();
+    activeJob?.reject(new Error("Indexer manager disposed"));
     if (this.worker) {
       this.worker.kill();
       this.worker = null;
@@ -383,6 +426,89 @@ export class IndexerManager implements vscode.Disposable {
   }
 
   // --- Internals ---
+
+  /**
+   * Crash-loop circuit breaker. A worker that dies abnormally on every
+   * dispatched job otherwise becomes a fork/SIGCHLD storm that can livelock
+   * the extension host in native signal handling (observed 2026-07-27:
+   * ~97 SIGABRTs in an hour wedged the host at 100% CPU). After
+   * `WORKER_CRASH_LIMIT` abnormal exits inside `WORKER_CRASH_WINDOW_MS`,
+   * stop re-forking; retry half-opens after `WORKER_CRASH_RETRY_MS`.
+   */
+  private static readonly WORKER_CRASH_LIMIT = 5;
+  private static readonly WORKER_CRASH_WINDOW_MS = 10 * 60_000;
+  private static readonly WORKER_CRASH_RETRY_MS = 30 * 60_000;
+  private workerCrashTimes: number[] = [];
+  private workerCircuitOpenedAt: number | null = null;
+  private breakerRearmTimer: NodeJS.Timeout | null = null;
+
+  private recordAbnormalWorkerExit(
+    code: number | null,
+    signal: NodeJS.Signals | string | null,
+  ): void {
+    const now = Date.now();
+    this.workerCrashTimes = this.workerCrashTimes.filter(
+      (time) => now - time < IndexerManager.WORKER_CRASH_WINDOW_MS,
+    );
+    this.workerCrashTimes.push(now);
+    if (
+      this.workerCrashTimes.length >= IndexerManager.WORKER_CRASH_LIMIT &&
+      this.workerCircuitOpenedAt === null
+    ) {
+      this.workerCircuitOpenedAt = now;
+      const detail =
+        `Indexer worker crash-loop breaker opened after ` +
+        `${this.workerCrashTimes.length} abnormal exits within ` +
+        `${IndexerManager.WORKER_CRASH_WINDOW_MS / 60_000} minutes ` +
+        `(last: code=${code}, signal=${signal}); indexing paused for ` +
+        `${IndexerManager.WORKER_CRASH_RETRY_MS / 60_000} minutes`;
+      this.log(detail);
+      this.updateStatus({
+        state: "error",
+        readinessReason: "generic_error",
+        readinessMessage: getSemanticReadinessMessage("generic_error"),
+        error: detail,
+      });
+    }
+  }
+
+  private isWorkerCircuitOpen(): boolean {
+    if (this.workerCircuitOpenedAt === null) return false;
+    if (
+      Date.now() - this.workerCircuitOpenedAt >=
+      IndexerManager.WORKER_CRASH_RETRY_MS
+    ) {
+      this.workerCircuitOpenedAt = null;
+      this.workerCrashTimes = [];
+      this.log("Indexer worker crash-loop breaker half-open: allowing a retry");
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * While the breaker is open, incremental flushes park their pending
+   * changes instead of churning through filtering/status/log cycles on
+   * every file event. This timer retries the parked changes once the
+   * breaker half-opens, so they are not stranded until the next event.
+   */
+  private scheduleBreakerRearm(): void {
+    if (this.breakerRearmTimer || this.workerCircuitOpenedAt === null) return;
+    const remainingMs =
+      IndexerManager.WORKER_CRASH_RETRY_MS -
+      (Date.now() - this.workerCircuitOpenedAt);
+    this.breakerRearmTimer = setTimeout(
+      () => {
+        this.breakerRearmTimer = null;
+        if (this.cancelRequested) return;
+        if (this.pendingAdded.size === 0 && this.pendingRemoved.size === 0) {
+          return;
+        }
+        this.scheduleIncrementalUpdate();
+      },
+      Math.max(remainingMs, 60_000),
+    );
+  }
 
   private ensureWorker(): void {
     if (this.worker) return;
@@ -396,26 +522,47 @@ export class IndexerManager implements vscode.Disposable {
     this.log(`Forking indexer worker: ${workerPath}`);
     this.worker = fork(workerPath, [], {
       stdio: ["ignore", "pipe", "pipe", "ipc"],
-      execArgv: ["--max-old-space-size=512"],
+      execArgv: ["--max-old-space-size=1024"],
     });
+    const worker = this.worker;
+    const workerPid = worker.pid ?? "unknown";
+    this.log(`Indexer worker forked (pid=${workerPid})`);
 
     // Forward worker stdout/stderr to log
-    this.worker.stdout?.on("data", (data: Buffer) => {
+    worker.stdout?.on("data", (data: Buffer) => {
       this.log(`[worker stdout] ${data.toString().trim()}`);
     });
-    this.worker.stderr?.on("data", (data: Buffer) => {
+    worker.stderr?.on("data", (data: Buffer) => {
       this.log(`[worker stderr] ${data.toString().trim()}`);
     });
 
-    this.worker.on("message", (msg: WorkerToExtensionMessage) => {
+    worker.on("message", (msg: WorkerToExtensionMessage) => {
+      this.activeWorkerJob?.watchdog.touch();
       this.handleWorkerMessage(msg);
     });
 
-    this.worker.on("exit", (code, signal) => {
-      this.log(`Indexer worker exited (code=${code}, signal=${signal})`);
+    worker.on("exit", (code, signal) => {
+      const ownsCurrentWorker = this.worker === worker;
+      const activeJob = ownsCurrentWorker ? this.activeWorkerJob : undefined;
+      const expectedTermination = this.terminatingWorker === worker;
+      this.log(
+        `Indexer worker exited (pid=${workerPid}, code=${code}, signal=${signal}, ` +
+          `job=${activeJob?.jobType ?? "none"}, workspace=${activeJob?.workspaceRoot ?? "none"}, ` +
+          `store=${activeJob?.retrievalStoreRoot ?? "none"}, phase=${activeJob?.lastPhase ?? "none"}, ` +
+          `progress=${activeJob?.lastCurrent ?? 0}/${activeJob?.lastTotal ?? activeJob?.total ?? 0}, ` +
+          `detail=${activeJob?.lastDetail ?? activeJob?.detailPrefix ?? "none"})`,
+      );
+      if (!ownsCurrentWorker) return;
       this.worker = null;
-      const activeJob = this.activeWorkerJob;
+      if (this.terminatingWorker === worker) this.terminatingWorker = undefined;
+      if (this.workerTerminationTimer) {
+        clearTimeout(this.workerTerminationTimer);
+        this.workerTerminationTimer = undefined;
+      }
       this.activeWorkerJob = undefined;
+      activeJob?.watchdog.dispose();
+      if (expectedTermination) return;
+      this.recordAbnormalWorkerExit(code, signal);
       activeJob?.reject(
         new Error(
           `Worker process exited unexpectedly (code=${code}, signal=${signal})`,
@@ -426,16 +573,26 @@ export class IndexerManager implements vscode.Disposable {
           state: "error",
           readinessReason: "generic_error",
           readinessMessage: getSemanticReadinessMessage("generic_error"),
-          error: `Worker process exited unexpectedly (code=${code})`,
+          error: `Worker process exited unexpectedly (code=${code}, signal=${signal})`,
         });
       }
     });
 
-    this.worker.on("error", (err) => {
+    worker.on("error", (err) => {
       this.log(`Indexer worker error: ${err}`);
+      if (this.worker !== worker) return;
+      const expectedTermination = this.terminatingWorker === worker;
       this.worker = null;
+      if (this.terminatingWorker === worker) this.terminatingWorker = undefined;
+      if (this.workerTerminationTimer) {
+        clearTimeout(this.workerTerminationTimer);
+        this.workerTerminationTimer = undefined;
+      }
       const activeJob = this.activeWorkerJob;
       this.activeWorkerJob = undefined;
+      activeJob?.watchdog.dispose();
+      if (expectedTermination) return;
+      this.recordAbnormalWorkerExit(null, null);
       activeJob?.reject(err);
       this.updateStatus({
         state: "error",
@@ -463,20 +620,82 @@ export class IndexerManager implements vscode.Disposable {
     if (this.activeWorkerJob) {
       throw new Error("Indexer worker job already in progress");
     }
+    if (this.terminatingWorker) {
+      throw new Error(
+        "Indexer worker is still terminating after a timed-out job",
+      );
+    }
+    if (this.isWorkerCircuitOpen()) {
+      throw new Error(
+        "Indexer worker crash-loop breaker is open; indexing is paused after repeated worker crashes",
+      );
+    }
 
     this.ensureWorker();
     const worker = this.worker!;
 
     return new Promise<IndexStats>((resolve, reject) => {
-      this.activeWorkerJob = { resolve, reject, ...progress };
+      const watchdog = createWorkerJobWatchdog(
+        WORKER_JOB_INACTIVITY_TIMEOUT_MS,
+        () => {
+          const activeJob = this.activeWorkerJob;
+          if (!activeJob || activeJob.reject !== reject) return;
+          this.activeWorkerJob = undefined;
+          activeJob.watchdog.dispose();
+          const detail =
+            `Indexer worker job timed out after ${WORKER_JOB_INACTIVITY_TIMEOUT_MS}ms without activity ` +
+            `(pid=${worker.pid ?? "unknown"}, job=${message.type}, workspace=${message.workspaceRoot}, ` +
+            `store=${message.retrievalStoreRoot}, phase=${activeJob.lastPhase ?? "none"}, ` +
+            `progress=${activeJob.lastCurrent ?? 0}/${activeJob.lastTotal ?? activeJob.total ?? 0}, ` +
+            `detail=${activeJob.lastDetail ?? activeJob.detailPrefix ?? "none"})`;
+          this.log(detail);
+          this.terminateWorker(worker);
+          reject(new Error(detail));
+          this.updateStatus({
+            state: "error",
+            readinessReason: "generic_error",
+            readinessMessage: getSemanticReadinessMessage("generic_error"),
+            error: detail,
+          });
+        },
+      );
+      this.activeWorkerJob = {
+        resolve,
+        reject,
+        ...progress,
+        jobType: message.type,
+        workspaceRoot: message.workspaceRoot,
+        retrievalStoreRoot: message.retrievalStoreRoot,
+        watchdog,
+      };
+      this.log(
+        `Dispatching indexer job (pid=${worker.pid ?? "unknown"}, job=${message.type}, ` +
+          `workspace=${message.workspaceRoot}, store=${message.retrievalStoreRoot})`,
+      );
       worker.send(message, (error) => {
         if (!error) return;
         if (this.activeWorkerJob?.reject === reject) {
+          this.activeWorkerJob.watchdog.dispose();
           this.activeWorkerJob = undefined;
         }
         reject(error);
       });
     });
+  }
+
+  private terminateWorker(worker: ChildProcess): void {
+    this.terminatingWorker = worker;
+    worker.kill();
+    if (this.workerTerminationTimer) clearTimeout(this.workerTerminationTimer);
+    this.workerTerminationTimer = setTimeout(() => {
+      if (this.terminatingWorker === worker && worker.exitCode === null) {
+        this.log(
+          `Indexer worker did not exit after ${WORKER_TERMINATION_GRACE_MS}ms; sending SIGKILL (pid=${worker.pid ?? "unknown"})`,
+        );
+        worker.kill("SIGKILL");
+      }
+    }, WORKER_TERMINATION_GRACE_MS);
+    this.workerTerminationTimer.unref();
   }
 
   private addStats(target: IndexStats, source: IndexStats): void {
@@ -498,6 +717,12 @@ export class IndexerManager implements vscode.Disposable {
 
       case "progress": {
         const activeJob = this.activeWorkerJob;
+        if (activeJob) {
+          activeJob.lastPhase = msg.phase;
+          activeJob.lastCurrent = msg.current;
+          activeJob.lastTotal = msg.total;
+          activeJob.lastDetail = msg.detail;
+        }
         this.updateStatus({
           state: "indexing",
           phase: msg.phase,
@@ -516,6 +741,7 @@ export class IndexerManager implements vscode.Disposable {
         const activeJob = this.activeWorkerJob;
         if (activeJob) {
           this.activeWorkerJob = undefined;
+          activeJob.watchdog.dispose();
           activeJob.resolve(msg.stats);
           break;
         }
@@ -551,6 +777,7 @@ export class IndexerManager implements vscode.Disposable {
         if (msg.fatal) {
           const activeJob = this.activeWorkerJob;
           this.activeWorkerJob = undefined;
+          activeJob?.watchdog.dispose();
           activeJob?.reject(new Error(msg.message));
           this.updateStatus({
             state: "error",
@@ -637,7 +864,7 @@ export class IndexerManager implements vscode.Disposable {
     }
     return [...roots].some((workspaceRoot) =>
       this.cacheRequiresFullReindex(
-        this.getCachePath(getWorkspaceCacheKey(workspaceRoot)),
+        this.getCachePath(getCodeIndexCacheKey(workspaceRoot)),
         granularity,
       ),
     );
@@ -664,6 +891,10 @@ export class IndexerManager implements vscode.Disposable {
       this.status.state === "indexing" ||
       this.status.state === "discovering"
     ) {
+      return;
+    }
+    if (this.isWorkerCircuitOpen()) {
+      this.scheduleBreakerRearm();
       return;
     }
 
@@ -733,9 +964,6 @@ export class IndexerManager implements vscode.Disposable {
       filteringComplete = true;
       if (filteredChanges.length === 0) return;
 
-      const retrievalStoreRoot = getRetrievalStoreRoot(
-        this.globalStorageUri.fsPath,
-      );
       const embeddingBearerToken = await this.getEmbeddingBearerToken();
 
       const totalAdded = filteredChanges.reduce(
@@ -758,7 +986,7 @@ export class IndexerManager implements vscode.Disposable {
       if (
         filteredChanges.some(({ workspaceRoot }) =>
           this.cacheRequiresFullReindex(
-            this.getCachePath(getWorkspaceCacheKey(workspaceRoot)),
+            this.getCachePath(getCodeIndexCacheKey(workspaceRoot)),
             granularity,
           ),
         )
@@ -782,7 +1010,7 @@ export class IndexerManager implements vscode.Disposable {
       const startTime = Date.now();
 
       for (const { workspaceRoot, added, removed } of filteredChanges) {
-        const indexName = getWorkspaceCacheKey(workspaceRoot);
+        const indexName = getCodeIndexCacheKey(workspaceRoot);
         const cachePath = this.getCachePath(indexName);
         const stats = await this.runWorkerJob({
           type: "incrementalUpdate",
@@ -791,7 +1019,10 @@ export class IndexerManager implements vscode.Disposable {
           workspaceRoot,
           indexName,
           workspaceScopeId: getCodeWorkspaceScopeId(workspaceRoot),
-          retrievalStoreRoot,
+          retrievalStoreRoot: getCodeRetrievalStoreRoot(
+            this.globalStorageUri.fsPath,
+            workspaceRoot,
+          ),
           embeddingBearerToken,
           cachePath,
           granularity,

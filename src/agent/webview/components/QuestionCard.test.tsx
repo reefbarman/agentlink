@@ -57,6 +57,39 @@ describe("QuestionCard progress publishing", () => {
   });
 });
 
+describe("QuestionCard file links", () => {
+  it("routes file references in question markdown to onOpenFile", () => {
+    const onOpenFile = vi.fn();
+    const { container } = render(
+      <QuestionCard
+        id="request-1"
+        context=""
+        questions={[
+          {
+            id: "choice",
+            type: "multiple_choice",
+            context: "About [App.tsx](src/agent/webview/App.tsx).",
+            question: "Keep the current behavior?",
+            options: ["Yes", "No"],
+          },
+        ]}
+        onSubmit={vi.fn()}
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    const link = container.querySelector(
+      ".question-context a",
+    ) as HTMLAnchorElement;
+    expect(link).toBeTruthy();
+    fireEvent.click(link);
+    expect(onOpenFile).toHaveBeenCalledWith(
+      "src/agent/webview/App.tsx",
+      undefined,
+    );
+  });
+});
+
 describe("QuestionCard other context", () => {
   it("commits composer text and allows an attachment-only answer", () => {
     const onSubmit = vi.fn();

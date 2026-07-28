@@ -297,7 +297,7 @@ function getSubdirChain(cwd: string, targetDir: string): string[] {
  *   7. AGENTS.md / AGENT.md / CLAUDE.md in workspace root (first found wins)
  *   8. .agents/AGENTS.md & .agents/rules/*.md
  *   9. .claude/CLAUDE.md & .claude/rules/*.md
- *  10. .agentlink/CLAUDE.md & .agentlink/rules/*.md
+ *  10. .agentlink/AGENTS.md (falling back to .agentlink/CLAUDE.md) & .agentlink/rules/*.md
  *
  * Subfolder & local:
  *  11. Subfolder AGENTS.md files (from root child down to activeFilePath's dir)
@@ -446,12 +446,13 @@ export async function loadAllInstructionBlocks(
     });
   }
 
-  // .agentlink/CLAUDE.md & .agentlink/rules/*.md
-  const agentlinkClaude = await safeReadFile(
-    path.join(cwd, ".agentlink", "CLAUDE.md"),
-  );
-  if (agentlinkClaude) {
-    blocks.push({ source: ".agentlink/CLAUDE.md", content: agentlinkClaude });
+  // .agentlink/AGENTS.md, falling back to .agentlink/CLAUDE.md
+  for (const filename of ["AGENTS.md", "CLAUDE.md"]) {
+    const content = await safeReadFile(path.join(cwd, ".agentlink", filename));
+    if (content) {
+      blocks.push({ source: `.agentlink/${filename}`, content });
+      break;
+    }
   }
   const agentlinkRules = await readMdDirectory(
     path.join(cwd, ".agentlink", "rules"),
@@ -486,9 +487,12 @@ export async function loadAllInstructionBlocks(
     for (const subdir of subdirs) {
       const relDir = path.relative(cwd, subdir);
       for (const filename of ["AGENTS.md", "AGENT.md", "CLAUDE.md"]) {
+        const source = `${relDir}/${filename}`;
         const content = await safeReadFile(path.join(subdir, filename));
         if (content) {
-          blocks.push({ source: `${relDir}/${filename}`, content });
+          if (!blocks.some((block) => block.source === source)) {
+            blocks.push({ source, content });
+          }
           break;
         }
       }

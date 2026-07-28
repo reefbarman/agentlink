@@ -110,6 +110,8 @@ export interface ActivityTraceRecorderLike {
     sessionId: string,
     query: import("../core/sessionActivityDiagnostics.js").SessionActivityQuery,
   ): import("../core/sessionActivityDiagnostics.js").SessionActivityDiagnosis;
+  /** Force buffered trace writes to disk (shutdown / test seam). */
+  flush?(): Promise<void>;
 }
 
 export interface TimerHost {

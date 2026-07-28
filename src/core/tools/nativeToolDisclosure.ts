@@ -76,6 +76,18 @@ export function createNativeToolDisclosureSnapshot(
     }
   }
 
+  const discoveryToolIndex = inlineTools.findIndex(
+    (tool) => tool.name === "find_native_tools",
+  );
+  if (discoveryToolIndex >= 0) {
+    const discoveryTool = inlineTools[discoveryToolIndex]!;
+    const deferredToolNames = deferredTools.map((tool) => tool.name).join(", ");
+    inlineTools[discoveryToolIndex] = cloneAndFreezeDefinition({
+      ...discoveryTool,
+      description: `${discoveryTool.description} Deferred native tools in this catalog: ${deferredToolNames || "none"}.`,
+    });
+  }
+
   return Object.freeze({
     schemaVersion: 1 as const,
     inlineTools: Object.freeze(inlineTools),

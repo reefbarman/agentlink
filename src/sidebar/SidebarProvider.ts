@@ -18,6 +18,7 @@ import type {
 import { deleteFeedback, readFeedback } from "../util/feedbackStore.js";
 
 import type { CommandRuleDecision } from "../approvals/CommandRuleStore.js";
+import type { ContextHealthSnapshot } from "../shared/contextHealth.js";
 import { editRuleViaQuickPick } from "./editRuleQuickPick.js";
 import { getConfiguredMasterBypass } from "../adapters/vscode/agentLinkConfig.js";
 import { renderWebviewShell } from "../adapters/vscode/webviewShell.js";
@@ -84,6 +85,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     } catch {
       // feedbackStore may not exist yet
     }
+  }
+
+  updateContextHealth(health: ContextHealthSnapshot): void {
+    this.state.contextHealth = structuredClone(health);
+    this.view?.webview.postMessage({
+      type: "updateContextHealth",
+      health,
+    });
   }
 
   updateIndexStatus(status: IndexStatusInfo): void {

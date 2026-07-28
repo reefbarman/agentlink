@@ -1,6 +1,7 @@
 // Shared types between extension and webview.
 // Imported by both SidebarProvider.ts (Node) and webview components (browser).
 
+import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
 import type { SemanticReadinessReason } from "../../shared/semanticReadiness.js";
 
 export interface CommandRule {
@@ -57,6 +58,7 @@ export interface SidebarState {
   projectWriteRules?: PathRule[];
   settingsWriteRules?: string[];
   activeSessions?: SessionInfo[];
+  contextHealth?: ContextHealthSnapshot;
   indexStatus?: IndexStatusInfo;
 }
 
@@ -87,6 +89,7 @@ export type ExtensionMessage =
   | { type: "stateUpdate"; state: SidebarState }
   | { type: "updateToolCalls"; calls: TrackedCallInfo[] }
   | { type: "updateFeedback"; entries: FeedbackEntry[] }
+  | { type: "updateContextHealth"; health: ContextHealthSnapshot }
   | { type: "updateIndexStatus"; status: IndexStatusInfo };
 
 export type RuleEditCommand =

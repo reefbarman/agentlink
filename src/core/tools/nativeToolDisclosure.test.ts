@@ -50,6 +50,37 @@ describe("native tool disclosure snapshots", () => {
     expect(snapshot.dormantToolNames).toEqual(["show_notification"]);
   });
 
+  it("advertises the exact deferred catalog through the discovery bridge", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("find_native_tools", "Discover deferred native tools"),
+      definition("get_call_hierarchy"),
+      definition("generate_image"),
+      definition("show_notification"),
+    ]);
+
+    const discoveryTool = snapshot.inlineTools.find(
+      (tool) => tool.name === "find_native_tools",
+    );
+    expect(discoveryTool?.description).toBe(
+      "Discover deferred native tools Deferred native tools in this catalog: get_call_hierarchy, generate_image.",
+    );
+    expect(discoveryTool?.description).not.toContain("show_notification");
+  });
+
+  it("advertises an explicitly empty deferred catalog", () => {
+    const snapshot = createNativeToolDisclosureSnapshot([
+      definition("find_native_tools", "Discover deferred native tools"),
+      definition("read_file"),
+    ]);
+
+    expect(
+      snapshot.inlineTools.find((tool) => tool.name === "find_native_tools")
+        ?.description,
+    ).toBe(
+      "Discover deferred native tools Deferred native tools in this catalog: none.",
+    );
+  });
+
   it("captures an immutable definition and schema snapshot", () => {
     const source = definition("get_call_hierarchy");
     const snapshot = createNativeToolDisclosureSnapshot([source]);

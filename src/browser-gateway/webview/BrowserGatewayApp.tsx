@@ -7118,6 +7118,16 @@ export function BrowserGatewayApp({
                     questions={visibleQuestion.questions}
                     backgroundTask={visibleQuestion.backgroundTask}
                     modes={modes}
+                    onOpenFile={
+                      isAskAgentSelected
+                        ? undefined
+                        : (filePath, line) =>
+                            browserVscodeApi.postMessage({
+                              command: "agentOpenFile",
+                              path: filePath,
+                              line,
+                            })
+                    }
                     attachmentCounts={Object.fromEntries(
                       Object.entries(questionAttachments).map(
                         ([questionId, value]) => [

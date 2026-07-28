@@ -171,6 +171,21 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
     // The first event should commit immediately, regardless of the clock's epoch.
     let lastStreamApplyAt = now() - streamCoalesceMs;
 
+    // Origin-liveness tracking: the bridge server runs inside the VS Code
+    // extension host, so its named `heartbeat` SSE events (and any data event)
+    // prove the host event loop is alive. A TCP connection can stay "open"
+    // long after the host wedges — EventSource.onerror never fires — so
+    // staleness here is the only browser-side signal of a locked-up host.
+    let lastOriginActivityAt = now();
+    let flaggedHostStale = false;
+    const noteOriginActivity = () => {
+      lastOriginActivityAt = now();
+      if (flaggedHostStale) {
+        flaggedHostStale = false;
+        setStatus("Connected");
+      }
+    };
+
     const applyPendingStreamData = () => {
       streamCoalesceTimer = undefined;
       if (closed || pendingStreamData === null) return;
@@ -197,6 +212,7 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
     };
 
     const applySnapshotEvent = (event: MessageEvent<string>) => {
+      noteOriginActivity();
       pendingStreamData = event.data;
       if (streamCoalesceTimer !== undefined) return;
       const elapsed = now() - lastStreamApplyAt;
@@ -215,6 +231,7 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
     );
     eventSource.onopen = () => {
       if (closed) return;
+      noteOriginActivity();
       observe("open");
       stopFallbackSnapshotPolling();
       setStatus("Connected");
@@ -231,6 +248,21 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
     };
     eventSource.addEventListener("snapshot", applySnapshotEvent);
     eventSource.addEventListener("update", applySnapshotEvent);
+    const heartbeatListener = () => {
+      if (!closed) noteOriginActivity();
+    };
+    eventSource.addEventListener("heartbeat", heartbeatListener);
+    // Bridge keepalives arrive every 15s; tolerate two missed beats before
+    // declaring the extension host unresponsive.
+    const hostStaleCheckTimer = setInterval(() => {
+      if (closed || flaggedHostStale) return;
+      if (now() - lastOriginActivityAt > 40_000) {
+        flaggedHostStale = true;
+        setStatus(
+          "Extension host not responding — stream open but no heartbeat",
+        );
+      }
+    }, 5_000);
 
     initialSnapshotTimer = setTimeout(() => {
       initialSnapshotTimer = undefined;
@@ -264,11 +296,13 @@ export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
       snapshotFetchController = undefined;
       stopInitialSnapshotFallback();
       stopFallbackSnapshotPolling();
+      clearInterval(hostStaleCheckTimer);
       if (eventSource) {
         eventSource.onopen = null;
         eventSource.onerror = null;
         eventSource.removeEventListener("snapshot", applySnapshotEvent);
         eventSource.removeEventListener("update", applySnapshotEvent);
+        eventSource.removeEventListener("heartbeat", heartbeatListener);
         eventSource.close();
       }
     };

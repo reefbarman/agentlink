@@ -34,6 +34,8 @@ interface QuestionCardProps {
   backgroundTask?: string;
   /** Available agent modes — used to render the display name on modeSwitch badges. */
   modes?: ModeInfo[];
+  /** Opens a workspace file referenced in question markdown. */
+  onOpenFile?: (path: string, line?: number) => void;
 }
 
 function getModeDisplayName(slug: string, modes?: ModeInfo[]): string {
@@ -104,6 +106,7 @@ export function QuestionCard({
   modes,
   onEditOtherContext,
   attachmentCounts = {},
+  onOpenFile,
 }: QuestionCardProps) {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<
@@ -226,6 +229,7 @@ export function QuestionCard({
           <QuestionMarkdown
             className="question-context"
             text={questionContext}
+            onOpenFile={onOpenFile}
           />
         )}
 
@@ -243,7 +247,11 @@ export function QuestionCard({
           </div>
         )}
 
-        <QuestionMarkdown className="question-text" text={q.question} />
+        <QuestionMarkdown
+          className="question-text"
+          text={q.question}
+          onOpenFile={onOpenFile}
+        />
 
         <QuestionInput
           question={q}
@@ -346,13 +354,15 @@ export function QuestionCard({
 function QuestionMarkdown({
   className,
   text,
+  onOpenFile,
 }: {
   className: string;
   text: string;
+  onOpenFile?: (path: string, line?: number) => void;
 }) {
   return (
     <div class={className}>
-      <StreamingText text={text} streaming={false} />
+      <StreamingText text={text} streaming={false} onOpenFile={onOpenFile} />
     </div>
   );
 }

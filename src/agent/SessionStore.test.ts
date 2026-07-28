@@ -1745,4 +1745,78 @@ describe("SessionStore", () => {
     ) as Array<{ title: string }>;
     expect(persisted[0]?.title).toBe("Fix auth bug");
   });
+
+  it("externalizes oversized payloads to attachment files and rehydrates them on read", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const bigImage = "iVBORw0K".repeat(64_000); // 512k chars, above the threshold
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hello" },
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: bigImage },
+          },
+        ],
+      } as unknown as AgentMessage,
+    ];
+    const record = createRecord({ messages, transcriptRevision: 1 });
+
+    const saved = await store.saveSession({
+      session: record,
+      expectedRevision: null,
+      durability: "durable",
+    });
+    expect(saved.ok).toBe(true);
+
+    const sessionDir = path.join(
+      tmpDir,
+      ".agentlink",
+      "history",
+      record.summary.id,
+    );
+    const rawTranscript = fs.readFileSync(
+      path.join(sessionDir, "messages.json"),
+      "utf-8",
+    );
+    expect(rawTranscript).not.toContain(bigImage);
+    expect(rawTranscript).toContain("agentlink-external-payload:v1:");
+    const attachmentsDir = path.join(sessionDir, "attachments");
+    const attachments = fs.readdirSync(attachmentsDir);
+    expect(attachments).toHaveLength(1);
+    expect(
+      fs.readFileSync(path.join(attachmentsDir, attachments[0]!), "utf-8"),
+    ).toBe(bigImage);
+
+    // Both read paths rehydrate the original bytes.
+    expect(store.loadMessages(record.summary.id)).toEqual(messages);
+    const read = await store.readSession(record.summary.id);
+    expect(read.ok).toBe(true);
+    if (read.ok) expect(read.value.messages).toEqual(messages);
+
+    // A later save from a fresh store (no in-memory ensure cache) reuses the
+    // existing content-addressed file instead of rewriting it.
+    const payloadPath = path.join(attachmentsDir, attachments[0]!);
+    const mtimeBefore = fs.statSync(payloadPath).mtimeMs;
+    const reopened = new SessionStore(tmpDir);
+    const grown = createRecord({
+      messages: [...messages, { role: "assistant", content: "done" }],
+      summary: createSummary({ messageCount: 3 }),
+      transcriptRevision: 2,
+    });
+    const revision = read.ok ? read.revision : null;
+    const resaved = await reopened.saveSession({
+      session: grown,
+      expectedRevision: revision,
+      durability: "durable",
+    });
+    expect(resaved.ok).toBe(true);
+    expect(fs.readdirSync(attachmentsDir)).toHaveLength(1);
+    expect(fs.statSync(payloadPath).mtimeMs).toBe(mtimeBefore);
+
+    // The rehydrated grown transcript still matches, via the reopened store.
+    expect(reopened.loadMessages(grown.summary.id)).toEqual(grown.messages);
+  });
 });

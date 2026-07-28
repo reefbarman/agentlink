@@ -1300,15 +1300,26 @@ export class AgentEngine {
         const advertisedDisclosure = advertisedTools
           ? createNativeToolDisclosureSnapshot(advertisedTools)
           : undefined;
-        const nativeToolDisclosure = currentModeTools
-          ? createNativeToolDisclosureSnapshot(currentModeTools)
-          : undefined;
+        const nativeToolDisclosure = useUnionToolAdvertisement
+          ? advertisedDisclosure
+          : currentModeTools
+            ? createNativeToolDisclosureSnapshot(currentModeTools)
+            : undefined;
         const inlineToolNames = advertisedDisclosure
           ? new Set(advertisedDisclosure.inlineTools.map((tool) => tool.name))
           : undefined;
+        const discoveryDescription = advertisedDisclosure?.inlineTools.find(
+          (tool) => tool.name === "find_native_tools",
+        )?.description;
         const rawTools =
           advertisedTools && inlineToolNames
-            ? advertisedTools.filter((tool) => inlineToolNames.has(tool.name))
+            ? advertisedTools
+                .filter((tool) => inlineToolNames.has(tool.name))
+                .map((tool) =>
+                  tool.name === "find_native_tools" && discoveryDescription
+                    ? { ...tool, description: discoveryDescription }
+                    : tool,
+                )
             : undefined;
         const modeAllowedToolNames =
           useUnionToolAdvertisement && currentModeTools

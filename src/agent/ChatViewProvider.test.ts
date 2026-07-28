@@ -2704,6 +2704,7 @@ describe("ChatViewProvider session state sync", () => {
       estimatedTotalUsed: 0,
       lastInputTokens: 0,
       lastOutputTokens: 0,
+      transcriptRevision: 27,
       runState: { phase: "running", startedAt: 123 },
       getAllMessages: () => messages,
     };
@@ -2740,6 +2741,7 @@ describe("ChatViewProvider session state sync", () => {
       expect.objectContaining({
         type: "agentSessionLoaded",
         sessionId: "session-1",
+        transcriptRevision: 27,
         originalPrompt: "original task",
         todos,
         hasMoreBefore: true,
@@ -5532,6 +5534,50 @@ describe("ChatViewProvider session state sync", () => {
     ).toBe(false);
   });
 
+  it("posts the completed transcript revision on agentDone", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+    const session = {
+      id: "foreground-1",
+      background: false,
+      transcriptRevision: 41,
+    };
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getSession: () => session,
+      getForegroundSession: () => session,
+      listPersistedSessions: () => [],
+    };
+
+    const handleAgentEvent = (
+      provider as unknown as {
+        handleAgentEvent: (sessionId: string, event: unknown) => void;
+      }
+    ).handleAgentEvent;
+    handleAgentEvent.call(provider, "foreground-1", {
+      type: "done",
+      totalInputTokens: 1,
+      totalOutputTokens: 2,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+    });
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentDone",
+        sessionId: "foreground-1",
+        transcriptRevision: 41,
+      }),
+    );
+  });
+
   it("posts the resolved background result on agentBgDone", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(
@@ -5625,6 +5671,10 @@ describe("ChatViewProvider session state sync", () => {
             },
           ],
         },
+        ...Array.from({ length: 9 }, (_, index) => ({
+          role: "user" as const,
+          content: `Later turn ${index + 1}`,
+        })),
       ],
     };
     provider.setSessionManager({
@@ -5678,7 +5728,7 @@ describe("ChatViewProvider session state sync", () => {
         ?.projectedMessages.flatMap((message) => message.blocks)
         .filter((block) => block.type === "bg_agent_result")
         .map((block) => block.sessionId),
-    ).toEqual(["bg-pulled", "bg-pushed"]);
+    ).toEqual(["bg-pushed"]);
   });
 
   it("fails closed when a background completion has no current parent metadata", async () => {

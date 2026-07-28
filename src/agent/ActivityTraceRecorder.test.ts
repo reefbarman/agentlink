@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 describe("ActivityTraceRecorder", () => {
-  it("keeps tracing in memory when persistence becomes unavailable", () => {
+  it("keeps tracing in memory when persistence becomes unavailable", async () => {
     const workspace = makeTempWorkspace();
     fs.writeFileSync(path.join(workspace, ".agentlink"), "not a directory");
     const log = vi.fn();
@@ -39,6 +39,7 @@ describe("ActivityTraceRecorder", () => {
         "background_agent",
       ),
     ).not.toThrow();
+    await recorder.flush();
     expect(recorder.getSummary("session-1")).toMatchObject({
       eventCount: 1,
       warningCount: 1,
@@ -57,9 +58,59 @@ describe("ActivityTraceRecorder", () => {
       { type: "warning", message: "second warning" },
       "background_agent",
     );
+    await recorder.flush();
     expect(recorder.getSummary("session-1").warningCount).toBe(2);
     expect(recorder.getSummary("session-1").droppedEventCount).toBe(2);
     expect(log).toHaveBeenCalledOnce();
+  });
+
+  it("buffers writes off the hot path and coalesces them into one append", async () => {
+    const workspace = makeTempWorkspace();
+    const recorder = new ActivityTraceRecorder({ workspaceDir: workspace });
+    const tracePath = path.join(
+      workspace,
+      ".agentlink",
+      "history",
+      "session-1",
+      "activity-trace.jsonl",
+    );
+    const appendSpy = vi.spyOn(fs.promises, "appendFile");
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        recorder.append("project-1", {
+          sessionId: "session-1",
+          kind: "warning",
+          source: "system",
+          summary: `warning ${i}`,
+        });
+      }
+
+      // Nothing has hit the disk yet, but reads already see buffered events.
+      expect(fs.existsSync(tracePath)).toBe(false);
+      expect(recorder.loadEvents("session-1")).toHaveLength(5);
+      expect(recorder.loadSummary("session-1")).toMatchObject({
+        eventCount: 5,
+        recordedEventCount: 5,
+      });
+
+      await recorder.flush();
+
+      const traceAppends = appendSpy.mock.calls.filter(([target]) =>
+        String(target).endsWith("activity-trace.jsonl"),
+      );
+      expect(traceAppends).toHaveLength(1);
+      expect(
+        fs.readFileSync(tracePath, "utf-8").trim().split("\n"),
+      ).toHaveLength(5);
+      // A fresh recorder proves the summary snapshot reached the disk.
+      expect(
+        new ActivityTraceRecorder({ workspaceDir: workspace }).loadSummary(
+          "session-1",
+        ),
+      ).toMatchObject({ eventCount: 5, warningCount: 5 });
+    } finally {
+      appendSpy.mockRestore();
+    }
   });
 
   it("persists trace events as JSONL and writes a derived summary", () => {

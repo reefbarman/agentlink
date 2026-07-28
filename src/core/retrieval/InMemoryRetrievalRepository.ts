@@ -189,7 +189,7 @@ export class InMemoryRetrievalRepository implements RetrievalRepository {
   async preparePublication(
     request: RetrievalPublicationRequest,
   ): Promise<RetrievalPublicationPreparation> {
-    validatePublication(request);
+    validateRetrievalPublicationRequest(request);
     validateRetrievalSourceRevision(request.source.revision);
     if (this.pending.has(request.publicationId)) {
       throw new Error(`Publication already exists: ${request.publicationId}`);
@@ -203,6 +203,37 @@ export class InMemoryRetrievalRepository implements RetrievalRepository {
       generation: request.generation,
       status: "prepared",
     };
+  }
+
+  async preparePublicationBatch(
+    requests: RetrievalPublicationRequest[],
+  ): Promise<RetrievalPublicationPreparation[]> {
+    validateUniqueIds(
+      requests.map((request) => request.publicationId),
+      "publication",
+    );
+    validateUniqueIds(
+      requests.map((request) => request.source.id),
+      "publication source",
+    );
+    const originalPending = new Map(
+      [...this.pending].map(([id, request]) => [id, clone(request)]),
+    );
+    const originalAggregate = clone(this.aggregate);
+    const prepared: RetrievalPublicationPreparation[] = [];
+    try {
+      for (const request of requests) {
+        prepared.push(await this.preparePublication(request));
+      }
+      return prepared;
+    } catch (error) {
+      this.pending.clear();
+      for (const [id, request] of originalPending) {
+        this.pending.set(id, request);
+      }
+      Object.assign(this.aggregate, originalAggregate);
+      throw error;
+    }
   }
 
   async commitPublication(
@@ -271,6 +302,16 @@ export class InMemoryRetrievalRepository implements RetrievalRepository {
     publicationIds: string[],
   ): Promise<RetrievalPublicationBatchOutcome> {
     validateUniqueIds(publicationIds, "publication");
+    const pendingRequests = publicationIds.flatMap((publicationId) => {
+      const request = this.pending.get(publicationId);
+      return request ? [request] : [];
+    });
+    if (pendingRequests.length === publicationIds.length) {
+      validateUniqueIds(
+        pendingRequests.map((request) => request.source.id),
+        "publication source",
+      );
+    }
     if (publicationIds.length === 0) {
       return {
         status: "published",
@@ -911,7 +952,9 @@ export class InMemoryRetrievalRepository implements RetrievalRepository {
   }
 }
 
-function validatePublication(request: RetrievalPublicationRequest): void {
+export function validateRetrievalPublicationRequest(
+  request: RetrievalPublicationRequest,
+): void {
   if (!request.publicationId || !request.generation || !request.source.id) {
     throw new Error("Publication identity is required");
   }

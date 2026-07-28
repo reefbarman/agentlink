@@ -514,6 +514,7 @@ export function MessageBubble({
                   resolvedModel={bgSession?.resolvedModel}
                   resolvedProvider={bgSession?.resolvedProvider}
                   onOpenTranscript={onOpenTranscript}
+                  onOpenFile={onOpenFile}
                 />
               );
             }

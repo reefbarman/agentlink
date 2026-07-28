@@ -650,6 +650,40 @@ describe("MessageBubble slash-command rendering", () => {
     expect(onOpenFile).toHaveBeenCalledWith("src/agent/webview/App.tsx", 42);
   });
 
+  it("routes file links in background agent results to onOpenFile", () => {
+    const onOpenFile = vi.fn();
+    const message: ChatMessage = {
+      id: "assistant-bg-result",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "bg_agent_result",
+          sessionId: "bg-1",
+          task: "Investigate",
+          status: "completed",
+          resultText: "The fix is in [App.tsx](src/agent/webview/App.tsx:42).",
+        },
+      ],
+    };
+
+    const { container } = render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    const link = container.querySelector(
+      ".bg-result-content a",
+    ) as HTMLAnchorElement;
+    expect(link).toBeTruthy();
+    fireEvent.click(link);
+    expect(onOpenFile).toHaveBeenCalledWith("src/agent/webview/App.tsx", 42);
+  });
+
   it("renders detected question fallback options and dispatches selected payload", () => {
     const onAnswer = vi.fn();
     const onDismiss = vi.fn();

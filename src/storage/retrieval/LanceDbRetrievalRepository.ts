@@ -43,7 +43,12 @@ import {
   normalizeRetrievalPath,
 } from "../../core/retrieval/ranking.js";
 import {
+  compareRetrievalSourceRevisions,
+  validateRetrievalSourceRevision,
+} from "../../core/retrieval/revisionOrder.js";
+import {
   InMemoryRetrievalRepository,
+  validateRetrievalPublicationRequest,
   type InMemoryRetrievalRepositoryOptions,
 } from "../../core/retrieval/InMemoryRetrievalRepository.js";
 import {
@@ -60,7 +65,8 @@ import { withRetrievalStoreLock } from "./retrievalStoreLock.js";
 const FINGERPRINT_KEY = "fingerprint";
 const METRICS_KEY = "aggregate_metrics";
 const NATIVE_CAPABILITIES_KEY = "native_capabilities";
-const RETRIEVAL_STORE_MARKER = ".agentlink-retrieval-store";
+const NATIVE_INDEXES_DIRTY_KEY = "native_indexes_dirty";
+export const RETRIEVAL_STORE_MARKER = ".agentlink-retrieval-store";
 const DEFAULT_VECTOR_DIMENSIONS = 1;
 const MINIMUM_NATIVE_CANDIDATES = 100;
 const MAXIMUM_NATIVE_CANDIDATES = 1_000;
@@ -68,6 +74,12 @@ const LEXICAL_INDEX_NAME = "retrieval_search_text_fts";
 const SOURCE_INDEX_NAME = "retrieval_source_id_btree";
 const GENERATION_INDEX_NAME = "retrieval_generation_btree";
 const WRITE_BATCH_SIZE = 256;
+const DELETE_SCOPE_ID_BATCH_SIZE = 200;
+// Queries on stores whose native search indexes are unavailable fall back to
+// hydrating every chunk into memory for engine-side scanning. Beyond this row
+// count that hydration can block the host process for minutes (chunk payloads
+// embed full source content), so the query degrades instead.
+const MAXIMUM_UNINDEXED_QUERY_CHUNKS = 2_048;
 const REQUIRED_RETRIEVAL_TABLES = [
   RETRIEVAL_TABLES.sources,
   RETRIEVAL_TABLES.chunks,
@@ -167,6 +179,13 @@ interface DurableState extends DurableSnapshotState {
   snapshots: SnapshotRow[];
   metrics: RetrievalAggregateMetrics;
   nativeCapabilities: NativeCapabilities;
+  nativeIndexesDirty: boolean;
+}
+
+interface NativeIndexState {
+  fingerprint: RetrievalFingerprint | null | undefined;
+  nativeCapabilities: NativeCapabilities;
+  nativeIndexesDirty: boolean;
 }
 
 interface RetrievalTables {
@@ -191,6 +210,9 @@ export interface LanceDbRetrievalRepositoryOptions extends Omit<
   root: string;
   embeddingDimensions?: number;
   indexOperations?: LanceDbRetrievalIndexOperations;
+  deferNativeIndexRefresh?: boolean;
+  /** Test seam; production callers use {@link MAXIMUM_UNINDEXED_QUERY_CHUNKS}. */
+  maxUnindexedQueryChunks?: number;
 }
 
 export class LanceDbRetrievalRepository implements RetrievalRepository {
@@ -215,148 +237,133 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
     expected: RetrievalFingerprint,
   ): Promise<RetrievalFingerprintDisposition> {
     this.inspectedFingerprint = clone(expected);
-    return this.withState(expected.embedding?.dimensions, async (state) =>
-      classifyRetrievalFingerprint(state.fingerprint, expected),
-    );
+    return this.withTables(expected.embedding?.dimensions, async (tables) => {
+      const metadata = await readRows<MetadataRow>(tables.metadata);
+      return classifyRetrievalFingerprint(
+        metadataValue<RetrievalFingerprint>(metadata, FINGERPRINT_KEY),
+        expected,
+      );
+    });
   }
 
   async migrate(
     expected: RetrievalFingerprint,
   ): Promise<RetrievalMigrationOutcome> {
     this.inspectedFingerprint = clone(expected);
-    return this.withState(
-      expected.embedding?.dimensions,
-      async (state, tables) => {
-        const disposition = classifyRetrievalFingerprint(
-          state.fingerprint,
-          expected,
-        );
-        if (disposition === "compatible") {
-          if (hasUnavailableNativeCapability(state.nativeCapabilities)) {
-            await this.refreshNativeIndexes(state, tables);
-            await this.persistMetadata(state, tables);
-          }
-          await this.writeStoreMarker();
-          return {
-            status: "up_to_date",
-            fromVersion: state.fingerprint?.schemaVersion ?? null,
-            toVersion: expected.schemaVersion,
-          };
-        }
-        if (disposition === "rebuild_required") {
-          return {
-            status: "rebuild_required",
-            fromVersion: state.fingerprint?.schemaVersion ?? null,
-            toVersion: expected.schemaVersion,
-          };
-        }
-        state.fingerprint = clone(expected);
-        await this.refreshNativeIndexes(state, tables);
-        await this.persistMetadata(state, tables);
-        await this.writeStoreMarker();
+    return this.withTables(expected.embedding?.dimensions, async (tables) => {
+      const metadata = await readRows<MetadataRow>(tables.metadata);
+      const fingerprint = metadataValue<RetrievalFingerprint>(
+        metadata,
+        FINGERPRINT_KEY,
+      );
+      const nativeCapabilities =
+        metadataValue<NativeCapabilities>(metadata, NATIVE_CAPABILITIES_KEY) ??
+        defaultNativeCapabilities();
+      const nativeIndexesDirty =
+        metadataValue<boolean>(metadata, NATIVE_INDEXES_DIRTY_KEY) ??
+        fingerprint !== undefined;
+      const disposition = classifyRetrievalFingerprint(fingerprint, expected);
+      if (disposition === "rebuild_required") {
         return {
-          status: "migrated",
-          fromVersion: null,
+          status: "rebuild_required",
+          fromVersion: fingerprint?.schemaVersion ?? null,
           toVersion: expected.schemaVersion,
         };
-      },
-    );
+      }
+
+      if (disposition === "initialize") {
+        await upsertMetadataValue(tables.metadata, FINGERPRINT_KEY, expected);
+        await upsertMetadataValue(tables.metadata, METRICS_KEY, EMPTY_METRICS);
+      }
+      if (
+        disposition === "initialize" ||
+        nativeIndexesDirty ||
+        hasUnavailableNativeCapability(nativeCapabilities)
+      ) {
+        if (this.options.deferNativeIndexRefresh) {
+          await upsertMetadataValue(
+            tables.metadata,
+            NATIVE_INDEXES_DIRTY_KEY,
+            true,
+          );
+        } else {
+          await this.refreshNativeIndexesFromTables(tables);
+        }
+      }
+      await this.writeStoreMarker();
+      return {
+        status: disposition === "initialize" ? "migrated" : "up_to_date",
+        fromVersion: fingerprint?.schemaVersion ?? null,
+        toVersion: expected.schemaVersion,
+      };
+    });
   }
 
   async preparePublication(
     request: RetrievalPublicationRequest,
   ): Promise<RetrievalPublicationPreparation> {
-    return this.withState(undefined, async (state, tables) => {
-      const engine = await this.buildEngine(state);
-      const preparation = await engine.preparePublication(request);
-      state.publications.push(publicationRow(request));
-      state.metrics.sourcesScanned += 1;
-      await writeRows(
+    const [preparation] = await this.preparePublicationBatch([request]);
+    return preparation!;
+  }
+
+  async preparePublicationBatch(
+    requests: RetrievalPublicationRequest[],
+  ): Promise<RetrievalPublicationPreparation[]> {
+    if (
+      new Set(requests.map((request) => request.publicationId)).size !==
+      requests.length
+    ) {
+      throw new Error("Publication IDs must be unique");
+    }
+    if (
+      new Set(requests.map((request) => request.source.id)).size !==
+      requests.length
+    ) {
+      throw new Error("Publication source IDs must be unique within a batch");
+    }
+    if (requests.length === 0) return [];
+    const preparations = requests.map((request) => {
+      validateRetrievalPublicationRequest(request);
+      validateRetrievalSourceRevision(request.source.revision);
+      return {
+        publicationId: request.publicationId,
+        sourceId: request.source.id,
+        revisionId: request.source.revision.id,
+        generation: request.generation,
+        status: "prepared" as const,
+      };
+    });
+    return this.withTables(undefined, async (tables) => {
+      const publicationIds = requests.map((request) => request.publicationId);
+      if (
+        (await tables.publications.countRows(
+          sqlIn("publication_id", publicationIds),
+        )) > 0
+      ) {
+        throw new Error("Publication already exists");
+      }
+      await appendRows(
         tables.publications,
-        state.publications,
+        requests.map(publicationRow),
         retrievalPublicationSchema(),
       );
-      await this.persistMetadata(state, tables);
-      return preparation;
+      await this.updateMetrics(tables, (metrics) => {
+        metrics.sourcesScanned += requests.length;
+      });
+      return preparations;
     });
   }
 
   async commitPublication(
     publicationId: string,
   ): Promise<RetrievalPublicationOutcome> {
-    return this.withState(undefined, async (state, tables) => {
-      const engine = await this.buildEngine(state);
-      const outcome = await engine.commitPublication(publicationId);
-      const publication = state.publications.find(
-        (row) => row.publication_id === publicationId,
-      );
-      if (!publication) return outcome;
-      const request = parseJson<RetrievalPublicationRequest>(
-        publication.payload_json,
-      );
-
-      if (outcome.status === "published") {
-        const nextChunks = deduplicateChunks([
-          ...state.chunks,
-          ...request.chunks.map((chunk) =>
-            chunkRow(chunk, request.source, request.relations),
-          ),
-        ]);
-        const nextRelations = deduplicateRelations([
-          ...state.relations,
-          ...request.relations.map(relationRow),
-        ]);
-        await writeRows(
-          tables.chunks,
-          nextChunks,
-          retrievalChunkSchema(this.requireDimensions()),
-        );
-        await writeRows(
-          tables.relations,
-          nextRelations,
-          retrievalRelationSchema(),
-        );
-
-        state.sources = [
-          ...state.sources.filter((row) => row.source_id !== request.source.id),
-          sourceRow(request.source, request.generation),
-        ];
-        await writeRows(tables.sources, state.sources, retrievalSourceSchema());
-
-        state.chunks = nextChunks.filter((row) =>
-          isActiveGeneration(row, state.sources),
-        );
-        state.relations = nextRelations.filter((row) =>
-          isActiveGeneration(row, state.sources),
-        );
-        await writeRows(
-          tables.chunks,
-          state.chunks,
-          retrievalChunkSchema(this.requireDimensions()),
-        );
-        await writeRows(
-          tables.relations,
-          state.relations,
-          retrievalRelationSchema(),
-        );
-        await this.refreshNativeIndexes(state, tables);
-        this.staleSourceIds.delete(request.source.id);
-        state.metrics.sourcesPublished += 1;
-        state.metrics.recordsAdded += outcome.recordsAdded;
-        state.metrics.recordsRemoved += outcome.recordsRemoved;
-      }
-
-      state.publications = state.publications.filter(
-        (row) => row.publication_id !== publicationId,
-      );
-      await writeRows(
-        tables.publications,
-        state.publications,
-        retrievalPublicationSchema(),
-      );
-      await this.persistMetadata(state, tables);
-      return outcome;
-    });
+    const outcome = await this.commitPublicationBatch([publicationId]);
+    const publication =
+      outcome.publications[0] ?? missingPublication(publicationId);
+    if (outcome.status === "rejected" && publication.status !== "not_found") {
+      await this.abortPublication(publicationId);
+    }
+    return publication;
   }
 
   async commitPublicationBatch(
@@ -377,94 +384,131 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
       };
     }
 
-    return this.withState(undefined, async (state, tables) => {
-      const engine = await this.buildEngine(state);
-      const publications: RetrievalPublicationOutcome[] = [];
+    return this.withTables(undefined, async (tables) => {
+      const publicationRows = await readFilteredRows<PublicationRow>(
+        tables.publications,
+        sqlIn("publication_id", publicationIds),
+      );
+      const publicationsById = new Map(
+        publicationRows.map((row) => [row.publication_id, row]),
+      );
       const requests: RetrievalPublicationRequest[] = [];
       for (const publicationId of publicationIds) {
-        const outcome = await engine.commitPublication(publicationId);
-        publications.push(outcome);
-        if (outcome.status !== "published") {
-          return {
-            status: "rejected",
-            publications,
-            recordsAdded: 0,
-            recordsRemoved: 0,
-          };
-        }
-        const row = state.publications.find(
-          (candidate) => candidate.publication_id === publicationId,
-        );
+        const row = publicationsById.get(publicationId);
         if (!row) {
-          return {
-            status: "rejected",
-            publications: [
-              ...publications.slice(0, -1),
-              {
-                publicationId,
-                status: "not_found",
-                recordsAdded: 0,
-                recordsRemoved: 0,
-              },
-            ],
-            recordsAdded: 0,
-            recordsRemoved: 0,
-          };
+          return rejectedPublicationBatch([
+            ...requests.map((request) =>
+              publicationOutcome(request, "published"),
+            ),
+            missingPublication(publicationId),
+          ]);
         }
         requests.push(parseJson<RetrievalPublicationRequest>(row.payload_json));
       }
+      if (
+        new Set(requests.map((request) => request.source.id)).size !==
+        requests.length
+      ) {
+        throw new Error("Publication source IDs must be unique within a batch");
+      }
 
-      let nextSources = state.sources;
-      let nextChunks = state.chunks;
-      let nextRelations = state.relations;
+      const sourceIds = requests.map((request) => request.source.id);
+      const currentSourceRows = await readFilteredRows<SourceRow>(
+        tables.sources,
+        sqlIn("source_id", sourceIds),
+      );
+      const currentSources = new Map(
+        currentSourceRows.map((row) => [row.source_id, row]),
+      );
+      const publications: RetrievalPublicationOutcome[] = [];
       for (const request of requests) {
-        nextChunks = deduplicateChunks([
-          ...nextChunks,
-          ...request.chunks.map((chunk) =>
-            chunkRow(chunk, request.source, request.relations),
+        const currentRow = currentSources.get(request.source.id);
+        if (!publicationIsComplete(request)) {
+          publications.push(publicationOutcome(request, "incomplete"));
+          return rejectedPublicationBatch(publications);
+        }
+        if (currentRow && publicationIsStale(request, currentRow)) {
+          publications.push(publicationOutcome(request, "stale_source"));
+          return rejectedPublicationBatch(publications);
+        }
+        const recordsRemoved = currentRow
+          ? 1 +
+            (await tables.chunks.countRows(
+              sqlEquals("source_id", request.source.id),
+            )) +
+            (await tables.relations.countRows(
+              sqlEquals("source_id", request.source.id),
+            ))
+          : 0;
+        publications.push(
+          publicationOutcome(
+            request,
+            "published",
+            1 + request.chunks.length + request.relations.length,
+            recordsRemoved,
           ),
-        ]);
-        nextRelations = deduplicateRelations([
-          ...nextRelations,
-          ...request.relations.map(relationRow),
-        ]);
-        nextSources = [
-          ...nextSources.filter((row) => row.source_id !== request.source.id),
-          sourceRow(request.source, request.generation),
-        ];
-        nextChunks = nextChunks.filter((row) =>
-          isActiveGeneration(row, nextSources),
-        );
-        nextRelations = nextRelations.filter((row) =>
-          isActiveGeneration(row, nextSources),
         );
       }
 
-      state.sources = nextSources;
-      state.chunks = nextChunks;
-      state.relations = nextRelations;
-      state.publications = state.publications.filter(
-        (row) => !publicationIds.includes(row.publication_id),
+      await upsertMetadataValue(
+        tables.metadata,
+        NATIVE_INDEXES_DIRTY_KEY,
+        true,
       );
-      await writeRows(
+
+      const stagedGenerations = sqlOr(
+        requests.map((request) =>
+          sqlAnd(
+            sqlEquals("source_id", request.source.id),
+            sqlEquals("generation", request.generation),
+          ),
+        ),
+      );
+      await tables.chunks.delete(stagedGenerations);
+      await tables.relations.delete(stagedGenerations);
+      await appendRows(
         tables.chunks,
-        state.chunks,
+        requests.flatMap((request) =>
+          request.chunks.map((chunk) =>
+            chunkRow(chunk, request.source, request.relations),
+          ),
+        ),
         retrievalChunkSchema(this.requireDimensions()),
       );
-      await writeRows(
+      await appendRows(
         tables.relations,
-        state.relations,
+        requests.flatMap((request) => request.relations.map(relationRow)),
         retrievalRelationSchema(),
       );
-      // Sources are the visibility boundary: staged chunks remain hidden until
-      // every source generation becomes active in this single table rewrite.
-      await writeRows(tables.sources, state.sources, retrievalSourceSchema());
-      await writeRows(
-        tables.publications,
-        state.publications,
-        retrievalPublicationSchema(),
+
+      await tables.sources
+        .mergeInsert(["source_id"])
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute(
+          makeArrowTable(
+            requests.map((request) =>
+              sourceRow(request.source, request.generation),
+            ) as unknown as Record<string, unknown>[],
+            { schema: retrievalSourceSchema() },
+          ),
+        );
+
+      const obsoleteGenerations = sqlOr(
+        requests.map((request) =>
+          sqlAnd(
+            sqlEquals("source_id", request.source.id),
+            sqlNotEquals("generation", request.generation),
+          ),
+        ),
       );
-      await this.refreshNativeIndexes(state, tables);
+      await tables.chunks.delete(obsoleteGenerations);
+      await tables.relations.delete(obsoleteGenerations);
+      for (const request of requests) {
+        this.staleSourceIds.delete(request.source.id);
+      }
+      await tables.publications.delete(sqlIn("publication_id", publicationIds));
+
       const recordsAdded = publications.reduce(
         (total, publication) => total + publication.recordsAdded,
         0,
@@ -473,13 +517,14 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
         (total, publication) => total + publication.recordsRemoved,
         0,
       );
-      for (const request of requests) {
-        this.staleSourceIds.delete(request.source.id);
+      await this.updateMetrics(tables, (metrics) => {
+        metrics.sourcesPublished += publications.length;
+        metrics.recordsAdded += recordsAdded;
+        metrics.recordsRemoved += recordsRemoved;
+      });
+      if (!this.options.deferNativeIndexRefresh) {
+        await this.refreshNativeIndexesFromTables(tables);
       }
-      state.metrics.sourcesPublished += publications.length;
-      state.metrics.recordsAdded += recordsAdded;
-      state.metrics.recordsRemoved += recordsRemoved;
-      await this.persistMetadata(state, tables);
       return {
         status: "published",
         publications,
@@ -492,28 +537,62 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   async abortPublication(
     publicationId: string,
   ): Promise<RetrievalAbortPublicationOutcome> {
-    return this.withState(undefined, async (state, tables) => {
-      const before = state.publications.length;
-      state.publications = state.publications.filter(
-        (row) => row.publication_id !== publicationId,
-      );
-      if (state.publications.length === before) {
-        return { publicationId, status: "not_found" };
-      }
-      await writeRows(
+    return this.withTables(undefined, async (tables) => {
+      const [pendingPublication] = await readFilteredRows<PublicationRow>(
         tables.publications,
-        state.publications,
-        retrievalPublicationSchema(),
+        sqlEquals("publication_id", publicationId),
+      );
+      if (!pendingPublication) return { publicationId, status: "not_found" };
+
+      const request = parseJson<RetrievalPublicationRequest>(
+        pendingPublication.payload_json,
+      );
+      const [activeSource] = await readFilteredRows<SourceRow>(
+        tables.sources,
+        sqlEquals("source_id", request.source.id),
+      );
+      const generationPredicate =
+        activeSource?.generation === request.generation
+          ? sqlAnd(
+              sqlEquals("source_id", request.source.id),
+              sqlNotEquals("generation", request.generation),
+            )
+          : sqlAnd(
+              sqlEquals("source_id", request.source.id),
+              sqlEquals("generation", request.generation),
+            );
+      const [chunksToRemove, relationsToRemove] = await Promise.all([
+        tables.chunks.countRows(generationPredicate),
+        tables.relations.countRows(generationPredicate),
+      ]);
+      if (chunksToRemove + relationsToRemove > 0) {
+        await upsertMetadataValue(
+          tables.metadata,
+          NATIVE_INDEXES_DIRTY_KEY,
+          true,
+        );
+        if (chunksToRemove > 0) await tables.chunks.delete(generationPredicate);
+        if (relationsToRemove > 0) {
+          await tables.relations.delete(generationPredicate);
+        }
+        if (!this.options.deferNativeIndexRefresh) {
+          await this.refreshNativeIndexesFromTables(tables);
+        }
+      }
+      await tables.publications.delete(
+        sqlEquals("publication_id", publicationId),
       );
       return { publicationId, status: "aborted" };
     });
   }
 
   async inspectSource(sourceId: string): Promise<RetrievalActiveSource | null> {
-    return this.withState(undefined, async (state) => {
-      const row = activeSourceRows(state.sources).find(
-        (source) => source.source_id === sourceId,
+    return this.withTables(undefined, async (tables) => {
+      const rows = await readFilteredRows<SourceRow>(
+        tables.sources,
+        sqlEquals("source_id", sourceId),
       );
+      const row = activeSourceRows(rows)[0];
       return row?.generation
         ? {
             source: parseJson<RetrievalSourceDocument>(row.payload_json),
@@ -655,66 +734,112 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   async deleteSource(
     request: RetrievalDeleteSourceRequest,
   ): Promise<RetrievalDeleteSourceOutcome> {
-    return this.withState(undefined, async (state, tables) => {
-      const engine = await this.buildEngine(state);
-      const outcome = await engine.deleteSource(request);
-      if (outcome.status !== "deleted") return outcome;
-      const current = activeSourceRows(state.sources).find(
-        (row) => row.source_id === request.sourceId,
+    return this.withTables(undefined, async (tables) => {
+      const predicate = sqlEquals("source_id", request.sourceId);
+      const sourceRows = await readFilteredRows<SourceRow>(
+        tables.sources,
+        predicate,
       );
-      if (!current) return outcome;
+      const current = activeSourceRows(sourceRows)[0];
+      if (!current) {
+        return {
+          sourceId: request.sourceId,
+          status: "not_found",
+          recordsRemoved: 0,
+        };
+      }
+      if (
+        request.expectedRevisionId &&
+        current.revision_id !== request.expectedRevisionId
+      ) {
+        return {
+          sourceId: request.sourceId,
+          status: "stale_source",
+          recordsRemoved: 0,
+        };
+      }
+
+      const [chunksRemoved, relationsRemoved] = await Promise.all([
+        tables.chunks.countRows(predicate),
+        tables.relations.countRows(predicate),
+      ]);
       const source = parseJson<RetrievalSourceDocument>(current.payload_json);
-
-      state.sources = [
-        ...state.sources.filter((row) => row.source_id !== request.sourceId),
-        tombstoneRow(request.sourceId, source.revision),
-      ];
-      await writeRows(tables.sources, state.sources, retrievalSourceSchema());
-
-      state.chunks = state.chunks.filter(
-        (row) => row.source_id !== request.sourceId,
+      await upsertMetadataValue(
+        tables.metadata,
+        NATIVE_INDEXES_DIRTY_KEY,
+        true,
       );
-      state.relations = state.relations.filter(
-        (row) => row.source_id !== request.sourceId,
-      );
-      await writeRows(
-        tables.chunks,
-        state.chunks,
-        retrievalChunkSchema(this.requireDimensions()),
-      );
-      await writeRows(
-        tables.relations,
-        state.relations,
-        retrievalRelationSchema(),
-      );
-      await this.refreshNativeIndexes(state, tables);
+      await tables.sources
+        .mergeInsert(["source_id"])
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute(
+          makeArrowTable(
+            [
+              tombstoneRow(request.sourceId, source.revision),
+            ] as unknown as Record<string, unknown>[],
+            { schema: retrievalSourceSchema() },
+          ),
+        );
+      await Promise.all([
+        tables.chunks.delete(predicate),
+        tables.relations.delete(predicate),
+      ]);
+      if (!this.options.deferNativeIndexRefresh) {
+        await this.refreshNativeIndexesFromTables(tables);
+      }
       this.staleSourceIds.delete(request.sourceId);
-      state.metrics.sourcesDeleted += 1;
-      state.metrics.recordsRemoved += outcome.recordsRemoved;
-      await this.persistMetadata(state, tables);
-      return outcome;
+      const recordsRemoved = 1 + chunksRemoved + relationsRemoved;
+      await this.updateMetrics(tables, (metrics) => {
+        metrics.sourcesDeleted += 1;
+        metrics.recordsRemoved += recordsRemoved;
+      });
+      return {
+        sourceId: request.sourceId,
+        status: "deleted",
+        recordsRemoved,
+      };
     });
   }
 
   async deleteScope(
     request: RetrievalDeleteScopeRequest,
   ): Promise<RetrievalDeleteScopeOutcome> {
-    return this.withState(undefined, async (state, tables) => {
-      const activeRows = activeSourceRows(state.sources).filter((row) =>
-        matchesDeleteScope(
-          parseJson<RetrievalSourceDocument>(row.payload_json),
-          request,
-        ),
+    return this.withTables(undefined, async (tables) => {
+      const candidatePredicate = request.sourceIdPrefix
+        ? sqlStartsWith("source_id", request.sourceIdPrefix)
+        : undefined;
+      const [sourceRows, publicationRows] = await Promise.all([
+        candidatePredicate
+          ? readFilteredRows<SourceRow>(tables.sources, candidatePredicate)
+          : readRows<SourceRow>(tables.sources),
+        candidatePredicate
+          ? readFilteredRows<PublicationRow>(
+              tables.publications,
+              candidatePredicate,
+            )
+          : readRows<PublicationRow>(tables.publications),
+      ]);
+      const activeSourceIds = new Set(
+        sourceRows
+          .filter((row) => !row.deleted && row.generation !== null)
+          .filter((row) =>
+            matchesDeleteScope(
+              parseJson<RetrievalSourceDocument>(row.payload_json),
+              request,
+            ),
+          )
+          .map((row) => row.source_id),
       );
-      const scopedSourceIds = new Set(activeRows.map((row) => row.source_id));
+      const scopedSourceIds = new Set(activeSourceIds);
       if (request.sourceIdPrefix) {
-        for (const row of state.sources) {
-          if (row.source_id.startsWith(request.sourceIdPrefix)) {
+        for (const row of sourceRows) {
+          if (row.deleted && row.source_id.startsWith(request.sourceIdPrefix)) {
             scopedSourceIds.add(row.source_id);
           }
         }
       }
-      for (const row of state.publications) {
+      for (const row of publicationRows) {
         const publication = parseJson<RetrievalPublicationRequest>(
           row.payload_json,
         );
@@ -722,61 +847,141 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
           scopedSourceIds.add(publication.source.id);
         }
       }
+      if (scopedSourceIds.size === 0) {
+        return { sourcesDeleted: 0, recordsRemoved: 0 };
+      }
 
-      const chunksRemoved = state.chunks.filter((row) =>
-        scopedSourceIds.has(row.source_id),
-      ).length;
-      const relationsRemoved = state.relations.filter((row) =>
-        scopedSourceIds.has(row.source_id),
-      ).length;
-      state.sources = state.sources.filter(
-        (row) => !scopedSourceIds.has(row.source_id),
+      const sourceIdBatches = batchValues(
+        [...scopedSourceIds],
+        DELETE_SCOPE_ID_BATCH_SIZE,
       );
-      state.chunks = state.chunks.filter(
-        (row) => !scopedSourceIds.has(row.source_id),
+      let chunksRemoved = 0;
+      let relationsRemoved = 0;
+      for (const sourceIds of sourceIdBatches) {
+        const predicate = sqlIn("source_id", sourceIds);
+        const [chunks, relations] = await Promise.all([
+          tables.chunks.countRows(predicate),
+          tables.relations.countRows(predicate),
+        ]);
+        chunksRemoved += chunks;
+        relationsRemoved += relations;
+      }
+
+      await upsertMetadataValue(
+        tables.metadata,
+        NATIVE_INDEXES_DIRTY_KEY,
+        true,
       );
-      state.relations = state.relations.filter(
-        (row) => !scopedSourceIds.has(row.source_id),
-      );
-      state.publications = state.publications.filter(
-        (row) => !scopedSourceIds.has(row.source_id),
-      );
-      await Promise.all([
-        writeRows(tables.sources, state.sources, retrievalSourceSchema()),
-        writeRows(
-          tables.chunks,
-          state.chunks,
-          retrievalChunkSchema(this.requireDimensions()),
-        ),
-        writeRows(tables.relations, state.relations, retrievalRelationSchema()),
-        writeRows(
-          tables.publications,
-          state.publications,
-          retrievalPublicationSchema(),
-        ),
-      ]);
-      await this.refreshNativeIndexes(state, tables);
-      for (const sourceId of scopedSourceIds)
+      for (const sourceIds of sourceIdBatches) {
+        const predicate = sqlIn("source_id", sourceIds);
+        await Promise.all([
+          tables.sources.delete(predicate),
+          tables.chunks.delete(predicate),
+          tables.relations.delete(predicate),
+          tables.publications.delete(predicate),
+        ]);
+      }
+      if (!this.options.deferNativeIndexRefresh) {
+        await this.refreshNativeIndexesFromTables(tables);
+      }
+      for (const sourceId of scopedSourceIds) {
         this.staleSourceIds.delete(sourceId);
+      }
       const recordsRemoved =
-        activeRows.length + chunksRemoved + relationsRemoved;
-      state.metrics.sourcesDeleted += activeRows.length;
-      state.metrics.recordsRemoved += recordsRemoved;
-      await this.persistMetadata(state, tables);
+        activeSourceIds.size + chunksRemoved + relationsRemoved;
+      await this.updateMetrics(tables, (metrics) => {
+        metrics.sourcesDeleted += activeSourceIds.size;
+        metrics.recordsRemoved += recordsRemoved;
+      });
       return {
-        sourcesDeleted: activeRows.length,
+        sourcesDeleted: activeSourceIds.size,
         recordsRemoved,
       };
     });
   }
 
+  async deleteSourceIdPrefix(
+    sourceIdPrefix: string,
+  ): Promise<RetrievalDeleteScopeOutcome> {
+    return this.withTables(undefined, async (tables) => {
+      const predicate = sqlStartsWith("source_id", sourceIdPrefix);
+      const [sources, activeSources, chunks, relations, publications] =
+        await Promise.all([
+          tables.sources.countRows(predicate),
+          tables.sources.countRows(
+            sqlAnd(predicate, "deleted = false", "generation IS NOT NULL"),
+          ),
+          tables.chunks.countRows(predicate),
+          tables.relations.countRows(predicate),
+          tables.publications.countRows(predicate),
+        ]);
+      if (sources + chunks + relations + publications === 0) {
+        return { sourcesDeleted: 0, recordsRemoved: 0 };
+      }
+
+      await upsertMetadataValue(
+        tables.metadata,
+        NATIVE_INDEXES_DIRTY_KEY,
+        true,
+      );
+      await Promise.all([
+        sources > 0 ? tables.sources.delete(predicate) : undefined,
+        chunks > 0 ? tables.chunks.delete(predicate) : undefined,
+        relations > 0 ? tables.relations.delete(predicate) : undefined,
+        publications > 0 ? tables.publications.delete(predicate) : undefined,
+      ]);
+      if (!this.options.deferNativeIndexRefresh) {
+        await this.refreshNativeIndexesFromTables(tables);
+      }
+      for (const sourceId of this.staleSourceIds) {
+        if (sourceId.startsWith(sourceIdPrefix)) {
+          this.staleSourceIds.delete(sourceId);
+        }
+      }
+      const recordsRemoved = activeSources + chunks + relations;
+      await this.updateMetrics(tables, (metrics) => {
+        metrics.sourcesDeleted += activeSources;
+        metrics.recordsRemoved += recordsRemoved;
+      });
+      return { sourcesDeleted: activeSources, recordsRemoved };
+    });
+  }
+
   async query(request: RetrievalQuery): Promise<RetrievalQueryResult> {
-    return this.withState(undefined, async (state, tables) => {
-      const engine = await this.buildEngine(state);
+    return this.withTables(undefined, async (tables) => {
+      const nativeState = await readNativeIndexState(tables);
       const candidateLimit = Math.min(
         MAXIMUM_NATIVE_CANDIDATES,
         Math.max(MINIMUM_NATIVE_CANDIDATES, request.limit * 8),
       );
+      const nativeIds = await this.nativeCandidateIds(
+        request,
+        candidateLimit,
+        nativeState,
+        tables,
+      );
+      let engine: InMemoryRetrievalRepository;
+      if (nativeIds) {
+        engine = await this.buildScopedEngine(nativeState, tables, nativeIds);
+      } else {
+        const chunkRowCount = await tables.chunks.countRows();
+        const maxUnindexedChunks =
+          this.options.maxUnindexedQueryChunks ??
+          MAXIMUM_UNINDEXED_QUERY_CHUNKS;
+        if (chunkRowCount > maxUnindexedChunks) {
+          await this.updateMetrics(tables, (metrics) => {
+            metrics.queries += 1;
+            metrics[`${request.mode}Queries`] += 1;
+          });
+          return {
+            query: clone(request),
+            candidates: [],
+            mode: request.mode,
+            degradedReason: "lexical_index_unavailable",
+          };
+        }
+        engine = await this.buildEngine(await readState(tables));
+      }
       const expandedRequest: RetrievalQuery = {
         ...request,
         limit: candidateLimit,
@@ -785,33 +990,19 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
           collapseOverlaps: false,
         },
       };
-      let result = await engine.query(expandedRequest);
-      const nativeIds = await this.nativeCandidateIds(
-        request,
-        candidateLimit,
-        state,
-        tables,
-      );
-      if (nativeIds) {
-        result = {
-          ...result,
-          query: clone(request),
-          candidates: diversifyRetrievalCandidates(
-            result.candidates.filter((candidate) =>
-              nativeIds.has(candidate.chunk.id),
-            ),
-            request,
-          ),
-        };
-      } else {
-        result = {
-          ...result,
-          query: clone(request),
-          candidates: diversifyRetrievalCandidates(result.candidates, request),
-        };
-      }
-      state.metrics.queries += 1;
-      state.metrics[`${request.mode}Queries`] += 1;
+      const expanded = await engine.query(expandedRequest);
+      const result: RetrievalQueryResult = {
+        ...expanded,
+        query: clone(request),
+        candidates: diversifyRetrievalCandidates(
+          nativeIds
+            ? expanded.candidates.filter((candidate) =>
+                nativeIds.has(candidate.chunk.id),
+              )
+            : expanded.candidates,
+          request,
+        ),
+      };
       if (request.freshness === "required") {
         const observed = new Set(
           result.freshness?.staleSources.map((source) => source.sourceId) ?? [],
@@ -826,7 +1017,10 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
           this.staleSourceIds.delete(sourceId);
         }
       }
-      await this.persistMetadata(state, tables);
+      await this.updateMetrics(tables, (metrics) => {
+        metrics.queries += 1;
+        metrics[`${request.mode}Queries`] += 1;
+      });
       return result;
     });
   }
@@ -884,13 +1078,21 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
           metadata,
           NATIVE_CAPABILITIES_KEY,
         );
-        if (!capabilities || capabilities.lexical.status !== "ready") {
+        const nativeIndexesDirty =
+          metadataValue<boolean>(metadata, NATIVE_INDEXES_DIRTY_KEY) ?? true;
+        if (
+          nativeIndexesDirty ||
+          !capabilities ||
+          capabilities.lexical.status !== "ready"
+        ) {
           return {
             status: "unavailable",
             reason: "lexical_index_unavailable",
-            ...(capabilities?.lexical.detail
-              ? { detail: capabilities.lexical.detail }
-              : {}),
+            ...(nativeIndexesDirty
+              ? { detail: "Native indexes require refresh" }
+              : capabilities?.lexical.detail
+                ? { detail: capabilities.lexical.detail }
+                : {}),
           };
         }
         return { status: "ready" };
@@ -908,21 +1110,57 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   }
 
   async health(): Promise<RetrievalHealthSnapshot> {
-    return this.withState(undefined, async (state) => {
-      const engine = await this.buildEngine(state);
+    return this.withTables(undefined, async (tables) => {
+      const metadata = await readRows<MetadataRow>(tables.metadata);
+      const fingerprint = metadataValue<RetrievalFingerprint>(
+        metadata,
+        FINGERPRINT_KEY,
+      );
+      const nativeCapabilities =
+        metadataValue<NativeCapabilities>(metadata, NATIVE_CAPABILITIES_KEY) ??
+        defaultNativeCapabilities();
+      const nativeIndexesDirty =
+        metadataValue<boolean>(metadata, NATIVE_INDEXES_DIRTY_KEY) ??
+        fingerprint !== undefined;
+      const effectiveNativeCapabilities = nativeIndexesDirty
+        ? dirtyNativeCapabilities()
+        : nativeCapabilities;
+      const engine = new InMemoryRetrievalRepository({
+        ...this.options,
+        lexicalAvailable:
+          (this.options.lexicalAvailable ?? true) &&
+          effectiveNativeCapabilities.lexical.status === "ready",
+        scalarAvailable:
+          (this.options.scalarAvailable ?? true) &&
+          effectiveNativeCapabilities.scalar.status === "ready",
+        vectorIndexAvailable:
+          (this.options.vectorIndexAvailable ?? true) &&
+          effectiveNativeCapabilities.vector.status === "ready",
+        embeddingConfigured:
+          this.options.embeddingConfigured ?? Boolean(fingerprint?.embedding),
+        ...(fingerprint ? { fingerprint } : {}),
+      });
+      if (this.inspectedFingerprint) {
+        await engine.inspectFingerprint(this.inspectedFingerprint);
+      }
       const health = await engine.health();
-      const details = nativeHealthDetails(state.nativeCapabilities);
+      const details = nativeHealthDetails(effectiveNativeCapabilities);
+      const [pendingPublications, sourceCount, chunkCount, relationCount] =
+        await Promise.all([
+          tables.publications.countRows(),
+          tables.sources.countRows(
+            "deleted = false AND generation IS NOT NULL",
+          ),
+          tables.chunks.countRows(),
+          tables.relations.countRows(),
+        ]);
       return {
         ...health,
         ...(Object.keys(details).length > 0 ? { details } : {}),
-        pendingPublications: state.publications.length,
-        sourceCount: activeSourceRows(state.sources).length,
-        chunkCount: state.chunks.filter((row) =>
-          isActiveGeneration(row, state.sources),
-        ).length,
-        relationCount: state.relations.filter((row) =>
-          isActiveGeneration(row, state.sources),
-        ).length,
+        pendingPublications,
+        sourceCount,
+        chunkCount,
+        relationCount,
         staleSourceCount: this.staleSourceIds.size,
       };
     });
@@ -972,6 +1210,7 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
         ...state.chunks,
         ...snapshot.chunks,
       ]);
+      await this.markNativeIndexesDirty(state, tables);
       const stagedRelations = deduplicateRelations([
         ...state.relations,
         ...snapshot.relations,
@@ -1012,7 +1251,7 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
         state.publications,
         retrievalPublicationSchema(),
       );
-      await this.refreshNativeIndexes(state, tables);
+      await this.refreshNativeIndexesInState(state, tables);
       this.staleSourceIds.clear();
       state.metrics.snapshotsRestored += 1;
       await this.persistMetadata(state, tables);
@@ -1034,29 +1273,33 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
     });
   }
 
+  async refreshNativeIndexes(): Promise<void> {
+    await this.withTables(undefined, (tables) =>
+      this.refreshNativeIndexesFromTables(tables),
+    );
+  }
+
   async optimize(): Promise<RetrievalOptimizeOutcome> {
-    return this.withState(undefined, async (state, tables) => {
+    return this.withTables(undefined, async (tables) => {
+      const recordCount =
+        (await tables.sources.countRows()) +
+        (await tables.chunks.countRows()) +
+        (await tables.relations.countRows());
       let fragmentsRemoved = 0;
       let bytesReclaimed = 0;
+      await this.refreshNativeIndexesFromTables(tables);
+      const options = { cleanupOlderThan: new Date(), deleteUnverified: false };
       for (const table of Object.values(tables)) {
-        const stats = await table.optimize();
+        const stats = await table.optimize(options);
         fragmentsRemoved += stats.compaction.fragmentsRemoved;
         bytesReclaimed += stats.prune.bytesRemoved;
       }
-      const recordsCompacted =
-        fragmentsRemoved > 0
-          ? activeSourceRows(state.sources).length +
-            state.chunks.filter((row) => isActiveGeneration(row, state.sources))
-              .length +
-            state.relations.filter((row) =>
-              isActiveGeneration(row, state.sources),
-            ).length
-          : 0;
-      state.metrics.optimizations += 1;
-      await this.persistMetadata(state, tables);
+      await this.updateMetrics(tables, (metrics) => {
+        metrics.optimizations += 1;
+      });
       return {
         status: "optimized",
-        recordsCompacted,
+        recordsCompacted: fragmentsRemoved > 0 ? recordCount : 0,
         ...(bytesReclaimed > 0 ? { bytesReclaimed } : {}),
       };
     });
@@ -1099,10 +1342,7 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
       return this.closePromise;
     }
     this.closePromise = withRetrievalStoreLock(this.root, async () => {
-      for (const table of Object.values(this.tables ?? {})) table.close();
-      this.tables = undefined;
-      this.connection?.close();
-      this.connection = undefined;
+      this.closeNativeHandles();
       this.staleSourceIds.clear();
     });
     return this.closePromise;
@@ -1112,16 +1352,79 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
     dimensions: number | undefined,
     operation: (state: DurableState, tables: RetrievalTables) => Promise<T>,
   ): Promise<T> {
-    if (this.closing) throw new Error("retrieval_store_closed");
-    return withRetrievalStoreLock(this.root, async () => {
-      if (this.closing) throw new Error("retrieval_store_closed");
-      const tables = await this.ensureTables(dimensions);
+    return this.withTables(dimensions, async (tables) => {
       const state = await readState(tables);
       this.aggregate = clone(state.metrics);
       const result = await operation(state, tables);
       this.aggregate = clone(state.metrics);
       return result;
     });
+  }
+
+  private async withTables<T>(
+    dimensions: number | undefined,
+    operation: (tables: RetrievalTables) => Promise<T>,
+  ): Promise<T> {
+    if (this.closing) throw new Error("retrieval_store_closed");
+    return withRetrievalStoreLock(this.root, async () => {
+      if (this.closing) throw new Error("retrieval_store_closed");
+      try {
+        return await operation(await this.ensureTables(dimensions));
+      } finally {
+        this.closeNativeHandles();
+      }
+    });
+  }
+
+  private async updateMetrics(
+    tables: RetrievalTables,
+    update: (metrics: RetrievalAggregateMetrics) => void,
+  ): Promise<void> {
+    const metadata = await readRows<MetadataRow>(tables.metadata);
+    const metrics =
+      metadataValue<RetrievalAggregateMetrics>(metadata, METRICS_KEY) ??
+      clone(EMPTY_METRICS);
+    update(metrics);
+    this.aggregate = clone(metrics);
+    await upsertMetadataValue(tables.metadata, METRICS_KEY, metrics);
+  }
+
+  private async markNativeIndexesDirty(
+    state: DurableState,
+    tables: RetrievalTables,
+  ): Promise<void> {
+    state.nativeIndexesDirty = true;
+    await upsertMetadataValue(tables.metadata, NATIVE_INDEXES_DIRTY_KEY, true);
+  }
+
+  private async refreshNativeIndexesFromTables(
+    tables: RetrievalTables,
+  ): Promise<void> {
+    const operations = this.options.indexOperations ?? defaultIndexOperations;
+    const nativeCapabilities: NativeCapabilities = {
+      lexical: await runIndexOperation(() =>
+        operations.createLexical(tables.chunks),
+      ),
+      scalar: await runIndexOperation(() =>
+        operations.createScalar(tables.chunks),
+      ),
+      vector: await runIndexOperation(() =>
+        operations.validateVector(tables.chunks, this.requireDimensions()),
+      ),
+    };
+    await upsertMetadataValue(
+      tables.metadata,
+      NATIVE_CAPABILITIES_KEY,
+      nativeCapabilities,
+    );
+    await upsertMetadataValue(tables.metadata, NATIVE_INDEXES_DIRTY_KEY, false);
+  }
+
+  private closeNativeHandles(): void {
+    for (const table of Object.values(this.tables ?? {})) table.close();
+    this.tables = undefined;
+    this.connection?.close();
+    this.connection = undefined;
   }
 
   private async ensureTables(
@@ -1189,25 +1492,88 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
     return this.dimensions;
   }
 
-  private async buildEngine(
-    state: DurableState,
-  ): Promise<InMemoryRetrievalRepository> {
-    const engine = new InMemoryRetrievalRepository({
+  private engineOptions(
+    state: NativeIndexState,
+  ): ConstructorParameters<typeof InMemoryRetrievalRepository>[0] {
+    return {
       ...this.options,
       lexicalAvailable:
         (this.options.lexicalAvailable ?? true) &&
+        !state.nativeIndexesDirty &&
         state.nativeCapabilities.lexical.status === "ready",
       scalarAvailable:
         (this.options.scalarAvailable ?? true) &&
+        !state.nativeIndexesDirty &&
         state.nativeCapabilities.scalar.status === "ready",
       vectorIndexAvailable:
         (this.options.vectorIndexAvailable ?? true) &&
+        !state.nativeIndexesDirty &&
         state.nativeCapabilities.vector.status === "ready",
       embeddingConfigured:
         this.options.embeddingConfigured ??
         Boolean(state.fingerprint?.embedding),
       ...(state.fingerprint ? { fingerprint: clone(state.fingerprint) } : {}),
-    });
+    };
+  }
+
+  /**
+   * Hydrates only the given candidate chunks (and their sources) into a
+   * scoring engine. Row reads stay proportional to the native candidate
+   * limit, never to store size.
+   */
+  private async buildScopedEngine(
+    state: NativeIndexState,
+    tables: RetrievalTables,
+    chunkIds: ReadonlySet<string>,
+  ): Promise<InMemoryRetrievalRepository> {
+    const engine = new InMemoryRetrievalRepository(this.engineOptions(state));
+    const chunkRows: ChunkRow[] = [];
+    for (const ids of batchValues([...chunkIds], DELETE_SCOPE_ID_BATCH_SIZE)) {
+      chunkRows.push(
+        ...(await readFilteredRows<ChunkRow>(
+          tables.chunks,
+          sqlIn("chunk_id", ids),
+        )),
+      );
+    }
+    const sourceIds = [...new Set(chunkRows.map((row) => row.source_id))];
+    const sourceRows: SourceRow[] = [];
+    for (const ids of batchValues(sourceIds, DELETE_SCOPE_ID_BATCH_SIZE)) {
+      sourceRows.push(
+        ...(await readFilteredRows<SourceRow>(
+          tables.sources,
+          sqlIn("source_id", ids),
+        )),
+      );
+    }
+    for (const row of activeSourceRows(sourceRows)) {
+      const chunks = deduplicateChunks(
+        chunkRows.filter((chunk) => isRowForSource(chunk, row)),
+      ).map((chunk) => parseJson<RetrievalChunkRecord>(chunk.payload_json));
+      if (chunks.length === 0) continue;
+      const source = parseJson<RetrievalSourceDocument>(row.payload_json);
+      const request: RetrievalPublicationRequest = {
+        publicationId: `hydrate:${source.id}:${source.revision.id}`,
+        generation: row.generation!,
+        source,
+        chunks,
+        relations: [],
+        expectedChunkIds: chunks.map((chunk) => chunk.id),
+        expectedRelationIds: [],
+      };
+      await engine.preparePublication(request);
+      await engine.commitPublication(request.publicationId);
+    }
+    if (this.inspectedFingerprint) {
+      await engine.inspectFingerprint(this.inspectedFingerprint);
+    }
+    return engine;
+  }
+
+  private async buildEngine(
+    state: DurableState,
+  ): Promise<InMemoryRetrievalRepository> {
+    const engine = new InMemoryRetrievalRepository(this.engineOptions(state));
     for (const row of activeSourceRows(state.sources)) {
       const source = parseJson<RetrievalSourceDocument>(row.payload_json);
       const chunks = state.chunks
@@ -1267,7 +1633,7 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
     return engine;
   }
 
-  private async refreshNativeIndexes(
+  private async refreshNativeIndexesInState(
     state: DurableState,
     tables: RetrievalTables,
   ): Promise<void> {
@@ -1281,18 +1647,20 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
     state.nativeCapabilities.vector = await runIndexOperation(() =>
       operations.validateVector(tables.chunks, this.requireDimensions()),
     );
+    state.nativeIndexesDirty = false;
   }
 
   private async nativeCandidateIds(
     request: RetrievalQuery,
     limit: number,
-    state: DurableState,
+    state: NativeIndexState,
     tables: RetrievalTables,
   ): Promise<Set<string> | undefined> {
     const candidateIds = new Set<string>();
     let usedNativeSearch = false;
     if (
       (request.mode === "lexical" || request.mode === "hybrid") &&
+      !state.nativeIndexesDirty &&
       state.nativeCapabilities.lexical.status === "ready" &&
       request.text.trim()
     ) {
@@ -1311,6 +1679,7 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
     }
     if (
       (request.mode === "vector" || request.mode === "hybrid") &&
+      !state.nativeIndexesDirty &&
       state.nativeCapabilities.vector.status === "ready" &&
       request.embedding?.length
     ) {
@@ -1349,6 +1718,7 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
     state.publications = [];
     state.chunks = activeChunks;
     state.relations = activeRelations;
+    await this.markNativeIndexesDirty(state, tables);
     await writeRows(
       tables.publications,
       state.publications,
@@ -1364,7 +1734,7 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
       state.relations,
       retrievalRelationSchema(),
     );
-    await this.refreshNativeIndexes(state, tables);
+    await this.refreshNativeIndexesInState(state, tables);
     const repaired =
       abandonedPublications + orphanedChunksRemoved + orphanedRelationsRemoved >
       0;
@@ -1420,6 +1790,7 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
         : []),
       metadataRow(METRICS_KEY, state.metrics),
       metadataRow(NATIVE_CAPABILITIES_KEY, state.nativeCapabilities),
+      metadataRow(NATIVE_INDEXES_DIRTY_KEY, state.nativeIndexesDirty),
     ];
     await writeRows(tables.metadata, state.metadata, retrievalMetadataSchema());
   }
@@ -1431,6 +1802,25 @@ function missingStructuralSnapshot(): RetrievalStructuralSnapshot {
     fingerprintDisposition: "initialize",
     sources: [],
     relations: [],
+  };
+}
+
+async function readNativeIndexState(
+  tables: RetrievalTables,
+): Promise<NativeIndexState> {
+  const metadata = await readRows<MetadataRow>(tables.metadata);
+  const fingerprint = metadataValue<RetrievalFingerprint>(
+    metadata,
+    FINGERPRINT_KEY,
+  );
+  return {
+    fingerprint,
+    nativeCapabilities:
+      metadataValue<NativeCapabilities>(metadata, NATIVE_CAPABILITIES_KEY) ??
+      defaultNativeCapabilities(),
+    nativeIndexesDirty:
+      metadataValue<boolean>(metadata, NATIVE_INDEXES_DIRTY_KEY) ??
+      fingerprint !== undefined,
   };
 }
 
@@ -1454,6 +1844,9 @@ async function readState(tables: RetrievalTables): Promise<DurableState> {
   const nativeCapabilities =
     metadataValue<NativeCapabilities>(metadata, NATIVE_CAPABILITIES_KEY) ??
     defaultNativeCapabilities();
+  const nativeIndexesDirty =
+    metadataValue<boolean>(metadata, NATIVE_INDEXES_DIRTY_KEY) ??
+    fingerprint !== undefined;
   return {
     fingerprint,
     sources,
@@ -1464,11 +1857,23 @@ async function readState(tables: RetrievalTables): Promise<DurableState> {
     snapshots,
     metrics,
     nativeCapabilities,
+    nativeIndexesDirty,
   };
 }
 
 async function readRows<T>(table: Table): Promise<T[]> {
-  return (await table.query().toArray()).map((row) => {
+  return normalizeRows<T>(await table.query().toArray());
+}
+
+async function readFilteredRows<T>(
+  table: Table,
+  predicate: string,
+): Promise<T[]> {
+  return normalizeRows<T>(await table.query().where(predicate).toArray());
+}
+
+function normalizeRows<T>(rows: unknown[]): T[] {
+  return rows.map((row) => {
     const value =
       row !== null &&
       typeof row === "object" &&
@@ -1478,6 +1883,29 @@ async function readRows<T>(table: Table): Promise<T[]> {
         : row;
     return JSON.parse(JSON.stringify(value)) as T;
   });
+}
+
+async function appendRows<T extends object>(
+  table: Table,
+  rows: T[],
+  schema: Schema,
+): Promise<void> {
+  for (let offset = 0; offset < rows.length; offset += WRITE_BATCH_SIZE) {
+    const batch = rows.slice(offset, offset + WRITE_BATCH_SIZE);
+    await table.add(
+      makeArrowTable(batch as unknown as Record<string, unknown>[], { schema }),
+      { mode: "append" },
+    );
+  }
+}
+
+async function upsertMetadataValue(
+  table: Table,
+  key: string,
+  value: unknown,
+): Promise<void> {
+  await table.delete(sqlEquals("key", key));
+  await appendRows(table, [metadataRow(key, value)], retrievalMetadataSchema());
 }
 
 async function writeRows<T extends object>(
@@ -1715,6 +2143,14 @@ function hasUnavailableNativeCapability(
   );
 }
 
+function dirtyNativeCapabilities(): NativeCapabilities {
+  return {
+    lexical: unavailableCapability("Native indexes require refresh"),
+    scalar: unavailableCapability("Native indexes require refresh"),
+    vector: unavailableCapability("Native indexes require refresh"),
+  };
+}
+
 function defaultNativeCapabilities(): NativeCapabilities {
   return {
     lexical: {
@@ -1819,6 +2255,123 @@ function deduplicateRows<T>(rows: T[], key: (row: T) => string): T[] {
   const unique = new Map<string, T>();
   for (const row of rows) unique.set(key(row), row);
   return [...unique.values()];
+}
+
+function publicationIsComplete(request: RetrievalPublicationRequest): boolean {
+  return (
+    sameIds(
+      request.expectedChunkIds,
+      request.chunks.map((chunk) => chunk.id),
+    ) &&
+    sameIds(
+      request.expectedRelationIds,
+      request.relations.map((relation) => relation.id),
+    )
+  );
+}
+
+function sameIds(
+  expected: readonly string[],
+  actual: readonly string[],
+): boolean {
+  if (expected.length !== actual.length) return false;
+  const actualIds = new Set(actual);
+  return expected.every((id) => actualIds.has(id));
+}
+
+function publicationIsStale(
+  request: RetrievalPublicationRequest,
+  current: SourceRow,
+): boolean {
+  const currentRevision = current.deleted
+    ? parseJson<RetrievalSourceRevision>(current.payload_json)
+    : parseJson<RetrievalSourceDocument>(current.payload_json).revision;
+  const comparison = compareRetrievalSourceRevisions(
+    currentRevision,
+    request.source.revision,
+  );
+  return current.deleted ? comparison >= 0 : comparison > 0;
+}
+
+function publicationOutcome(
+  request: RetrievalPublicationRequest,
+  status: RetrievalPublicationOutcome["status"],
+  recordsAdded = 0,
+  recordsRemoved = 0,
+): RetrievalPublicationOutcome {
+  return {
+    publicationId: request.publicationId,
+    sourceId: request.source.id,
+    revisionId: request.source.revision.id,
+    generation: request.generation,
+    status,
+    recordsAdded,
+    recordsRemoved,
+  };
+}
+
+function missingPublication(
+  publicationId: string,
+): RetrievalPublicationOutcome {
+  return {
+    publicationId,
+    status: "not_found",
+    recordsAdded: 0,
+    recordsRemoved: 0,
+  };
+}
+
+function rejectedPublicationBatch(
+  publications: RetrievalPublicationOutcome[],
+): RetrievalPublicationBatchOutcome {
+  return {
+    status: "rejected",
+    publications,
+    recordsAdded: 0,
+    recordsRemoved: 0,
+  };
+}
+
+function sqlEquals(column: string, value: string): string {
+  return `${column} = ${sqlString(value)}`;
+}
+
+function sqlNotEquals(column: string, value: string): string {
+  return `${column} != ${sqlString(value)}`;
+}
+
+function sqlIn(column: string, values: readonly string[]): string {
+  if (values.length === 0) return "false";
+  return `${column} IN (${values.map(sqlString).join(", ")})`;
+}
+
+function sqlAnd(...predicates: string[]): string {
+  return predicates.map((predicate) => `(${predicate})`).join(" AND ");
+}
+
+function sqlStartsWith(column: string, prefix: string): string {
+  const escapedPrefix = prefix
+    .replaceAll("\\", "\\\\")
+    .replaceAll("%", "\\%")
+    .replaceAll("_", "\\_");
+  return `${column} LIKE ${sqlString(`${escapedPrefix}%`)} ESCAPE '\\'`;
+}
+
+function sqlOr(predicates: string[]): string {
+  if (predicates.length === 0) return "false";
+  return predicates.map((predicate) => `(${predicate})`).join(" OR ");
+}
+
+function sqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function batchValues<T>(values: T[], batchSize: number): T[][] {
+  const batches: T[][] = [];
+  for (let offset = 0; offset < values.length; offset += batchSize) {
+    batches.push(values.slice(offset, offset + batchSize));
+  }
+  return batches;
 }
 
 function parseJson<T>(value: string): T {

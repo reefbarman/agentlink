@@ -431,6 +431,181 @@ h3 {
   opacity: 0.85;
 }
 
+/* --- Context Health --- */
+
+.context-health-panel {
+  margin: 0 0 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
+}
+
+.context-health-panel > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.context-health-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.context-health-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.context-health-pulse {
+  width: 12px;
+  height: 8px;
+  background: currentColor;
+  clip-path: polygon(
+    0 50%,
+    20% 50%,
+    32% 0,
+    48% 100%,
+    62% 30%,
+    74% 50%,
+    100% 50%,
+    100% 66%,
+    68% 66%,
+    63% 58%,
+    48% 100%,
+    33% 38%,
+    27% 66%,
+    0 66%
+  );
+}
+
+.context-health-summary {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+}
+
+.context-health-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 1px 4px;
+  border-radius: 999px;
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.08));
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.context-health-chip
+  > :not(.context-health-dot):not(.context-health-chip-status) {
+  display: none;
+}
+
+.context-health-chip-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-health-dot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.context-health-ready {
+  color: var(--vscode-testing-iconPassed, #4ec9b0);
+}
+
+.context-health-working {
+  color: var(--vscode-progressBar-background, #4ec9b0);
+}
+
+.context-health-degraded {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.context-health-unavailable {
+  color: var(--vscode-editorError-foreground, #f14c4c);
+}
+
+.context-health-disabled,
+.context-health-not_measured {
+  color: var(--vscode-descriptionForeground);
+}
+
+.context-health-chevron {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  color: var(--vscode-descriptionForeground);
+  transform: rotate(45deg);
+  transition: transform 120ms ease;
+}
+
+.context-health-panel[open] .context-health-chevron {
+  transform: rotate(225deg);
+}
+
+.context-health-body {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.context-health-section {
+  min-width: 0;
+  padding: 8px;
+  border-radius: 4px;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.08));
+}
+
+.context-health-section-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+
+.context-health-state {
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.context-health-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+}
+
+.context-health-metrics strong {
+  color: var(--vscode-foreground);
+  font-weight: 500;
+}
+
+.context-health-reason {
+  margin-top: 5px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+}
+
 /* --- Codebase Index --- */
 
 .index-status {

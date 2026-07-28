@@ -94,6 +94,10 @@ describe("BrowserGatewayAskAgentModelClient", () => {
     expect(Object.keys(ASK_AGENT_DEFERRED_NATIVE_TOOL_VALIDATORS)).toEqual(
       disclosure.deferredTools.map((tool) => tool.name),
     );
+    expect(
+      disclosure.inlineTools.find((tool) => tool.name === "find_native_tools")
+        ?.description,
+    ).toContain("manage_memory, recall_memory, generate_image, present_images");
   });
 
   it("rejects project memory and workspace image fields in deferred Browser tools", () => {

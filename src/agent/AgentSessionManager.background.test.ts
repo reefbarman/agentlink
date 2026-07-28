@@ -4059,7 +4059,7 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
-  it("excludes cancelled and already-announced results from parent completions", async () => {
+  it("excludes cancelled and already-announced results from recovery", async () => {
     const makeSummary = (id: string, title: string) => ({
       schemaVersion: 1,
       id,
@@ -4155,7 +4155,11 @@ describe("AgentSessionManager background agents", () => {
       mgr.getSession("interrupted-bg")?.fleetMetadata?.resultAnnouncedAt,
     ).toEqual(expect.any(Number));
     expect(saveSession).toHaveBeenCalledTimes(1);
-    expect(mgr.getBackgroundCompletionsForParent("foreground-1")).toEqual([]);
+    expect(
+      mgr
+        .getBackgroundCompletionsForParent("foreground-1")
+        .map((completion) => completion.sessionId),
+    ).toEqual([]);
 
     // Idempotent: an already-announced result is not re-stamped or re-saved.
     mgr.markBackgroundResultsAnnounced(["interrupted-bg"]);

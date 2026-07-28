@@ -38,7 +38,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   find_native_tools: {
     label: "Discover deferred native tools",
     description:
-      "Discover native AgentLink tools deferred from the provider request. Searches only the immutable, request-authorized catalog and returns bounded, deterministic results. Discovery cannot broaden mode, profile, skill, background, web, or surface restrictions.",
+      "Discover native AgentLink tools deferred from the provider request. When a requested capability is not directly exposed, search this catalog before saying it is unavailable; image generation is a common deferred capability. Searches only the immutable, request-authorized catalog and returns bounded, deterministic results. Discovery cannot broaden mode, profile, skill, background, web, or surface restrictions.",
   },
   call_native_tool: {
     label: "Invoke deferred native tool",

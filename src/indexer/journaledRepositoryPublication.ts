@@ -1,6 +1,8 @@
 import type {
   RetrievalActiveSource,
+  RetrievalPublicationBatchOutcome,
   RetrievalPublicationOutcome,
+  RetrievalPublicationPreparation,
   RetrievalPublicationRequest,
 } from "../core/retrieval/contracts.js";
 import {
@@ -27,6 +29,12 @@ export interface FileReplacementStore {
 
 export interface RepositoryPublicationPort {
   preparePublication(request: RetrievalPublicationRequest): Promise<unknown>;
+  preparePublicationBatch(
+    requests: RetrievalPublicationRequest[],
+  ): Promise<RetrievalPublicationPreparation[]>;
+  commitPublicationBatch(
+    publicationIds: string[],
+  ): Promise<RetrievalPublicationBatchOutcome>;
   commitPublication(
     publicationId: string,
   ): Promise<RetrievalPublicationOutcome>;
@@ -68,7 +76,7 @@ export async function executeJournaledRepositoryPublications(args: {
   }
   if (args.publications.length === 0) return emptyResult(args.isCancelled());
 
-  writeFileIndexJournal(args.journalPath, {
+  const journal = {
     ...emptyFileIndexJournal(),
     operations: args.publications.map(
       ({ file, publication, oldRecordIds }) => ({
@@ -81,14 +89,55 @@ export async function executeJournaledRepositoryPublications(args: {
         intendedBatches: groupIds(publication.expectedChunkIds, 100),
       }),
     ),
-  });
+  };
+  writeFileIndexJournal(args.journalPath, journal);
 
-  for (const item of args.publications) {
-    if (args.isCancelled()) return pendingResult();
-    await args.repository.preparePublication(item.publication);
-  }
+  if (args.isCancelled()) return pendingResult();
+  await args.repository.preparePublicationBatch(
+    args.publications.map((item) => item.publication),
+  );
   checkpointPending(args.store, args.publications);
-  return recoverJournaledRepositoryPublications(args);
+  if (args.isCancelled()) return pendingResult();
+
+  const publicationIds = args.publications.map(
+    (item) => item.publication.publicationId,
+  );
+  const outcome = await args.repository.commitPublicationBatch(publicationIds);
+  if (outcome.status !== "published") {
+    return recoverJournaledRepositoryPublications(args);
+  }
+
+  const currentVectors = args.publications.map(
+    ({ file, publication, cacheEntry }): [string, CachedFileEntry] => [
+      file,
+      {
+        ...cacheEntry,
+        generation: publication.generation,
+        visibility: "current",
+      },
+    ],
+  );
+  checkpointCompleted(
+    args.journalPath,
+    args.store,
+    journal,
+    new Set(publicationIds),
+    currentVectors,
+  );
+  return {
+    committedFiles: outcome.publications.length,
+    recordsUpserted: args.publications.reduce(
+      (total, publication) =>
+        total + publication.publication.expectedChunkIds.length,
+      0,
+    ),
+    recordsDeleted: args.publications.reduce(
+      (total, publication) => total + publication.oldRecordIds.length,
+      0,
+    ),
+    cancelled: false,
+    pending: false,
+  };
 }
 
 export async function recoverJournaledRepositoryPublications(args: {
@@ -178,6 +227,9 @@ export async function recoverJournaledRepositoryPublications(args: {
       outcome?.status === "published" ||
       matchesActive(active, operation.generation, revisionId)
     ) {
+      if (!outcome) {
+        await args.repository.abortPublication(operation.operationId);
+      }
       currentVectors.push([
         operation.file,
         {

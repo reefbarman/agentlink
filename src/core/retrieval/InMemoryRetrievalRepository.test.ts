@@ -256,6 +256,34 @@ describe("InMemoryRetrievalRepository publication contract", () => {
     ).toEqual(["chunk:revision-1:1"]);
   });
 
+  it("rolls back every prepared member when batch validation fails", async () => {
+    const repository = new InMemoryRetrievalRepository({ fingerprint });
+    const valid = publication(
+      "batch-valid",
+      "revision-valid",
+      "2026-07-25T00:00:00.000Z",
+      { sourceId: "source:valid" },
+    );
+    const invalid = publication(
+      "batch-invalid",
+      "revision-invalid",
+      "2026-07-25T00:01:00.000Z",
+      { sourceId: "source:invalid" },
+    );
+    invalid.expectedChunkIds = ["duplicate", "duplicate"];
+
+    await expect(
+      repository.preparePublicationBatch([valid, invalid]),
+    ).rejects.toThrow("expected chunk IDs must be unique");
+    expect(await repository.health()).toMatchObject({
+      pendingPublications: 0,
+    });
+    expect(repository.metrics().sourcesScanned).toBe(0);
+    await expect(
+      repository.commitPublication(valid.publicationId),
+    ).resolves.toMatchObject({ status: "not_found" });
+  });
+
   it("does not publish incomplete expected records and allows a complete retry", async () => {
     const repository = new InMemoryRetrievalRepository({ fingerprint });
     const request = publication(

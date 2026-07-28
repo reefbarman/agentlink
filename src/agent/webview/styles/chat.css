@@ -135,6 +135,31 @@ body {
   opacity: 1;
 }
 
+/* Extension host stopped sending heartbeats — overrides every per-status color
+   (must stay below the status rules so it wins same-specificity ties). */
+.chat-tab-status.host-stale::before {
+  background: var(--vscode-charts-purple, #b180d7);
+  box-shadow: 0 0 0 2px color-mix(in srgb, #b180d7 25%, transparent);
+  opacity: 1;
+  animation: chat-tab-host-stale-pulse 1.15s ease-in-out infinite;
+}
+
+@keyframes chat-tab-host-stale-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-tab-status.host-stale::before {
+    animation: none;
+  }
+}
+
 .chat-tab-label {
   flex-shrink: 0;
   font-size: 11px;
@@ -977,6 +1002,28 @@ body.chat-activity-shelf-resizing * {
   font-weight: 600;
 }
 
+.context-health-pulse {
+  width: 12px;
+  height: 8px;
+  background: currentColor;
+  clip-path: polygon(
+    0 50%,
+    20% 50%,
+    32% 0,
+    48% 100%,
+    62% 30%,
+    74% 50%,
+    100% 50%,
+    100% 66%,
+    68% 66%,
+    63% 58%,
+    48% 100%,
+    33% 38%,
+    27% 66%,
+    0 66%
+  );
+}
+
 .context-health-summary {
   display: flex;
   align-items: center;
@@ -1039,13 +1086,18 @@ body.chat-activity-shelf-resizing * {
 }
 
 .context-health-chevron {
+  width: 6px;
+  height: 6px;
   flex: 0 0 auto;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
   color: var(--vscode-descriptionForeground);
+  transform: rotate(45deg);
   transition: transform 120ms ease;
 }
 
 .context-health-panel[open] .context-health-chevron {
-  transform: rotate(180deg);
+  transform: rotate(225deg);
 }
 
 .context-health-body {

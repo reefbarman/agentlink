@@ -209,7 +209,7 @@ import {
   withWorkspaceRoots,
 } from "../util/paths.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
-import { getRetrievalStoreRoot } from "../storage/retrieval/retrievalStorePaths.js";
+import { getCodeRetrievalStoreRoot } from "../indexer/codeRetrievalIdentity.js";
 import { createComposeExecutionScope } from "./compose/composeScope.js";
 import type { ComposeParams } from "./compose/composeRuntime.js";
 import { loadComposeRuntime } from "./compose/composeRuntimeLoader.js";
@@ -3300,9 +3300,11 @@ export async function dispatchToolCall(
           : undefined,
         ctx.globalStorageUri
           ? {
-              retrievalStoreRoot: getRetrievalStoreRoot(
-                ctx.globalStorageUri.fsPath,
-              ),
+              retrievalStoreRootForWorkspace: (workspaceRoot: string) =>
+                getCodeRetrievalStoreRoot(
+                  ctx.globalStorageUri!.fsPath,
+                  workspaceRoot,
+                ),
             }
           : {},
       );
@@ -3417,9 +3419,11 @@ export async function dispatchToolCall(
           ),
           semanticQueryOptions: ctx.globalStorageUri
             ? {
-                retrievalStoreRoot: getRetrievalStoreRoot(
-                  ctx.globalStorageUri.fsPath,
-                ),
+                retrievalStoreRootForWorkspace: (workspaceRoot: string) =>
+                  getCodeRetrievalStoreRoot(
+                    ctx.globalStorageUri!.fsPath,
+                    workspaceRoot,
+                  ),
               }
             : undefined,
         },
@@ -3453,9 +3457,11 @@ export async function dispatchToolCall(
           ),
           semanticQueryOptions: ctx.globalStorageUri
             ? {
-                retrievalStoreRoot: getRetrievalStoreRoot(
-                  ctx.globalStorageUri.fsPath,
-                ),
+                retrievalStoreRootForWorkspace: (workspaceRoot: string) =>
+                  getCodeRetrievalStoreRoot(
+                    ctx.globalStorageUri!.fsPath,
+                    workspaceRoot,
+                  ),
               }
             : undefined,
         },

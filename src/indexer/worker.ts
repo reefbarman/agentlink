@@ -127,9 +127,12 @@ const MAX_BATCH_TOKENS = 50_000;
 
 /**
  * Number of files to process through the full pipeline (chunk → embed → upsert)
- * per batch. Bounds peak memory to ~7.5MB per batch instead of O(total_files).
+ * per batch. Each file may be 1MB and publication temporarily holds source text,
+ * chunks, embeddings, JSON, and Arrow buffers, so keep this deliberately small.
  */
-const FILE_BATCH_SIZE = 50;
+const FILE_BATCH_SIZE = 5;
+const TREE_SITTER_STARTUP_TIMEOUT_MS = 15_000;
+const STARTUP_HEARTBEAT_INTERVAL_MS = 5_000;
 
 // --- State ---
 
@@ -196,6 +199,7 @@ function createRetrievalRepository(root: string): LanceDbRetrievalRepository {
   return new LanceDbRetrievalRepository({
     root,
     embeddingDimensions: EMBEDDING_DIM,
+    deferNativeIndexRefresh: true,
   });
 }
 
@@ -218,13 +222,60 @@ function sampleHeapUsed(): void {
   metrics.sampleHeapUsed(process.memoryUsage().heapUsed);
 }
 
-function sendComplete(stats: IndexStats): void {
-  sampleHeapUsed();
-  send({ type: "complete", stats: { ...stats, metrics: metrics.snapshot() } });
+function sendStartupProgress(total: number, detail: string): void {
+  const { heapUsed, rss } = process.memoryUsage();
+  const mib = 1024 * 1024;
+  sendProgress(
+    "reading",
+    0,
+    total,
+    `${detail} (heap=${Math.round(heapUsed / mib)}MiB rss=${Math.round(rss / mib)}MiB)`,
+  );
+}
+
+function completeMessage(stats: IndexStats, jobMetrics = metrics): unknown {
+  jobMetrics.sampleHeapUsed(process.memoryUsage().heapUsed);
+  return {
+    type: "complete",
+    stats: { ...stats, metrics: jobMetrics.snapshot() },
+  };
+}
+
+function sendComplete(stats: IndexStats, jobMetrics = metrics): void {
+  send(completeMessage(stats, jobMetrics));
+}
+
+function deferComplete(
+  stats: IndexStats,
+  jobMetrics: ReturnType<typeof createIndexWorkerMetrics>,
+): () => void {
+  const message = completeMessage(stats, jobMetrics);
+  return () => send(message);
+}
+
+function errorMessage(message: string, fatal: boolean): unknown {
+  return { type: "error", message, fatal };
 }
 
 function sendError(message: string, fatal: boolean): void {
-  send({ type: "error", message, fatal });
+  send(errorMessage(message, fatal));
+}
+
+async function refreshRetrievalIndexes(
+  repository: LanceDbRetrievalRepository,
+  current: number,
+  total: number,
+): Promise<void> {
+  const report = () =>
+    sendProgress("cleanup", current, total, "refreshing retrieval indexes");
+  report();
+  const heartbeat = setInterval(report, 30_000);
+  heartbeat.unref();
+  try {
+    await repository.refreshNativeIndexes();
+  } finally {
+    clearInterval(heartbeat);
+  }
 }
 
 async function closeRetrievalRepository(
@@ -419,7 +470,7 @@ async function resetIndexOwnership(args: {
   indexName: string;
   retrievalStoreRoot: string;
   workspaceScopeId: string;
-  repository: Pick<RetrievalRepository, "deleteScope">;
+  repository: Pick<LanceDbRetrievalRepository, "deleteSourceIdPrefix">;
   granularity: ChunkGranularity;
   fingerprint: IndexCache["fingerprint"];
   interruptedTarget: IndexResetTarget | null;
@@ -443,11 +494,7 @@ async function resetIndexOwnership(args: {
   }
   beginIndexReset(resetStatePath, currentTarget);
   metrics.recordOperation("retrieval.deleteIndex");
-  await args.repository.deleteScope({
-    namespaces: ["code"],
-    metadata: { scopeId: args.workspaceScopeId },
-    sourceIdPrefix: `code:${args.workspaceScopeId}:`,
-  });
+  await args.repository.deleteSourceIdPrefix(`code:${args.workspaceScopeId}:`);
   resetFileIndexJournal(getFileIndexJournalPath(args.cachePath));
   args.cache.version = 1;
   args.cache.files = {};
@@ -466,6 +513,7 @@ async function updateStructuralCacheForFiles(
   structuralCache: StructuralGraphCache,
   files: FileWithContent[],
   workspaceRoot: string,
+  useTreeSitter: boolean,
 ): Promise<number> {
   const indexedAt = new Date().toISOString();
   let updated = 0;
@@ -479,6 +527,7 @@ async function updateStructuralCacheForFiles(
       continue;
     }
     const symbolHints =
+      useTreeSitter &&
       isTreeSitterSupported(file.absPath) &&
       shouldUseTreeSitterSymbolHints(file.absPath)
         ? (
@@ -632,7 +681,12 @@ async function recoverChangedFileReplacements(args: {
   structuralCache: StructuralGraphCache;
   repository: RetrievalRepository;
   checkpoints: CacheCheckpointCoordinator;
-}): Promise<{ cancelled: boolean; pending: boolean; recordsDeleted: number }> {
+}): Promise<{
+  cancelled: boolean;
+  pending: boolean;
+  recordsDeleted: number;
+  refreshRequired: boolean;
+}> {
   const journalPath = getFileIndexJournalPath(args.cachePath);
   const loaded = loadFileIndexJournal(journalPath);
   if (loaded.status === "corrupt") {
@@ -641,7 +695,12 @@ async function recoverChangedFileReplacements(args: {
   if (
     !loaded.journal.operations.some((operation) => operation.kind === "replace")
   ) {
-    return { cancelled: false, pending: false, recordsDeleted: 0 };
+    return {
+      cancelled: false,
+      pending: false,
+      recordsDeleted: 0,
+      refreshRequired: false,
+    };
   }
   const recovered = await recoverJournaledRepositoryPublications({
     journalPath,
@@ -653,6 +712,8 @@ async function recoverChangedFileReplacements(args: {
     cancelled: recovered.cancelled,
     pending: recovered.pending,
     recordsDeleted: recovered.recordsDeleted,
+    refreshRequired:
+      recovered.committedFiles > 0 || recovered.recordsDeleted > 0,
   };
 }
 
@@ -662,6 +723,7 @@ async function backfillStructuralCacheForCachedFiles(args: {
   cache: IndexCache;
   structuralCache: StructuralGraphCache;
   errors: string[];
+  useTreeSitter: boolean;
 }): Promise<number> {
   const missingStructuralPaths: Array<{ absPath: string; relPath: string }> =
     [];
@@ -714,6 +776,7 @@ async function backfillStructuralCacheForCachedFiles(args: {
           (file) => args.cache.files[file.relPath]?.hash === file.hash,
         ),
         args.workspaceRoot,
+        args.useTreeSitter,
       );
     } finally {
       metrics.contentReleased(retainedBytes);
@@ -764,11 +827,75 @@ process.on("message", (msg: ExtensionToWorkerMessage) => {
 
 send({ type: "ready" });
 
-// Initialize tree-sitter WASM (one-time, before any indexing)
+// Initialize tree-sitter WASM on the first job so the startup phase is visible
+// before invoking WASM, but do not let optional syntax-aware chunking block the
+// lexical indexing fallback indefinitely.
 const wasmDir = path.join(__dirname, "wasm");
-const treeSitterReady = initTreeSitter(wasmDir).catch((err) => {
-  sendError(`Tree-sitter init failed: ${err}`, true);
-});
+let treeSitterReady: Promise<void> | undefined;
+let treeSitterInitializationSettled = false;
+let treeSitterInitializationSucceeded = false;
+let treeSitterStartupAbandoned = false;
+let treeSitterRecoveryRequiresRebuild = false;
+
+function startTreeSitterInitialization(): Promise<void> {
+  treeSitterReady ??= initTreeSitter(wasmDir)
+    .then(() => {
+      treeSitterInitializationSucceeded = true;
+    })
+    .catch((error) => {
+      sendError(
+        `Tree-sitter init failed; using lexical chunking: ${error}`,
+        false,
+      );
+    })
+    .finally(() => {
+      treeSitterInitializationSettled = true;
+      if (treeSitterStartupAbandoned && treeSitterInitializationSucceeded) {
+        treeSitterRecoveryRequiresRebuild = true;
+      }
+      treeSitterStartupAbandoned = false;
+    });
+  return treeSitterReady;
+}
+
+async function awaitTreeSitterStartup(total: number): Promise<boolean> {
+  const report = () =>
+    sendProgress("reading", 0, total, "initializing syntax parser");
+  report();
+  if (treeSitterStartupAbandoned) return false;
+  const initialization = startTreeSitterInitialization();
+  if (treeSitterInitializationSettled) {
+    await initialization;
+    return treeSitterInitializationSucceeded;
+  }
+
+  const heartbeat = setInterval(report, STARTUP_HEARTBEAT_INTERVAL_MS);
+  heartbeat.unref();
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    const initialized = await Promise.race([
+      initialization.then(() => true),
+      new Promise<false>((resolve) => {
+        timeout = setTimeout(
+          () => resolve(false),
+          TREE_SITTER_STARTUP_TIMEOUT_MS,
+        );
+        timeout.unref();
+      }),
+    ]);
+    if (!initialized) {
+      if (!treeSitterInitializationSettled) treeSitterStartupAbandoned = true;
+      sendError(
+        `Tree-sitter initialization exceeded ${TREE_SITTER_STARTUP_TIMEOUT_MS}ms; using lexical chunking`,
+        false,
+      );
+    }
+    return initialized && treeSitterInitializationSucceeded;
+  } finally {
+    clearInterval(heartbeat);
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 // --- File batch pipeline ---
 
@@ -779,6 +906,7 @@ interface BatchConfig {
   workspaceRoot: string;
   granularity: ChunkGranularity;
   checkpoints: CacheCheckpointCoordinator;
+  useTreeSitter: boolean;
 }
 
 interface BatchResult {
@@ -824,7 +952,7 @@ async function processFileBatch(
     let chunks: Chunk[];
     if (isMarkdownFile(file.absPath)) {
       chunks = markdownChunkFile(file.content, file.absPath, file.relPath);
-    } else if (isTreeSitterSupported(file.absPath)) {
+    } else if (config.useTreeSitter && isTreeSitterSupported(file.absPath)) {
       const treeSitterResult = await treeSitterChunkFileDetailed(
         file.content,
         file.absPath,
@@ -1075,7 +1203,8 @@ async function processFilePaths(
 // --- Main indexing pipeline ---
 
 async function handleStart(msg: StartIndexMessage): Promise<void> {
-  await treeSitterReady;
+  const useTreeSitter = await awaitTreeSitterStartup(msg.files.length);
+  const syntaxRecoveryRebuild = treeSitterRecoveryRequiresRebuild;
   const startTime = Date.now();
   const errors: string[] = [];
   let filesIndexed = 0;
@@ -1084,6 +1213,23 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
   let recordsDeleted = 0;
   let checkpoints: CacheCheckpointCoordinator | undefined;
   let repository: LanceDbRetrievalRepository | undefined;
+  let terminalMessage: (() => void) | undefined;
+  const jobMetrics = metrics;
+
+  if (aborted) {
+    sendComplete({
+      filesIndexed,
+      totalFilesInIndex: 0,
+      chunksCreated,
+      totalChunksInIndex: 0,
+      recordsUpserted,
+      recordsDeleted,
+      durationMs: Date.now() - startTime,
+      errors,
+      cancelled: true,
+    });
+    return;
+  }
 
   // Distribute granularity to all chunkers
   setTreeSitterGranularity(msg.granularity);
@@ -1091,6 +1237,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
   setMarkdownGranularity(msg.granularity);
 
   try {
+    sendProgress("reading", 0, msg.files.length, "loading index metadata");
     const expectedScopeId = getCodeWorkspaceScopeId(msg.workspaceRoot);
     if (msg.workspaceScopeId !== expectedScopeId) {
       throw new Error("Workspace scope identity does not match workspace root");
@@ -1105,12 +1252,16 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         workspaceRoot: msg.workspaceRoot,
         indexName: msg.indexName,
       });
+    sendProgress("reading", 0, msg.files.length, "opening retrieval store");
     repository = createRetrievalRepository(msg.retrievalStoreRoot);
     const expectedFingerprint = createCodeIndexFingerprint(msg.granularity);
+    sendStartupProgress(msg.files.length, "migrating retrieval store");
     const migration = await repository.migrate(expectedFingerprint);
     if (migration.status === "rebuild_required") {
       throw new Error(CODE_INDEX_REBUILD_REQUIRED_ERROR);
     }
+    const retrievalIndexesRequireRefresh =
+      (await repository.lexicalReadiness()).status !== "ready";
     const checkpointCoordinator = createCacheCheckpointCoordinator({
       cachePath: msg.cachePath,
       structuralCachePath,
@@ -1124,11 +1275,23 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     );
     const rebuildRequested =
       msg.force ||
+      syntaxRecoveryRebuild ||
       fingerprintDisposition !== "compatible" ||
       (cache.granularity ?? "standard") !== msg.granularity;
 
+    if (!rebuildRequested) {
+      sendStartupProgress(
+        msg.files.length,
+        "recovering interrupted file publications",
+      );
+    }
     const replacementRecovery = rebuildRequested
-      ? { cancelled: false, pending: false, recordsDeleted: 0 }
+      ? {
+          cancelled: false,
+          pending: false,
+          recordsDeleted: 0,
+          refreshRequired: false,
+        }
       : await recoverChangedFileReplacements({
           cachePath: msg.cachePath,
           cache,
@@ -1138,18 +1301,31 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         });
     recordsDeleted += replacementRecovery.recordsDeleted;
     if (replacementRecovery.pending || replacementRecovery.cancelled) {
-      sendComplete({
-        filesIndexed,
-        totalFilesInIndex: Object.keys(cache.files).length,
-        chunksCreated,
-        totalChunksInIndex: countCachedChunks(cache),
-        recordsUpserted,
-        recordsDeleted,
-        durationMs: Date.now() - startTime,
-        errors,
-        cancelled: true,
-      });
+      if (replacementRecovery.refreshRequired) {
+        await refreshRetrievalIndexes(
+          repository,
+          filesIndexed,
+          Object.keys(cache.files).length,
+        );
+      }
+      terminalMessage = deferComplete(
+        {
+          filesIndexed,
+          totalFilesInIndex: Object.keys(cache.files).length,
+          chunksCreated,
+          totalChunksInIndex: countCachedChunks(cache),
+          recordsUpserted,
+          recordsDeleted,
+          durationMs: Date.now() - startTime,
+          errors,
+          cancelled: true,
+        },
+        jobMetrics,
+      );
       return;
+    }
+    if (!rebuildRequested) {
+      sendStartupProgress(msg.files.length, "recovering interrupted deletions");
     }
     const recovery = rebuildRequested
       ? {
@@ -1171,22 +1347,36 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     recordsDeleted += recovery.recordsDeleted;
     errors.push(...recovery.errors);
     if (recovery.pending || recovery.cancelled) {
-      sendComplete({
-        filesIndexed,
-        totalFilesInIndex: Object.keys(cache.files).length,
-        chunksCreated,
-        totalChunksInIndex: countCachedChunks(cache),
-        recordsUpserted,
-        recordsDeleted,
-        durationMs: Date.now() - startTime,
-        errors,
-        cancelled: recovery.cancelled || undefined,
-      });
+      if (recordsDeleted > 0) {
+        await refreshRetrievalIndexes(
+          repository,
+          filesIndexed,
+          Object.keys(cache.files).length,
+        );
+      }
+      terminalMessage = deferComplete(
+        {
+          filesIndexed,
+          totalFilesInIndex: Object.keys(cache.files).length,
+          chunksCreated,
+          totalChunksInIndex: countCachedChunks(cache),
+          recordsUpserted,
+          recordsDeleted,
+          durationMs: Date.now() - startTime,
+          errors,
+          cancelled: recovery.cancelled || undefined,
+        },
+        jobMetrics,
+      );
       return;
     }
 
     // Force and granularity rebuilds share one durable retrieval index/cache reset.
     if (rebuildRequested) {
+      sendStartupProgress(
+        msg.files.length,
+        "resetting workspace retrieval scope",
+      );
       await resetIndexOwnership({
         cachePath: msg.cachePath,
         cache,
@@ -1201,6 +1391,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         interruptedTarget: interruptedResetTarget,
         checkpoints,
       });
+      if (syntaxRecoveryRebuild) treeSitterRecoveryRequiresRebuild = false;
     }
 
     // Phase 1: Scan files to determine what changed (paths only, no content held)
@@ -1223,17 +1414,20 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
 
     if (aborted) {
       checkpoints.drain();
-      sendComplete({
-        filesIndexed,
-        totalFilesInIndex: Object.keys(cache.files).length,
-        chunksCreated,
-        totalChunksInIndex: countCachedChunks(cache),
-        recordsUpserted,
-        recordsDeleted,
-        durationMs: Date.now() - startTime,
-        errors,
-        cancelled: true,
-      });
+      terminalMessage = deferComplete(
+        {
+          filesIndexed,
+          totalFilesInIndex: Object.keys(cache.files).length,
+          chunksCreated,
+          totalChunksInIndex: countCachedChunks(cache),
+          recordsUpserted,
+          recordsDeleted,
+          durationMs: Date.now() - startTime,
+          errors,
+          cancelled: true,
+        },
+        jobMetrics,
+      );
       return;
     }
 
@@ -1254,17 +1448,27 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       errors.push(...removal.errors);
       sendProgress("cleanup", removal.completed, removedRelPaths.length);
       if (removal.pending || removal.cancelled) {
-        sendComplete({
-          filesIndexed,
-          totalFilesInIndex: Object.keys(cache.files).length,
-          chunksCreated,
-          totalChunksInIndex: countCachedChunks(cache),
-          recordsUpserted,
-          recordsDeleted,
-          durationMs: Date.now() - startTime,
-          errors,
-          cancelled: removal.cancelled || undefined,
-        });
+        if (recordsDeleted > 0) {
+          await refreshRetrievalIndexes(
+            repository,
+            filesIndexed,
+            Object.keys(cache.files).length,
+          );
+        }
+        terminalMessage = deferComplete(
+          {
+            filesIndexed,
+            totalFilesInIndex: Object.keys(cache.files).length,
+            chunksCreated,
+            totalChunksInIndex: countCachedChunks(cache),
+            recordsUpserted,
+            recordsDeleted,
+            durationMs: Date.now() - startTime,
+            errors,
+            cancelled: removal.cancelled || undefined,
+          },
+          jobMetrics,
+        );
         return;
       }
     }
@@ -1280,6 +1484,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
             cache,
             structuralCache,
             errors,
+            useTreeSitter,
           }),
       );
       sampleHeapUsed();
@@ -1295,17 +1500,33 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         checkpoints,
       });
       checkpoints.drain();
-      sendComplete({
-        filesIndexed: 0,
-        totalFilesInIndex: Object.keys(cache.files).length,
-        chunksCreated: 0,
-        totalChunksInIndex: countCachedChunks(cache),
-        recordsUpserted,
-        recordsDeleted,
-        durationMs: Date.now() - startTime,
-        errors,
-        cancelled: aborted || undefined,
-      });
+      if (
+        !aborted &&
+        (retrievalIndexesRequireRefresh ||
+          rebuildRequested ||
+          replacementRecovery.refreshRequired ||
+          recordsDeleted > 0)
+      ) {
+        await refreshRetrievalIndexes(
+          repository,
+          filesIndexed,
+          Object.keys(cache.files).length,
+        );
+      }
+      terminalMessage = deferComplete(
+        {
+          filesIndexed: 0,
+          totalFilesInIndex: Object.keys(cache.files).length,
+          chunksCreated: 0,
+          totalChunksInIndex: countCachedChunks(cache),
+          recordsUpserted,
+          recordsDeleted,
+          durationMs: Date.now() - startTime,
+          errors,
+          cancelled: aborted || undefined,
+        },
+        jobMetrics,
+      );
       return;
     }
 
@@ -1320,6 +1541,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         workspaceRoot: msg.workspaceRoot,
         granularity: msg.granularity,
         checkpoints,
+        useTreeSitter,
       },
       cache,
       structuralCache,
@@ -1343,32 +1565,51 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       checkpoints,
     });
     checkpoints.drain();
+    if (
+      !aborted &&
+      (retrievalIndexesRequireRefresh ||
+        rebuildRequested ||
+        replacementRecovery.refreshRequired ||
+        recordsUpserted > 0 ||
+        recordsDeleted > 0)
+    ) {
+      await refreshRetrievalIndexes(
+        repository,
+        filesIndexed,
+        Object.keys(cache.files).length,
+      );
+    }
 
-    sendComplete({
-      filesIndexed,
-      totalFilesInIndex: Object.keys(cache.files).length,
-      chunksCreated,
-      totalChunksInIndex: countCachedChunks(cache),
-      recordsUpserted,
-      recordsDeleted,
-      durationMs: Date.now() - startTime,
-      errors,
-      cancelled: aborted || undefined,
-    });
+    terminalMessage = deferComplete(
+      {
+        filesIndexed,
+        totalFilesInIndex: Object.keys(cache.files).length,
+        chunksCreated,
+        totalChunksInIndex: countCachedChunks(cache),
+        recordsUpserted,
+        recordsDeleted,
+        durationMs: Date.now() - startTime,
+        errors,
+        cancelled: aborted || undefined,
+      },
+      jobMetrics,
+    );
   } catch (err) {
     try {
       checkpoints?.drain();
     } catch (checkpointError) {
-      sendError(
-        `Indexing failed: ${err}; cache checkpoint failed: ${checkpointError}`,
-        true,
-      );
+      terminalMessage = () =>
+        sendError(
+          `Indexing failed: ${err}; cache checkpoint failed: ${checkpointError}`,
+          true,
+        );
       return;
     }
-    sendError(`Indexing failed: ${err}`, true);
+    terminalMessage = () => sendError(`Indexing failed: ${err}`, true);
   } finally {
     checkpoints?.cancelScheduled();
     await closeRetrievalRepository(repository);
+    terminalMessage?.();
   }
 }
 
@@ -1377,7 +1618,9 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
 async function handleIncrementalUpdate(
   msg: IncrementalUpdateMessage,
 ): Promise<void> {
-  await treeSitterReady;
+  const useTreeSitter = await awaitTreeSitterStartup(
+    msg.added.length + msg.removed.length,
+  );
   const startTime = Date.now();
   const errors: string[] = [];
   let filesIndexed = 0;
@@ -1386,6 +1629,23 @@ async function handleIncrementalUpdate(
   let recordsDeleted = 0;
   let checkpoints: CacheCheckpointCoordinator | undefined;
   let repository: LanceDbRetrievalRepository | undefined;
+  let terminalMessage: (() => void) | undefined;
+  const jobMetrics = metrics;
+
+  if (aborted) {
+    sendComplete({
+      filesIndexed,
+      totalFilesInIndex: 0,
+      chunksCreated,
+      totalChunksInIndex: 0,
+      recordsUpserted,
+      recordsDeleted,
+      durationMs: Date.now() - startTime,
+      errors,
+      cancelled: true,
+    });
+    return;
+  }
 
   // Distribute granularity to all chunkers
   setTreeSitterGranularity(msg.granularity);
@@ -1393,6 +1653,11 @@ async function handleIncrementalUpdate(
   setMarkdownGranularity(msg.granularity);
 
   try {
+    if (treeSitterRecoveryRequiresRebuild) {
+      throw new Error(CODE_INDEX_REBUILD_REQUIRED_ERROR);
+    }
+    const totalChanges = msg.added.length + msg.removed.length;
+    sendProgress("reading", 0, totalChanges, "loading index metadata");
     const expectedScopeId = getCodeWorkspaceScopeId(msg.workspaceRoot);
     if (msg.workspaceScopeId !== expectedScopeId) {
       throw new Error("Workspace scope identity does not match workspace root");
@@ -1414,11 +1679,15 @@ async function handleIncrementalUpdate(
         workspaceRoot: msg.workspaceRoot,
         indexName: msg.indexName,
       });
+    sendProgress("reading", 0, totalChanges, "opening retrieval store");
     repository = createRetrievalRepository(msg.retrievalStoreRoot);
+    sendStartupProgress(totalChanges, "migrating retrieval store");
     const migration = await repository.migrate(expectedFingerprint);
     if (migration.status === "rebuild_required") {
       throw new Error(CODE_INDEX_REBUILD_REQUIRED_ERROR);
     }
+    const retrievalIndexesRequireRefresh =
+      (await repository.lexicalReadiness()).status !== "ready";
     const checkpointCoordinator = createCacheCheckpointCoordinator({
       cachePath: msg.cachePath,
       structuralCachePath,
@@ -1435,17 +1704,27 @@ async function handleIncrementalUpdate(
     });
     recordsDeleted += replacementRecovery.recordsDeleted;
     if (replacementRecovery.pending || replacementRecovery.cancelled) {
-      sendComplete({
-        filesIndexed,
-        totalFilesInIndex: Object.keys(cache.files).length,
-        chunksCreated,
-        totalChunksInIndex: countCachedChunks(cache),
-        recordsUpserted,
-        recordsDeleted,
-        durationMs: Date.now() - startTime,
-        errors,
-        cancelled: true,
-      });
+      if (replacementRecovery.refreshRequired) {
+        await refreshRetrievalIndexes(
+          repository,
+          filesIndexed,
+          Object.keys(cache.files).length,
+        );
+      }
+      terminalMessage = deferComplete(
+        {
+          filesIndexed,
+          totalFilesInIndex: Object.keys(cache.files).length,
+          chunksCreated,
+          totalChunksInIndex: countCachedChunks(cache),
+          recordsUpserted,
+          recordsDeleted,
+          durationMs: Date.now() - startTime,
+          errors,
+          cancelled: true,
+        },
+        jobMetrics,
+      );
       return;
     }
     const recovery = await removeFilesFromIndex({
@@ -1460,17 +1739,27 @@ async function handleIncrementalUpdate(
     recordsDeleted += recovery.recordsDeleted;
     errors.push(...recovery.errors);
     if (recovery.pending || recovery.cancelled) {
-      sendComplete({
-        filesIndexed,
-        totalFilesInIndex: Object.keys(cache.files).length,
-        chunksCreated,
-        totalChunksInIndex: countCachedChunks(cache),
-        recordsUpserted,
-        recordsDeleted,
-        durationMs: Date.now() - startTime,
-        errors,
-        cancelled: recovery.cancelled || undefined,
-      });
+      if (recordsDeleted > 0) {
+        await refreshRetrievalIndexes(
+          repository,
+          filesIndexed,
+          Object.keys(cache.files).length,
+        );
+      }
+      terminalMessage = deferComplete(
+        {
+          filesIndexed,
+          totalFilesInIndex: Object.keys(cache.files).length,
+          chunksCreated,
+          totalChunksInIndex: countCachedChunks(cache),
+          recordsUpserted,
+          recordsDeleted,
+          durationMs: Date.now() - startTime,
+          errors,
+          cancelled: recovery.cancelled || undefined,
+        },
+        jobMetrics,
+      );
       return;
     }
 
@@ -1494,17 +1783,27 @@ async function handleIncrementalUpdate(
     recordsDeleted += removal.recordsDeleted;
     errors.push(...removal.errors);
     if (removal.pending || removal.cancelled) {
-      sendComplete({
-        filesIndexed,
-        totalFilesInIndex: Object.keys(cache.files).length,
-        chunksCreated,
-        totalChunksInIndex: countCachedChunks(cache),
-        recordsUpserted,
-        recordsDeleted,
-        durationMs: Date.now() - startTime,
-        errors,
-        cancelled: removal.cancelled || undefined,
-      });
+      if (recordsDeleted > 0) {
+        await refreshRetrievalIndexes(
+          repository,
+          filesIndexed,
+          Object.keys(cache.files).length,
+        );
+      }
+      terminalMessage = deferComplete(
+        {
+          filesIndexed,
+          totalFilesInIndex: Object.keys(cache.files).length,
+          chunksCreated,
+          totalChunksInIndex: countCachedChunks(cache),
+          recordsUpserted,
+          recordsDeleted,
+          durationMs: Date.now() - startTime,
+          errors,
+          cancelled: removal.cancelled || undefined,
+        },
+        jobMetrics,
+      );
       return;
     }
 
@@ -1537,6 +1836,7 @@ async function handleIncrementalUpdate(
           workspaceRoot: msg.workspaceRoot,
           granularity: msg.granularity,
           checkpoints,
+          useTreeSitter,
         },
         cache,
         structuralCache,
@@ -1554,32 +1854,51 @@ async function handleIncrementalUpdate(
       checkpoints,
     });
     checkpoints.drain();
+    if (
+      !aborted &&
+      (retrievalIndexesRequireRefresh ||
+        replacementRecovery.refreshRequired ||
+        recordsUpserted > 0 ||
+        recordsDeleted > 0)
+    ) {
+      await refreshRetrievalIndexes(
+        repository,
+        filesIndexed,
+        Object.keys(cache.files).length,
+      );
+    }
 
-    sendComplete({
-      filesIndexed,
-      totalFilesInIndex: Object.keys(cache.files).length,
-      chunksCreated,
-      totalChunksInIndex: countCachedChunks(cache),
-      recordsUpserted,
-      recordsDeleted,
-      durationMs: Date.now() - startTime,
-      errors,
-      cancelled: aborted || undefined,
-    });
+    terminalMessage = deferComplete(
+      {
+        filesIndexed,
+        totalFilesInIndex: Object.keys(cache.files).length,
+        chunksCreated,
+        totalChunksInIndex: countCachedChunks(cache),
+        recordsUpserted,
+        recordsDeleted,
+        durationMs: Date.now() - startTime,
+        errors,
+        cancelled: aborted || undefined,
+      },
+      jobMetrics,
+    );
   } catch (err) {
     try {
       checkpoints?.drain();
     } catch (checkpointError) {
-      sendError(
-        `Incremental update failed: ${err}; cache checkpoint failed: ${checkpointError}`,
-        true,
-      );
+      terminalMessage = () =>
+        sendError(
+          `Incremental update failed: ${err}; cache checkpoint failed: ${checkpointError}`,
+          true,
+        );
       return;
     }
-    sendError(`Incremental update failed: ${err}`, true);
+    terminalMessage = () =>
+      sendError(`Incremental update failed: ${err}`, true);
   } finally {
     checkpoints?.cancelScheduled();
     await closeRetrievalRepository(repository);
+    terminalMessage?.();
   }
 }
 

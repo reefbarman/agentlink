@@ -45,6 +45,7 @@ const {
   readFileMock,
   statMock,
   retrievalQuery,
+  retrievalRepositoryRoots,
   closeRetrievalRepository,
 } = vi.hoisted(() => ({
   resolveEmbeddingAuth: vi.fn(),
@@ -54,6 +55,7 @@ const {
   readFileMock: vi.fn(),
   statMock: vi.fn(),
   retrievalQuery: vi.fn(),
+  retrievalRepositoryRoots: [] as string[],
   closeRetrievalRepository: vi.fn(),
 }));
 
@@ -70,6 +72,10 @@ vi.mock("../agent/providers/index.js", () => ({
 
 vi.mock("../storage/retrieval/LanceDbRetrievalRepository.js", () => ({
   LanceDbRetrievalRepository: class {
+    constructor(options: { root: string }) {
+      retrievalRepositoryRoots.push(options.root);
+    }
+
     query = retrievalQuery;
     close = closeRetrievalRepository;
   },
@@ -333,6 +339,7 @@ describe("semantic retrieval service", () => {
     readFileMock.mockReset();
     statMock.mockReset();
     retrievalQuery.mockReset();
+    retrievalRepositoryRoots.length = 0;
     closeRetrievalRepository.mockReset();
     closeRetrievalRepository.mockResolvedValue(undefined);
     statMock.mockResolvedValue({
@@ -636,6 +643,13 @@ describe("semantic retrieval service", () => {
     retrievalQuery
       .mockResolvedValueOnce(queryResult([api]))
       .mockResolvedValueOnce(queryResult([web]));
+    const apiStoreRoot = path.join(retrievalStoreRoot, "api");
+    const webStoreRoot = path.join(retrievalStoreRoot, "web");
+    fs.mkdirSync(apiStoreRoot);
+    fs.mkdirSync(webStoreRoot);
+    const retrievalStoreRootForWorkspace = vi.fn((workspacePath: string) =>
+      workspacePath === "/workspace/api" ? apiStoreRoot : webStoreRoot,
+    );
 
     try {
       const result = await semanticSearch(
@@ -643,7 +657,7 @@ describe("semantic retrieval service", () => {
         "workspace search",
         5,
         undefined,
-        { includeAllWorkspaceRoots: true, retrievalStoreRoot },
+        { includeAllWorkspaceRoots: true, retrievalStoreRootForWorkspace },
       );
       const resultPayload = payload(result);
       expect(String(resultPayload.results)).toContain("api/src/server.ts");
@@ -652,9 +666,28 @@ describe("semantic retrieval service", () => {
         ([request]) => request.filters.metadata.scopeId,
       );
       expect(new Set(scopeIds).size).toBe(2);
+      expect(
+        retrievalStoreRootForWorkspace.mock.calls.map(([root]) => root),
+      ).toEqual(["/workspace/api", "/workspace/web"]);
+      expect(retrievalRepositoryRoots).toEqual([apiStoreRoot, webStoreRoot]);
     } finally {
       workspace.workspaceFolders = originalFolders;
     }
+  });
+
+  it("prefers an explicit store root over the per-workspace resolver", async () => {
+    retrievalQuery.mockResolvedValue(queryResult([]));
+    const retrievalStoreRootForWorkspace = vi.fn(() =>
+      path.join(retrievalStoreRoot, "derived"),
+    );
+
+    await semanticFileList("/workspace", "explicit root", 5, {
+      retrievalStoreRoot,
+      retrievalStoreRootForWorkspace,
+    });
+
+    expect(retrievalStoreRootForWorkspace).not.toHaveBeenCalled();
+    expect(retrievalRepositoryRoots).toEqual([retrievalStoreRoot]);
   });
 
   it("falls back to bounded ripgrep when the local retrieval store is missing", async () => {

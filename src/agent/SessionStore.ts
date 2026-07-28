@@ -25,6 +25,13 @@ import {
 } from "./sessionTitle.js";
 
 import type { Checkpoint } from "./CheckpointManager.js";
+import { hostFlightRecorder } from "../core/hostLiveness.js";
+import {
+  TRANSCRIPT_ATTACHMENTS_DIRNAME,
+  externalizeTranscriptPayloads,
+  rehydrateTranscriptPayloads,
+  type ExternalizedTranscript,
+} from "./transcriptPayloads.js";
 import {
   SESSION_PROJECT_SCOPE_SCHEMA_VERSION,
   type SessionProjectScope,
@@ -442,7 +449,10 @@ export class SessionStore implements SessionPersistenceProvider {
       ok: true,
       value: {
         summary: normalizedSummary,
-        messages: messagesResult.value.messages,
+        messages: this.rehydrateMessages(
+          sessionId,
+          messagesResult.value.messages,
+        ),
         metadata,
       },
       revision: metadataResult.value.revision ?? "0",
@@ -732,9 +742,16 @@ export class SessionStore implements SessionPersistenceProvider {
   loadMessages(sessionId: string): AgentMessage[] | null {
     const file = path.join(this.historyDir, sessionId, "messages.json");
     try {
+      const startedAt = Date.now();
       const raw = fs.readFileSync(file, "utf-8");
       const parsed = JSON.parse(raw) as MessagesFile;
-      return parsed.messages ?? null;
+      hostFlightRecorder.noteSync(
+        "transcript-load",
+        `${sessionId} ${raw.length}B`,
+        startedAt,
+      );
+      if (!parsed.messages) return null;
+      return this.rehydrateMessages(sessionId, parsed.messages);
     } catch {
       return null;
     }
@@ -884,6 +901,13 @@ export class SessionStore implements SessionPersistenceProvider {
 
     const messagesPath = path.join(sessionDir, "messages.json");
     const transcriptRevision = record.transcriptRevision;
+    // Oversized payloads (base64 media) are persisted as content-addressed
+    // attachment files instead of transcript bytes, so `messages.json` stays
+    // small enough to re-stringify every checkpoint tick. Lazy: the
+    // revision-skip path never pays for the transform.
+    let externalized: ExternalizedTranscript | undefined;
+    const getExternalized = () =>
+      (externalized ??= externalizeTranscriptPayloads(record.messages));
     let messagesJson: string | undefined;
     let messagesDigest: string | undefined;
     let transcriptUnchanged: boolean;
@@ -894,7 +918,10 @@ export class SessionStore implements SessionPersistenceProvider {
     } else {
       // Legacy records without a transcript revision fall back to hashing the
       // serialized history to detect unchanged transcripts.
-      messagesJson = this.serializeMessages(record.messages);
+      messagesJson = this.serializeMessages(
+        getExternalized().messages,
+        summary.id,
+      );
       messagesDigest = crypto
         .createHash("sha256")
         .update(messagesJson)
@@ -905,9 +932,18 @@ export class SessionStore implements SessionPersistenceProvider {
     }
 
     if (!transcriptUnchanged) {
+      // Attachments before messages, mirroring the messages-before-metadata
+      // invariant: the transcript on disk never references a payload file
+      // that has not already been written.
+      await this.ensureTranscriptPayloadFiles(
+        sessionDir,
+        summary.id,
+        getExternalized().payloads,
+      );
       await this.writeSerializedFileAtomic(
         messagesPath,
-        messagesJson ?? this.serializeMessages(record.messages),
+        messagesJson ??
+          this.serializeMessages(getExternalized().messages, summary.id),
         durability,
       );
       // Record whichever change tracker the record supports and drop the
@@ -942,12 +978,78 @@ export class SessionStore implements SessionPersistenceProvider {
     await this.scheduleIndexFlush(durability);
   }
 
-  private serializeMessages(messages: AgentMessage[]): string {
+  /**
+   * Content hashes whose attachment files are known to exist on disk, per
+   * session. Avoids an `existsSync` per payload per save; content-addressed
+   * files are immutable so "seen once" is proof enough for this process.
+   */
+  private readonly ensuredPayloadHashes = new Map<string, Set<string>>();
+
+  private async ensureTranscriptPayloadFiles(
+    sessionDir: string,
+    sessionId: string,
+    payloads: Map<string, string>,
+  ): Promise<void> {
+    if (payloads.size === 0) return;
+    let known = this.ensuredPayloadHashes.get(sessionId);
+    if (!known) {
+      known = new Set();
+      this.ensuredPayloadHashes.set(sessionId, known);
+    }
+    const attachmentsDir = path.join(
+      sessionDir,
+      TRANSCRIPT_ATTACHMENTS_DIRNAME,
+    );
+    for (const [hash, value] of payloads) {
+      if (known.has(hash)) continue;
+      const payloadPath = path.join(attachmentsDir, `${hash}.payload`);
+      if (!fs.existsSync(payloadPath)) {
+        // Always durable: a payload is written once per unique blob, and the
+        // checkpoint→durable upgrade tracking only covers messages.json, so
+        // paying one fsync here keeps the durability invariant simple.
+        await this.writeSerializedFileAtomic(payloadPath, value, "durable");
+      }
+      known.add(hash);
+    }
+  }
+
+  private rehydrateMessages(
+    sessionId: string,
+    messages: AgentMessage[],
+  ): AgentMessage[] {
+    return rehydrateTranscriptPayloads(messages, (hash) => {
+      try {
+        return fs.readFileSync(
+          path.join(
+            this.historyDir,
+            sessionId,
+            TRANSCRIPT_ATTACHMENTS_DIRNAME,
+            `${hash}.payload`,
+          ),
+          "utf-8",
+        );
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  private serializeMessages(
+    messages: AgentMessage[],
+    diagnosticsId: string,
+  ): string {
     const messagesFile: MessagesFile = {
       schemaVersion: SCHEMA_VERSION,
       messages,
     };
-    return `${JSON.stringify(messagesFile)}\n`;
+    const startedAt = Date.now();
+    const serialized = `${JSON.stringify(messagesFile)}\n`;
+    hostFlightRecorder.noteSync(
+      "transcript-stringify",
+      `${diagnosticsId} ${serialized.length}B`,
+      startedAt,
+    );
+    return serialized;
   }
 
   private metadataFileToRecord(
@@ -1337,6 +1439,7 @@ export class SessionStore implements SessionPersistenceProvider {
     this.lastMessagesDigest.delete(sessionId);
     this.lastTranscriptRevision.delete(sessionId);
     this.messagesFileDurability.delete(sessionId);
+    this.ensuredPayloadHashes.delete(sessionId);
   }
 
   private forgetEnsuredDirs(sessionDir: string): void {

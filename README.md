@@ -338,7 +338,30 @@ You can push editor context into the built-in agent without copy/paste:
 
 AgentLink supports both project-level and user-level customization for the built-in agent.
 
-**Custom modes** are project-level only and are loaded from these files, in ascending priority:
+#### Instruction files
+
+AgentLink combines instruction files in ascending priority, so later sources can extend or override earlier guidance:
+
+1. Global instructions: `~/.agents/AGENTS.md` and `~/.agents/rules/*.md`, then `~/.claude/CLAUDE.md` and rules, then `~/.agentlink/CLAUDE.md` and rules
+2. Workspace root: the first existing file among `AGENTS.md`, `AGENT.md`, and `CLAUDE.md`
+3. Project directories: `.agents/AGENTS.md`, `.claude/CLAUDE.md`, then `.agentlink/AGENTS.md` (falling back to `.agentlink/CLAUDE.md`), plus each directory's `rules/*.md`
+4. Subfolder instructions from the workspace root down to the active file's directory: the first non-empty `AGENTS.md`, `AGENT.md`, or `CLAUDE.md` in each directory, plus `AGENTS.local.md`
+5. Workspace-root `AGENTS.local.md`
+
+Use `.agentlink/AGENTS.md` for AgentLink-specific project instructions. AgentLink loads the first non-empty file between `.agentlink/AGENTS.md` and the legacy `.agentlink/CLAUDE.md`.
+
+For personal additions to a project's committed root instructions, use a workspace-root `AGENTS.local.md`. It is loaded last and is intended to remain uncommitted. Exclude it locally without changing the shared `.gitignore`:
+
+```gitignore
+# .git/info/exclude
+/AGENTS.local.md
+```
+
+Subfolder `AGENTS.local.md` files can provide personal instructions scoped to files below that directory. Changes to the workspace-root files and project `.agentlink` instruction files listed above are picked up automatically for subsequent agent requests; start a new session after changing global instructions or other sources that are not watched.
+
+#### Custom modes
+
+Custom modes are project-level only and are loaded from these files, in ascending priority:
 
 - `.agents/modes.json`
 - `.claude/modes.json`
@@ -360,7 +383,9 @@ Four low-adoption language-server tools are hidden from ordinary modes so their 
 
 The `language-benchmark` group is opt-in; adding it back to normal modes defeats the experiment. AgentLink also rejects a tool call unless that tool appeared in the exact provider request for the current turn.
 
-**Custom slash commands** are loaded from these directories, again with later sources taking precedence:
+#### Custom slash commands
+
+Custom slash commands are loaded from these directories, again with later sources taking precedence:
 
 - `~/.agents/commands/`
 - `~/.claude/commands/`
@@ -519,7 +544,7 @@ This does not disable unrelated connected MCP tools.
 
 ## Semantic Codebase Search Setup
 
-Semantic search powers `codebase_search` plus the `query` parameter on `read_file` and `list_files`. AgentLink stores the workspace index in an embedded local LanceDB retrieval store; no external database process or service such as Qdrant is required by the current production path.
+Semantic search powers `codebase_search` plus the `query` parameter on `read_file` and `list_files`. AgentLink stores each canonical project/workspace-folder index in its own embedded local LanceDB retrieval store; no external database process or service such as Qdrant is required by the current production path.
 
 Lexical indexing and search work without credentials. An optional OpenAI API key adds vector embeddings and hybrid ranking. ChatGPT/Codex OAuth authenticates model chat but does not provide embeddings.
 
@@ -535,7 +560,7 @@ Set these VS Code settings:
 ```
 
 - `agentlink.semanticSearchEnabled` enables local codebase indexing and retrieval.
-- `agentlink.autoIndex` indexes the workspace automatically on startup when semantic search is enabled.
+- `agentlink.autoIndex` indexes each workspace folder automatically on startup when semantic search is enabled.
 
 ### 2. Build the codebase index
 
@@ -563,11 +588,11 @@ After indexing completes, agents can use:
 
 ### Notes
 
-- Index data is workspace-specific and stored under AgentLink's extension storage.
+- Code index data is stored under AgentLink's extension storage in a reusable store keyed by the canonical project/workspace-folder root. Windows and workspace compositions that reference the same project reuse that store; unrelated projects use separate stores and do not contend for one global code index.
 - `agentlink.indexExclusions` adds extra glob-based exclusions on top of `.gitignore`.
 - `agentlink.chunkGranularity` controls indexing detail: `standard` is cheaper, while `fine` provides more retrieval granularity.
 - Missing embedding credentials degrade vector/hybrid requests to lexical ranking; they do not block indexing or search.
-- Legacy Qdrant index contents are not migrated in place. Rebuild the workspace index to publish fresh code and structural records into LanceDB. Compatibility aliases for old reset-state field names do not re-enable a live Qdrant integration.
+- Legacy Qdrant index contents and code rows from the previous global retrieval-store layout are not migrated in place. Rebuild each project index to publish fresh code and structural records into its project-specific LanceDB store. Compatibility aliases for old reset-state field names do not re-enable a live Qdrant integration.
 - Rolling back to a build that expects Qdrant does not convert LanceDB data back into a Qdrant index; that older build may require its own database configuration and rebuild. AgentLink does not claim to delete external Qdrant data or services.
 
 ## Unified context allocation and health
@@ -576,7 +601,7 @@ Each provider request gets an immutable model-aware context ledger. It records t
 
 `get_context` complements that request ledger with content-addressed working-set tracking. Unchanged content omission is opt-in through `dedupe_unchanged_content`, applies only to the exact range already returned in the current session, and can be bypassed with `refresh`; overlapping ranges and separate full-file reads are tracked independently.
 
-The Chat Activity Shelf separately projects context-system health for autonomous memory, lexical/vector/structural retrieval, and index state. This operational health display is not part of `/context-doctor`: the doctor reports measured prompt sections, tool schemas, the latest completed request ledger, retained/repeated tool results, and condensation evidence, and labels diagnostics it does not yet instrument rather than guessing.
+Context Health separately projects autonomous memory, lexical/vector/structural retrieval, and index state. In VS Code it appears in the sidebar Activity section between Tool Calls and Codebase Index; the Browser Gateway keeps it in the Chat Activity Shelf. This operational health display is not part of `/context-doctor`: the doctor reports measured prompt sections, tool schemas, the latest completed request ledger, retained/repeated tool results, and condensation evidence, and labels diagnostics it does not yet instrument rather than guessing.
 
 ## Upgrading from the retired external-agent integration
 
@@ -609,7 +634,7 @@ The tools below are available to the built-in agent according to its active mode
 
 ### find_native_tools
 
-Discover native AgentLink tools whose schemas were deferred from the current provider request. The result is bounded, stable, and derived only from the immutable catalog already authorized for that request; discovery cannot broaden mode, profile, skill, background, web, or surface restrictions.
+Discover native AgentLink tools whose schemas were deferred from the current provider request. The always-visible tool description includes the exact deferred tool names authorized for that request, so agents can recognize capabilities such as image generation without carrying every full schema. Search the catalog before concluding that a capability is unavailable. The result is bounded, stable, and derived only from the immutable request catalog; discovery cannot broaden mode, profile, skill, background, web, or surface restrictions.
 
 | Parameter         | Type     | Description                                                         |
 | ----------------- | -------- | ------------------------------------------------------------------- |
@@ -619,7 +644,7 @@ Discover native AgentLink tools whose schemas were deferred from the current pro
 | `include_schemas` | boolean? | Include input schemas; defaults to false.                           |
 | `schema_limit`    | number?  | Maximum returned schemas, from 1 to 10; defaults to 1 when enabled. |
 
-The response includes the matching tools, total count, applied offset and limit, and `nextOffset` when another page exists. Results preserve the authorized catalog's deterministic order.
+The response includes the matching tools, total count, applied offset and limit, and `nextOffset` when another page exists. Results preserve the authorized catalog's deterministic order. Foreground sessions use a cache-stable union catalog across built-in modes; invoking a discovered tool still passes the active mode gate and can require switching modes. Restricted profiles, background sessions, and Browser Ask Agent receive their own narrower catalogs.
 
 ### call_native_tool
 
@@ -1024,7 +1049,7 @@ When both selectors are omitted, the most recent session image is presented. Exa
 
 ### Autonomous memory inspection and migration
 
-Set `agentlink.memory.mode` to `autonomous` to enable typed low-authority memory and the `/memory` manager. The manager is a local control surface: opening it, changing filters, viewing details, and performing its direct user actions do not send a model request or create an agent approval flow. Mutations still pass through the same scope checks, provenance, secret scanning, quotas, revisions, audit, undo, and health reporting as the native memory tools.
+Typed low-authority memory and the `/memory` manager are enabled by default with `agentlink.memory.mode` set to `autonomous`. Set it explicitly to `off` to opt out. The manager is a local control surface: opening it, changing filters, viewing details, and performing its direct user actions do not send a model request or create an agent approval flow. Mutations still pass through the same scope checks, provenance, secret scanning, quotas, revisions, audit, undo, and health reporting as the native memory tools.
 
 The VS Code manager supports global and current-project scopes. Projectless Browser Ask Agent supports global scope only and uses the helper-owned runtime selected from connected VS Code owners. Both surfaces support bounded search/filtering, record detail, forget/restore, audit undo, confirmed scope clearing, and versioned JSON import/export. Imported archives are validated before persistence; target scope is derived by the host rather than trusted from browser input.
 
@@ -1954,8 +1979,8 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 | `agentlink.background.acpAgents`               | `[]`                       | ACP stdio subprocesses available as background-agent backends                                                                                                                 |
 | `agentlink.background.maxConcurrent`           | `8`                        | Max background agents running at once (also caps per-root and per-provider concurrency); extra launches queue                                                                 |
 | `agentlink.semanticSearchEnabled`              | `false`                    | Enable embedded local codebase retrieval; lexical ranking works without credentials and optional embeddings add vector/hybrid ranking                                         |
-| `agentlink.memory.mode`                        | `off`                      | Dogfood typed autonomous low-authority memory (`autonomous`) or disable its tools (`off`)                                                                                     |
-| `agentlink.autoIndex`                          | `true`                     | Automatically index the workspace on startup when semantic search is enabled                                                                                                  |
+| `agentlink.memory.mode`                        | `autonomous`               | Enable typed autonomous low-authority memory (`autonomous`) or explicitly disable its tools (`off`)                                                                           |
+| `agentlink.autoIndex`                          | `true`                     | Automatically index each workspace folder on startup when semantic search is enabled                                                                                          |
 | `agentlink.chunkGranularity`                   | `fine`                     | Index chunking mode: `standard` or `fine`                                                                                                                                     |
 | `agentlink.indexExclusions`                    | built-in defaults          | Extra glob patterns to exclude from indexing in addition to `.gitignore`                                                                                                      |
 | `agentlink.masterBypass`                       | `false`                    | Skip ordinary command and file-write prompts; native escalation, outside-path, MCP, protected-path, and read-only/delegation gates remain                                     |

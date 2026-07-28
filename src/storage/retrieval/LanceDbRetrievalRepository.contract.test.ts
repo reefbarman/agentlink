@@ -314,6 +314,86 @@ describe("LanceDbRetrievalRepository persistence", () => {
     });
   });
 
+  it("degrades unindexed queries on oversized stores instead of hydrating them", async () => {
+    await withStore(async (root) => {
+      const repository = new LanceDbRetrievalRepository({
+        root,
+        embeddingDimensions: 3,
+        deferNativeIndexRefresh: true,
+        maxUnindexedQueryChunks: 2,
+      });
+      const request = publication("oversized", "revision-oversized");
+      request.chunks = [0, 1, 2].map((index) => ({
+        ...request.chunks[0]!,
+        id: `chunk:oversized-${index}`,
+        content: `durable retrieval state ${index}`,
+      }));
+      request.expectedChunkIds = request.chunks.map((chunk) => chunk.id);
+      request.relations = [];
+      request.expectedRelationIds = [];
+      try {
+        await repository.migrate(fingerprint);
+        await repository.preparePublication(request);
+        await repository.commitPublication(request.publicationId);
+        const result = await repository.query({
+          text: "durable retrieval",
+          mode: "lexical",
+          limit: 10,
+        });
+        expect(result.candidates).toEqual([]);
+        expect(result.degradedReason).toBe("lexical_index_unavailable");
+        expect(repository.metrics().queries).toBe(1);
+      } finally {
+        await repository.close();
+      }
+    });
+  });
+
+  it("serves oversized indexed stores through bounded native candidates", async () => {
+    await withStore(async (root) => {
+      const repository = new LanceDbRetrievalRepository({
+        root,
+        embeddingDimensions: 3,
+        maxUnindexedQueryChunks: 2,
+      });
+      const request = publication("indexed-large", "revision-indexed-large");
+      request.chunks = [0, 1, 2].map((index) => ({
+        ...request.chunks[0]!,
+        id: `chunk:indexed-large-${index}`,
+        content: `durable retrieval state ${index}`,
+        location: {
+          path: "src/storage/retrieval/example.ts",
+          startLine: index * 10 + 1,
+          endLine: index * 10 + 5,
+        },
+      }));
+      request.expectedChunkIds = request.chunks.map((chunk) => chunk.id);
+      request.relations = [];
+      request.expectedRelationIds = [];
+      try {
+        await repository.migrate(fingerprint);
+        await repository.preparePublication(request);
+        await repository.commitPublication(request.publicationId);
+        const result = await repository.query({
+          text: "durable retrieval",
+          mode: "lexical",
+          limit: 10,
+          diversity: { maxPerSource: 3, collapseOverlaps: false },
+        });
+        expect(result.degradedReason).toBeUndefined();
+        expect(
+          result.candidates.map((candidate) => candidate.chunk.id).sort(),
+        ).toEqual([
+          "chunk:indexed-large-0",
+          "chunk:indexed-large-1",
+          "chunk:indexed-large-2",
+        ]);
+      } finally {
+        await repository.close();
+      }
+    });
+  });
+
   it("surfaces actionable native index creation failures", async () => {
     await withStore(async (root) => {
       const repository = new LanceDbRetrievalRepository({
@@ -339,6 +419,190 @@ describe("LanceDbRetrievalRepository persistence", () => {
         });
       } finally {
         await repository.close();
+      }
+    });
+  });
+
+  it("refreshes deferred native indexes without compacting the store", async () => {
+    await withStore(async (root) => {
+      let lexicalRefreshes = 0;
+      const repository = new LanceDbRetrievalRepository({
+        root,
+        embeddingDimensions: 3,
+        deferNativeIndexRefresh: true,
+        indexOperations: {
+          async createLexical() {
+            lexicalRefreshes += 1;
+          },
+          async createScalar() {},
+          async validateVector() {},
+        },
+      });
+      const request = publication("deferred", "revision-deferred");
+      try {
+        await repository.migrate(fingerprint);
+        await repository.preparePublication(request);
+        await repository.commitPublication(request.publicationId);
+
+        expect(await repository.lexicalReadiness()).toMatchObject({
+          status: "unavailable",
+          reason: "lexical_index_unavailable",
+          detail: "Native indexes require refresh",
+        });
+        expect(await repository.health()).toMatchObject({
+          status: "unavailable",
+          lexical: "unavailable",
+        });
+
+        await repository.refreshNativeIndexes();
+
+        expect(lexicalRefreshes).toBe(1);
+        expect(await repository.lexicalReadiness()).toEqual({
+          status: "ready",
+        });
+        expect(repository.metrics().optimizations).toBe(0);
+      } finally {
+        await repository.close();
+      }
+    });
+  });
+
+  it("deletes an owned source prefix without hydrating filtered source payloads", async () => {
+    await withStore(async (root) => {
+      const repository = new LanceDbRetrievalRepository({
+        root,
+        embeddingDimensions: 3,
+        deferNativeIndexRefresh: true,
+      });
+      const owned = publication("owned-prefix", "revision-owned-prefix", {
+        sourceId: "code:workspace_%:owned.ts",
+      });
+      const neighbor = publication(
+        "neighbor-prefix",
+        "revision-neighbor-prefix",
+        {
+          sourceId: "code:workspace-A:neighbor.ts",
+        },
+      );
+      try {
+        await repository.migrate(fingerprint);
+        await repository.preparePublicationBatch([owned, neighbor]);
+        await repository.commitPublicationBatch([
+          owned.publicationId,
+          neighbor.publicationId,
+        ]);
+        await repository.refreshNativeIndexes();
+
+        await expect(
+          repository.deleteSourceIdPrefix("code:workspace_%:"),
+        ).resolves.toEqual({ sourcesDeleted: 1, recordsRemoved: 3 });
+        expect(await repository.inspectSource(owned.source.id)).toBeNull();
+        expect(
+          await repository.inspectSource(neighbor.source.id),
+        ).not.toBeNull();
+        expect(await repository.lexicalReadiness()).toMatchObject({
+          status: "unavailable",
+          detail: "Native indexes require refresh",
+        });
+      } finally {
+        await repository.close();
+      }
+    });
+  });
+
+  it("defers native index refresh across source deletion", async () => {
+    await withStore(async (root) => {
+      let lexicalRefreshes = 0;
+      const repository = new LanceDbRetrievalRepository({
+        root,
+        embeddingDimensions: 3,
+        deferNativeIndexRefresh: true,
+        indexOperations: {
+          async createLexical() {
+            lexicalRefreshes += 1;
+          },
+          async createScalar() {},
+          async validateVector() {},
+        },
+      });
+      const request = publication(
+        "delete-deferred",
+        "revision-delete-deferred",
+      );
+      try {
+        await repository.migrate(fingerprint);
+        await repository.preparePublication(request);
+        await repository.commitPublication(request.publicationId);
+        await repository.refreshNativeIndexes();
+        expect(lexicalRefreshes).toBe(1);
+
+        await expect(
+          repository.deleteSource({
+            sourceId: request.source.id,
+            expectedRevisionId: request.source.revision.id,
+          }),
+        ).resolves.toMatchObject({ status: "deleted" });
+        expect(lexicalRefreshes).toBe(1);
+        expect(await repository.lexicalReadiness()).toMatchObject({
+          status: "unavailable",
+          detail: "Native indexes require refresh",
+        });
+
+        await repository.refreshNativeIndexes();
+        expect(lexicalRefreshes).toBe(2);
+        expect(await repository.lexicalReadiness()).toEqual({
+          status: "ready",
+        });
+      } finally {
+        await repository.close();
+      }
+    });
+  });
+
+  it("preserves deferred native indexes during compatible reopen migration", async () => {
+    await withStore(async (root) => {
+      const first = new LanceDbRetrievalRepository({
+        root,
+        embeddingDimensions: 3,
+        deferNativeIndexRefresh: true,
+      });
+      const request = publication("interrupted", "revision-interrupted");
+      await first.migrate(fingerprint);
+      await first.preparePublication(request);
+      await first.commitPublication(request.publicationId);
+      await first.close();
+
+      let lexicalRefreshes = 0;
+      const reopened = new LanceDbRetrievalRepository({
+        root,
+        embeddingDimensions: 3,
+        deferNativeIndexRefresh: true,
+        indexOperations: {
+          async createLexical() {
+            lexicalRefreshes += 1;
+          },
+          async createScalar() {},
+          async validateVector() {},
+        },
+      });
+      try {
+        expect(await reopened.lexicalReadiness()).toMatchObject({
+          status: "unavailable",
+          reason: "lexical_index_unavailable",
+        });
+        expect(await reopened.migrate(fingerprint)).toMatchObject({
+          status: "up_to_date",
+        });
+        expect(lexicalRefreshes).toBe(0);
+        expect(await reopened.lexicalReadiness()).toMatchObject({
+          status: "unavailable",
+          detail: "Native indexes require refresh",
+        });
+        await reopened.refreshNativeIndexes();
+        expect(lexicalRefreshes).toBe(1);
+        expect(await reopened.lexicalReadiness()).toEqual({ status: "ready" });
+      } finally {
+        await reopened.close();
       }
     });
   });
@@ -433,9 +697,9 @@ async function withStore(run: (root: string) => Promise<void>): Promise<void> {
 function publication(
   publicationId: string,
   revisionId: string,
-  options: { observedAt?: string } = {},
+  options: { observedAt?: string; sourceId?: string } = {},
 ): RetrievalPublicationRequest {
-  const sourceId = "source:durable";
+  const sourceId = options.sourceId ?? "source:durable";
   const generation = `generation:${publicationId}`;
   const content = "durable retrieval state";
   const chunkId = `chunk:${revisionId}`;

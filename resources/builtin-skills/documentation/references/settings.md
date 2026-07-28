@@ -22,7 +22,7 @@ All settings live under the `agentlink.*` namespace and are set in VS Code Setti
 
 ## Autonomous memory
 
-- `memory.mode` — dogfood typed autonomous low-authority memory (`autonomous`) or disable its tools (`off`, the default). Autonomous writes are scope-bound, secret-scanned, quota-bound, revisioned, auditable, and treated as evidence rather than instructions; authoritative instructions, skills, and commands retain reviewed proposal flow. `/memory` opens the no-model inspection/audit/undo/import/export manager. VS Code exposes global and current-project scopes; projectless Browser Ask Agent exposes global scope only.
+- `memory.mode` — typed autonomous low-authority memory (`autonomous`, the default) or explicitly disable its tools (`off`). Autonomous writes are scope-bound, secret-scanned, quota-bound, revisioned, auditable, and treated as evidence rather than instructions; authoritative instructions, skills, and commands retain reviewed proposal flow. `/memory` opens the no-model inspection/audit/undo/import/export manager. VS Code exposes global and current-project scopes; projectless Browser Ask Agent exposes global scope only.
 
 ## Approvals and safety
 
@@ -64,7 +64,7 @@ MCP servers are configured in `mcp.json` files, not VS Code settings — see `re
 ## Semantic codebase search
 
 - `semanticSearchEnabled`, `autoIndex`, `indexExclusions`, `chunkGranularity`
-- The embedded local LanceDB retrieval store supports lexical indexing/search without credentials; optional OpenAI embedding auth adds vector and hybrid ranking. Current production retrieval does not require Qdrant; legacy Qdrant indexes require a rebuild rather than in-place migration.
+- Embedded local LanceDB stores support lexical indexing/search without credentials; optional OpenAI embedding auth adds vector and hybrid ranking. Each canonical project/workspace-folder root has a reusable code store, isolating unrelated projects while allowing windows that reference the same project to share its index. Current production retrieval does not require Qdrant; legacy Qdrant data and code rows in the former global store require a per-project rebuild rather than in-place migration.
 
 ## OpenAI-compatible connections and helper endpoint
 

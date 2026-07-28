@@ -123,8 +123,14 @@ function parseMarkdown(text: string): {
     raw += localMarked.parse(text.slice(lastIndex), { async: false }) as string;
   }
 
+  // Beyond http(s)/vscode URLs, keep scheme-less hrefs (workspace-relative or
+  // absolute file paths, e.g. from `[App.tsx](src/agent/webview/App.tsx)`
+  // markdown links) so they can be wired to the host's open-file action. A
+  // `path.ext:42` line suffix parses like a URI scheme, so it needs its own
+  // allowance; dangerous schemes (javascript:, data:) match none of these.
   const html = DOMPurify.sanitize(raw, {
-    ALLOWED_URI_REGEXP: /^(?:https?|vscode):/i,
+    ALLOWED_URI_REGEXP:
+      /^(?:(?:https?|vscode):|(?![a-z][a-z0-9.+-]*:)|\S*\.\w{1,8}:\d+(?:-\d+)?$)/i,
     ADD_ATTR: ["data-special-idx", "data-special-kind"],
   });
 
@@ -254,6 +260,74 @@ function linkifyFilePathNodes(
   }
 }
 
+// Recognizes `:42` / `:42-51` suffixes and `#L42` / `#L42-L51` fragments on
+// markdown link targets that point at workspace files.
+const HREF_LINE_SUFFIX_RE = /(?::(\d+)(?:-\d+)?|#L(\d+)(?:-L?\d+)?)$/i;
+
+function parseFileHref(
+  href: string,
+): { filePath: string; line?: number } | null {
+  if (!href || href.startsWith("#")) return null;
+  if (/^[a-z][a-z0-9.+-]*:(?!\d+(?:-\d+)?$)/i.test(href)) return null;
+
+  let target = href;
+  let line: number | undefined;
+  const lineMatch = target.match(HREF_LINE_SUFFIX_RE);
+  if (lineMatch) {
+    line = parseInt(lineMatch[1] ?? lineMatch[2]!, 10);
+    target = target.slice(0, -lineMatch[0].length);
+  }
+  try {
+    target = decodeURI(target);
+  } catch {
+    // Keep the raw href when it is not valid percent-encoding.
+  }
+  return target ? { filePath: target, line } : null;
+}
+
+function wireFileLinkAnchors(
+  container: HTMLElement,
+  onOpenFile: (path: string, line?: number) => void,
+) {
+  container.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((link) => {
+    const parsed = parseFileHref(link.getAttribute("href") ?? "");
+    if (!parsed) return;
+    link.classList.add("file-path-link");
+    link.title = `Open ${parsed.filePath}${parsed.line !== undefined ? `:${parsed.line}` : ""}`;
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      onOpenFile(parsed.filePath, parsed.line);
+    });
+  });
+}
+
+function linkifyFilePathCodeSpans(
+  container: HTMLElement,
+  onOpenFile: (path: string, line?: number) => void,
+) {
+  container.querySelectorAll<HTMLElement>("code").forEach((code) => {
+    if (code.closest("pre, a")) return;
+    const text = code.textContent ?? "";
+    // Only linkify when the entire code span is one file path — partial
+    // matches inside code snippets are too likely to be false positives.
+    const [match] = matchFilePaths(` ${text}`);
+    if (!match || match.index !== 1 || match.fullMatch.length !== text.length) {
+      return;
+    }
+    const a = document.createElement("a");
+    a.className = "file-path-link";
+    a.textContent = text;
+    a.href = "#";
+    a.title = `Open ${match.filePath}${match.line !== undefined ? `:${match.line}` : ""}`;
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      onOpenFile(match.filePath, match.line);
+    });
+    code.textContent = "";
+    code.appendChild(a);
+  });
+}
+
 interface StreamingTextProps {
   text: string;
   streaming: boolean;
@@ -378,8 +452,12 @@ export function StreamingText({
     addCodeBlockCopyButtons(containerRef.current);
     addExternalLinkFlourishes(containerRef.current);
 
-    // Linkify bare file paths in text nodes (skips code/pre blocks)
+    // Wire markdown links whose targets are workspace file paths, linkify
+    // whole-path inline code spans, and linkify bare file paths in text nodes
+    // (skips fenced code blocks).
     if (onOpenFile) {
+      wireFileLinkAnchors(containerRef.current, onOpenFile);
+      linkifyFilePathCodeSpans(containerRef.current, onOpenFile);
       linkifyFilePathNodes(containerRef.current, onOpenFile);
     }
 

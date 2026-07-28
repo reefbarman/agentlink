@@ -65,7 +65,7 @@ import {
   type ComposerMedia,
 } from "./components/InputArea";
 import { ChatActivityShelf } from "../../shared/ui/ChatActivityShelf";
-import { ContextHealthPanel } from "../../shared/ui/ContextHealthPanel";
+
 import { MemoryPanel } from "../../shared/ui/MemoryPanel";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
 import type {
@@ -296,6 +296,14 @@ const streamingBaselineMetrics = __DEV_BUILD__
   ? getDevelopmentStreamingBaselineMetrics("vscode-webview", true)
   : undefined;
 
+/**
+ * How long without a `hostHeartbeat` message (sent every 2s by
+ * ChatViewProvider) before the tab-strip indicator flags the extension host as
+ * unresponsive. Three missed beats: long enough to ignore ordinary jitter,
+ * short enough to also make multi-second event-loop stalls visible.
+ */
+const HOST_HEARTBEAT_STALE_MS = 6_000;
+
 export function App({
   vscodeApi: hostVscodeApi,
   pane = { surface: "sidebar" },
@@ -309,8 +317,14 @@ export function App({
   const [workspaceSnapshot, setWorkspaceSnapshot] =
     useState<ChatWorkspaceViewSnapshot | null>(null);
   const workspaceSnapshotRef = useRef<ChatWorkspaceViewSnapshot | null>(null);
+  const [hostConnectionStale, setHostConnectionStale] = useState(false);
+  const lastHostHeartbeatRef = useRef(Date.now());
   const inactiveProjectionCacheRef = useRef(new InactiveChatProjectionCache());
   const projectionStateCacheRef = useRef(new ChatProjectionStateCache());
+  const restoredCachedSessionRef = useRef<string | null>(null);
+  const acceptedTranscriptRevisionsRef = useRef(
+    new Map<string, { controllerEpoch: string | null; revision: number }>(),
+  );
   const flushConnectionDeltasRef = useRef<() => void>(() => {});
   const vscodeApi = useMemo<VsCodeApi>(
     () => ({
@@ -335,6 +349,31 @@ export function App({
   stateRef.current = state.chatState;
   const fullStateRef = useRef(state);
   fullStateRef.current = state;
+
+  // Flag the extension host as unresponsive when heartbeats stop arriving.
+  // The webview renderer keeps running while the host event loop is blocked,
+  // so a stale beat is a reliable "backend is wedged" signal.
+  useEffect(() => {
+    if (pane.surface !== "sidebar") return;
+    const timer = setInterval(() => {
+      const stale =
+        Date.now() - lastHostHeartbeatRef.current > HOST_HEARTBEAT_STALE_MS;
+      setHostConnectionStale((prev) => (prev === stale ? prev : stale));
+    }, 1_000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        // Hidden webviews get timer-throttled and may miss beats; grant a
+        // fresh grace period on return so only staleness observed while
+        // visible is flagged.
+        lastHostHeartbeatRef.current = Date.now();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [pane.surface]);
   const previousStreamingRef = useRef(state.streaming);
   const activeDetectRequestRef = useRef<{
     requestId: string;
@@ -527,10 +566,18 @@ export function App({
 
   const applyWorkspaceSnapshot = useCallback(
     (snapshot: ChatWorkspaceViewSnapshot) => {
+      const previousSnapshot = workspaceSnapshotRef.current;
       const previousSessionId = selectedWorkspaceSessionId(
-        workspaceSnapshotRef.current,
+        previousSnapshot,
         pinnedTabId,
       );
+      if (
+        !previousSnapshot ||
+        previousSnapshot.controllerEpoch !== snapshot.controllerEpoch
+      ) {
+        acceptedTranscriptRevisionsRef.current.clear();
+        restoredCachedSessionRef.current = null;
+      }
       const nextSessionId = selectedWorkspaceSessionId(snapshot, pinnedTabId);
       const openSessionIds = new Set(
         snapshot.tabs.flatMap((tab) => (tab.sessionId ? [tab.sessionId] : [])),
@@ -538,6 +585,10 @@ export function App({
       if (previousSessionId !== nextSessionId) {
         flushConnectionDeltasRef.current();
         projectionStateCacheRef.current.save(fullStateRef.current);
+        restoredCachedSessionRef.current =
+          nextSessionId && projectionStateCacheRef.current.has(nextSessionId)
+            ? nextSessionId
+            : null;
         const restored = projectionStateCacheRef.current.restore(
           nextSessionId,
           {
@@ -555,6 +606,11 @@ export function App({
       }
       inactiveProjectionCacheRef.current.retainSessions(openSessionIds);
       projectionStateCacheRef.current.retainSessions(openSessionIds);
+      for (const sessionId of acceptedTranscriptRevisionsRef.current.keys()) {
+        if (!openSessionIds.has(sessionId)) {
+          acceptedTranscriptRevisionsRef.current.delete(sessionId);
+        }
+      }
       workspaceSnapshotRef.current = snapshot;
       setWorkspaceSnapshot(snapshot);
     },
@@ -586,12 +642,23 @@ export function App({
     dispatchDelta: dispatch,
     onInactiveSessionMessage: (msg) => {
       if (msg.type === "agentSessionLoaded") return;
+      if (msg.type === "agentDone" && msg.transcriptRevision !== undefined) {
+        acceptedTranscriptRevisionsRef.current.set(msg.sessionId, {
+          controllerEpoch:
+            workspaceSnapshotRef.current?.controllerEpoch ?? null,
+          revision: msg.transcriptRevision,
+        });
+      }
       inactiveProjectionCacheRef.current.append(msg);
     },
     onMessage: (msg, controls) => {
       const { dropIfNotStreaming, flushDeltasNow } = controls;
 
       switch (msg.type) {
+        case "hostHeartbeat":
+          lastHostHeartbeatRef.current = Date.now();
+          setHostConnectionStale(false);
+          break;
         case "chatWorkspaceUpdate":
           applyWorkspaceSnapshot(msg.snapshot);
           setChatTabFailure(null);
@@ -798,6 +865,13 @@ export function App({
             chars: 0,
           });
           flushDeltasNow();
+          if (msg.transcriptRevision !== undefined) {
+            acceptedTranscriptRevisionsRef.current.set(msg.sessionId, {
+              controllerEpoch:
+                workspaceSnapshotRef.current?.controllerEpoch ?? null,
+              revision: msg.transcriptRevision,
+            });
+          }
           streamingRef.current = false;
           dispatch({ type: "DONE" });
           const queue = queuedMessagesReadyToDrain(
@@ -1114,9 +1188,70 @@ export function App({
           ) {
             break;
           }
+          const transcriptRevision = msg.transcriptRevision;
+          const controllerEpoch =
+            workspaceSnapshotRef.current?.controllerEpoch ?? null;
+          const acceptedTranscriptRevision =
+            acceptedTranscriptRevisionsRef.current.get(msg.sessionId);
+          const comparableAcceptedRevision =
+            acceptedTranscriptRevision?.controllerEpoch === controllerEpoch
+              ? acceptedTranscriptRevision.revision
+              : undefined;
+          const projectBackgroundResults = () => {
+            for (const result of msg.backgroundResults ?? []) {
+              dispatch({
+                type: "BG_AGENT_DONE",
+                sessionId: result.sessionId,
+                task: result.task,
+                status: result.status,
+                resultText: result.resultText,
+                summary: result.summary,
+              });
+            }
+          };
+          const cachedProjectionAcknowledgement =
+            !msg.restored &&
+            restoredCachedSessionRef.current === msg.sessionId &&
+            transcriptRevision !== undefined &&
+            comparableAcceptedRevision !== undefined &&
+            transcriptRevision <= comparableAcceptedRevision;
+          if (cachedProjectionAcknowledgement) {
+            restoredCachedSessionRef.current = null;
+            startupRestorePendingRef.current = false;
+            historyLoadPendingRef.current = false;
+            loadingSessionIdRef.current = null;
+            setShowHistory(false);
+            projectBackgroundResults();
+            for (const inactiveEvent of inactiveProjectionCacheRef.current.take(
+              msg.sessionId,
+            )) {
+              replayInactiveSessionMessage(inactiveEvent);
+            }
+            break;
+          }
+          if (
+            transcriptRevision !== undefined &&
+            comparableAcceptedRevision !== undefined &&
+            transcriptRevision <= comparableAcceptedRevision
+          ) {
+            restoredCachedSessionRef.current = null;
+            startupRestorePendingRef.current = false;
+            historyLoadPendingRef.current = false;
+            loadingSessionIdRef.current = null;
+            setShowHistory(false);
+            projectBackgroundResults();
+            break;
+          }
+          if (transcriptRevision !== undefined) {
+            acceptedTranscriptRevisionsRef.current.set(msg.sessionId, {
+              controllerEpoch,
+              revision: transcriptRevision,
+            });
+          }
           const inactiveEvents = inactiveProjectionCacheRef.current.take(
             msg.sessionId,
           );
+          restoredCachedSessionRef.current = null;
           startupRestorePendingRef.current = false;
           historyLoadPendingRef.current = false;
           loadingSessionIdRef.current = msg.sessionId;
@@ -3033,6 +3168,7 @@ export function App({
       <ChatWorkspace
         snapshot={workspaceSnapshot}
         showTabStrip={pane.surface === "sidebar"}
+        hostStale={hostConnectionStale}
         onFocus={handleFocusChatTab}
         onNewTab={handleNewChatTab}
         onClose={handleCloseChatTab}
@@ -3317,9 +3453,7 @@ export function App({
                 condenseThreshold={state.chatState.condenseThreshold}
                 defaultMaxTokens={DEFAULT_MAX_TOKENS}
               />
-              {state.contextHealth && (
-                <ContextHealthPanel health={state.contextHealth} />
-              )}
+
               {memoryPanelOpen && (
                 <MemoryPanel
                   snapshot={memoryPanelSnapshot}
@@ -3492,6 +3626,7 @@ export function App({
                   questions={state.questionRequest.questions}
                   backgroundTask={state.questionRequest.backgroundTask}
                   modes={state.modes}
+                  onOpenFile={handleOpenFile}
                   attachmentCounts={Object.fromEntries(
                     Object.entries(questionAttachments).map(
                       ([questionId, value]) => [

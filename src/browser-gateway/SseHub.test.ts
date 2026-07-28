@@ -258,7 +258,9 @@ describe("SseHub", () => {
     res.write.mockClear();
 
     tick?.();
-    expect(res.write).toHaveBeenCalledWith(": keepalive 123\n\n");
+    expect(res.write).toHaveBeenCalledWith(
+      ": keepalive 123\n\nevent: heartbeat\ndata: 123\n\n",
+    );
 
     hub.remove(response(res));
     expect(clearInterval).toHaveBeenCalledWith(timer);

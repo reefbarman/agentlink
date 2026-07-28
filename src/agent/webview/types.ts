@@ -206,6 +206,7 @@ export interface WorktreeSetupState {
 /** Messages from extension to webview */
 export type ExtensionMessage =
   | { type: "stateUpdate"; state: ChatState }
+  | { type: "hostHeartbeat"; at: number }
   | { type: "chatWorkspaceUpdate"; snapshot: ChatWorkspaceViewSnapshot }
   | {
       type: "chatTabActionConfirmationRequested";
@@ -299,6 +300,8 @@ export type ExtensionMessage =
   | {
       type: "agentDone";
       sessionId: string;
+      /** Transcript revision after the completed turn's final deltas were committed. */
+      transcriptRevision?: number;
       totalInputTokens: number;
       totalOutputTokens: number;
       totalCacheReadTokens: number;
@@ -478,6 +481,8 @@ export type ExtensionMessage =
   | {
       type: "agentSessionLoaded";
       sessionId: string;
+      /** Monotonic transcript mutation counter used to reject stale hydrations. */
+      transcriptRevision?: number;
       title: string;
       /** Original visible user prompt, independent of the paginated message tail. */
       originalPrompt?: string;

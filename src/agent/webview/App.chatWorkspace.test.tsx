@@ -44,10 +44,15 @@ function postedCommands(
     .filter((message) => message.command === command);
 }
 
-function sessionLoaded(sessionId: string, message: string) {
+function sessionLoaded(
+  sessionId: string,
+  message: string,
+  transcriptRevision?: number,
+) {
   return {
     type: "agentSessionLoaded",
     sessionId,
+    transcriptRevision,
     title: `Loaded ${sessionId}`,
     mode: "code",
     model: "claude-opus-5",
@@ -430,6 +435,199 @@ describe("App chat workspace integration", () => {
       expect(screen.getAllByText("transcript for B")).not.toHaveLength(0);
       expect(screen.getByText("buffered for B")).toBeTruthy();
     });
+  });
+
+  it("does not duplicate a turn that completes while its tab is inactive", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "last user message in A", 1));
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "claude-opus-5",
+        streaming: true,
+      },
+    });
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B", 1));
+    deliver({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "assistant completed while A was inactive",
+    });
+    deliver({
+      type: "agentDone",
+      sessionId: "session-1",
+      transcriptRevision: 2,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+    });
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "persisted transcript revision 2", 2));
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText("assistant completed while A was inactive"),
+      ).toHaveLength(1);
+    });
+    expect(screen.queryByText("persisted transcript revision 2")).toBeNull();
+  });
+
+  it("keeps live assistant content after the last user message when a cached tab is focused", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "last user message in A", 1));
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "claude-opus-5",
+        streaming: true,
+      },
+    });
+    deliver({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "assistant content after the last user message",
+    });
+    deliver({
+      type: "agentDone",
+      sessionId: "session-1",
+      transcriptRevision: 2,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+    });
+    await waitFor(() => {
+      expect(
+        screen.getAllByText("assistant content after the last user message"),
+      ).toHaveLength(1);
+    });
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B", 1));
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver({
+      ...sessionLoaded("session-1", "stale persisted tail for A", 2),
+      backgroundResults: [
+        {
+          sessionId: "bg-completed-while-inactive",
+          task: "Inactive review",
+          status: "completed",
+          resultText: "recovered background result",
+          completedAt: 1,
+        },
+      ],
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText("assistant content after the last user message"),
+      ).toHaveLength(1);
+      expect(screen.getAllByText("recovered background result")).toHaveLength(
+        1,
+      );
+    });
+    expect(screen.queryByText("stale persisted tail for A")).toBeNull();
+
+    deliver(sessionLoaded("session-1", "older duplicate load for A", 1));
+    expect(
+      screen.getAllByText("assistant content after the last user message"),
+    ).toHaveLength(1);
+    expect(screen.queryByText("older duplicate load for A")).toBeNull();
+
+    deliver(sessionLoaded("session-1", "newer authoritative load for A", 3));
+    expect(
+      screen.getAllByText("newer authoritative load for A"),
+    ).not.toHaveLength(0);
+    expect(
+      screen.queryByText("assistant content after the last user message"),
+    ).toBeNull();
+    expect(
+      document.querySelectorAll(".message.user-message .markdown-body p"),
+    ).toHaveLength(1);
+  });
+
+  it("accepts a higher-revision destructive replacement as the first cached-focus load", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "original transcript for A", 4));
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "transcript for B", 1));
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "reverted transcript for A", 5));
+
+    await waitFor(() => {
+      expect(screen.getAllByText("reverted transcript for A")).not.toHaveLength(
+        0,
+      );
+    });
+    expect(screen.queryByText("original transcript for A")).toBeNull();
+  });
+
+  it("resets pagination state when restoring a cached tab", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver({
+      ...sessionLoaded("session-1", "transcript for A", 1),
+      userTurnOffset: 1,
+      hasMoreBefore: true,
+    });
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver({
+      ...sessionLoaded("session-2", "transcript for B", 1),
+      userTurnOffset: 2,
+      hasMoreBefore: true,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Show earlier messages/ }),
+    );
+    expect(
+      postedCommands(vscodeApi.postMessage, "agentLoadEarlierSessionMessages"),
+    ).toEqual([
+      expect.objectContaining({
+        sessionId: "session-2",
+        beforeUserTurnOffset: 2,
+      }),
+    ]);
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "stale persisted tail for A", 1));
+    deliver({
+      type: "agentSessionChunk",
+      sessionId: "session-2",
+      messages: [{ role: "user", content: "late history from B" }],
+      userTurnOffset: 0,
+      hasMoreBefore: false,
+    });
+
+    expect(screen.queryByText("late history from B")).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: /Show earlier messages/ }),
+    );
+    expect(
+      postedCommands(vscodeApi.postMessage, "agentLoadEarlierSessionMessages"),
+    ).toEqual([
+      expect.objectContaining({ sessionId: "session-2" }),
+      expect.objectContaining({
+        sessionId: "session-1",
+        beforeUserTurnOffset: 1,
+      }),
+    ]);
   });
 
   it("does not duplicate an inactive queued interjection after terminal replay", async () => {

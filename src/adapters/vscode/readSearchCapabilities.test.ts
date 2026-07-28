@@ -13,10 +13,13 @@ import {
   createVscodeSemanticSearchProvider,
   createVscodeStructuralGraphProvider,
 } from "./readSearchCapabilities.js";
+import {
+  getCodeRetrievalStoreRoot,
+  getCodeWorkspaceScopeId,
+} from "../../indexer/codeRetrievalIdentity.js";
 
 import { LanceDbRetrievalRepository } from "../../storage/retrieval/LanceDbRetrievalRepository.js";
 import { createCodeIndexFingerprint } from "../../indexer/retrievalFingerprint.js";
-import { getCodeWorkspaceScopeId } from "../../indexer/codeRetrievalIdentity.js";
 import { prepareCodeFilePublication } from "../../indexer/retrievalPublicationTranslation.js";
 
 vi.mock("../../util/agentlinkTmpArtifacts.js", () => ({
@@ -206,8 +209,8 @@ describe("createVscodeStructuralGraphProvider", () => {
   it("reports a missing unified retrieval store without creating one", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "graph-storage-"));
     directories.push(directory);
-    const storeRoot = path.join(directory, "retrieval-store");
-    fs.mkdirSync(storeRoot);
+    const storeRoot = getCodeRetrievalStoreRoot(directory, "workspace");
+    fs.mkdirSync(storeRoot, { recursive: true });
     const before = fs.readdirSync(storeRoot);
     const provider = createVscodeStructuralGraphProvider({
       fsPath: directory,
@@ -226,7 +229,7 @@ describe("createVscodeStructuralGraphProvider", () => {
   it("projects only the requested workspace from committed retrieval records", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "graph-store-"));
     directories.push(directory);
-    const storeRoot = path.join(directory, "retrieval-store");
+    const storeRoot = getCodeRetrievalStoreRoot(directory, "workspace");
     const repository = new LanceDbRetrievalRepository({ root: storeRoot });
     await repository.migrate(createCodeIndexFingerprint("standard"));
 

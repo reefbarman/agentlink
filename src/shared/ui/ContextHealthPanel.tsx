@@ -81,7 +81,7 @@ export function ContextHealthPanel({ health }: ContextHealthPanelProps) {
     <details class="context-health-panel">
       <summary>
         <span class="context-health-title">
-          <span class="codicon codicon-pulse" aria-hidden="true" />
+          <span class="context-health-pulse" aria-hidden="true" />
           Context health
         </span>
         <span class="context-health-summary">
@@ -89,7 +89,7 @@ export function ContextHealthPanel({ health }: ContextHealthPanelProps) {
           <StatusChip label="Retrieval" status={health.retrieval.status} />
           <StatusChip label="Index" status={health.index.status} />
         </span>
-        <span class="codicon codicon-chevron-down context-health-chevron" />
+        <span class="context-health-chevron" aria-hidden="true" />
       </summary>
       <div class="context-health-body">
         <HealthSection

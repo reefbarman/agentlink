@@ -399,7 +399,7 @@ export const ASK_AGENT_SAFE_PROJECTLESS_TOOLS: CoreModelToolDefinition[] = [
   {
     name: "generate_image",
     description:
-      "Generate PNG images through a connected VS Code AgentLink instance and show them in this browser chat. Ask Agent cannot save generated images to files; output_path and local reference image paths are unavailable.",
+      "Generate PNG images in the Browser Ask Agent helper using leased or cached OpenAI/Codex credentials and show them in this browser chat. Ask Agent cannot save generated images to files; output_path and local reference image paths are unavailable.",
     input_schema: askAgentSchema(ASK_AGENT_GENERATE_IMAGE_SCHEMA),
   },
   {

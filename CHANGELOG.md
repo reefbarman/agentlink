@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added project-level `.agentlink/AGENTS.md` instructions, preferred over the existing `.agentlink/CLAUDE.md` fallback, and documented `AGENTS.local.md` for uncommitted personal project guidance.
 - Added default-on hybrid web access for the built-in VS Code agent and Browser Ask Agent. `auto` selects one supported provider-hosted backend or an explicitly configured SearXNG MCP binding before each request; strict `provider`, `mcp`, and `disabled` strategies are also available.
 - Added durable hosted search/fetch activity and safe `http`/`https` citations across live transcripts, restore, retry/fallback, export, browser reconnect, and background-agent views. Provider-private replay stays out of public browser state, logs, and exports.
 - Added a one-time installation/upgrade disclosure and persistent `agentlink.webAccess.*` settings for provider charges, external data flow, domain restrictions, bounded usage where supported, and disabling web access before a turn.

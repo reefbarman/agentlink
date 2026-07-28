@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emptyFileIndexJournal,
   loadFileIndexJournal,
@@ -190,6 +190,76 @@ describe("journaled repository publication", () => {
     });
     expect(await repository.inspectSource(sourceId)).toMatchObject({
       generation,
+    });
+  });
+
+  it("prepares and commits multiple files through one repository batch", async () => {
+    const { store, vectors, structurals } = createStore();
+    const first = preparedFile();
+    const second = structuredClone(first);
+    second.file = "src/second.ts";
+    second.publication.publicationId = "publication-2";
+    second.publication.generation = "generation-2";
+    second.publication.source.id = "code:workspace:test:src/second.ts";
+    second.publication.source.path = second.file;
+    second.publication.source.revision = {
+      id: "hash-2",
+      contentHash: "hash-2",
+      observedAt: "2026-07-25T00:01:00.000Z",
+    };
+    second.publication.chunks[0]!.id = "chunk-2";
+    second.publication.chunks[0]!.sourceId = second.publication.source.id;
+    second.publication.chunks[0]!.revisionId = "hash-2";
+    second.publication.chunks[0]!.generation = "generation-2";
+    second.publication.chunks[0]!.location = {
+      path: second.file,
+      startLine: 1,
+      endLine: 1,
+    };
+    second.publication.expectedChunkIds = ["chunk-2"];
+    second.oldRecordIds = ["old-chunk-2"];
+    second.cacheEntry.hash = "hash-2";
+    second.cacheEntry.recordIds = ["chunk-2"];
+    second.structuralEntry.relPath = second.file;
+    second.structuralEntry.sourceId = second.publication.source.id;
+    second.structuralEntry.hash = "hash-2";
+
+    const prepareBatch = vi.spyOn(repository, "preparePublicationBatch");
+    const commitBatch = vi.spyOn(repository, "commitPublicationBatch");
+
+    await expect(
+      executeJournaledRepositoryPublications({
+        journalPath,
+        publications: [first, second],
+        store,
+        repository,
+        isCancelled: () => false,
+      }),
+    ).resolves.toEqual({
+      committedFiles: 2,
+      recordsUpserted: 2,
+      recordsDeleted: 2,
+      cancelled: false,
+      pending: false,
+    });
+
+    expect(prepareBatch).toHaveBeenCalledOnce();
+    expect(prepareBatch).toHaveBeenCalledWith([
+      first.publication,
+      second.publication,
+    ]);
+    expect(commitBatch).toHaveBeenCalledOnce();
+    expect(commitBatch).toHaveBeenCalledWith([
+      "publication-1",
+      "publication-2",
+    ]);
+    expect(vectors).toMatchObject({
+      "src/index.ts": { generation: "generation-1", visibility: "current" },
+      "src/second.ts": { generation: "generation-2", visibility: "current" },
+    });
+    expect(structurals).toMatchObject({
+      "src/index.ts": { generation: "generation-1", status: "current" },
+      "src/second.ts": { generation: "generation-2", status: "current" },
     });
   });
 

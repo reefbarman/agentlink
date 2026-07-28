@@ -224,6 +224,9 @@ interface SemanticSearchRecord {
 
 export interface SemanticQueryOptions {
   retrievalStoreRoot?: string;
+  retrievalStoreRootForWorkspace?: (
+    workspacePath: string,
+  ) => string | undefined;
 }
 
 interface SemanticQueryTarget {
@@ -374,6 +377,16 @@ export function rerankResults(
 }
 
 // --- Retrieval store query adapter ---
+
+function resolveRetrievalStoreRoot(
+  options: SemanticQueryOptions,
+  workspacePath: string,
+): string | undefined {
+  return (
+    options.retrievalStoreRoot ??
+    options.retrievalStoreRootForWorkspace?.(workspacePath)
+  );
+}
 
 async function queryRetrievalStore(args: {
   retrievalStoreRoot: string | undefined;
@@ -903,7 +916,10 @@ export async function semanticFileQuery(
       ? await generateEmbedding(expandQuery(query), auth).catch(() => undefined)
       : undefined;
     const candidates = await queryRetrievalStore({
-      retrievalStoreRoot: options.retrievalStoreRoot,
+      retrievalStoreRoot: resolveRetrievalStoreRoot(
+        options,
+        resolvedWorkspacePath,
+      ),
       workspacePath: resolvedWorkspacePath,
       queryText: query,
       queryVector,
@@ -1004,7 +1020,7 @@ export async function semanticFileList(
       workspacePaths.map(async (target) => {
         const { workspacePath, directoryPrefix } = target;
         const results = await queryRetrievalStore({
-          retrievalStoreRoot: options.retrievalStoreRoot,
+          retrievalStoreRoot: resolveRetrievalStoreRoot(options, workspacePath),
           workspacePath,
           queryText: query,
           queryVector,
@@ -1114,7 +1130,7 @@ export async function semanticSearch(
       workspacePaths.map(async (target) => {
         const { workspacePath, directoryPrefix } = target;
         const results = await queryRetrievalStore({
-          retrievalStoreRoot: options.retrievalStoreRoot,
+          retrievalStoreRoot: resolveRetrievalStoreRoot(options, workspacePath),
           workspacePath,
           queryText: query,
           queryVector,

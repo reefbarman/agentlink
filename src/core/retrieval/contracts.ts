@@ -345,9 +345,14 @@ export interface RetrievalRepository {
   preparePublication(
     request: RetrievalPublicationRequest,
   ): Promise<RetrievalPublicationPreparation>;
+  /** Batch requests must have unique publication IDs and source IDs. */
+  preparePublicationBatch(
+    requests: RetrievalPublicationRequest[],
+  ): Promise<RetrievalPublicationPreparation[]>;
   commitPublication(
     publicationId: string,
   ): Promise<RetrievalPublicationOutcome>;
+  /** Pending batch members must resolve to unique source IDs. */
   commitPublicationBatch(
     publicationIds: string[],
   ): Promise<RetrievalPublicationBatchOutcome>;

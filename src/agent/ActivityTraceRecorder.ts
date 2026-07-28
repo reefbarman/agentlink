@@ -101,6 +101,12 @@ const DEFAULT_MAX_PAYLOAD_STRING_CHARS = 500;
 const DEFAULT_MAX_PAYLOAD_ARRAY_ITEMS = 20;
 const TRACE_FILE = "activity-trace.jsonl";
 const SUMMARY_FILE = "activity-trace-summary.json";
+/**
+ * How long appended events sit in the buffer before a flush. Long enough to
+ * coalesce a burst of agent events into one append per session, short enough
+ * that a crash loses at most a beat of diagnostics.
+ */
+const FLUSH_DELAY_MS = 50;
 
 export class ActivityTraceRecorder {
   private readonly historyDir: string;
@@ -113,8 +119,22 @@ export class ActivityTraceRecorder {
   private persistenceDisabled = false;
   private sequences = new Map<string, number>();
   private summaries = new Map<string, ActivityTraceSummary>();
-  /** Directories already created this process — skips redundant mkdirSync. */
+  /** Directories already created this process — skips redundant mkdir. */
   private ensuredDirs = new Set<string>();
+  /**
+   * Events buffered for the next flush, per session. Disk writes happen off
+   * the append hot path: agent events fire many times per second and the old
+   * per-event `appendFileSync` + full-summary `writeFileSync` was synchronous
+   * main-thread I/O on every one of them.
+   */
+  private pendingBySession = new Map<string, ActivityTraceEvent[]>();
+  /** Events taken by an in-progress flush but not yet confirmed on disk. */
+  private inFlightBySession = new Map<string, ActivityTraceEvent[]>();
+  /** Sessions whose summary snapshot must be rewritten at the next flush. */
+  private dirtySummaries = new Set<string>();
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Single-lane flush chain — at most one flush touches disk at a time. */
+  private flushChain: Promise<void> = Promise.resolve();
 
   constructor(options: ActivityTraceRecorderOptions) {
     this.historyDir = path.join(options.workspaceDir, ".agentlink", "history");
@@ -214,27 +234,95 @@ export class ActivityTraceRecorder {
 
     this.updateSummary(normalized, shouldRecordEvent);
     if (!this.persistenceDisabled) {
-      try {
-        if (shouldRecordEvent) {
-          this.writeEvent(normalized);
-        }
-        this.writeSummary(event.sessionId);
-      } catch (error) {
-        this.persistenceDisabled = true;
-        if (shouldRecordEvent) {
-          summary.recordedEventCount = Math.max(
-            0,
-            summary.recordedEventCount - 1,
-          );
-          summary.droppedEventCount += 1;
-          summary.traceTruncated = true;
-        }
-        this.log?.(
-          `[activity-trace] Disabled persistence after write failure: ${error instanceof Error ? error.message : String(error)}`,
-        );
+      if (shouldRecordEvent) {
+        const pending = this.pendingBySession.get(event.sessionId);
+        if (pending) pending.push(normalized);
+        else this.pendingBySession.set(event.sessionId, [normalized]);
       }
+      this.dirtySummaries.add(event.sessionId);
+      this.scheduleFlush();
     }
     return shouldRecordEvent ? normalized : null;
+  }
+
+  /**
+   * Force buffered events and dirty summaries to disk. Resolves when
+   * everything appended so far has been flushed (or persistence has been
+   * disabled by a write failure). Flush failures never reject.
+   */
+  flush(): Promise<void> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.flushChain = this.flushChain.then(() => this.flushNow());
+    return this.flushChain;
+  }
+
+  /** Best-effort final flush for host shutdown. */
+  dispose(): Promise<void> {
+    return this.flush();
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.flushChain = this.flushChain.then(() => this.flushNow());
+    }, FLUSH_DELAY_MS);
+    this.flushTimer.unref?.();
+  }
+
+  private async flushNow(): Promise<void> {
+    if (this.persistenceDisabled) return;
+    const batches = this.pendingBySession;
+    this.pendingBySession = new Map();
+    for (const [sessionId, events] of batches) {
+      this.inFlightBySession.set(sessionId, events);
+    }
+    const dirty = [...this.dirtySummaries];
+    this.dirtySummaries.clear();
+
+    try {
+      for (const [sessionId, events] of batches) {
+        const file = this.tracePath(sessionId);
+        const lines = events
+          .map((event) => `${JSON.stringify(event)}\n`)
+          .join("");
+        await this.withEnsuredDir(path.dirname(file), () =>
+          fs.promises.appendFile(file, lines, "utf-8"),
+        );
+        this.inFlightBySession.delete(sessionId);
+      }
+      for (const sessionId of dirty) {
+        const file = this.summaryPath(sessionId);
+        const snapshot = JSON.stringify(this.getOrCreateSummary(sessionId));
+        await this.withEnsuredDir(path.dirname(file), () =>
+          fs.promises.writeFile(file, snapshot, "utf-8"),
+        );
+      }
+    } catch (error) {
+      this.persistenceDisabled = true;
+      // Roll back counters for every recorded-but-unwritten event: the batch
+      // that failed plus anything buffered while this flush was in flight.
+      for (const buffered of [this.inFlightBySession, this.pendingBySession]) {
+        for (const [sessionId, events] of buffered) {
+          const summary = this.getOrCreateSummary(sessionId);
+          summary.recordedEventCount = Math.max(
+            0,
+            summary.recordedEventCount - events.length,
+          );
+          summary.droppedEventCount += events.length;
+          summary.traceTruncated = true;
+        }
+      }
+      this.inFlightBySession.clear();
+      this.pendingBySession = new Map();
+      this.dirtySummaries.clear();
+      this.log?.(
+        `[activity-trace] Disabled persistence after write failure: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   getSummary(sessionId: string): ActivityTraceSummary {
@@ -243,18 +331,29 @@ export class ActivityTraceRecorder {
 
   loadEvents(sessionId: string): ActivityTraceEvent[] {
     const file = this.tracePath(sessionId);
+    let persisted: ActivityTraceEvent[];
     try {
-      return fs
+      persisted = fs
         .readFileSync(file, "utf-8")
         .split(/\r?\n/)
         .filter((line) => line.trim().length > 0)
         .map((line) => JSON.parse(line) as ActivityTraceEvent);
     } catch {
-      return [];
+      persisted = [];
     }
+    // Read-your-writes: include events buffered for (or taken by) a flush so
+    // diagnostics never miss the newest activity.
+    const inFlight = this.inFlightBySession.get(sessionId) ?? [];
+    const pending = this.pendingBySession.get(sessionId) ?? [];
+    if (inFlight.length === 0 && pending.length === 0) return persisted;
+    return [...persisted, ...inFlight, ...pending];
   }
 
   loadSummary(sessionId: string): ActivityTraceSummary | null {
+    // The in-memory summary is always at least as fresh as the disk snapshot
+    // (summary writes are coalesced into flushes).
+    const inMemory = this.summaries.get(sessionId);
+    if (inMemory) return { ...inMemory };
     const file = this.summaryPath(sessionId);
     try {
       return JSON.parse(fs.readFileSync(file, "utf-8")) as ActivityTraceSummary;
@@ -636,9 +735,9 @@ export class ActivityTraceRecorder {
     return truncate(text, maxChars);
   }
 
-  private ensureDir(dir: string): void {
+  private async ensureDir(dir: string): Promise<void> {
     if (this.ensuredDirs.has(dir)) return;
-    fs.mkdirSync(dir, { recursive: true });
+    await fs.promises.mkdir(dir, { recursive: true });
     this.ensuredDirs.add(dir);
   }
 
@@ -647,36 +746,21 @@ export class ActivityTraceRecorder {
    * out from under the cache (e.g. the session was deleted), recreate it and
    * retry once instead of letting persistence get disabled.
    */
-  private withEnsuredDir(dir: string, write: () => void): void {
-    this.ensureDir(dir);
+  private async withEnsuredDir(
+    dir: string,
+    write: () => Promise<void>,
+  ): Promise<void> {
+    await this.ensureDir(dir);
     try {
-      write();
+      await write();
     } catch (error) {
       if ((error as NodeJS.ErrnoException | null)?.code !== "ENOENT") {
         throw error;
       }
       this.ensuredDirs.delete(dir);
-      this.ensureDir(dir);
-      write();
+      await this.ensureDir(dir);
+      await write();
     }
-  }
-
-  private writeEvent(event: ActivityTraceEvent): void {
-    const file = this.tracePath(event.sessionId);
-    this.withEnsuredDir(path.dirname(file), () =>
-      fs.appendFileSync(file, `${JSON.stringify(event)}\n`, "utf-8"),
-    );
-  }
-
-  private writeSummary(sessionId: string): void {
-    const file = this.summaryPath(sessionId);
-    this.withEnsuredDir(path.dirname(file), () =>
-      fs.writeFileSync(
-        file,
-        JSON.stringify(this.getOrCreateSummary(sessionId)),
-        "utf-8",
-      ),
-    );
   }
 
   private tracePath(sessionId: string): string {
