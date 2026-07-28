@@ -32,6 +32,10 @@ export class InactiveChatProjectionCache {
     }
   }
 
+  clear(): void {
+    this.bySession.clear();
+  }
+
   size(sessionId: string): number {
     return this.bySession.get(sessionId)?.length ?? 0;
   }

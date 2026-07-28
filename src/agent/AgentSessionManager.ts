@@ -9384,7 +9384,10 @@ export class AgentSessionManager {
       resultText: string;
       structuredResult: import("./FleetWorkflows.js").FleetResultEnvelope;
       resultState: BackgroundResultState;
+      terminalReason?: string;
       partialResult?: string;
+      retrySafe: boolean;
+      agentRetryable: boolean;
     },
   ): Promise<void> {
     const fleet = session.fleetMetadata;
@@ -9476,32 +9479,41 @@ export class AgentSessionManager {
     resultText: string;
     structuredResult: import("./FleetWorkflows.js").FleetResultEnvelope;
     resultState: BackgroundResultState;
+    terminalReason?: string;
     partialResult?: string;
+    retrySafe: boolean;
+    agentRetryable: boolean;
   } {
-    // A valid final marker is authoritative even if the provider disconnects
-    // immediately afterward. The marker is already persisted in session history.
+    // A completed final marker is authoritative even if the provider disconnects
+    // immediately afterward. Non-completed markers retain their output as partial
+    // evidence but cannot authorize a successful background result.
     const marker = session.getLastFinalMarker?.();
-    if (marker?.result) {
+    if (marker?.status === "completed" && marker.result) {
       return {
         resultText: formatFleetResultEnvelope(marker.result),
         structuredResult: marker.result,
         resultState: "completed",
+        retrySafe: true,
+        agentRetryable: false,
       };
     }
 
+    const markerPartialResult = marker?.result
+      ? formatFleetResultEnvelope(marker.result)
+      : marker?.summary;
     const durablePartialResult =
       this.bgPartialResults.get(session.id) ??
       session.fleetMetadata?.partialResult;
     const partialResult = options?.preferDurableMetadata
       ? (durablePartialResult ??
         session.getLastAssistantText() ??
-        marker?.summary)
+        markerPartialResult)
       : session.fleetMetadata?.placement === "worktree"
         ? (durablePartialResult ??
           session.getLastAssistantText() ??
-          marker?.summary)
+          markerPartialResult)
         : (session.getLastAssistantText() ??
-          marker?.summary ??
+          markerPartialResult ??
           durablePartialResult);
     const rawText =
       (options?.preferDurableMetadata
@@ -9520,8 +9532,13 @@ export class AgentSessionManager {
       !options?.preferDurableMetadata ||
       !session.fleetMetadata?.resultState
     ) {
-      if (this.bgCancelled.has(session.id)) {
+      if (this.bgCancelled.has(session.id) || marker?.status === "cancelled") {
         resultState = "cancelled";
+      } else if (
+        marker?.status === "blocked" ||
+        marker?.status === "waiting_for_user"
+      ) {
+        resultState = "interrupted";
       } else if (
         session.fleetMetadata?.terminalReason?.startsWith("budget_exhausted:")
       ) {
@@ -9555,27 +9572,46 @@ export class AgentSessionManager {
             : formatFleetResultEnvelope(structuredResult),
         structuredResult,
         resultState,
+        retrySafe: true,
+        agentRetryable: false,
       };
     }
 
+    const markerTerminalReason =
+      marker?.status === "blocked"
+        ? "blocked"
+        : marker?.status === "waiting_for_user"
+          ? "waiting_for_user"
+          : marker?.status === "cancelled"
+            ? "cancelled_by_user"
+            : undefined;
     const terminalReason =
       resultState === "incomplete_expected_result"
         ? "incomplete_expected_result"
         : (this.bgErrors.get(session.id) ??
           session.fleetMetadata?.terminalReason ??
+          markerTerminalReason ??
           resultState);
+    const retrySafe = true;
+    const agentRetryable =
+      this.bgAgentRetryable.get(session.id) ??
+      session.fleetMetadata?.agentRetryable ??
+      false;
     const failureResult = JSON.stringify({
       status: resultState,
       terminalReason,
-      retrySafe: true,
-      agentRetryable: this.bgAgentRetryable.get(session.id) ?? false,
+      retrySafe,
+      agentRetryable,
       ...(partialResult ? { partialOutput: partialResult } : {}),
     });
     return {
       resultText: failureResult,
       structuredResult: { type: "text", text: failureResult },
       resultState,
+      terminalReason,
       partialResult,
+      retrySafe,
+      agentRetryable,
     };
   }
 
@@ -9916,6 +9952,49 @@ export class AgentSessionManager {
     return { resultText, summary: marker?.summary };
   }
 
+  getBackgroundCompletion(
+    sessionId: string,
+  ): BackgroundCompletionResult | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session?.background) return undefined;
+    const displayResult = this.getBackgroundResult(sessionId);
+    const terminalResult = this.resolveBackgroundResult(
+      session,
+      displayResult.resultText ?? displayResult.summary ?? "",
+      { preferDurableMetadata: true },
+    );
+    const status =
+      terminalResult.resultState === "cancelled"
+        ? "cancelled"
+        : terminalResult.resultState === "completed"
+          ? "completed"
+          : "error";
+    return {
+      sessionId,
+      task: session.fleetMetadata?.task ?? session.title,
+      status,
+      resultState: terminalResult.resultState,
+      terminalReason: terminalResult.terminalReason,
+      resultText:
+        terminalResult.resultState === "completed"
+          ? terminalResult.resultText
+          : undefined,
+      partialOutput:
+        terminalResult.resultState === "completed"
+          ? undefined
+          : terminalResult.partialResult,
+      summary:
+        displayResult.summary ?? this.getBackgroundResultSummary(sessionId),
+      retrySafe: terminalResult.retrySafe,
+      agentRetryable: terminalResult.agentRetryable,
+      completedAt:
+        this.bgCompletedAt.get(sessionId) ??
+        session.fleetMetadata?.completedAt ??
+        session.lastActiveAt ??
+        session.createdAt,
+    };
+  }
+
   getBackgroundResultSummary(sessionId: string): string | undefined {
     const finalSummary = this.getBackgroundResult(sessionId).summary?.trim();
     if (finalSummary) return finalSummary;
@@ -9979,35 +10058,11 @@ export class AgentSessionManager {
         }
         return true;
       })
-      .map((session): BackgroundCompletionResult => {
-        const resultState = this.getBackgroundResultState(session, true);
-        const status =
-          resultState === "cancelled"
-            ? "cancelled"
-            : resultState === "completed"
-              ? "completed"
-              : "error";
-        const displayResult = this.getBackgroundResult(session.id);
-        const terminalResult = this.resolveBackgroundResult(
-          session,
-          displayResult.resultText ?? displayResult.summary ?? "",
-          { preferDurableMetadata: true },
-        );
-        return {
-          sessionId: session.id,
-          task: session.fleetMetadata?.task ?? session.title,
-          status,
-          resultText: terminalResult.resultText,
-          summary:
-            displayResult.summary ??
-            this.getBackgroundResultSummary(session.id),
-          completedAt:
-            this.bgCompletedAt.get(session.id) ??
-            session.fleetMetadata?.completedAt ??
-            session.lastActiveAt ??
-            session.createdAt,
-        };
-      })
+      .map((session) => this.getBackgroundCompletion(session.id))
+      .filter(
+        (completion): completion is BackgroundCompletionResult =>
+          completion !== undefined,
+      )
       .sort(
         (a, b) =>
           a.completedAt - b.completedAt ||

@@ -14,6 +14,7 @@ import type {
 } from "../agent/webview/types.js";
 
 import type { ComposeChildStatus, ComposeTrace } from "./composeTypes.js";
+import type { BackgroundResultState } from "../core/capabilities/background.js";
 import type { ContextHealthSnapshot } from "./contextHealth.js";
 import type { DetectedQuestion } from "./questionDetection.js";
 import { randomId } from "./randomId.js";
@@ -339,24 +340,116 @@ function addQuestionContextMessage(
   ];
 }
 
-function inferBgResultStatus(
-  resultText: string,
-): "completed" | "error" | "cancelled" {
-  const normalized = resultText.trim().toLowerCase();
-  if (!normalized) return "completed";
-  if (normalized.startsWith("background agent stopped:")) {
-    return normalized.includes("cancel") ? "cancelled" : "error";
-  }
-  return "completed";
+type ProjectedBackgroundResult = Extract<
+  ContentBlock,
+  { type: "bg_agent_result" }
+>;
+
+type ParsedBackgroundToolResult =
+  | { kind: "non_terminal" }
+  | {
+      kind: "terminal";
+      status: ProjectedBackgroundResult["status"];
+      resultState: BackgroundResultState;
+      terminalReason?: string;
+      resultText?: string;
+      partialOutput?: string;
+      retrySafe?: boolean;
+      agentRetryable?: boolean;
+    };
+
+const TERMINAL_BACKGROUND_STATES = new Set<BackgroundResultState>([
+  "completed",
+  "incomplete_expected_result",
+  "failed",
+  "cancelled",
+  "budget_exhausted",
+  "interrupted",
+  "authorization_lost",
+]);
+
+function coarseBackgroundStatus(
+  resultState: BackgroundResultState,
+): ProjectedBackgroundResult["status"] {
+  if (resultState === "completed") return "completed";
+  if (resultState === "cancelled") return "cancelled";
+  return "error";
 }
 
-function isNonTerminalBackgroundResult(resultText: string): boolean {
-  const parsed = parseJsonObject(resultText);
-  return (
-    parsed?.done === false ||
-    parsed?.status === "continued-in-background" ||
-    parsed?.status === "wait_interrupted"
-  );
+function parseBackgroundToolResult(
+  resultText: string,
+): ParsedBackgroundToolResult {
+  const trimmed = resultText.trim();
+  const normalized = trimmed.toLowerCase();
+  if (normalized.startsWith("background agent stopped:")) {
+    const resultState: BackgroundResultState = normalized.includes("cancel")
+      ? "cancelled"
+      : "failed";
+    return {
+      kind: "terminal",
+      status: coarseBackgroundStatus(resultState),
+      resultState,
+      terminalReason: trimmed,
+      partialOutput: trimmed,
+    };
+  }
+
+  const parsed = parseJsonObject(trimmed);
+  if (!parsed) {
+    return {
+      kind: "terminal",
+      status: "completed",
+      resultState: "completed",
+      resultText: resultText || undefined,
+    };
+  }
+  if (
+    parsed.done === false ||
+    parsed.status === "continued-in-background" ||
+    parsed.status === "wait_interrupted"
+  ) {
+    return { kind: "non_terminal" };
+  }
+
+  const status = parsed.status;
+  if (
+    typeof status !== "string" ||
+    !TERMINAL_BACKGROUND_STATES.has(status as BackgroundResultState)
+  ) {
+    return {
+      kind: "terminal",
+      status: "completed",
+      resultState: "completed",
+      resultText: resultText || undefined,
+    };
+  }
+
+  const terminalReason = parsed.terminalReason;
+  const retrySafe = parsed.retrySafe;
+  const agentRetryable = parsed.agentRetryable;
+  const partialOutput = parsed.partialOutput;
+  const valid =
+    (terminalReason === undefined || typeof terminalReason === "string") &&
+    (retrySafe === undefined || typeof retrySafe === "boolean") &&
+    (agentRetryable === undefined || typeof agentRetryable === "boolean") &&
+    (partialOutput === undefined || typeof partialOutput === "string") &&
+    (parsed.done === undefined || parsed.done === true);
+  const resultState: BackgroundResultState = valid
+    ? (status as BackgroundResultState)
+    : "failed";
+  return {
+    kind: "terminal",
+    status: coarseBackgroundStatus(resultState),
+    resultState,
+    terminalReason: valid
+      ? (terminalReason as string | undefined)
+      : "Malformed background result metadata",
+    partialOutput: valid
+      ? (partialOutput as string | undefined)
+      : "The background result could not be classified safely. See the tool details for the exact output.",
+    retrySafe: valid ? (retrySafe as boolean | undefined) : false,
+    agentRetryable: valid ? (agentRetryable as boolean | undefined) : false,
+  };
 }
 
 function getBgSessionIdFromToolInput(
@@ -671,7 +764,7 @@ export type AppAction =
       todos: TodoItem[];
       lastInputTokens?: number;
       lastOutputTokens?: number;
-      /** Durable child results not already represented in persisted messages. */
+      /** Durable child results reconciled against any tool-derived message state. */
       backgroundResults?: BackgroundCompletionResult[];
       /**
        * Checkpoints are keyed by user-turn count at snapshot time.
@@ -699,11 +792,7 @@ export type AppAction =
   | { type: "CLEAR_ERROR" }
   | {
       type: "BG_AGENT_DONE";
-      sessionId: string;
-      task: string;
-      status: "completed" | "error" | "cancelled";
-      resultText?: string;
-      summary?: string;
+      completion: BackgroundCompletionResult;
     }
   | { type: "TOKEN_ESTIMATE"; estimatedTotalUsed: number };
 
@@ -1113,8 +1202,9 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
                 toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
             });
 
-            if (sessionId && !isNonTerminalBackgroundResult(toolResult)) {
-              const status = inferBgResultStatus(toolResult);
+            const parsedBackgroundResult =
+              parseBackgroundToolResult(toolResult);
+            if (sessionId && parsedBackgroundResult.kind === "terminal") {
               let task = "Background Agent";
               for (let i = blocks.length - 1; i >= 0; i--) {
                 const candidate = blocks[i];
@@ -1151,9 +1241,15 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
                 type: "bg_agent_result",
                 sessionId,
                 task,
-                status,
-                resultText: toolResult || undefined,
+                status: parsedBackgroundResult.status,
+                resultState: parsedBackgroundResult.resultState,
+                terminalReason: parsedBackgroundResult.terminalReason,
+                resultText: parsedBackgroundResult.resultText,
+                partialOutput: parsedBackgroundResult.partialOutput,
                 summary: undefined,
+                retrySafe: parsedBackgroundResult.retrySafe,
+                agentRetryable: parsedBackgroundResult.agentRetryable,
+                sourceAuthority: "tool",
               });
             }
           } else {
@@ -1969,10 +2065,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
 
       // When get_background_result completes, add a visible result block so
       // the output is not only available inside the raw tool-call details.
-      if (
-        action.toolName === "get_background_result" &&
-        !isNonTerminalBackgroundResult(action.result)
-      ) {
+      if (action.toolName === "get_background_result") {
+        const parsedBackgroundResult = parseBackgroundToolResult(action.result);
+        if (parsedBackgroundResult.kind === "non_terminal") {
+          return { ...state, messages: msgs };
+        }
         const toolBlock = target.blocks.find(
           (b) => b.type === "tool_call" && b.id === action.toolCallId,
         );
@@ -1991,19 +2088,40 @@ export function reducer(state: AppState, action: AppAction): AppState {
                 block.type === "bg_agent_result" &&
                 block.sessionId === sessionId,
             );
-          const bgResultBlock: ContentBlock = existingResult
-            ? {
-                ...existingResult,
-                resultText: action.result || existingResult.resultText,
-              }
-            : {
-                type: "bg_agent_result",
-                sessionId,
-                task: findBgTaskForSession(msgs, target.blocks, sessionId),
-                status: inferBgResultStatus(action.result),
-                resultText: action.result || undefined,
-                summary: undefined,
-              };
+          const toolResultBlock: ProjectedBackgroundResult = {
+            type: "bg_agent_result",
+            sessionId,
+            task: findBgTaskForSession(msgs, target.blocks, sessionId),
+            status: parsedBackgroundResult.status,
+            resultState: parsedBackgroundResult.resultState,
+            terminalReason: parsedBackgroundResult.terminalReason,
+            resultText: parsedBackgroundResult.resultText,
+            partialOutput: parsedBackgroundResult.partialOutput,
+            summary: undefined,
+            retrySafe: parsedBackgroundResult.retrySafe,
+            agentRetryable: parsedBackgroundResult.agentRetryable,
+            sourceAuthority: "tool",
+          };
+          const toolContentIsCompatible =
+            existingResult?.resultState === toolResultBlock.resultState ||
+            (!existingResult?.resultState &&
+              existingResult?.status === toolResultBlock.status);
+          const bgResultBlock: ContentBlock =
+            existingResult?.sourceAuthority === "canonical"
+              ? {
+                  ...existingResult,
+                  resultText:
+                    existingResult.resultText ??
+                    (toolContentIsCompatible
+                      ? toolResultBlock.resultText
+                      : undefined),
+                  partialOutput:
+                    existingResult.partialOutput ??
+                    (toolContentIsCompatible
+                      ? toolResultBlock.partialOutput
+                      : undefined),
+                }
+              : { ...toolResultBlock, summary: existingResult?.summary };
           const reconciledMessages = msgs
             .map((message) => ({
               ...message,
@@ -2954,25 +3072,61 @@ export function reducer(state: AppState, action: AppAction): AppState {
       );
       let restoredMessages = applied.messages;
       for (const result of action.backgroundResults ?? []) {
-        if (
-          restoredMessages.some((message) =>
-            message.blocks.some(
-              (block) =>
-                block.type === "bg_agent_result" &&
-                block.sessionId === result.sessionId,
-            ),
-          )
-        ) {
-          continue;
-        }
+        const existingResults = restoredMessages
+          .flatMap((message) => message.blocks)
+          .filter(
+            (
+              block,
+            ): block is Extract<ContentBlock, { type: "bg_agent_result" }> =>
+              block.type === "bg_agent_result" &&
+              block.sessionId === result.sessionId,
+          );
+        const existingResult = existingResults.at(-1);
+        const existingContentIsCompatible =
+          existingResult?.resultState === result.resultState ||
+          (!existingResult?.resultState &&
+            existingResult?.status === result.status);
         const resultBlock: ContentBlock = {
           type: "bg_agent_result",
           sessionId: result.sessionId,
           task: result.task,
           status: result.status,
-          resultText: result.resultText,
-          summary: result.summary,
+          resultState: result.resultState,
+          terminalReason: result.terminalReason,
+          resultText:
+            result.resultText ??
+            (existingContentIsCompatible
+              ? existingResult?.resultText
+              : undefined),
+          partialOutput:
+            result.partialOutput ??
+            (existingContentIsCompatible
+              ? existingResult?.partialOutput
+              : undefined),
+          summary: result.summary ?? existingResult?.summary,
+          retrySafe: result.retrySafe,
+          agentRetryable: result.agentRetryable,
+          sourceAuthority: "canonical",
         };
+        if (existingResult) {
+          let resultOccurrence = 0;
+          restoredMessages = restoredMessages.map((message) => ({
+            ...message,
+            blocks: message.blocks.flatMap((block) => {
+              if (
+                block.type !== "bg_agent_result" ||
+                block.sessionId !== result.sessionId
+              ) {
+                return [block];
+              }
+              resultOccurrence += 1;
+              return resultOccurrence === existingResults.length
+                ? [resultBlock]
+                : [];
+            }),
+          }));
+          continue;
+        }
         const lastMessage = restoredMessages.at(-1);
         if (lastMessage?.role === "assistant") {
           restoredMessages = [
@@ -3030,7 +3184,22 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "PREPEND_SESSION_CHUNK": {
-      const prepended = [...action.messages, ...state.messages];
+      const activeBackgroundResultSessionIds = new Set(
+        state.messages.flatMap((message) =>
+          message.blocks.flatMap((block) =>
+            block.type === "bg_agent_result" ? [block.sessionId] : [],
+          ),
+        ),
+      );
+      const prependedMessages = action.messages.map((message) => ({
+        ...message,
+        blocks: message.blocks.filter(
+          (block) =>
+            block.type !== "bg_agent_result" ||
+            !activeBackgroundResultSessionIds.has(block.sessionId),
+        ),
+      }));
+      const prepended = [...prependedMessages, ...state.messages];
       const mergedCheckpoints = [
         ...(state.pendingCheckpoints ?? []),
         ...(action.checkpoints ?? []),
@@ -3058,6 +3227,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "BG_AGENT_DONE": {
+      const completion = action.completion;
       // If get_background_result already completed for this session, keep the
       // result directly after that tool call. Otherwise, insert before any
       // still-active tail blocks so the live end of the transcript stays last.
@@ -3068,15 +3238,33 @@ export function reducer(state: AppState, action: AppAction): AppState {
             block,
           ): block is Extract<ContentBlock, { type: "bg_agent_result" }> =>
             block.type === "bg_agent_result" &&
-            block.sessionId === action.sessionId,
+            block.sessionId === completion.sessionId,
         );
+      const existingContentIsCompatible =
+        existingResult?.resultState === completion.resultState ||
+        (!existingResult?.resultState &&
+          existingResult?.status === completion.status);
       const resultBlock: ContentBlock = {
         type: "bg_agent_result",
-        sessionId: action.sessionId,
-        task: action.task,
-        status: action.status,
-        resultText: action.resultText ?? existingResult?.resultText,
-        summary: action.summary ?? existingResult?.summary,
+        sessionId: completion.sessionId,
+        task: completion.task,
+        status: completion.status,
+        resultState: completion.resultState,
+        terminalReason: completion.terminalReason,
+        resultText:
+          completion.resultText ??
+          (existingContentIsCompatible
+            ? existingResult?.resultText
+            : undefined),
+        partialOutput:
+          completion.partialOutput ??
+          (existingContentIsCompatible
+            ? existingResult?.partialOutput
+            : undefined),
+        summary: completion.summary ?? existingResult?.summary,
+        retrySafe: completion.retrySafe,
+        agentRetryable: completion.agentRetryable,
+        sourceAuthority: "canonical",
       };
       const messagesWithoutPriorResult = state.messages
         .map((message) => ({
@@ -3085,7 +3273,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
             (block) =>
               !(
                 block.type === "bg_agent_result" &&
-                block.sessionId === action.sessionId
+                block.sessionId === completion.sessionId
               ),
           ),
         }))
@@ -3108,7 +3296,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
             block.name === "get_background_result" &&
             block.complete &&
             getBgSessionIdFromToolInput(undefined, block.inputJson) ===
-              action.sessionId,
+              completion.sessionId,
         );
         if (toolIndex < 0) continue;
         const messages = [...messagesWithoutPriorResult];

@@ -3631,7 +3631,10 @@ describe("AgentSessionManager background agents", () => {
     const session = {
       id: "bg-final-marker",
       status: "error",
-      getLastFinalMarker: () => ({ result: structuredResult }),
+      getLastFinalMarker: () => ({
+        status: "completed",
+        result: structuredResult,
+      }),
       getLastAssistantText: () => "trailing progress prose",
       fleetMetadata: { delegation: { expectedResult: "review_findings" } },
     };
@@ -3644,6 +3647,78 @@ describe("AgentSessionManager background agents", () => {
       }),
     );
   });
+
+  it.each([
+    ["cancelled", "cancelled", "cancelled_by_user"],
+    ["blocked", "interrupted", "blocked"],
+    ["waiting_for_user", "interrupted", "waiting_for_user"],
+  ] as const)(
+    "does not promote a %s final marker result to completed",
+    (markerStatus, resultState, terminalReason) => {
+      const mgr = new AgentSessionManager(config, "/tmp");
+      const structuredResult = {
+        type: "review_findings" as const,
+        findings: [],
+        reviewedScope: "src/agent",
+        emptyDiff: false,
+      };
+      const session = {
+        id: `bg-${markerStatus}`,
+        status: "idle",
+        getLastFinalMarker: () => ({
+          status: markerStatus,
+          result: structuredResult,
+          summary: "Partial review evidence",
+        }),
+        getLastAssistantText: () => undefined,
+        fleetMetadata: { delegation: { expectedResult: "review_findings" } },
+      };
+
+      const resolved = (mgr as any).resolveBackgroundResult(
+        session,
+        "fallback",
+      );
+      expect(resolved).toMatchObject({
+        resultState,
+        terminalReason,
+        partialResult: expect.stringContaining("Reviewed scope:** src/agent"),
+      });
+      expect(JSON.parse(resolved.resultText)).toMatchObject({
+        status: resultState,
+        terminalReason,
+        partialOutput: expect.stringContaining("Reviewed scope:** src/agent"),
+      });
+    },
+  );
+
+  it.each([
+    ["cancelled", "cancelled", "cancelled_by_user"],
+    ["blocked", "interrupted", "blocked"],
+    ["waiting_for_user", "interrupted", "waiting_for_user"],
+  ] as const)(
+    "preserves summary evidence for a %s final marker without a result",
+    (markerStatus, resultState, terminalReason) => {
+      const mgr = new AgentSessionManager(config, "/tmp");
+      const session = {
+        id: `bg-summary-${markerStatus}`,
+        status: "idle",
+        getLastFinalMarker: () => ({
+          status: markerStatus,
+          summary: "Partial review evidence",
+        }),
+        getLastAssistantText: () => undefined,
+        fleetMetadata: { delegation: { expectedResult: "review_findings" } },
+      };
+
+      expect(
+        (mgr as any).resolveBackgroundResult(session, "fallback"),
+      ).toMatchObject({
+        resultState,
+        terminalReason,
+        partialResult: "Partial review evidence",
+      });
+    },
+  );
 
   it("preserves a parsed expected envelope across a later provider failure", () => {
     const mgr = new AgentSessionManager(config, "/tmp");
@@ -3668,6 +3743,44 @@ describe("AgentSessionManager background agents", () => {
         resultState: "completed",
       }),
     );
+  });
+
+  it("completes a fenced ACP findings envelope despite a later provider error", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const envelope = {
+      type: "review_findings" as const,
+      findings: [
+        {
+          severity: "high" as const,
+          message: "The worker can stop before finalization completes.",
+          path: "src/indexer/worker.ts",
+          line: 1347,
+        },
+      ],
+      reviewedScope: "src/indexer worker shutdown and context health",
+      emptyDiff: false,
+    };
+    const session = {
+      id: "bg-fenced-envelope",
+      status: "error",
+      getLastFinalMarker: () => undefined,
+      getLastAssistantText: () =>
+        `The review is complete.\n\n\`\`\`json\n${JSON.stringify(envelope)}\n\`\`\``,
+      fleetMetadata: { delegation: { expectedResult: "review_findings" } },
+    };
+    (mgr as any).bgErrors.set(session.id, "transport disconnected");
+
+    const resolved = (mgr as any).resolveBackgroundResult(session, "fallback");
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        structuredResult: envelope,
+        resultState: "completed",
+      }),
+    );
+    expect(resolved.resultText).toContain(
+      "**HIGH** — `src/indexer/worker.ts:1347`: The worker can stop before finalization completes.",
+    );
+    expect(resolved.resultText).not.toContain("incomplete_expected_result");
   });
 
   it("marks missing expected envelopes incomplete and preserves prose", () => {
@@ -3712,7 +3825,10 @@ describe("AgentSessionManager background agents", () => {
     };
     const resolved = (mgr as any).resolveBackgroundResult(
       {
-        getLastFinalMarker: () => ({ result: structuredResult }),
+        getLastFinalMarker: () => ({
+          status: "completed",
+          result: structuredResult,
+        }),
         getLastAssistantText: () => undefined,
         fleetMetadata: { delegation: { expectedResult: "review_findings" } },
       },
@@ -4043,12 +4159,13 @@ describe("AgentSessionManager background agents", () => {
         status: "error",
       }),
     );
-    expect(JSON.parse(completion[0].resultText ?? "{}")).toEqual(
+    expect(completion[0]).toEqual(
       expect.objectContaining({
-        status: "interrupted",
+        resultState: "interrupted",
         terminalReason: "extension_reloaded_during_run",
         retrySafe: true,
         partialOutput: "work preserved before reload",
+        resultText: undefined,
       }),
     );
     expect(mgr.listPersistedFleetSessions().map((item) => item.id)).toEqual([
@@ -4265,14 +4382,18 @@ describe("AgentSessionManager background agents", () => {
     ).resolves.toBe("durable child result");
     expect(mgr.getBackgroundCompletionsForParent(foregroundSummary.id)).toEqual(
       [
-        {
+        expect.objectContaining({
           sessionId: childSummary.id,
           task: childSummary.title,
           status: "completed",
+          resultState: "completed",
           resultText: "durable child result",
+          partialOutput: undefined,
           summary: "durable child result",
+          retrySafe: true,
+          agentRetryable: false,
           completedAt: now - 1,
-        },
+        }),
       ],
     );
 

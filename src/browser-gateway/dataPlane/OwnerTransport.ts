@@ -1,4 +1,8 @@
-import type { BrowserGatewayCoreOwnerLeaseRegistration } from "../protocol.js";
+import {
+  BROWSER_GATEWAY_DATA_PLANE_FEATURES,
+  type BrowserGatewayCoreOwnerLeaseRegistration,
+  type BrowserGatewayDataPlaneFeature,
+} from "../protocol.js";
 import type { BrowserGatewayCoreOwnerRegistrationResolution } from "../coreOwnerRegistry.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./limits.js";
 import {
@@ -26,6 +30,7 @@ export interface BrowserGatewayOwnerTransportRegistration {
   readonly ownerGenerationId: string;
   readonly helperGenerationId: string;
   readonly resolution: BrowserGatewayCoreOwnerRegistrationResolution;
+  readonly dataPlaneFeatures?: readonly BrowserGatewayDataPlaneFeature[];
 }
 
 export interface BrowserGatewayOwnerTransportPublicationAck {
@@ -210,6 +215,9 @@ export class HttpBrowserGatewayOwnerTransport implements BrowserGatewayOwnerTran
       value.helperGenerationId,
       "helperGenerationId",
     );
+    const dataPlaneFeatures = optionalDataPlaneFeatures(
+      value.dataPlaneFeatures,
+    );
     if (helperGenerationId !== this.options.helperGenerationId) {
       throw new Error("browser_gateway_helper_generation_mismatch");
     }
@@ -225,6 +233,7 @@ export class HttpBrowserGatewayOwnerTransport implements BrowserGatewayOwnerTran
       ownerGenerationId: this.options.owner.ownerGenerationId,
       helperGenerationId,
       resolution,
+      dataPlaneFeatures,
     };
   }
 
@@ -1087,6 +1096,17 @@ function requiredString(value: unknown, field: string): string {
     throw new Error(`browser_gateway_invalid_${field}`);
   }
   return value;
+}
+
+function optionalDataPlaneFeatures(
+  value: unknown,
+): BrowserGatewayDataPlaneFeature[] {
+  if (!Array.isArray(value)) return [];
+  const supported = new Set<string>(BROWSER_GATEWAY_DATA_PLANE_FEATURES);
+  return value.filter(
+    (feature): feature is BrowserGatewayDataPlaneFeature =>
+      typeof feature === "string" && supported.has(feature),
+  );
 }
 
 function requiredRegistrationResolution(

@@ -142,18 +142,97 @@ export type FleetResultEnvelope =
       logs?: string[];
     };
 
+const MAX_FLEET_RESULT_FENCES = 32;
+const MAX_FLEET_RESULT_FENCE_BODY_CHARS = 1_000_000;
+
+interface MarkdownFence {
+  character: "`" | "~";
+  length: number;
+  accepted: boolean;
+  body: string[];
+  bodyChars: number;
+}
+
+function parseExpectedFleetResult(
+  expected: Exclude<
+    SpawnBackgroundRequest["expectedResult"],
+    "text" | undefined
+  >,
+  text: string,
+): FleetResultEnvelope | undefined {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return isFleetResultEnvelope(parsed) && parsed.type === expected
+      ? parsed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractFleetResultFenceBodies(text: string): {
+  bodies: string[];
+  overflowed: boolean;
+} {
+  const bodies: string[] = [];
+  let fence: MarkdownFence | undefined;
+
+  for (const line of text.split(/\r?\n/)) {
+    if (fence) {
+      const closer = line.match(/^ {0,3}(`+|~+)[ \t]*$/);
+      if (
+        closer?.[1]?.[0] === fence.character &&
+        closer[1].length >= fence.length
+      ) {
+        if (
+          fence.accepted &&
+          fence.bodyChars <= MAX_FLEET_RESULT_FENCE_BODY_CHARS
+        ) {
+          bodies.push(fence.body.join("\n"));
+          if (bodies.length > MAX_FLEET_RESULT_FENCES) {
+            return { bodies: [], overflowed: true };
+          }
+        }
+        fence = undefined;
+      } else if (fence.accepted) {
+        fence.bodyChars += line.length + 1;
+        if (fence.bodyChars <= MAX_FLEET_RESULT_FENCE_BODY_CHARS) {
+          fence.body.push(line);
+        }
+      }
+      continue;
+    }
+
+    const opener = line.match(/^ {0,3}(`{3,}|~{3,})([^\r\n]*)$/);
+    if (!opener?.[1]) continue;
+    const info = opener[2]?.trim().toLowerCase() ?? "";
+    fence = {
+      character: opener[1][0] as "`" | "~",
+      length: opener[1].length,
+      accepted: info === "" || info === "json",
+      body: [],
+      bodyChars: 0,
+    };
+  }
+
+  return { bodies, overflowed: false };
+}
+
 export function parseFleetResultEnvelope(
   expected: SpawnBackgroundRequest["expectedResult"],
   text: string,
 ): FleetResultEnvelope {
   if (expected && expected !== "text") {
-    try {
-      const parsed = JSON.parse(text) as unknown;
-      if (isFleetResultEnvelope(parsed) && parsed.type === expected)
-        return parsed;
-    } catch {
-      // Preserve useful evidence as text if the backend did not emit JSON.
-    }
+    const exact = parseExpectedFleetResult(expected, text);
+    if (exact) return exact;
+
+    const fenced = extractFleetResultFenceBodies(text);
+    if (fenced.overflowed) return { type: "text", text };
+    const validFencedResults = fenced.bodies.flatMap((body) => {
+      const parsed = parseExpectedFleetResult(expected, body.trim());
+      return parsed ? [parsed] : [];
+    });
+    if (validFencedResults.length === 1) return validFencedResults[0];
   }
   return { type: "text", text };
 }

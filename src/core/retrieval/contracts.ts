@@ -94,6 +94,62 @@ export interface RetrievalPublicationRequest {
   expectedRelationIds: string[];
 }
 
+export interface RetrievalStagedPublicationManifest {
+  publicationId: string;
+  generation: string;
+  fenceToken: string;
+  source: RetrievalSourceDocument;
+  expectedChunkCount: number;
+  expectedRelationCount: number;
+  expectedChunkDigest: string;
+  expectedRelationDigest: string;
+  sourcePayloadDigest: string;
+}
+
+export interface RetrievalStagedChunkBatch {
+  publicationId: string;
+  batchIndex: number;
+  expectedIdDigest: string;
+  expectedContentDigest: string;
+  chunks: RetrievalChunkRecord[];
+}
+
+export interface RetrievalStagedRelationBatch {
+  publicationId: string;
+  batchIndex: number;
+  expectedIdDigest: string;
+  expectedContentDigest: string;
+  relations: RetrievalRelationRecord[];
+}
+
+export interface RetrievalStagedPublicationInspection {
+  publicationId: string;
+  sourceId: string;
+  revisionId: string;
+  generation: string;
+  fenceToken: string;
+  state: "staging" | "staged" | "activated";
+  expectedChunkCount: number;
+  expectedRelationCount: number;
+  expectedChunkDigest: string;
+  expectedRelationDigest: string;
+  sourcePayloadDigest: string;
+}
+
+export interface StagedRetrievalPublicationRepository {
+  beginStagedPublication(
+    manifest: RetrievalStagedPublicationManifest,
+  ): Promise<RetrievalPublicationPreparation>;
+  appendStagedChunkBatch(batch: RetrievalStagedChunkBatch): Promise<void>;
+  appendStagedRelationBatch(batch: RetrievalStagedRelationBatch): Promise<void>;
+  completeStagedPublication(publicationId: string): Promise<void>;
+  adoptStagedPublication(publicationId: string): Promise<void>;
+  abortStagedPublication(publicationId: string): Promise<void>;
+  inspectStagedPublication(
+    publicationId: string,
+  ): Promise<RetrievalStagedPublicationInspection | null>;
+}
+
 export interface RetrievalPublicationPreparation {
   publicationId: string;
   sourceId: string;

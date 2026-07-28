@@ -106,6 +106,70 @@ describe("fleet workflows", () => {
     expect(instruction).toContain("reviewedScope");
   });
 
+  it("recovers one valid expected envelope from a fenced final response", () => {
+    const envelope = {
+      type: "review_findings" as const,
+      findings: [
+        {
+          severity: "high" as const,
+          message: "The worker can stop before finalization completes.",
+          path: "src/indexer/worker.ts",
+          line: 1347,
+        },
+      ],
+      reviewedScope: "src/indexer worker shutdown and context health",
+      emptyDiff: false,
+    };
+
+    for (const response of [
+      `The review is complete.\n\n\`\`\`json\n${JSON.stringify(envelope)}\n\`\`\``,
+      `Findings follow.\r\n\r\n~~~ JSON \r\n${JSON.stringify(envelope)}\r\n~~~`,
+      `Outer commentary.\n\n\`\`\`\`\n\`\`\`json\n${JSON.stringify(envelope)}\n\`\`\`\n\`\`\`\`\n\n~~~json\n${JSON.stringify(envelope)}\n~~~`,
+    ]) {
+      expect(parseFleetResultEnvelope("review_findings", response)).toEqual(
+        envelope,
+      );
+    }
+  });
+
+  it("fails closed for ambiguous, unsupported, or incomplete fenced results", () => {
+    const envelope = JSON.stringify({
+      type: "review_findings",
+      findings: [],
+      reviewedScope: "src/agent",
+      emptyDiff: false,
+    });
+    const ambiguous = `\`\`\`json\n${envelope}\n\`\`\`\n\n\`\`\`json\n${envelope}\n\`\`\``;
+    const unsupported = `\`\`\`typescript\n${envelope}\n\`\`\``;
+    const unclosed = `\`\`\`json\n${envelope}`;
+    const trailing = `\`\`\`json\n${envelope}\nnot-json\n\`\`\``;
+    const nestedInUnsupportedOuter = `\`\`\`\`markdown\n\`\`\`json\n${envelope}\n\`\`\`\n\`\`\`\``;
+
+    for (const response of [
+      ambiguous,
+      unsupported,
+      unclosed,
+      trailing,
+      nestedInUnsupportedOuter,
+      `Example inline: ${envelope}`,
+    ]) {
+      expect(parseFleetResultEnvelope("review_findings", response)).toEqual({
+        type: "text",
+        text: response,
+      });
+    }
+  });
+
+  it("does not recover a fenced envelope of the wrong expected type", () => {
+    const response =
+      '```json\n{"type":"verification","passed":true,"summary":"ok"}\n```';
+
+    expect(parseFleetResultEnvelope("review_findings", response)).toEqual({
+      type: "text",
+      text: response,
+    });
+  });
+
   it("formats structured review results as readable markdown", () => {
     expect(
       formatFleetResultEnvelope({

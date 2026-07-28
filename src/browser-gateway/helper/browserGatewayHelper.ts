@@ -55,6 +55,7 @@ import {
   type AskAgentOwnerResolvedDetail,
 } from "./AskAgentOwnerAdapter.js";
 import {
+  BROWSER_GATEWAY_DATA_PLANE_FEATURES,
   BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
   type BrowserGatewayClientLeaseRequest,
   type BrowserGatewayClientReleaseRequest,
@@ -1599,6 +1600,7 @@ export class BrowserGatewayHelper {
           activeClientLeases: this.getActiveLeaseCount(),
           helperGenerationId: this.helperGenerationId,
           dataPlaneMode,
+          dataPlaneFeatures: [...BROWSER_GATEWAY_DATA_PLANE_FEATURES],
           coreOwners: this.coreOwnerRegistry.list(Date.now()).length,
         };
         writeJson(res, 200, payload);
@@ -7683,6 +7685,7 @@ export class BrowserGatewayHelper {
         effectiveOwnerId: registration.effectiveOwnerId,
         resolution: registration.resolution,
         ownerRegistration: registration.registration,
+        dataPlaneFeatures: [...BROWSER_GATEWAY_DATA_PLANE_FEATURES],
       });
     } catch (err) {
       const invalidJson = String(err) === "Error: invalid_json";
@@ -8705,6 +8708,7 @@ export class BrowserGatewayHelper {
       helperVersion: this.options.helperVersion,
       helperGenerationId: this.helperGenerationId,
       dataPlaneMode,
+      dataPlaneFeatures: [...BROWSER_GATEWAY_DATA_PLANE_FEATURES],
       browserBootstrapToken: this.browserBootstrapToken,
       clientSharedSecret: this.clientSharedSecret,
       lanAccess: Boolean(this.options.lanAccess),

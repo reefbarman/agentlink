@@ -144,6 +144,29 @@ describe("withRetrievalStoreLock", () => {
     });
   });
 
+  it("reclaims a fresh lock immediately when its recorded owner is dead", async () => {
+    await withRoot(async (root) => {
+      const lockDirectory = `${root}.lock`;
+      await fs.mkdir(lockDirectory);
+      await fs.writeFile(
+        path.join(lockDirectory, "dead-owner"),
+        `${JSON.stringify({ pid: 2_147_483_647 })}\n`,
+      );
+
+      const startedAt = Date.now();
+      await expect(
+        withRetrievalStoreLock(root, async () => "recovered", {
+          staleMs: 60_000,
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toBe("recovered");
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+      await expect(fs.stat(lockDirectory)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+
   it("reclaims an orphaned stale lock", async () => {
     await withRoot(async (root) => {
       const lockDirectory = `${root}.lock`;

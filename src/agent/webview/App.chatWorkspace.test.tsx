@@ -63,9 +63,12 @@ function sessionLoaded(
   };
 }
 
-function createSnapshot(focusedTabId = "tab-1"): ChatWorkspaceViewSnapshot {
+function createSnapshot(
+  focusedTabId = "tab-1",
+  controllerEpoch = "epoch-1",
+): ChatWorkspaceViewSnapshot {
   return {
-    controllerEpoch: "epoch-1",
+    controllerEpoch,
     focusedTabId,
     tabs: [
       {
@@ -434,6 +437,57 @@ describe("App chat workspace integration", () => {
     await waitFor(() => {
       expect(screen.getAllByText("transcript for B")).not.toHaveLength(0);
       expect(screen.getByText("buffered for B")).toBeTruthy();
+    });
+  });
+
+  it("does not restore a cached projection from a previous controller epoch", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "pre-reset transcript for A", 1));
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "pre-reset transcript for B", 1));
+
+    deliver({
+      type: "chatWorkspaceUpdate",
+      snapshot: createSnapshot("tab-1", "epoch-2"),
+    });
+
+    expect(screen.queryByText("pre-reset transcript for A")).toBeNull();
+    expect(screen.queryByText("pre-reset transcript for B")).toBeNull();
+
+    deliver(
+      sessionLoaded("session-1", "post-reset canonical transcript for A", 1),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getAllByText("post-reset canonical transcript for A"),
+      ).not.toHaveLength(0);
+    });
+  });
+
+  it("hydrates an uncached tab when an inactive completion has the same revision", async () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A", 1));
+    deliver({
+      type: "agentDone",
+      sessionId: "session-2",
+      transcriptRevision: 2,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+    });
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver(sessionLoaded("session-2", "first canonical transcript for B", 2));
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText("first canonical transcript for B"),
+      ).not.toHaveLength(0);
     });
   });
 

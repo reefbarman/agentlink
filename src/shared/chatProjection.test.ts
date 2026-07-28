@@ -716,10 +716,14 @@ describe("ask_user result projection", () => {
 describe("BG_AGENT_DONE result placement", () => {
   const bgDone = {
     type: "BG_AGENT_DONE" as const,
-    sessionId: "bg-1",
-    task: "Review implementation",
-    status: "completed" as const,
-    resultText: "Looks good.",
+    completion: {
+      sessionId: "bg-1",
+      task: "Review implementation",
+      status: "completed" as const,
+      resultState: "completed" as const,
+      resultText: "Looks good.",
+      completedAt: 1,
+    },
   };
 
   function stateWith(
@@ -890,7 +894,10 @@ describe("BG_AGENT_DONE result placement", () => {
         },
       ],
     };
-    state = reducer(state, { ...bgDone, summary: "Still complete." });
+    state = reducer(state, {
+      ...bgDone,
+      completion: { ...bgDone.completion, summary: "Still complete." },
+    });
 
     expect(
       state.messages.filter(
@@ -1023,8 +1030,11 @@ describe("BG_AGENT_DONE result placement", () => {
     });
     state = reducer(state, {
       ...bgDone,
-      resultText: undefined,
-      summary: "No blocking issues.",
+      completion: {
+        ...bgDone.completion,
+        resultText: undefined,
+        summary: "No blocking issues.",
+      },
     });
 
     expect(state.messages[0].blocks.map((block) => block.type)).toEqual([
@@ -1036,6 +1046,129 @@ describe("BG_AGENT_DONE result placement", () => {
       sessionId: "bg-1",
       resultText: "Looks good.",
       summary: "No blocking issues.",
+    });
+  });
+
+  it("does not let a provisional failed tool result override a later canonical completion", () => {
+    let state = stateWith(
+      [
+        {
+          type: "tool_call",
+          id: "tool-result",
+          name: "get_background_result",
+          inputJson: JSON.stringify({ sessionId: "bg-1" }),
+          result: "",
+          complete: false,
+        },
+      ],
+      true,
+    );
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-result",
+      toolName: "get_background_result",
+      result: JSON.stringify({
+        status: "failed",
+        terminalReason: "transport_closed",
+        retrySafe: true,
+        partialOutput: "Partial review",
+      }),
+      durationMs: 1,
+      input: { sessionId: "bg-1" },
+    });
+    state = reducer(state, bgDone);
+
+    expect(state.messages[0].blocks[1]).toMatchObject({
+      type: "bg_agent_result",
+      status: "completed",
+      resultState: "completed",
+      resultText: "Looks good.",
+      partialOutput: undefined,
+      sourceAuthority: "canonical",
+    });
+  });
+
+  it("does not let a later provisional tool result override a canonical completion", () => {
+    let state = stateWith(
+      [
+        {
+          type: "tool_call",
+          id: "tool-result",
+          name: "get_background_result",
+          inputJson: JSON.stringify({ sessionId: "bg-1" }),
+          result: "",
+          complete: false,
+        },
+      ],
+      true,
+    );
+    state = reducer(state, bgDone);
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-result",
+      toolName: "get_background_result",
+      result: JSON.stringify({
+        status: "failed",
+        terminalReason: "transport_closed",
+        retrySafe: true,
+        partialOutput: "Partial review",
+      }),
+      durationMs: 1,
+      input: { sessionId: "bg-1" },
+    });
+
+    expect(state.messages[0].blocks[1]).toMatchObject({
+      type: "bg_agent_result",
+      status: "completed",
+      resultState: "completed",
+      resultText: "Looks good.",
+      partialOutput: undefined,
+      sourceAuthority: "canonical",
+    });
+  });
+
+  it("preserves JSON success output with metadata-like keys verbatim", () => {
+    const result = JSON.stringify({
+      status: "ok",
+      done: true,
+      partialOutput: ["raw evidence"],
+    });
+    const state = reducer(
+      stateWith(
+        [
+          {
+            type: "tool_call",
+            id: "tool-result",
+            name: "get_background_result",
+            inputJson: JSON.stringify({ sessionId: "bg-1" }),
+            result: "",
+            complete: false,
+          },
+        ],
+        true,
+      ),
+      {
+        type: "TOOL_COMPLETE",
+        toolCallId: "tool-result",
+        toolName: "get_background_result",
+        result,
+        durationMs: 1,
+        input: { sessionId: "bg-1" },
+      },
+    );
+
+    expect(state.messages[0].blocks[0]).toMatchObject({
+      type: "tool_call",
+      result,
+    });
+    expect(state.messages[0].blocks[1]).toMatchObject({
+      type: "bg_agent_result",
+      status: "completed",
+      resultState: "completed",
+      terminalReason: undefined,
+      resultText: result,
+      retrySafe: undefined,
+      sourceAuthority: "tool",
     });
   });
 
@@ -1110,6 +1243,63 @@ describe("BG_AGENT_DONE result placement", () => {
     ]);
   });
 
+  it("does not duplicate an active canonical result when older history is prepended", () => {
+    const canonicalResult = {
+      type: "bg_agent_result" as const,
+      sessionId: "bg-restored",
+      task: "Review implementation",
+      status: "completed" as const,
+      resultState: "completed" as const,
+      resultText: "Canonical result",
+      sourceAuthority: "canonical" as const,
+    };
+    const state: AppState = {
+      ...initialState,
+      messages: [
+        {
+          id: "assistant-tail",
+          role: "assistant",
+          content: "",
+          timestamp: 2,
+          blocks: [canonicalResult],
+        },
+      ],
+    };
+
+    const next = reducer(state, {
+      type: "PREPEND_SESSION_CHUNK",
+      messages: [
+        {
+          id: "assistant-older",
+          role: "assistant",
+          content: "",
+          timestamp: 1,
+          blocks: [
+            {
+              ...canonicalResult,
+              resultText: "Older tool-derived result",
+              sourceAuthority: "tool",
+            },
+            { type: "text", text: "Older transcript content" },
+          ],
+        },
+      ],
+      userTurnOffset: 0,
+      hasMoreBefore: false,
+    });
+
+    const results = next.messages.flatMap((message) =>
+      message.blocks.filter(
+        (block) =>
+          block.type === "bg_agent_result" && block.sessionId === "bg-restored",
+      ),
+    );
+    expect(results).toEqual([canonicalResult]);
+    expect(next.messages[0].blocks).toEqual([
+      { type: "text", text: "Older transcript content" },
+    ]);
+  });
+
   it("rehydrates durable results missing from persisted parent messages", () => {
     const next = reducer(initialState, {
       type: "LOAD_SESSION",
@@ -1132,6 +1322,7 @@ describe("BG_AGENT_DONE result placement", () => {
           sessionId: "bg-restored",
           task: "Review implementation",
           status: "completed",
+          resultState: "completed",
           resultText: "Found one issue.",
           summary: "One issue found",
           completedAt: 2,
@@ -1146,19 +1337,86 @@ describe("BG_AGENT_DONE result placement", () => {
         sessionId: "bg-restored",
         task: "Review implementation",
         status: "completed",
+        resultState: "completed",
+        terminalReason: undefined,
         resultText: "Found one issue.",
+        partialOutput: undefined,
         summary: "One issue found",
+        retrySafe: undefined,
+        agentRetryable: undefined,
+        sourceAuthority: "canonical",
       },
     ]);
   });
 
-  it("does not duplicate a background result already restored from tool history", () => {
-    const existingResult = {
+  it("deduplicates repeated tool-derived results at the latest canonical location", () => {
+    const duplicateResult = {
       type: "bg_agent_result" as const,
       sessionId: "bg-restored",
       task: "Review implementation",
       status: "completed" as const,
-      resultText: "Found one issue.",
+      resultState: "completed" as const,
+      resultText: "Tool-derived result",
+      sourceAuthority: "tool" as const,
+    };
+    const next = reducer(initialState, {
+      type: "LOAD_SESSION",
+      sessionId: "foreground-1",
+      title: "Restored session",
+      mode: "code",
+      model: "gpt-5.6-sol",
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "",
+          timestamp: 1,
+          blocks: [duplicateResult, { type: "text", text: "Between results" }],
+        },
+        {
+          id: "assistant-2",
+          role: "assistant",
+          content: "",
+          timestamp: 2,
+          blocks: [duplicateResult],
+        },
+      ],
+      todos: [],
+      backgroundResults: [
+        {
+          sessionId: "bg-restored",
+          task: "Review implementation",
+          status: "completed",
+          resultState: "completed",
+          resultText: "Canonical result",
+          completedAt: 3,
+        },
+      ],
+    });
+
+    expect(next.messages[0].blocks).toEqual([
+      { type: "text", text: "Between results" },
+    ]);
+    expect(next.messages[1].blocks).toEqual([
+      expect.objectContaining({
+        type: "bg_agent_result",
+        sessionId: "bg-restored",
+        resultText: "Canonical result",
+        sourceAuthority: "canonical",
+      }),
+    ]);
+  });
+
+  it("reconciles a tool-derived background result with canonical child metadata", () => {
+    const existingResult = {
+      type: "bg_agent_result" as const,
+      sessionId: "bg-restored",
+      task: "Review implementation",
+      status: "error" as const,
+      resultState: "failed" as const,
+      terminalReason: "transport_closed",
+      partialOutput: "Stale partial output",
+      sourceAuthority: "tool" as const,
     };
     const next = reducer(initialState, {
       type: "LOAD_SESSION",
@@ -1181,21 +1439,27 @@ describe("BG_AGENT_DONE result placement", () => {
           sessionId: "bg-restored",
           task: "Review implementation",
           status: "completed",
+          resultState: "completed",
           resultText: "Found one issue.",
           completedAt: 2,
         },
       ],
     });
 
-    expect(
-      next.messages.flatMap((message) =>
-        message.blocks.filter(
-          (block) =>
-            block.type === "bg_agent_result" &&
-            block.sessionId === "bg-restored",
-        ),
+    const results = next.messages.flatMap((message) =>
+      message.blocks.filter(
+        (block) =>
+          block.type === "bg_agent_result" && block.sessionId === "bg-restored",
       ),
-    ).toHaveLength(1);
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      status: "completed",
+      resultState: "completed",
+      resultText: "Found one issue.",
+      partialOutput: undefined,
+      sourceAuthority: "canonical",
+    });
   });
 });
 

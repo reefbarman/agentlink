@@ -164,7 +164,10 @@ export class BrowserGatewayOwnerRuntime {
           ownerId: registration.effectiveOwnerId,
           ownerGenerationId: registration.ownerGenerationId,
         },
-        { commandCapabilities: this.options.commandCapabilities },
+        {
+          commandCapabilities: this.options.commandCapabilities,
+          dataPlaneFeatures: registration.dataPlaneFeatures,
+        },
       );
       this.projectionSubscription = this.projection.onDidPublish(
         (publication) => {

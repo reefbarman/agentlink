@@ -33,6 +33,7 @@ export async function executeJournaledRepositoryDeletions(args: {
   repository: Pick<RetrievalRepository, "deleteSource">;
   resolveSource: (file: string) => RepositorySourceDeletion;
   checkpointCompleted: (files: string[]) => void;
+  runFenced<T>(operation: () => Promise<T>): Promise<T>;
   isCancelled: () => boolean;
   createId: () => string;
 }): Promise<JournaledRepositoryDeletionResult> {
@@ -54,6 +55,7 @@ export async function executeJournaledRepositoryDeletions(args: {
     repository: args.repository,
     resolveSource: args.resolveSource,
     checkpointCompleted: args.checkpointCompleted,
+    runFenced: args.runFenced,
     isCancelled: args.isCancelled,
   });
   if (recovered.pending || recovered.cancelled) return recovered;
@@ -63,23 +65,26 @@ export async function executeJournaledRepositoryDeletions(args: {
   );
   if (requested.length === 0) return recovered;
 
-  writeFileIndexJournal(args.journalPath, {
-    ...emptyFileIndexJournal(),
-    operations: requested.map((file) => ({
-      operationId: args.createId(),
-      file: file.file,
-      kind: "remove" as const,
-      generation: file.generation,
-      targetHash: null,
-      oldRecordIds: file.oldRecordIds,
-      intendedBatches: [],
-    })),
+  await args.runFenced(async () => {
+    writeFileIndexJournal(args.journalPath, {
+      ...emptyFileIndexJournal(),
+      operations: requested.map((file) => ({
+        operationId: args.createId(),
+        file: file.file,
+        kind: "remove" as const,
+        generation: file.generation,
+        targetHash: null,
+        oldRecordIds: file.oldRecordIds,
+        intendedBatches: [],
+      })),
+    });
   });
   const removed = await recoverJournaledRepositoryDeletions({
     journalPath: args.journalPath,
     repository: args.repository,
     resolveSource: args.resolveSource,
     checkpointCompleted: args.checkpointCompleted,
+    runFenced: args.runFenced,
     isCancelled: args.isCancelled,
   });
   return {
@@ -96,6 +101,7 @@ export async function recoverJournaledRepositoryDeletions(args: {
   repository: Pick<RetrievalRepository, "deleteSource">;
   resolveSource: (file: string) => RepositorySourceDeletion;
   checkpointCompleted: (files: string[]) => void;
+  runFenced<T>(operation: () => Promise<T>): Promise<T>;
   isCancelled: () => boolean;
 }): Promise<JournaledRepositoryDeletionResult> {
   const loaded = loadFileIndexJournal(args.journalPath);
@@ -141,17 +147,19 @@ export async function recoverJournaledRepositoryDeletions(args: {
         failure: `Repository source deletion retained stale ownership for ${operation.file}`,
       };
     }
+    await args.runFenced(async () => {
+      args.checkpointCompleted([operation.file]);
+      const completedIndex = remaining.findIndex(
+        (candidate) => candidate.operationId === operation.operationId,
+      );
+      if (completedIndex >= 0) remaining.splice(completedIndex, 1);
+      writeFileIndexJournal(args.journalPath, {
+        ...loaded.journal,
+        operations: remaining,
+      });
+    });
     completedFiles.push(operation.file);
     recordsDeleted += outcome.recordsRemoved;
-    args.checkpointCompleted([operation.file]);
-    const completedIndex = remaining.findIndex(
-      (candidate) => candidate.operationId === operation.operationId,
-    );
-    if (completedIndex >= 0) remaining.splice(completedIndex, 1);
-    writeFileIndexJournal(args.journalPath, {
-      ...loaded.journal,
-      operations: remaining,
-    });
   }
   return {
     completedFiles,

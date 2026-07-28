@@ -18,6 +18,13 @@ export const RETRIEVAL_TABLES = {
   memoryEntries: "memory_entries",
 } as const;
 
+export const STAGED_RETRIEVAL_TABLES = {
+  manifests: "retrieval_publication_manifests_v2",
+  batches: "retrieval_publication_batches_v2",
+  chunks: "retrieval_staged_chunks_v2",
+  relations: "retrieval_staged_relations_v2",
+} as const;
+
 const utf8 = () => new Utf8();
 
 export function retrievalSourceSchema(): Schema {
@@ -66,6 +73,51 @@ export function retrievalPublicationSchema(): Schema {
     new Field("revision_id", utf8(), false),
     new Field("generation", utf8(), false),
     new Field("payload_json", utf8(), false),
+  ]);
+}
+
+export function stagedRetrievalManifestSchema(): Schema {
+  return new Schema([
+    new Field("publication_id", utf8(), false),
+    new Field("source_id", utf8(), false),
+    new Field("revision_id", utf8(), false),
+    new Field("generation", utf8(), false),
+    new Field("fence_token", utf8(), false),
+    new Field("state", utf8(), false),
+    new Field("expected_chunk_count", new Int32(), false),
+    new Field("expected_relation_count", new Int32(), false),
+    new Field("expected_chunk_digest", utf8(), false),
+    new Field("expected_relation_digest", utf8(), false),
+    new Field("source_payload_digest", utf8(), false),
+    new Field("source_payload_json", utf8(), false),
+  ]);
+}
+
+export function stagedRetrievalBatchSchema(): Schema {
+  return new Schema([
+    new Field("publication_id", utf8(), false),
+    new Field("row_kind", utf8(), false),
+    new Field("batch_index", new Int32(), false),
+    new Field("expected_count", new Int32(), false),
+    new Field("expected_id_digest", utf8(), false),
+    new Field("expected_content_digest", utf8(), false),
+  ]);
+}
+
+export function stagedRetrievalChunkSchema(dimensions: number): Schema {
+  const active = retrievalChunkSchema(dimensions);
+  return new Schema([
+    new Field("publication_id", utf8(), false),
+    new Field("batch_index", new Int32(), false),
+    ...active.fields,
+  ]);
+}
+
+export function stagedRetrievalRelationSchema(): Schema {
+  return new Schema([
+    new Field("publication_id", utf8(), false),
+    new Field("batch_index", new Int32(), false),
+    ...retrievalRelationSchema().fields,
   ]);
 }
 

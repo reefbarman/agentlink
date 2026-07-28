@@ -15,6 +15,10 @@ import {
 
 import type { RetrievalDeleteSourceOutcome } from "../core/retrieval/contracts.js";
 
+async function runFenced<T>(operation: () => Promise<T>): Promise<T> {
+  return operation();
+}
+
 function operation(file: string, operationId = `operation:${file}`) {
   return {
     operationId,
@@ -77,6 +81,7 @@ describe("journaled repository deletion", () => {
           expectedRevisionId: `revision:${file}`,
         }),
         checkpointCompleted: (files) => checkpointed.push(...files),
+        runFenced,
         isCancelled: () => false,
         createId: () => `operation-${++sequence}`,
       }),
@@ -117,6 +122,7 @@ describe("journaled repository deletion", () => {
           expectedRevisionId: "revision:recover",
         }),
         checkpointCompleted: () => undefined,
+        runFenced,
         isCancelled: () => false,
       }),
     ).resolves.toMatchObject({
@@ -149,6 +155,7 @@ describe("journaled repository deletion", () => {
           expectedRevisionId: "revision:failure",
         }),
         checkpointCompleted,
+        runFenced,
         isCancelled: () => false,
       }),
     ).resolves.toMatchObject({
@@ -188,6 +195,7 @@ describe("journaled repository deletion", () => {
           expectedRevisionId: "revision:stale",
         }),
         checkpointCompleted,
+        runFenced,
         isCancelled: () => false,
       }),
     ).resolves.toMatchObject({

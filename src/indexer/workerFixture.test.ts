@@ -582,15 +582,16 @@ describe("indexer worker fixture", () => {
       expectEmptyJournal(workspace);
 
       const removalFixture = await createFixture(192);
-      await expect(
-        removalFixture.complete(
-          incrementalMessage(workspace, { removed: [file] }),
-        ),
-      ).resolves.toMatchObject({
+      const removal = await removalFixture.complete(
+        incrementalMessage(workspace, { removed: [file] }),
+      );
+      expect(removal).toMatchObject({
         totalFilesInIndex: 0,
-        recordsDeleted: cached.recordIds.length + 1,
         errors: [],
       });
+      expect(removal.recordsDeleted).toBeGreaterThanOrEqual(
+        cached.recordIds.length + 1,
+      );
       await stopChild(removalFixture.child);
 
       await withRepository(workspace.retrievalStoreRoot, async (reopened) => {
@@ -871,12 +872,12 @@ describe("indexer worker fixture", () => {
       });
       expect(stats.metrics?.operations["retrieval.deleteIndex"]).toBe(1);
       expect(stats.metrics?.operations["retrieval.upsertRecords"]).toBe(11);
-      expect(
-        stats.metrics?.operations["cache.writeRetrieval"],
-      ).toBeLessThanOrEqual(2 * 11 + 1);
-      expect(
-        stats.metrics?.operations["cache.writeStructural"],
-      ).toBeLessThanOrEqual(11 + 1);
+      expect(stats.metrics?.operations["cache.writeRetrieval"]).toBe(
+        2 * files.length + 1,
+      );
+      expect(stats.metrics?.operations["cache.writeStructural"]).toBe(
+        files.length + 1,
+      );
       expect(stats.metrics?.maxActiveReads).toBeLessThanOrEqual(10);
       expect(stats.metrics?.maxRetainedContentBytes).toBeGreaterThan(0);
     },

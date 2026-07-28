@@ -1,10 +1,15 @@
+import type { BackgroundResultState } from "../../../core/capabilities/background";
 import { StreamingText } from "./StreamingText";
+import { getBackgroundResultPresentation } from "../../../shared/backgroundResultPresentation";
 
 interface BgAgentResultBlockProps {
   sessionId: string;
   task: string;
   status: "completed" | "error" | "cancelled";
+  resultState?: BackgroundResultState;
+  terminalReason?: string;
   resultText?: string;
+  partialOutput?: string;
   summary?: string;
   resolvedModel?: string;
   resolvedProvider?: string;
@@ -16,45 +21,37 @@ export function BgAgentResultBlock({
   sessionId,
   task,
   status,
+  resultState,
+  terminalReason,
   resultText,
+  partialOutput,
   summary,
   resolvedModel,
   resolvedProvider,
   onOpenTranscript,
   onOpenFile,
 }: BgAgentResultBlockProps) {
-  const statusClass =
-    status === "completed"
-      ? "bg-agent-result-completed"
-      : status === "error"
-        ? "bg-agent-result-error"
-        : "bg-agent-result-cancelled";
-
-  const icon =
-    status === "completed"
-      ? "codicon-check"
-      : status === "error"
-        ? "codicon-error"
-        : "codicon-circle-slash";
-
-  const statusText =
-    status === "completed"
-      ? "completed"
-      : status === "error"
-        ? "failed"
-        : "cancelled";
-
+  const presentation = getBackgroundResultPresentation(
+    resultState,
+    status,
+    terminalReason,
+  );
+  const statusClass = `bg-agent-result-${presentation.family}`;
   const trimmedResultText = resultText?.trim();
+  const trimmedPartialOutput = partialOutput?.trim();
   const trimmedSummary = summary?.trim();
-  const visibleResult = trimmedResultText || trimmedSummary;
+  const visibleResult =
+    presentation.family === "success"
+      ? trimmedResultText || trimmedSummary
+      : trimmedPartialOutput || trimmedSummary;
 
   return (
     <div class={`bg-agent-result-block ${statusClass}`}>
       <div class="bg-agent-result-header">
-        <i class={`codicon ${icon}`} />
-        <span class="bg-agent-result-title">Background Result</span>
+        <i class={`codicon ${presentation.icon}`} />
+        <span class="bg-agent-result-title">{presentation.title}</span>
         <span class="bg-agent-result-task">
-          {task} — {statusText}
+          {task} — {presentation.statusText}
         </span>
         {resolvedModel && (
           <span class="bg-agent-result-model">
@@ -65,6 +62,9 @@ export function BgAgentResultBlock({
       </div>
 
       <div class="bg-result-content">
+        {presentation.reason && (
+          <div class="bg-result-reason">{presentation.reason}</div>
+        )}
         {visibleResult ? (
           <StreamingText
             text={visibleResult}

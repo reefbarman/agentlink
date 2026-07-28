@@ -59,6 +59,10 @@ export class ChatProjectionStateCache {
     }
   }
 
+  clear(): void {
+    this.bySession.clear();
+  }
+
   has(sessionId: string): boolean {
     return this.bySession.has(sessionId);
   }

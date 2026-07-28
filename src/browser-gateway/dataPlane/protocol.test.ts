@@ -476,6 +476,37 @@ describe("browser gateway data-plane limits", () => {
 });
 
 describe("browser gateway owner protocol", () => {
+  it("accepts legacy and typed background result blocks", () => {
+    const legacy = checkpoint();
+    legacy.transcript.messages[0].blocks = [
+      {
+        type: "bg_agent_result",
+        blockId: "background-result-legacy",
+        sessionId: "background-1",
+        task: "Review",
+        status: "completed",
+      },
+    ];
+    expect(parseBrowserGatewayOwnerCheckpoint(legacy)).toEqual(legacy);
+
+    const typed = checkpoint();
+    typed.transcript.messages[0].blocks = [
+      {
+        type: "bg_agent_result",
+        blockId: "background-result-typed",
+        sessionId: "background-1",
+        task: "Review",
+        status: "error",
+        resultState: "incomplete_expected_result",
+        terminalReason: "incomplete_expected_result",
+        partialOutput: { kind: "inline", text: "Partial findings" },
+        retrySafe: true,
+        agentRetryable: false,
+      },
+    ];
+    expect(parseBrowserGatewayOwnerCheckpoint(typed)).toEqual(typed);
+  });
+
   it("parses a strict bounded checkpoint and a sequence-zero checkpoint batch", () => {
     const parsedCheckpoint = parseBrowserGatewayOwnerCheckpoint(checkpoint());
     expect(parsedCheckpoint).toMatchObject({

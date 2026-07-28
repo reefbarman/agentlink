@@ -61,11 +61,12 @@ import {
   executeJournaledRepositoryDeletions,
   type RepositorySourceDeletion,
 } from "./journaledRepositoryDeletion.js";
+import type { FileReplacementStore } from "./journaledRepositoryPublication.js";
 import {
-  executeJournaledRepositoryPublications,
-  recoverJournaledRepositoryPublications,
-  type FileReplacementStore,
-} from "./journaledRepositoryPublication.js";
+  executeJournaledStagedRepositoryPublications,
+  recoverJournaledStagedRepositoryPublications,
+  type StagedRepositoryPublicationPort,
+} from "./journaledStagedRepositoryPublication.js";
 import {
   extractStructuralFile,
   shouldUseTreeSitterSymbolHints,
@@ -91,6 +92,15 @@ import type {
 import type { RetrievalRepository } from "../core/retrieval/contracts.js";
 import { classifyRetrievalFingerprint } from "../core/retrieval/fingerprint.js";
 import { LanceDbRetrievalRepository } from "../storage/retrieval/LanceDbRetrievalRepository.js";
+import { LanceDbCodeIndexStagingRepository } from "../storage/retrieval/LanceDbCodeIndexStagingRepository.js";
+import { LanceDbCodeIndexActivator } from "../storage/retrieval/LanceDbCodeIndexActivator.js";
+import {
+  acquireCodeIndexWriterLease,
+  releaseCodeIndexWriterLease,
+  renewCodeIndexWriterLease,
+  type CodeIndexWriterLease,
+  withCodeIndexWriterFence,
+} from "./codeIndexWriterLease.js";
 import { EMBEDDING_DIM } from "./embeddingConfig.js";
 import { requestEmbeddings } from "./embeddingClient.js";
 import {
@@ -195,12 +205,82 @@ function scheduleCacheMetadataCheckpoint(args: {
   args.checkpoints.scheduleVector();
 }
 
-function createRetrievalRepository(root: string): LanceDbRetrievalRepository {
+function createRetrievalRepository(
+  root: string,
+  lease: CodeIndexWriterLease,
+): LanceDbRetrievalRepository {
   return new LanceDbRetrievalRepository({
     root,
     embeddingDimensions: EMBEDDING_DIM,
     deferNativeIndexRefresh: true,
+    codeIndexWriterLease: lease,
   });
+}
+
+function createStagedPublicationPort(
+  lease: CodeIndexWriterLease,
+): StagedRepositoryPublicationPort {
+  const staging = new LanceDbCodeIndexStagingRepository(lease, EMBEDDING_DIM);
+  const activator = new LanceDbCodeIndexActivator(lease, EMBEDDING_DIM);
+  return {
+    fenceToken: lease.fenceToken,
+    runFenced: (operation) => withCodeIndexWriterFence(lease, operation),
+    beginStagedPublication: (manifest) =>
+      staging.beginStagedPublication(manifest),
+    appendStagedChunkBatch: (batch) => staging.appendStagedChunkBatch(batch),
+    appendStagedRelationBatch: (batch) =>
+      staging.appendStagedRelationBatch(batch),
+    completeStagedPublication: (publicationId) =>
+      staging.completeStagedPublication(publicationId),
+    adoptStagedPublication: (publicationId) =>
+      staging.adoptStagedPublication(publicationId),
+    inspectStagedPublication: (publicationId) =>
+      staging.inspectStagedPublication(publicationId),
+    abortStagedPublication: (publicationId) =>
+      staging.abortStagedPublication(publicationId),
+    activate: (publicationId) => activator.activate(publicationId),
+    finalizeActivation: (publicationId) =>
+      activator.finalizeActivation(publicationId),
+  };
+}
+
+async function acquireWorkerWriterLease(args: {
+  storeRoot: string;
+  workspaceScopeId: string;
+}): Promise<{
+  lease: CodeIndexWriterLease;
+  port: StagedRepositoryPublicationPort;
+  stopHeartbeat(): void;
+}> {
+  const lease = await acquireCodeIndexWriterLease({
+    storeRoot: args.storeRoot,
+    workspaceScopeId: args.workspaceScopeId,
+    ownerId: `worker:${process.pid}:${randomUUID()}`,
+    protocolVersion: "v4",
+  });
+  const heartbeat = setInterval(() => {
+    void renewCodeIndexWriterLease(lease).catch((error) => {
+      console.error(`Code index writer lease renewal failed: ${error}`);
+    });
+  }, 5_000);
+  heartbeat.unref();
+  return {
+    lease,
+    port: createStagedPublicationPort(lease),
+    stopHeartbeat: () => clearInterval(heartbeat),
+  };
+}
+
+async function releaseWorkerWriterLease(
+  writer: Awaited<ReturnType<typeof acquireWorkerWriterLease>> | undefined,
+): Promise<void> {
+  if (!writer) return;
+  writer.stopHeartbeat();
+  try {
+    await releaseCodeIndexWriterLease(writer.lease);
+  } catch (error) {
+    console.error(`Failed to release code index writer lease: ${error}`);
+  }
 }
 
 // --- IPC helpers ---
@@ -475,6 +555,7 @@ async function resetIndexOwnership(args: {
   fingerprint: IndexCache["fingerprint"];
   interruptedTarget: IndexResetTarget | null;
   checkpoints: CacheCheckpointCoordinator;
+  runFenced<T>(operation: () => Promise<T>): Promise<T>;
 }): Promise<void> {
   const resetStatePath = getIndexResetStatePath(args.cachePath);
   const currentTarget: IndexResetTarget = {
@@ -492,21 +573,25 @@ async function resetIndexOwnership(args: {
       "Index reset state targets a different retrieval store or workspace scope",
     );
   }
-  beginIndexReset(resetStatePath, currentTarget);
+  await args.runFenced(async () => {
+    beginIndexReset(resetStatePath, currentTarget);
+  });
   metrics.recordOperation("retrieval.deleteIndex");
   await args.repository.deleteSourceIdPrefix(`code:${args.workspaceScopeId}:`);
-  resetFileIndexJournal(getFileIndexJournalPath(args.cachePath));
-  args.cache.version = 1;
-  args.cache.files = {};
-  args.cache.granularity = args.granularity;
-  args.cache.fingerprint = args.fingerprint;
-  resetStructuralCache(
-    args.structuralCache,
-    args.workspaceRoot,
-    args.indexName,
-  );
-  args.checkpoints.checkpointBoth(["vector", "structural"]);
-  completeIndexReset(resetStatePath, currentTarget);
+  await args.runFenced(async () => {
+    resetFileIndexJournal(getFileIndexJournalPath(args.cachePath));
+    args.cache.version = 1;
+    args.cache.files = {};
+    args.cache.granularity = args.granularity;
+    args.cache.fingerprint = args.fingerprint;
+    resetStructuralCache(
+      args.structuralCache,
+      args.workspaceRoot,
+      args.indexName,
+    );
+    args.checkpoints.checkpointBoth(["vector", "structural"]);
+    completeIndexReset(resetStatePath, currentTarget);
+  });
 }
 
 async function updateStructuralCacheForFiles(
@@ -573,6 +658,7 @@ async function removeFilesFromIndex(args: {
   workspaceScopeId: string;
   repository: Pick<RetrievalRepository, "deleteSource">;
   checkpoints: CacheCheckpointCoordinator;
+  runFenced<T>(operation: () => Promise<T>): Promise<T>;
 }): Promise<{
   completed: number;
   errors: string[];
@@ -609,6 +695,7 @@ async function removeFilesFromIndex(args: {
       args.structuralCache.generatedAt = new Date().toISOString();
       args.checkpoints.checkpointBoth(["structural", "vector"]);
     },
+    runFenced: args.runFenced,
     isCancelled: () => aborted,
     createId: randomUUID,
   });
@@ -679,7 +766,7 @@ async function recoverChangedFileReplacements(args: {
   cachePath: string;
   cache: IndexCache;
   structuralCache: StructuralGraphCache;
-  repository: RetrievalRepository;
+  stagedPublicationPort: StagedRepositoryPublicationPort;
   checkpoints: CacheCheckpointCoordinator;
 }): Promise<{
   cancelled: boolean;
@@ -702,10 +789,10 @@ async function recoverChangedFileReplacements(args: {
       refreshRequired: false,
     };
   }
-  const recovered = await recoverJournaledRepositoryPublications({
+  const recovered = await recoverJournaledStagedRepositoryPublications({
     journalPath,
     store: createFileReplacementStore(args),
-    repository: args.repository,
+    port: args.stagedPublicationPort,
     isCancelled: () => aborted,
   });
   return {
@@ -901,6 +988,8 @@ async function awaitTreeSitterStartup(total: number): Promise<boolean> {
 
 interface BatchConfig {
   repository: RetrievalRepository;
+  stagedPublicationPort: StagedRepositoryPublicationPort;
+  writerFenceToken: string;
   embeddingBearerToken: string | undefined;
   cachePath: string;
   workspaceRoot: string;
@@ -1075,17 +1164,19 @@ async function processFileBatch(
   if (publications.length > 0) {
     try {
       metrics.recordOperation("retrieval.upsertRecords");
-      const publicationResult = await executeJournaledRepositoryPublications({
-        journalPath: getFileIndexJournalPath(config.cachePath),
-        publications,
-        store: createFileReplacementStore({
-          cache,
-          structuralCache,
-          checkpoints: config.checkpoints,
-        }),
-        repository: config.repository,
-        isCancelled: () => aborted,
-      });
+      const publicationResult =
+        await executeJournaledStagedRepositoryPublications({
+          journalPath: getFileIndexJournalPath(config.cachePath),
+          publications,
+          store: createFileReplacementStore({
+            cache,
+            structuralCache,
+            checkpoints: config.checkpoints,
+          }),
+          port: config.stagedPublicationPort,
+          fenceToken: config.writerFenceToken,
+          isCancelled: () => aborted,
+        });
       filesIndexed += publicationResult.committedFiles;
       recordsUpserted += publicationResult.recordsUpserted;
       recordsDeleted += publicationResult.recordsDeleted;
@@ -1213,6 +1304,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
   let recordsDeleted = 0;
   let checkpoints: CacheCheckpointCoordinator | undefined;
   let repository: LanceDbRetrievalRepository | undefined;
+  let writer: Awaited<ReturnType<typeof acquireWorkerWriterLease>> | undefined;
   let terminalMessage: (() => void) | undefined;
   const jobMetrics = metrics;
 
@@ -1253,7 +1345,14 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         indexName: msg.indexName,
       });
     sendProgress("reading", 0, msg.files.length, "opening retrieval store");
-    repository = createRetrievalRepository(msg.retrievalStoreRoot);
+    writer = await acquireWorkerWriterLease({
+      storeRoot: msg.retrievalStoreRoot,
+      workspaceScopeId: msg.workspaceScopeId,
+    });
+    repository = createRetrievalRepository(
+      msg.retrievalStoreRoot,
+      writer.lease,
+    );
     const expectedFingerprint = createCodeIndexFingerprint(msg.granularity);
     sendStartupProgress(msg.files.length, "migrating retrieval store");
     const migration = await repository.migrate(expectedFingerprint);
@@ -1296,7 +1395,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
           cachePath: msg.cachePath,
           cache,
           structuralCache,
-          repository,
+          stagedPublicationPort: writer.port,
           checkpoints,
         });
     recordsDeleted += replacementRecovery.recordsDeleted;
@@ -1343,6 +1442,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
           workspaceScopeId: msg.workspaceScopeId,
           repository,
           checkpoints,
+          runFenced: writer.port.runFenced,
         });
     recordsDeleted += recovery.recordsDeleted;
     errors.push(...recovery.errors);
@@ -1390,6 +1490,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         fingerprint: expectedFingerprint,
         interruptedTarget: interruptedResetTarget,
         checkpoints,
+        runFenced: writer.port.runFenced,
       });
       if (syntaxRecoveryRebuild) treeSitterRecoveryRequiresRebuild = false;
     }
@@ -1443,6 +1544,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         workspaceScopeId: msg.workspaceScopeId,
         repository,
         checkpoints,
+        runFenced: writer.port.runFenced,
       });
       recordsDeleted += removal.recordsDeleted;
       errors.push(...removal.errors);
@@ -1536,6 +1638,8 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       toIndexPaths,
       {
         repository,
+        stagedPublicationPort: writer.port,
+        writerFenceToken: writer.lease.fenceToken,
         embeddingBearerToken: msg.embeddingBearerToken,
         cachePath: msg.cachePath,
         workspaceRoot: msg.workspaceRoot,
@@ -1608,6 +1712,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     terminalMessage = () => sendError(`Indexing failed: ${err}`, true);
   } finally {
     checkpoints?.cancelScheduled();
+    await releaseWorkerWriterLease(writer);
     await closeRetrievalRepository(repository);
     terminalMessage?.();
   }
@@ -1629,6 +1734,7 @@ async function handleIncrementalUpdate(
   let recordsDeleted = 0;
   let checkpoints: CacheCheckpointCoordinator | undefined;
   let repository: LanceDbRetrievalRepository | undefined;
+  let writer: Awaited<ReturnType<typeof acquireWorkerWriterLease>> | undefined;
   let terminalMessage: (() => void) | undefined;
   const jobMetrics = metrics;
 
@@ -1680,7 +1786,14 @@ async function handleIncrementalUpdate(
         indexName: msg.indexName,
       });
     sendProgress("reading", 0, totalChanges, "opening retrieval store");
-    repository = createRetrievalRepository(msg.retrievalStoreRoot);
+    writer = await acquireWorkerWriterLease({
+      storeRoot: msg.retrievalStoreRoot,
+      workspaceScopeId: msg.workspaceScopeId,
+    });
+    repository = createRetrievalRepository(
+      msg.retrievalStoreRoot,
+      writer.lease,
+    );
     sendStartupProgress(totalChanges, "migrating retrieval store");
     const migration = await repository.migrate(expectedFingerprint);
     if (migration.status === "rebuild_required") {
@@ -1699,7 +1812,7 @@ async function handleIncrementalUpdate(
       cachePath: msg.cachePath,
       cache,
       structuralCache,
-      repository,
+      stagedPublicationPort: writer.port,
       checkpoints,
     });
     recordsDeleted += replacementRecovery.recordsDeleted;
@@ -1735,6 +1848,7 @@ async function handleIncrementalUpdate(
       workspaceScopeId: msg.workspaceScopeId,
       repository,
       checkpoints,
+      runFenced: writer.port.runFenced,
     });
     recordsDeleted += recovery.recordsDeleted;
     errors.push(...recovery.errors);
@@ -1779,6 +1893,7 @@ async function handleIncrementalUpdate(
       workspaceScopeId: msg.workspaceScopeId,
       repository,
       checkpoints,
+      runFenced: writer.port.runFenced,
     });
     recordsDeleted += removal.recordsDeleted;
     errors.push(...removal.errors);
@@ -1831,6 +1946,8 @@ async function handleIncrementalUpdate(
         toIndexPaths,
         {
           repository,
+          stagedPublicationPort: writer.port,
+          writerFenceToken: writer.lease.fenceToken,
           embeddingBearerToken: msg.embeddingBearerToken,
           cachePath: msg.cachePath,
           workspaceRoot: msg.workspaceRoot,
@@ -1897,6 +2014,7 @@ async function handleIncrementalUpdate(
       sendError(`Incremental update failed: ${err}`, true);
   } finally {
     checkpoints?.cancelScheduled();
+    await releaseWorkerWriterLease(writer);
     await closeRetrievalRepository(repository);
     terminalMessage?.();
   }

@@ -741,9 +741,7 @@ export type ExtensionMessage =
       totalOutputTokens: number;
       totalCacheReadTokens: number;
       totalCacheCreationTokens: number;
-      resultText?: string;
-      /** Concise summary for collapsed background-result UI */
-      resultSummary?: string;
+      completion?: BackgroundCompletionResult;
     }
   | ShowBgTranscriptMessage
   | {
@@ -976,12 +974,21 @@ export type ContentBlock =
       sessionId: string;
       /** Short task label */
       task: string;
-      /** Completion status */
+      /** Compatibility status for legacy transcript blocks. */
       status: "completed" | "error" | "cancelled";
-      /** The final result text from the background agent */
+      /** Authoritative terminal state for current transcript blocks. */
+      resultState?: import("../../core/capabilities/background.js").BackgroundResultState;
+      terminalReason?: string;
+      /** The formatted successful result text from the background agent. */
       resultText?: string;
+      /** Useful output preserved for non-success terminal states. */
+      partialOutput?: string;
       /** Optional concise summary for collapsed rendering */
       summary?: string;
+      retrySafe?: boolean;
+      agentRetryable?: boolean;
+      /** Internal projection authority used to make live/replay merge order deterministic. */
+      sourceAuthority?: "canonical" | "tool" | "legacy";
     }
   | {
       type: "question_answer";

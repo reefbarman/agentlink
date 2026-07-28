@@ -531,6 +531,43 @@ describe("RelaySnapshotProjector", () => {
     });
   });
 
+  it("preserves typed background result fields", () => {
+    const terminalMessage = message("background-result-message", 2);
+    terminalMessage.blocks = [
+      {
+        type: "bg_agent_result",
+        blockId: "background-result",
+        sessionId: "background-1",
+        task: "Review",
+        status: "error",
+        resultState: "incomplete_expected_result",
+        terminalReason: "incomplete_expected_result",
+        partialOutput: { kind: "inline", text: "Recovered partial findings" },
+        retrySafe: true,
+        agentRetryable: false,
+      },
+    ];
+    const projected = new RelaySnapshotProjector().project(
+      checkpoint({
+        transcript: {
+          messages: [terminalMessage],
+          earlierCursor: null,
+          hasEarlier: false,
+        },
+      }),
+    ).session.foreground!.projectedMessages[0]!;
+
+    expect(projected.blocks[0]).toMatchObject({
+      type: "bg_agent_result",
+      status: "error",
+      resultState: "incomplete_expected_result",
+      terminalReason: "incomplete_expected_result",
+      partialOutput: "Recovered partial findings",
+      retrySafe: true,
+      agentRetryable: false,
+    });
+  });
+
   it("maps safe message blocks and omits redacted pairing status", () => {
     const projected = new RelaySnapshotProjector().project(checkpoint()).session
       .foreground!.projectedMessages[0]!;

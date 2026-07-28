@@ -1,3 +1,4 @@
+import type { BackgroundResultState } from "../../core/capabilities/background.js";
 import type { ContextHealthSnapshot } from "../../shared/contextHealth.js";
 import { utf8ByteLength } from "../../shared/streamingBaselineMetrics.js";
 import {
@@ -271,8 +272,13 @@ export type BrowserGatewayTranscriptBlock =
       sessionId: string;
       task: string;
       status: "completed" | "error" | "cancelled";
+      resultState?: BackgroundResultState;
+      terminalReason?: string;
       result?: BrowserGatewayTranscriptText;
+      partialOutput?: BrowserGatewayTranscriptText;
       summary?: string;
+      retrySafe?: boolean;
+      agentRetryable?: boolean;
     }
   | {
       type: "question_answer";
@@ -2419,8 +2425,13 @@ function parseTranscriptBlock(
         "sessionId",
         "task",
         "status",
+        "resultState",
+        "terminalReason",
         "result",
+        "partialOutput",
         "summary",
+        "retrySafe",
+        "agentRetryable",
       ]);
       const result = optionalObject(
         object,
@@ -2428,6 +2439,35 @@ function parseTranscriptBlock(
         path,
         parseTranscriptText,
       );
+      const partialOutput = optionalObject(
+        object,
+        "partialOutput",
+        path,
+        parseTranscriptText,
+      );
+      const resultState = optionalEnum(
+        object,
+        "resultState",
+        path,
+        new Set([
+          "running",
+          "completed",
+          "incomplete_expected_result",
+          "failed",
+          "cancelled",
+          "budget_exhausted",
+          "interrupted",
+          "authorization_lost",
+        ]),
+      ) as BackgroundResultState | undefined;
+      const terminalReason = optionalString(
+        object,
+        "terminalReason",
+        path,
+        4_000,
+      );
+      const retrySafe = optionalBoolean(object, "retrySafe", path);
+      const agentRetryable = optionalBoolean(object, "agentRetryable", path);
       const summary = optionalString(object, "summary", path, 4_000);
       return {
         type: "bg_agent_result",
@@ -2442,8 +2482,13 @@ function parseTranscriptBlock(
           BrowserGatewayTranscriptBlock,
           { type: "bg_agent_result" }
         >["status"],
+        ...(resultState ? { resultState } : {}),
+        ...(terminalReason ? { terminalReason } : {}),
         ...(result ? { result } : {}),
+        ...(partialOutput ? { partialOutput } : {}),
         ...(summary ? { summary } : {}),
+        ...(retrySafe !== undefined ? { retrySafe } : {}),
+        ...(agentRetryable !== undefined ? { agentRetryable } : {}),
       };
     }
     case "question_answer": {

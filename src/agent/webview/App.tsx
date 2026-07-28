@@ -571,11 +571,13 @@ export function App({
         previousSnapshot,
         pinnedTabId,
       );
-      if (
+      const controllerEpochChanged =
         !previousSnapshot ||
-        previousSnapshot.controllerEpoch !== snapshot.controllerEpoch
-      ) {
+        previousSnapshot.controllerEpoch !== snapshot.controllerEpoch;
+      if (controllerEpochChanged) {
         acceptedTranscriptRevisionsRef.current.clear();
+        inactiveProjectionCacheRef.current.clear();
+        projectionStateCacheRef.current.clear();
         restoredCachedSessionRef.current = null;
       }
       const nextSessionId = selectedWorkspaceSessionId(snapshot, pinnedTabId);
@@ -584,7 +586,9 @@ export function App({
       );
       if (previousSessionId !== nextSessionId) {
         flushConnectionDeltasRef.current();
-        projectionStateCacheRef.current.save(fullStateRef.current);
+        if (!controllerEpochChanged) {
+          projectionStateCacheRef.current.save(fullStateRef.current);
+        }
         restoredCachedSessionRef.current =
           nextSessionId && projectionStateCacheRef.current.has(nextSessionId)
             ? nextSessionId
@@ -643,10 +647,17 @@ export function App({
     onInactiveSessionMessage: (msg) => {
       if (msg.type === "agentSessionLoaded") return;
       if (msg.type === "agentDone" && msg.transcriptRevision !== undefined) {
+        const controllerEpoch =
+          workspaceSnapshotRef.current?.controllerEpoch ?? null;
+        const accepted = acceptedTranscriptRevisionsRef.current.get(
+          msg.sessionId,
+        );
         acceptedTranscriptRevisionsRef.current.set(msg.sessionId, {
-          controllerEpoch:
-            workspaceSnapshotRef.current?.controllerEpoch ?? null,
-          revision: msg.transcriptRevision,
+          controllerEpoch,
+          revision:
+            accepted?.controllerEpoch === controllerEpoch
+              ? Math.max(accepted.revision, msg.transcriptRevision)
+              : msg.transcriptRevision,
         });
       }
       inactiveProjectionCacheRef.current.append(msg);
@@ -866,10 +877,17 @@ export function App({
           });
           flushDeltasNow();
           if (msg.transcriptRevision !== undefined) {
+            const controllerEpoch =
+              workspaceSnapshotRef.current?.controllerEpoch ?? null;
+            const accepted = acceptedTranscriptRevisionsRef.current.get(
+              msg.sessionId,
+            );
             acceptedTranscriptRevisionsRef.current.set(msg.sessionId, {
-              controllerEpoch:
-                workspaceSnapshotRef.current?.controllerEpoch ?? null,
-              revision: msg.transcriptRevision,
+              controllerEpoch,
+              revision:
+                accepted?.controllerEpoch === controllerEpoch
+                  ? Math.max(accepted.revision, msg.transcriptRevision)
+                  : msg.transcriptRevision,
             });
           }
           streamingRef.current = false;
@@ -1199,14 +1217,7 @@ export function App({
               : undefined;
           const projectBackgroundResults = () => {
             for (const result of msg.backgroundResults ?? []) {
-              dispatch({
-                type: "BG_AGENT_DONE",
-                sessionId: result.sessionId,
-                task: result.task,
-                status: result.status,
-                resultText: result.resultText,
-                summary: result.summary,
-              });
+              dispatch({ type: "BG_AGENT_DONE", completion: result });
             }
           };
           const cachedProjectionAcknowledgement =
@@ -1230,6 +1241,7 @@ export function App({
             break;
           }
           if (
+            projectionStateCacheRef.current.has(msg.sessionId) &&
             transcriptRevision !== undefined &&
             comparableAcceptedRevision !== undefined &&
             transcriptRevision <= comparableAcceptedRevision
@@ -1637,38 +1649,7 @@ export function App({
           );
           break;
         case "agentBgDone": {
-          // Insert a completion notification at the current chat position
           const bgSessionId = msg.sessionId;
-          // Determine status and task from bgSessions state, falling back to the
-          // foreground launch block for legacy events without fleet metadata.
-          const bgInfo = bgSessionsRef.current.find(
-            (s) => s.id === bgSessionId,
-          );
-          let bgTask = bgInfo?.task ?? "Background Agent";
-          if (!bgInfo?.task) {
-            for (const m of fullStateRef.current.messages) {
-              for (const b of m.blocks) {
-                if (b.type === "bg_agent" && b.sessionId === bgSessionId) {
-                  bgTask = b.task;
-                  break;
-                }
-              }
-            }
-          }
-          const bgStatus: "completed" | "error" | "cancelled" =
-            bgInfo?.status === "error"
-              ? "error"
-              : bgInfo?.status === "cancelled"
-                ? "cancelled"
-                : "completed";
-          const completionAction: AppAction = {
-            type: "BG_AGENT_DONE",
-            sessionId: bgSessionId,
-            task: bgTask,
-            status: bgStatus,
-            resultText: msg.resultText as string | undefined,
-            summary: msg.resultSummary as string | undefined,
-          };
           setTranscriptView((prev) =>
             reduceOpenTranscript(
               prev,
@@ -1678,12 +1659,13 @@ export function App({
             ),
           );
           if (
+            msg.completion &&
             shouldProjectBackgroundCompletion(
               msg.parentSessionId,
               fullStateRef.current.chatState.sessionId,
             )
           ) {
-            dispatch(completionAction);
+            dispatch({ type: "BG_AGENT_DONE", completion: msg.completion });
           }
           break;
         }

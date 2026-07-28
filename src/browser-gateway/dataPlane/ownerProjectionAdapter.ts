@@ -38,6 +38,7 @@ import {
   type BrowserGatewayOwnerInteractionPayload,
 } from "./interactionPayload.js";
 import { BROWSER_GATEWAY_DATA_PLANE_LIMITS } from "./limits.js";
+import type { BrowserGatewayDataPlaneFeature } from "../protocol.js";
 import type {
   BrowserGatewayOwnerBackgroundSource,
   BrowserGatewayOwnerForegroundSource,
@@ -75,6 +76,7 @@ export interface BrowserGatewayOwnerProjectionAdapterOptions {
   createId?: (kind: "checkpoint" | "event", sequence: number) => string;
   createDetailId?: (locator: string, revision: number) => string;
   commandCapabilities?: readonly BrowserGatewayOwnerCommandKind[];
+  dataPlaneFeatures?: readonly BrowserGatewayDataPlaneFeature[];
 }
 
 interface ProjectionContext {
@@ -85,6 +87,7 @@ interface ProjectionContext {
   readonly interaction: (
     source: BrowserGatewayOwnerInteractionSource | null,
   ) => BrowserGatewayInteractionSummary | null;
+  readonly typedBackgroundResults: boolean;
 }
 
 interface ProjectedReadSet {
@@ -126,6 +129,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
   ) => string;
   private readonly detailCache = new Map<string, CachedProjectionDetail>();
   private readonly commandCapabilities: readonly BrowserGatewayOwnerCommandKind[];
+  private readonly typedBackgroundResults: boolean;
   private demanded = false;
   private disposed = false;
   private ownerSequence = 0;
@@ -151,6 +155,9 @@ export class BrowserGatewayOwnerProjectionAdapter {
       (Object.keys(
         BROWSER_GATEWAY_COMMAND_IDEMPOTENCY,
       ) as BrowserGatewayOwnerCommandKind[]);
+    this.typedBackgroundResults =
+      options.dataPlaneFeatures?.includes("typed-background-results-v1") ??
+      false;
     this.sourceSubscription = sources.onDidChange((source) => {
       this.handleSourceChange(source);
     });
@@ -219,6 +226,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       projectMessage(message, {
         detail: (text, locator) => this.projectText(text, locator, details),
         interaction: () => null,
+        typedBackgroundResults: this.typedBackgroundResults,
       }),
     );
     const referencedDetails = detailsForMessages(
@@ -509,6 +517,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
       detail: (text, locator) => this.projectText(text, locator, details),
       interaction: (source) =>
         this.projectInteraction(source, details).interaction,
+      typedBackgroundResults: this.typedBackgroundResults,
     };
     const state = projectReadSet(readSet, context, this.commandCapabilities);
     const referencedDetails = [...details.values()];
@@ -529,6 +538,7 @@ export class BrowserGatewayOwnerProjectionAdapter {
     const transcript = projectTranscript(foreground, {
       detail: (text, locator) => this.projectText(text, locator, details),
       interaction: () => null,
+      typedBackgroundResults: this.typedBackgroundResults,
     });
     const referencedDetails = detailsForMessages(
       [...details.values()],
@@ -1350,15 +1360,38 @@ function projectBlock(
         sessionId: bounded(block.sessionId, 256),
         task: bounded(block.task, 4_000),
         status: block.status,
-        ...(block.resultText !== undefined
+        ...(block.resultText !== undefined ||
+        (!context.typedBackgroundResults && block.partialOutput !== undefined)
           ? {
               result: context.detail(
-                block.resultText,
+                block.resultText ?? block.partialOutput ?? "",
                 `${messageId}:block:${index}:result`,
               ),
             }
           : {}),
         ...(block.summary ? { summary: bounded(block.summary, 4_000) } : {}),
+        ...(context.typedBackgroundResults
+          ? {
+              ...(block.resultState ? { resultState: block.resultState } : {}),
+              ...(block.terminalReason
+                ? { terminalReason: bounded(block.terminalReason, 4_000) }
+                : {}),
+              ...(block.partialOutput !== undefined
+                ? {
+                    partialOutput: context.detail(
+                      block.partialOutput,
+                      `${messageId}:block:${index}:partial-output`,
+                    ),
+                  }
+                : {}),
+              ...(block.retrySafe !== undefined
+                ? { retrySafe: block.retrySafe }
+                : {}),
+              ...(block.agentRetryable !== undefined
+                ? { agentRetryable: block.agentRetryable }
+                : {}),
+            }
+          : {}),
       };
     case "question_answer":
       return {
@@ -1446,8 +1479,9 @@ function detailsForMessages(
     for (const block of message.blocks) {
       if (block.type === "text" || block.type === "thinking") {
         visitText(block.text);
-      } else if (block.type === "bg_agent_result" && block.result) {
-        visitText(block.result);
+      } else if (block.type === "bg_agent_result") {
+        if (block.result) visitText(block.result);
+        if (block.partialOutput) visitText(block.partialOutput);
       }
     }
   }

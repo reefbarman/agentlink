@@ -1018,8 +1018,19 @@ describe("BrowserGatewayHelper proxy routing", () => {
     const helperBase = `http://127.0.0.1:${helperPort}`;
     const discovery = JSON.parse(
       await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
-    ) as { clientSharedSecret: string; helperGenerationId?: string };
+    ) as {
+      clientSharedSecret: string;
+      helperGenerationId?: string;
+      dataPlaneFeatures?: string[];
+    };
     expect(discovery.helperGenerationId).toBeTruthy();
+    expect(discovery.dataPlaneFeatures).toContain(
+      "typed-background-results-v1",
+    );
+    const health = await fetch(`${helperBase}/health`);
+    await expect(health.json()).resolves.toMatchObject({
+      dataPlaneFeatures: ["typed-background-results-v1"],
+    });
 
     const headers = {
       "Content-Type": "application/json",
@@ -1086,6 +1097,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(register.ok).toBe(true);
     await expect(register.json()).resolves.toMatchObject({
       ok: true,
+      dataPlaneFeatures: ["typed-background-results-v1"],
       ownerRegistration: {
         owner: {
           ownerId: "owner-vscode-1",

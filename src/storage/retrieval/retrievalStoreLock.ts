@@ -65,14 +65,20 @@ export async function withRetrievalStoreLock<T>(
       if (!isAlreadyExistsError(error)) throw error;
       try {
         const owner = await staleReferenceStat(lockDirectory);
-        if (
-          Date.now() - owner.mtimeMs > staleMs &&
-          !(await isLockOwnerAlive(owner.pid, owner.bootId, bootId))
-        ) {
-          await fs.rm(lockDirectory, { recursive: true, force: true });
-          observedOwner = undefined;
-          progressDeadline = Math.min(Date.now() + timeoutMs, hardDeadline);
-          continue;
+        const ownerAlive = await isLockOwnerAlive(
+          owner.pid,
+          owner.bootId,
+          bootId,
+        );
+        const ownerDefinitelyDead = owner.pid !== undefined && !ownerAlive;
+        const ownerStale = Date.now() - owner.mtimeMs > staleMs;
+        if ((ownerDefinitelyDead || ownerStale) && !ownerAlive) {
+          const reclaimed = await reclaimLockOwner(lockDirectory, owner.token);
+          if (reclaimed) {
+            observedOwner = undefined;
+            progressDeadline = Math.min(Date.now() + timeoutMs, hardDeadline);
+            continue;
+          }
         }
         if (
           !observedOwner ||
@@ -181,6 +187,22 @@ async function staleReferenceStat(lockDirectory: string): Promise<{
     }
   }
   return { token, mtimeMs: stat.mtimeMs, pid, bootId };
+}
+
+async function reclaimLockOwner(
+  lockDirectory: string,
+  ownerToken: string,
+): Promise<boolean> {
+  try {
+    if (ownerToken) {
+      await fs.rm(path.join(lockDirectory, ownerToken), { force: true });
+    }
+    await fs.rmdir(lockDirectory);
+    return true;
+  } catch {
+    // The owner changed after inspection or another contender reclaimed it.
+    return false;
+  }
 }
 
 async function isLockOwnerAlive(

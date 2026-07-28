@@ -181,6 +181,40 @@ describe("ChatView message windowing", () => {
     expect(screen.getByText("acp / acp:claude")).toBeTruthy();
   });
 
+  it("renders explicit background terminal result families and preserved output", () => {
+    const { container, rerender } = render(
+      h(BgAgentResultBlock, {
+        sessionId: "background-incomplete",
+        task: "Review implementation",
+        status: "error",
+        resultState: "incomplete_expected_result",
+        terminalReason: "incomplete_expected_result",
+        partialOutput: "Recovered partial findings.",
+        resultText: '{"status":"incomplete_expected_result"}',
+      }),
+    );
+
+    expect(container.querySelector(".bg-agent-result-warning")).toBeTruthy();
+    expect(screen.getByText("Incomplete Result")).toBeTruthy();
+    expect(container.textContent).toContain("expected result format");
+    expect(container.textContent).toContain("Recovered partial findings.");
+    expect(container.textContent).not.toContain('{"status"');
+
+    rerender(
+      h(BgAgentResultBlock, {
+        sessionId: "background-unauthorized",
+        task: "Review implementation",
+        status: "error",
+        resultState: "authorization_lost",
+        terminalReason: "outside_caller_subtree",
+      }),
+    );
+    expect(container.querySelector(".bg-agent-result-error")).toBeTruthy();
+    expect(screen.getByText("Background Failed")).toBeTruthy();
+    expect(container.textContent).toContain("authorization lost");
+    expect(container.textContent).toContain("no longer authorized");
+  });
+
   it("cancels pending bottom scrolling before revealing earlier history", () => {
     const callbacks = new Map<number, FrameRequestCallback>();
     let nextId = 0;

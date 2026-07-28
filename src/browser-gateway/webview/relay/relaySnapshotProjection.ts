@@ -469,8 +469,21 @@ function projectBlock(
           sessionId: block.sessionId,
           task: block.task,
           status: block.status,
+          ...(block.resultState ? { resultState: block.resultState } : {}),
+          ...(block.terminalReason
+            ? { terminalReason: block.terminalReason }
+            : {}),
           ...(block.result ? { resultText: transcriptText(block.result) } : {}),
+          ...(block.partialOutput
+            ? { partialOutput: transcriptText(block.partialOutput) }
+            : {}),
           ...(block.summary ? { summary: block.summary } : {}),
+          ...(block.retrySafe !== undefined
+            ? { retrySafe: block.retrySafe }
+            : {}),
+          ...(block.agentRetryable !== undefined
+            ? { agentRetryable: block.agentRetryable }
+            : {}),
         },
       ];
     case "question_answer":

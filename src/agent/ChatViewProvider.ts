@@ -8679,6 +8679,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.detectRequestInputs.clear();
   }
 
+  private syncProjectedControllerEpoch(): void {
+    this.projectedForegroundStore.setControllerEpoch(
+      this.getChatWorkspaceViewSnapshot()?.controllerEpoch ?? null,
+    );
+  }
+
   private ensureProjectedForegroundSession(
     session: AgentSession | undefined,
   ): void {
@@ -8727,6 +8733,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private projectExtensionMessage(msg: ExtensionToWebview): void {
     const fg = this.sessionManager?.getForegroundSession();
+    this.syncProjectedControllerEpoch();
     this.ensureProjectedForegroundSession(fg);
 
     const extMsg = msg as unknown as ExtensionMessage;
@@ -8941,6 +8948,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
 
       case "agentDone":
+        if (extMsg.transcriptRevision !== undefined) {
+          this.projectedForegroundStore.recordTranscriptRevision(
+            extMsg.sessionId,
+            extMsg.transcriptRevision,
+          );
+        }
         this.applyProjectedAction({ type: "DONE" });
         break;
 
@@ -9048,6 +9061,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentSessionLoaded": {
+        if (
+          !this.projectedForegroundStore.acceptSessionLoad(
+            extMsg.sessionId,
+            extMsg.transcriptRevision,
+          )
+        ) {
+          break;
+        }
         this.projectedForegroundStore.beginSessionLoad(
           extMsg.sessionId,
           extMsg.hasMoreBefore,
@@ -9182,23 +9203,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             }
           }
         }
-        const bgInfo = this.sessionManager
-          ?.getBgSessionInfos()
-          .find((entry) => entry.id === extMsg.sessionId);
-        const bgStatus: "completed" | "error" | "cancelled" =
-          bgInfo?.status === "error"
-            ? "error"
-            : bgInfo?.status === "cancelled"
-              ? "cancelled"
-              : "completed";
-        this.applyProjectedAction({
-          type: "BG_AGENT_DONE",
-          sessionId: extMsg.sessionId,
-          task: bgTask,
-          status: bgStatus,
-          resultText: extMsg.resultText,
-          summary: extMsg.resultSummary,
-        });
+        if (extMsg.completion) {
+          this.applyProjectedAction({
+            type: "BG_AGENT_DONE",
+            completion: {
+              ...extMsg.completion,
+              task: extMsg.completion.task || bgTask,
+            },
+          });
+        }
         break;
       }
 
@@ -9673,8 +9686,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const parentSessionId = isBackground
           ? this.sessionManager?.getBackgroundParentSessionId(sessionId)
           : undefined;
-        const backgroundResult = isBackground
-          ? this.sessionManager?.getBackgroundResult(sessionId)
+        const backgroundCompletion = isBackground
+          ? this.sessionManager?.getBackgroundCompletion(sessionId)
           : undefined;
         const completedSession = this.sessionManager?.getSession(sessionId);
         this.postMessage({
@@ -9691,11 +9704,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           totalCacheReadTokens: event.totalCacheReadTokens,
           totalCacheCreationTokens: event.totalCacheCreationTokens,
           ...(isBackground && {
-            resultText: backgroundResult?.resultText,
-            resultSummary:
-              backgroundResult?.summary ??
-              bgInfo?.resultSummary ??
-              this.sessionManager?.getBackgroundResultSummary(sessionId),
+            completion: backgroundCompletion
+              ? {
+                  ...backgroundCompletion,
+                  summary:
+                    backgroundCompletion.summary ??
+                    bgInfo?.resultSummary ??
+                    this.sessionManager?.getBackgroundResultSummary(sessionId),
+                }
+              : undefined,
           }),
         });
         if (
@@ -11296,16 +11313,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       all,
       opts?.tailTurns ?? RESTORE_TAIL_TURNS,
     );
-    const persistedResultSessionIds = new Set(
-      projectedAll.flatMap((message) =>
-        message.blocks.flatMap((block) =>
-          block.type === "bg_agent_result" ? [block.sessionId] : [],
-        ),
-      ),
-    );
-    const backgroundResults = (
-      this.sessionManager?.getBackgroundCompletionsForParent?.(session.id) ?? []
-    ).filter((result) => !persistedResultSessionIds.has(result.sessionId));
+    const backgroundResults =
+      this.sessionManager?.getBackgroundCompletionsForParent?.(session.id) ??
+      [];
     return {
       type: "agentSessionLoaded",
       sessionId: session.id,

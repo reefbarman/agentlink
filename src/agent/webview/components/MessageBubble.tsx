@@ -509,7 +509,10 @@ export function MessageBubble({
                   sessionId={block.sessionId}
                   task={block.task}
                   status={block.status}
+                  resultState={block.resultState}
+                  terminalReason={block.terminalReason}
                   resultText={block.resultText}
+                  partialOutput={block.partialOutput}
                   summary={block.summary}
                   resolvedModel={bgSession?.resolvedModel}
                   resolvedProvider={bgSession?.resolvedProvider}

@@ -142,6 +142,65 @@ describe("ProjectedForegroundStore", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts the first canonical load after synthetic foreground hydration", () => {
+    const store = new ProjectedForegroundStore();
+    store.setControllerEpoch("epoch-1");
+    store.hydrate(loadSession(), 56);
+
+    expect(store.acceptSessionLoad("session-1", 2)).toBe(true);
+    store.beginSessionLoad("session-1", false);
+    store.apply({
+      ...loadSession(),
+      backgroundResults: [
+        {
+          sessionId: "bg-1",
+          task: "Review",
+          status: "completed",
+          resultState: "completed",
+          resultText: "Canonical child result",
+          completedAt: 1,
+        },
+      ],
+    });
+
+    expect(
+      store.state.messages.flatMap((message) => message.blocks),
+    ).toContainEqual(
+      expect.objectContaining({
+        type: "bg_agent_result",
+        sessionId: "bg-1",
+        resultText: "Canonical child result",
+      }),
+    );
+    expect(store.acceptSessionLoad("session-1", 2)).toBe(false);
+  });
+
+  it("accepts only newer canonical loads for the current session and epoch", () => {
+    const store = new ProjectedForegroundStore();
+    store.setControllerEpoch("epoch-1");
+    store.setSessionId("session-1");
+
+    expect(store.acceptSessionLoad("session-2", 1)).toBe(false);
+    expect(store.acceptSessionLoad("session-1", 2)).toBe(true);
+    expect(store.acceptSessionLoad("session-1", 2)).toBe(false);
+    expect(store.acceptSessionLoad("session-1", 1)).toBe(false);
+    expect(store.acceptSessionLoad("session-1", 3)).toBe(true);
+
+    store.setControllerEpoch("epoch-2");
+    expect(store.acceptSessionLoad("session-1", 1)).toBe(true);
+  });
+
+  it("keeps transcript completion revisions monotonic", () => {
+    const store = new ProjectedForegroundStore();
+    store.setControllerEpoch("epoch-1");
+    store.setSessionId("session-1");
+    store.recordTranscriptRevision("session-1", 5);
+    store.recordTranscriptRevision("session-1", 3);
+
+    expect(store.acceptSessionLoad("session-1", 4)).toBe(false);
+    expect(store.acceptSessionLoad("session-1", 6)).toBe(true);
+  });
+
   it("tracks a paged session load and accepts only matching chunks", () => {
     const store = new ProjectedForegroundStore();
 

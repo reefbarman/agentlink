@@ -2,14 +2,15 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { afterEach, describe, expect, it } from "vitest";
 import {
+  CODE_INDEX_STORAGE_GENERATION,
   getCodeIndexCacheKey,
   getCodeRelationId,
   getCodeRetrievalStoreRoot,
   getCodeSourceId,
   getCodeWorkspaceScopeId,
 } from "./codeRetrievalIdentity.js";
+import { afterEach, describe, expect, it } from "vitest";
 
 describe("code retrieval identity", () => {
   const roots: string[] = [];
@@ -59,9 +60,14 @@ describe("code retrieval identity", () => {
     expect(getCodeIndexCacheKey(other)).not.toBe(
       getCodeIndexCacheKey(physical),
     );
+    expect(CODE_INDEX_STORAGE_GENERATION).toBe(4);
     expect(path.dirname(storeRoot)).toBe(
+      path.join(globalStorage, "code-indexes-v4"),
+    );
+    expect(path.dirname(storeRoot)).not.toBe(
       path.join(globalStorage, "code-indexes-v3"),
     );
+    expect(getCodeIndexCacheKey(physical)).toMatch(/^al-v4-/);
   });
 
   it("combines workspace scope and canonical portable path without accepting non-canonical input", () => {

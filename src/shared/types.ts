@@ -321,8 +321,13 @@ export interface BackgroundCompletionResult {
   sessionId: string;
   task: string;
   status: "completed" | "error" | "cancelled";
+  resultState: BackgroundResultState;
+  terminalReason?: string;
   resultText?: string;
+  partialOutput?: string;
   summary?: string;
+  retrySafe?: boolean;
+  agentRetryable?: boolean;
   completedAt: number;
 }
 

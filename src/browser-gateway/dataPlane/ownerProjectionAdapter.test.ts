@@ -283,15 +283,80 @@ function readSet(): BrowserGatewayOwnerProjectionReadSet {
 
 function makeAdapter(
   sources: ProjectionSources,
-  options: { now?: () => number } = {},
+  options: {
+    now?: () => number;
+    dataPlaneFeatures?: readonly ["typed-background-results-v1"];
+  } = {},
 ) {
   return new BrowserGatewayOwnerProjectionAdapter(sources, identity, {
     now: options.now ?? (() => 1_000),
     createId: (kind, sequence) => `${kind}-${sequence}`,
+    dataPlaneFeatures: options.dataPlaneFeatures,
   });
 }
 
 describe("BrowserGatewayOwnerProjectionAdapter", () => {
+  it("capability-gates typed background result fields", () => {
+    const source = readSet();
+    source.foreground = {
+      ...source.foreground!,
+      messages: [
+        ...source.foreground!.messages,
+        message("background-result", "assistant", "", 950, [
+          {
+            type: "bg_agent_result",
+            sessionId: "background-1",
+            task: "Review",
+            status: "error",
+            resultState: "incomplete_expected_result",
+            terminalReason: "incomplete_expected_result",
+            partialOutput: "Recovered partial findings",
+            retrySafe: true,
+            agentRetryable: false,
+          },
+        ]),
+      ],
+    };
+
+    const legacy = makeAdapter(new ProjectionSources(source)).getCheckpoint();
+    const capable = makeAdapter(new ProjectionSources(source), {
+      dataPlaneFeatures: ["typed-background-results-v1"],
+    }).getCheckpoint();
+    const legacyBlock = legacy.transcript.messages
+      .flatMap((message) => message.blocks)
+      .find((block) => block.type === "bg_agent_result");
+    const capableBlock = capable.transcript.messages
+      .flatMap((message) => message.blocks)
+      .find((block) => block.type === "bg_agent_result");
+
+    expect(legacyBlock).toEqual(
+      expect.objectContaining({
+        type: "bg_agent_result",
+        status: "error",
+      }),
+    );
+    expect(legacyBlock).not.toHaveProperty("resultState");
+    expect(legacyBlock).not.toHaveProperty("partialOutput");
+    expect(legacyBlock).toMatchObject({
+      result: {
+        kind: "inline",
+        text: "Recovered partial findings",
+      },
+    });
+    expect(capableBlock).toMatchObject({
+      type: "bg_agent_result",
+      status: "error",
+      resultState: "incomplete_expected_result",
+      terminalReason: "incomplete_expected_result",
+      partialOutput: {
+        kind: "inline",
+        text: "Recovered partial findings",
+      },
+      retrySafe: true,
+      agentRetryable: false,
+    });
+  });
+
   it("does no projection work without demand and starts each demand period with a checkpoint", () => {
     const sources = new ProjectionSources(readSet());
     const adapter = makeAdapter(sources);

@@ -15,6 +15,8 @@ export class ProjectedForegroundStore {
   private currentSessionId: string | null = null;
   private loadingSessionId: string | null = null;
   private streaming = false;
+  private controllerEpoch: string | null = null;
+  private readonly acceptedTranscriptRevisions = new Map<string, number>();
   private readonly listeners = new Set<ProjectedForegroundStoreListener>();
 
   get state(): AppState {
@@ -50,6 +52,29 @@ export class ProjectedForegroundStore {
     this.emitChange();
   }
 
+  setControllerEpoch(controllerEpoch: string | null): void {
+    if (this.controllerEpoch === controllerEpoch) return;
+    this.controllerEpoch = controllerEpoch;
+    this.acceptedTranscriptRevisions.clear();
+  }
+
+  recordTranscriptRevision(sessionId: string, revision: number): void {
+    const accepted = this.acceptedTranscriptRevisions.get(sessionId);
+    this.acceptedTranscriptRevisions.set(
+      sessionId,
+      accepted === undefined ? revision : Math.max(accepted, revision),
+    );
+  }
+
+  acceptSessionLoad(sessionId: string, revision: number | undefined): boolean {
+    if (sessionId !== this.currentSessionId) return false;
+    if (revision === undefined) return true;
+    const accepted = this.acceptedTranscriptRevisions.get(sessionId);
+    if (accepted !== undefined && revision <= accepted) return false;
+    this.recordTranscriptRevision(sessionId, revision);
+    return true;
+  }
+
   apply(action: AppAction): void {
     const nextState = reducer(this.currentState, action);
     if (nextState === this.currentState) return;
@@ -76,6 +101,7 @@ export class ProjectedForegroundStore {
     this.currentSessionId = null;
     this.loadingSessionId = null;
     this.streaming = false;
+    this.acceptedTranscriptRevisions.clear();
     this.emitChange();
   }
 

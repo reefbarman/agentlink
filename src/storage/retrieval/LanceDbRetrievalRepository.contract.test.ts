@@ -2,6 +2,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import {
+  CODE_INDEX_WRITER_FENCED_ERROR,
+  acquireCodeIndexWriterLease,
+} from "../../indexer/codeIndexWriterLease.js";
 import type {
   RetrievalFingerprint,
   RetrievalPublicationRequest,
@@ -63,6 +67,39 @@ describeRetrievalRepositoryContract("LanceDbRetrievalRepository", async () => {
 });
 
 describe("LanceDbRetrievalRepository persistence", () => {
+  it("rejects mutations after its code-index writer lease is displaced", async () => {
+    await withStore(async (root) => {
+      const firstLease = await acquireCodeIndexWriterLease({
+        storeRoot: root,
+        workspaceScopeId: "workspace:test",
+        ownerId: "worker:first",
+        protocolVersion: "v4",
+      });
+      const repository = new LanceDbRetrievalRepository({
+        root,
+        embeddingDimensions: 3,
+        deferNativeIndexRefresh: true,
+        codeIndexWriterLease: firstLease,
+      });
+      try {
+        await repository.migrate(fingerprint);
+        await acquireCodeIndexWriterLease({
+          storeRoot: root,
+          workspaceScopeId: "workspace:test",
+          ownerId: "worker:successor",
+          protocolVersion: "v4",
+          options: { isOwnerAlive: () => false },
+        });
+
+        await expect(
+          repository.deleteSourceIdPrefix("code:workspace:test:"),
+        ).rejects.toThrow(CODE_INDEX_WRITER_FENCED_ERROR);
+      } finally {
+        await repository.close();
+      }
+    });
+  });
+
   it("reports a never-migrated store as missing", async () => {
     await withStore(async (root) => {
       const repository = new LanceDbRetrievalRepository({

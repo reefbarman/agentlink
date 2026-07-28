@@ -5589,7 +5589,11 @@ describe("ChatViewProvider session state sync", () => {
       webview: { postMessage: mockPostMessage },
     };
     (provider as unknown as { webviewReady: boolean }).webviewReady = true;
-    const getBackgroundResult = vi.fn(() => ({
+    const getBackgroundCompletion = vi.fn(() => ({
+      sessionId: "bg-1",
+      task: "Review implementation",
+      status: "completed" as const,
+      resultState: "completed" as const,
       resultText: "full structured report",
       summary: "one-line summary",
     }));
@@ -5599,8 +5603,7 @@ describe("ChatViewProvider session state sync", () => {
       getForegroundSession: () => ({ id: "foreground-1" }),
       getBgSessionInfos: () => [{ id: "bg-1" }],
       getBackgroundParentSessionId: () => "foreground-1",
-      getBackgroundResult,
-      getBackgroundResultSummary: () => "Reviewed the plan",
+      getBackgroundCompletion,
       markBackgroundResultsAnnounced,
       listPersistedSessions: () => [],
     };
@@ -5618,14 +5621,19 @@ describe("ChatViewProvider session state sync", () => {
       totalCacheCreationTokens: 0,
     });
 
-    expect(getBackgroundResult).toHaveBeenCalledWith("bg-1");
+    expect(getBackgroundCompletion).toHaveBeenCalledWith("bg-1");
     expect(mockPostMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "agentBgDone",
         sessionId: "bg-1",
         parentSessionId: "foreground-1",
-        resultText: "full structured report",
-        resultSummary: "one-line summary",
+        completion: expect.objectContaining({
+          sessionId: "bg-1",
+          status: "completed",
+          resultState: "completed",
+          resultText: "full structured report",
+          summary: "one-line summary",
+        }),
       }),
     );
     expect(markBackgroundResultsAnnounced).toHaveBeenCalledWith(["bg-1"]);
@@ -5717,18 +5725,25 @@ describe("ChatViewProvider session state sync", () => {
     )?.[0];
     expect(loadedMessage?.backgroundResults).toEqual([
       expect.objectContaining({
+        sessionId: "bg-pulled",
+        resultText: "Already persisted",
+      }),
+      expect.objectContaining({
         sessionId: "bg-pushed",
         resultText: "Recover me",
       }),
     ]);
-    expect(markBackgroundResultsAnnounced).toHaveBeenCalledWith(["bg-pushed"]);
+    expect(markBackgroundResultsAnnounced).toHaveBeenCalledWith([
+      "bg-pulled",
+      "bg-pushed",
+    ]);
     expect(
       provider
         .getBrowserProjectedForegroundState()
         ?.projectedMessages.flatMap((message) => message.blocks)
         .filter((block) => block.type === "bg_agent_result")
         .map((block) => block.sessionId),
-    ).toEqual(["bg-pushed"]);
+    ).toEqual(["bg-pulled", "bg-pushed"]);
   });
 
   it("fails closed when a background completion has no current parent metadata", async () => {
@@ -5747,7 +5762,13 @@ describe("ChatViewProvider session state sync", () => {
       getForegroundSession: () => undefined,
       getBgSessionInfos: () => [],
       getBackgroundParentSessionId: () => undefined,
-      getBackgroundResult: () => ({ resultText: "nested result" }),
+      getBackgroundCompletion: () => ({
+        sessionId: "bg-unresolved",
+        task: "Nested review",
+        status: "completed" as const,
+        resultState: "completed" as const,
+        resultText: "nested result",
+      }),
       getBackgroundResultSummary: () => undefined,
       listPersistedSessions: () => [],
     };

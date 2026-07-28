@@ -206,6 +206,7 @@ describe("HttpBrowserGatewayOwnerTransport", () => {
       ownerGenerationId,
       helperGenerationId,
       resolution: "collision_assigned",
+      dataPlaneFeatures: [],
     });
     await ownerTransport.heartbeat();
 

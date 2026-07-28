@@ -191,14 +191,15 @@ describe("webview App reducer background agent launch blocks", () => {
           result: resultText,
           complete: true,
         }),
-        {
+        expect.objectContaining({
           type: "bg_agent_result",
           sessionId: bgSessionId,
           task,
           status: "completed",
+          resultState: "completed",
           resultText,
-          summary: undefined,
-        },
+          sourceAuthority: "tool",
+        }),
       ]),
     );
   });
@@ -2357,21 +2358,23 @@ describe("webview App reducer background agent launch blocks", () => {
 
     expect(restored[2]?.role).toBe("assistant");
     expect(restored[2]?.blocks).toEqual([
-      {
+      expect.objectContaining({
         type: "tool_call",
         id: "bg-result-tool",
         name: "get_background_result",
         inputJson: JSON.stringify({ sessionId: bgSessionId }),
         result: resultText,
         complete: true,
-      },
-      {
+      }),
+      expect.objectContaining({
         type: "bg_agent_result",
         sessionId: bgSessionId,
         task,
         status: "completed",
+        resultState: "completed",
         resultText,
-      },
+        sourceAuthority: "tool",
+      }),
     ]);
   });
 

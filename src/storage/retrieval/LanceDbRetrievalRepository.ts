@@ -60,7 +60,10 @@ import {
   retrievalSnapshotSchema,
   retrievalSourceSchema,
 } from "./lanceDbSchemas.js";
+import type { CodeIndexWriterLease } from "../../indexer/codeIndexWriterLease.js";
+import { assertCodeIndexWriterFenceCurrent } from "../../indexer/codeIndexWriterLease.js";
 import { withRetrievalStoreLock } from "./retrievalStoreLock.js";
+import { buildRetrievalChunkSearchText } from "./retrievalSearchText.js";
 
 const FINGERPRINT_KEY = "fingerprint";
 const METRICS_KEY = "aggregate_metrics";
@@ -211,6 +214,7 @@ export interface LanceDbRetrievalRepositoryOptions extends Omit<
   embeddingDimensions?: number;
   indexOperations?: LanceDbRetrievalIndexOperations;
   deferNativeIndexRefresh?: boolean;
+  codeIndexWriterLease?: CodeIndexWriterLease;
   /** Test seam; production callers use {@link MAXIMUM_UNINDEXED_QUERY_CHUNKS}. */
   maxUnindexedQueryChunks?: number;
 }
@@ -1368,6 +1372,9 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
     if (this.closing) throw new Error("retrieval_store_closed");
     return withRetrievalStoreLock(this.root, async () => {
       if (this.closing) throw new Error("retrieval_store_closed");
+      if (this.options.codeIndexWriterLease) {
+        assertCodeIndexWriterFenceCurrent(this.options.codeIndexWriterLease);
+      }
       try {
         return await operation(await this.ensureTables(dimensions));
       } finally {
@@ -2003,31 +2010,12 @@ function chunkRow(
   source: RetrievalSourceDocument,
   relations: RetrievalRelationRecord[],
 ): ChunkRow {
-  const relationTerms = relations
-    .filter(
-      (relation) => relation.fromId === chunk.id || relation.toId === chunk.id,
-    )
-    .flatMap((relation) => [relation.kind, relation.fromId, relation.toId]);
   return {
     chunk_id: chunk.id,
     source_id: chunk.sourceId,
     revision_id: chunk.revisionId,
     generation: chunk.generation,
-    search_text: [
-      source.id,
-      source.revision.id,
-      source.path,
-      source.title,
-      chunk.location?.path,
-      ...(chunk.location?.scope ?? []),
-      ...Object.values(source.metadata).map(String),
-      ...Object.values(chunk.metadata).map(String),
-      ...relationTerms,
-      source.content,
-      chunk.content,
-    ]
-      .filter((value): value is string => Boolean(value))
-      .join("\n"),
+    search_text: buildRetrievalChunkSearchText({ chunk, source, relations }),
     embedding: chunk.embedding,
     payload_json: JSON.stringify(chunk),
   };

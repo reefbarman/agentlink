@@ -17,6 +17,11 @@ import type { OpenAiCompatibleRuntimeProfile } from "../core/model/providers/ope
 import type { PromptProfileResolution } from "../core/promptProfile.js";
 
 export const BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION = 2;
+export const BROWSER_GATEWAY_DATA_PLANE_FEATURES = [
+  "typed-background-results-v1",
+] as const;
+export type BrowserGatewayDataPlaneFeature =
+  (typeof BROWSER_GATEWAY_DATA_PLANE_FEATURES)[number];
 
 export interface BrowserGatewayHelperDiscoveryRecord {
   pid: number;
@@ -28,6 +33,7 @@ export interface BrowserGatewayHelperDiscoveryRecord {
   helperVersion: string;
   helperGenerationId?: string;
   dataPlaneMode?: BrowserGatewayDataPlaneMode;
+  dataPlaneFeatures?: BrowserGatewayDataPlaneFeature[];
   browserBootstrapToken: string;
   clientSharedSecret: string;
   /** True when the helper is bound to 0.0.0.0 and advertising mDNS. */
@@ -53,6 +59,7 @@ export interface BrowserGatewayHelperHealthResponse {
   activeClientLeases: number;
   helperGenerationId?: string;
   dataPlaneMode?: BrowserGatewayDataPlaneMode;
+  dataPlaneFeatures?: BrowserGatewayDataPlaneFeature[];
   coreOwners?: number;
 }
 
@@ -101,6 +108,7 @@ export interface BrowserGatewayCoreOwnerRegistrationResponse {
   effectiveOwnerId: string;
   resolution: BrowserGatewayCoreOwnerRegistrationResolution;
   ownerRegistration: CoreOwnerRegistrationDto;
+  dataPlaneFeatures?: BrowserGatewayDataPlaneFeature[];
 }
 
 export interface BrowserGatewayCoreOwnersListResponse {

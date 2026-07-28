@@ -4,7 +4,7 @@ import { canonicalizePath } from "../util/canonicalPath.js";
 import { createHash } from "crypto";
 import { requireCanonicalPortableCodeIndexPath } from "./codeIndexPaths.js";
 
-export const CODE_INDEX_STORAGE_GENERATION = 3;
+export const CODE_INDEX_STORAGE_GENERATION = 4;
 export const CODE_RETRIEVAL_STORES_DIRECTORY = `code-indexes-v${CODE_INDEX_STORAGE_GENERATION}`;
 
 export function getCodeWorkspaceScopeId(workspaceRoot: string): string {

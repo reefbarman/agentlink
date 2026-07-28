@@ -8143,6 +8143,19 @@ body.approval-resizing {
   background: color-mix(in srgb, var(--vscode-errorForeground) 5%, transparent);
 }
 
+.bg-agent-result-warning {
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, #cca700) 40%,
+    transparent
+  );
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, #cca700) 6%,
+    transparent
+  );
+}
+
 .bg-agent-result-cancelled {
   border-color: color-mix(
     in srgb,
@@ -8179,6 +8192,15 @@ body.approval-resizing {
     transparent
   );
   color: var(--vscode-errorForeground);
+}
+
+.bg-agent-result-warning .bg-agent-result-header {
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, #cca700) 12%,
+    transparent
+  );
+  color: var(--vscode-editorWarning-foreground, #cca700);
 }
 
 .bg-agent-result-cancelled .bg-agent-result-header {
@@ -8223,6 +8245,11 @@ body.approval-resizing {
 
 .bg-result-content .markdown-body {
   font-size: 12px;
+}
+
+.bg-result-reason {
+  margin-bottom: 6px;
+  color: var(--vscode-descriptionForeground);
 }
 
 .bg-result-empty {
