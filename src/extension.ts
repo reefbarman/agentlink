@@ -2407,7 +2407,6 @@ export async function activate(
   const actionApprovalReviewer = createActionApprovalReviewer({
     resolveContext: resolveApprovalReviewerContext,
   });
-  chatViewProvider.setActionApprovalReviewer(actionApprovalReviewer);
 
   // Wire up window-level capabilities. MCP is captured from the session project registry.
   agentSessionManager.setToolContext({
@@ -2526,6 +2525,9 @@ export async function activate(
     chatViewProvider.setContextUsageTelemetry(contextUsageTelemetry);
   }
   chatViewProvider.setSessionManager(agentSessionManager);
+  sidebarProvider.setAgentWriteApprovalHandler((mode, sessionIds) =>
+    chatViewProvider.setSidebarWriteApproval(mode, sessionIds),
+  );
 
   void (async () => {
     await chatTabControllerInitialization;

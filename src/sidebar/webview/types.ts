@@ -74,6 +74,8 @@ export interface TrackedCallInfo {
 }
 
 export interface FeedbackEntry {
+  id: string;
+  global_index: number;
   timestamp: string;
   tool_name: string;
   feedback: string;
@@ -194,7 +196,7 @@ export type WebviewCommand =
   | RuleRemoveMessage
   | { command: "clearSessionRules"; sessionId: string }
   | ToolCallControlMessage
-  | { command: "deleteFeedbackEntry"; index: number }
+  | { command: "deleteFeedbackEntry"; id: string }
   | { command: "setupSemanticSearch"; reason?: string };
 
 type DataWebviewCommand = Exclude<

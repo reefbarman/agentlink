@@ -1,16 +1,20 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendFeedback,
-  readFeedback,
   deleteFeedback,
+  readFeedback,
 } from "./feedbackStore.js";
+
 import type { FeedbackEntry } from "./feedbackStore.js";
 
 let tmpHome: string;
 let feedbackPath: string;
+let legacyTombstonePath: string;
+let tombstoneDirectory: string;
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
 
@@ -31,6 +35,16 @@ beforeEach(() => {
   process.env.HOME = tmpHome;
   process.env.USERPROFILE = tmpHome;
   feedbackPath = path.join(tmpHome, ".agentlink", "agentlink-feedback.jsonl");
+  legacyTombstonePath = path.join(
+    tmpHome,
+    ".agentlink",
+    "agentlink-feedback-deletions.jsonl",
+  );
+  tombstoneDirectory = path.join(
+    tmpHome,
+    ".agentlink",
+    "agentlink-feedback-deletions",
+  );
 });
 
 afterEach(() => {
@@ -40,94 +54,172 @@ afterEach(() => {
 });
 
 describe("feedbackStore", () => {
-  it("appends and reads a feedback entry", () => {
-    const entry = makeEntry({ feedback: "works great" });
-    appendFeedback(entry);
+  it("assigns stable IDs and global indices to appended entries", () => {
+    const appended = appendFeedback(makeEntry({ feedback: "works great" }));
     const entries = readFeedback();
-    expect(entries.length).toBeGreaterThanOrEqual(1);
-    const last = entries[entries.length - 1];
-    expect(last.feedback).toBe("works great");
-    expect(last.tool_name).toBe("test_tool");
+
+    expect(appended.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(entries).toEqual([
+      expect.objectContaining({
+        id: appended.id,
+        global_index: 0,
+        feedback: "works great",
+        tool_name: "test_tool",
+      }),
+    ]);
   });
 
-  it("appends multiple entries", () => {
-    appendFeedback(makeEntry({ feedback: "first" }));
-    appendFeedback(makeEntry({ feedback: "second" }));
-    const entries = readFeedback();
-    expect(entries.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("filters by tool_name", () => {
+  it("preserves global indices when filtering", () => {
     appendFeedback(makeEntry({ tool_name: "tool_a", feedback: "a" }));
-    appendFeedback(makeEntry({ tool_name: "tool_b", feedback: "b" }));
-    const filtered = readFeedback("tool_a");
-    expect(filtered.every((e) => e.tool_name === "tool_a")).toBe(true);
+    const second = appendFeedback(
+      makeEntry({ tool_name: "tool_b", feedback: "b" }),
+    );
+
+    expect(readFeedback("tool_b")).toEqual([
+      expect.objectContaining({ id: second.id, global_index: 1 }),
+    ]);
   });
 
-  it("returns empty array when no file exists", () => {
-    try {
-      fs.unlinkSync(feedbackPath);
-    } catch {
-      /* */
-    }
+  it("returns stable distinct IDs for duplicate legacy lines across formatting and EOL changes", () => {
+    const entry = makeEntry({ feedback: "legacy" });
+    const compact = JSON.stringify(entry);
+    fs.mkdirSync(path.dirname(feedbackPath), { recursive: true });
+    fs.writeFileSync(feedbackPath, `${compact}\r\n${compact}\r\n`, "utf-8");
+
+    const firstRead = readFeedback();
+    fs.writeFileSync(
+      feedbackPath,
+      `${JSON.stringify(entry, null, 0)}\n${JSON.stringify(entry, null, 0)}\n`,
+      "utf-8",
+    );
+    const secondRead = readFeedback();
+
+    expect(firstRead.map((record) => record.id)).toEqual(
+      secondRead.map((record) => record.id),
+    );
+    expect(new Set(firstRead.map((record) => record.id))).toHaveLength(2);
+    expect(firstRead.every((record) => record.id.startsWith("legacy-"))).toBe(
+      true,
+    );
+  });
+
+  it("returns an empty array when no file exists", () => {
     expect(readFeedback()).toEqual([]);
   });
 
-  it("truncates long feedback", () => {
-    const longFeedback = "x".repeat(5000);
-    appendFeedback(makeEntry({ feedback: longFeedback }));
-    const entries = readFeedback();
-    const last = entries[entries.length - 1];
-    expect(last.feedback.length).toBeLessThan(5000);
-    expect(last.feedback).toContain("…(truncated)");
+  it("byte-bounds serialized entries for atomic append", () => {
+    appendFeedback(
+      makeEntry({
+        feedback: '🌊\n"'.repeat(5000),
+        tool_params: "p".repeat(1000),
+      }),
+    );
+    const [entry] = readFeedback();
+    const [line] = fs.readFileSync(feedbackPath, "utf-8").split("\n");
+
+    expect(entry?.feedback.length).toBeLessThan(5000);
+    expect(entry?.feedback).toContain("…(truncated)");
+    expect(entry?.tool_params?.length).toBeLessThanOrEqual(520);
+    expect(Buffer.byteLength(`${line}\n`, "utf-8")).toBeLessThanOrEqual(4000);
   });
 
-  it("truncates long tool_params", () => {
-    appendFeedback(makeEntry({ tool_params: "p".repeat(1000) }));
-    const entries = readFeedback();
-    const last = entries[entries.length - 1];
-    expect(last.tool_params!.length).toBeLessThanOrEqual(520); // 500 + "…(truncated)"
+  it("deletes by stable ID using append-only tombstones", () => {
+    const keep = appendFeedback(makeEntry({ feedback: "keep" }));
+    const remove = appendFeedback(makeEntry({ feedback: "delete me" }));
+    const primaryBefore = fs.readFileSync(feedbackPath, "utf-8");
+
+    const result = deleteFeedback({ ids: [remove.id] });
+
+    expect(result.removed).toEqual([
+      expect.objectContaining({ id: remove.id, feedback: "delete me" }),
+    ]);
+    expect(readFeedback()).toEqual([
+      expect.objectContaining({ id: keep.id, feedback: "keep" }),
+    ]);
+    expect(fs.readFileSync(feedbackPath, "utf-8")).toBe(primaryBefore);
+    const tombstones = fs.readdirSync(tombstoneDirectory);
+    expect(tombstones).toHaveLength(1);
+    expect(
+      fs.readFileSync(path.join(tombstoneDirectory, tombstones[0]!), "utf-8"),
+    ).toContain(remove.id);
   });
 
-  it("deletes entries by index", () => {
-    appendFeedback(makeEntry({ feedback: "keep" }));
-    appendFeedback(makeEntry({ feedback: "delete me" }));
-    appendFeedback(makeEntry({ feedback: "also keep" }));
-    const removed = deleteFeedback([1]);
-    expect(removed).toBe(1);
-    const remaining = readFeedback();
-    expect(remaining.map((e) => e.feedback)).toEqual(["keep", "also keep"]);
+  it("keeps appends made after a deletion snapshot", () => {
+    const remove = appendFeedback(makeEntry({ feedback: "remove" }));
+    deleteFeedback({ ids: [remove.id] });
+    const later = appendFeedback(makeEntry({ feedback: "later append" }));
+
+    expect(readFeedback()).toEqual([
+      expect.objectContaining({ id: later.id, feedback: "later append" }),
+    ]);
   });
 
-  it("deletes multiple entries", () => {
-    appendFeedback(makeEntry({ feedback: "a" }));
-    appendFeedback(makeEntry({ feedback: "b" }));
-    appendFeedback(makeEntry({ feedback: "c" }));
-    const removed = deleteFeedback([0, 2]);
-    expect(removed).toBe(2);
-    const remaining = readFeedback();
-    expect(remaining.map((e) => e.feedback)).toEqual(["b"]);
+  it("keeps legacy global indices stable after deletion", () => {
+    const first = appendFeedback(makeEntry({ feedback: "first" }));
+    appendFeedback(makeEntry({ feedback: "second" }));
+    const third = appendFeedback(makeEntry({ feedback: "third" }));
+
+    expect(deleteFeedback({ indices: [0] }).removed[0]?.id).toBe(first.id);
+    expect(
+      readFeedback().map(({ id, global_index }) => ({ id, global_index })),
+    ).toEqual([
+      { id: expect.any(String), global_index: 1 },
+      { id: third.id, global_index: 2 },
+    ]);
+    expect(deleteFeedback({ indices: [2] }).removed[0]?.id).toBe(third.id);
   });
 
-  it("returns 0 when deleting from nonexistent file", () => {
-    try {
-      fs.unlinkSync(feedbackPath);
-    } catch {
-      /* */
-    }
-    expect(deleteFeedback([0])).toBe(0);
+  it("honors valid legacy tombstones", () => {
+    const line = JSON.stringify(makeEntry({ feedback: "legacy deleted" }));
+    fs.mkdirSync(path.dirname(feedbackPath), { recursive: true });
+    fs.writeFileSync(feedbackPath, `${line}\n`, "utf-8");
+    const [entry] = readFeedback();
+    fs.writeFileSync(
+      legacyTombstonePath,
+      `${JSON.stringify({ id: entry?.id, deleted_at: new Date().toISOString() })}\n`,
+      "utf-8",
+    );
+
+    expect(readFeedback()).toEqual([]);
+    expect(deleteFeedback({ ids: [entry!.id] }).already_deleted_ids).toEqual([
+      entry!.id,
+    ]);
   });
 
-  it("skips malformed JSON lines", () => {
+  it("reports idempotent IDs and unknown IDs and indices explicitly", () => {
+    const entry = appendFeedback(makeEntry());
+    deleteFeedback({ ids: [entry.id] });
+
+    const result = deleteFeedback({ ids: [entry.id, "missing-id"] });
+
+    expect(result.removed).toEqual([]);
+    expect(result.already_deleted_ids).toEqual([entry.id]);
+    expect(result.unknown_ids).toEqual(["missing-id"]);
+    expect(result.unknown_indices).toEqual([]);
+    expect(deleteFeedback({ indices: [999] }).unknown_indices).toEqual([999]);
+  });
+
+  it("rejects mixed, missing, and empty deletion selectors", () => {
+    expect(() => deleteFeedback({ ids: [], indices: [] })).toThrow(
+      /exactly one/,
+    );
+    expect(() => deleteFeedback({})).toThrow(/exactly one/);
+    expect(() => deleteFeedback({ ids: [] })).toThrow(/non-empty array/);
+    expect(() => deleteFeedback({ ids: [" "] })).toThrow(/non-empty strings/);
+    expect(() => deleteFeedback({ indices: [] })).toThrow(/non-empty array/);
+  });
+
+  it("skips malformed primary and tombstone lines", () => {
     fs.mkdirSync(path.dirname(feedbackPath), { recursive: true });
     fs.writeFileSync(
       feedbackPath,
-      '{"timestamp":"t","tool_name":"x","feedback":"good","extension_version":"1"}\nnot json\n{"timestamp":"t","tool_name":"y","feedback":"also good","extension_version":"1"}\n',
+      '{"timestamp":"t","tool_name":"x","feedback":"good","extension_version":"1"}\nnot json\n',
       "utf-8",
     );
-    const entries = readFeedback();
-    expect(entries).toHaveLength(2);
-    expect(entries[0].feedback).toBe("good");
-    expect(entries[1].feedback).toBe("also good");
+    fs.writeFileSync(legacyTombstonePath, "not json\n", "utf-8");
+
+    expect(readFeedback()).toEqual([
+      expect.objectContaining({ feedback: "good", global_index: 0 }),
+    ]);
   });
 });

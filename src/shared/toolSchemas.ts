@@ -50,6 +50,53 @@ export const webFetchSchema = {
     .describe("Optional text or pattern to locate within the opened page"),
 };
 
+// ─── Development feedback tools ──────────────────────────────────────────────
+
+export const sendFeedbackSchema = {
+  tool_name: z
+    .string()
+    .describe(
+      "AgentLink tool this feedback is about. For MCP-related feedback, use the native AgentLink MCP tool actually involved, such as find_mcp_tools or call_mcp_tool. Never report a specific MCP server or its server__tool; those are out of scope unless the problem is in AgentLink's MCP plumbing.",
+    ),
+  feedback: z
+    .string()
+    .describe("Description of the issue, suggestion, or missing feature"),
+  tool_params: z
+    .string()
+    .optional()
+    .describe(
+      "Optional serialized params passed to the tool (helps reproduce)",
+    ),
+  tool_result_summary: z
+    .string()
+    .optional()
+    .describe("Optional summary of what happened / unexpected result"),
+};
+
+export const getFeedbackSchema = {
+  tool_name: z
+    .string()
+    .optional()
+    .describe(
+      "Filter to feedback about a specific tool (omit for all feedback)",
+    ),
+};
+
+export const deleteFeedbackSchema = {
+  ids: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Stable feedback entry IDs to delete (preferred; from get_feedback output)",
+    ),
+  indices: z
+    .array(z.number().int().nonnegative())
+    .optional()
+    .describe(
+      "Legacy global 0-based feedback indices to delete; never use filtered-list positions",
+    ),
+};
+
 // ─── Native tool discovery ───────────────────────────────────────────────────
 
 export const findNativeToolsSchema = {

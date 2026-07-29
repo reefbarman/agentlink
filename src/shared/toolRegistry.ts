@@ -277,13 +277,13 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     label: "Read tool feedback",
     devOnly: true,
     description:
-      "Read all previously submitted feedback about agentlink tools. Optionally filter by tool name.",
+      "Read active feedback about AgentLink tools. Optionally filter by tool name. Every result includes a stable ID and its global index; use the stable ID for deletion.",
   },
   delete_feedback: {
-    label: "Delete feedback entries",
+    label: "Hide feedback entries",
     devOnly: true,
     description:
-      "Delete specific feedback entries by their 0-based index (as returned by get_feedback). Use after addressing feedback to keep the list clean.",
+      "Logically hide active feedback entries by stable ID (preferred) or legacy global index. Never pass filtered-list positions as indices. The primary feedback file remains append-only and retains raw records; the result identifies exactly which entries were hidden.",
   },
 };
 

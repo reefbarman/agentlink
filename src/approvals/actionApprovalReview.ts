@@ -40,7 +40,7 @@ Host boundary:
 Policy:
 - Deny actions unrelated to or insufficiently authorized by the user's objective.
 - Deny likely secret/private-data exposure, broad destructive changes, or broad security weakening unless exact authorization and bounded impact are clear.
-- Mode switches may be allowed when the exact capability delta is consistent with the user's request.
+
 - Outside reads may be allowed only for the exact operation and canonical target shown.
 - Outside writes may be allowed only when the complete proposal evidence and affected-file set are consistent with the request.
 
@@ -89,19 +89,6 @@ interface ActionApprovalReviewCommon {
   userObjective?: string;
   context?: readonly CommandReviewContextEntry[];
   signal?: AbortSignal;
-}
-
-export interface ModeSwitchActionApprovalReviewInput extends ActionApprovalReviewCommon {
-  kind: "mode-switch";
-  sourceMode: string;
-  targetMode: string;
-  reason?: string;
-  capabilityDelta: {
-    sourceToolGroups: readonly string[];
-    targetToolGroups: readonly string[];
-    addedToolGroups: readonly string[];
-    removedToolGroups: readonly string[];
-  };
 }
 
 export type OutsideReadOperation =
@@ -222,7 +209,6 @@ export interface OutsideWriteActionApprovalReviewInput extends ActionApprovalRev
 }
 
 export type ActionApprovalReviewInput =
-  | ModeSwitchActionApprovalReviewInput
   | OutsideReadActionApprovalReviewInput
   | OutsideWriteActionApprovalReviewInput;
 
@@ -549,33 +535,6 @@ function canonicalAction(
   userObjectiveSha256: string | undefined,
 ): CanonicalActionResult {
   switch (input.kind) {
-    case "mode-switch": {
-      if (
-        !isBoundedString(input.sourceMode, 1, 128) ||
-        !isBoundedString(input.targetMode, 1, 128) ||
-        input.sourceMode === input.targetMode ||
-        !isOptionalBoundedString(
-          input.reason,
-          ACTION_REVIEW_EVIDENCE_LIMITS.maxReasonBytes,
-        )
-      ) {
-        return { eligible: false, reason: "invalid-action" };
-      }
-      const delta = canonicalCapabilityDelta(input.capabilityDelta);
-      if (!delta) return { eligible: false, reason: "invalid-action" };
-      return {
-        eligible: true,
-        value: {
-          kind: input.kind,
-          sourceMode: input.sourceMode,
-          targetMode: input.targetMode,
-          reason: input.reason ?? null,
-          userObjective: userObjective ?? null,
-          userObjectiveSha256: userObjectiveSha256 ?? null,
-          capabilityDelta: delta,
-        },
-      };
-    }
     case "outside-read": {
       if (!isBoundedString(input.requestingTool, 1, 128)) {
         return { eligible: false, reason: "invalid-action" };
@@ -742,41 +701,6 @@ function canonicalWriteProposal(
   };
 }
 
-function canonicalCapabilityDelta(
-  delta: ModeSwitchActionApprovalReviewInput["capabilityDelta"],
-): ModeSwitchActionApprovalReviewInput["capabilityDelta"] | undefined {
-  const sourceToolGroups = canonicalStringSet(delta.sourceToolGroups);
-  const targetToolGroups = canonicalStringSet(delta.targetToolGroups);
-  const addedToolGroups = canonicalStringSet(delta.addedToolGroups);
-  const removedToolGroups = canonicalStringSet(delta.removedToolGroups);
-  if (
-    !sourceToolGroups ||
-    !targetToolGroups ||
-    !addedToolGroups ||
-    !removedToolGroups
-  ) {
-    return undefined;
-  }
-  const expectedAdded = targetToolGroups.filter(
-    (group) => !sourceToolGroups.includes(group),
-  );
-  const expectedRemoved = sourceToolGroups.filter(
-    (group) => !targetToolGroups.includes(group),
-  );
-  if (
-    canonicalJson(addedToolGroups) !== canonicalJson(expectedAdded) ||
-    canonicalJson(removedToolGroups) !== canonicalJson(expectedRemoved)
-  ) {
-    return undefined;
-  }
-  return {
-    sourceToolGroups,
-    targetToolGroups,
-    addedToolGroups,
-    removedToolGroups,
-  };
-}
-
 function boundReviewContext(
   entries: readonly CommandReviewContextEntry[],
 ): CommandReviewContextEntry[] {
@@ -880,16 +804,6 @@ function relativeParts(parent: string, child: string): string[] | undefined {
   return relative ? relative.split(path.sep) : [];
 }
 
-function canonicalStringSet(values: readonly string[]): string[] | undefined {
-  if (
-    values.length > 64 ||
-    values.some((value) => !isBoundedString(value, 1, 128))
-  ) {
-    return undefined;
-  }
-  return [...new Set(values)].sort();
-}
-
 function hasDuplicateProposals(proposals: readonly unknown[]): boolean {
   const targets = new Set<string>();
   for (const proposal of proposals) {
@@ -977,13 +891,6 @@ function boundOptionalText(
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   return truncateUtf8(trimmed, maxBytes);
-}
-
-function isOptionalBoundedString(
-  value: string | undefined,
-  maxBytes: number,
-): boolean {
-  return value === undefined || isBoundedString(value, 0, maxBytes);
 }
 
 function isBoundedString(

@@ -19,7 +19,6 @@ import {
   revalidateActionApprovalBinding,
   revalidateGuardianCanonicalPath,
   type ActionApprovalPolicySnapshot,
-  type ModeSwitchActionApprovalReviewInput,
   type OutsideReadActionApprovalReviewInput,
   type OutsideWriteActionApprovalReviewInput,
 } from "./actionApprovalReview.js";
@@ -92,24 +91,6 @@ function makeProvider(
     complete,
   };
   return { provider, complete, sessionModel };
-}
-
-function modeSwitchInput(): ModeSwitchActionApprovalReviewInput {
-  return {
-    kind: "mode-switch",
-    sessionId: "session-1",
-    policy,
-    sourceMode: "ask",
-    targetMode: "code",
-    reason: "Implement the approved change",
-    userObjective: "Implement the feature",
-    capabilityDelta: {
-      sourceToolGroups: ["read", "search"],
-      targetToolGroups: ["read", "search", "edit", "command"],
-      addedToolGroups: ["edit", "command"],
-      removedToolGroups: [],
-    },
-  };
 }
 
 function outsideReadInput(): OutsideReadActionApprovalReviewInput {
@@ -212,22 +193,6 @@ describe("Guardian path risk", () => {
 });
 
 describe("action binding and evidence", () => {
-  it("canonicalizes equivalent mode capability sets", () => {
-    const first = modeSwitchInput();
-    const second = modeSwitchInput();
-    second.capabilityDelta.sourceToolGroups = ["search", "read", "read"];
-    second.capabilityDelta.targetToolGroups = [
-      "command",
-      "edit",
-      "search",
-      "read",
-    ];
-    second.capabilityDelta.addedToolGroups = ["command", "edit"];
-    expect(actionApprovalActionKey(second)).toBe(
-      actionApprovalActionKey(first),
-    );
-  });
-
   it("binds read operation parameters and full write proposals", () => {
     const read = outsideReadInput();
     const changedRead = outsideReadInput();
@@ -275,7 +240,7 @@ describe("one-shot Guardian action review", () => {
     const reviewer = createActionApprovalReviewer({
       resolveContext: () => ({ provider, sessionModel }),
     });
-    const input = modeSwitchInput();
+    const input = outsideReadInput();
     input.context = Array.from({ length: 12 }, (_, index) => ({
       role: "user" as const,
       content: `${index}:${"x".repeat(2_000)}`,
@@ -304,8 +269,8 @@ describe("one-shot Guardian action review", () => {
     const reviewer = createActionApprovalReviewer({
       resolveContext: () => ({ provider, sessionModel }),
     });
-    const input = modeSwitchInput();
-    input.userObjective = `Implement the approved plan. ${"界".repeat(2_000)} trailing text`;
+    const input = outsideReadInput();
+    input.userObjective = `Inspect the adjacent project. ${"界".repeat(2_000)} trailing text`;
 
     const outcome = await reviewer.review(input);
 
@@ -328,7 +293,7 @@ describe("one-shot Guardian action review", () => {
     expect(reviewData.action.userObjective).toBe(reviewData.userObjective);
     expect(reviewData.userObjective).toMatch(/…$/);
 
-    const changedSuffix = modeSwitchInput();
+    const changedSuffix = outsideReadInput();
     changedSuffix.userObjective = `${input.userObjective} changed after review`;
     const driftedApproval = createOneShotActionApproval(outcome);
     expect(
@@ -446,7 +411,7 @@ describe("one-shot Guardian action review", () => {
         sessionModel: invalid.sessionModel,
       }),
     });
-    const invalidOutcome = await invalidReviewer.review(modeSwitchInput());
+    const invalidOutcome = await invalidReviewer.review(outsideReadInput());
     expect(invalidOutcome).toMatchObject({
       disposition: "reviewed",
       result: { outcome: "deny", status: "invalid" },
@@ -461,7 +426,7 @@ describe("one-shot Guardian action review", () => {
       }),
     });
     const unavailableOutcome =
-      await unavailableReviewer.review(modeSwitchInput());
+      await unavailableReviewer.review(outsideReadInput());
     expect(unavailableOutcome).toMatchObject({
       disposition: "reviewed",
       result: { outcome: "deny", status: "unavailable" },

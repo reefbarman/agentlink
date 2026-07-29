@@ -415,6 +415,7 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain(
       "call `switch_mode` directly with a clear `reason`",
     );
+    expect(result).toContain("does not require Guardian or user approval");
     expect(result).toContain(
       "Do not use `ask_user` to request permission to switch modes",
     );

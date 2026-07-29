@@ -321,6 +321,8 @@ function SecretEditor({
 function GuidedEditor({
   snapshot,
   entry,
+  entries,
+  onSelectEntry,
   onCancel,
   onComplete,
   onMutateConfig,
@@ -328,8 +330,10 @@ function GuidedEditor({
 }: {
   snapshot: McpConfigSnapshot;
   entry?: McpConfigEntrySummary;
+  entries: McpConfigEntrySummary[];
+  onSelectEntry: (name: string | null) => void;
   onCancel: () => void;
-  onComplete: () => void;
+  onComplete: (message: string) => void;
   onMutateConfig?: McpManagerPanelProps["onMutateConfig"];
   onSaveServer?: McpManagerPanelProps["onSaveServer"];
 }) {
@@ -446,7 +450,7 @@ function GuidedEditor({
         if (!onMutateConfig) {
           onSaveServer?.(scope, review.draft);
           setSubmission({ kind: "success", message: "Save request sent." });
-          onComplete();
+          onComplete("Save request sent.");
           return;
         }
 
@@ -484,7 +488,7 @@ function GuidedEditor({
               return;
             }
             setSubmission({ kind: "success", message: "Server saved." });
-            onComplete();
+            onComplete("Server saved.");
           })
           .catch((reason: unknown) => {
             setSubmission({
@@ -495,6 +499,20 @@ function GuidedEditor({
           });
       }}
     >
+      <Field label="Server to configure">
+        <select
+          value={entry?.name ?? ""}
+          disabled={submission.kind === "pending"}
+          onInput={(event) => onSelectEntry(event.currentTarget.value || null)}
+        >
+          <option value="">Add a new server</option>
+          {entries.map((item) => (
+            <option key={item.name} value={item.name}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+      </Field>
       <div class="mcp-manager-form-heading">
         <h2>{entry ? `Edit ${entry.name}` : "Add a server"}</h2>
       </div>
@@ -1131,6 +1149,11 @@ export function McpManagerPanel({
   const editingEntry = editingServer
     ? entryByName.get(editingServer)
     : undefined;
+  useEffect(() => {
+    if (editingServer && !entryByName.has(editingServer)) {
+      setEditingServer(null);
+    }
+  }, [editingServer, entryByName]);
   const configuredCount = snapshot.entries.length;
   const connectedCount = snapshot.statusInfos.filter(
     (info) => info.status === "connected",
@@ -1646,11 +1669,15 @@ export function McpManagerPanel({
           key={editingEntry?.name ?? "new"}
           snapshot={snapshot}
           entry={editingEntry}
+          entries={snapshot.entries}
+          onSelectEntry={setEditingServer}
           onMutateConfig={onMutateConfig}
           onSaveServer={onSaveServer}
           onCancel={() => navigate("overview")}
-          onComplete={() => {
+          onComplete={(message) => {
+            setView("overview");
             setEditingServer(null);
+            setSubmission({ kind: "success", message });
           }}
         />
       )}

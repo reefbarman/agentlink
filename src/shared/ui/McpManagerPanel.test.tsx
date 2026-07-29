@@ -311,6 +311,102 @@ describe("McpManagerPanel", () => {
     expect(screen.queryByText(/TOKEN=/)).toBeNull();
   });
 
+  it("selects configured servers to edit from the add or edit tab", () => {
+    render(<McpManagerPanel snapshot={snapshot()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add / edit" }));
+    let serverSelector = screen.getByLabelText(
+      "Server to configure",
+    ) as HTMLSelectElement;
+    expect(serverSelector.value).toBe("");
+    expect(
+      Array.from(serverSelector.options).map((option) => option.value),
+    ).toEqual(["", "configured-only", "disabled-server"]);
+
+    fireEvent.input(serverSelector, {
+      target: { value: "configured-only" },
+    });
+    expect(
+      screen.getByRole("form", { name: "Edit configured-only" }),
+    ).toBeTruthy();
+    const editName = screen.getByLabelText("Server name") as HTMLInputElement;
+    expect(editName.value).toBe("configured-only");
+    expect(editName.disabled).toBe(true);
+    expect((screen.getByLabelText("Command") as HTMLInputElement).value).toBe(
+      "node",
+    );
+    expect(
+      (screen.getByLabelText(/^Arguments/) as HTMLTextAreaElement).value,
+    ).toBe("script with spaces.js");
+
+    serverSelector = screen.getByLabelText(
+      "Server to configure",
+    ) as HTMLSelectElement;
+    fireEvent.input(serverSelector, { target: { value: "disabled-server" } });
+    expect(
+      screen.getByRole("form", { name: "Edit disabled-server" }),
+    ).toBeTruthy();
+    expect(
+      (screen.getByLabelText("Server name") as HTMLInputElement).value,
+    ).toBe("disabled-server");
+    expect(
+      (screen.getByLabelText("Keep this server disabled") as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+
+    serverSelector = screen.getByLabelText(
+      "Server to configure",
+    ) as HTMLSelectElement;
+    fireEvent.input(serverSelector, { target: { value: "" } });
+    expect(screen.getByRole("form", { name: "Add MCP server" })).toBeTruthy();
+    const newName = screen.getByLabelText("Server name") as HTMLInputElement;
+    expect(newName.value).toBe("");
+    expect(newName.disabled).toBe(false);
+    expect((screen.getByLabelText("Command") as HTMLInputElement).value).toBe(
+      "",
+    );
+  });
+
+  it("reflects an overview edit action in the server selector", () => {
+    render(<McpManagerPanel snapshot={snapshot()} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit configured-only" }),
+    );
+
+    expect(
+      (screen.getByLabelText("Server to configure") as HTMLSelectElement).value,
+    ).toBe("configured-only");
+  });
+
+  it("locks server selection during saves and confirms completion", async () => {
+    let resolveSave: ((result: McpConfigMutationResult) => void) | undefined;
+    const onMutateConfig = vi.fn(
+      (batch: McpConfigBatchMutation) =>
+        new Promise<McpConfigMutationResult>((resolve) => {
+          resolveSave = () => resolve(successfulResult(batch));
+        }),
+    );
+    render(
+      <McpManagerPanel snapshot={snapshot()} onMutateConfig={onMutateConfig} />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit configured-only" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save server" }));
+
+    await waitFor(() => expect(onMutateConfig).toHaveBeenCalledTimes(1));
+    expect(
+      (screen.getByLabelText("Server to configure") as HTMLSelectElement)
+        .disabled,
+    ).toBe(true);
+
+    resolveSave?.(successfulResult(onMutateConfig.mock.calls[0][0]));
+    await waitFor(() => expect(screen.getByText("Server saved.")).toBeTruthy());
+    expect(screen.getByText("configured-only")).toBeTruthy();
+  });
+
   it("preserves spaces in line arguments and submits explicit secret patch mutations", async () => {
     const batches: McpConfigBatchMutation[] = [];
     const onMutateConfig = vi.fn(async (batch: McpConfigBatchMutation) => {

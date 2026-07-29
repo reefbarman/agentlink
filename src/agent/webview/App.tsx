@@ -304,6 +304,34 @@ const streamingBaselineMetrics = __DEV_BUILD__
  */
 const HOST_HEARTBEAT_STALE_MS = 6_000;
 
+/**
+ * Session-scoped events whose content is fully superseded by an applied
+ * `agentSessionLoaded` hydration (persisted transcript + in-flight tail).
+ * Replaying these on top of a load duplicates the turn; everything else in
+ * the inactive buffer (questions, approvals, queue changes, API telemetry)
+ * carries state the payload cannot rebuild and is replayed after the load.
+ */
+const TRANSCRIPT_CONTENT_EVENT_TYPES = new Set<string>([
+  "agentThinkingStart",
+  "agentThinkingDelta",
+  "agentThinkingEnd",
+  "agentTextDelta",
+  "agentToolStart",
+  "agentToolInputDelta",
+  "agentToolComplete",
+  "agentDone",
+  "agentError",
+  "agentInterjection",
+  "agentCommittedUserMessage",
+  "agentSurfaceChange",
+  "agentCondenseStart",
+  "agentCondense",
+  "agentCondenseError",
+  "agentCheckpointCreated",
+  "agentTodoUpdate",
+  "agentFinalMarker",
+]);
+
 export function App({
   vscodeApi: hostVscodeApi,
   pane = { surface: "sidebar" },
@@ -325,6 +353,15 @@ export function App({
   const acceptedTranscriptRevisionsRef = useRef(
     new Map<string, { controllerEpoch: string | null; revision: number }>(),
   );
+  /**
+   * Sessions whose projection held by this webview (live, or saved in the
+   * projection cache) came from a real hydration or has been maintained by an
+   * unbroken event stream since. Only such projections may be served instead
+   * of applying an incoming hydration, and only they may be saved to the
+   * projection cache — saving a never-hydrated placeholder poisons the cache
+   * with a permanently empty transcript.
+   */
+  const hydratedSessionsRef = useRef(new Set<string>());
   const flushConnectionDeltasRef = useRef<() => void>(() => {});
   const vscodeApi = useMemo<VsCodeApi>(
     () => ({
@@ -579,6 +616,7 @@ export function App({
         inactiveProjectionCacheRef.current.clear();
         projectionStateCacheRef.current.clear();
         restoredCachedSessionRef.current = null;
+        hydratedSessionsRef.current.clear();
       }
       const nextSessionId = selectedWorkspaceSessionId(snapshot, pinnedTabId);
       const openSessionIds = new Set(
@@ -586,13 +624,33 @@ export function App({
       );
       if (previousSessionId !== nextSessionId) {
         flushConnectionDeltasRef.current();
-        if (!controllerEpochChanged) {
-          projectionStateCacheRef.current.save(fullStateRef.current);
+        // Only a projection that came from a real hydration — or that visibly
+        // accumulated session state while live — may be cached. Saving a
+        // pristine placeholder (switching away before the session's first
+        // load arrived) would poison the cache with an empty transcript that
+        // later gets trusted.
+        const outgoing = fullStateRef.current;
+        const outgoingHasSubstance =
+          outgoing.messages.length > 0 ||
+          outgoing.messageQueue.length > 0 ||
+          outgoing.streaming ||
+          outgoing.estimatedTotalUsed > 0;
+        if (
+          !controllerEpochChanged &&
+          previousSessionId &&
+          (hydratedSessionsRef.current.has(previousSessionId) ||
+            outgoingHasSubstance)
+        ) {
+          projectionStateCacheRef.current.save(outgoing);
         }
         restoredCachedSessionRef.current =
           nextSessionId && projectionStateCacheRef.current.has(nextSessionId)
             ? nextSessionId
             : null;
+        if (nextSessionId && restoredCachedSessionRef.current === null) {
+          // The incoming projection is a fresh placeholder, not session state.
+          hydratedSessionsRef.current.delete(nextSessionId);
+        }
         const restored = projectionStateCacheRef.current.restore(
           nextSessionId,
           {
@@ -613,6 +671,11 @@ export function App({
       for (const sessionId of acceptedTranscriptRevisionsRef.current.keys()) {
         if (!openSessionIds.has(sessionId)) {
           acceptedTranscriptRevisionsRef.current.delete(sessionId);
+        }
+      }
+      for (const sessionId of hydratedSessionsRef.current) {
+        if (!openSessionIds.has(sessionId)) {
+          hydratedSessionsRef.current.delete(sessionId);
         }
       }
       workspaceSnapshotRef.current = snapshot;
@@ -644,6 +707,11 @@ export function App({
     },
     flushDeltasRef: flushConnectionDeltasRef,
     dispatchDelta: dispatch,
+    onStreamDrop: (sessionId) => {
+      // A dropped event means this webview's replica of that session is no
+      // longer complete; stop serving it in place of real hydrations.
+      if (sessionId) hydratedSessionsRef.current.delete(sessionId);
+    },
     onInactiveSessionMessage: (msg) => {
       if (msg.type === "agentSessionLoaded") return;
       if (msg.type === "agentDone" && msg.transcriptRevision !== undefined) {
@@ -1210,6 +1278,9 @@ export function App({
           ) {
             break;
           }
+          // Drain buffered deltas first so the projection we evaluate (and
+          // possibly keep serving) is current.
+          flushDeltasNow();
           const transcriptRevision = msg.transcriptRevision;
           const controllerEpoch =
             workspaceSnapshotRef.current?.controllerEpoch ?? null;
@@ -1224,49 +1295,92 @@ export function App({
               dispatch({ type: "BG_AGENT_DONE", completion: result });
             }
           };
-          const cachedProjectionAcknowledgement =
-            !msg.restored &&
-            restoredCachedSessionRef.current === msg.sessionId &&
-            transcriptRevision !== undefined &&
-            comparableAcceptedRevision !== undefined &&
-            transcriptRevision <= comparableAcceptedRevision;
-          if (cachedProjectionAcknowledgement) {
+          const finishWithoutLoad = () => {
             restoredCachedSessionRef.current = null;
             startupRestorePendingRef.current = false;
             historyLoadPendingRef.current = false;
             loadingSessionIdRef.current = null;
             setShowHistory(false);
             projectBackgroundResults();
-            for (const inactiveEvent of inactiveProjectionCacheRef.current.take(
+          };
+          const recordAcceptedRevision = () => {
+            if (transcriptRevision === undefined) return;
+            const accepted = acceptedTranscriptRevisionsRef.current.get(
               msg.sessionId,
-            )) {
-              replayInactiveSessionMessage(inactiveEvent);
-            }
-            break;
-          }
-          if (
-            projectionStateCacheRef.current.has(msg.sessionId) &&
-            transcriptRevision !== undefined &&
-            comparableAcceptedRevision !== undefined &&
-            transcriptRevision <= comparableAcceptedRevision
-          ) {
-            restoredCachedSessionRef.current = null;
-            startupRestorePendingRef.current = false;
-            historyLoadPendingRef.current = false;
-            loadingSessionIdRef.current = null;
-            setShowHistory(false);
-            projectBackgroundResults();
-            break;
-          }
-          if (transcriptRevision !== undefined) {
+            );
             acceptedTranscriptRevisionsRef.current.set(msg.sessionId, {
               controllerEpoch,
-              revision: transcriptRevision,
+              revision:
+                accepted?.controllerEpoch === controllerEpoch
+                  ? Math.max(accepted.revision, transcriptRevision)
+                  : transcriptRevision,
             });
+          };
+
+          // Focus-style hydrations may be served from webview-held state. All
+          // other origins (history load, checkpoint revert, recovered-question
+          // resync, webview boot) rewrote or re-established the transcript and
+          // must be applied.
+          if (msg.origin === "focus" && !msg.restored) {
+            const bufferIntact =
+              !inactiveProjectionCacheRef.current.wasTruncated(msg.sessionId);
+            // (a) The session is already live in the current projection: the
+            // local replica is a superset of this snapshot. Nothing to apply.
+            if (
+              restoredCachedSessionRef.current !== msg.sessionId &&
+              stateRef.current.sessionId === msg.sessionId &&
+              hydratedSessionsRef.current.has(msg.sessionId)
+            ) {
+              inactiveProjectionCacheRef.current.take(msg.sessionId);
+              recordAcceptedRevision();
+              finishWithoutLoad();
+              break;
+            }
+            // (b) A cached projection was just restored for this session and
+            // every event since it was saved is still buffered: replaying the
+            // buffer on top reproduces the live state exactly — including
+            // rows (API telemetry, in-turn ask_user context) a persisted-
+            // transcript reload cannot rebuild.
+            if (
+              restoredCachedSessionRef.current === msg.sessionId &&
+              hydratedSessionsRef.current.has(msg.sessionId) &&
+              bufferIntact
+            ) {
+              const bufferedEvents = inactiveProjectionCacheRef.current.take(
+                msg.sessionId,
+              );
+              recordAcceptedRevision();
+              finishWithoutLoad();
+              for (const inactiveEvent of bufferedEvents) {
+                replayInactiveSessionMessage(inactiveEvent);
+              }
+              break;
+            }
           }
-          const inactiveEvents = inactiveProjectionCacheRef.current.take(
+
+          // Stale guard: never let an older snapshot clobber newer applied
+          // state (e.g. delayed re-delivery after a postMessage failure).
+          if (
+            transcriptRevision !== undefined &&
+            comparableAcceptedRevision !== undefined &&
+            transcriptRevision < comparableAcceptedRevision &&
+            hydratedSessionsRef.current.has(msg.sessionId) &&
+            stateRef.current.sessionId === msg.sessionId
+          ) {
+            finishWithoutLoad();
+            break;
+          }
+
+          // Apply the hydration. It is complete (persisted tail + live
+          // in-flight blocks), so it supersedes every buffered transcript-
+          // content event — replaying those on top of a load is exactly the
+          // historical duplication bug. Buffered events that carry state the
+          // payload cannot rebuild (questions, approvals, queue changes, API
+          // telemetry) are replayed after the load instead.
+          const bufferedEvents = inactiveProjectionCacheRef.current.take(
             msg.sessionId,
           );
+          recordAcceptedRevision();
           restoredCachedSessionRef.current = null;
           startupRestorePendingRef.current = false;
           historyLoadPendingRef.current = false;
@@ -1281,7 +1395,9 @@ export function App({
             originalPrompt: msg.originalPrompt,
             mode: msg.mode,
             model: msg.model,
-            messages: agentMessagesToChatMessages(msg.messages as unknown[]),
+            messages: agentMessagesToChatMessages(msg.messages as unknown[], {
+              baseIndex: msg.messageIndexOffset,
+            }),
             todos: msg.todos,
             lastInputTokens: msg.lastInputTokens,
             lastOutputTokens: msg.lastOutputTokens,
@@ -1289,10 +1405,36 @@ export function App({
             checkpoints: msg.checkpoints,
             userTurnOffset: (msg.userTurnOffset as number | undefined) ?? 0,
             hasMoreBefore: msg.hasMoreBefore,
+            inFlight: msg.inFlight,
+            streaming: msg.streaming,
           });
+          streamingRef.current = Boolean(msg.streaming);
+          // Keep the synchronous mirrors coherent before the render commits,
+          // so a follow-up message in the same task sees the applied session.
+          stateRef.current = {
+            ...stateRef.current,
+            sessionId: msg.sessionId,
+            streaming: Boolean(msg.streaming),
+          };
+          hydratedSessionsRef.current.add(msg.sessionId);
           setShowHistory(false);
-          for (const inactiveEvent of inactiveEvents) {
-            replayInactiveSessionMessage(inactiveEvent);
+          for (const bufferedEvent of bufferedEvents) {
+            if (bufferedEvent.type === "agentInterjection") {
+              // The interjection bubble itself is part of the hydrated
+              // transcript; only its queue-consumption side effect must be
+              // reapplied or the queued entry resurrects as a ghost.
+              dispatch({
+                type: "REMOVE_FROM_QUEUE",
+                id: bufferedEvent.queueId,
+              });
+              messageQueueRef.current = messageQueueRef.current.filter(
+                (queued) => queued.id !== bufferedEvent.queueId,
+              );
+              continue;
+            }
+            if (!TRANSCRIPT_CONTENT_EVENT_TYPES.has(bufferedEvent.type)) {
+              replayInactiveSessionMessage(bufferedEvent);
+            }
           }
           break;
         }
@@ -1313,7 +1455,9 @@ export function App({
           }
           dispatch({
             type: "PREPEND_SESSION_CHUNK",
-            messages: agentMessagesToChatMessages(msg.messages as unknown[]),
+            messages: agentMessagesToChatMessages(msg.messages as unknown[], {
+              baseIndex: msg.messageIndexOffset,
+            }),
             userTurnOffset: msg.userTurnOffset as number,
             hasMoreBefore: msg.hasMoreBefore as boolean,
             checkpoints: msg.checkpoints,
@@ -2614,6 +2758,13 @@ export function App({
     [vscodeApi],
   );
 
+  const handleRevealPendingDiff = useCallback(
+    (requestId: string) => {
+      vscodeApi.postMessage({ command: "revealPendingDiff", id: requestId });
+    },
+    [vscodeApi],
+  );
+
   const pendingRegexSuggestionsRef = useRef<
     Map<
       string,
@@ -3701,6 +3852,7 @@ export function App({
                   submit={handleForwardedApprovalSubmit}
                   onResizeStart={handleApprovalResizeStart}
                   onSuggestRegex={handleSuggestRegex}
+                  onRevealDiff={handleRevealPendingDiff}
                 />
               )}
               {btwState && (

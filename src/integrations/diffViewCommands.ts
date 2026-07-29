@@ -1,6 +1,10 @@
 import * as vscode from "vscode";
 
-import { resolveCurrentDiff, showDiffMoreOptions } from "./DiffViewProvider.js";
+import {
+  resolveCurrentDiff,
+  revealPendingDiff,
+  showDiffMoreOptions,
+} from "./DiffViewProvider.js";
 
 export function registerDiffViewCommands(): vscode.Disposable[] {
   return [
@@ -12,6 +16,10 @@ export function registerDiffViewCommands(): vscode.Disposable[] {
     ),
     vscode.commands.registerCommand("agentlink.rejectDiff", () =>
       resolveCurrentDiff("reject"),
+    ),
+    vscode.commands.registerCommand(
+      "agentlink.revealDiff",
+      (requestId: string) => revealPendingDiff(requestId),
     ),
   ];
 }

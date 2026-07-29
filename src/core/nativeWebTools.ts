@@ -12,13 +12,34 @@ import type {
 
 export const CORE_NATIVE_WEB_MAX_PAUSE_TURNS = 8;
 
+export const CORE_NATIVE_WEB_TOOL_PREFERENCE_GUIDANCE: Readonly<
+  Record<CoreWebToolKind, string>
+> = Object.freeze({
+  search:
+    "Prefer this native tool over general-purpose MCP web-search tools when it is available; use an MCP web tool when the user requests that server or needs an MCP-specific capability.",
+  fetch:
+    "Prefer this native tool over general-purpose MCP page-reading tools when it is available; use an MCP web tool when the user requests that server or needs an MCP-specific capability.",
+});
+
+export function appendNativeWebToolPreference(
+  kind: CoreWebToolKind,
+  description: string,
+): string {
+  const guidance = CORE_NATIVE_WEB_TOOL_PREFERENCE_GUIDANCE[kind];
+  return description.includes(guidance)
+    ? description
+    : `${description} ${guidance}`;
+}
+
 export const CORE_NATIVE_WEB_TOOL_DEFINITIONS: Readonly<
   Record<CoreWebToolKind, CoreModelToolDefinition>
 > = Object.freeze({
   search: {
     name: "web_search",
-    description:
+    description: appendNativeWebToolPreference(
+      "search",
       "Search the public web using the selected model provider's hosted web capability. Returns provider-visible search actions, result content, citations, and usage.",
+    ),
     input_schema: {
       type: "object",
       properties: {
@@ -49,8 +70,10 @@ export const CORE_NATIVE_WEB_TOOL_DEFINITIONS: Readonly<
   },
   fetch: {
     name: "web_fetch",
-    description:
+    description: appendNativeWebToolPreference(
+      "fetch",
       "Open and read a public HTTP or HTTPS URL using the selected model provider's hosted page-access capability. Returns provider-visible actions, content, citations, and usage.",
+    ),
     input_schema: {
       type: "object",
       properties: {

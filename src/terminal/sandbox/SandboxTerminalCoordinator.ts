@@ -50,6 +50,7 @@ import {
 const DEFAULT_DIMENSIONS: TerminalDimensions = { columns: 80, rows: 24 };
 const DEFAULT_RECENTLY_CLOSED_LIMIT = 20;
 const DEFAULT_SANDBOX_TITLE = "Agent command";
+const MAX_IMPLICIT_CHANNELS_PER_OWNER = 4;
 export const SANDBOX_INTERACTIVE_PROMPT_GRACE_MS = 1_500;
 
 export interface AuthorizedSandboxLaunch {
@@ -91,6 +92,9 @@ export interface SandboxTerminalCoordinatorOptions {
 interface ManagedSandboxChannel {
   session: SandboxTerminalSession;
   owner?: TerminalExecutionOwner;
+  envKey?: string;
+  implicit: boolean;
+  lastUsedAt: number;
   active?: {
     commandId: string;
     generation: number;
@@ -511,6 +515,23 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         "Sandbox authorizer returned a mismatched command identity",
       );
     }
+    const current = channel.session.snapshot();
+    if (
+      (reservation &&
+        this.channelReservations.get(before.channelId) !== reservation) ||
+      this.channels.get(before.channelId) !== channel ||
+      current.status !== "idle" ||
+      current.nextGeneration !== before.nextGeneration
+    ) {
+      authorized.finalize?.();
+      if (
+        reservation &&
+        this.channelReservations.get(before.channelId) === reservation
+      ) {
+        this.channelReservations.delete(before.channelId);
+      }
+      throw new Error("Sandbox terminal target changed during authorization");
+    }
     return { channel, before, commandId, authorized };
   }
 
@@ -738,30 +759,68 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     }
     if (options.split_from) {
       return this.createChannel(
-        DEFAULT_SANDBOX_TITLE,
+        options.terminal_creation_name ?? DEFAULT_SANDBOX_TITLE,
         options.cwd,
         options.owner,
       );
     }
-    const idleDefault = [...this.channels.values()].find(
-      ({ session, owner }) => {
+    const envKey = JSON.stringify(
+      Object.entries(options.env ?? {}).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    );
+    const implicitChannels = [...this.channels.values()].filter(
+      (channel) =>
+        channel.implicit &&
+        sameTerminalOwnerScope(channel.owner, options.owner),
+    );
+    const idleDefault = implicitChannels.find(
+      ({ session, envKey: current }) => {
         const snapshot = session.snapshot();
         return (
-          sameTerminalOwnerScope(owner, options.owner) &&
           snapshot.status === "idle" &&
-          !this.channelReservations.has(snapshot.channelId)
+          !this.channelReservations.has(snapshot.channelId) &&
+          snapshot.cwd === options.cwd &&
+          current === envKey
         );
       },
     );
-    return idleDefault
-      ? this.reuseChannel(idleDefault, options.owner)
-      : this.createChannel(DEFAULT_SANDBOX_TITLE, options.cwd, options.owner);
+    if (idleDefault) return this.reuseChannel(idleDefault, options.owner);
+    if (implicitChannels.length >= MAX_IMPLICIT_CHANNELS_PER_OWNER) {
+      const reclaimable = implicitChannels
+        .filter(({ session }) => {
+          const snapshot = session.snapshot();
+          return (
+            snapshot.status === "idle" &&
+            !this.channelReservations.has(snapshot.channelId)
+          );
+        })
+        .sort((left, right) => left.lastUsedAt - right.lastUsedAt)[0];
+      if (!reclaimable) {
+        const blockingIds = implicitChannels.map(
+          ({ session }) => session.snapshot().channelId,
+        );
+        throw new Error(
+          `Sandbox terminal pool exhausted by ${blockingIds.join(", ")}. Wait for a command to finish or use get_terminal_output/kill with its terminal_id.`,
+        );
+      }
+      this.reclaimImplicitChannel(reclaimable);
+    }
+    return this.createChannel(
+      options.terminal_creation_name ?? DEFAULT_SANDBOX_TITLE,
+      options.cwd,
+      options.owner,
+      true,
+      envKey,
+    );
   }
 
   private createChannel(
     title: string,
     cwd: string,
     owner: TerminalExecutionOwner | undefined,
+    implicit = false,
+    envKey?: string,
   ): ManagedSandboxChannel {
     const channelId = this.createChannelId();
     if (
@@ -782,6 +841,9 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     const channel: ManagedSandboxChannel = {
       session,
       ...(owner ? { owner: Object.freeze({ ...owner }) } : {}),
+      ...(envKey === undefined ? {} : { envKey }),
+      implicit,
+      lastUsedAt: this.now(),
     };
     session.onEvent((event) => {
       if (event.type === "network-request") {
@@ -796,6 +858,22 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     });
     this.channels.set(channelId, channel);
     return channel;
+  }
+
+  private reclaimImplicitChannel(channel: ManagedSandboxChannel): void {
+    const snapshot = channel.session.snapshot();
+    const commandId = snapshot.commands.at(-1)?.commandId;
+    const outputLease = commandId
+      ? channel.session.detachCommandOutput(commandId)
+      : undefined;
+    this.clearInteractivePromptWatchdog(channel.active);
+    channel.active?.networkAbortController.abort();
+    channel.session.close();
+    channel.active?.finalizer?.();
+    channel.active = undefined;
+    this.channels.delete(snapshot.channelId);
+    this.channelReservations.delete(snapshot.channelId);
+    if (commandId) this.rememberClosed(snapshot, channel.owner, outputLease);
   }
 
   private originFor(sandboxSessionId: string): SandboxCommandOrigin {
@@ -993,6 +1071,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     channel.active.networkAbortController.abort();
     channel.active.finalizer?.();
     channel.active = undefined;
+    channel.lastUsedAt = this.now();
   }
 
   private backgroundStateFromSnapshot(

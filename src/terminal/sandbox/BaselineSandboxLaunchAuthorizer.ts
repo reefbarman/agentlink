@@ -32,6 +32,7 @@ import {
   buildSandboxPolicyEnvironment,
   type SandboxShellEnvironmentPolicy,
 } from "./sandboxEnvironmentPolicy.js";
+import { resolveWorkspaceGitProtection } from "./gitMetadataProtection.js";
 import { compileSandboxHelperLaunchRequest } from "./sandboxPolicyCompiler.js";
 
 const PROFILE_ID = "workspace-write";
@@ -56,13 +57,6 @@ const AGENTLINK_RUNTIME_ENTRIES = new Set([
   "checkpoints",
   "tool-usage-report",
 ]);
-const GIT_INTEGRITY_ENTRIES = [
-  "config",
-  "config.worktree",
-  "hooks",
-  "commondir",
-  "gitdir",
-] as const;
 
 const RUNTIME_COMPATIBILITY_WRITE_ROOTS = [
   "/tmp/claude",
@@ -196,121 +190,6 @@ async function resolveAgentlinkIntegrityRoots(
     protectedRoots.push(await realpath(candidate));
   }
   return uniqueRoots(protectedRoots);
-}
-
-async function resolveGitIntegrityEntry(
-  gitDirectory: string,
-  entry: (typeof GIT_INTEGRITY_ENTRIES)[number],
-): Promise<string | undefined> {
-  const candidate = path.join(gitDirectory, entry);
-  let metadata;
-  try {
-    metadata = await lstat(candidate);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-  if (metadata.isSymbolicLink()) {
-    throw new Error(
-      `Workspace Git integrity entry must not be a symbolic link: ${candidate}`,
-    );
-  }
-  if (!metadata.isDirectory() && !metadata.isFile()) {
-    throw new Error(
-      `Workspace Git integrity entry must be a regular file or directory: ${candidate}`,
-    );
-  }
-  // This early check improves diagnostics; the packaged helper independently
-  // canonicalizes and snapshots every returned root immediately before spawn.
-  return realpath(candidate);
-}
-
-async function resolveGitIntegrityRoots(
-  gitDirectory: string,
-): Promise<string[]> {
-  const roots = await Promise.all(
-    GIT_INTEGRITY_ENTRIES.map((entry) =>
-      resolveGitIntegrityEntry(gitDirectory, entry),
-    ),
-  );
-  return roots.filter((entry): entry is string => entry !== undefined);
-}
-
-async function resolveGitProtection(workspaceRoot: string): Promise<{
-  deniedWrite: string[];
-  integrity: string[];
-  structural: string[];
-  readable: string[];
-}> {
-  const dotGit = path.join(workspaceRoot, ".git");
-  let dotGitStat;
-  try {
-    dotGitStat = await lstat(dotGit);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {
-        deniedWrite: [dotGit],
-        integrity: [],
-        structural: [],
-        readable: [],
-      };
-    }
-    throw error;
-  }
-  if (dotGitStat.isSymbolicLink()) {
-    throw new Error(
-      `Workspace .git path must not be a symbolic link: ${dotGit}`,
-    );
-  }
-  if (!dotGitStat.isDirectory() && !dotGitStat.isFile()) {
-    throw new Error(
-      `Workspace .git path must be a regular file or directory: ${dotGit}`,
-    );
-  }
-  const metadata = await realpath(dotGit);
-  const deniedWrite = [dotGit, metadata];
-  const integrity: string[] = [];
-  const structural: string[] = [];
-  const readable = [metadata];
-  if (dotGitStat.isFile()) {
-    integrity.push(metadata);
-    const pointer = await readFile(dotGit, "utf8");
-    const match = /^gitdir:\s*(.+?)\s*$/im.exec(pointer);
-    if (!match) throw new Error(`Invalid Git worktree pointer: ${dotGit}`);
-    const gitDirectory = await realpath(
-      path.resolve(workspaceRoot, match[1] as string),
-    );
-    deniedWrite.push(gitDirectory);
-    readable.push(gitDirectory);
-    structural.push(gitDirectory);
-    integrity.push(...(await resolveGitIntegrityRoots(gitDirectory)));
-
-    try {
-      const commonPointer = await readFile(
-        path.join(gitDirectory, "commondir"),
-        "utf8",
-      );
-      const commonDirectory = await realpath(
-        path.resolve(gitDirectory, commonPointer.trim()),
-      );
-      deniedWrite.push(commonDirectory);
-      readable.push(commonDirectory);
-      structural.push(commonDirectory);
-      integrity.push(...(await resolveGitIntegrityRoots(commonDirectory)));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  } else {
-    structural.push(metadata);
-    integrity.push(...(await resolveGitIntegrityRoots(metadata)));
-  }
-
-  return {
-    deniedWrite: uniqueRoots(deniedWrite),
-    integrity: uniqueRoots(integrity),
-    structural: uniqueRoots(structural),
-    readable: uniqueRoots(readable),
-  };
 }
 
 async function resolveDeveloperToolchain(): Promise<{
@@ -544,7 +423,7 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
     try {
       const inlineFiles = await verifyInlineFiles(options.sandboxInlineFiles);
       const gitProtection = await Promise.all(
-        workspaceRoots.map((root) => resolveGitProtection(root)),
+        workspaceRoots.map((root) => resolveWorkspaceGitProtection(root)),
       );
       const policyWriteDenials = workspaceRoots.flatMap((root) => [
         path.join(root, ".agentlink"),

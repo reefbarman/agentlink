@@ -266,6 +266,7 @@ export class SandboxTerminalSession {
       throw new Error("Sandbox command cwd is not allowed for this channel");
     }
 
+    this.cwd = input.cwd;
     const command: SandboxTerminalCommandRecord = {
       commandId: input.process.identity.commandId,
       generation: input.process.identity.generation,

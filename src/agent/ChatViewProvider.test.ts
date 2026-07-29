@@ -36,6 +36,7 @@ class MockEventEmitter<T> {
 }
 
 const mockPostMessage = vi.fn();
+const mockExecuteCommand = vi.fn();
 const mockFindFiles = vi.fn(async () => [] as Array<{ fsPath: string }>);
 const mockOpenTextDocument = vi.fn(async (filePath: string) => ({ filePath }));
 const mockShowTextDocument = vi.fn(async () => undefined);
@@ -68,6 +69,54 @@ const mockGetConfiguration = vi.fn((section?: string) => ({
 }));
 
 describe("worktree startup prompt policy", () => {
+  it("repairs Approve for Me write authority after switching the startup mode", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = {
+      id: "worktree-session",
+      mode: "architect",
+      projectScope: { rootPath: "/workspace/project" },
+    };
+    let writeApproval: "prompt" | "session" = "prompt";
+    const setAgentWriteApprovalSelection = vi.fn(
+      (_sessionId: string, selection: typeof writeApproval) => {
+        writeApproval = selection;
+        return true;
+      },
+    );
+    provider.setApprovalManager({
+      getAgentWriteApprovalState: vi.fn(() => writeApproval),
+      setAgentWriteApprovalSelection,
+      resetSessionAgentWriteApproval: vi.fn(),
+      onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+    } as never);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+      switchForegroundMode: vi.fn(async () => session),
+      getCommandApprovalPolicy: vi.fn(() => "approve-for-me"),
+      setCommandApprovalPolicy: vi.fn(),
+    } as never);
+    (provider as unknown as { sendInitialState: () => void }).sendInitialState =
+      vi.fn();
+    vi.spyOn(provider, "injectPrompt").mockImplementation(() => undefined);
+
+    await provider.startPromptInMode({
+      prompt: "Run the isolated task",
+      mode: "architect",
+    });
+
+    expect(setAgentWriteApprovalSelection).toHaveBeenCalledWith(
+      "worktree-session",
+      "session",
+      "/workspace/project",
+    );
+    expect(writeApproval).toBe("session");
+  });
+
   it("applies inherited Approve for Me before submitting the startup prompt exactly once", async () => {
     vi.useFakeTimers();
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
@@ -127,6 +176,38 @@ describe("worktree startup prompt policy", () => {
     );
     expect(order).toEqual(["policy", "prompt"]);
     vi.useRealTimers();
+  }, 15_000);
+});
+
+describe("approval diff reveal messages", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it("forwards the approval request id to the diff reveal command", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: () => undefined,
+    };
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "revealPendingDiff",
+      id: "diff-request-1",
+    });
+
+    expect(mockExecuteCommand).toHaveBeenCalledWith(
+      "agentlink.revealDiff",
+      "diff-request-1",
+    );
   }, 15_000);
 });
 
@@ -334,6 +415,9 @@ vi.mock("vscode", () => ({
     showTextDocument: mockShowTextDocument,
     activeTextEditor: undefined,
     activeColorTheme: { kind: 2 },
+  },
+  commands: {
+    executeCommand: mockExecuteCommand,
   },
   env: {
     sessionId: "test-session",
@@ -2310,6 +2394,67 @@ describe("ChatViewProvider session state sync", () => {
     expect(resetSessionAgentWriteApproval).toHaveBeenCalledWith(
       "foreground-session",
     );
+  });
+
+  it("sidebar Prompt disables only Approve for Me across live sessions", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const sessions = [
+      {
+        id: "manual-session",
+        projectScope: {
+          projectId: "project-a",
+          rootPath: "/workspace/a",
+        },
+      },
+      {
+        id: "approve-for-me-session",
+        projectScope: {
+          projectId: "project-b",
+          rootPath: "/workspace/b",
+        },
+      },
+    ];
+    const policies = new Map<string, "safe" | "manual" | "approve-for-me">([
+      ["manual-session", "manual"],
+      ["approve-for-me-session", "approve-for-me"],
+    ]);
+    const setCommandApprovalPolicy = vi.fn(
+      (sessionId: string, policy: "safe" | "manual" | "approve-for-me") => {
+        policies.set(sessionId, policy);
+      },
+    );
+    provider.setApprovalManager({
+      getAgentWriteApprovalState: vi.fn(() => "project"),
+      setAgentWriteApprovalSelection: vi.fn(() => true),
+      resetAgentWriteApproval: vi.fn(),
+      resetSessionAgentWriteApproval: vi.fn(),
+      onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+    } as never);
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => sessions[1]),
+      getSession: vi.fn((sessionId: string) =>
+        sessions.find((session) => session.id === sessionId),
+      ),
+      getSessionInfos: vi.fn(() => sessions.map(({ id }) => ({ id }))),
+      getCommandApprovalPolicy: vi.fn(
+        (sessionId: string) => policies.get(sessionId) ?? "safe",
+      ),
+      setCommandApprovalPolicy,
+    } as never);
+    (provider as unknown as { sendInitialState: () => void }).sendInitialState =
+      vi.fn();
+
+    expect(provider.setSidebarWriteApproval("prompt", [])).toBe(true);
+    expect(setCommandApprovalPolicy).toHaveBeenCalledOnce();
+    expect(setCommandApprovalPolicy).toHaveBeenCalledWith(
+      "approve-for-me-session",
+      "safe",
+    );
+    expect(policies.get("manual-session")).toBe("manual");
   });
 
   it("requeues pending command approvals only when Approve for Me becomes active", async () => {
@@ -5436,6 +5581,87 @@ describe("ChatViewProvider session state sync", () => {
     });
   });
 
+  it("ships a complete hydration snapshot: tail offset, in-flight blocks, streaming, focus origin", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    const allMessages = [
+      { role: "user", content: "turn one" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer one" }],
+      },
+      { role: "user", content: "turn two" },
+    ];
+    const session = {
+      id: "session-live",
+      title: "Live session",
+      mode: "code",
+      model: "claude-opus-5",
+      status: "streaming",
+      background: false,
+      transcriptRevision: 7,
+      lastInputTokens: 12,
+      inFlightAssistantBlocks: [
+        {
+          type: "thinking",
+          id: "think-live",
+          text: "reasoning",
+          complete: false,
+        },
+        { type: "text", text: "partial answer" },
+      ],
+      getAllMessages: () => allMessages,
+    };
+
+    const message = (
+      provider as unknown as {
+        buildSessionLoadedMessage(
+          session: unknown,
+          opts?: { tailTurns?: number; origin?: "focus" },
+        ): Record<string, unknown>;
+      }
+    ).buildSessionLoadedMessage(session, { tailTurns: 1, origin: "focus" });
+
+    expect(message).toMatchObject({
+      type: "agentSessionLoaded",
+      sessionId: "session-live",
+      transcriptRevision: 7,
+      streaming: true,
+      origin: "focus",
+      inFlight: [
+        {
+          type: "thinking",
+          id: "think-live",
+          text: "reasoning",
+          complete: false,
+        },
+        { type: "text", text: "partial answer" },
+      ],
+    });
+    // tailTurns 1 keeps only the last user turn; the offset points at its
+    // absolute index so rehydrated ids stay deterministic across loads.
+    expect(message.messages).toEqual([{ role: "user", content: "turn two" }]);
+    expect(message.messageIndexOffset).toBe(2);
+
+    const idle = (
+      provider as unknown as {
+        buildSessionLoadedMessage(session: unknown): Record<string, unknown>;
+      }
+    ).buildSessionLoadedMessage({
+      ...session,
+      status: "idle",
+      inFlightAssistantBlocks: [],
+    });
+    expect(idle.streaming).toBe(false);
+    expect(idle.inFlight).toBeUndefined();
+    expect(idle.origin).toBeUndefined();
+  });
+
   it("refreshes the context budget snapshot when the foreground session condenses", async () => {
     const { providerRegistry } = await import("./providers/index.js");
     providerRegistry.register({
@@ -7215,41 +7441,22 @@ describe("handleModeSwitch resume queueing", () => {
     return provider;
   }
 
-  it("uses a one-shot Guardian approval for an exact project mode switch", async () => {
-    const sourceMode = {
-      slug: "architect",
-      name: "Architect",
-      icon: "organization",
-      toolGroups: ["read", "search"],
-    };
-    const targetMode = {
-      slug: "code",
-      name: "Code",
-      icon: "code",
-      toolGroups: ["read", "search", "edit", "command"],
-    };
-    const fg = {
-      ...session(),
-      agentMode: sourceMode,
-      isAborted: false,
-      getAllMessages: () => [
-        { role: "user", content: "Implement the requested change" },
-      ],
-    };
+  it("switches seamlessly without Guardian or human approval under Approve for Me", async () => {
+    const fg = session();
     const switchSessionMode = vi.fn(async () => ({ ...fg, mode: "code" }));
     const queueModeSwitchResume = vi.fn();
-    const manager = {
+    const getSessionApprovalMode = vi.fn(() => ({
+      commandApprovalPolicy: "approve-for-me" as const,
+      approvalPolicy: "on-request" as const,
+      approvalReviewer: "auto-review" as const,
+      executionPreset: "workspace-write" as const,
+    }));
+    const resetSessionAgentWriteApproval = vi.fn();
+    const provider = await makeProvider({
       getForegroundSession: vi.fn(() => fg),
-      getSession: vi.fn(() => fg),
-      getSessionApprovalMode: vi.fn(() => ({
-        commandApprovalPolicy: "approve-for-me",
-        approvalPolicy: "on-request",
-        approvalReviewer: "auto-review",
-        executionPreset: "workspace-write",
-      })),
-      resolveSessionMode: vi.fn(async () => targetMode),
       switchSessionMode,
       queueModeSwitchResume,
+      getSessionApprovalMode,
       getCommandApprovalPolicy: vi.fn(() => "approve-for-me"),
       getConfig: vi.fn(() => ({
         model: "claude-sonnet-4-6",
@@ -7257,37 +7464,13 @@ describe("handleModeSwitch resume queueing", () => {
       })),
       getSessionInfos: vi.fn(() => []),
       getBgSessionInfos: vi.fn(() => []),
-    };
-    const provider = await makeProvider(manager);
+    });
     provider.setApprovalManager({
       getAgentWriteApprovalState: vi.fn(() => "session"),
       setAgentWriteApprovalSelection: vi.fn(() => true),
-      resetSessionAgentWriteApproval: vi.fn(),
+      resetSessionAgentWriteApproval,
       onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
     } as never);
-    provider.setActionApprovalReviewer({
-      review: vi.fn(async (input) => ({
-        disposition: "reviewed" as const,
-        binding: {
-          sessionId: input.sessionId,
-          policyKey: (
-            await import("../approvals/actionApprovalReview.js")
-          ).actionApprovalPolicyKey(input.policy),
-          actionKey: (
-            await import("../approvals/actionApprovalReview.js")
-          ).actionApprovalActionKey(input)!,
-          kind: input.kind,
-        },
-        result: {
-          outcome: "allow" as const,
-          risk: "low" as const,
-          userAuthorization: "high" as const,
-          rationale: "Allowed",
-          status: "reviewed" as const,
-          model: "guardian-model",
-        },
-      })),
-    });
     const requestApproval = vi.spyOn(provider, "requestApproval");
 
     const result = await provider.handleModeSwitch(
@@ -7298,10 +7481,87 @@ describe("handleModeSwitch resume queueing", () => {
     );
 
     expect(result).toMatchObject({ approved: true, mode: "code" });
+    expect(getSessionApprovalMode).toHaveBeenCalledWith(fg.id, "safe");
     expect(requestApproval).not.toHaveBeenCalled();
-    expect(switchSessionMode).toHaveBeenCalledWith("session-1", "code", {
-      agentMode: targetMode,
+    expect(switchSessionMode).toHaveBeenCalledWith("session-1", "code");
+    expect(resetSessionAgentWriteApproval).not.toHaveBeenCalled();
+    expect(queueModeSwitchResume).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the manual card for an incomplete Approve for Me policy", async () => {
+    const fg = session();
+    const switchSessionMode = vi.fn(async () => ({ ...fg, mode: "code" }));
+    const provider = await makeProvider({
+      getForegroundSession: vi.fn(() => fg),
+      getSessionApprovalMode: vi.fn(() => ({
+        commandApprovalPolicy: "approve-for-me",
+        approvalPolicy: "on-request",
+        approvalReviewer: "user",
+        executionPreset: "workspace-write",
+      })),
+      switchSessionMode,
+      queueModeSwitchResume: vi.fn(),
+      getCommandApprovalPolicy: vi.fn(() => "approve-for-me"),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
     });
+    const requestApproval = vi
+      .spyOn(provider, "requestApproval")
+      .mockResolvedValue("run-once");
+
+    const result = await provider.handleModeSwitch(
+      "code",
+      "Start implementation",
+      false,
+      fg.id,
+    );
+
+    expect(result).toMatchObject({ approved: true, mode: "code" });
+    expect(requestApproval).toHaveBeenCalledOnce();
+    expect(switchSessionMode).toHaveBeenCalledWith("session-1", "code");
+  });
+
+  it("keeps the manual mode-switch approval card outside Approve for Me", async () => {
+    const fg = session();
+    const switchSessionMode = vi.fn(async () => ({ ...fg, mode: "code" }));
+    const queueModeSwitchResume = vi.fn();
+    const provider = await makeProvider({
+      getForegroundSession: vi.fn(() => fg),
+      getSessionApprovalMode: vi.fn(() => ({
+        commandApprovalPolicy: "safe",
+        approvalPolicy: "on-request",
+        approvalReviewer: "user",
+        executionPreset: "native-manual",
+      })),
+      switchSessionMode,
+      queueModeSwitchResume,
+      getCommandApprovalPolicy: vi.fn(() => "safe"),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+    });
+    const requestApproval = vi
+      .spyOn(provider, "requestApproval")
+      .mockResolvedValue("run-once");
+
+    const result = await provider.handleModeSwitch(
+      "code",
+      "Start implementation",
+      false,
+      fg.id,
+    );
+
+    expect(result).toMatchObject({ approved: true, mode: "code" });
+    expect(requestApproval).toHaveBeenCalledOnce();
+    expect(switchSessionMode).toHaveBeenCalledWith("session-1", "code");
+    expect(queueModeSwitchResume).toHaveBeenCalledOnce();
   });
 
   it("queues a mode-switch resume after an in-place silent switch", async () => {

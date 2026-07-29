@@ -35,6 +35,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     hasWorkspace: (vscode.workspace.workspaceFolders ?? []).length > 0,
   };
   private approvalManager: ApprovalManager | undefined;
+  private setAgentWriteApproval:
+    | ((mode: "prompt" | RuleScope, sessionIds: readonly string[]) => boolean)
+    | undefined;
   private toolCallTracker: AgentToolCallTracker | undefined;
   private activeToolCalls: TrackedCallInfo[] = [];
   private log: (msg: string) => void;
@@ -50,6 +53,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   setApprovalManager(manager: ApprovalManager): void {
     this.approvalManager = manager;
     manager.onDidChange(() => this.refreshApprovalState());
+  }
+
+  setAgentWriteApprovalHandler(
+    handler: (
+      mode: "prompt" | RuleScope,
+      sessionIds: readonly string[],
+    ) => boolean,
+  ): void {
+    this.setAgentWriteApproval = handler;
   }
 
   setToolCallTracker(tracker: AgentToolCallTracker): void {
@@ -155,20 +167,35 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case "setWriteApproval":
           if (this.approvalManager) {
             const mode = message.mode;
+            const sessions = this.approvalManager.getActiveSessions();
             // Reset everything first, then set the new level.
-            // Keep legacy + agent tracks in sync for compatibility.
             this.approvalManager.resetWriteApproval();
-            this.approvalManager.resetAgentWriteApproval();
+            const sessionIds = sessions.map((session) => session.id);
+            const agentWriteApprovalCoordinated = this.setAgentWriteApproval
+              ? this.setAgentWriteApproval(mode, sessionIds)
+              : false;
+            if (this.setAgentWriteApproval && !agentWriteApprovalCoordinated) {
+              this.log(
+                `Could not coordinate ${mode} write approval across active agent sessions`,
+              );
+            }
+            if (!this.setAgentWriteApproval) {
+              this.approvalManager.resetAgentWriteApproval();
+            }
             if (mode !== "prompt") {
               // For session scope, approve all active sessions
               if (mode === "session") {
-                for (const s of this.approvalManager.getActiveSessions()) {
+                for (const s of sessions) {
                   this.approvalManager.setWriteApproval(s.id, "session");
-                  this.approvalManager.setAgentWriteApproval(s.id, "session");
+                  if (!this.setAgentWriteApproval) {
+                    this.approvalManager.setAgentWriteApproval(s.id, "session");
+                  }
                 }
               } else {
                 this.approvalManager.setWriteApproval("_sidebar", mode);
-                this.approvalManager.setAgentWriteApproval("_sidebar", mode);
+                if (!this.setAgentWriteApproval) {
+                  this.approvalManager.setAgentWriteApproval("_sidebar", mode);
+                }
               }
             }
           }
@@ -352,7 +379,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "deleteFeedbackEntry":
           if (__DEV_BUILD__) {
-            deleteFeedback([message.index]);
+            deleteFeedback({ ids: [message.id] });
             this.refreshFeedback();
           }
           break;
@@ -360,7 +387,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           if (__DEV_BUILD__) {
             const entries = readFeedback();
             if (entries.length > 0) {
-              deleteFeedback(entries.map((_, i) => i));
+              deleteFeedback({ ids: entries.map((entry) => entry.id) });
             }
             this.refreshFeedback();
           }

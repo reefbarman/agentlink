@@ -61,6 +61,8 @@ import type { NetworkApprovalReviewer } from "../approvals/networkApprovalReview
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 import { validateCommand } from "../util/pipeValidator.js";
 import { validateInteractiveCommand } from "../util/interactiveValidator.js";
+import { resolveBaselineProtectedGitMetadataForCwd } from "../terminal/sandbox/gitMetadataProtection.js";
+import { classifyPredictableGitMetadataWriter } from "../util/gitMetadataWriterClassifier.js";
 import { validateProtectedWriteCommand } from "../util/protectedWriteValidator.js";
 import {
   scanShellLexBoundaries,
@@ -587,6 +589,79 @@ function networkRuleScope(
   }
 }
 
+async function protectedGitMetadataRetryResult(input: {
+  command: string;
+  originalCommand?: string;
+  cwd: string;
+  workspaceRoots: readonly string[];
+  hasEnvironmentOverrides: boolean;
+  hasInlineFiles: boolean;
+}): Promise<ToolResult | undefined> {
+  const classification = classifyPredictableGitMetadataWriter({
+    command: input.command,
+    hasEnvironmentOverrides: input.hasEnvironmentOverrides,
+    hasInlineFiles: input.hasInlineFiles,
+  });
+  if (!classification) return undefined;
+  let protection;
+  try {
+    protection = await resolveBaselineProtectedGitMetadataForCwd(
+      input.cwd,
+      input.workspaceRoots,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "rejected",
+            command: input.command,
+            ...(input.originalCommand && input.originalCommand !== input.command
+              ? { original_command: input.originalCommand }
+              : {}),
+            reason: `Unable to verify protected Git metadata safely: ${message}`,
+            capability_code: "protected_git_metadata",
+            git_subcommand: classification.subcommand,
+            command_sent: false,
+            process_launched: false,
+            retry_safe: true,
+            failure_stage: "validation",
+          }),
+        },
+      ],
+    };
+  }
+  if (!protection) return undefined;
+  const suggestedReason = `Git ${classification.subcommand} mutates protected repository metadata and requires reviewed native execution.`;
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          status: "retry_required",
+          command: input.command,
+          ...(input.originalCommand && input.originalCommand !== input.command
+            ? { original_command: input.originalCommand }
+            : {}),
+          reason:
+            "The workspace sandbox keeps this repository's Git metadata read-only. Retry the exact command with reviewed native escalation.",
+          capability_code: "protected_git_metadata",
+          git_subcommand: classification.subcommand,
+          protected_path: protection.marker,
+          required_sandbox_permissions: "require_escalated",
+          suggested_reason: suggestedReason,
+          command_sent: false,
+          process_launched: false,
+          retry_safe: true,
+          failure_stage: "validation",
+        }),
+      },
+    ],
+  };
+}
+
 function unavailableExecuteCommandResult(command: string): ToolResult {
   return {
     content: [
@@ -950,6 +1025,29 @@ export async function handleExecuteCommand(
         terminalOptions(),
         routeContext,
       );
+      if (preparedExecution.security.route === "sandbox") {
+        const gitRetry = await protectedGitMetadataRetryResult({
+          command: commandToRun,
+          cwd,
+          workspaceRoots,
+          hasEnvironmentOverrides: Boolean(
+            params.env && Object.keys(params.env).length > 0,
+          ),
+          hasInlineFiles: inlineFiles !== undefined,
+        });
+        if (gitRetry) {
+          const revokedPreparation = preparedExecution;
+          preparedExecution = undefined;
+          revokedPreparation.dispose();
+          recordExecutionAudit(
+            providers.terminalProvider,
+            "preparation_revoked",
+            revokedPreparation.security,
+            { resultStatus: "protected_git_metadata" },
+          );
+          return gitRetry;
+        }
+      }
 
       if (
         nativeEscalation ||
@@ -1068,6 +1166,31 @@ export async function handleExecuteCommand(
               params.command,
             );
             if (editedValidation) return editedValidation;
+            const editedGitRetry =
+              preparedExecution.security.route === "sandbox"
+                ? await protectedGitMetadataRetryResult({
+                    command: commandToRun,
+                    originalCommand: params.command,
+                    cwd,
+                    workspaceRoots,
+                    hasEnvironmentOverrides: Boolean(
+                      params.env && Object.keys(params.env).length > 0,
+                    ),
+                    hasInlineFiles: inlineFiles !== undefined,
+                  })
+                : undefined;
+            if (editedGitRetry) {
+              const revokedPreparation = preparedExecution;
+              preparedExecution = undefined;
+              revokedPreparation.dispose();
+              recordExecutionAudit(
+                providers.terminalProvider,
+                "preparation_revoked",
+                revokedPreparation.security,
+                { resultStatus: "protected_git_metadata" },
+              );
+              return editedGitRetry;
+            }
             const displayedSecurity = preparedExecution.security;
             preparedExecution.dispose();
             preparedExecution = await prepareTerminalExecution(

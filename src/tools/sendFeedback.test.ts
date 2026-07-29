@@ -26,6 +26,10 @@ vi.mock("../util/feedbackStore.js", () => ({
 describe("handleSendFeedback", () => {
   beforeEach(() => {
     mocks.appendFeedback.mockReset();
+    mocks.appendFeedback.mockReturnValue({
+      id: "feedback-id",
+      global_index: 7,
+    });
   });
 
   it("attributes feedback with only the supplied opaque project ID", async () => {
@@ -50,7 +54,12 @@ describe("handleSendFeedback", () => {
     );
     expect(result.content[0]).toMatchObject({
       type: "text",
-      text: JSON.stringify({ status: "recorded", tool_name: "read_file" }),
+      text: JSON.stringify({
+        status: "recorded",
+        id: "feedback-id",
+        global_index: 7,
+        tool_name: "read_file",
+      }),
     });
   });
 
@@ -71,7 +80,12 @@ describe("handleSendFeedback", () => {
     );
     expect(result.content[0]).toMatchObject({
       type: "text",
-      text: JSON.stringify({ status: "recorded", tool_name: "search_files" }),
+      text: JSON.stringify({
+        status: "recorded",
+        id: "feedback-id",
+        global_index: 7,
+        tool_name: "search_files",
+      }),
     });
   });
 });

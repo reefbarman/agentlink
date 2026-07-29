@@ -22,6 +22,7 @@ import { randomId } from "./randomId.js";
 import { getToolCapabilityMetadata } from "../core/tools/toolCapabilities.js";
 import type {
   BackgroundCompletionResult,
+  InFlightAssistantBlock,
   McpApprovalPromotionMeta,
   RequestContextBreakdown,
   RevertRecoveryNotice,
@@ -327,7 +328,22 @@ function addQuestionContextMessage(
   if (!trimmed) return messages;
 
   const messageId = `question-context-${questionId}`;
-  if (messages.some((message) => message.id === messageId)) return messages;
+  // The same context paragraph is rendered inline by transcript rehydration
+  // (a text block pushed just before the ask_user tool_call). Skip synthesis
+  // whenever any message already shows this exact text, not only when our own
+  // synthesized message id exists — otherwise every resync of a session that
+  // is awaiting a question duplicates the preamble.
+  if (
+    messages.some(
+      (message) =>
+        message.id === messageId ||
+        message.blocks.some(
+          (block) => block.type === "text" && block.text.trim() === trimmed,
+        ),
+    )
+  ) {
+    return messages;
+  }
 
   return [
     ...messages,
@@ -778,6 +794,18 @@ export type AppAction =
       checkpoints?: Array<{ turnIndex: number; checkpointId: string }>;
       userTurnOffset?: number;
       hasMoreBefore?: boolean;
+      /**
+       * Live tail: blocks of the model response currently streaming, which is
+       * not yet part of the persisted transcript. Included so a hydration can
+       * never regress content the user is watching stream.
+       */
+      inFlight?: InFlightAssistantBlock[];
+      /**
+       * Whether the session's turn is still running. A hydration of an active
+       * session must not force the projection out of streaming mode, or
+       * subsequent deltas get dropped and the text visibly re-streams.
+       */
+      streaming?: boolean;
     }
   | {
       type: "PREPEND_SESSION_CHUNK";
@@ -806,7 +834,22 @@ export type AppAction =
  * Tool-result user messages are filtered out as they're internal plumbing.
  * Condense summary messages are rendered as condense rows.
  */
-export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
+export function agentMessagesToChatMessages(
+  raw: unknown[],
+  opts?: {
+    /**
+     * Absolute index of `raw[0]` within the full persisted transcript. When
+     * provided, rehydrated messages get deterministic ids (`t<absoluteIndex>`)
+     * so repeated hydrations of the same content keep stable identity —
+     * stable React keys, no remount churn, and cross-hydration reconciliation.
+     * Without it every projection regenerates random ids.
+     */
+    baseIndex?: number;
+  },
+): ChatMessage[] {
+  const baseIndex = opts?.baseIndex;
+  const rehydratedMessageId = (rawIndex: number): string =>
+    baseIndex === undefined ? randomId() : `t${baseIndex + rawIndex}`;
   const stripSystemReminderBlocks = (text: string): string =>
     text
       .replace(/<system-reminder>[\s\S]*?<\/system-reminder>\n*/gi, "")
@@ -892,7 +935,8 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
 
   // Second pass: build ChatMessages
   const result: ChatMessage[] = [];
-  for (const msg of raw) {
+  for (let rawIndex = 0; rawIndex < raw.length; rawIndex++) {
+    const msg = raw[rawIndex];
     const m = msg as {
       role: string;
       content: unknown;
@@ -933,7 +977,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
     if (m.isSummary) {
       const hint = m.uiHint?.condense;
       result.push({
-        id: randomId(),
+        id: rehydratedMessageId(rawIndex),
         role: "condense",
         content: "",
         timestamp: Date.now(),
@@ -954,7 +998,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
       if (typeof m.content === "string") {
         const hint = m.uiHint?.userMessage;
         result.push({
-          id: randomId(),
+          id: rehydratedMessageId(rawIndex),
           role: "user",
           content: hint?.displayText ?? m.content,
           timestamp: Date.now(),
@@ -1317,7 +1361,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           ...(presentedDisplayMedia?.images ?? []),
         ];
         result.push({
-          id: randomId(),
+          id: rehydratedMessageId(rawIndex),
           role: "assistant",
           content: "",
           timestamp: Date.now(),
@@ -1760,6 +1804,19 @@ export function reducer(state: AppState, action: AppAction): AppState {
       };
 
     case "THINKING_START": {
+      // Idempotence: a replayed or hydration-overlapping start must not create
+      // a second block with the same id — THINKING_DELTA appends to every
+      // matching block, so duplicates would each receive the full text.
+      if (
+        state.messages.some((message) =>
+          message.blocks.some(
+            (block) =>
+              block.type === "thinking" && block.id === action.thinkingId,
+          ),
+        )
+      ) {
+        return { ...state, statusOverride: null };
+      }
       const all = ensureAssistant(state.messages);
       const { msgs, last } = cloneLast(all);
       last.blocks.push({
@@ -1772,6 +1829,25 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "THINKING_DELTA": {
+      // Self-heal: if the target block is missing (its start event was lost or
+      // a hydration dropped it), create it instead of silently discarding the
+      // text — an empty/absent block at THINKING_END renders as no thinking at
+      // all.
+      if (
+        !state.messages[state.messages.length - 1]?.blocks.some(
+          (b) => b.type === "thinking" && b.id === action.thinkingId,
+        )
+      ) {
+        const all = ensureAssistant(state.messages);
+        const { msgs, last } = cloneLast(all);
+        last.blocks.push({
+          type: "thinking",
+          id: action.thinkingId,
+          text: action.text,
+          complete: false,
+        });
+        return { ...state, messages: msgs };
+      }
       const { msgs, last } = cloneLast(state.messages);
       last.blocks = last.blocks.map((b) =>
         b.type === "thinking" && b.id === action.thinkingId
@@ -1794,12 +1870,15 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "TOOL_START": {
+      // Idempotence for every tool (not just ask_user): tool ids are
+      // provider-stable, so a start event whose block already exists — via a
+      // replay or a hydration that included it — must be a no-op.
       if (
-        action.toolName === "ask_user" &&
         state.messages.some((message) =>
           message.blocks.some(
             (block) =>
-              block.type === "tool_call" && block.id === action.toolCallId,
+              (block.type === "tool_call" || block.type === "skill_load") &&
+              block.id === action.toolCallId,
           ),
         )
       ) {
@@ -1822,6 +1901,12 @@ export function reducer(state: AppState, action: AppAction): AppState {
               completedChildren: 0,
               children: [],
             };
+            // Idempotence: a replayed child start must not double-count.
+            if (
+              trace.children.some((child) => child.id === action.toolCallId)
+            ) {
+              return block;
+            }
             const inputSummary =
               action.input === undefined
                 ? undefined
@@ -1983,7 +2068,35 @@ export function reducer(state: AppState, action: AppAction): AppState {
           break;
         }
       }
-      if (targetIdx === -1) return state; // tool_call not found — no-op
+      if (targetIdx === -1) {
+        // ask_user must never lose its durable answer: if the anchor block is
+        // gone (a hydration replaced the message that held it), synthesize the
+        // completed tool_call plus its answer instead of no-opping.
+        if (action.toolName === "ask_user") {
+          const items = parseAskUserQuestionAnswerItems(action.result);
+          const ensured = ensureAssistant(state.messages);
+          const cloned = cloneLast(ensured);
+          cloned.last.blocks.push({
+            type: "tool_call",
+            id: action.toolCallId,
+            name: action.toolName,
+            inputJson:
+              action.input === undefined ? "" : JSON.stringify(action.input),
+            result: action.result,
+            complete: true,
+            durationMs: action.durationMs,
+          });
+          if (items.length > 0) {
+            cloned.last.blocks.push({
+              type: "question_answer",
+              toolCallId: action.toolCallId,
+              items,
+            });
+          }
+          return { ...state, messages: cloned.msgs };
+        }
+        return state; // tool_call not found — no-op
+      }
 
       const msgs = [...state.messages];
       const target = { ...msgs[targetIdx] };
@@ -2670,6 +2783,14 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "ADD_COMMITTED_USER_MESSAGE": {
+      // Idempotence: a replayed commit (buffered-event replay, paired
+      // surfaces) must not append the user row twice.
+      if (
+        action.id !== undefined &&
+        state.messages.some((message) => message.id === action.id)
+      ) {
+        return state;
+      }
       const lastMessage = state.messages[state.messages.length - 1];
       const previousMessage = state.messages[state.messages.length - 2];
       const optimisticUserPendingAssistant =
@@ -2843,11 +2964,31 @@ export function reducer(state: AppState, action: AppAction): AppState {
           }
         }
       }
-      if (targetIdx < 0 || !toolCallId) {
+      if (!toolCallId) {
         return { ...state, questionRequest: null };
       }
+      let messages = [...state.messages];
+      if (targetIdx < 0) {
+        // The anchor tool_call was lost (e.g. a transcript hydration replaced
+        // the message that held it). Synthesize it rather than silently
+        // dropping the user's answer; TOOL_COMPLETE reconciles by id later.
+        const ensured = ensureAssistant(messages);
+        const cloned = cloneLast(ensured);
+        cloned.last.blocks.push({
+          type: "tool_call",
+          id: toolCallId,
+          name: "ask_user",
+          inputJson: JSON.stringify({
+            context: request.context,
+            questions: request.questions,
+          }),
+          result: "",
+          complete: false,
+        });
+        messages = cloned.msgs;
+        targetIdx = messages.length - 1;
+      }
 
-      const messages = [...state.messages];
       const target = { ...messages[targetIdx] };
       const answerBlock: ContentBlock = {
         type: "question_answer",
@@ -3212,6 +3353,62 @@ export function reducer(state: AppState, action: AppAction): AppState {
           ];
         }
       }
+      // Live tail: render the in-flight model response (not yet persisted) so
+      // a hydration never regresses content the user is watching stream. Skip
+      // blocks whose ids already landed in the restored transcript (a response
+      // that committed between snapshot and hydration).
+      const restoredBlockIds = new Set(
+        restoredMessages.flatMap((message) =>
+          message.blocks.flatMap((block) =>
+            block.type === "thinking" ||
+            block.type === "tool_call" ||
+            block.type === "skill_load"
+              ? [block.id]
+              : [],
+          ),
+        ),
+      );
+      const inFlightBlocks: ContentBlock[] = (action.inFlight ?? []).flatMap(
+        (block): ContentBlock[] => {
+          if (block.type === "text") {
+            return block.text ? [{ type: "text", text: block.text }] : [];
+          }
+          if (restoredBlockIds.has(block.id)) return [];
+          if (block.type === "thinking") {
+            return [
+              {
+                type: "thinking",
+                id: block.id,
+                text: block.text,
+                complete: block.complete,
+              },
+            ];
+          }
+          return [
+            {
+              type: "tool_call",
+              id: block.id,
+              name: block.name,
+              inputJson: block.inputJson,
+              result: "",
+              complete: block.complete,
+            },
+          ];
+        },
+      );
+      if (inFlightBlocks.length > 0) {
+        restoredMessages = [
+          ...restoredMessages,
+          {
+            id: `live-${action.sessionId}`,
+            role: "assistant",
+            content: "",
+            timestamp: Date.now(),
+            blocks: inFlightBlocks,
+          },
+        ];
+      }
+      const streaming = action.streaming ?? false;
       const sameSession = state.chatState.sessionId === action.sessionId;
       return {
         ...state,
@@ -3220,7 +3417,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           action.originalPrompt ??
           action.messages.find((message) => message.role === "user")?.content ??
           null,
-        streaming: false,
+        streaming,
         restoringSession: false,
         loadedUserTurnOffset: userTurnOffset,
         pendingCheckpoints: applied.pending,
@@ -3240,7 +3437,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           sessionId: action.sessionId,
           mode: action.mode,
           model: action.model,
-          streaming: false,
+          streaming,
           interrupted: false,
         },
       };
@@ -3329,6 +3526,20 @@ export function reducer(state: AppState, action: AppAction): AppState {
         agentRetryable: completion.agentRetryable,
         sourceAuthority: "canonical",
       };
+      // Idempotence: hydration paths re-dispatch durable completions on every
+      // tab switch. If the rendered block already carries this exact result,
+      // keep it where it is instead of ripping it out and re-inserting at the
+      // tail (which reads as the card jumping/duplicating).
+      if (
+        existingResult &&
+        existingResult.resultState === resultBlock.resultState &&
+        existingResult.status === resultBlock.status &&
+        existingResult.resultText === resultBlock.resultText &&
+        existingResult.summary === resultBlock.summary &&
+        existingResult.sourceAuthority === "canonical"
+      ) {
+        return state;
+      }
       const messagesWithoutPriorResult = state.messages
         .map((message) => ({
           ...message,

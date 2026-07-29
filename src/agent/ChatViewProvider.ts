@@ -133,7 +133,7 @@ import {
   mutateMcpConfigBatch,
   persistMcpToolApproval,
 } from "./mcpConfig.js";
-import { BUILT_IN_MODES, type AgentMode } from "./modes.js";
+import { BUILT_IN_MODES } from "./modes.js";
 import {
   buildSystemPrompt,
   formatRuleCatalogPath,
@@ -146,15 +146,8 @@ import type {
   DecisionMessage,
 } from "../approvals/webview/types.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
-import {
-  classifyGuardianPathRisk,
-  createOneShotActionApproval,
-  type ActionApprovalPolicySnapshot,
-  type ActionApprovalReviewer,
-  type ModeSwitchActionApprovalReviewInput,
-} from "../approvals/actionApprovalReview.js";
+import { classifyGuardianPathRisk } from "../approvals/actionApprovalReview.js";
 import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";
-import { buildCommandReviewContext } from "../approvals/commandApprovalReview.js";
 import type { AgentToolCallTracker } from "./AgentToolCallTracker.js";
 import { ContextJumpTracker } from "../telemetry/ContextJumpTracker.js";
 import {
@@ -680,6 +673,8 @@ export type ExtensionToWebview =
       mode: string;
       model: string;
       messages: import("./types.js").AgentMessage[];
+      /** Absolute index of `messages[0]` in the full persisted transcript (deterministic rehydration ids). */
+      messageIndexOffset?: number;
       todos: TodoItem[];
       lastInputTokens: number;
       lastOutputTokens: number;
@@ -687,6 +682,17 @@ export type ExtensionToWebview =
       backgroundResults?: BackgroundCompletionResult[];
       /** True when this came from automatic startup restore rather than explicit user action. */
       restored?: boolean;
+      /** Live tail: blocks of the model response currently streaming (not yet persisted). */
+      inFlight?: import("../shared/types.js").InFlightAssistantBlock[];
+      /** Whether the session's turn is still running at snapshot time. */
+      streaming?: boolean;
+      /**
+       * "focus" marks a hydration triggered by tab/pane focus, where the
+       * webview may serve the session from its own caches. All other loads
+       * (history load, checkpoint revert, recovered-question resync, webview
+       * boot) must be applied.
+       */
+      origin?: "focus";
       /**
        * Restored checkpoints keyed by the number of visible user turns already
        * committed at that snapshot.
@@ -703,6 +709,8 @@ export type ExtensionToWebview =
       messages: import("./types.js").AgentMessage[];
       /** Number of user turns before the first message in this chunk. */
       userTurnOffset: number;
+      /** Absolute index of `messages[0]` in the full persisted transcript (deterministic rehydration ids). */
+      messageIndexOffset?: number;
       /** True when older messages still exist before this chunk. */
       hasMoreBefore: boolean;
       checkpoints?: Array<{ turnIndex: number; checkpointId: string }>;
@@ -1085,6 +1093,8 @@ export function getPreviousChunkByUserTurns(
 ): {
   messages: import("./types.js").AgentMessage[];
   userTurnOffset: number;
+  /** Absolute index of the first returned message in the full transcript. */
+  messageIndexOffset: number;
   hasMoreBefore: boolean;
 } {
   const userMessageIndexes: number[] = [];
@@ -1109,6 +1119,7 @@ export function getPreviousChunkByUserTurns(
   return {
     messages: messages.slice(startIndex, endIndex),
     userTurnOffset: startTurn,
+    messageIndexOffset: startIndex,
     hasMoreBefore: startTurn > 0,
   };
 }
@@ -1235,7 +1246,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   };
   private streamDropLogTimer: ReturnType<typeof setTimeout> | null = null;
   private approvalManager: ApprovalManager | undefined;
-  private actionApprovalReviewer: ActionApprovalReviewer | undefined;
   private commandApprovalRequeueHandler:
     | ((sessionId: string) => number)
     | undefined;
@@ -1572,10 +1582,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  setActionApprovalReviewer(reviewer: ActionApprovalReviewer): void {
-    this.actionApprovalReviewer = reviewer;
-  }
-
   /**
    * Register the callback (wired to the built-in approval panel) that
    * re-resolves a session's pending command approval cards when its command
@@ -1792,10 +1798,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private reconcileSessionApprovalAfterModeSwitch(sessionId: string): void {
-    this.getSessionApprovalPolicyCoordinator()?.reconcileAfterModeSwitch(
-      sessionId,
-      this.getConfiguredCommandApprovalPolicy(),
-    );
+    const session = this.sessionManager?.getSession?.(sessionId);
+    const result =
+      this.getSessionApprovalPolicyCoordinator()?.reconcileAfterModeSwitch(
+        sessionId,
+        this.getConfiguredCommandApprovalPolicy(session?.projectScope),
+        session?.projectScope.rootPath,
+      );
+    if (result && !result.ok) {
+      this.log(
+        `[approval] disabled Approve for Me after mode switch because session write approval could not be restored (${sessionId})`,
+      );
+    }
   }
 
   private reconcileRestoredSessionApproval(session: AgentSession): void {
@@ -2813,129 +2827,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await this.openMcpConfigFile(filePath);
   }
 
-  private getActionApprovalPolicySnapshot(
-    sessionId: string,
-  ): ActionApprovalPolicySnapshot | undefined {
-    if (!this.sessionManager) return undefined;
-    const mode = this.sessionManager.getSessionApprovalMode(
-      sessionId,
-      this.getConfiguredCommandApprovalPolicy(),
-    );
-    return {
-      commandApprovalPolicy: mode.commandApprovalPolicy,
-      approvalPolicy: mode.approvalPolicy,
-      approvalReviewer: mode.approvalReviewer,
-      executionPreset: mode.executionPreset,
-    };
-  }
-
-  private async buildModeSwitchReviewInput(
-    sessionId: string,
-    targetMode: string,
-    reason: string | undefined,
-  ): Promise<
-    | { input: ModeSwitchActionApprovalReviewInput; resolvedTarget: AgentMode }
-    | undefined
-  > {
-    if (!this.sessionManager) return undefined;
-    const session = this.sessionManager.getSession(sessionId);
-    const policy = this.getActionApprovalPolicySnapshot(sessionId);
-    const resolvedTarget = await this.sessionManager.resolveSessionMode(
-      sessionId,
-      targetMode,
-    );
-    if (!session || session.isAborted || !policy || !resolvedTarget) {
-      return undefined;
-    }
-    const sourceToolGroups = [...session.agentMode.toolGroups];
-    const targetToolGroups = [...resolvedTarget.toolGroups];
-    const addedToolGroups = targetToolGroups.filter(
-      (group) => !sourceToolGroups.includes(group),
-    );
-    const removedToolGroups = sourceToolGroups.filter(
-      (group) => !targetToolGroups.includes(group),
-    );
-    const messages = session.getAllMessages();
-    let userObjective: string | undefined;
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index];
-      if (message?.role === "user" && typeof message.content === "string") {
-        userObjective = message.content;
-        break;
-      }
-    }
-    return {
-      resolvedTarget,
-      input: {
-        kind: "mode-switch",
-        sessionId,
-        policy,
-        sourceMode: session.mode,
-        targetMode,
-        reason,
-        capabilityDelta: {
-          sourceToolGroups,
-          targetToolGroups,
-          addedToolGroups,
-          removedToolGroups,
-        },
-        userObjective,
-        context: buildCommandReviewContext(messages),
-      },
-    };
-  }
-
-  private async guardianApprovedModeSwitch(
-    sessionId: string,
-    targetMode: string,
-    reason: string | undefined,
-  ): Promise<AgentMode | undefined> {
-    if (!this.actionApprovalReviewer || !this.sessionManager) return undefined;
-    const reviewed = await this.buildModeSwitchReviewInput(
-      sessionId,
-      targetMode,
-      reason,
-    );
-    if (!reviewed) return undefined;
-    let outcome;
-    try {
-      outcome = await this.actionApprovalReviewer.review(reviewed.input);
-    } catch (error) {
-      this.log(`[mode] Guardian review failed for ${targetMode}: ${error}`);
-      return undefined;
-    }
-    const approval = createOneShotActionApproval(outcome);
-    if (!approval) {
-      this.log(
-        `[mode] Guardian did not approve switch to ${targetMode}: ${outcome.result.status}/${outcome.result.outcome}`,
-      );
-      return undefined;
-    }
-    const current = await this.buildModeSwitchReviewInput(
-      sessionId,
-      targetMode,
-      reason,
-    );
-    const currentSession = this.sessionManager.getSession(sessionId);
-    if (!current || !currentSession) return undefined;
-    const revalidation = approval.consume({
-      sessionId,
-      sessionActive: !currentSession.isAborted,
-      policy: current.input.policy,
-      action: current.input,
-    });
-    if (!revalidation.valid) {
-      this.log(
-        `[mode] Guardian approval for ${targetMode} was stale: ${revalidation.reason}`,
-      );
-      return undefined;
-    }
-    this.log(
-      `[mode] Guardian approved one-shot switch to ${targetMode} (${approval.review.risk}/${approval.review.userAuthorization})`,
-    );
-    return current.resolvedTarget;
-  }
-
   /** Called by the tool dispatcher when the agent requests a mode switch. */
   public async handleModeSwitch(
     mode: string,
@@ -2952,48 +2843,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       reason && reason.trim().length > 0 ? reason.trim() : "agent";
 
     let followUp: string | undefined;
-    let guardianApprovedMode: AgentMode | undefined;
     const targetSessionId =
       sessionId ?? this.sessionManager?.getForegroundSession()?.id;
-
-    if (!silent) {
-      try {
-        guardianApprovedMode = targetSessionId
-          ? await this.guardianApprovedModeSwitch(targetSessionId, mode, reason)
-          : undefined;
-        if (!guardianApprovedMode) {
-          const approval = await this.requestApproval(
-            {
-              id: `mode-switch-${randomUUID()}`,
-              kind: "mode-switch",
-              title: `Switch to "${mode}" mode`,
-              detail: requestedBy,
-              choices: [
-                { label: "Allow", value: "run-once", isPrimary: true },
-                { label: "Reject", value: "reject", isDanger: true },
-              ],
-            },
+    const approvalMode =
+      !silent && targetSessionId
+        ? this.sessionManager?.getSessionApprovalMode(
             targetSessionId,
-          );
+            this.getConfiguredCommandApprovalPolicy(
+              this.sessionManager?.getSession?.(targetSessionId)?.projectScope,
+            ),
+          )
+        : undefined;
+    const approveForMe =
+      approvalMode?.commandApprovalPolicy === "approve-for-me" &&
+      approvalMode.approvalPolicy === "on-request" &&
+      approvalMode.approvalReviewer === "auto-review" &&
+      approvalMode.executionPreset === "workspace-write";
 
-          const decision =
-            typeof approval === "string" ? approval : approval.decision;
-          const rejectionReason =
-            typeof approval === "string" ? undefined : approval.rejectionReason;
-          followUp =
-            typeof approval === "string" ? undefined : approval.followUp;
+    if (!silent && !approveForMe) {
+      try {
+        const approval = await this.requestApproval(
+          {
+            id: `mode-switch-${randomUUID()}`,
+            kind: "mode-switch",
+            title: `Switch to "${mode}" mode`,
+            detail: requestedBy,
+            choices: [
+              { label: "Allow", value: "run-once", isPrimary: true },
+              { label: "Reject", value: "reject", isDanger: true },
+            ],
+          },
+          targetSessionId,
+        );
 
-          if (decision === "reject") {
-            const reasonText = rejectionReason?.trim() || "No reason provided";
-            this.log(`[mode] denied switch to ${mode}: ${reasonText}`);
-            this.postMessage({
-              type: "agentUserAnnotation",
-              sessionId: targetSessionId ?? "agent",
-              text: `Mode switch to "${mode}" denied: ${reasonText}`,
-              badge: "rejection",
-            });
-            return { approved: false, mode, followUp, rejectionReason };
-          }
+        const decision =
+          typeof approval === "string" ? approval : approval.decision;
+        const rejectionReason =
+          typeof approval === "string" ? undefined : approval.rejectionReason;
+        followUp = typeof approval === "string" ? undefined : approval.followUp;
+
+        if (decision === "reject") {
+          const reasonText = rejectionReason?.trim() || "No reason provided";
+          this.log(`[mode] denied switch to ${mode}: ${reasonText}`);
+          this.postMessage({
+            type: "agentUserAnnotation",
+            sessionId: targetSessionId ?? "agent",
+            text: `Mode switch to "${mode}" denied: ${reasonText}`,
+            badge: "rejection",
+          });
+          return { approved: false, mode, followUp, rejectionReason };
         }
       } catch (err) {
         this.log(`[mode] approval flow failed for switch to ${mode}: ${err}`);
@@ -3016,9 +2914,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const switched = await this.sessionManager!.switchSessionMode(
           targetSessionId,
           mode,
-          guardianApprovedMode
-            ? { agentMode: guardianApprovedMode }
-            : undefined,
         );
         if (!switched) return null;
         this.reconcileSessionApprovalAfterModeSwitch(switched.id);
@@ -6695,6 +6590,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           command === "chatTabNew" || command === "chatTabNewChat"
             ? 0
             : undefined,
+        // Focus-style selection changes only re-point the webview at a session
+        // it may already hold live/cached state for — mark them so it can
+        // serve from cache instead of destructively re-applying.
+        origin:
+          command === "chatTabFocus" || command === "chatTabClose"
+            ? "focus"
+            : undefined,
       });
     }
     this.sendInitialState();
@@ -7826,6 +7728,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "revealPendingDiff": {
+        await vscode.commands.executeCommand(
+          "agentlink.revealDiff",
+          String(msg.id ?? ""),
+        );
+        break;
+      }
+
       case "approvalDecision": {
         const id = msg.id as string;
 
@@ -8390,6 +8300,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           sessionId,
           messages: chunk.messages,
           userTurnOffset: chunk.userTurnOffset,
+          messageIndexOffset: chunk.messageIndexOffset,
           hasMoreBefore: chunk.hasMoreBefore,
           checkpoints: this.getSessionCheckpoints(sessionId),
         });
@@ -9133,7 +9044,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           title: extMsg.title,
           mode: extMsg.mode,
           model: extMsg.model,
-          messages: agentMessagesToChatMessages(extMsg.messages as unknown[]),
+          messages: agentMessagesToChatMessages(extMsg.messages as unknown[], {
+            baseIndex: extMsg.messageIndexOffset,
+          }),
           todos: extMsg.todos,
           lastInputTokens: extMsg.lastInputTokens,
           lastOutputTokens: extMsg.lastOutputTokens,
@@ -9141,6 +9054,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           checkpoints: extMsg.checkpoints,
           userTurnOffset: extMsg.userTurnOffset ?? 0,
           hasMoreBefore: extMsg.hasMoreBefore,
+          inFlight: extMsg.inFlight,
+          streaming: extMsg.streaming,
         });
         break;
       }
@@ -9156,7 +9071,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         this.applyProjectedAction({
           type: "PREPEND_SESSION_CHUNK",
-          messages: agentMessagesToChatMessages(extMsg.messages as unknown[]),
+          messages: agentMessagesToChatMessages(extMsg.messages as unknown[], {
+            baseIndex: extMsg.messageIndexOffset,
+          }),
           userTurnOffset: extMsg.userTurnOffset,
           hasMoreBefore: extMsg.hasMoreBefore,
           checkpoints: extMsg.checkpoints,
@@ -10975,6 +10892,83 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     void this.sendModelsUpdate();
   }
 
+  public setSidebarWriteApproval(
+    selection: AgentWriteApprovalSelection,
+    approvalSessionIds: readonly string[],
+  ): boolean {
+    if (!this.approvalManager || !this.sessionManager) return false;
+    const liveSessionIds =
+      this.sessionManager.getSessionInfos?.().map((session) => session.id) ??
+      [];
+    const fallbackSessionId = this.sessionManager.getForegroundSession()?.id;
+    const targetSessionIds = [
+      ...new Set([
+        ...approvalSessionIds,
+        ...liveSessionIds,
+        ...(fallbackSessionId ? [fallbackSessionId] : []),
+      ]),
+    ];
+
+    return this.withApprovalStateTransition(() => {
+      const approveForMeSessionIds = targetSessionIds.filter((sessionId) => {
+        const session = this.sessionManager!.getSession?.(sessionId);
+        return (
+          this.sessionManager!.getCommandApprovalPolicy(
+            sessionId,
+            this.getConfiguredCommandApprovalPolicy(session?.projectScope),
+          ) === "approve-for-me"
+        );
+      });
+      for (const sessionId of approveForMeSessionIds) {
+        const session = this.sessionManager!.getSession?.(sessionId);
+        this.sessionManager!.setCommandApprovalPolicy(
+          sessionId,
+          this.getConfiguredCommandApprovalPolicy(session?.projectScope),
+        );
+      }
+
+      this.approvalManager!.resetAgentWriteApproval();
+      if (selection === "prompt") return true;
+
+      const targetSessionId = fallbackSessionId ?? targetSessionIds[0];
+      if (!targetSessionId) return false;
+      const targetSession = this.sessionManager!.getSession?.(targetSessionId);
+      const targetProjectId = targetSession?.projectScope.projectId;
+      const writeTargets =
+        selection === "session" ? targetSessionIds : [targetSessionId];
+      const approvedSessionIds = new Set<string>();
+      let success = true;
+      for (const sessionId of writeTargets) {
+        const session = this.sessionManager!.getSession?.(sessionId);
+        const updated = this.approvalManager!.setAgentWriteApprovalSelection(
+          sessionId,
+          selection,
+          session?.projectScope.rootPath,
+        );
+        if (updated) approvedSessionIds.add(sessionId);
+        success = updated && success;
+      }
+
+      for (const sessionId of approveForMeSessionIds) {
+        const session = this.sessionManager!.getSession?.(sessionId);
+        const covered =
+          selection === "global"
+            ? success
+            : selection === "project"
+              ? success && session?.projectScope.projectId === targetProjectId
+              : approvedSessionIds.has(sessionId);
+        if (!covered) continue;
+        const restored = this.setSessionCommandApprovalPolicy(
+          sessionId,
+          "approve-for-me",
+          session?.projectScope.rootPath,
+        );
+        success = (restored?.ok ?? false) && success;
+      }
+      return success;
+    });
+  }
+
   /**
    * Inject a prompt into the chat input and optionally focus the panel.
    * Used by code actions (Fix/Explain with AgentLink).
@@ -11000,7 +10994,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         tailTurns: 0,
       });
     } else if (mode) {
-      await this.sessionManager.switchForegroundMode(mode);
+      const switched = await this.sessionManager.switchForegroundMode(mode);
+      if (switched) {
+        current = switched;
+        this.reconcileSessionApprovalAfterModeSwitch(switched.id);
+      }
     }
     if (opts.commandApprovalPolicy) {
       this.withApprovalStateTransition(() => {
@@ -11335,6 +11333,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       restored?: boolean;
       tailTurns?: number;
       checkpoints?: Array<{ turnIndex: number; checkpointId: string }>;
+      origin?: "focus";
     },
   ): void {
     this.withApprovalStateTransition(() => {
@@ -11359,8 +11358,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       restored?: boolean;
       tailTurns?: number;
       checkpoints?: Array<{ turnIndex: number; checkpointId: string }>;
+      origin?: "focus";
     },
   ): Extract<ExtensionToWebview, { type: "agentSessionLoaded" }> {
+    // Deliver buffered deltas before the hydration snapshot so ordering stays
+    // coherent: everything up to the snapshot arrives first, the snapshot
+    // supersedes it, and only genuinely newer deltas follow.
+    this.deltaBufferFlusher.flushNow();
     const all = session.getAllMessages();
     const projectedAll = agentMessagesToChatMessages(all as unknown[]);
     const tail = getTailChunkByUserTurns(
@@ -11370,6 +11374,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const backgroundResults =
       this.sessionManager?.getBackgroundCompletionsForParent?.(session.id) ??
       [];
+    const streaming =
+      session.status === "streaming" ||
+      session.status === "tool_executing" ||
+      session.status === "awaiting_approval";
+    // Optional chaining tolerates stub sessions in tests; a real AgentSession
+    // always exposes the live-tail snapshot.
+    const inFlight = session.inFlightAssistantBlocks ?? [];
     return {
       type: "agentSessionLoaded",
       sessionId: session.id,
@@ -11380,6 +11391,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       mode: session.mode,
       model: session.model,
       messages: tail.chunk,
+      messageIndexOffset: all.length - tail.chunk.length,
       todos: getLatestTodoState(all),
       lastInputTokens: session.lastInputTokens,
       lastOutputTokens: 0,
@@ -11389,6 +11401,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       checkpoints: opts?.checkpoints,
       userTurnOffset: tail.userTurnOffset,
       hasMoreBefore: tail.hasMoreBefore,
+      inFlight: inFlight.length > 0 ? inFlight : undefined,
+      streaming,
+      origin: opts?.origin,
     };
   }
 

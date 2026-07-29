@@ -126,6 +126,60 @@ describe("SidebarProvider write approval sync", () => {
     vi.clearAllMocks();
   });
 
+  it("coordinates Prompt before resetting agent write authority", async () => {
+    const { SidebarProvider } = await import("./SidebarProvider.js");
+    const provider = new SidebarProvider({ path: "/ext" } as never);
+    const approvalManager = makeApprovalManager();
+    const setAgentWriteApproval = vi.fn(() => true);
+    provider.setApprovalManager(approvalManager as never);
+    provider.setAgentWriteApprovalHandler(setAgentWriteApproval);
+    const webview = makeWebviewView();
+
+    provider.resolveWebviewView(
+      webview.view as never,
+      {} as never,
+      {} as never,
+    );
+    webview.getMessageHandler()!({
+      command: "setWriteApproval",
+      mode: "prompt",
+    });
+
+    expect(setAgentWriteApproval).toHaveBeenCalledWith("prompt", ["session-a"]);
+    expect(approvalManager.resetAgentWriteApproval).not.toHaveBeenCalled();
+    expect(approvalManager.setAgentWriteApproval).not.toHaveBeenCalled();
+  });
+
+  it("delegates coordinated session agent-write approval", async () => {
+    const { SidebarProvider } = await import("./SidebarProvider.js");
+    const provider = new SidebarProvider({ path: "/ext" } as never);
+    const approvalManager = makeApprovalManager();
+    const setAgentWriteApproval = vi.fn(() => true);
+    provider.setApprovalManager(approvalManager as never);
+    provider.setAgentWriteApprovalHandler(setAgentWriteApproval);
+    const webview = makeWebviewView();
+
+    provider.resolveWebviewView(
+      webview.view as never,
+      {} as never,
+      {} as never,
+    );
+    webview.getMessageHandler()!({
+      command: "setWriteApproval",
+      mode: "session",
+    });
+
+    expect(setAgentWriteApproval).toHaveBeenCalledWith("session", [
+      "session-a",
+    ]);
+    expect(approvalManager.resetAgentWriteApproval).not.toHaveBeenCalled();
+    expect(approvalManager.setAgentWriteApproval).not.toHaveBeenCalled();
+    expect(approvalManager.setWriteApproval).toHaveBeenCalledWith(
+      "session-a",
+      "session",
+    );
+  });
+
   it("setWriteApproval session updates both legacy and agent approval tracks", async () => {
     const { SidebarProvider } = await import("./SidebarProvider.js");
 

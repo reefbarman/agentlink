@@ -1,13 +1,42 @@
 // @vitest-environment jsdom
 
 import type { ApprovalRequest, DecisionMessage } from "../types.js";
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/preact";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
 import { WriteCard } from "./WriteCard.js";
 import { createRef } from "preact";
 
+afterEach(cleanup);
+
 describe("WriteCard", () => {
+  it("reveals a file diff without resolving the approval", () => {
+    const submit = vi.fn<(data: Omit<DecisionMessage, "type">) => void>();
+    const onRevealDiff = vi.fn();
+    const request: ApprovalRequest = {
+      kind: "write",
+      id: "diff-request-1",
+      filePath: "src/example.ts",
+      writeOperation: "modify",
+    };
+
+    render(
+      <WriteCard
+        request={request}
+        submit={submit}
+        followUpRef={createRef<string>()}
+        onRevealDiff={onRevealDiff}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reveal diff in editor" }),
+    );
+
+    expect(onRevealDiff).toHaveBeenCalledWith("diff-request-1");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   it("renders explicit non-file write choices without file trust controls", () => {
     const submit = vi.fn<(data: Omit<DecisionMessage, "type">) => void>();
     const request: ApprovalRequest = {
@@ -38,6 +67,9 @@ describe("WriteCard", () => {
     ).toBeTruthy();
     expect(screen.queryByText("modify")).toBeNull();
     expect(screen.queryByText("Auto Approval Rules")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Reveal diff in editor" }),
+    ).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: "Generate for Session" }),
     );

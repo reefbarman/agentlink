@@ -1758,3 +1758,116 @@ describe("AgentSession", () => {
     });
   });
 });
+
+describe("in-flight assistant snapshot", () => {
+  it("accumulates the streaming response from agent events", async () => {
+    const session = await makeSession();
+
+    session.recordInFlightAgentEvent({
+      type: "thinking_start",
+      thinkingId: "think-1",
+    });
+    session.recordInFlightAgentEvent({
+      type: "thinking_delta",
+      thinkingId: "think-1",
+      text: "reasoning",
+    });
+    session.recordInFlightAgentEvent({
+      type: "thinking_end",
+      thinkingId: "think-1",
+    });
+    session.recordInFlightAgentEvent({ type: "text_delta", text: "Hello" });
+    session.recordInFlightAgentEvent({ type: "text_delta", text: " world" });
+    session.recordInFlightAgentEvent({
+      type: "tool_start",
+      toolCallId: "tool-1",
+      toolName: "read_file",
+      input: { path: "a.ts" },
+    });
+
+    expect(session.inFlightAssistantBlocks).toEqual([
+      { type: "thinking", id: "think-1", text: "reasoning", complete: true },
+      { type: "text", text: "Hello world" },
+      {
+        type: "tool_call",
+        id: "tool-1",
+        name: "read_file",
+        inputJson: JSON.stringify({ path: "a.ts" }),
+        complete: false,
+      },
+    ]);
+  });
+
+  it("ignores duplicate starts and child tool calls", async () => {
+    const session = await makeSession();
+
+    session.recordInFlightAgentEvent({
+      type: "thinking_start",
+      thinkingId: "think-1",
+    });
+    session.recordInFlightAgentEvent({
+      type: "thinking_start",
+      thinkingId: "think-1",
+    });
+    session.recordInFlightAgentEvent({
+      type: "tool_start",
+      toolCallId: "child-1",
+      toolName: "read_file",
+      parentCallId: "parent-1",
+      input: {},
+    });
+
+    expect(session.inFlightAssistantBlocks).toEqual([
+      { type: "thinking", id: "think-1", text: "", complete: false },
+    ]);
+  });
+
+  it("clears when the response is committed to the transcript", async () => {
+    const session = await makeSession();
+    session.recordInFlightAgentEvent({ type: "text_delta", text: "partial" });
+    expect(session.inFlightAssistantBlocks).toHaveLength(1);
+
+    session.appendAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "partial done" }],
+    } as AgentMessage);
+    expect(session.inFlightAssistantBlocks).toEqual([]);
+  });
+
+  it("clears on done, error, and abort", async () => {
+    const session = await makeSession();
+
+    session.recordInFlightAgentEvent({ type: "text_delta", text: "a" });
+    session.recordInFlightAgentEvent({
+      type: "done",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+    });
+    expect(session.inFlightAssistantBlocks).toEqual([]);
+
+    session.recordInFlightAgentEvent({ type: "text_delta", text: "b" });
+    session.recordInFlightAgentEvent({
+      type: "error",
+      error: "boom",
+      retryable: false,
+    });
+    expect(session.inFlightAssistantBlocks).toEqual([]);
+
+    session.recordInFlightAgentEvent({ type: "text_delta", text: "c" });
+    session.abort();
+    expect(session.inFlightAssistantBlocks).toEqual([]);
+  });
+
+  it("returns copies so callers cannot mutate the snapshot", async () => {
+    const session = await makeSession();
+    session.recordInFlightAgentEvent({ type: "text_delta", text: "x" });
+
+    const snapshot = session.inFlightAssistantBlocks;
+    if (snapshot[0]?.type === "text") snapshot[0].text = "mutated";
+    expect(session.inFlightAssistantBlocks).toEqual([
+      { type: "text", text: "x" },
+    ]);
+  });
+});

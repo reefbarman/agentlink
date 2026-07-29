@@ -2829,6 +2829,10 @@ export class AgentSessionManager {
     const session = this.sessions.get(sessionId);
     if (session) {
       this.updateInterruptedRunProgress(session, event);
+      // Keep the session's live-tail snapshot current before any surface
+      // consumes the event, so hydrations built mid-stream are complete.
+      // Optional call tolerates stub sessions injected by tests.
+      session.recordInFlightAgentEvent?.(event);
     }
     if (session && event.type === "warning" && event.modelFallback) {
       session.model = event.modelFallback.effectiveModel;
@@ -3638,7 +3642,7 @@ export class AgentSessionManager {
    * Keep the session's prompt-facing Approve for Me flag in step with its
    * command approval policy. When the flag crosses the approve-for-me boundary,
    * rebuild the system prompt and conversation-placed mode anchor so mode-switch
-   * guidance flips between user consent and automatic guardian review. Rebuilds
+   * guidance flips between user consent and automatic allowance. Rebuilds
    * are fire-and-forget and serialized per session; the engine picks up the new
    * prompt and anchor on its next API request.
    */

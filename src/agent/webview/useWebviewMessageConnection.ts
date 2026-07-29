@@ -40,6 +40,12 @@ export interface WebviewMessageConnectionOptions {
   flushDeltasRef?: MutableRef<() => void>;
   dispatchDelta(action: StreamingDeltaAction): void;
   onInactiveSessionMessage?(msg: SessionScopedExtensionMessage): void;
+  /**
+   * Called whenever a session-scoped event is dropped. A drop means the local
+   * projection for that session is no longer a complete replica of the
+   * extension's stream — callers should stop treating it as authoritative.
+   */
+  onStreamDrop?(sessionId: string | undefined): void;
   onMessage(msg: ExtensionMessage, controls: WebviewMessageControls): void;
 }
 
@@ -172,6 +178,7 @@ export function useWebviewMessageConnection(
       const reportDrop = (
         reason: "session_mismatch" | "streaming_false",
       ): void => {
+        optionsRef.current.onStreamDrop?.(eventSessionId);
         vscodeApi.postMessage({
           command: "agentStreamDrop",
           reason,
@@ -212,6 +219,10 @@ export function useWebviewMessageConnection(
 
       const controls: WebviewMessageControls = {
         dropIfNotStreaming: () => {
+          // Replayed buffered events were valid in order when they were
+          // captured; the streaming gate only exists to reject stale live
+          // events and must never discard a replay.
+          if (bypassSessionRouting) return false;
           if (streamingRef.current) return false;
           console.debug(
             `[agentlink-webview] dropping ${msg.type}: streamingRef=false (eventSession=${eventSessionId ?? "none"}, current=${sessionIdRef.current ?? "null"})`,

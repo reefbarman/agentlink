@@ -3851,14 +3851,15 @@ describe("AgentEngine", () => {
               },
               fetch: {
                 kind: "fetch",
-                backend: "disabled",
-                available: false,
-                reason: "disabled",
+                backend: "provider",
+                available: true,
+                reason: "native_selected",
+                hostedTool: { type: "web_fetch", citationsEnabled: true },
               },
             },
             settings: {
               searchBackend: "native",
-              fetchBackend: "disabled",
+              fetchBackend: "native",
               nativeSearchMode: "cached",
               allowedDomains: [],
               blockedDomains: [],
@@ -3867,20 +3868,35 @@ describe("AgentEngine", () => {
               maxFetchContentTokens: 25_000,
               maxReplayBytesPerTurn: 5_242_880,
             },
-            hostedTools: [{ type: "web_search" }],
-            enabledKinds: ["search"],
+            hostedTools: [
+              { type: "web_search" },
+              { type: "web_fetch", citationsEnabled: true },
+            ],
+            enabledKinds: ["search", "fetch"],
             diagnostics: {
               providerSearchSupported: true,
-              providerFetchSupported: false,
+              providerFetchSupported: true,
               domainRestrictionsRequested: false,
               maxSearchUsesEnforced: false,
               maxFetchUsesEnforced: false,
               maxFetchContentTokensEnforced: false,
             },
           },
-          mcpToolDefinitions: [],
+          mcpToolDefinitions: [
+            {
+              name: "searxng__search",
+              description: "Search",
+              input_schema: { type: "object", properties: {} },
+            },
+          ],
           mcpToolDisclosure: {
-            inlineTools: [],
+            inlineTools: [
+              {
+                name: "searxng__search",
+                description: "Search",
+                input_schema: { type: "object", properties: {} },
+              },
+            ],
             deferredTools: [],
             catalog: [],
           },
@@ -3892,7 +3908,21 @@ describe("AgentEngine", () => {
       expect(streamCalls[0]?.tools?.map((tool) => tool.name)).toContain(
         "web_search",
       );
-      expect(streamCalls[0]?.tools?.map((tool) => tool.name)).not.toContain(
+      const webSearchDescription = streamCalls[0]?.tools?.find(
+        (tool) => tool.name === "web_search",
+      )?.description;
+      const searchGuidance =
+        "Prefer this native tool over general-purpose MCP web-search tools";
+      expect(webSearchDescription).toContain(searchGuidance);
+      expect(webSearchDescription?.split(searchGuidance)).toHaveLength(2);
+      const webFetchDescription = streamCalls[0]?.tools?.find(
+        (tool) => tool.name === "web_fetch",
+      )?.description;
+      const fetchGuidance =
+        "Prefer this native tool over general-purpose MCP page-reading tools";
+      expect(webFetchDescription).toContain(fetchGuidance);
+      expect(webFetchDescription?.split(fetchGuidance)).toHaveLength(2);
+      expect(streamCalls[0]?.tools?.map((tool) => tool.name)).toContain(
         "searxng__search",
       );
     });

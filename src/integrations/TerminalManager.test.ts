@@ -32,6 +32,7 @@ type MockManagedTerminal = {
   cwd: string;
   busy: boolean;
   envKey?: string;
+  implicit?: boolean;
   owner?: TerminalExecutionOwner;
   backgroundRunning: boolean;
   lastCommandEndedAt: number;
@@ -427,9 +428,119 @@ describe("TerminalManager terminal selection", () => {
       "AgentLink",
       undefined,
       undefined,
+      true,
     );
     expect(result.terminal_id).toBe("term_new");
     expect(existing.terminal.sendText).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing explicit terminal ID without creating a replacement", async () => {
+    const manager = new TerminalManager();
+    const createTerminal = vi.spyOn(
+      manager as unknown as {
+        createTerminal: (...args: unknown[]) => MockManagedTerminal;
+      },
+      "createTerminal",
+    );
+
+    await expect(
+      (
+        manager as unknown as {
+          resolveTerminal: (
+            options: TerminalExecuteOptions,
+          ) => Promise<MockManagedTerminal>;
+        }
+      ).resolveTerminal({
+        owner: undefined,
+        command: "pwd",
+        cwd: "/workspace",
+        terminal_id: "missing",
+      }),
+    ).rejects.toThrow("Terminal not found: missing");
+    expect(createTerminal).not.toHaveBeenCalled();
+  });
+
+  it("rejects a busy named terminal without creating a duplicate", async () => {
+    const manager = new TerminalManager();
+    const existing = {
+      id: "term_named",
+      name: "Server",
+      cwd: "/workspace/server",
+      busy: false,
+      backgroundRunning: true,
+      lastCommandEndedAt: 0,
+      outputBuffer: "",
+      backgroundExitCode: null,
+      backgroundOutputCaptured: true,
+      backgroundDisposables: [],
+      terminal: {
+        show: vi.fn(),
+        sendText: vi.fn(),
+        dispose: vi.fn(),
+      },
+    } satisfies MockManagedTerminal;
+    (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+      existing,
+    ];
+    const createTerminal = vi.spyOn(
+      manager as unknown as {
+        createTerminal: (...args: unknown[]) => MockManagedTerminal;
+      },
+      "createTerminal",
+    );
+
+    await expect(
+      (
+        manager as unknown as {
+          resolveTerminal: (
+            options: TerminalExecuteOptions,
+          ) => Promise<MockManagedTerminal>;
+        }
+      ).resolveTerminal({
+        owner: undefined,
+        command: "npm run dev",
+        cwd: "/workspace/server",
+        terminal_name: "Server",
+      }),
+    ).rejects.toThrow("Terminal Server is busy");
+    expect(createTerminal).not.toHaveBeenCalled();
+  });
+
+  it("refreshes cwd when a background command finishes", () => {
+    const manager = new TerminalManager();
+    const existing = {
+      id: "term_background",
+      name: "AgentLink",
+      cwd: "/workspace",
+      busy: false,
+      backgroundRunning: true,
+      lastCommandEndedAt: 0,
+      outputBuffer: "",
+      backgroundExitCode: 0,
+      backgroundOutputCaptured: true,
+      backgroundDisposables: [],
+      terminal: {
+        show: vi.fn(),
+        sendText: vi.fn(),
+        dispose: vi.fn(),
+        shellIntegration: {
+          cwd: { fsPath: "/workspace/subdir" },
+          executeCommand: vi.fn(),
+        },
+      },
+    } satisfies MockManagedTerminal;
+
+    expect(
+      (
+        manager as unknown as {
+          finishBackgroundCommand: (
+            managed: MockManagedTerminal,
+            commandId: string,
+          ) => boolean;
+        }
+      ).finishBackgroundCommand(existing, "command-1"),
+    ).toBe(true);
+    expect(existing.cwd).toBe("/workspace/subdir");
   });
 
   it("preserves named-terminal reuse across requested cwd changes", async () => {
@@ -492,6 +603,7 @@ describe("TerminalManager terminal selection", () => {
       id: "term_existing",
       name: "AgentLink",
       cwd: "/workspace",
+      implicit: true,
       busy: false,
       backgroundRunning: false,
       lastCommandEndedAt: 0,
@@ -582,6 +694,7 @@ describe("TerminalManager terminal selection", () => {
       "AgentLink",
       undefined,
       undefined,
+      true,
     );
 
     releaseCooldown?.();

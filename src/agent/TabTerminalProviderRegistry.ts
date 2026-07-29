@@ -23,8 +23,6 @@ interface OwnedTerminal {
   owner: TabTerminalOwner;
   logicalName: string;
   physicalName: string;
-  cwd: string;
-  envKey: string;
 }
 
 function ownerKey(owner: TabTerminalOwner): string {
@@ -44,14 +42,6 @@ function physicalName(owner: TabTerminalOwner, logicalName: string): string {
   return logicalName === "AgentLink"
     ? `AgentLink ${owner.tabLabel}`
     : `AgentLink ${owner.tabLabel} · ${logicalName}`;
-}
-
-function environmentKey(env?: Record<string, string>): string {
-  return JSON.stringify(
-    Object.entries(env ?? {}).sort(([left], [right]) =>
-      left.localeCompare(right),
-    ),
-  );
 }
 
 export class TabTerminalProviderRegistry {
@@ -144,8 +134,6 @@ export class TabTerminalProviderRegistry {
     owner: TabTerminalOwner,
     logicalName: string,
     resolvedPhysicalName: string,
-    cwd: string,
-    envKey: string,
   ): void {
     if (this.isRetired(owner)) {
       this.provider.closeTerminals({
@@ -166,8 +154,6 @@ export class TabTerminalProviderRegistry {
       owner: { ...owner },
       logicalName,
       physicalName: resolvedPhysicalName,
-      cwd,
-      envKey,
     });
   }
 
@@ -410,9 +396,9 @@ class ScopedTabTerminalProvider implements TerminalProvider {
     if (!this.acceptsRequestOwner(options.owner)) {
       throw new Error("Terminal execution owner does not match this chat tab.");
     }
-    let terminalId = options.terminal_id;
+    const terminalId = options.terminal_id;
     let splitFrom = options.split_from;
-    const envKey = environmentKey(options.env);
+
     if (terminalId && !this.registry.ownedTerminal(terminalId, this.owner)) {
       throw new Error(`Terminal not found: ${terminalId}`);
     }
@@ -433,24 +419,9 @@ class ScopedTabTerminalProvider implements TerminalProvider {
       (terminalId
         ? this.registry.ownedTerminal(terminalId, this.owner)?.logicalName
         : options.terminal_name) ?? "AgentLink";
-    if (!terminalId && !options.split_from) {
-      const activeMetadata = new Map(
-        this.registry.baseProvider
-          .listTerminals({ owner: executionOwner(this.owner) })
-          .map((terminal) => [terminal.id, terminal]),
-      );
-      const reusable = this.registry
-        .activeOwnedTerminals(this.owner)
-        .find(
-          ([terminalId, terminal]) =>
-            activeMetadata.get(terminalId)?.busy === false &&
-            terminal.logicalName === logicalName &&
-            terminal.envKey === envKey &&
-            terminal.cwd === options.cwd,
-        );
-      terminalId = reusable?.[0];
-    }
-    const resolvedPhysicalName = physicalName(this.owner, logicalName);
+    const resolvedPhysicalName = options.terminal_name
+      ? physicalName(this.owner, logicalName)
+      : `${physicalName(this.owner, logicalName)} · Pool`;
     this.registry.reservePhysicalName(this.owner, resolvedPhysicalName);
     const assign = (assignedId: string) => {
       this.registry.register(
@@ -458,8 +429,6 @@ class ScopedTabTerminalProvider implements TerminalProvider {
         this.owner,
         logicalName,
         resolvedPhysicalName,
-        options.cwd,
-        envKey,
       );
       options.onTerminalAssigned?.(assignedId);
     };
@@ -468,8 +437,20 @@ class ScopedTabTerminalProvider implements TerminalProvider {
       ...options,
       owner: executionOwner(this.owner),
       ...(terminalId
-        ? { terminal_id: terminalId, terminal_name: undefined }
-        : { terminal_name: resolvedPhysicalName }),
+        ? {
+            terminal_id: terminalId,
+            terminal_name: undefined,
+            terminal_creation_name: undefined,
+          }
+        : options.terminal_name
+          ? {
+              terminal_name: resolvedPhysicalName,
+              terminal_creation_name: undefined,
+            }
+          : {
+              terminal_name: undefined,
+              terminal_creation_name: resolvedPhysicalName,
+            }),
       ...(splitFrom ? { split_from: splitFrom } : {}),
       onTerminalAssigned: assign,
     };

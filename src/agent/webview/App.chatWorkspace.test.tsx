@@ -524,7 +524,10 @@ describe("App chat workspace integration", () => {
     });
 
     deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
-    deliver(sessionLoaded("session-1", "persisted transcript revision 2", 2));
+    deliver({
+      ...sessionLoaded("session-1", "persisted transcript revision 2", 2),
+      origin: "focus",
+    });
 
     await waitFor(() => {
       expect(
@@ -573,6 +576,7 @@ describe("App chat workspace integration", () => {
     deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
     deliver({
       ...sessionLoaded("session-1", "stale persisted tail for A", 2),
+      origin: "focus",
       backgroundResults: [
         {
           sessionId: "bg-completed-while-inactive",
@@ -660,7 +664,10 @@ describe("App chat workspace integration", () => {
     ]);
 
     deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
-    deliver(sessionLoaded("session-1", "stale persisted tail for A", 1));
+    deliver({
+      ...sessionLoaded("session-1", "stale persisted tail for A", 1),
+      origin: "focus",
+    });
     deliver({
       type: "agentSessionChunk",
       sessionId: "session-2",
@@ -718,7 +725,10 @@ describe("App chat workspace integration", () => {
     });
 
     deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
-    deliver(sessionLoaded("session-2", "transcript for B"));
+    deliver({
+      ...sessionLoaded("session-2", "transcript for B"),
+      origin: "focus",
+    });
 
     await waitFor(() => {
       expect(screen.getAllByText("interject once")).toHaveLength(1);

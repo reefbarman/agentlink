@@ -25,6 +25,7 @@ export function ApprovalPanelEmbed({
   submit,
   onResizeStart,
   onSuggestRegex,
+  onRevealDiff,
   actions,
 }: {
   request: ApprovalRequest;
@@ -37,6 +38,7 @@ export function ApprovalPanelEmbed({
     subCommand: string;
     fullCommand: string;
   }) => Promise<string>;
+  onRevealDiff?: (requestId: string) => void;
   actions?: ComponentChildren;
 }) {
   return (
@@ -79,6 +81,7 @@ export function ApprovalPanelEmbed({
           request={request}
           submit={submit}
           followUpRef={followUpRef}
+          onRevealDiff={onRevealDiff}
         />
       ) : request.kind === "rename" ? (
         <RenameCard

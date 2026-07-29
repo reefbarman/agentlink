@@ -318,6 +318,23 @@ export interface BrowserGatewayThemeSnapshot {
   source?: "webview-dom" | "vscode-theme-api" | "baked-default";
 }
 
+/**
+ * Serializable snapshot of the model response currently streaming. Captured
+ * extension-side (the persisted transcript only gains the assistant message
+ * once the whole response completes) and shipped with `agentSessionLoaded`
+ * so hydration is complete: transcript + live tail.
+ */
+export type InFlightAssistantBlock =
+  | { type: "thinking"; id: string; text: string; complete: boolean }
+  | { type: "text"; text: string }
+  | {
+      type: "tool_call";
+      id: string;
+      name: string;
+      inputJson: string;
+      complete: boolean;
+    };
+
 /** Durable background completion projected back into its parent transcript. */
 export interface BackgroundCompletionResult {
   sessionId: string;

@@ -327,7 +327,10 @@ export interface TerminalExecuteOptions {
   command: string;
   cwd: string;
   terminal_id?: string;
+  /** Explicit logical selector: reuse or create a terminal with this name. */
   terminal_name?: string;
+  /** Presentation-only name used when an untargeted execution creates a terminal. */
+  terminal_creation_name?: string;
   split_from?: string;
   background?: boolean;
   timeout?: number;

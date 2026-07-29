@@ -320,43 +320,9 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   compose: schemas.composeSchema,
   ...(__DEV_BUILD__
     ? {
-        send_feedback: {
-          tool_name: z
-            .string()
-            .describe(
-              "AgentLink tool this feedback is about. For MCP-related feedback, use the native AgentLink MCP tool actually involved, such as find_mcp_tools or call_mcp_tool. Never report a specific MCP server or its server__tool; those are out of scope unless the problem is in AgentLink's MCP plumbing.",
-            ),
-          feedback: z
-            .string()
-            .describe(
-              "Description of the issue, suggestion, or missing feature",
-            ),
-          tool_params: z
-            .string()
-            .optional()
-            .describe(
-              "Optional serialized params passed to the tool (helps reproduce)",
-            ),
-          tool_result_summary: z
-            .string()
-            .optional()
-            .describe("Optional summary of what happened / unexpected result"),
-        },
-        get_feedback: {
-          tool_name: z
-            .string()
-            .optional()
-            .describe(
-              "Filter to feedback about a specific tool (omit for all feedback)",
-            ),
-        },
-        delete_feedback: {
-          indices: z
-            .array(z.coerce.number())
-            .describe(
-              "0-based feedback entry indices to delete (from get_feedback output)",
-            ),
-        },
+        send_feedback: schemas.sendFeedbackSchema,
+        get_feedback: schemas.getFeedbackSchema,
+        delete_feedback: schemas.deleteFeedbackSchema,
       }
     : {}),
 };
@@ -648,7 +614,7 @@ function getSetTaskStatusTool(
 const SWITCH_MODE_TOOL: ToolDefinition = {
   name: "switch_mode",
   description:
-    "Request to switch the current agent mode (e.g. from 'code' to 'architect'). The user must approve the switch. Available modes: code, architect, ask, debug.",
+    "Request to switch the current agent mode (e.g. from 'code' to 'architect'). Approve for Me allows the switch automatically; otherwise the user must approve it. Available modes: code, architect, ask, debug.",
   input_schema: {
     type: "object",
     properties: {
@@ -4643,12 +4609,17 @@ export async function dispatchToolCall(
           ],
         };
       }
+      const ids = Array.isArray(params.ids)
+        ? params.ids.filter(
+            (value: unknown): value is string => typeof value === "string",
+          )
+        : undefined;
       const indices = Array.isArray(params.indices)
-        ? params.indices
-            .map((v: unknown) => Number(v))
-            .filter((n: number) => Number.isFinite(n))
-        : [];
-      return handleDeleteFeedback({ indices });
+        ? params.indices.filter(
+            (value: unknown): value is number => typeof value === "number",
+          )
+        : undefined;
+      return handleDeleteFeedback({ ids, indices });
     }
 
     default:

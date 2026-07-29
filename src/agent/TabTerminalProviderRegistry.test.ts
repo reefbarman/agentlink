@@ -18,6 +18,7 @@ function createProvider() {
   const terminals = new Map<string, TerminalMetadata>();
   const states = new Map<string, TerminalBackgroundState>();
   const recentlyClosed: ClosedTerminalSnapshot[] = [];
+  const executionKeys = new Map<string, string>();
   let nextId = 1;
 
   const owned = (
@@ -33,15 +34,28 @@ function createProvider() {
 
   const provider: TerminalProvider = {
     executeCommand: vi.fn(async (options: TerminalExecuteOptions) => {
-      const id = options.terminal_id ?? `term_${nextId++}`;
+      const implicitKey = JSON.stringify({
+        owner: options.owner,
+        cwd: options.cwd,
+        env: options.env ?? {},
+        name: options.terminal_creation_name ?? "AgentLink",
+      });
+      const reusableId = options.terminal_name
+        ? undefined
+        : [...executionKeys].find(([, key]) => key === implicitKey)?.[0];
+      const id = options.terminal_id ?? reusableId ?? `term_${nextId++}`;
       const name =
-        terminals.get(id)?.name ?? options.terminal_name ?? "AgentLink";
+        terminals.get(id)?.name ??
+        options.terminal_name ??
+        options.terminal_creation_name ??
+        "AgentLink";
       terminals.set(id, {
         id,
         name,
         busy: false,
         ...(options.owner ? { owner: { ...options.owner } } : {}),
       });
+      if (!options.terminal_name) executionKeys.set(id, implicitKey);
       states.set(id, {
         is_running: false,
         state: "completed",
@@ -189,8 +203,35 @@ describe("TabTerminalProviderRegistry", () => {
     expect(t1Second.terminal_id).toBe(t1First.terminal_id);
     expect(t2First.terminal_id).not.toBe(t1First.terminal_id);
     expect(t1First.terminal_name).toBe("AgentLink");
-    expect(base.terminals.get(t1First.terminal_id)?.name).toBe("AgentLink T1");
-    expect(base.terminals.get(t2First.terminal_id)?.name).toBe("AgentLink T2");
+    expect(base.terminals.get(t1First.terminal_id)?.name).toBe(
+      "AgentLink T1 · Pool",
+    );
+    expect(base.terminals.get(t2First.terminal_id)?.name).toBe(
+      "AgentLink T2 · Pool",
+    );
+  });
+
+  it("preserves implicit execution intent while providing a physical creation title", async () => {
+    const base = createProvider();
+    const provider = new TabTerminalProviderRegistry(base.provider).forOwner(
+      t1,
+    );
+
+    await provider.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/tmp",
+    });
+
+    const forwarded = vi.mocked(base.provider.executeCommand).mock
+      .calls[0]?.[0];
+    expect(forwarded).toEqual(
+      expect.objectContaining({
+        terminal_name: undefined,
+        terminal_creation_name: "AgentLink T1 · Pool",
+      }),
+    );
+    expect(forwarded).not.toHaveProperty("terminal_id");
   });
 
   it("fails closed for explicit cross-owner IDs, names, output, and control", async () => {
@@ -368,7 +409,9 @@ describe("TabTerminalProviderRegistry", () => {
       cwd: "/tmp",
     });
     expect(fresh.terminal_id).not.toBe(other.terminal_id);
-    expect(base.terminals.get(fresh.terminal_id)?.name).toBe("AgentLink T1");
+    expect(base.terminals.get(fresh.terminal_id)?.name).toBe(
+      "AgentLink T1 · Pool",
+    );
   });
 
   it("does not reuse an implicit terminal across cwd or environment changes", async () => {

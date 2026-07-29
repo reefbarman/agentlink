@@ -349,7 +349,7 @@ Approve for Me is enabled, so the architect review loop is autonomous:
 1. **Resolve genuine uncertainty** — Use \`ask_user\` only for unresolved requirements, constraints, or trade-offs that require the user's judgment. Do not ask the user to review or approve the plan, confirm proceeding, or choose whether to switch modes.
 2. **Review the plan** — Critically self-review the plan and use the background review agent where warranted. Incorporate valid findings before presenting it.
 3. **Present the result** — Summarize the final plan and include its file path. Do not pause for plan approval.
-4. **Transition immediately** — Call \`switch_mode\` with \`mode: "code"\` and a clear reason. The switch is reviewed automatically under Approve for Me; do not use \`ask_user\` or wait for user confirmation.`;
+4. **Transition immediately** — Call \`switch_mode\` with \`mode: "code"\` and a clear reason. The switch is allowed automatically under Approve for Me; do not use \`ask_user\` or wait for user confirmation.`;
 
 /**
  * Mode-specific prompt augmentations.
@@ -1140,7 +1140,7 @@ export async function buildPromptArtifacts(
     promptProfileOverrides?: Readonly<Record<string, PromptProfile>>;
     /** Deterministic catalog-budget override for evaluation and tests. */
     skillCatalogBudgetChars?: number;
-    /** Approve for Me is active: mode switches are reviewed automatically, not by the user. */
+    /** Approve for Me is active: mode switches are allowed automatically. */
     approveForMe?: boolean;
     /**
      * Where mode-specific instructions live. "system" (default) inlines them
@@ -1274,9 +1274,9 @@ export async function buildPromptArtifacts(
   const approveForMeSection = options?.approveForMe
     ? `\n\n## Mode Switching Under Approve for Me
 
-Approve for Me is enabled for this session: mode switches are reviewed automatically on the user's behalf, so an approved \`switch_mode\` call does not interrupt the user. This section overrides the mode-switch consent guidance elsewhere in this prompt:
+Approve for Me is enabled for this session: mode switches are allowed automatically, so a \`switch_mode\` call does not require Guardian or user approval and does not interrupt the user. This section overrides the mode-switch consent guidance elsewhere in this prompt:
 
-- When a mode change is warranted, call \`switch_mode\` directly with a clear \`reason\`. Do not use \`ask_user\` to request permission to switch modes or to proceed — approval is handled automatically.
+- When a mode change is warranted, call \`switch_mode\` directly with a clear \`reason\`. Do not use \`ask_user\` to request permission to switch modes or to proceed — the switch is allowed automatically.
 - Never ask a question whose only purpose is mode-change or plan-approval consent. Keep using \`ask_user\` whenever you genuinely need the user's input on requirements, trade-offs, or open design decisions; if such a question's answer naturally implies a mode, you may still attach a \`modeSwitch\` map — the user's explicit choice remains valid consent.`
     : "";
 
@@ -1375,7 +1375,7 @@ export async function buildSystemPrompt(
     promptProfile?: Readonly<PromptProfileResolution>;
     promptProfileOverrides?: Readonly<Record<string, PromptProfile>>;
     skillCatalogBudgetChars?: number;
-    /** Approve for Me is active: mode switches are reviewed automatically, not by the user. */
+    /** Approve for Me is active: mode switches are allowed automatically. */
     approveForMe?: boolean;
   },
 ): Promise<string> {

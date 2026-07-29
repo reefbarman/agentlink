@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = path.resolve(
@@ -588,12 +589,81 @@ function buildParameterRows(tools) {
   );
 }
 
+function legacyFeedbackDeletionPath(feedbackPath) {
+  return path.join(
+    path.dirname(feedbackPath),
+    "agentlink-feedback-deletions.jsonl",
+  );
+}
+
+function feedbackTombstonePath(feedbackPath, id) {
+  const fileName = createHash("sha256").update(id).digest("hex") + ".json";
+  return path.join(
+    path.dirname(feedbackPath),
+    "agentlink-feedback-deletions",
+    fileName,
+  );
+}
+
+function readLegacyDeletedFeedbackIds(feedbackPath) {
+  const deletedIds = new Set();
+  const deletionPath = legacyFeedbackDeletionPath(feedbackPath);
+  if (!fs.existsSync(deletionPath)) return deletedIds;
+  for (const line of fs.readFileSync(deletionPath, "utf-8").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const tombstone = JSON.parse(line);
+      if (typeof tombstone?.id === "string" && tombstone.id.trim()) {
+        deletedIds.add(tombstone.id);
+      }
+    } catch {
+      // Malformed tombstones do not hide active feedback.
+    }
+  }
+  return deletedIds;
+}
+
+function canonicalLegacyFeedbackEntry(entry) {
+  return JSON.stringify({
+    timestamp: entry.timestamp,
+    tool_name: entry.tool_name,
+    feedback: entry.feedback,
+    session_id: entry.session_id,
+    workspace: entry.workspace,
+    extension_version: entry.extension_version,
+    tool_params: entry.tool_params,
+    tool_result_summary: entry.tool_result_summary,
+  });
+}
+
+function legacyFeedbackId(canonicalEntry, duplicateOrdinal) {
+  return `legacy-${createHash("sha256")
+    .update(canonicalEntry)
+    .update("\0")
+    .update(String(duplicateOrdinal))
+    .digest("hex")}`;
+}
+
+function readFeedbackTombstoneNames(feedbackPath) {
+  const directory = path.join(
+    path.dirname(feedbackPath),
+    "agentlink-feedback-deletions",
+  );
+  if (!fs.existsSync(directory)) return new Set();
+  return new Set(
+    fs.readdirSync(directory).filter((name) => name.endsWith(".json")),
+  );
+}
+
 export function mergeFeedbackCounts(report, feedbackPath) {
   report.feedbackCount = 0;
   report.invalidFeedbackLines = 0;
   report.feedbackCountsByTool = {};
   if (!fs.existsSync(feedbackPath)) return;
 
+  const legacyDeletedIds = readLegacyDeletedFeedbackIds(feedbackPath);
+  const tombstoneNames = readFeedbackTombstoneNames(feedbackPath);
+  const duplicateOrdinals = new Map();
   for (const line of fs.readFileSync(feedbackPath, "utf-8").split(/\r?\n/)) {
     if (!line.trim()) continue;
     try {
@@ -602,6 +672,21 @@ export function mergeFeedbackCounts(report, feedbackPath) {
         typeof entry?.tool_name === "string" ? entry.tool_name.trim() : "";
       if (!toolName) {
         report.invalidFeedbackLines += 1;
+        continue;
+      }
+      const canonicalEntry = canonicalLegacyFeedbackEntry(entry);
+      const duplicateOrdinal = duplicateOrdinals.get(canonicalEntry) ?? 0;
+      duplicateOrdinals.set(canonicalEntry, duplicateOrdinal + 1);
+      const id =
+        typeof entry.id === "string" && entry.id.trim()
+          ? entry.id
+          : legacyFeedbackId(canonicalEntry, duplicateOrdinal);
+      if (
+        legacyDeletedIds.has(id) ||
+        tombstoneNames.has(
+          path.basename(feedbackTombstonePath(feedbackPath, id)),
+        )
+      ) {
         continue;
       }
       report.feedbackCount += 1;

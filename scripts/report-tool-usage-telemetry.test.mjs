@@ -12,6 +12,7 @@ import {
 } from "./report-tool-usage-telemetry.mjs";
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 
 const tempDirectories = [];
@@ -254,10 +255,21 @@ test("reports bounded data-quality warnings for invalid and unsupported records"
 test("counts feedback by tool without retaining text and tolerates an absent file", () => {
   const directory = makeTempDirectory();
   const telemetryPath = path.join(directory, "telemetry.jsonl");
-  const feedbackPath = path.join(directory, "feedback.jsonl");
+  const feedbackPath = path.join(directory, "agentlink-feedback.jsonl");
+  const deletionPath = path.join(
+    directory,
+    "agentlink-feedback-deletions.jsonl",
+  );
   fs.writeFileSync(telemetryPath, "", "utf-8");
   writeJsonLines(feedbackPath, [
     {
+      id: "deleted-feedback",
+      timestamp: "2026-07-19T09:59:00Z",
+      tool_name: "execute_command",
+      feedback: "resolved private feedback",
+    },
+    {
+      id: "active-feedback",
       timestamp: "2026-07-19T10:00:00Z",
       tool_name: "read_file",
       feedback: "PRIVATE FEEDBACK BODY",
@@ -276,6 +288,20 @@ test("counts feedback by tool without retaining text and tolerates an absent fil
     "invalid feedback",
     { feedback: "missing tool" },
   ]);
+  writeJsonLines(deletionPath, ["malformed legacy tombstone"]);
+  const tombstoneDirectory = path.join(
+    directory,
+    "agentlink-feedback-deletions",
+  );
+  fs.mkdirSync(tombstoneDirectory);
+  fs.writeFileSync(
+    path.join(
+      tombstoneDirectory,
+      `${createHash("sha256").update("deleted-feedback").digest("hex")}.json`,
+    ),
+    '{"id":"deleted-feedback","deleted_at":"2026-07-20T00:00:00Z"}\n',
+    "utf-8",
+  );
 
   const report = readTelemetry(telemetryPath);
   mergeFeedbackCounts(report, feedbackPath);

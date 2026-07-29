@@ -494,6 +494,8 @@ export type ExtensionMessage =
       mode: string;
       model: string;
       messages: unknown[];
+      /** Absolute index of `messages[0]` in the full persisted transcript (deterministic rehydration ids). */
+      messageIndexOffset?: number;
       todos: TodoItem[];
       lastInputTokens: number;
       lastOutputTokens: number;
@@ -501,6 +503,17 @@ export type ExtensionMessage =
       backgroundResults?: BackgroundCompletionResult[];
       /** True when this came from automatic startup restore rather than explicit user action. */
       restored?: boolean;
+      /** Live tail: blocks of the model response currently streaming (not yet persisted). */
+      inFlight?: import("../../shared/types.js").InFlightAssistantBlock[];
+      /** Whether the session's turn is still running at snapshot time. */
+      streaming?: boolean;
+      /**
+       * "focus" marks a hydration triggered by tab/pane focus, where the
+       * webview may serve the session from its own caches. All other loads
+       * (history load, checkpoint revert, recovered-question resync, webview
+       * boot) must be applied.
+       */
+      origin?: "focus";
       /**
        * Restored checkpoints keyed by the number of visible user turns already
        * committed at that snapshot.
@@ -517,6 +530,8 @@ export type ExtensionMessage =
       messages: unknown[];
       /** Number of user turns before the first message in this chunk. */
       userTurnOffset: number;
+      /** Absolute index of `messages[0]` in the full persisted transcript (deterministic rehydration ids). */
+      messageIndexOffset?: number;
       /** True when older messages still exist before this chunk. */
       hasMoreBefore: boolean;
       checkpoints?: Array<{ turnIndex: number; checkpointId: string }>;

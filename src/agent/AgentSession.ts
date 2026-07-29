@@ -1,9 +1,11 @@
 import type {
   AgentConfig,
+  AgentEvent,
   AgentMessage,
   AgentRuntimeError,
   SessionStatus,
 } from "./types.js";
+import type { InFlightAssistantBlock } from "../shared/types.js";
 import type {
   RequestContextBreakdown,
   ToolResultContextAttribution,
@@ -219,7 +221,7 @@ export class AgentSession {
   /** Provider ID (e.g. "anthropic", "codex") — used for provider-specific system prompt tuning. */
   providerId: string | undefined;
   /** Approve for Me is active for this session — switches the system prompt's
-   *  mode-switch guidance from user consent to automatic guardian review.
+   *  mode-switch guidance from user consent to automatic allowance.
    *  Owned by AgentSessionManager, which syncs it from the session's command
    *  approval policy and rebuilds the prompt when it changes. */
   approveForMe = false;
@@ -860,6 +862,110 @@ export class AgentSession {
     this.messagesRevision++;
     this.messages.push(message);
     this.lastActiveAt = Date.now();
+    // The streamed response is now part of the transcript; the live tail
+    // snapshot must not shadow it.
+    this.inFlightBlocks = [];
+  }
+
+  /**
+   * Live tail of the model response currently streaming. The transcript only
+   * gains the assistant message once the whole response completes, so any
+   * hydration built purely from `messages` would silently drop content the
+   * user is watching stream. This snapshot closes that gap: it is maintained
+   * from the same agent events the surfaces render, cleared the moment the
+   * response is committed (appendAssistantMessage) or the run ends.
+   */
+  private inFlightBlocks: InFlightAssistantBlock[] = [];
+
+  get inFlightAssistantBlocks(): InFlightAssistantBlock[] {
+    return this.inFlightBlocks.map((block) => ({ ...block }));
+  }
+
+  clearInFlightAssistantBlocks(): void {
+    this.inFlightBlocks = [];
+  }
+
+  recordInFlightAgentEvent(event: AgentEvent): void {
+    switch (event.type) {
+      case "thinking_start":
+        if (
+          !this.inFlightBlocks.some(
+            (block) =>
+              block.type === "thinking" && block.id === event.thinkingId,
+          )
+        ) {
+          this.inFlightBlocks.push({
+            type: "thinking",
+            id: event.thinkingId,
+            text: "",
+            complete: false,
+          });
+        }
+        break;
+      case "thinking_delta":
+        for (const block of this.inFlightBlocks) {
+          if (block.type === "thinking" && block.id === event.thinkingId) {
+            block.text += event.text;
+          }
+        }
+        break;
+      case "thinking_end":
+        for (const block of this.inFlightBlocks) {
+          if (block.type === "thinking" && block.id === event.thinkingId) {
+            block.complete = true;
+          }
+        }
+        break;
+      case "text_delta": {
+        const last = this.inFlightBlocks[this.inFlightBlocks.length - 1];
+        if (last?.type === "text") {
+          last.text += event.text;
+        } else {
+          this.inFlightBlocks.push({ type: "text", text: event.text });
+        }
+        break;
+      }
+      case "tool_start":
+        // Child tool calls render inside the parent's compose trace, not as
+        // top-level blocks; mirror the projection and skip them here.
+        if (event.parentCallId) break;
+        if (
+          !this.inFlightBlocks.some(
+            (block) =>
+              block.type === "tool_call" && block.id === event.toolCallId,
+          )
+        ) {
+          this.inFlightBlocks.push({
+            type: "tool_call",
+            id: event.toolCallId,
+            name: event.toolName,
+            inputJson:
+              event.input === undefined ? "" : JSON.stringify(event.input),
+            complete: false,
+          });
+        }
+        break;
+      case "tool_input_delta":
+        for (const block of this.inFlightBlocks) {
+          if (block.type === "tool_call" && block.id === event.toolCallId) {
+            block.inputJson += event.partialJson;
+          }
+        }
+        break;
+      case "tool_result":
+        for (const block of this.inFlightBlocks) {
+          if (block.type === "tool_call" && block.id === event.toolCallId) {
+            block.complete = true;
+          }
+        }
+        break;
+      case "done":
+      case "error":
+        this.inFlightBlocks = [];
+        break;
+      default:
+        break;
+    }
   }
 
   appendSurfaceChange(
@@ -1485,6 +1591,7 @@ export class AgentSession {
     this._abortGeneration++;
     this.abortController?.abort();
     this.abortController = null;
+    this.inFlightBlocks = [];
     this._pendingModeResume = null;
   }
 

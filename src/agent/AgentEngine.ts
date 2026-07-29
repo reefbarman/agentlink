@@ -36,7 +36,11 @@ import { buildToolContextBreakdown } from "./contextBreakdown.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import { partitionMcpToolsForDisclosure } from "./mcpToolDisclosure.js";
 import type { CoreResolvedWebAccessPolicy } from "../core/webAccess.js";
-import { CORE_NATIVE_WEB_MAX_PAUSE_TURNS } from "../core/nativeWebTools.js";
+import {
+  appendNativeWebToolPreference,
+  CORE_NATIVE_WEB_MAX_PAUSE_TURNS,
+  CORE_NATIVE_WEB_TOOL_DEFINITIONS,
+} from "../core/nativeWebTools.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { handleToolError } from "../shared/types.js";
 import type {
@@ -1311,15 +1315,37 @@ export class AgentEngine {
         const discoveryDescription = advertisedDisclosure?.inlineTools.find(
           (tool) => tool.name === "find_native_tools",
         )?.description;
+        const nativeWebDescriptions = new Map(
+          (opts?.webAccessPolicy?.enabledKinds ?? []).map((kind) => {
+            const definition = CORE_NATIVE_WEB_TOOL_DEFINITIONS[kind];
+            const existingDescription = advertisedTools?.find(
+              (tool) => tool.name === definition.name,
+            )?.description;
+            return [
+              definition.name,
+              appendNativeWebToolPreference(
+                kind,
+                existingDescription ?? definition.description,
+              ),
+            ] as const;
+          }),
+        );
         const rawTools =
           advertisedTools && inlineToolNames
             ? advertisedTools
                 .filter((tool) => inlineToolNames.has(tool.name))
-                .map((tool) =>
-                  tool.name === "find_native_tools" && discoveryDescription
+                .map((tool) => {
+                  const nativeWebDescription = nativeWebDescriptions.get(
+                    tool.name,
+                  );
+                  if (nativeWebDescription) {
+                    return { ...tool, description: nativeWebDescription };
+                  }
+                  return tool.name === "find_native_tools" &&
+                    discoveryDescription
                     ? { ...tool, description: discoveryDescription }
-                    : tool,
-                )
+                    : tool;
+                })
             : undefined;
         const modeAllowedToolNames =
           useUnionToolAdvertisement && currentModeTools

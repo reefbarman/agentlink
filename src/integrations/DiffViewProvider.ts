@@ -33,6 +33,7 @@ interface PendingDiffDecision {
   requestId: string;
   filePath: string;
   resolve: (decision: DiffDecision) => void;
+  reveal: () => Promise<void>;
 }
 
 // Map of diff request ID → pending decision metadata.
@@ -46,6 +47,13 @@ const pendingDiffRequestIdsByPath = new Map<string, string>();
  * Resolve the diff for the currently active editor tab.
  * Falls back to resolving the single pending diff if only one exists.
  */
+export async function revealPendingDiff(requestId: string): Promise<boolean> {
+  const pending = pendingDecisionResolvers.get(requestId);
+  if (!pending) return false;
+  await pending.reveal();
+  return true;
+}
+
 export function resolveCurrentDiff(decision: DiffDecision): boolean {
   if (pendingDecisionResolvers.size === 0) return false;
 
@@ -223,6 +231,14 @@ function detectEol(content: string): "\r\n" | "\n" | undefined {
   return undefined;
 }
 
+export function interactiveDiffEditorOptions(): vscode.TextDocumentShowOptions {
+  return withPrimaryEditorColumn({ preview: true });
+}
+
+export function interactiveFallbackEditorOptions(): vscode.TextDocumentShowOptions {
+  return withPrimaryEditorColumn();
+}
+
 export function createUserEditsPatch(
   relPath: string,
   proposedContent: string,
@@ -381,28 +397,7 @@ export class DiffViewProvider {
     }
 
     try {
-      // Open diff view
-      const fileName = path.basename(this.absolutePath);
-      const leftUri = vscode.Uri.parse(
-        `${DIFF_VIEW_URI_SCHEME}:${fileName}`,
-      ).with({
-        query: Buffer.from(this.originalContent).toString("base64"),
-      });
-      const rightUri = vscode.Uri.file(this.absolutePath);
-
-      const outsidePrefix = this.outsideWorkspace
-        ? "\u26a0 OUTSIDE WORKSPACE: "
-        : "";
-      await vscode.commands.executeCommand(
-        "vscode.diff",
-        leftUri,
-        rightUri,
-        `${outsidePrefix}${this.relPath}: ${fileExists ? "Proposed Changes" : "New File"} (Editable)`,
-        withPrimaryEditorColumn({
-          preview: true,
-          preserveFocus: true,
-        }),
-      );
+      await this.revealDiff();
 
       // Wait for the diff editor to open. Poll until it appears rather than
       // blocking on a fixed delay — the editor is usually visible within a few
@@ -415,7 +410,7 @@ export class DiffViewProvider {
         const doc = await vscode.workspace.openTextDocument(this.absolutePath);
         this.activeDiffEditor = await vscode.window.showTextDocument(
           doc,
-          withPrimaryEditorColumn({ preserveFocus: true }),
+          interactiveFallbackEditorOptions(),
         );
       }
 
@@ -452,6 +447,25 @@ export class DiffViewProvider {
         vscode.TextEditorRevealType.InCenterIfOutsideViewport,
       );
     }
+  }
+
+  private async revealDiff(): Promise<void> {
+    const fileName = path.basename(this.absolutePath!);
+    const leftUri = vscode.Uri.parse(
+      `${DIFF_VIEW_URI_SCHEME}:${fileName}`,
+    ).with({
+      query: Buffer.from(this.originalContent ?? "").toString("base64"),
+    });
+    const outsidePrefix = this.outsideWorkspace
+      ? "\u26a0 OUTSIDE WORKSPACE: "
+      : "";
+    await vscode.commands.executeCommand(
+      "vscode.diff",
+      leftUri,
+      vscode.Uri.file(this.absolutePath!),
+      `${outsidePrefix}${this.relPath}: ${this.editType === "modify" ? "Proposed Changes" : "New File"} (Editable)`,
+      interactiveDiffEditorOptions(),
+    );
   }
 
   async waitForUserDecision(
@@ -505,6 +519,7 @@ export class DiffViewProvider {
           requestId: this.requestId,
           filePath: this.absolutePath!,
           resolve: finish,
+          reveal: () => this.revealDiff(),
         });
         pendingDiffRequestIdsByPath.set(this.absolutePath!, this.requestId);
 

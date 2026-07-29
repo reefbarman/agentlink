@@ -32,6 +32,12 @@ import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
 import { handleGetModuleNeighbors } from "../tools/getModuleNeighbors.js";
 import { handleGetRepoMap } from "../tools/getRepoMap.js";
 
+const feedbackToolMocks = vi.hoisted(() => ({
+  handleDeleteFeedback: vi.fn().mockResolvedValue({
+    content: [{ type: "text", text: "deleted" }],
+  }),
+}));
+
 // Mock all tool handlers so dispatchToolCall tests don't hit VS Code APIs
 vi.mock("../tools/readFile.js", () => ({
   handleReadFile: vi
@@ -187,6 +193,9 @@ vi.mock("../tools/renameSymbol.js", () => ({
   handleRenameSymbol: vi
     .fn()
     .mockResolvedValue({ content: [{ type: "text", text: "renamed" }] }),
+}));
+vi.mock("../tools/deleteFeedback.js", () => ({
+  handleDeleteFeedback: feedbackToolMocks.handleDeleteFeedback,
 }));
 
 const mockOnApprovalRequest = vi.fn();
@@ -937,6 +946,10 @@ describe("getAgentTools", () => {
       const sendFeedback = tools.find((tool) => tool.name === "send_feedback");
       const toolNameSchema = sendFeedback?.input_schema.properties
         ?.tool_name as { description?: string } | undefined;
+      const getFeedback = tools.find((tool) => tool.name === "get_feedback");
+      const deleteFeedback = tools.find(
+        (tool) => tool.name === "delete_feedback",
+      );
       expect(sendFeedback?.description).toContain(
         "report only problems with AgentLink's native MCP tools",
       );
@@ -949,6 +962,13 @@ describe("getAgentTools", () => {
       expect(toolNameSchema?.description).toContain(
         "Never report a specific MCP server or its server__tool",
       );
+      expect(getFeedback?.description).toContain("stable ID");
+      expect(deleteFeedback?.description).toContain("stable ID");
+      expect(deleteFeedback?.input_schema.required ?? []).not.toContain(
+        "indices",
+      );
+      expect(deleteFeedback?.input_schema.properties).toHaveProperty("ids");
+      expect(deleteFeedback?.input_schema.properties).toHaveProperty("indices");
     } else {
       expect(names).not.toContain("send_feedback");
       expect(names).not.toContain("get_feedback");
@@ -2324,6 +2344,20 @@ describe("spawn_background_agent tool", () => {
 });
 
 describe("dispatchToolCall", () => {
+  it("forwards feedback IDs and strict numeric global indices", async () => {
+    feedbackToolMocks.handleDeleteFeedback.mockClear();
+
+    await dispatchToolCall(
+      "delete_feedback",
+      { ids: ["feedback-id"], indices: [7, "8", null] },
+      mockCtx,
+    );
+
+    expect(feedbackToolMocks.handleDeleteFeedback).toHaveBeenCalledWith({
+      ids: ["feedback-id"],
+      indices: [7],
+    });
+  });
   it("forwards autonomous memory requests through the production context seam without approval", async () => {
     const onApprovalRequest = vi.fn();
     const manage = vi.fn<MemoryToolProvider["manage"]>().mockResolvedValue({

@@ -6555,6 +6555,12 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(completionParams[0]?.tools?.map((tool) => tool.name)).toEqual(
       expect.arrayContaining(["web_search", "web_fetch"]),
     );
+    expect(
+      completionParams[0]?.tools?.find((tool) => tool.name === "web_search")
+        ?.description,
+    ).toContain(
+      "Prefer this native tool over general-purpose MCP web-search tools",
+    );
   });
 
   it("executes native web search as an ordinary tool call while keeping provider replay private", async () => {

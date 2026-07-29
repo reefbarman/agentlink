@@ -224,6 +224,66 @@ describe("NativeAgentTerminalCoordinator", () => {
     });
   });
 
+  it("cancels startup when the channel closes during shell preparation", async () => {
+    const test = harness();
+    const preparation = deferred<MaterializedHostShellBootstrap>();
+    const preparedBootstrap = bootstrap("/workspace");
+    test.prepareShell.mockImplementationOnce(() => preparation.promise);
+
+    const result = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf closed",
+      cwd: "/workspace",
+    });
+    await flush();
+    expect(test.coordinator.closeTerminals({ owner: undefined })).toEqual({
+      closed: 1,
+    });
+    preparation.resolve(preparedBootstrap);
+
+    await expect(result).rejects.toThrow(
+      "Native Agent terminal target changed during startup",
+    );
+    expect(preparedBootstrap.mode).toBe("integrated");
+    if (preparedBootstrap.mode === "integrated") {
+      expect(preparedBootstrap.cleanup).toHaveBeenCalledOnce();
+    }
+    expect(test.runtime.prepareChannel).not.toHaveBeenCalled();
+    expect(test.runtime.createCommand).not.toHaveBeenCalled();
+    expect(test.liveChannels).toEqual(new Set());
+  });
+
+  it("closes a runtime channel created after its terminal closes during preparation", async () => {
+    const test = harness();
+    const channelPreparation = deferred<void>();
+    vi.mocked(test.runtime.prepareChannel).mockImplementationOnce(
+      async (request) => {
+        test.channelRequests.push(request);
+        test.liveChannels.add(request.channelId);
+        await channelPreparation.promise;
+      },
+    );
+
+    const result = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf closed",
+      cwd: "/workspace",
+    });
+    await flush();
+    expect(test.liveChannels).toEqual(new Set(["native-agent-1"]));
+    expect(test.coordinator.closeTerminals({ owner: undefined })).toEqual({
+      closed: 1,
+    });
+    channelPreparation.resolve();
+
+    await expect(result).rejects.toThrow(
+      "Native Agent terminal target changed during startup",
+    );
+    expect(test.runtime.closeChannel).toHaveBeenCalledWith("native-agent-1");
+    expect(test.runtime.createCommand).not.toHaveBeenCalled();
+    expect(test.liveChannels).toEqual(new Set());
+  });
+
   it("reserves separate terminals for parallel prepared executions", async () => {
     const test = harness();
     const firstPrepared = await test.coordinator.prepareNativeExecution(
@@ -284,6 +344,47 @@ describe("NativeAgentTerminalCoordinator", () => {
     await expect(second).resolves.toMatchObject({
       terminal_id: "native-agent-2",
     });
+  });
+
+  it("bounds implicit channels and reclaims the oldest idle channel", async () => {
+    const test = harness();
+    const running = Array.from({ length: 4 }, (_, index) =>
+      test.coordinator.executeCommand({
+        owner: undefined,
+        command: `printf ${index}`,
+        cwd: `/workspace/${index}`,
+        background: true,
+      }),
+    );
+    await flush();
+    await Promise.all(running);
+
+    await expect(
+      test.coordinator.executeCommand({
+        owner: undefined,
+        command: "printf exhausted",
+        cwd: "/workspace/exhausted",
+      }),
+    ).rejects.toThrow("Native Agent terminal pool exhausted");
+    expect(test.coordinator.listTerminals({ owner: undefined })).toHaveLength(
+      4,
+    );
+
+    await finish(test.processes[0], "zero\r\n");
+    const replacement = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf replacement",
+      cwd: "/workspace/replacement",
+      background: true,
+    });
+    await flush();
+    await expect(replacement).resolves.toMatchObject({
+      terminal_id: "native-agent-5",
+    });
+    expect(test.runtime.closeChannel).toHaveBeenCalledWith("native-agent-1");
+    expect(test.coordinator.listTerminals({ owner: undefined })).toHaveLength(
+      4,
+    );
   });
 
   it("preserves an explicit terminal name instead of the AgentLink default", async () => {

@@ -1,14 +1,19 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+import * as vscode from "vscode";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  DiffViewProvider,
   createFormatOnSaveReport,
   createUserEditsPatch,
   diagnoseEditSaveFailure,
+  interactiveDiffEditorOptions,
+  interactiveFallbackEditorOptions,
   isIgnorableTabCloseError,
+  revealPendingDiff,
 } from "./DiffViewProvider.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { withFileLock } from "../util/fileLock.js";
 
@@ -92,6 +97,84 @@ describe("createFormatOnSaveReport", () => {
       format_on_save: true,
       eol_changed: true,
     });
+  });
+});
+
+describe("interactive review editor options", () => {
+  it("reveals the diff in the primary editor group", () => {
+    expect(interactiveDiffEditorOptions()).toEqual({
+      preview: true,
+      viewColumn: 1,
+    });
+  });
+
+  it("reveals the fallback file in the primary editor group", () => {
+    expect(interactiveFallbackEditorOptions()).toEqual({
+      viewColumn: 1,
+    });
+  });
+});
+
+describe("revealPendingDiff", () => {
+  it("reveals only the pending diff matching the request id", async () => {
+    Object.assign(vscode.window.tabGroups, {
+      onDidChangeTabs: vi.fn(() => ({ dispose: vi.fn() })),
+    });
+
+    let resolveFirst!: (decision: string) => void;
+    let resolveSecond!: (decision: string) => void;
+    const firstApproval = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    const secondApproval = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveSecond = resolve;
+        }),
+    );
+    const firstReveal = vi.fn().mockResolvedValue(undefined);
+    const secondReveal = vi.fn().mockResolvedValue(undefined);
+    const first = new DiffViewProvider(0, "diff-request-1");
+    const second = new DiffViewProvider(0, "diff-request-2");
+    Object.assign(first, {
+      absolutePath: "/workspace/first.ts",
+      relPath: "first.ts",
+      originalContent: "",
+      newContent: "first",
+      editType: "modify",
+      revealDiff: firstReveal,
+    });
+    Object.assign(second, {
+      absolutePath: "/workspace/second.ts",
+      relPath: "second.ts",
+      originalContent: "",
+      newContent: "second",
+      editType: "modify",
+      revealDiff: secondReveal,
+    });
+
+    const firstDecision = first.waitForUserDecision({} as never, firstApproval);
+    const secondDecision = second.waitForUserDecision(
+      {} as never,
+      secondApproval,
+    );
+    await vi.waitFor(() => {
+      expect(firstApproval).toHaveBeenCalledOnce();
+      expect(secondApproval).toHaveBeenCalledOnce();
+    });
+
+    await expect(revealPendingDiff("missing-request")).resolves.toBe(false);
+    await expect(revealPendingDiff("diff-request-2")).resolves.toBe(true);
+    expect(firstReveal).not.toHaveBeenCalled();
+    expect(secondReveal).toHaveBeenCalledOnce();
+
+    resolveFirst("reject");
+    resolveSecond("reject");
+    await expect(firstDecision).resolves.toBe("reject");
+    await expect(secondDecision).resolves.toBe("reject");
   });
 });
 

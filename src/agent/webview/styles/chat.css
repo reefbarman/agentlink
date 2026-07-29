@@ -15,10 +15,7 @@ body {
   height: 100vh;
 }
 
-#root {
-  height: 100%;
-}
-
+#root,
 .chat-workspace,
 .chat-session-pane,
 .chat-container {
@@ -27,9 +24,13 @@ body {
   min-height: 0;
 }
 
+#root {
+  height: 100%;
+}
+
 .chat-workspace,
 .chat-session-pane {
-  height: 100%;
+  flex: 1;
 }
 
 .chat-container {
@@ -6982,12 +6983,37 @@ body.approval-resizing {
   color: var(--vscode-symbolIcon-fileForeground, var(--vscode-foreground));
 }
 .approval-panel-embed .file-path {
+  flex: 1;
+  min-width: 0;
   font-family: var(--vscode-editor-font-family);
   font-size: var(--vscode-editor-font-size);
   word-break: break-all;
 }
+.approval-panel-embed .file-card-reveal-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  color: var(--vscode-foreground);
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.approval-panel-embed .file-card-reveal-button:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+  opacity: 1;
+}
+.approval-panel-embed .file-card-reveal-button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+  opacity: 1;
+}
 .approval-panel-embed .operation-badge {
-  margin-left: auto;
   font-size: 11px;
   font-weight: 600;
   padding: 2px 8px;

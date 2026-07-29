@@ -1,9 +1,38 @@
-import type { CoreModelMessage, CoreModelStreamEvent } from "./modelRuntime.js";
 import {
+  CORE_NATIVE_WEB_TOOL_DEFINITIONS,
+  appendNativeWebToolPreference,
   collectNativeWebToolResult,
   continueNativeWebProviderStream,
 } from "./nativeWebTools.js";
+import type { CoreModelMessage, CoreModelStreamEvent } from "./modelRuntime.js";
 import { describe, expect, it } from "vitest";
+
+describe("native web tool definitions", () => {
+  it("prefers native web tools without prohibiting MCP-specific use", () => {
+    expect(CORE_NATIVE_WEB_TOOL_DEFINITIONS.search.description).toContain(
+      "Prefer this native tool over general-purpose MCP web-search tools",
+    );
+    expect(CORE_NATIVE_WEB_TOOL_DEFINITIONS.fetch.description).toContain(
+      "Prefer this native tool over general-purpose MCP page-reading tools",
+    );
+    expect(CORE_NATIVE_WEB_TOOL_DEFINITIONS.search.description).toContain(
+      "when the user requests that server or needs an MCP-specific capability",
+    );
+  });
+
+  it("appends preference guidance idempotently", () => {
+    const initial = "Search the web.";
+    const once = appendNativeWebToolPreference("search", initial);
+    const twice = appendNativeWebToolPreference("search", once);
+
+    expect(twice).toBe(once);
+    expect(
+      twice.split(
+        "Prefer this native tool over general-purpose MCP web-search tools",
+      ),
+    ).toHaveLength(2);
+  });
+});
 
 describe("native web provider continuation", () => {
   it("replays pause_turn privately and aggregates the visible result", async () => {

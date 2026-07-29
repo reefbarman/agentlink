@@ -128,7 +128,7 @@ describe("SessionApprovalPolicyCoordinator", () => {
     },
   );
 
-  it("turns off Approve for Me when Prompt is selected", () => {
+  it("turns off Approve for Me before selecting Prompt", () => {
     const test = harness({
       policy: "approve-for-me",
       writeApproval: "project",
@@ -146,6 +146,11 @@ describe("SessionApprovalPolicyCoordinator", () => {
       commandApprovalPolicy: "sensitive",
       agentWriteApproval: "prompt",
     });
+    expect(
+      test.setCommandApprovalPolicy.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      test.setAgentWriteApprovalSelection.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("turns off Approve for Me even when selecting Prompt fails to persist", () => {
@@ -189,6 +194,42 @@ describe("SessionApprovalPolicyCoordinator", () => {
 
     expect(test.resetSessionAgentWriteApproval).not.toHaveBeenCalled();
     expect(test.state().writeApproval).toBe("session");
+  });
+
+  it("repairs missing session writes after a mode switch under Approve for Me", () => {
+    const test = harness({ policy: "approve-for-me" });
+
+    expect(
+      test.coordinator.reconcileAfterModeSwitch(
+        "session-1",
+        "safe",
+        "/workspace",
+      ),
+    ).toEqual({
+      ok: true,
+      commandApprovalPolicy: "approve-for-me",
+      agentWriteApproval: "session",
+    });
+    expect(test.setAgentWriteApprovalSelection).toHaveBeenCalledWith(
+      "session-1",
+      "session",
+      "/workspace",
+    );
+  });
+
+  it("disables Approve for Me when mode-switch repair cannot persist", () => {
+    const test = harness({
+      policy: "approve-for-me",
+      writeUpdateSucceeds: false,
+    });
+
+    expect(
+      test.coordinator.reconcileAfterModeSwitch("session-1", "sensitive"),
+    ).toEqual({
+      ok: false,
+      commandApprovalPolicy: "sensitive",
+      agentWriteApproval: "prompt",
+    });
   });
 
   it("resets only session writes across mode switches without Approve for Me", () => {

@@ -64,10 +64,10 @@ export function FeedbackList({ entries, postCommand }: Props) {
         </button>
         <button
           class="btn btn-cancel"
-          title="Permanently delete every recorded feedback entry"
+          title="Hide every active feedback entry; raw records remain in the append-only file"
           onClick={() => postCommand("clearAllFeedback")}
         >
-          Clear All
+          Hide All
         </button>
         <button
           class="btn"
@@ -77,8 +77,8 @@ export function FeedbackList({ entries, postCommand }: Props) {
           Open File
         </button>
       </div>
-      {entries.map((entry, i) => (
-        <div key={`${entry.timestamp}-${i}`} class="feedback-row">
+      {entries.map((entry) => (
+        <div key={entry.id} class="feedback-row">
           <div class="feedback-header">
             <code class="tool-call-name">{entry.tool_name}</code>
             <span class="feedback-time" title={entry.timestamp}>
@@ -105,10 +105,12 @@ export function FeedbackList({ entries, postCommand }: Props) {
             )}
             <button
               class="btn-inline btn-cancel"
-              title="Delete this feedback entry"
-              onClick={() => postCommand("deleteFeedbackEntry", { index: i })}
+              title="Hide this feedback entry; the raw record remains on disk"
+              onClick={() =>
+                postCommand("deleteFeedbackEntry", { id: entry.id })
+              }
             >
-              Delete
+              Hide
             </button>
           </div>
         </div>

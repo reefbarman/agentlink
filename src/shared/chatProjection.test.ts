@@ -1594,3 +1594,363 @@ describe("context health projection", () => {
     expect(cleared.contextHealth).toBeNull();
   });
 });
+
+describe("transcript stability invariants", () => {
+  const baseLoad = {
+    type: "LOAD_SESSION" as const,
+    sessionId: "session-1",
+    title: "Session",
+    mode: "code",
+    model: "model",
+    todos: [],
+  };
+
+  function assistantRaw(blocks: unknown[]): unknown {
+    return { role: "assistant", content: blocks };
+  }
+
+  it("rehydrates deterministic message ids when a base index is provided", () => {
+    const raw = [
+      { role: "user", content: "hello" },
+      assistantRaw([{ type: "text", text: "hi" }]),
+    ];
+    const first = agentMessagesToChatMessages(raw, { baseIndex: 10 });
+    const second = agentMessagesToChatMessages(raw, { baseIndex: 10 });
+
+    expect(first.map((m) => m.id)).toEqual(["t10", "t11"]);
+    expect(second.map((m) => m.id)).toEqual(first.map((m) => m.id));
+  });
+
+  it("renders the in-flight live tail on LOAD_SESSION and preserves streaming", () => {
+    const loaded = reducer(initialState, {
+      ...baseLoad,
+      messages: [
+        {
+          id: "t0",
+          role: "user",
+          content: "prompt",
+          timestamp: 1,
+          blocks: [],
+        },
+      ],
+      inFlight: [
+        {
+          type: "thinking",
+          id: "think-1",
+          text: "reasoning...",
+          complete: false,
+        },
+        { type: "text", text: "partial answer" },
+        {
+          type: "tool_call",
+          id: "tool-1",
+          name: "read_file",
+          inputJson: "{}",
+          complete: false,
+        },
+      ],
+      streaming: true,
+    });
+
+    const tail = loaded.messages[loaded.messages.length - 1];
+    expect(loaded.streaming).toBe(true);
+    expect(loaded.chatState.streaming).toBe(true);
+    expect(tail.role).toBe("assistant");
+    expect(tail.blocks).toEqual([
+      {
+        type: "thinking",
+        id: "think-1",
+        text: "reasoning...",
+        complete: false,
+      },
+      { type: "text", text: "partial answer" },
+      {
+        type: "tool_call",
+        id: "tool-1",
+        name: "read_file",
+        inputJson: "{}",
+        result: "",
+        complete: false,
+      },
+    ]);
+
+    // Streaming continues into the live tail after the hydration: the delta
+    // lands in the same assistant message (a fresh text block after the
+    // trailing tool_call), not in a new duplicate message.
+    const withDelta = reducer(loaded, { type: "TEXT_DELTA", text: " more" });
+    expect(withDelta.messages).toHaveLength(loaded.messages.length);
+    const tailAfter = withDelta.messages[withDelta.messages.length - 1];
+    const lastBlock = tailAfter.blocks[tailAfter.blocks.length - 1];
+    expect(lastBlock).toEqual({ type: "text", text: " more" });
+  });
+
+  it("skips in-flight blocks whose ids already landed in the restored transcript", () => {
+    const loaded = reducer(initialState, {
+      ...baseLoad,
+      messages: [
+        {
+          id: "t0",
+          role: "assistant",
+          content: "",
+          timestamp: 1,
+          blocks: [
+            {
+              type: "tool_call",
+              id: "tool-1",
+              name: "read_file",
+              inputJson: "{}",
+              result: "done",
+              complete: true,
+            },
+          ],
+        },
+      ],
+      inFlight: [
+        {
+          type: "tool_call",
+          id: "tool-1",
+          name: "read_file",
+          inputJson: "{}",
+          complete: true,
+        },
+      ],
+      streaming: true,
+    });
+
+    const toolBlocks = loaded.messages.flatMap((m) =>
+      m.blocks.filter((b) => b.type === "tool_call" && b.id === "tool-1"),
+    );
+    expect(toolBlocks).toHaveLength(1);
+  });
+
+  it("keeps LOAD_SESSION non-streaming by default", () => {
+    const loaded = reducer(initialState, { ...baseLoad, messages: [] });
+    expect(loaded.streaming).toBe(false);
+    expect(loaded.chatState.streaming).toBe(false);
+  });
+
+  it("ignores replayed THINKING_START for an existing block", () => {
+    const started = reducer(initialState, {
+      type: "THINKING_START",
+      thinkingId: "think-1",
+    });
+    const withText = reducer(started, {
+      type: "THINKING_DELTA",
+      thinkingId: "think-1",
+      text: "abc",
+    });
+    const replayed = reducer(withText, {
+      type: "THINKING_START",
+      thinkingId: "think-1",
+    });
+    const withMoreText = reducer(replayed, {
+      type: "THINKING_DELTA",
+      thinkingId: "think-1",
+      text: "def",
+    });
+
+    const thinkingBlocks = withMoreText.messages.flatMap((m) =>
+      m.blocks.filter((b) => b.type === "thinking" && b.id === "think-1"),
+    );
+    expect(thinkingBlocks).toHaveLength(1);
+    expect(
+      thinkingBlocks[0].type === "thinking" ? thinkingBlocks[0].text : "",
+    ).toBe("abcdef");
+  });
+
+  it("self-heals a THINKING_DELTA whose start block is missing", () => {
+    const state = reducer(initialState, {
+      type: "THINKING_DELTA",
+      thinkingId: "think-lost",
+      text: "recovered",
+    });
+    const blocks = state.messages.flatMap((m) =>
+      m.blocks.filter((b) => b.type === "thinking" && b.id === "think-lost"),
+    );
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type === "thinking" ? blocks[0].text : "").toBe(
+      "recovered",
+    );
+  });
+
+  it("ignores replayed TOOL_START for any tool whose block already exists", () => {
+    const started = reducer(initialState, {
+      type: "TOOL_START",
+      toolCallId: "tool-1",
+      toolName: "read_file",
+      input: { path: "a.ts" },
+    });
+    const replayed = reducer(started, {
+      type: "TOOL_START",
+      toolCallId: "tool-1",
+      toolName: "read_file",
+      input: { path: "a.ts" },
+    });
+
+    const toolBlocks = replayed.messages.flatMap((m) =>
+      m.blocks.filter((b) => b.type === "tool_call" && b.id === "tool-1"),
+    );
+    expect(toolBlocks).toHaveLength(1);
+  });
+
+  it("does not double-count a replayed child tool start in the compose trace", () => {
+    const parent = reducer(initialState, {
+      type: "TOOL_START",
+      toolCallId: "parent-1",
+      toolName: "compose",
+      input: {},
+    });
+    const child = reducer(parent, {
+      type: "TOOL_START",
+      toolCallId: "child-1",
+      toolName: "read_file",
+      parentCallId: "parent-1",
+      input: {},
+    });
+    const replayed = reducer(child, {
+      type: "TOOL_START",
+      toolCallId: "child-1",
+      toolName: "read_file",
+      parentCallId: "parent-1",
+      input: {},
+    });
+
+    const parentBlock = replayed.messages
+      .flatMap((m) => m.blocks)
+      .find((b) => b.type === "tool_call" && b.id === "parent-1");
+    expect(
+      parentBlock?.type === "tool_call"
+        ? parentBlock.composeTrace?.totalChildren
+        : undefined,
+    ).toBe(1);
+  });
+
+  it("keeps a submitted ask_user answer when the anchor tool_call was lost", () => {
+    const withQuestion = reducer(initialState, {
+      type: "SET_QUESTION",
+      id: "q-1",
+      toolCallId: "ask-1",
+      context: "",
+      questions: [
+        { id: "q1", type: "text" as const, question: "Which colour?" },
+      ],
+    });
+    // Simulate a hydration that dropped the synthesized anchor.
+    const wiped = { ...withQuestion, messages: [] };
+    const submitted = reducer(wiped, {
+      type: "SUBMIT_QUESTION",
+      id: "q-1",
+      answers: { q1: "teal" },
+      notes: {},
+    });
+
+    const answer = submitted.messages
+      .flatMap((m) => m.blocks)
+      .find((b) => b.type === "question_answer" && b.toolCallId === "ask-1");
+    expect(answer).toBeDefined();
+    expect(
+      answer?.type === "question_answer" ? answer.items[0]?.answer : "",
+    ).toBe("teal");
+    expect(submitted.questionRequest).toBeNull();
+  });
+
+  it("synthesizes the ask_user tool_call and answer when TOOL_COMPLETE finds no anchor", () => {
+    const result = JSON.stringify({
+      responses: [{ question: "Which colour?", answer: "teal" }],
+    });
+    const completed = reducer(initialState, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "ask-1",
+      toolName: "ask_user",
+      result,
+      durationMs: 5,
+    });
+
+    const blocks = completed.messages.flatMap((m) => m.blocks);
+    const tool = blocks.find(
+      (b) =>
+        (b.type === "tool_call" || b.type === "skill_load") && b.id === "ask-1",
+    );
+    const answer = blocks.find(
+      (b) => b.type === "question_answer" && b.toolCallId === "ask-1",
+    );
+    expect(tool?.type === "tool_call" ? tool.complete : false).toBe(true);
+    expect(answer).toBeDefined();
+  });
+
+  it("does not duplicate the question context when the transcript already shows it inline", () => {
+    const context = "Pick the brand colour for the header.";
+    const hydrated = reducer(initialState, {
+      ...baseLoad,
+      messages: [
+        {
+          id: "t0",
+          role: "assistant",
+          content: "",
+          timestamp: 1,
+          blocks: [
+            { type: "text", text: context },
+            {
+              type: "tool_call",
+              id: "ask-1",
+              name: "ask_user",
+              inputJson: "{}",
+              result: "",
+              complete: false,
+            },
+          ],
+        },
+      ],
+    });
+    const withQuestion = reducer(hydrated, {
+      type: "SET_QUESTION",
+      id: "q-1",
+      toolCallId: "ask-1",
+      context,
+      questions: [
+        { id: "q1", type: "text" as const, question: "Which colour?" },
+      ],
+    });
+
+    const occurrences = withQuestion.messages
+      .flatMap((m) => m.blocks)
+      .filter((b) => b.type === "text" && b.text.trim() === context);
+    expect(occurrences).toHaveLength(1);
+  });
+
+  it("ignores a replayed committed user message with a known id", () => {
+    const first = reducer(initialState, {
+      type: "ADD_COMMITTED_USER_MESSAGE",
+      id: "commit-1",
+      text: "run the tests",
+    });
+    const replayed = reducer(first, {
+      type: "ADD_COMMITTED_USER_MESSAGE",
+      id: "commit-1",
+      text: "run the tests",
+    });
+
+    expect(replayed).toBe(first);
+    expect(
+      replayed.messages.filter((m) => m.content === "run the tests"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps an identical background completion in place on replay", () => {
+    const completion = {
+      sessionId: "bg-1",
+      task: "Research",
+      status: "completed" as const,
+      resultState: "completed" as const,
+      resultText: "All done",
+      completedAt: 123,
+    };
+    const first = reducer(initialState, {
+      type: "BG_AGENT_DONE",
+      completion,
+    });
+    const replayed = reducer(first, { type: "BG_AGENT_DONE", completion });
+
+    expect(replayed).toBe(first);
+  });
+});

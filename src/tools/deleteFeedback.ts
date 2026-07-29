@@ -3,10 +3,11 @@ import { deleteFeedback } from "../util/feedbackStore.js";
 import { type ToolResult } from "../shared/types.js";
 
 export async function handleDeleteFeedback(params: {
-  indices: number[];
+  ids?: string[];
+  indices?: number[];
 }): Promise<ToolResult> {
   try {
-    const removed = deleteFeedback(params.indices);
+    const result = deleteFeedback(params);
 
     return {
       content: [
@@ -14,23 +15,29 @@ export async function handleDeleteFeedback(params: {
           type: "text",
           text: JSON.stringify({
             status: "success",
-            removed,
-            indices: params.indices,
+            removed: result.removed.length,
+            removed_entries: result.removed,
+            already_deleted_ids: result.already_deleted_ids,
+            unknown_ids: result.unknown_ids,
+            unknown_indices: result.unknown_indices,
           }),
         },
       ],
     };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     return {
       content: [
         {
           type: "text",
           text: JSON.stringify({
             status: "error",
-            error: String(err),
+            error: message,
           }),
         },
       ],
+      isError: true,
+      error: { kind: "invalid_feedback_selector", message },
     };
   }
 }

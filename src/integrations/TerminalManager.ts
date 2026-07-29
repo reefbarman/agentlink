@@ -82,6 +82,7 @@ interface ManagedTerminal {
   owner?: TerminalExecutionOwner;
   busy: boolean;
   envKey?: string;
+  implicit?: boolean;
   stale?: boolean;
   /** Timestamp when the last foreground command completed — used for reuse cooldown */
   lastCommandEndedAt: number;
@@ -308,6 +309,7 @@ export class TerminalManager {
         terminal,
         name: terminal.name,
         cwd,
+        implicit: false,
         busy: false,
         stale: true,
         lastCommandEndedAt: 0,
@@ -372,6 +374,8 @@ export class TerminalManager {
   ): boolean {
     if (!managed.backgroundRunning) return false;
     managed.backgroundRunning = false;
+    const actualCwd = managed.terminal.shellIntegration?.cwd?.fsPath;
+    if (actualCwd) managed.cwd = actualCwd;
     managed.lastCommandEndedAt = Date.now();
     if (options?.normalizeOutput) {
       managed.outputBuffer = cleanTerminalRawOutput(managed.outputBuffer);
@@ -560,7 +564,14 @@ export class TerminalManager {
     options: ExecuteOptions,
   ): Promise<ManagedTerminal> {
     this.syncTerminalRegistry();
-    const { cwd, owner, terminal_id, terminal_name, split_from } = options;
+    const {
+      cwd,
+      owner,
+      terminal_id,
+      terminal_name,
+      terminal_creation_name,
+      split_from,
+    } = options;
     const envKey = this.buildEnvKey(options.env);
 
     // If terminal_id is specified, find that specific terminal
@@ -598,21 +609,32 @@ export class TerminalManager {
           throw err;
         }
       }
-      // If not found, fall through to creation
+      throw new Error(`Terminal not found: ${terminal_id}`);
     }
 
     // If terminal_name is specified, find or create by name
     if (terminal_name) {
       const existing = this.terminals.find(
-        (t) =>
-          t.name === terminal_name &&
-          sameTerminalOwnerScope(t.owner, owner) &&
-          !t.busy &&
-          !t.backgroundRunning &&
-          !t.stale &&
-          t.envKey === envKey,
+        (terminal) =>
+          terminal.name === terminal_name &&
+          sameTerminalOwnerScope(terminal.owner, owner),
       );
       if (existing) {
+        if (existing.stale) {
+          throw new Error(
+            `Terminal ${terminal_name} was adopted after extension reload and needs a fresh AgentLink environment. Close it or use a different terminal_name.`,
+          );
+        }
+        if (existing.envKey !== envKey) {
+          throw new Error(
+            `Terminal ${terminal_name} was created with a different env set. Use a different terminal_name or omit env to reuse.`,
+          );
+        }
+        if (existing.busy || existing.backgroundRunning) {
+          throw new Error(
+            `Terminal ${terminal_name} is busy. Wait for the current command to finish or use get_terminal_output/kill for background commands.`,
+          );
+        }
         this.refreshOwner(existing, owner);
         existing.busy = true;
         try {
@@ -650,7 +672,7 @@ export class TerminalManager {
         !t.busy &&
         !t.backgroundRunning &&
         !t.stale &&
-        t.name === "AgentLink" &&
+        t.implicit === true &&
         sameTerminalOwnerScope(t.owner, owner) &&
         t.cwd === cwd &&
         t.envKey === envKey,
@@ -667,7 +689,13 @@ export class TerminalManager {
       }
     }
 
-    const managed = this.createTerminal(cwd, "AgentLink", options.env, owner);
+    const managed = this.createTerminal(
+      cwd,
+      terminal_creation_name ?? "AgentLink",
+      options.env,
+      owner,
+      true,
+    );
     managed.busy = true;
     try {
       if (split_from) {
@@ -757,6 +785,7 @@ export class TerminalManager {
     name: string,
     extraEnv: Record<string, string> | undefined,
     owner: TerminalExecutionOwner | undefined,
+    implicit = false,
   ): ManagedTerminal {
     const terminal = vscode.window.createTerminal({
       name,
@@ -773,6 +802,7 @@ export class TerminalManager {
       cwd,
       ...(owner ? { owner: Object.freeze({ ...owner }) } : {}),
       envKey: this.buildEnvKey(extraEnv),
+      implicit,
       busy: false,
       lastCommandEndedAt: 0,
       outputBuffer: "",

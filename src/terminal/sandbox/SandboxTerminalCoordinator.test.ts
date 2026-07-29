@@ -327,6 +327,38 @@ describe("SandboxTerminalCoordinator", () => {
     });
   });
 
+  it("does not launch after its channel closes during authorization", async () => {
+    const test = harness();
+    const authorization = deferred<AuthorizedSandboxLaunch>();
+    const defaultAuthorize = vi
+      .mocked(test.authorizer.authorize)
+      .getMockImplementation();
+    if (!defaultAuthorize)
+      throw new Error("expected authorizer implementation");
+    vi.mocked(test.authorizer.authorize).mockImplementationOnce(
+      () => authorization.promise,
+    );
+
+    const result = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf closed",
+      cwd: "/workspace",
+      sandboxSessionId: "agent-session",
+    });
+    await flush();
+    const request = vi.mocked(test.authorizer.authorize).mock.calls[0][0];
+    expect(test.coordinator.closeTerminals({ owner: undefined })).toEqual({
+      closed: 1,
+    });
+    authorization.resolve(await defaultAuthorize(request));
+
+    await expect(result).rejects.toThrow(
+      "Sandbox terminal target changed during authorization",
+    );
+    expect(test.runtime.launch).not.toHaveBeenCalled();
+    expect(test.coordinator.listTerminals({ owner: undefined })).toEqual([]);
+  });
+
   it("reserves separate terminals while parallel direct executions authorize", async () => {
     const test = harness();
     const firstAuthorization = deferred<AuthorizedSandboxLaunch>();
@@ -367,6 +399,78 @@ describe("SandboxTerminalCoordinator", () => {
     await finish(test.processes[1], "first\r\n");
     await expect(first).resolves.toMatchObject({ terminal_id: "sandbox-1" });
     await expect(second).resolves.toMatchObject({ terminal_id: "sandbox-2" });
+  });
+
+  it("uses a cwd-compatible channel and reports each command launch cwd", async () => {
+    const test = harness();
+    const first = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace",
+      sandboxSessionId: "agent-session",
+    });
+    await flush();
+    await finish(test.processes[0], "/workspace\r\n");
+    const firstResult = await first;
+
+    const second = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "pwd",
+      cwd: "/workspace/subdir",
+      sandboxSessionId: "agent-session",
+    });
+    await flush();
+    await finish(test.processes[1], "/workspace/subdir\r\n");
+    const secondResult = await second;
+
+    expect(secondResult).toMatchObject({ cwd: "/workspace/subdir" });
+    expect(secondResult.terminal_id).not.toBe(firstResult.terminal_id);
+    expect(
+      test.coordinator.getChannelSnapshot(secondResult.terminal_id)?.cwd,
+    ).toBe("/workspace/subdir");
+  });
+
+  it("bounds implicit channels and reclaims the oldest idle channel", async () => {
+    const test = harness();
+    const running = Array.from({ length: 4 }, (_, index) =>
+      test.coordinator.executeCommand({
+        owner: undefined,
+        command: `printf ${index}`,
+        cwd: `/workspace/${index}`,
+        sandboxSessionId: "agent-session",
+        background: true,
+      }),
+    );
+    await flush();
+    await Promise.all(running);
+
+    await expect(
+      test.coordinator.executeCommand({
+        owner: undefined,
+        command: "printf exhausted",
+        cwd: "/workspace/exhausted",
+        sandboxSessionId: "agent-session",
+      }),
+    ).rejects.toThrow("Sandbox terminal pool exhausted");
+    expect(test.coordinator.listTerminals({ owner: undefined })).toHaveLength(
+      4,
+    );
+
+    await finish(test.processes[0], "zero\r\n");
+    const replacement = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf replacement",
+      cwd: "/workspace/replacement",
+      sandboxSessionId: "agent-session",
+      background: true,
+    });
+    await flush();
+    await expect(replacement).resolves.toMatchObject({
+      terminal_id: "sandbox-5",
+    });
+    expect(test.coordinator.listTerminals({ owner: undefined })).toHaveLength(
+      4,
+    );
   });
 
   it("reuses within an owner generation, refreshes attribution, and rejects the next generation", async () => {

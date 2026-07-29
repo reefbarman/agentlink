@@ -18,7 +18,7 @@ export async function handleSendFeedback(
     const version =
       (ext?.packageJSON as { version?: string })?.version ?? "unknown";
 
-    appendFeedback({
+    const recorded = appendFeedback({
       timestamp: new Date().toISOString(),
       tool_name: params.tool_name,
       feedback: params.feedback,
@@ -36,6 +36,8 @@ export async function handleSendFeedback(
           type: "text",
           text: JSON.stringify({
             status: "recorded",
+            id: recorded.id,
+            global_index: recorded.global_index,
             tool_name: params.tool_name,
           }),
         },

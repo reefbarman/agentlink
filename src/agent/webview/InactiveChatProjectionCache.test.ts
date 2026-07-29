@@ -177,4 +177,55 @@ describe("InactiveChatProjectionCache", () => {
       },
     ]);
   });
+
+  it("marks a session truncated once overflow drops events, until taken", () => {
+    const cache = new InactiveChatProjectionCache(1);
+    cache.append({
+      type: "agentThinkingStart",
+      sessionId: "session-1",
+      thinkingId: "thinking-1",
+    });
+    expect(cache.wasTruncated("session-1")).toBe(false);
+
+    cache.append({
+      type: "agentThinkingEnd",
+      sessionId: "session-1",
+      thinkingId: "thinking-1",
+    });
+    expect(cache.wasTruncated("session-1")).toBe(true);
+    expect(cache.wasTruncated("session-2")).toBe(false);
+
+    cache.take("session-1");
+    expect(cache.wasTruncated("session-1")).toBe(false);
+  });
+
+  it("clears truncation state for closed sessions and on clear()", () => {
+    const cache = new InactiveChatProjectionCache(1);
+    cache.append({
+      type: "agentThinkingStart",
+      sessionId: "session-1",
+      thinkingId: "thinking-1",
+    });
+    cache.append({
+      type: "agentThinkingEnd",
+      sessionId: "session-1",
+      thinkingId: "thinking-1",
+    });
+    cache.retainSessions(new Set());
+    expect(cache.wasTruncated("session-1")).toBe(false);
+
+    cache.append({
+      type: "agentThinkingStart",
+      sessionId: "session-2",
+      thinkingId: "thinking-2",
+    });
+    cache.append({
+      type: "agentThinkingEnd",
+      sessionId: "session-2",
+      thinkingId: "thinking-2",
+    });
+    expect(cache.wasTruncated("session-2")).toBe(true);
+    cache.clear();
+    expect(cache.wasTruncated("session-2")).toBe(false);
+  });
 });

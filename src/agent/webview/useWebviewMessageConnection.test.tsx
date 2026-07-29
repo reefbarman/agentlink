@@ -399,9 +399,13 @@ describe("useWebviewMessageConnection", () => {
     expect(postMessage.mock.calls).toEqual([[{ command: "webviewReady" }]]);
   });
 
-  it("keeps streaming guards when replaying cached events", () => {
+  it("never drops replayed cached events on the streaming gate", () => {
+    // Replayed buffered events were valid in order when captured; gating them
+    // on the current streaming flag silently discarded content that had
+    // streamed while the session's tab was inactive.
     const postMessage = vi.fn();
     const dispatchDelta = vi.fn();
+    const appended: string[] = [];
     const replayMessageRef = {
       current: (_message: ExtensionMessage) => {},
     };
@@ -413,6 +417,7 @@ describe("useWebviewMessageConnection", () => {
         dispatchDelta={dispatchDelta}
         onMessage={(msg, controls) => {
           if (msg.type === "agentTextDelta" && !controls.dropIfNotStreaming()) {
+            appended.push(msg.text);
             controls.appendTextDelta(msg.text);
           }
         }}
@@ -422,19 +427,17 @@ describe("useWebviewMessageConnection", () => {
 
     replayMessageRef.current({
       type: "agentTextDelta",
-      sessionId: "session-2",
-      text: "stale",
+      sessionId: "session-1",
+      text: "buffered while inactive",
     });
 
-    expect(dispatchDelta).not.toHaveBeenCalled();
-    expect(postMessage).toHaveBeenLastCalledWith({
-      command: "agentStreamDrop",
-      reason: "streaming_false",
-      eventType: "agentTextDelta",
-      eventSessionId: "session-2",
-      currentSessionId: "session-1",
-      streaming: false,
-    });
+    expect(appended).toEqual(["buffered while inactive"]);
+    expect(
+      postMessage.mock.calls.some(
+        ([message]) =>
+          (message as { command?: string }).command === "agentStreamDrop",
+      ),
+    ).toBe(false);
   });
 
   it("routes background transcript events independently of the foreground session", () => {

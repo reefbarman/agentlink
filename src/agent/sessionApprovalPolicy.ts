@@ -76,12 +76,6 @@ export class SessionApprovalPolicyCoordinator {
     configuredFallback: Exclude<CommandApprovalPolicy, "approve-for-me">,
     targetPath?: string,
   ): SessionApprovalPolicyTransitionResult {
-    const writeUpdated = this.host.setAgentWriteApprovalSelection(
-      sessionId,
-      selection,
-      targetPath,
-    );
-
     if (
       selection === "prompt" &&
       this.host.getCommandApprovalPolicy(sessionId, configuredFallback) ===
@@ -90,19 +84,31 @@ export class SessionApprovalPolicyCoordinator {
       this.host.setCommandApprovalPolicy(sessionId, configuredFallback);
     }
 
+    const writeUpdated = this.host.setAgentWriteApprovalSelection(
+      sessionId,
+      selection,
+      targetPath,
+    );
+
     return this.snapshot(sessionId, configuredFallback, writeUpdated);
   }
 
   reconcileAfterModeSwitch(
     sessionId: string,
     configuredFallback: Exclude<CommandApprovalPolicy, "approve-for-me">,
+    targetPath?: string,
   ): SessionApprovalPolicyTransitionResult {
     if (
-      this.host.getCommandApprovalPolicy(sessionId, configuredFallback) !==
+      this.host.getCommandApprovalPolicy(sessionId, configuredFallback) ===
       "approve-for-me"
     ) {
-      this.host.resetSessionAgentWriteApproval(sessionId);
+      return this.reconcileRestoredSession(
+        sessionId,
+        configuredFallback,
+        targetPath,
+      );
     }
+    this.host.resetSessionAgentWriteApproval(sessionId);
     return this.snapshot(sessionId, configuredFallback, true);
   }
 

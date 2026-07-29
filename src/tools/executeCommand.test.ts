@@ -2,18 +2,20 @@ import * as fs from "fs";
 import * as os from "os";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-import { evaluateCommandRulePolicy } from "../approvals/commandRulePolicy.js";
 import {
   createCommandReviewTurnCircuit,
   createRetainedCommandReviewDenials,
 } from "../approvals/commandApprovalReview.js";
+
+import { evaluateCommandRulePolicy } from "../approvals/commandRulePolicy.js";
 
 const {
   getWorkspaceRoots,
   tryGetFirstWorkspaceRoot,
   validateCommand,
   validateInteractiveCommand,
+  classifyPredictableGitMetadataWriter,
+  resolveBaselineProtectedGitMetadataForCwd,
   executeCommand,
   terminalProvider,
   getConfiguration,
@@ -22,6 +24,8 @@ const {
   tryGetFirstWorkspaceRoot: vi.fn(),
   validateCommand: vi.fn(),
   validateInteractiveCommand: vi.fn(),
+  classifyPredictableGitMetadataWriter: vi.fn(),
+  resolveBaselineProtectedGitMetadataForCwd: vi.fn(),
   executeCommand: vi.fn(),
   terminalProvider: {
     prepareExecution: vi.fn(async (options, routeContext) => ({
@@ -87,6 +91,14 @@ vi.mock("../util/interactiveValidator.js", () => ({
   validateInteractiveCommand,
 }));
 
+vi.mock("../util/gitMetadataWriterClassifier.js", () => ({
+  classifyPredictableGitMetadataWriter,
+}));
+
+vi.mock("../terminal/sandbox/gitMetadataProtection.js", () => ({
+  resolveBaselineProtectedGitMetadataForCwd,
+}));
+
 function textPayload(result: {
   content: Array<{ type: string; text?: string }>;
 }) {
@@ -111,6 +123,8 @@ describe("handleExecuteCommand", () => {
     tryGetFirstWorkspaceRoot.mockReturnValue("/workspace");
     validateCommand.mockReturnValue(null);
     validateInteractiveCommand.mockReturnValue(null);
+    classifyPredictableGitMetadataWriter.mockReturnValue(null);
+    resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue(undefined);
     executeCommand.mockResolvedValue({
       exit_code: 0,
       output: "ok",
@@ -118,6 +132,184 @@ describe("handleExecuteCommand", () => {
       terminal_id: "term_1",
       command_sent: true,
     });
+  });
+
+  it("returns native escalation guidance after preparing but before executing a protected Git writer", async () => {
+    classifyPredictableGitMetadataWriter.mockReturnValue({
+      kind: "predictable_git_metadata_writer",
+      subcommand: "commit",
+    });
+    resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+      marker: "/workspace/.git",
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "git commit -m fix" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-git-preflight",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(classifyPredictableGitMetadataWriter).toHaveBeenCalledWith({
+      command: "git commit -m fix",
+      hasEnvironmentOverrides: false,
+      hasInlineFiles: false,
+    });
+    expect(resolveBaselineProtectedGitMetadataForCwd).toHaveBeenCalledWith(
+      "/workspace",
+      ["/workspace"],
+    );
+    expect(terminalProvider.prepareExecution).toHaveBeenCalledOnce();
+    expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "retry_required",
+      command: "git commit -m fix",
+      capability_code: "protected_git_metadata",
+      git_subcommand: "commit",
+      protected_path: "/workspace/.git",
+      required_sandbox_permissions: "require_escalated",
+      command_sent: false,
+      process_launched: false,
+      retry_safe: true,
+      failure_stage: "validation",
+    });
+  });
+
+  it.each([
+    {
+      guard: "environment overrides",
+      params: { command: "git status --short", env: { CI: "1" } },
+      expectedCommand: "git status --short",
+      hasEnvironmentOverrides: true,
+      hasInlineFiles: false,
+    },
+    {
+      guard: "inline files",
+      params: {
+        command: "git status --short $AL_FILE(input)",
+        files: [{ name: "input", content: "fixture" }],
+      },
+      expectedCommand: expect.stringMatching(/^git status --short /),
+      hasEnvironmentOverrides: false,
+      hasInlineFiles: true,
+    },
+  ])(
+    "bypasses Git metadata resolution for non-writers with $guard",
+    async ({
+      params,
+      expectedCommand,
+      hasEnvironmentOverrides,
+      hasInlineFiles,
+    }) => {
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      await handleExecuteCommand(
+        params,
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        `session-git-bypass-${hasInlineFiles ? "files" : "env"}`,
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+        },
+      );
+
+      expect(classifyPredictableGitMetadataWriter).toHaveBeenCalledWith({
+        command: expectedCommand,
+        hasEnvironmentOverrides,
+        hasInlineFiles,
+      });
+      expect(resolveBaselineProtectedGitMetadataForCwd).not.toHaveBeenCalled();
+      expect(terminalProvider.prepareExecution).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("executes a classified writer when the cwd has no protected baseline Git metadata", async () => {
+    classifyPredictableGitMetadataWriter.mockReturnValue({
+      kind: "predictable_git_metadata_writer",
+      subcommand: "add",
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    await handleExecuteCommand(
+      { command: "git add src/index.ts" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-git-unprotected",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(resolveBaselineProtectedGitMetadataForCwd).toHaveBeenCalledOnce();
+    expect(terminalProvider.prepareExecution).toHaveBeenCalledOnce();
+    expect(terminalProvider.executeCommand).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed after preparation but before execution when Git metadata resolution fails", async () => {
+    classifyPredictableGitMetadataWriter.mockReturnValue({
+      kind: "predictable_git_metadata_writer",
+      subcommand: "add",
+    });
+    resolveBaselineProtectedGitMetadataForCwd.mockRejectedValue(
+      new Error("invalid Git metadata marker"),
+    );
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "git add src/index.ts" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-git-resolution-error",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(terminalProvider.prepareExecution).toHaveBeenCalledOnce();
+    expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "rejected",
+      reason: expect.stringContaining("invalid Git metadata marker"),
+      capability_code: "protected_git_metadata",
+      command_sent: false,
+      process_launched: false,
+      retry_safe: true,
+      failure_stage: "validation",
+    });
+  });
+
+  it("does not preflight Git metadata when preparation selects a native route", async () => {
+    classifyPredictableGitMetadataWriter.mockReturnValue({
+      kind: "predictable_git_metadata_writer",
+      subcommand: "commit",
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    await handleExecuteCommand(
+      { command: "git commit -m fix" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-git-native-route",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(terminalProvider.prepareExecution).toHaveBeenCalledOnce();
+    expect(classifyPredictableGitMetadataWriter).not.toHaveBeenCalled();
+    expect(resolveBaselineProtectedGitMetadataForCwd).not.toHaveBeenCalled();
+    expect(terminalProvider.executeCommand).toHaveBeenCalledOnce();
   });
 
   it("prepares exact execution before master bypass and consumes the same lease", async () => {
@@ -357,6 +549,146 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it("returns Git escalation guidance for a human-edited writer and revokes the first lease", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    classifyPredictableGitMetadataWriter
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce({
+        kind: "predictable_git_metadata_writer",
+        subcommand: "commit",
+      });
+    resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+      marker: "/workspace/.git",
+    });
+    const dispose = vi.fn();
+    const execute = vi.fn();
+    const recordExecutionAudit = vi.fn();
+    const prepareExecution = vi.fn(async () => ({
+      security: {
+        auditId: "audit-before-git-edit",
+        route: "sandbox" as const,
+        confinement: "verified-baseline" as const,
+        routeReason: "verified-local-macos" as const,
+        executionSurface: "verified-sandbox" as const,
+        requiredAuthority: "sandbox" as const,
+        permissionIntent: "default" as const,
+        approvalRequirement: "policy" as const,
+        authorityReason: "approval-policy" as const,
+        approvalPolicySnapshot: "on-request" as const,
+        approvalReviewerSnapshot: "user" as const,
+        executionPresetSnapshot: "workspace-write" as const,
+        commandApprovalPolicySnapshot: "manual" as const,
+        executionPolicy: "sandbox-baseline-v2" as const,
+        preparedAt: 100,
+      },
+      execute,
+      dispose,
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval: vi.fn(() => ({
+          promise: Promise.resolve({
+            decision: "edit",
+            editedCommand: "git commit -m fix",
+          }),
+        })),
+      } as never,
+      "session-edit-to-git",
+      undefined,
+      {
+        terminalProvider: {
+          ...terminalProvider,
+          prepareExecution,
+          recordExecutionAudit,
+        },
+        getCommandApprovalPolicy: () => "manual",
+      },
+    );
+
+    expect(classifyPredictableGitMetadataWriter.mock.calls).toEqual([
+      [
+        {
+          command: "npm test",
+          hasEnvironmentOverrides: false,
+          hasInlineFiles: false,
+        },
+      ],
+      [
+        {
+          command: "git commit -m fix",
+          hasEnvironmentOverrides: false,
+          hasInlineFiles: false,
+        },
+      ],
+    ]);
+    expect(resolveBaselineProtectedGitMetadataForCwd).toHaveBeenCalledOnce();
+    expect(prepareExecution).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(execute).not.toHaveBeenCalled();
+    expect(recordExecutionAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "preparation_revoked",
+        auditId: "audit-before-git-edit",
+        resultStatus: "protected_git_metadata",
+      }),
+    );
+    expect(textPayload(result)).toMatchObject({
+      status: "retry_required",
+      command: "git commit -m fix",
+      original_command: "npm test",
+      capability_code: "protected_git_metadata",
+      required_sandbox_permissions: "require_escalated",
+      command_sent: false,
+      process_launched: false,
+    });
+  });
+
+  it("does not repeat Git preflight when approval leaves the command unchanged", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    await handleExecuteCommand(
+      { command: "npm test" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval: vi.fn(() => ({
+          promise: Promise.resolve({ decision: "run-once" }),
+        })),
+      } as never,
+      "session-unchanged-preflight",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(classifyPredictableGitMetadataWriter).toHaveBeenCalledOnce();
+    expect(resolveBaselineProtectedGitMetadataForCwd).not.toHaveBeenCalled();
+    expect(terminalProvider.prepareExecution).toHaveBeenCalledOnce();
+    expect(terminalProvider.executeCommand).toHaveBeenCalledOnce();
+  });
+
   it("re-prepares an edited native escalation without changing authority", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
@@ -429,6 +761,8 @@ describe("handleExecuteCommand", () => {
       },
     );
 
+    expect(classifyPredictableGitMetadataWriter).not.toHaveBeenCalled();
+    expect(resolveBaselineProtectedGitMetadataForCwd).not.toHaveBeenCalled();
     expect(prepareExecution).toHaveBeenCalledTimes(2);
     expect(
       prepareExecution.mock.calls.map(([options, routeContext]) => ({
@@ -2432,6 +2766,12 @@ describe("handleExecuteCommand", () => {
       },
     );
 
+    expect(classifyPredictableGitMetadataWriter).toHaveBeenCalledWith({
+      command: "npm test",
+      hasEnvironmentOverrides: false,
+      hasInlineFiles: false,
+    });
+    expect(resolveBaselineProtectedGitMetadataForCwd).not.toHaveBeenCalled();
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({
         command: "npm test",

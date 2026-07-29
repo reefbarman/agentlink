@@ -28,7 +28,7 @@ The following tools are registered in dev builds only. They are **not** included
 
 ### send_feedback
 
-Submit feedback about an AgentLink tool — report issues, suggest improvements, or note missing features. Feedback is stored locally for the extension developer to review.
+Submit feedback about an AgentLink tool — report issues, suggest improvements, or note missing features. Feedback is stored locally for the extension developer to review. A successful result includes the assigned stable `id` and immutable `global_index`.
 
 For MCP-related work, submit feedback only about AgentLink's native MCP tools (`find_mcp_tools`, `call_mcp_tool`, and the other MCP management helpers) or AgentLink-owned discovery, transport, approval, dispatch, and result handling. Do not submit feedback about a specific MCP server or one of its native `server__tool` tools: that server's bugs, limitations, confusing output, and domain errors are upstream and out of scope. When AgentLink's MCP plumbing is the problem, use the native AgentLink MCP tool actually involved and include server/tool details only when they are needed as reproduction context.
 
@@ -41,7 +41,7 @@ For MCP-related work, submit feedback only about AgentLink's native MCP tools (`
 
 ### get_feedback
 
-Read all previously submitted feedback. Optionally filter by tool name.
+Read active feedback. Optionally filter by tool name. Every returned entry includes a stable `id` and its immutable `global_index`; filtered results keep their global indices.
 
 | Parameter   | Type    | Description                                             |
 | ----------- | ------- | ------------------------------------------------------- |
@@ -49,11 +49,14 @@ Read all previously submitted feedback. Optionally filter by tool name.
 
 ### delete_feedback
 
-Delete specific feedback entries by their 0-based index (as returned by `get_feedback`).
+Logically hide specific feedback entries from active reads and telemetry. Pass exactly one selector; stable IDs are preferred. The primary feedback JSONL remains append-only and retains raw feedback at rest. New deletions use atomically created per-ID tombstones under `~/.agentlink/agentlink-feedback-deletions/`; the legacy `agentlink-feedback-deletions.jsonl` log remains readable. This prevents concurrent feedback appends from being lost and makes repeated cross-window deletion deterministic.
 
-| Parameter | Type     | Description                        |
-| --------- | -------- | ---------------------------------- |
-| `indices` | number[] | Array of 0-based indices to delete |
+| Parameter | Type      | Description                                                                |
+| --------- | --------- | -------------------------------------------------------------------------- |
+| `ids`     | string[]? | Stable IDs returned by `get_feedback` (preferred)                          |
+| `indices` | number[]? | Legacy immutable global indices; never positions in a filtered result list |
+
+The result includes exact `removed_entries`, `already_deleted_ids`, `unknown_ids`, and `unknown_indices`. Repeating an ID is safe and reported as already deleted. Logical deletion does not redact or compact the append-only primary file.
 
 ## Streaming Baseline
 

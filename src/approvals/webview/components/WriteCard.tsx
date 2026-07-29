@@ -18,9 +18,15 @@ interface WriteCardProps {
   request: ApprovalRequest;
   submit: (data: Omit<DecisionMessage, "type">) => void;
   followUpRef: RefObject<string>;
+  onRevealDiff?: (requestId: string) => void;
 }
 
-export function WriteCard({ request, submit, followUpRef }: WriteCardProps) {
+export function WriteCard({
+  request,
+  submit,
+  followUpRef,
+  onRevealDiff,
+}: WriteCardProps) {
   const filePath = request.filePath ?? "";
   const operation = request.writeOperation ?? "modify";
   const explicitChoices = request.writeChoices ?? [];
@@ -197,6 +203,17 @@ export function WriteCard({ request, submit, followUpRef }: WriteCardProps) {
               class={`codicon ${operation === "create" ? "codicon-new-file" : "codicon-edit"}`}
             />
             <span class="file-path">{filePath}</span>
+            {onRevealDiff && (
+              <button
+                type="button"
+                class="file-card-reveal-button"
+                onClick={() => onRevealDiff(request.id)}
+                aria-label="Reveal diff in editor"
+                title="Reveal diff in editor"
+              >
+                <span class="codicon codicon-search" aria-hidden="true" />
+              </button>
+            )}
             <span class={`operation-badge ${operation}`}>{operation}</span>
           </div>
           {outsideWorkspace && (
