@@ -132,6 +132,10 @@ import {
 
 import { summarizeTextForPreview } from "../shared/textSummary.js";
 import {
+  buildAgentErrorMessageWithData,
+  isProviderAvailabilityErrorMessage,
+} from "../shared/agentErrors.js";
+import {
   applyMemoryCandidateNudge,
   countMemoryNudges,
 } from "../shared/memoryCandidates.js";
@@ -168,6 +172,7 @@ import { captureReviewScope } from "./reviewScopeSnapshot.js";
 import {
   formatFleetResultEnvelope,
   parseFleetResultEnvelope,
+  parseFleetResultEnvelopeDetailed,
   planFleetWorkflow,
   scoreFleetCandidate,
   type FleetWorkflowRequest,
@@ -179,6 +184,7 @@ import {
   isCommandApprovalPolicy,
   type CommandApprovalPolicy,
 } from "../approvals/commandApprovalPolicy.js";
+import { SessionApprovalPolicyCoordinator } from "./sessionApprovalPolicy.js";
 import type {
   TerminalApprovalModeSnapshot,
   TerminalApprovalPolicy,
@@ -203,6 +209,21 @@ const FLEET_VISIBILITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_BACKGROUND_HANDOFF_IMAGES = 8;
 const MAX_BACKGROUND_PARTIAL_RESULT_CHARS = 40 * 1024;
+/**
+ * Terminal results get a larger budget than streaming partials: they are
+ * written once per session, and tail-truncating a finished review at 40 KB
+ * cut findings and could sever the opening fence of the result envelope.
+ */
+const MAX_BACKGROUND_FINAL_RESULT_CHARS = 160 * 1024;
+
+/** Tail-truncate at a line boundary with an explicit truncation notice. */
+function truncateToTailLines(text: string, maxChars: number): string {
+  const tail = text.slice(-maxChars);
+  const firstLineBreak = tail.indexOf("\n");
+  const aligned = firstLineBreak === -1 ? tail : tail.slice(firstLineBreak + 1);
+  const dropped = text.length - aligned.length;
+  return `[…truncated ${dropped} earlier characters…]\n${aligned}`;
+}
 const MAX_ACP_OUTPUT_IMAGES = 8;
 const AUTOMATIC_MEMORY_MAX_RECORDS = 8;
 const AUTOMATIC_MEMORY_MAX_CHARS = 6_000;
@@ -222,10 +243,27 @@ interface AcpToolCallState {
   lastTerminalSignature?: string;
 }
 
+type AcpTranscriptEntry =
+  | {
+      type: "message";
+      role: "assistant" | "user";
+      messageId?: string;
+      content: ContentBlock[];
+      thought: boolean;
+      thinkingId?: string;
+    }
+  | { type: "tool_start"; toolCallId: string }
+  | { type: "tool_result"; toolCallId: string };
+
 interface AcpOutputState {
   assistantTextParts: string[];
   directImages: ImageBlock[];
   toolCalls: Map<string, AcpToolCallState>;
+  transcriptEntries: AcpTranscriptEntry[];
+  toolStartsRecorded: Set<string>;
+  toolResultsRecorded: Set<string>;
+  activeThinkingId?: string;
+  nextThinkingId: number;
   warnings: Set<string>;
   transcriptCommitted: boolean;
 }
@@ -635,6 +673,13 @@ export class AgentSessionManager {
    * in-flight checkpoint cadence so large transcripts checkpoint less often.
    */
   private sessionPersistDurationsMs = new Map<string, number>();
+  /**
+   * Number of currently running in-flight checkpoint loops (one per running
+   * turn). Each loop's cadence is multiplied by this count so the aggregate
+   * event-loop duty cycle of checkpointing stays bounded no matter how many
+   * sessions are running concurrently.
+   */
+  private activeInFlightPersistLoops = 0;
   private sessionRunSettled = new Map<string, Promise<void>>();
   private sessionSendQueues = new Map<string, Promise<void>>();
   private resumingInterruptedSessions = new Set<string>();
@@ -691,6 +736,14 @@ export class AgentSessionManager {
   private bgCompletedAt = new Map<string, number>();
   /** Error messages for background sessions. */
   private bgErrors = new Map<string, string>();
+  /**
+   * Providers/ACP agents that recently failed a background run before doing
+   * any work (auth expired, credits exhausted, startup failure). Keys are
+   * native provider ids or `acp:<id>` references; values are expiry epochs.
+   * Automatic routing avoids these until they expire so retries fall back to
+   * a working provider instead of repeating the same zero-turn failure.
+   */
+  private backgroundProviderCooldowns = new Map<string, number>();
   /** Human-friendly status detail (e.g. active file path) per background session. */
   private bgStatusDetail = new Map<string, string>();
   /** Set of bg session IDs that were explicitly cancelled by the user. */
@@ -1267,18 +1320,44 @@ export class AgentSessionManager {
     return session.fleetMetadata?.rootSessionId ?? session.id;
   }
 
+  /**
+   * Canonical write-scope paths for a path-delegated background writer. Only
+   * native background children qualify: their ownedPaths are enforced at tool
+   * dispatch by the delegation policy, so the mutation coordinator can let
+   * them run alongside the ancestor writer that delegated the scope. ACP
+   * children have no dispatch-level enforcement and never qualify.
+   */
+  private getDelegatedMutationPaths(
+    session: AgentSession,
+    roots: readonly string[],
+  ): string[] | undefined {
+    if (!session.background || session.providerId === "acp") return undefined;
+    const ownedPaths = session.fleetMetadata?.delegation?.ownedPaths;
+    if (!ownedPaths?.length) return undefined;
+    const resolved = ownedPaths.flatMap((ownedPath) =>
+      nodePath.isAbsolute(ownedPath)
+        ? [ownedPath]
+        : roots.map((root) => nodePath.resolve(root, ownedPath)),
+    );
+    return resolved.length > 0 ? resolved : undefined;
+  }
+
   private createWorkspaceMutationDomain(
     session: AgentSession,
     roots = this.getAvailableWorkspaceProjects().map(
       (project) => project.rootPath,
     ),
+    options?: { exclusive?: boolean },
   ): WorkspaceMutationDomain | undefined {
-    return roots.length > 0
-      ? this.host.workspaceMutationCoordinator.createDomain(
-          roots,
-          this.getAgentTreeScopeId(session),
-        )
-      : undefined;
+    if (roots.length === 0) return undefined;
+    const delegatedPaths = options?.exclusive
+      ? undefined
+      : this.getDelegatedMutationPaths(session, roots);
+    return this.host.workspaceMutationCoordinator.createDomain(roots, {
+      scopeId: this.getAgentTreeScopeId(session),
+      ...(delegatedPaths ? { delegatedPaths } : {}),
+      ...(options?.exclusive ? { exclusive: true } : {}),
+    });
   }
 
   private async ensureWorkspaceMutationLease(
@@ -1287,19 +1366,25 @@ export class AgentSessionManager {
     roots = this.getAvailableWorkspaceProjects().map(
       (project) => project.rootPath,
     ),
+    options?: { exclusive?: boolean },
   ): Promise<WorkspaceMutationLease | undefined> {
     if (leaseHolder.lease) return leaseHolder.lease;
     if (leaseHolder.acquisition) return leaseHolder.acquisition;
-    const domain = this.createWorkspaceMutationDomain(session, roots);
+    const domain = this.createWorkspaceMutationDomain(session, roots, options);
     if (!domain) return undefined;
 
-    const conflictingAncestorId = this.findMutationLeaseOwningAncestor(session);
-    if (conflictingAncestorId) {
-      throw new FleetAdmissionError({
-        ok: false,
-        code: "workspace_conflict",
-        message: `Workspace mutation rejected: this descendant cannot acquire a writer lease while ancestor ${conflictingAncestorId} owns the same agent-tree mutation domain. Use a read-only profile or delegate a disjoint scope.`,
-      });
+    // Path-delegated writers coexist with the ancestor's tree-wide lease; the
+    // coordinator serializes them only against overlapping delegated scopes.
+    if (!domain.delegatedPaths) {
+      const conflictingAncestorId =
+        this.findMutationLeaseOwningAncestor(session);
+      if (conflictingAncestorId) {
+        throw new FleetAdmissionError({
+          ok: false,
+          code: "workspace_conflict",
+          message: `Workspace mutation rejected: ancestor session ${conflictingAncestorId} holds the agent-tree mutation lease, which blocks every descendant writer regardless of file ownership until that session's turn completes. To write concurrently, the delegation must declare ownedPaths (an enforced write scope disjoint from other writers); otherwise use a read-only profile or wait for the ancestor to finish.`,
+        });
+      }
     }
 
     // session.abortSignal outlives its run: after abort() it stays aborted
@@ -2151,30 +2236,101 @@ export class AgentSessionManager {
     output: AcpOutputState,
     extraText?: string,
   ): AgentMessage[] {
-    const toolCalls = Array.from(output.toolCalls.values());
     const messages: AgentMessage[] = [];
-    if (toolCalls.length > 0) {
-      messages.push({
-        role: "assistant",
-        content: toolCalls.map((toolCall) => ({
-          type: "tool_use" as const,
-          id: toolCall.toolCallId,
-          name: toolCall.title,
-          input: this.acpToolInputForHistory(toolCall.rawInput),
-        })),
-      });
-      const results = toolCalls
-        .filter(
-          (toolCall) =>
-            toolCall.status === "completed" || toolCall.status === "failed",
-        )
-        .map((toolCall) => this.acpToolResultForHistory(output, toolCall));
-      if (results.length > 0) messages.push({ role: "user", content: results });
+    for (const entry of output.transcriptEntries) {
+      if (entry.type === "message") {
+        if (entry.content.length > 0) {
+          if (entry.role === "user") {
+            const text = entry.content
+              .filter(
+                (block): block is Extract<ContentBlock, { type: "text" }> =>
+                  block.type === "text",
+              )
+              .map((block) => block.text)
+              .join("");
+            const images = entry.content.flatMap((block, index) =>
+              block.type === "image"
+                ? [
+                    {
+                      name: `acp-user-image-${index + 1}`,
+                      mimeType: block.source.media_type,
+                      base64: block.source.data,
+                    },
+                  ]
+                : [],
+            );
+            messages.push({
+              role: "user",
+              content: text || (images.length > 0 ? "[Image]" : ""),
+              ...(images.length > 0
+                ? { media: { images, documents: [] } }
+                : {}),
+            });
+          } else {
+            messages.push({
+              role: "assistant",
+              content: structuredClone(entry.content),
+            });
+          }
+        }
+        continue;
+      }
+
+      const toolCall = output.toolCalls.get(entry.toolCallId);
+      if (!toolCall) continue;
+      if (entry.type === "tool_start") {
+        messages.push({
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: toolCall.toolCallId,
+              name: toolCall.title,
+              input: this.acpToolInputForHistory(toolCall.rawInput),
+            },
+          ],
+        });
+      } else if (
+        toolCall.status === "completed" ||
+        toolCall.status === "failed"
+      ) {
+        messages.push({
+          role: "user",
+          content: [this.acpToolResultForHistory(output, toolCall)],
+        });
+      }
     }
 
-    const assistantContent = this.buildAcpAssistantContent(output, extraText);
+    const assistantContent = this.buildAcpAssistantContent(
+      output,
+      extraText,
+      output.transcriptEntries.length === 0,
+    );
     if (assistantContent.length > 0) {
-      messages.push({ role: "assistant", content: assistantContent });
+      const lastMessage = messages.at(-1);
+      if (
+        extraText &&
+        lastMessage?.role === "assistant" &&
+        Array.isArray(lastMessage.content)
+      ) {
+        const tailText = assistantContent
+          .filter(
+            (block): block is Extract<ContentBlock, { type: "text" }> =>
+              block.type === "text",
+          )
+          .map((block) => block.text)
+          .join("\n\n");
+        const lastText = [...lastMessage.content]
+          .reverse()
+          .find((block) => block.type === "text");
+        if (tailText && lastText?.type === "text") {
+          lastText.text = `${lastText.text.trimEnd()}\n\n${tailText}`;
+        } else {
+          lastMessage.content.push(...assistantContent);
+        }
+      } else {
+        messages.push({ role: "assistant", content: assistantContent });
+      }
     }
     return messages;
   }
@@ -2184,6 +2340,7 @@ export class AgentSessionManager {
     output: AcpOutputState,
     extraText?: string,
   ): void {
+    this.finishAcpThinking(session, output);
     for (const message of this.buildAcpTranscriptMessages(output, extraText)) {
       if (message.role === "assistant" && Array.isArray(message.content)) {
         session.appendAssistantTurn(message.content);
@@ -2194,20 +2351,53 @@ export class AgentSessionManager {
         session.appendToolResults(
           message.content as PersistedPendingToolResult[],
         );
+      } else if (message.role === "user") {
+        session.appendUserMessage(message);
+      }
+    }
+    const resultText = this.buildAcpResultText(output, extraText);
+    if (resultText) {
+      // This is the terminal commit, not a per-tick streaming update, so it
+      // gets a larger budget: the 40 KB streaming cap cut long reviews
+      // mid-finding and could eat the opening fence of the result envelope.
+      const boundedResult =
+        resultText.length > MAX_BACKGROUND_FINAL_RESULT_CHARS
+          ? truncateToTailLines(resultText, MAX_BACKGROUND_FINAL_RESULT_CHARS)
+          : resultText;
+      this.bgPartialResults.set(session.id, boundedResult);
+      this.bgStreamingText.set(session.id, boundedResult.slice(-500));
+      if (session.fleetMetadata) {
+        session.fleetMetadata.partialResult = boundedResult;
       }
     }
     output.transcriptCommitted = true;
   }
 
-  private buildAcpAssistantContent(
+  private buildAcpResultText(
     state: AcpOutputState,
     extraText?: string,
-  ): ContentBlock[] {
-    const responseText = state.assistantTextParts.join("").trim();
+  ): string {
+    const messageText = state.transcriptEntries
+      .flatMap((entry) =>
+        entry.type === "message" && entry.role === "assistant" && !entry.thought
+          ? [
+              entry.content
+                .filter(
+                  (block): block is Extract<ContentBlock, { type: "text" }> =>
+                    block.type === "text",
+                )
+                .map((block) => block.text)
+                .join(""),
+            ]
+          : [],
+      )
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
     const warningText = Array.from(state.warnings).join("\n").trim();
     const imageCount = state.directImages.length;
-    const text = [
-      responseText ||
+    return [
+      messageText ||
         (imageCount > 0
           ? `ACP agent returned ${imageCount} image${imageCount === 1 ? "" : "s"}.`
           : ""),
@@ -2216,9 +2406,21 @@ export class AgentSessionManager {
     ]
       .filter(Boolean)
       .join("\n\n");
+  }
+
+  private buildAcpAssistantContent(
+    state: AcpOutputState,
+    extraText?: string,
+    includeResponse = true,
+  ): ContentBlock[] {
+    const text = includeResponse
+      ? this.buildAcpResultText(state, extraText)
+      : [Array.from(state.warnings).join("\n").trim(), extraText?.trim()]
+          .filter(Boolean)
+          .join("\n\n");
     return [
       ...(text ? ([{ type: "text", text }] as ContentBlock[]) : []),
-      ...state.directImages,
+      ...(includeResponse ? state.directImages : []),
     ];
   }
 
@@ -2499,6 +2701,109 @@ export class AgentSessionManager {
     return { outcome: { outcome: "selected", optionId: selected } };
   }
 
+  private finishAcpThinking(
+    session: AgentSession,
+    output: AcpOutputState,
+  ): void {
+    if (!output.activeThinkingId) return;
+    this.recordAndEmitEvent(session.id, {
+      type: "thinking_end",
+      thinkingId: output.activeThinkingId,
+    });
+    output.activeThinkingId = undefined;
+  }
+
+  private appendAcpMessageChunk(args: {
+    session: AgentSession;
+    output: AcpOutputState;
+    role: "assistant" | "user";
+    messageId?: string;
+    content: ContentBlock;
+    thought: boolean;
+  }): void {
+    const { session, output, role, messageId, content, thought } = args;
+    const last = output.transcriptEntries.at(-1);
+    const sameMessage =
+      last?.type === "message" &&
+      last.role === role &&
+      last.thought === thought &&
+      last.messageId === messageId;
+    let entry: Extract<AcpTranscriptEntry, { type: "message" }>;
+    if (sameMessage) {
+      entry = last;
+    } else {
+      if (!thought) this.finishAcpThinking(session, output);
+      const thinkingId = thought
+        ? `${messageId || "acp-thinking"}-${++output.nextThinkingId}`
+        : undefined;
+      entry = {
+        type: "message",
+        role,
+        messageId,
+        content: [],
+        thought,
+        thinkingId,
+      };
+      output.transcriptEntries.push(entry);
+      if (thought) {
+        this.finishAcpThinking(session, output);
+        output.activeThinkingId = thinkingId;
+        this.recordAndEmitEvent(session.id, {
+          type: "thinking_start",
+          thinkingId: thinkingId!,
+        });
+      }
+    }
+
+    if (thought && content.type === "text") {
+      const lastContent = entry.content.at(-1);
+      if (lastContent?.type === "thinking") {
+        lastContent.thinking += content.text;
+      } else {
+        entry.content.push({
+          type: "thinking",
+          thinking: content.text,
+          signature: "",
+        });
+      }
+      this.recordAndEmitEvent(session.id, {
+        type: "thinking_delta",
+        thinkingId: entry.thinkingId!,
+        text: content.text,
+      });
+      return;
+    }
+    const lastContent = entry.content.at(-1);
+    if (content.type === "text" && lastContent?.type === "text") {
+      lastContent.text += content.text;
+    } else {
+      entry.content.push(content);
+    }
+  }
+
+  private recordAcpToolStart(output: AcpOutputState, toolCallId: string): void {
+    if (output.toolStartsRecorded.has(toolCallId)) return;
+    output.toolStartsRecorded.add(toolCallId);
+    output.transcriptEntries.push({ type: "tool_start", toolCallId });
+  }
+
+  private recordAcpToolResult(
+    output: AcpOutputState,
+    toolCall: AcpToolCallState,
+  ): void {
+    if (
+      output.toolResultsRecorded.has(toolCall.toolCallId) ||
+      (toolCall.status !== "completed" && toolCall.status !== "failed")
+    ) {
+      return;
+    }
+    output.toolResultsRecorded.add(toolCall.toolCallId);
+    output.transcriptEntries.push({
+      type: "tool_result",
+      toolCallId: toolCall.toolCallId,
+    });
+  }
+
   private emitAcpToolStart(
     session: AgentSession,
     toolCall: AcpToolCallState,
@@ -2520,6 +2825,7 @@ export class AgentSessionManager {
   ): void {
     if (toolCall.status !== "completed" && toolCall.status !== "failed") return;
     this.emitAcpToolStart(session, toolCall);
+    this.recordAcpToolResult(output, toolCall);
     const result = this.normalizeAcpToolResult(output, toolCall);
     const signature = this.stringifyAcpValue({
       status: toolCall.status,
@@ -2579,30 +2885,58 @@ export class AgentSessionManager {
     update: SessionUpdate;
   }): void {
     const { session, update } = args;
-    if (update.sessionUpdate === "agent_message_chunk") {
-      this.noteBackgroundProgress(session.id, "responding");
+    if (
+      update.sessionUpdate === "agent_message_chunk" ||
+      update.sessionUpdate === "user_message_chunk" ||
+      update.sessionUpdate === "agent_thought_chunk"
+    ) {
+      const agentMessage = update.sessionUpdate === "agent_message_chunk";
+      const thought = update.sessionUpdate === "agent_thought_chunk";
+      this.noteBackgroundProgress(
+        session.id,
+        thought
+          ? "thinking"
+          : agentMessage
+            ? "responding"
+            : "waiting_for_provider",
+      );
       const converted = convertAcpContentBlock(update.content);
       if (converted.warning) args.output.warnings.add(converted.warning);
-      if (converted.content?.type === "text") {
+      if (converted.content?.type === "image") {
+        if (this.acpOutputImageCount(args.output) >= MAX_ACP_OUTPUT_IMAGES) {
+          args.output.warnings.add(
+            `[ACP images truncated: showing at most ${MAX_ACP_OUTPUT_IMAGES} images]`,
+          );
+          return;
+        }
+        args.output.directImages.push(converted.content);
+      }
+      if (converted.content) {
+        this.appendAcpMessageChunk({
+          session,
+          output: args.output,
+          role:
+            update.sessionUpdate === "user_message_chunk"
+              ? "user"
+              : "assistant",
+          messageId: update.messageId ?? undefined,
+          content: converted.content,
+          thought,
+        });
+      }
+      if (agentMessage && converted.content?.type === "text") {
         args.output.assistantTextParts.push(converted.content.text);
         this.appendBgStreamingText(session.id, converted.content.text);
         this.recordAndEmitEvent(session.id, {
           type: "text_delta",
           text: converted.content.text,
         });
-      } else if (converted.content?.type === "image") {
-        if (this.acpOutputImageCount(args.output) < MAX_ACP_OUTPUT_IMAGES) {
-          args.output.directImages.push(converted.content);
-        } else {
-          args.output.warnings.add(
-            `[ACP images truncated: showing at most ${MAX_ACP_OUTPUT_IMAGES} images]`,
-          );
-        }
       }
       return;
     }
 
     if (update.sessionUpdate === "tool_call") {
+      this.finishAcpThinking(session, args.output);
       this.noteBackgroundProgress(session.id, "executing_tool");
       session.currentTool = update.title;
       session.status = "tool_executing";
@@ -2621,6 +2955,7 @@ export class AgentSessionManager {
         lastTerminalSignature: existing?.lastTerminalSignature,
       };
       args.output.toolCalls.set(update.toolCallId, toolCall);
+      this.recordAcpToolStart(args.output, update.toolCallId);
       if (!existing) {
         const meta = this.bgMeta.get(session.id);
         if (meta) meta.toolCalls += 1;
@@ -2636,6 +2971,7 @@ export class AgentSessionManager {
     }
 
     if (update.sessionUpdate === "tool_call_update") {
+      this.finishAcpThinking(session, args.output);
       const existing = args.output.toolCalls.get(update.toolCallId);
       const current: AcpToolCallState =
         existing ??
@@ -2647,6 +2983,7 @@ export class AgentSessionManager {
         } satisfies AcpToolCallState);
       const toolCall = this.mergeAcpToolCallUpdate(current, update);
       args.output.toolCalls.set(update.toolCallId, toolCall);
+      this.recordAcpToolStart(args.output, update.toolCallId);
       if (!existing) {
         const meta = this.bgMeta.get(session.id);
         if (meta) meta.toolCalls += 1;
@@ -2906,9 +3243,13 @@ export class AgentSessionManager {
       const leaseHolder: WorkspaceMutationLeaseHolder = {
         sessionId: session.id,
       };
+      // Exclusive: checkpoint capture must not interleave with path-delegated
+      // writers, or the snapshot could contain a torn delegated write.
       const lease = await this.ensureWorkspaceMutationLease(
         session,
         leaseHolder,
+        undefined,
+        { exclusive: true },
       );
       if (!lease) return null;
       try {
@@ -3322,6 +3663,7 @@ export class AgentSessionManager {
     await this.discardEmptyForegroundSession();
     this.sessionApprovalModes.delete("agent");
     this.toolCtx?.approvalManager.clearSession("agent");
+    this.toolCtx?.approvalPanel.clearRecentApprovalsForSessions?.(["agent"]);
     return this.createSession(mode, opts);
   }
 
@@ -3646,6 +3988,42 @@ export class AgentSessionManager {
    * are fire-and-forget and serialized per session; the engine picks up the new
    * prompt and anchor on its next API request.
    */
+  private reconcileRestoredSessionApproval(session: AgentSession): void {
+    const approvalManager = this.toolCtx?.approvalManager;
+    if (!approvalManager) return;
+    if (session.projectScope.rootPath) {
+      approvalManager.bindSessionProject(session.id, session.projectScope);
+    }
+    const fallback =
+      this.host.config.getCommandApprovalPolicy?.(session.projectScope) ??
+      "safe";
+    const result = new SessionApprovalPolicyCoordinator({
+      getCommandApprovalPolicy: (sessionId, configuredFallback) =>
+        this.getCommandApprovalPolicy(sessionId, configuredFallback),
+      setCommandApprovalPolicy: (sessionId, policy) =>
+        this.setCommandApprovalPolicy(sessionId, policy),
+      getAgentWriteApprovalState: (sessionId) =>
+        approvalManager.getAgentWriteApprovalState(sessionId),
+      setAgentWriteApprovalSelection: (sessionId, selection, targetPath) =>
+        approvalManager.setAgentWriteApprovalSelection(
+          sessionId,
+          selection,
+          targetPath,
+        ),
+      resetSessionAgentWriteApproval: (sessionId) =>
+        approvalManager.resetSessionAgentWriteApproval(sessionId),
+    }).reconcileRestoredSession(
+      session.id,
+      fallback,
+      session.projectScope.rootPath,
+    );
+    if (!result.ok) {
+      this.log?.(
+        `[approval] disabled Approve for Me because restored session write approval could not be recreated (${session.id})`,
+      );
+    }
+  }
+
   private syncSessionApproveForMe(session: AgentSession | undefined): void {
     if (!session) return;
     const approveForMe =
@@ -3910,10 +4288,22 @@ export class AgentSessionManager {
    * persistence write so checkpointing stays under a ~4% event-loop duty
    * cycle: small sessions keep the 1 s cadence while a transcript that takes
    * 200 ms to persist checkpoints every 5 s, capped at 30 s.
+   *
+   * The per-session delay is then multiplied by the number of concurrently
+   * running checkpoint loops: every session's synchronous transcript stringify
+   * blocks the same event loop, so N running turns each checkpointing at the
+   * 1 s floor would multiply the aggregate duty cycle by N. Scaling the
+   * cadence keeps the aggregate roughly constant (~1 checkpoint/s across all
+   * sessions at the floor) at the cost of proportionally staler mid-turn
+   * checkpoints; turn-boundary durable saves are unaffected.
    */
   private nextInFlightPersistDelayMs(sessionId: string): number {
     const lastDurationMs = this.sessionPersistDurationsMs.get(sessionId) ?? 0;
-    return Math.min(30_000, Math.max(1_000, lastDurationMs * 25));
+    const concurrentLoops = Math.max(1, this.activeInFlightPersistLoops);
+    return Math.min(
+      30_000,
+      Math.max(1_000, lastDurationMs * 25) * concurrentLoops,
+    );
   }
 
   /**
@@ -3967,9 +4357,15 @@ export class AgentSessionManager {
         schedule();
       }, this.nextInFlightPersistDelayMs(sessionId));
     };
+    this.activeInFlightPersistLoops += 1;
     schedule();
     return () => {
+      if (stopped) return;
       stopped = true;
+      this.activeInFlightPersistLoops = Math.max(
+        0,
+        this.activeInFlightPersistLoops - 1,
+      );
       if (timer !== undefined) this.host.timers.clearTimeout(timer);
     };
   }
@@ -5034,6 +5430,9 @@ export class AgentSessionManager {
       void this.saveSessionNow(session.id);
       // Mark bg sessions as cancelled so the UI can distinguish stop vs complete
       if (session.background) {
+        this.clearSessionApprovalAuthority(
+          this.getSessionSubtreeIds(sessionId),
+        );
         this.bgCancelled.add(sessionId);
         this.markBgCompleted(sessionId);
         if (session.fleetMetadata) {
@@ -5843,9 +6242,12 @@ export class AgentSessionManager {
     ) {
       return { ok: false, reason: "workspace_mutation_conflict" };
     }
+    // Exclusive: a revert must not run while any path-delegated writer holds
+    // a lease, or it could restore files out from under an in-flight write.
     const domain = this.createWorkspaceMutationDomain(
       session,
       projectSnapshots.map(({ project }) => project.rootPath),
+      { exclusive: true },
     );
     if (!domain) return { ok: false, reason: "workspace_revert_failed" };
 
@@ -6287,7 +6689,10 @@ export class AgentSessionManager {
     sessionId: string,
   ): Promise<AgentSession | null> {
     const existing = this.sessions.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      this.reconcileRestoredSessionApproval(existing);
+      return existing;
+    }
     const inFlight = this.sessionHydrations.get(sessionId);
     if (inFlight) return inFlight;
     if (!this.persistence) return null;
@@ -6348,6 +6753,7 @@ export class AgentSessionManager {
       }
       if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
       this.foregroundId = sessionId;
+      this.reconcileRestoredSessionApproval(existing);
       await this.restorePersistedBackgroundSessions(
         this.getRestoredBackgroundRootSessionIds(sessionId),
       );
@@ -6452,6 +6858,7 @@ export class AgentSessionManager {
     const raced = this.sessions.get(sessionId);
     if (raced) return raced;
     this.sessions.set(sessionId, session);
+    this.reconcileRestoredSessionApproval(session);
     this.updateSkillCatalogFallback(session);
     this.syncSessionApproveForMe(session);
     if (interruptedRunRecovery.changed) {
@@ -6725,6 +7132,13 @@ export class AgentSessionManager {
     this.sessionPersistDurationsMs.delete(sessionId);
     this.sessionApprovalModes.delete(sessionId);
     this.retainedCommandReviewDenials.clearSession(sessionId);
+    const deletedSubtreeIds = this.getSessionSubtreeIds(sessionId);
+    this.toolCtx?.approvalManager.clearSessions?.(deletedSubtreeIds, {
+      forgetProjectBinding: true,
+    });
+    this.toolCtx?.approvalPanel.clearRecentApprovalsForSessions?.(
+      deletedSubtreeIds,
+    );
     const removedSession = this.sessions.get(sessionId);
     if (removedSession) {
       this.sessions.delete(sessionId);
@@ -7816,7 +8230,10 @@ export class AgentSessionManager {
     const backendRoute = resolveBackgroundBackendRoute(
       this.getBackgroundAgentSettings(inheritedScope),
       request,
-      { foregroundProvider },
+      {
+        foregroundProvider,
+        unavailableReferences: new Set(this.getCoolingBackgroundProviders()),
+      },
     );
 
     if (backendRoute.backend === "acp") {
@@ -7825,10 +8242,12 @@ export class AgentSessionManager {
           "ACP background agents cannot inherit active skill tool restrictions; use a native background agent",
         );
       }
-      this.ensureParentWriterCanSpawnSharedChild(
-        parent,
-        backendRoute.agent.readonlyOnly,
-      );
+      // An explicit review-only permission profile makes the run read-only at
+      // the ACP permission boundary, so it never contends for the writer lease.
+      const acpEnforcedReadOnly =
+        backendRoute.agent.readonlyOnly ||
+        request.permissionProfile === "review-only";
+      this.ensureParentWriterCanSpawnSharedChild(parent, acpEnforcedReadOnly);
       if (request.images?.length) {
         throw new Error(
           "Image handoff is not supported by ACP background agents; use a native background agent or save the images in the workspace and reference their paths.",
@@ -7893,7 +8312,7 @@ export class AgentSessionManager {
         task,
         parentSessionId,
         backend: `acp:${backendRoute.agent.id}`,
-        readonlyOnly: backendRoute.agent.readonlyOnly,
+        readonlyOnly: acpEnforcedReadOnly,
         resolvedMode,
         resolvedModel: `acp:${backendRoute.agent.id}`,
         resolvedProvider: "acp",
@@ -7929,10 +8348,14 @@ export class AgentSessionManager {
         assistantTextParts: [],
         directImages: [],
         toolCalls: new Map(),
+        transcriptEntries: [],
+        toolStartsRecorded: new Set(),
+        toolResultsRecorded: new Set(),
+        nextThinkingId: 0,
         warnings: new Set(),
         transcriptCommitted: false,
       };
-      const mutationLeaseHolder = backendRoute.agent.readonlyOnly
+      const mutationLeaseHolder = acpEnforcedReadOnly
         ? undefined
         : ({ sessionId: session.id } satisfies WorkspaceMutationLeaseHolder);
       let promptResponse: PromptResponse | undefined;
@@ -8007,7 +8430,7 @@ export class AgentSessionManager {
               this.handleAcpPermissionRequest({
                 session,
                 task,
-                readonlyOnly: backendRoute.agent.readonlyOnly,
+                readonlyOnly: acpEnforcedReadOnly,
                 mutationLeaseHolder,
                 requestContext: acpRequestContext,
                 request: permissionRequest,
@@ -8045,7 +8468,9 @@ export class AgentSessionManager {
             };
           }
         } catch (err: unknown) {
-          const error = err instanceof Error ? err.message : String(err);
+          // JSON-RPC transports bury the real cause (e.g. expired OAuth) in
+          // error.data behind a generic "Internal error" message.
+          const error = buildAgentErrorMessageWithData(err);
           const cancelled =
             this.bgCancelled.has(session.id) || session.isAborted;
           this.finalizeUnresolvedAcpTools(
@@ -8059,11 +8484,23 @@ export class AgentSessionManager {
             this.bgCancelled.add(session.id);
           } else {
             session.status = "error";
-            this.setBgError(session.id, error, false);
+            // A failure before any API turn means the agent never started
+            // (auth/config/transport); cool it down so automatic routing and
+            // retries fall back to another provider, and mark the run
+            // agent-retryable since no work is lost.
+            const zeroTurnStartupFailure = this.noteBackgroundProviderFailure(
+              `acp:${backendRoute.agent.id}`,
+              error,
+              {
+                apiTurns: this.bgMeta.get(session.id)?.apiTurns ?? 0,
+                anyStartupFailure: true,
+              },
+            );
+            this.setBgError(session.id, error, zeroTurnStartupFailure);
             this.recordAndEmitEvent(session.id, {
               type: "error",
               error,
-              retryable: false,
+              retryable: zeroTurnStartupFailure,
             });
           }
         } finally {
@@ -8094,6 +8531,7 @@ export class AgentSessionManager {
             const resolution = this.resolveBackgroundResult(
               session,
               fallbackMsg,
+              { preferPartialResult: true },
             );
             this.cancelOwnedChildrenOnCompletion(session.id);
             await this.finalizeFleetMetadata(session, resolution);
@@ -8138,6 +8576,7 @@ export class AgentSessionManager {
     const route = await resolveBackgroundRoute(this.host.providers, request, {
       mode: foregroundMode,
       model: foregroundModel,
+      unavailableProviders: this.getCoolingBackgroundProviders(),
     });
     const isReviewTask = route.taskClass.startsWith("review_");
     const effectivePermissionProfile =
@@ -8156,6 +8595,9 @@ export class AgentSessionManager {
     this.ensureParentWriterCanSpawnSharedChild(
       parent,
       usesReadOnlyNativeProfile,
+      {
+        enforcedOwnedPaths: request.ownedPaths ?? [],
+      },
     );
 
     this.log?.(
@@ -8410,10 +8852,18 @@ export class AgentSessionManager {
         }
         if (terminalEngineError) {
           session.status = "error";
+          // A provider availability failure (auth/billing/quota) before the
+          // first API turn cools the provider down so an immediate retry
+          // routes to a different one, and is safe for the agent to retry.
+          const availabilityRetryable = this.noteBackgroundProviderFailure(
+            route.resolvedProvider,
+            terminalEngineError.error,
+            { apiTurns: this.bgMeta.get(session.id)?.apiTurns ?? 0 },
+          );
           this.setBgError(
             session.id,
             terminalEngineError.error,
-            terminalEngineError.retryable,
+            terminalEngineError.retryable || availabilityRetryable,
           );
         } else if (session.status === "streaming") {
           session.status = "idle";
@@ -8551,6 +9001,11 @@ export class AgentSessionManager {
           fleet.delegation
             ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
           fleet.finalResult ?? "",
+          {
+            workspaceRoots: this.getWorkspaceFolders().map(
+              (folder) => folder.path,
+            ),
+          },
         );
       return {
         sessionId: session.id,
@@ -9172,24 +9627,82 @@ export class AgentSessionManager {
     callerSessionId: string,
     targetSessionId: string,
   ): boolean {
+    return (
+      this.getBackgroundManagementDenial(callerSessionId, targetSessionId) ===
+      undefined
+    );
+  }
+
+  /**
+   * Spawn records ancestry in both fleetMetadata and bgParents; a restore or
+   * resume path can drop either one, so the authorization walk accepts
+   * whichever survives instead of failing a direct child on bookkeeping drift.
+   */
+  private isBackgroundDescendantOf(
+    sessionId: string,
+    ancestorId: string,
+  ): boolean {
+    let parentId =
+      this.sessions.get(sessionId)?.fleetMetadata?.parentSessionId ??
+      this.bgParents.get(sessionId)?.sessionId;
+    const visited = new Set<string>();
+    while (parentId && !visited.has(parentId)) {
+      if (parentId === ancestorId) return true;
+      visited.add(parentId);
+      parentId =
+        this.sessions.get(parentId)?.fleetMetadata?.parentSessionId ??
+        this.bgParents.get(parentId)?.sessionId;
+    }
+    return false;
+  }
+
+  private getBackgroundManagementDenial(
+    callerSessionId: string,
+    targetSessionId: string,
+  ):
+    | {
+        terminalReason:
+          | "background_session_not_found"
+          | "outside_caller_subtree";
+        error: string;
+      }
+    | undefined {
     const caller = this.sessions.get(callerSessionId);
     const target = this.sessions.get(targetSessionId);
-    if (!caller || !target?.background) return false;
-    return this.isFleetDescendant(targetSessionId, callerSessionId);
+    if (!target?.background) {
+      return {
+        terminalReason: "background_session_not_found",
+        error: `Background session ${targetSessionId} is not loaded as a background agent in this window. It may not have been restored alongside the current foreground session; reloading or reopening the tab that spawned it restores its subtree.`,
+      };
+    }
+    if (
+      !caller ||
+      !this.isBackgroundDescendantOf(targetSessionId, callerSessionId)
+    ) {
+      return {
+        terminalReason: "outside_caller_subtree",
+        error: "Background session is outside the caller's subtree",
+      };
+    }
+    return undefined;
   }
 
   getAuthorizedBackgroundStatus(
     callerSessionId: string,
     sessionId: string,
   ): BgStatusResult {
-    if (!this.canManageBackground(callerSessionId, sessionId)) {
+    const denial = this.getBackgroundManagementDenial(
+      callerSessionId,
+      sessionId,
+    );
+    if (denial) {
       return {
         status: "error",
         done: true,
-        partialOutput: "Background session is outside the caller's subtree",
+        partialOutput: denial.error,
         displayStatus: "Unauthorized",
         resultState: "authorization_lost",
-        terminalReason: "outside_caller_subtree",
+        terminalReason: denial.terminalReason,
         retrySafe: false,
         phase: "failed",
         canSteer: false,
@@ -9203,14 +9716,18 @@ export class AgentSessionManager {
     callerSessionId: string,
     sessionId: string,
   ): Promise<string> {
-    if (!this.canManageBackground(callerSessionId, sessionId)) {
+    const denial = this.getBackgroundManagementDenial(
+      callerSessionId,
+      sessionId,
+    );
+    if (denial) {
       return Promise.resolve(
         JSON.stringify({
           status: "authorization_lost",
-          terminalReason: "outside_caller_subtree",
+          terminalReason: denial.terminalReason,
           retrySafe: false,
           agentRetryable: false,
-          error: "Background session is outside the caller's subtree",
+          error: denial.error,
         }),
       );
     }
@@ -9404,6 +9921,7 @@ export class AgentSessionManager {
       return { archived: false, reason: "active sessions cannot be archived" };
     }
     session.fleetMetadata.archivedAt = Date.now();
+    this.clearSessionApprovalAuthority([sessionId]);
     this.saveSession(sessionId);
     this.notifySessionsChanged();
     return { archived: true };
@@ -9454,6 +9972,7 @@ export class AgentSessionManager {
     }
     session.fleetMetadata.terminalReason = "resumed_as_new_session";
     session.fleetMetadata.archivedAt = Date.now();
+    this.clearSessionApprovalAuthority([sessionId]);
     this.saveSession(sessionId);
     this.notifySessionsChanged();
     return result;
@@ -9471,6 +9990,20 @@ export class AgentSessionManager {
         (message) =>
           message.role === "user" && typeof message.content === "string",
       );
+    // ACP sessions record resolvedProvider "acp" and resolvedModel
+    // "acp:<id>", which the native routers cannot resolve. Re-pin only an
+    // explicitly requested ACP agent (via its backend reference); otherwise
+    // let routing re-decide so a retry can fall back to a working provider.
+    const isAcpSession = fleet.resolvedProvider === "acp";
+    const explicitAcpOverride =
+      isAcpSession &&
+      fleet.backend !== "native" &&
+      Boolean(fleet.routingReason?.includes("explicit ACP provider override"));
+    const retryRouting = isAcpSession
+      ? explicitAcpOverride
+        ? { provider: fleet.backend }
+        : {}
+      : { model: fleet.resolvedModel, provider: fleet.resolvedProvider };
     return this.spawnBackground(
       {
         task: fleet.task,
@@ -9480,8 +10013,7 @@ export class AgentSessionManager {
             : `Retry the task: ${fleet.task}`,
         images: firstUserMessage?.media?.images,
         mode: fleet.resolvedMode,
-        model: fleet.resolvedModel,
-        provider: fleet.resolvedProvider,
+        ...retryRouting,
         taskClass: fleet.taskClass,
         ownedPaths: fleet.delegation?.ownedPaths,
         forbiddenPaths: fleet.delegation?.forbiddenPaths,
@@ -9648,6 +10180,50 @@ export class AgentSessionManager {
     if (fleet) fleet.agentRetryable = retryable;
   }
 
+  private static readonly BACKGROUND_PROVIDER_COOLDOWN_MS = 10 * 60 * 1000;
+
+  /** Providers/ACP agents currently cooling down after a zero-turn failure. */
+  private getCoolingBackgroundProviders(): string[] {
+    const now = Date.now();
+    const cooling: string[] = [];
+    for (const [key, until] of this.backgroundProviderCooldowns) {
+      if (now >= until) {
+        this.backgroundProviderCooldowns.delete(key);
+      } else {
+        cooling.push(key);
+      }
+    }
+    return cooling;
+  }
+
+  /**
+   * Record a background run that failed before doing any work. Availability
+   * failures (auth/billing/quota — or any startup failure for ACP agents)
+   * put the provider on a routing cooldown so an immediate retry lands on a
+   * different provider. Returns true when the failure is retry-worthy.
+   */
+  private noteBackgroundProviderFailure(
+    routeKey: string,
+    error: string,
+    options: { apiTurns: number; anyStartupFailure?: boolean },
+  ): boolean {
+    if (options.apiTurns > 0) return false;
+    if (
+      !options.anyStartupFailure &&
+      !isProviderAvailabilityErrorMessage(error)
+    ) {
+      return false;
+    }
+    this.backgroundProviderCooldowns.set(
+      routeKey,
+      Date.now() + AgentSessionManager.BACKGROUND_PROVIDER_COOLDOWN_MS,
+    );
+    this.log?.(
+      `[bg-route] cooling down ${routeKey} after zero-turn failure: ${error.slice(0, 200)}`,
+    );
+    return true;
+  }
+
   /** Mark a bg session as completed with a timestamp. */
   markBgCompleted(sessionId: string): void {
     const completedAt = Date.now();
@@ -9771,6 +10347,12 @@ export class AgentSessionManager {
     };
   }
 
+  private clearSessionApprovalAuthority(sessionIds: Iterable<string>): void {
+    const ids = [...new Set(sessionIds)];
+    this.toolCtx?.approvalManager.clearSessions?.(ids);
+    this.toolCtx?.approvalPanel.clearRecentApprovalsForSessions?.(ids);
+  }
+
   private async finalizeFleetMetadata(
     session: AgentSession,
     resolution: {
@@ -9785,6 +10367,7 @@ export class AgentSessionManager {
   ): Promise<void> {
     const fleet = session.fleetMetadata;
     if (!fleet) return;
+    this.clearSessionApprovalAuthority(this.getSessionSubtreeIds(session.id));
     this.bgBudgetWrapUps.delete(session.id);
     fleet.completedAt = this.bgCompletedAt.get(session.id) ?? Date.now();
     fleet.finalResult = resolution.resultText;
@@ -9867,7 +10450,10 @@ export class AgentSessionManager {
   private resolveBackgroundResult(
     session: AgentSession,
     fallbackText: string,
-    options?: { preferDurableMetadata?: boolean },
+    options?: {
+      preferDurableMetadata?: boolean;
+      preferPartialResult?: boolean;
+    },
   ): {
     resultText: string;
     structuredResult: import("./FleetWorkflows.js").FleetResultEnvelope;
@@ -9897,17 +10483,18 @@ export class AgentSessionManager {
     const durablePartialResult =
       this.bgPartialResults.get(session.id) ??
       session.fleetMetadata?.partialResult;
-    const partialResult = options?.preferDurableMetadata
-      ? (durablePartialResult ??
-        session.getLastAssistantText() ??
-        markerPartialResult)
-      : session.fleetMetadata?.placement === "worktree"
+    const partialResult =
+      options?.preferDurableMetadata || options?.preferPartialResult
         ? (durablePartialResult ??
           session.getLastAssistantText() ??
           markerPartialResult)
-        : (session.getLastAssistantText() ??
-          markerPartialResult ??
-          durablePartialResult);
+        : session.fleetMetadata?.placement === "worktree"
+          ? (durablePartialResult ??
+            session.getLastAssistantText() ??
+            markerPartialResult)
+          : (session.getLastAssistantText() ??
+            markerPartialResult ??
+            durablePartialResult);
     const rawText =
       (options?.preferDurableMetadata
         ? session.fleetMetadata?.finalResult
@@ -9916,7 +10503,10 @@ export class AgentSessionManager {
       fallbackText;
     const expected = session.fleetMetadata?.delegation
       ?.expectedResult as SpawnBackgroundRequest["expectedResult"];
-    const structuredResult = parseFleetResultEnvelope(expected, rawText);
+    const parsedEnvelope = parseFleetResultEnvelopeDetailed(expected, rawText, {
+      workspaceRoots: this.getWorkspaceFolders().map((folder) => folder.path),
+    });
+    const structuredResult = parsedEnvelope.envelope;
     let resultState: BackgroundResultState =
       (options?.preferDurableMetadata
         ? session.fleetMetadata?.resultState
@@ -9990,12 +10580,28 @@ export class AgentSessionManager {
       this.bgAgentRetryable.get(session.id) ??
       session.fleetMetadata?.agentRetryable ??
       false;
+    const incompleteEnvelope = resultState === "incomplete_expected_result";
     const failureResult = JSON.stringify({
       status: resultState,
       terminalReason,
       retrySafe,
       agentRetryable,
-      ...(partialResult ? { partialOutput: partialResult } : {}),
+      // Keep the raw response recoverable and say which validation failed so
+      // the coordinator can salvage findings instead of guessing.
+      ...(incompleteEnvelope
+        ? {
+            expectedResultIssue: `Expected a "${expected}" envelope; the final message parsed as ${
+              structuredResult.type === "text"
+                ? "plain text without a valid envelope"
+                : `a "${structuredResult.type}" envelope`
+            }.${parsedEnvelope.issue ? ` ${parsedEnvelope.issue}.` : ""} The raw final output is preserved in partialOutput.`,
+          }
+        : {}),
+      ...(partialResult
+        ? { partialOutput: partialResult }
+        : incompleteEnvelope
+          ? { partialOutput: rawText }
+          : {}),
     });
     return {
       resultText: failureResult,
@@ -10087,8 +10693,13 @@ export class AgentSessionManager {
   private ensureParentWriterCanSpawnSharedChild(
     parent: AgentSession | undefined,
     childIsReadOnly: boolean,
+    options?: { enforcedOwnedPaths?: readonly string[] },
   ): void {
     if (!parent || childIsReadOnly) return;
+    // Native children with ownedPaths are enforced to that write scope at
+    // tool dispatch, so they may run alongside the ancestor's tree-wide
+    // lease; the coordinator serializes overlapping delegated scopes.
+    if (options?.enforcedOwnedPaths?.length) return;
     const conflictingAncestorId = this.sessionOwnsMutationLease(parent.id)
       ? parent.id
       : this.findMutationLeaseOwningAncestor(parent);
@@ -10096,7 +10707,10 @@ export class AgentSessionManager {
     throw new FleetAdmissionError({
       ok: false,
       code: "workspace_conflict",
-      message: `Background spawn rejected: a writer cannot be launched while ancestor ${conflictingAncestorId} owns the agent-tree mutation lease. Use a read-only profile or delegate a disjoint scope.`,
+      message:
+        options?.enforcedOwnedPaths === undefined
+          ? `Background spawn rejected: ancestor session ${conflictingAncestorId} holds the agent-tree mutation lease, and this writer cannot be path-scoped, so no concurrent write is possible regardless of file ownership. Use a read-only profile, a native background agent with ownedPaths, or wait for the ancestor's turn to finish.`
+          : `Background spawn rejected: ancestor session ${conflictingAncestorId} holds the agent-tree mutation lease, which blocks writers that do not declare ownedPaths. Declare ownedPaths (an enforced write scope disjoint from other writers) to run concurrently, use a read-only profile, or wait for the ancestor's turn to finish.`,
     });
   }
 

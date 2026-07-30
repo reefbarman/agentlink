@@ -4,6 +4,7 @@ import type { ApprovalRequest, DecisionMessage } from "./webview/types.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { ApprovalPanelProvider } from "./ApprovalPanelProvider.js";
+import type { TerminalExecutionSecuritySummary } from "../core/capabilities/terminal.js";
 
 const { configuration, getConfiguration } = vi.hoisted(() => {
   const configuration = {
@@ -355,6 +356,10 @@ describe("ApprovalPanelProvider coordinator preflight", () => {
     });
     expect(statusBarManager.showAlert).toHaveBeenCalledWith(
       "Path access approval required",
+      expect.objectContaining({
+        command: "agentLink.focusApproval",
+        arguments: [{ sessionId: "background-1" }],
+      }),
     );
     expect(statusBarManager.setPendingCount).toHaveBeenCalledWith(1);
 
@@ -430,6 +435,10 @@ describe("ApprovalPanelProvider forwarded approval attention", () => {
 
     expect(statusBarManager.showAlert).toHaveBeenCalledWith(
       "Command approval required",
+      expect.objectContaining({
+        command: "agentLink.focusApproval",
+        arguments: [{ sessionId: "session-1" }],
+      }),
     );
     expect(alertDisposable.dispose).not.toHaveBeenCalled();
 
@@ -658,6 +667,171 @@ describe("ApprovalPanelProvider project attribution", () => {
     expect(shown).toEqual(["npm test"]);
   });
 
+  it("reuses only the exact committed command approval identity during preflight", async () => {
+    const { provider, statusBarManager } = createProvider(projectContext);
+    const forwarded: ApprovalRequest[] = [];
+    const security: TerminalExecutionSecuritySummary = {
+      auditId: "audit-recent-preflight",
+      route: "native" as const,
+      executionSurface: "agentlink-native" as const,
+      confinement: "native-unsandboxed" as const,
+      routeReason: "verified-local-macos" as const,
+      requiredAuthority: "native-agent" as const,
+      permissionIntent: "native-escalation" as const,
+      approvalRequirement: "explicit-escalation" as const,
+      authorityReason: "explicit-escalation" as const,
+      approvalPolicySnapshot: "on-request" as const,
+      approvalReviewerSnapshot: "auto-review" as const,
+      executionPresetSnapshot: "native-manual" as const,
+      commandApprovalPolicySnapshot: "approve-for-me" as const,
+      executionPolicy: "native-legacy-v1" as const,
+      preparedAt: 100,
+    };
+
+    provider.onForwardApproval = ({ request }, respond) => {
+      forwarded.push(request);
+      respond({
+        type: "decision",
+        id: request.id,
+        approvalKind: request.kind,
+        decision: "run-once",
+      });
+    };
+
+    const approval = provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "session-a",
+      cwd: "/workspace/a",
+      security,
+      commandPolicyFingerprint: "policy-a",
+      deferApprovalRecording: true,
+    });
+    await expect(approval.promise).resolves.toEqual({ decision: "run-once" });
+    approval.commitApprovalRecording();
+
+    const preflight = (
+      overrides: {
+        command?: string;
+        cwd?: string;
+        sessionId?: string;
+        security?: typeof security;
+        commandPolicyFingerprint?: string;
+      } = {},
+    ) =>
+      provider.isCommandRecentlyApproved({
+        command: overrides.command ?? "npm test",
+        cwd: overrides.cwd ?? "/workspace/a",
+        sessionId: overrides.sessionId ?? "session-a",
+        security: overrides.security ?? security,
+        commandPolicyFingerprint:
+          overrides.commandPolicyFingerprint ?? "policy-a",
+      });
+    const forwardedCount = forwarded.length;
+    const pendingCountCalls =
+      statusBarManager.setPendingCount.mock.calls.length;
+
+    expect(preflight()).toBe(true);
+    expect(preflight({ command: "npm test -- --watch" })).toBe(false);
+    expect(preflight({ cwd: "/workspace/b" })).toBe(false);
+    expect(preflight({ sessionId: "session-b" })).toBe(false);
+    expect(
+      preflight({
+        security: {
+          ...security,
+          requiredAuthority: "sandbox",
+          permissionIntent: "default",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      preflight({
+        security: { ...security, permissionIntent: "additional-permissions" },
+      }),
+    ).toBe(false);
+    expect(preflight({ commandPolicyFingerprint: "policy-b" })).toBe(false);
+    expect(forwarded).toHaveLength(forwardedCount);
+    expect(statusBarManager.setPendingCount).toHaveBeenCalledTimes(
+      pendingCountCalls,
+    );
+  });
+
+  it("uses the attributed project's recent-approval TTL during preflight", async () => {
+    getConfiguration.mockImplementation((...args: unknown[]) => ({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "recentApprovalTtl" &&
+        (args[1] as { fsPath?: string } | undefined)?.fsPath === "/workspace/a"
+          ? 0
+          : fallback,
+      ),
+    }));
+    try {
+      const { provider } = createProvider(projectContext);
+      provider.onForwardApproval = ({ request }, respond) => {
+        respond({
+          type: "decision",
+          id: request.id,
+          approvalKind: request.kind,
+          decision: "run-once",
+        });
+      };
+      const security = {
+        requiredAuthority: "sandbox" as const,
+        permissionIntent: "default" as const,
+      } as never;
+      const approval = provider.enqueueCommandApproval("npm test", "npm test", {
+        sessionId: "session-a",
+        cwd: "/workspace/a",
+        security,
+        commandPolicyFingerprint: "policy-a",
+        deferApprovalRecording: true,
+      });
+      await approval.promise;
+      approval.commitApprovalRecording();
+
+      expect(
+        provider.isCommandRecentlyApproved({
+          command: "npm test",
+          cwd: "/workspace/a",
+          sessionId: "session-a",
+          security,
+          commandPolicyFingerprint: "policy-a",
+        }),
+      ).toBe(false);
+      expect(getConfiguration).toHaveBeenCalledWith(
+        "agentlink",
+        expect.objectContaining({ fsPath: "/workspace/a" }),
+      );
+    } finally {
+      getConfiguration.mockImplementation(
+        (..._args: unknown[]) => configuration,
+      );
+    }
+  });
+
+  it("does not collide an unscoped cwd with a real path named unscoped", async () => {
+    const { provider } = createProvider();
+    const shownCwds: Array<string | undefined> = [];
+
+    provider.onForwardApproval = ({ request }, respond) => {
+      shownCwds.push(request.cwd);
+      respond({
+        type: "decision",
+        id: request.id,
+        approvalKind: request.kind,
+        decision: "run-once",
+      });
+    };
+
+    await provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "session-a",
+    }).promise;
+    await provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "session-a",
+      cwd: `${process.cwd()}/unscoped`,
+    }).promise;
+
+    expect(shownCwds).toEqual([undefined, `${process.cwd()}/unscoped`]);
+  });
+
   it("does not reuse a recent command approval across sessions in the same project", async () => {
     const { provider } = createProvider(() => ({
       sourceProject: {
@@ -691,6 +865,67 @@ describe("ApprovalPanelProvider project attribution", () => {
     ).resolves.toEqual({ decision: "run-once" });
 
     expect(shownCommands).toEqual(["npm test", "npm test"]);
+  });
+
+  it("clears recent command and path approvals for retired sessions only", async () => {
+    const { provider } = createProvider(projectContext);
+    const shown: string[] = [];
+
+    provider.onForwardApproval = ({ sessionId, request }, respond) => {
+      shown.push(
+        request.kind === "command"
+          ? `${sessionId}:command:${request.command}`
+          : `${sessionId}:path:${request.filePath}`,
+      );
+      respond({
+        type: "decision",
+        id: request.id,
+        approvalKind: request.kind,
+        decision: request.kind === "command" ? "run-once" : "allow-once",
+      });
+    };
+
+    await provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "session-a",
+    }).promise;
+    await provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "session-b",
+    }).promise;
+    await provider.enqueuePathApproval(
+      "/outside/shared/first-a.txt",
+      "session-a",
+    ).promise;
+    await provider.enqueuePathApproval(
+      "/outside/shared/first-b.txt",
+      "session-b",
+    ).promise;
+
+    provider.clearRecentApprovalsForSessions(["session-a"]);
+
+    await provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "session-a",
+    }).promise;
+    await expect(
+      provider.enqueueCommandApproval("npm test", "npm test", {
+        sessionId: "session-b",
+      }).promise,
+    ).resolves.toEqual({ decision: "run-once", recentApproval: true });
+    const recentPathApprovals = (
+      provider as unknown as {
+        recentPathApprovals: Array<{ sessionId?: string }>;
+      }
+    ).recentPathApprovals;
+
+    expect(shown).toEqual([
+      "session-a:command:npm test",
+      "session-b:command:npm test",
+      "session-a:path:/outside/shared/first-a.txt",
+      "session-b:path:/outside/shared/first-b.txt",
+      "session-a:command:npm test",
+    ]);
+    expect(recentPathApprovals.map((approval) => approval.sessionId)).toEqual([
+      "session-b",
+    ]);
   });
 
   it("bypasses a matching recent approval when a fresh decision is required", async () => {
@@ -777,7 +1012,7 @@ describe("ApprovalPanelProvider project attribution", () => {
 
     provider.onForwardApproval = ({ request }, respond) => {
       shownAuthorities.push(
-        `${request.security?.requiredAuthority ?? "unspecified"}:${request.security?.permissionIntent ?? "unspecified"}`,
+        `${request.security?.requiredAuthority ?? "unspecified"}:${request.security?.permissionIntent ?? "unspecified"}:${request.cwd ?? "unscoped"}`,
       );
       respond({
         type: "decision",
@@ -805,11 +1040,24 @@ describe("ApprovalPanelProvider project attribution", () => {
         security: securityFor("native-agent"),
       }).promise,
     ).resolves.toEqual({ decision: "run-once", recentApproval: true });
+    await provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "session-a",
+      cwd: "/workspace/other",
+      security: securityFor("native-agent"),
+    }).promise;
+    await provider.enqueueCommandApproval("npm test", "npm test", {
+      sessionId: "session-a",
+      cwd: "/workspace/other",
+      commandPolicyFingerprint: "policy-b",
+      security: securityFor("native-agent"),
+    }).promise;
 
     expect(shownAuthorities).toEqual([
-      "sandbox:default",
-      "sandbox:additional-permissions",
-      "native-agent:native-escalation",
+      "sandbox:default:unscoped",
+      "sandbox:additional-permissions:unscoped",
+      "native-agent:native-escalation:unscoped",
+      "native-agent:native-escalation:/workspace/other",
+      "native-agent:native-escalation:/workspace/other",
     ]);
   });
 
@@ -978,6 +1226,10 @@ describe("ApprovalPanelProvider network approvals", () => {
     expect(shown[0].managedNetwork?.dnsAnswers).not.toBe(request.dnsAnswers);
     expect(statusBarManager.showAlert).toHaveBeenCalledWith(
       "Network approval required",
+      expect.objectContaining({
+        command: "agentLink.focusApproval",
+        arguments: [{ sessionId: "session-a" }],
+      }),
     );
   });
 

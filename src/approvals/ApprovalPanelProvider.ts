@@ -160,6 +160,8 @@ interface InternalRequest {
   commandReview?: CommandReviewSummary;
   /** Concise guardrail reason shown instead of reviewer output. */
   humanOnlyReason?: string;
+  /** Fingerprint of the applicable command rules when this action was reviewed. */
+  commandPolicyFingerprint?: string;
   security?: TerminalExecutionSecuritySummary;
   managedNetwork?: ManagedNetworkRequest;
   networkReview?: NetworkReviewSummary;
@@ -205,7 +207,10 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   // TTL window are auto-approved. Path approvals use rule-aware matching so a
   // parallel batch of outside-workspace reads under the same approved directory
   // does not require one prompt per file.
-  private recentApprovals = new Map<string, number>();
+  private recentApprovals = new Map<
+    string,
+    { sessionId?: string; timestamp: number }
+  >();
   private recentPathApprovals: Array<{
     path: string;
     mode: "glob" | "prefix" | "exact";
@@ -256,6 +261,20 @@ export class ApprovalPanelProvider implements vscode.Disposable {
 
   // ── Public API ──────────────────────────────────────────────────────────
 
+  clearRecentApprovalsForSessions(sessionIds: Iterable<string>): void {
+    const ids = new Set(sessionIds);
+    if (ids.size === 0) return;
+
+    for (const [key, approval] of this.recentApprovals) {
+      if (approval.sessionId && ids.has(approval.sessionId)) {
+        this.recentApprovals.delete(key);
+      }
+    }
+    this.recentPathApprovals = this.recentPathApprovals.filter(
+      (approval) => !approval.sessionId || !ids.has(approval.sessionId),
+    );
+  }
+
   enqueueCommandApproval(
     command: string,
     fullCommand: string,
@@ -266,6 +285,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
       cwd?: string;
       commandReview?: CommandReviewSummary;
       humanOnlyReason?: string;
+      commandPolicyFingerprint?: string;
       security?: TerminalExecutionSecuritySummary;
       sessionId?: string;
       signal?: AbortSignal;
@@ -296,6 +316,7 @@ export class ApprovalPanelProvider implements vscode.Disposable {
         cwd: options?.cwd,
         commandReview: options?.commandReview,
         humanOnlyReason: options?.humanOnlyReason,
+        commandPolicyFingerprint: options?.commandPolicyFingerprint,
         security: options?.security,
         sessionId: options?.sessionId,
         signal: options?.signal,
@@ -717,6 +738,13 @@ export class ApprovalPanelProvider implements vscode.Disposable {
               : request.kind === "memory"
                 ? "Memory approval required"
                 : "Path access approval required",
+      request.sessionId && this.onForwardApproval
+        ? {
+            command: "agentLink.focusApproval",
+            title: "Focus pending AgentLink approval",
+            arguments: [{ sessionId: request.sessionId }],
+          }
+        : undefined,
     );
 
     // If a forwarding hook is set, delegate rendering to the caller (e.g. chat webview)
@@ -1102,8 +1130,11 @@ export class ApprovalPanelProvider implements vscode.Disposable {
 
   // ── Alert ───────────────────────────────────────────────────────────────
 
-  private showAlert(message: string): vscode.Disposable {
-    return this.statusBarManager.showAlert(message);
+  private showAlert(
+    message: string,
+    command?: vscode.Command,
+  ): vscode.Disposable {
+    return this.statusBarManager.showAlert(message, command);
   }
 
   private updatePendingCount(): void {
@@ -1146,6 +1177,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     requiredAuthority = "unspecified",
     permissionIntent = "unspecified",
     sessionId?: string,
+    cwd = "unscoped",
+    commandPolicyFingerprint = "unspecified",
   ): boolean {
     if (kind !== "command") return false;
     return this.hasRecentApproval(
@@ -1154,9 +1187,37 @@ export class ApprovalPanelProvider implements vscode.Disposable {
         projectId,
         requiredAuthority,
         permissionIntent,
+        cwd,
+        commandPolicyFingerprint,
         identifier,
       ),
     );
+  }
+
+  isCommandRecentlyApproved(input: {
+    command: string;
+    cwd: string;
+    sessionId: string;
+    security: TerminalExecutionSecuritySummary;
+    commandPolicyFingerprint: string;
+  }): boolean {
+    const projectContext = this.resolveProjectContext?.({
+      sessionId: input.sessionId,
+      targetPath: input.cwd,
+    });
+    const request: InternalRequest = {
+      kind: "command",
+      id: "recent-command-preflight",
+      sessionId: input.sessionId,
+      sourceProject: projectContext?.sourceProject,
+      projectResourceUri: projectContext?.projectResourceUri,
+      cwd: path.resolve(input.cwd),
+      fullCommand: input.command,
+      security: input.security,
+      commandPolicyFingerprint: input.commandPolicyFingerprint,
+    };
+    const key = this.approvalKeyForRequest(request);
+    return key ? this.hasRecentApproval(key, request) : false;
   }
 
   private getRecentApprovalTtl(request?: InternalRequest): number {
@@ -1190,9 +1251,19 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     projectId: string,
     requiredAuthority: string,
     permissionIntent: string,
+    cwd: string,
+    commandPolicyFingerprint: string,
     command: string,
   ): string {
-    return `${projectId}:session:${sessionId ?? "unscoped"}:cmd:${requiredAuthority}:${permissionIntent}:${command}`;
+    return JSON.stringify([
+      projectId,
+      sessionId ?? "unscoped",
+      requiredAuthority,
+      permissionIntent,
+      cwd === "unscoped" ? cwd : path.resolve(cwd),
+      commandPolicyFingerprint,
+      command,
+    ]);
   }
 
   private approvalKeyForRequest(request: InternalRequest): string | undefined {
@@ -1205,6 +1276,8 @@ export class ApprovalPanelProvider implements vscode.Disposable {
               projectPrefix,
               request.security?.requiredAuthority ?? "unspecified",
               request.security?.permissionIntent ?? "unspecified",
+              request.cwd ?? "unscoped",
+              request.commandPolicyFingerprint ?? "unspecified",
               request.fullCommand,
             )
           : undefined;
@@ -1232,9 +1305,9 @@ export class ApprovalPanelProvider implements vscode.Disposable {
   private hasRecentApproval(key: string, request?: InternalRequest): boolean {
     const ttl = this.getRecentApprovalTtl(request);
     if (ttl <= 0) return false;
-    const ts = this.recentApprovals.get(key);
-    if (ts === undefined) return false;
-    if (Date.now() - ts > ttl) {
+    const approval = this.recentApprovals.get(key);
+    if (!approval) return false;
+    if (Date.now() - approval.timestamp > ttl) {
       this.recentApprovals.delete(key);
       return false;
     }
@@ -1272,13 +1345,16 @@ export class ApprovalPanelProvider implements vscode.Disposable {
     if (request.kind !== "command") return;
     const key = this.approvalKeyForRequest(request);
     if (!key) return;
-    this.recentApprovals.set(key, Date.now());
+    this.recentApprovals.set(key, {
+      sessionId: request.sessionId,
+      timestamp: Date.now(),
+    });
     // Prune expired entries when the map grows large
     if (this.recentApprovals.size > 100) {
       const ttl = this.getRecentApprovalTtl(request);
       const now = Date.now();
-      for (const [k, ts] of this.recentApprovals) {
-        if (now - ts > ttl) this.recentApprovals.delete(k);
+      for (const [k, approval] of this.recentApprovals) {
+        if (now - approval.timestamp > ttl) this.recentApprovals.delete(k);
       }
     }
   }

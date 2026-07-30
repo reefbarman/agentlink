@@ -80,6 +80,35 @@ export const getFeedbackSchema = {
     .describe(
       "Filter to feedback about a specific tool (omit for all feedback)",
     ),
+  triaged: z
+    .boolean()
+    .optional()
+    .describe("Filter by triage state (omit for both triaged and untriaged)"),
+  priorities: z
+    .array(z.enum(["P0", "P1", "P2", "P3"]))
+    .min(1)
+    .optional()
+    .describe(
+      "Filter to one or more priorities. Untriaged feedback has no priority and is excluded when this filter is present.",
+    ),
+};
+
+export const triageFeedbackSchema = {
+  ids: z
+    .array(z.string().min(1))
+    .min(1)
+    .describe("Stable feedback entry IDs from get_feedback output"),
+  triaged: z
+    .boolean()
+    .describe(
+      "Set true after evaluating the feedback as worth fixing; set false to return it to the untriaged queue",
+    ),
+  priority: z
+    .enum(["P0", "P1", "P2", "P3"])
+    .optional()
+    .describe(
+      "Required when triaged=true and forbidden when triaged=false. P0 is highest priority; P3 is lowest.",
+    ),
 };
 
 export const deleteFeedbackSchema = {
@@ -846,7 +875,7 @@ export const executeCommandSchema = {
     .string()
     .optional()
     .describe(
-      "Working directory (absolute or relative to workspace root). Reused unnamed terminals are only selected when their current tracked cwd matches this value; otherwise a new terminal is created.",
+      'Working directory (absolute or relative to workspace root). Reused unnamed terminals are only selected when their current tracked cwd matches this value; otherwise a new terminal is created. Sandbox routes require cwd inside an active workspace root; an outside path returns retry_guidance code "sandbox_cwd_outside_workspace" before launch, with reviewed native execution offered only when policy permits.',
     ),
   terminal_id: z
     .string()
@@ -884,6 +913,12 @@ export const executeCommandSchema = {
     .describe(
       'Environment variables to set for this command (e.g. {"CI":"1"}). Merged with the terminal\'s base execution environment.',
     ),
+  temporary_home: z
+    .literal(true)
+    .optional()
+    .describe(
+      "Use a fresh writable per-command HOME for hermetic tests and disposable user state. Requires Approve for Me and sandbox execution; incompatible with background and require_escalated. The temporary home is empty and deleted after the command, while the host home remains readable by absolute path. Do not use for commands that need ~/.gitconfig, gh/npm/SSH/Docker credentials, or other user configuration.",
+    ),
   sandbox_permissions: z
     .enum([
       "use_default",
@@ -893,7 +928,7 @@ export const executeCommandSchema = {
     ])
     .optional()
     .describe(
-      'Execution authority intent. Omit or use "use_default" for the normal sandbox route with loopback client access and public/LAN egress blocked. Use "with_additional_permissions" with additional_permissions for a narrow sandbox capability such as local listener binding. "require_managed_network" is the compatibility intent for one exact sandboxed command that needs reviewed public network access. Use "require_escalated" only when execution must occur outside the sandbox. Every non-default intent requires a non-empty reason and approval.',
+      'Execution authority intent. Omit or use "use_default" for the normal sandbox route with loopback client access and public/LAN egress blocked. Use "with_additional_permissions" with additional_permissions for a narrow sandbox capability such as local listener binding. Recognized default-sandbox HOME/listener failures may return retry_guidance code "sandbox_missing_capabilities" with the exact narrow retry parameters; AgentLink never broadens permissions automatically. "require_managed_network" is the compatibility intent for one exact sandboxed command that needs reviewed public network access; Git-over-SSH and recognized gh TLS trust failures may return non-automatic retry_guidance codes "managed_network_ssh_git_transport" or "managed_network_tls_trust". Never replace trust repair with disabled TLS verification. Use "require_escalated" only when execution must occur outside the sandbox. Every non-default intent requires a non-empty reason and approval.',
     ),
   additional_permissions: z
     .object({
@@ -1007,7 +1042,7 @@ export const readOnlyExecuteCommandSchema = {
     .string()
     .optional()
     .describe(
-      "Working directory inside the workspace. Defaults to the first workspace root.",
+      'Working directory inside the workspace. Defaults to the first workspace root. An outside path returns retry_guidance code "sandbox_cwd_outside_workspace"; this restricted profile cannot escalate to native execution.',
     ),
   output_head: executeCommandSchema.output_head,
   output_tail: executeCommandSchema.output_tail,
@@ -1192,7 +1227,7 @@ export const composeSchema = {
     .min(1)
     .max(64 * 1024)
     .describe(
-      "Sandboxed JavaScript function body. Use synchronous guest helpers tool(name, input) and toolAll([{ name, input }, ...]); top-level return is supported.",
+      "Sandboxed JavaScript function body. Use synchronous guest helpers tool(name, input), fail-fast toolAll([{ name, input }, ...]), and toolAllSettled([{ name, input }, ...]); top-level return is supported.",
     ),
   description: z
     .string()

@@ -230,6 +230,7 @@ export interface TerminalCommandResult {
     | { by: "explicit_rule" }
     | { by: "recent_approval" }
     | { by: "coordinator" }
+    | { by: "sandbox_verification" }
     | {
         by: "tier";
         tier: "safe" | "sensitive" | "dangerous";
@@ -335,6 +336,8 @@ export interface TerminalExecuteOptions {
   background?: boolean;
   timeout?: number;
   env?: Record<string, string>;
+  /** Use a fresh writable per-command HOME. Requires sandbox execution. */
+  temporaryHome?: true;
   /** Owning AgentLink session for sandbox launch binding and audit attribution. */
   sandboxSessionId?: string;
   /** Host-owned temporary command inputs; hashes enter the binding, paths only shape read policy. */

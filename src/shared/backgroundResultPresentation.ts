@@ -28,6 +28,9 @@ function humanizeTerminalReason(
   if (trimmed === "outside_caller_subtree") {
     return "This session is no longer authorized to access that background result.";
   }
+  if (trimmed === "background_session_not_found") {
+    return "That background session is not loaded in this window; it may not have been restored with the current foreground session.";
+  }
   if (trimmed === "cancelled_by_user") return "Cancelled by the user.";
   if (trimmed.startsWith("budget_exhausted:")) {
     return `The background agent reached its ${trimmed.slice("budget_exhausted:".length).replaceAll("_", " ")} budget.`;

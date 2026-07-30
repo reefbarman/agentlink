@@ -1,4 +1,6 @@
 import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 
 import {
   InlineCommandFileError,
@@ -7,6 +9,8 @@ import {
   validateInlineCommandFiles,
 } from "./commandInlineFiles.js";
 import { describe, expect, it } from "vitest";
+
+import { execFileSync } from "node:child_process";
 
 function expectInlineError(fn: () => unknown, code: string): void {
   expect(fn).toThrow(InlineCommandFileError);
@@ -52,9 +56,31 @@ describe("commandInlineFiles", () => {
     run.cleanup();
   });
 
+  it.each([
+    ["unquoted", "cat $AL_FILE(body)"],
+    ["single-quoted", "cat '$AL_FILE(body)'"],
+    ["double-quoted", 'cat "$AL_FILE(body)"'],
+    ["embedded assignment", 'INPUT="$AL_FILE(body)"; cat "$AL_FILE(body)"'],
+  ])("substitutes an exact path in %s context", (_label, command) => {
+    const run = materializeInlineCommandFiles(command, [
+      { name: "body", content: "exact content" },
+    ]);
+    expect(run).toBeDefined();
+    if (!run) throw new Error("expected inline run");
+
+    try {
+      expect(
+        execFileSync("/bin/zsh", ["-c", run.command], { encoding: "utf8" }),
+      ).toBe("exact content");
+      expect(run.command).not.toContain("$AL_FILE(");
+    } finally {
+      run.cleanup();
+    }
+  });
+
   it("supports multiple and repeated references", () => {
     const run = materializeInlineCommandFiles(
-      "cmd $AL_FILE(a) $AL_FILE(b) $AL_FILE(a)",
+      "cmd $AL_FILE(a) '$AL_FILE(b)' \"$AL_FILE(a)\"",
       [
         { name: "a", content: "a" },
         { name: "b", content: "b" },
@@ -147,13 +173,37 @@ describe("commandInlineFiles", () => {
     );
   });
 
-  it("rejects invalid token-like strings", () => {
+  it("rejects invalid token-like strings even after a valid token", () => {
     expectInlineError(
       () =>
-        validateInlineCommandFiles("cat $AL_FILE(body/path)", [
+        validateInlineCommandFiles("cat $AL_FILE(body) $AL_FILE(body/path)", [
           { name: "body", content: "x" },
         ]),
-      "unreferenced_file",
+      "unresolved_token",
+    );
+  });
+
+  it.each([
+    ["escaped token", String.raw`cat \$AL_FILE(body)`],
+    ["comment token", "echo ok # $AL_FILE(body)"],
+    ["heredoc", "cat <<EOF\n$AL_FILE(body)\nEOF"],
+    ["ANSI-C quote", "printf $'$AL_FILE(body)'"],
+    ["command substitution", "echo $(cat $AL_FILE(body))"],
+    ["backtick substitution", "echo `cat $AL_FILE(body)`"],
+    ["parameter expansion", "echo ${value:-$AL_FILE(body)}"],
+    ["plain parameter expansion", "echo $value $AL_FILE(body)"],
+    ["arithmetic expansion", "echo $((1 + $AL_FILE(body)))"],
+    ["legacy arithmetic expansion", "echo $[1 + 1] $AL_FILE(body)"],
+    ["process substitution", "diff <(cat $AL_FILE(body)) expected"],
+    ["zsh process substitution", "cat =(printf ok) $AL_FILE(body)"],
+    ["here string", "cat <<< $AL_FILE(body)"],
+    ["unterminated quote", "cat '$AL_FILE(body)"],
+    ["dangling escape", "cat $AL_FILE(body) " + "\\"],
+  ])("rejects unsupported %s context", (_label, command) => {
+    expectInlineError(
+      () =>
+        validateInlineCommandFiles(command, [{ name: "body", content: "x" }]),
+      "unsupported_context",
     );
   });
 
@@ -189,6 +239,49 @@ describe("commandInlineFiles", () => {
       run?.previews.find((file) => file.name === "body")?.preview.split("\n"),
     ).toHaveLength(40);
     run?.cleanup();
+  });
+
+  it("materializes through an adversarial temp root without expansion or side effects", () => {
+    const originalTmpdir = process.env.TMPDIR;
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-inline-adversarial-"),
+    );
+    const adversarialRoot = path.join(
+      root,
+      "space ' double\" dollar$AL_FILE(fragment) backtick` slash\\ line\nroot",
+    );
+    const sentinel = path.join(root, "sentinel");
+    fs.mkdirSync(adversarialRoot);
+    process.env.TMPDIR = adversarialRoot;
+
+    try {
+      for (const command of [
+        "cat $AL_FILE(body)",
+        "cat '$AL_FILE(body)'",
+        'cat "$AL_FILE(body)"',
+      ]) {
+        const run = materializeInlineCommandFiles(command, [
+          { name: "body", content: "adversarial content" },
+        ]);
+        expect(run).toBeDefined();
+        if (!run) throw new Error("expected inline run");
+        try {
+          const output = execFileSync(
+            "/bin/zsh",
+            ["-c", `${run.command}; test ! -e ${quotePosixShellArg(sentinel)}`],
+            { encoding: "utf8" },
+          );
+          expect(output).toBe("adversarial content");
+        } finally {
+          run.cleanup();
+        }
+      }
+      expect(fs.existsSync(sentinel)).toBe(false);
+    } finally {
+      if (originalTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = originalTmpdir;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("quotes POSIX shell arguments", () => {

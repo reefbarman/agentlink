@@ -41,11 +41,27 @@ For MCP-related work, submit feedback only about AgentLink's native MCP tools (`
 
 ### get_feedback
 
-Read active feedback. Optionally filter by tool name. Every returned entry includes a stable `id` and its immutable `global_index`; filtered results keep their global indices.
+Read active feedback. Optionally filter by tool name, triage state, and priority. Every returned entry includes a stable `id`, immutable `global_index`, and projected triage metadata; filtered results keep their global indices.
 
-| Parameter   | Type    | Description                                             |
-| ----------- | ------- | ------------------------------------------------------- |
-| `tool_name` | string? | Filter to feedback about a specific tool (omit for all) |
+| Parameter    | Type     | Description                                                            |
+| ------------ | -------- | ---------------------------------------------------------------------- |
+| `tool_name`  | string?  | Filter to feedback about a specific tool (omit for all)                |
+| `triaged`    | boolean? | Filter to accepted-for-fixing (`true`) or untriaged (`false`) feedback |
+| `priorities` | P0-P3[]? | Filter to one or more priorities; untriaged feedback has no priority   |
+
+### triage_feedback
+
+Mark active feedback as accepted for fixing with a required priority, or return it to the untriaged queue. “Triaged” means the feedback was evaluated and judged worth fixing; it does not merely mean reviewed. Feedback that is not worth fixing can be hidden with `delete_feedback`.
+
+| Parameter  | Type     | Description                                                           |
+| ---------- | -------- | --------------------------------------------------------------------- |
+| `ids`      | string[] | Stable IDs returned by `get_feedback`                                 |
+| `triaged`  | boolean  | `true` to accept for fixing; `false` to return to the untriaged queue |
+| `priority` | P0-P3?   | Required when triaging and forbidden when untriaging; P0 is highest   |
+
+Triage metadata is stored as immutable events in append order under `~/.agentlink/agentlink-feedback-triage.jsonl`. The primary feedback JSONL remains append-only. The result includes exact `updated_entries` and `unknown_ids`.
+
+The development sidebar defaults to the untriaged queue grouped by tool. It can switch between all, untriaged, and triaged feedback; filter accepted items by priority; group by tool or priority; and search feedback text and tool names. Assigning a priority accepts an item for fixing, while **Untriage** clears its priority.
 
 ### delete_feedback
 

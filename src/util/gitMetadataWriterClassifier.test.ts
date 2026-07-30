@@ -100,6 +100,28 @@ const positives: Array<[PredictableGitMetadataWriterSubcommand, string[]]> = [
       "git reset -- src/a.ts",
     ],
   ],
+  [
+    "fetch",
+    [
+      "git fetch",
+      "git fetch origin",
+      "git fetch origin main",
+      "git fetch --all --prune",
+      "git fetch --prune --tags origin",
+    ],
+  ],
+  [
+    "rebase",
+    [
+      "git rebase main",
+      "git rebase main feature",
+      "git rebase --onto new-base old-base feature",
+      "git rebase --continue",
+      "git rebase --abort",
+      "git rebase --skip",
+      "git rebase --quit",
+    ],
+  ],
 ];
 
 const negatives = [
@@ -108,12 +130,24 @@ const negatives = [
   "git log",
   "git branch",
   "git stash list",
-  "git fetch",
   "git pull",
   "git push",
   "git clone example",
   "git clean -fdx",
-  "git rebase main",
+  "git fetch --dry-run",
+  "git fetch --help",
+  "git fetch origin main extra",
+  "git fetch https://example.com/owner/repo.git",
+  "git fetch ssh://git@example.com/owner/repo.git",
+  "git fetch git@example.com:owner/repo.git",
+  "git rebase -i main",
+  "git rebase --interactive main",
+  "git rebase --exec test main",
+  "git rebase -x test main",
+  "git rebase --edit-todo",
+  "git rebase --show-current-patch",
+  "git rebase --help",
+  "git rebase --onto only-new-base",
   "git reset --hard HEAD",
   "git branch -D old",
   "git branch -d -f old",
@@ -152,8 +186,9 @@ const negatives = [
   "git --namespace=x add .",
   "git --config-env=x=Y add .",
   "git --no-pager add .",
-  "git add . && git commit -m x",
-  "git add . || true",
+  "git add . && npm test",
+  "cd sub && git add .",
+  "git add . || git commit -m x",
   "git add .; echo done",
   "git add .\ngit status",
   "git add . # comment",
@@ -180,7 +215,18 @@ describe("classifyPredictableGitMetadataWriter", () => {
   )("classifies %s writer: %s", (subcommand, command) => {
     expect(classify(command)).toEqual({
       kind: "predictable_git_metadata_writer",
-      subcommand,
+      subcommands: [subcommand],
+    });
+  });
+
+  it.each([
+    ["git add src/a.ts && git commit -m fix", ["add", "commit"]],
+    ["git add src/a.ts && git commit -m 'keep && explain'", ["add", "commit"]],
+    ["git fetch origin && git rebase main", ["fetch", "rebase"]],
+  ] as const)("classifies writer chain: %s", (command, subcommands) => {
+    expect(classify(command)).toEqual({
+      kind: "predictable_git_metadata_writer",
+      subcommands,
     });
   });
 

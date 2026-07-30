@@ -585,6 +585,20 @@ export type AppAction =
   | { type: "RESTORE_PROJECTION"; state: AppState }
   | { type: "SET_STATE"; state: ChatState }
   | {
+      type: "SET_SESSIONLESS_SELECTIONS";
+      selections: Partial<
+        Pick<
+          ChatState,
+          | "mode"
+          | "model"
+          | "reasoningEffort"
+          | "thinkingEnabled"
+          | "agentWriteApproval"
+          | "commandApprovalPolicy"
+        >
+      >;
+    }
+  | {
       type: "SET_DEBUG_INFO";
       info: Record<string, string | number>;
       systemPrompt?: string;
@@ -1723,6 +1737,14 @@ export function reducer(state: AppState, action: AppAction): AppState {
         )
           ? (action.state.revertRecoveryNotice ?? null)
           : state.revertRecoveryNotice,
+      };
+
+    case "SET_SESSIONLESS_SELECTIONS":
+      return {
+        ...state,
+        thinkingEnabled:
+          action.selections.thinkingEnabled ?? state.thinkingEnabled,
+        chatState: { ...state.chatState, ...action.selections },
       };
 
     case "SET_DEBUG_INFO":

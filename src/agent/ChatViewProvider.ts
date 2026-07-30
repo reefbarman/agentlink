@@ -35,6 +35,7 @@ import type {
 } from "./AgentSessionManager.js";
 import type { AgentSession } from "./AgentSession.js";
 import type {
+  ChatTab,
   ChatTabActionAddress,
   ChatTabController,
 } from "./ChatTabController.js";
@@ -1233,6 +1234,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Tracks which pending-question IDs belong to each session, for scoped cancellation on stop */
   private questionSessionIndex = new Map<string, Set<string>>();
   private questionSessionById = new Map<string, string>();
+  private readonly questionAttentionById = new Map<
+    string,
+    { attention: vscode.Disposable; recovered: boolean; sessionId: string }
+  >();
+  private showPendingInteractionAlert:
+    | ((message: string, command: vscode.Command) => vscode.Disposable)
+    | undefined;
   /** Tracks which pending-approval IDs belong to each session, for scoped cancellation on stop */
   private approvalSessionIndex = new Map<string, Set<string>>();
 
@@ -1421,6 +1429,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.pendingQuestions.clear();
     this.questionSessionIndex.clear();
     this.questionSessionById.clear();
+    for (const { attention } of this.questionAttentionById.values()) {
+      attention.dispose();
+    }
+    this.questionAttentionById.clear();
     for (const request of this.pendingBtwRequests.values()) {
       request.controller.abort();
     }
@@ -1812,16 +1824,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private reconcileRestoredSessionApproval(session: AgentSession): void {
-    this.getSessionApprovalPolicyCoordinator()?.reconcileRestoredSession(
-      session.id,
-      this.getConfiguredCommandApprovalPolicy(),
-      session.projectScope.rootPath,
-    );
-  }
-
   setToolCallTracker(tracker: AgentToolCallTracker): void {
     this.toolCallTracker = tracker;
+  }
+
+  setPendingInteractionAlertProvider(
+    showAlert: (message: string, command: vscode.Command) => vscode.Disposable,
+  ): void {
+    this.showPendingInteractionAlert = showAlert;
   }
 
   setContextUsageTelemetry(
@@ -3465,6 +3475,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     session: AgentSession,
     question: PendingQuestionRecoveryState,
   ): void {
+    this.showQuestionAttention(question.questionRequestId, session.id, true);
     if (session.id !== this.sessionManager?.getForegroundSession()?.id) return;
     this.ensureProjectedForegroundSession(session);
     this.applyProjectedAction({
@@ -3499,10 +3510,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     sessionSet.add(id);
     this.questionSessionIndex.set(sessionId, sessionSet);
     this.questionSessionById.set(id, sessionId);
+    this.showQuestionAttention(id, sessionId);
     return new Promise((resolve) => {
       this.pendingQuestions.set(id, (raw) => {
         this.questionSessionIndex.get(sessionId)?.delete(id);
         this.questionSessionById.delete(id);
+        this.clearQuestionAttention(id);
         this.sessionManager?.clearPendingQuestionRecovery(sessionId, id);
         resolve({
           answers:
@@ -3541,6 +3554,61 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         toolCallId ?? pendingQuestionRecovery?.toolUseId,
       );
     });
+  }
+
+  private showQuestionAttention(
+    id: string,
+    sessionId: string,
+    recovered = false,
+  ): void {
+    if (
+      this.questionAttentionById.has(id) ||
+      !this.showPendingInteractionAlert
+    ) {
+      return;
+    }
+    this.questionAttentionById.set(id, {
+      attention: this.showPendingInteractionAlert(
+        "Question requires a response",
+        {
+          command: "agentLink.focusApproval",
+          title: "Focus pending AgentLink question",
+          arguments: [{ sessionId }],
+        },
+      ),
+      recovered,
+      sessionId,
+    });
+  }
+
+  private clearQuestionAttention(id: string): void {
+    this.questionAttentionById.get(id)?.attention.dispose();
+    this.questionAttentionById.delete(id);
+  }
+
+  private reconcileQuestionAttention(): void {
+    const manager = this.sessionManager;
+    if (!manager) return;
+    for (const [id, pending] of this.questionAttentionById) {
+      const session = manager.getSession(pending.sessionId);
+      const recovery = pending.recovered
+        ? manager.getPendingQuestionRecovery(pending.sessionId)
+        : null;
+      const remainsPending = pending.recovered
+        ? recovery?.questionRequestId === id
+        : Boolean(
+            session && !session.isAborted && this.pendingQuestions.has(id),
+          );
+      if (remainsPending) continue;
+
+      const resolve = this.pendingQuestions.get(id);
+      this.pendingQuestions.delete(id);
+      this.questionSessionById.delete(id);
+      this.questionSessionIndex.get(pending.sessionId)?.delete(id);
+      resolve?.({ answers: {}, notes: {} });
+      this.uiPublisher.publishQuestionCleared(pending.sessionId, id);
+      this.clearQuestionAttention(id);
+    }
   }
 
   public submitBrowserApprovalDecision(msg: {
@@ -3654,7 +3722,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 ),
             },
           )) === true;
-        if (!accepted) return false;
+        if (!accepted) {
+          this.clearQuestionAttention(msg.id);
+          return false;
+        }
+        this.clearQuestionAttention(msg.id);
         if (
           this.sessionManager?.getForegroundSession()?.id === recoverySession.id
         ) {
@@ -3680,6 +3752,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!sessionId) return false;
     this.pendingQuestions.delete(msg.id);
     this.questionSessionById.delete(msg.id);
+    this.clearQuestionAttention(msg.id);
     resolve({
       answers: msg.answers,
       notes: msg.notes ?? {},
@@ -5245,6 +5318,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (resolve) {
           this.pendingQuestions.delete(id);
           this.questionSessionById.delete(id);
+          this.clearQuestionAttention(id);
           resolve({ answers: {}, notes: {} });
           this.uiPublisher.publishQuestionCleared(sessionId, id);
         }
@@ -6257,6 +6331,53 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.sendChatWorkspaceUpdate();
   }
 
+  async focusPendingInteraction(sessionId: string): Promise<boolean> {
+    const controller = this.chatTabController;
+    const coordinator = this.chatTabHostCoordinator;
+    if (!controller || !coordinator) return false;
+
+    let targetSessionId: string | undefined = sessionId;
+    let tab: ChatTab | undefined;
+    const visited = new Set<string>();
+    while (targetSessionId && !visited.has(targetSessionId)) {
+      visited.add(targetSessionId);
+      tab = controller.getTabForSession(targetSessionId);
+      if (tab) break;
+      targetSessionId =
+        this.sessionManager?.getBackgroundParentSessionId(targetSessionId);
+    }
+    if (!tab || !targetSessionId) {
+      if (!this.sessionManager?.getSession(sessionId)) return false;
+      this.revealPanel(false);
+      return true;
+    }
+    if (tab.placement === "popped") {
+      return this.chatTabPanelHost?.focusPanel(tab.id) === true;
+    }
+
+    const result = await coordinator.focus({
+      controllerEpoch: controller.getWorkspaceSnapshot().controllerEpoch,
+      tabId: tab.id,
+      sessionId: targetSessionId,
+    });
+    if (!result.ok) return false;
+    this.foregroundSessionTransition = undefined;
+    this.sendChatWorkspaceUpdate();
+    if (result.session) {
+      this.postSessionLoaded(result.session, {
+        checkpoints: this.getSessionCheckpoints(result.session.id),
+        origin: "focus",
+      });
+    }
+    this.sendInitialState();
+    this.revealPanel(false);
+    if (result.session) {
+      await this.sendModesUpdate();
+      await this.sendSlashCommands();
+    }
+    return true;
+  }
+
   async hydrateEditorPane(
     tabId: string,
     connection: ChatPaneConnection,
@@ -6386,6 +6507,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
 
     manager.onSessionsChanged = () => {
+      this.reconcileQuestionAttention();
       // Session status can change outside the foreground event stream (for example
       // when a tracked tool is force-cancelled/completed from the sidebar). Push a
       // full foreground state refresh so the chat webview's streaming/session state
@@ -6830,6 +6952,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const mgr = this.sessionManager;
         let effectiveSessionId =
           await this.resolveForegroundSessionTransition(sessionId);
+        const sessionlessSend = !sessionId;
         if (!effectiveSessionId || !mgr.getSession(effectiveSessionId)) {
           const address = parseChatTabActionAddress(msg);
           let newSession: AgentSession;
@@ -6858,6 +6981,48 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             "agent",
             effectiveSessionId,
           );
+        }
+        if (sessionlessSend) {
+          const targetRoot =
+            mgr.getSession(effectiveSessionId)?.projectScope.rootPath;
+          if (typeof msg.model === "string" && msg.model) {
+            try {
+              await this.submitSessionSetModel(effectiveSessionId, msg.model);
+            } catch (error) {
+              this.log(
+                `[selection] Could not apply pre-session model ${msg.model}: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
+          if (
+            msg.agentWriteApproval === "prompt" ||
+            msg.agentWriteApproval === "session" ||
+            msg.agentWriteApproval === "project" ||
+            msg.agentWriteApproval === "global"
+          ) {
+            const result = this.setSessionWriteApproval(
+              effectiveSessionId,
+              msg.agentWriteApproval,
+              targetRoot,
+            );
+            if (result && !result.ok) {
+              this.log(
+                `[selection] Could not apply pre-session write approval; retained ${result.agentWriteApproval}`,
+              );
+            }
+          }
+          if (isCommandApprovalPolicy(msg.commandApprovalPolicy)) {
+            const result = this.setSessionCommandApprovalPolicy(
+              effectiveSessionId,
+              msg.commandApprovalPolicy,
+              targetRoot,
+            );
+            if (result && !result.ok) {
+              this.log(
+                `[selection] Could not apply pre-session command approval policy; retained ${result.commandApprovalPolicy}`,
+              );
+            }
+          }
         }
         const effectiveSession = mgr.getSession(effectiveSessionId);
         const projectless = effectiveSession
@@ -11103,9 +11268,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } as ExtensionToWebview);
   }
 
-  private revealPanel(): void {
+  private revealPanel(preserveFocus = true): void {
     if (this.view) {
-      this.view.show(true);
+      this.view.show(preserveFocus);
     } else {
       // Panel hasn't been opened yet — force VS Code to create it
       vscode.commands.executeCommand(`${ChatViewProvider.viewType}.focus`);
@@ -11337,7 +11502,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     },
   ): void {
     this.withApprovalStateTransition(() => {
-      this.reconcileRestoredSessionApproval(session);
       const message = this.buildSessionLoadedMessage(session, opts);
       if (message.backgroundResults?.length) {
         this.sessionManager?.markBackgroundResultsAnnounced?.(

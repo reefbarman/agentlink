@@ -7,9 +7,10 @@ export class StatusBarManager implements vscode.Disposable {
   private readonly item: vscode.StatusBarItem;
 
   private alertGeneration = 0;
-  private alert:
-    | { generation: number; message: string; command: string }
-    | undefined;
+  private readonly alerts = new Map<
+    number,
+    { message: string; command: string | vscode.Command }
+  >();
   private pendingCount = 0;
   private errorMessage: string | undefined;
 
@@ -39,19 +40,20 @@ export class StatusBarManager implements vscode.Disposable {
    * Show a persistent approval alert on the primary item.
    * Returns a Disposable that restores the previous base state.
    */
-  showAlert(message: string, command?: string): vscode.Disposable {
+  showAlert(
+    message: string,
+    command?: string | vscode.Command,
+  ): vscode.Disposable {
     const generation = ++this.alertGeneration;
-    this.alert = {
-      generation,
+    this.alerts.set(generation, {
       message,
       command: command ?? "agentLink.focusApproval",
-    };
+    });
     this.renderAlert();
 
     return {
       dispose: () => {
-        if (generation !== this.alert?.generation) return;
-        this.alert = undefined;
+        if (!this.alerts.delete(generation)) return;
         this.restoreBaseState();
       },
     };
@@ -61,7 +63,7 @@ export class StatusBarManager implements vscode.Disposable {
   setPendingCount(count: number): void {
     this.pendingCount = Math.max(0, count);
     if (this.errorMessage) return;
-    if (this.alert) {
+    if (this.alerts.size > 0) {
       this.renderAlert();
       return;
     }
@@ -69,19 +71,20 @@ export class StatusBarManager implements vscode.Disposable {
   }
 
   private renderAlert(): void {
-    if (!this.alert) return;
-    const countSuffix =
-      this.pendingCount > 0 ? ` (+${this.pendingCount} pending)` : "";
+    const alert = Array.from(this.alerts.values()).at(-1);
+    if (!alert) return;
+    const otherAlerts = this.alerts.size - 1;
+    const countSuffix = otherAlerts > 0 ? ` (+${otherAlerts} pending)` : "";
     const queuedTooltip =
-      this.pendingCount > 0
-        ? `\n${this.pendingCount} more approval${this.pendingCount > 1 ? "s" : ""} pending`
+      otherAlerts > 0
+        ? `\n${otherAlerts} more AgentLink interaction${otherAlerts > 1 ? "s" : ""} pending`
         : "";
-    this.item.text = `$(link) AgentLink — ${this.alert.message}${countSuffix}`;
-    this.item.tooltip = `${this.alert.message}${queuedTooltip}`;
+    this.item.text = `$(link) AgentLink — ${alert.message}${countSuffix}`;
+    this.item.tooltip = `${alert.message}${queuedTooltip}`;
     this.item.backgroundColor = new vscode.ThemeColor(
       "statusBarItem.warningBackground",
     );
-    this.item.command = this.alert.command;
+    this.item.command = alert.command;
     this.item.show();
   }
 
@@ -111,7 +114,7 @@ export class StatusBarManager implements vscode.Disposable {
       this.renderError();
       return;
     }
-    if (this.alert) {
+    if (this.alerts.size > 0) {
       this.renderAlert();
       return;
     }
@@ -127,7 +130,7 @@ export class StatusBarManager implements vscode.Disposable {
   }
 
   dispose(): void {
-    this.alertGeneration++;
+    this.alerts.clear();
     this.item.dispose();
   }
 }

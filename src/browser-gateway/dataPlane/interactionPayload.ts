@@ -187,11 +187,15 @@ function subCommand(value: unknown): SubCommandEntry {
   });
   copyOptional(result, "existingRule", source.existingRule, (item) => {
     const rule = recordValue(item);
-    return {
+    const existingRule: NonNullable<SubCommandEntry["existingRule"]> = {
       pattern: stringValue(rule.pattern),
       mode: enumValue(rule.mode, ["prefix", "exact", "regex"] as const),
       scope: enumValue(rule.scope, ["session", "project", "global"] as const),
     };
+    copyOptional(existingRule, "decision", rule.decision, (decision) =>
+      enumValue(decision, ["allow", "prompt", "forbidden"] as const),
+    );
+    return existingRule;
   });
   return result;
 }
@@ -351,6 +355,8 @@ function sandboxCapabilities(
     ] as const),
     network: enumValue(source.network, [
       "blocked",
+      "loopback",
+      "loopback-listener",
       "proxy-only",
       "partial",
       "unrestricted",

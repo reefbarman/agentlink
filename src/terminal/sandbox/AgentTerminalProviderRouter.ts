@@ -21,6 +21,14 @@ import type {
 } from "../../core/capabilities/terminal.js";
 
 import { randomUUID } from "node:crypto";
+import {
+  TerminalTargetRecoveryError,
+  type TerminalTargetAuthority,
+  type TerminalTargetCandidate,
+  type TerminalTargetFailure,
+  type TerminalTargetKind,
+} from "../../core/capabilities/terminalTargetError.js";
+import { verifyTerminalInlineFiles } from "../inlineFileIntegrity.js";
 
 export interface AgentTerminalProviderHost {
   platform: NodeJS.Platform;
@@ -241,12 +249,17 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
             : {}),
         })
       : undefined;
+    const effectiveRouteContext =
+      this.maybeDeEscalateForPinnedSandboxTarget(
+        descriptor,
+        suppliedRouteContext,
+      ) ?? suppliedRouteContext;
     const generation = this.generation;
-    const decision = await this.decideRoute(suppliedRouteContext);
+    const decision = await this.decideRoute(effectiveRouteContext);
     this.assertGeneration(generation);
 
     const frozenRouteContext: TerminalExecutionRouteContext =
-      suppliedRouteContext ??
+      effectiveRouteContext ??
       Object.freeze({
         approvalPolicySnapshot: "on-request",
         approvalReviewerSnapshot:
@@ -332,6 +345,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
         security,
         inner,
         provider,
+        descriptor,
       );
       this.audit("execution_prepared", security);
       return prepared;
@@ -372,6 +386,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       prepared.security,
       prepared,
       provider,
+      descriptor,
       decision.attestation.attestationId,
     );
     this.audit("execution_prepared", security);
@@ -565,6 +580,53 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     this.disposeAllChannelProviders();
   }
 
+  /**
+   * A command pinned to an existing sandbox terminal may run under sandbox
+   * authority even when policy would route it natively (e.g. an allowlisted
+   * command whose rule grants native authority): the sandbox is strictly more
+   * confined, and rejecting the pinned target with wrong_authority would force
+   * the caller to abandon the terminal it deliberately targeted. Explicit user
+   * escalation and non-default permission intents are never overridden, and
+   * the reverse direction (escalating to a native target) is never taken.
+   */
+  private maybeDeEscalateForPinnedSandboxTarget(
+    descriptor: TerminalExecuteOptions,
+    routeContext?: TerminalExecutionRouteContext,
+  ): TerminalExecutionRouteContext | undefined {
+    if (routeContext?.requiredAuthority !== "native-agent") return undefined;
+    if (routeContext.authorityReason === "explicit-escalation")
+      return undefined;
+    if (routeContext.permissionIntent !== "default") return undefined;
+    const sandbox = this.sandboxProvider;
+    if (!sandbox || this.isRetiredChannelProvider(sandbox)) return undefined;
+
+    const idTargets = [descriptor.terminal_id, descriptor.split_from].filter(
+      (target): target is string => Boolean(target),
+    );
+    const hasNamedTarget = Boolean(descriptor.terminal_name);
+    if (idTargets.length === 0 && !hasNamedTarget) return undefined;
+
+    for (const target of idTargets) {
+      const matches = this.providersForTerminalId(target, descriptor.owner);
+      if (matches.length !== 1 || matches[0] !== sandbox) return undefined;
+    }
+    if (hasNamedTarget) {
+      const namedMatches = this.allProviders().filter((provider) =>
+        provider
+          .listTerminals({ owner: descriptor.owner })
+          .some((terminal) => terminal.name === descriptor.terminal_name),
+      );
+      if (namedMatches.length !== 1 || namedMatches[0] !== sandbox) {
+        return undefined;
+      }
+    }
+
+    return Object.freeze({
+      ...routeContext,
+      requiredAuthority: "sandbox" as const,
+    });
+  }
+
   private async decideRoute(
     routeContext?: TerminalExecutionRouteContext,
   ): Promise<RouteDecision> {
@@ -713,6 +775,7 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     security: TerminalExecutionSecuritySummary,
     inner: PreparedTerminalExecution,
     ownerProvider: TerminalProvider,
+    descriptor: TerminalExecuteOptions,
     attestationId?: string,
   ): PreparedTerminalExecution {
     let state: "prepared" | "consumed" | "disposed" = "prepared";
@@ -754,8 +817,21 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
         state = "consumed";
         this.pendingExecutions.delete(revoke);
         this.audit("prepared_execution_consumed", security);
-        this.audit("execution_started", security);
+        if (security.route === "native") {
+          try {
+            await verifyTerminalInlineFiles(descriptor.sandboxInlineFiles, {
+              requireCanonicalPaths: true,
+            });
+          } catch (error) {
+            inner.dispose();
+            this.audit("execution_failed", security, {
+              failure: "launch_failed",
+            });
+            throw error;
+          }
+        }
         try {
+          this.audit("execution_started", security);
           const result = await inner.execute();
           this.activeProvider = ownerProvider;
           this.audit("execution_completed", security, {
@@ -841,18 +917,54 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     ] as const) {
       if (!target) continue;
       if (target.startsWith("host-terminal-")) {
-        this.rejectExecutionTarget("host_target", kind);
+        this.rejectExecutionTarget(
+          "host_target",
+          kind,
+          target,
+          descriptor,
+          expectedProvider,
+          [],
+        );
       }
       const matches = this.providersForTerminalId(target, descriptor.owner);
-      if (matches.length === 0) this.rejectExecutionTarget("not_found", kind);
+      if (matches.length === 0)
+        this.rejectExecutionTarget(
+          "not_found",
+          kind,
+          target,
+          descriptor,
+          expectedProvider,
+          [],
+        );
       if (matches.length > 1)
-        this.rejectExecutionTarget("ambiguous_name", kind);
+        this.rejectExecutionTarget(
+          "ambiguous_name",
+          kind,
+          target,
+          descriptor,
+          expectedProvider,
+          matches,
+        );
       const owner = matches[0];
       if (this.isRetiredChannelProvider(owner)) {
-        this.rejectExecutionTarget("provider_retired", kind);
+        this.rejectExecutionTarget(
+          "provider_retired",
+          kind,
+          target,
+          descriptor,
+          expectedProvider,
+          matches,
+        );
       }
       if (owner !== expectedProvider) {
-        this.rejectExecutionTarget("wrong_authority", kind);
+        this.rejectExecutionTarget(
+          "wrong_authority",
+          kind,
+          target,
+          descriptor,
+          expectedProvider,
+          matches,
+        );
       }
     }
 
@@ -864,25 +976,45 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     );
     if (namedMatches.length === 0) return;
     if (namedMatches.length > 1) {
-      this.rejectExecutionTarget("ambiguous_name", "terminal_name");
+      this.rejectExecutionTarget(
+        "ambiguous_name",
+        "terminal_name",
+        descriptor.terminal_name,
+        descriptor,
+        expectedProvider,
+        namedMatches,
+      );
     }
     const owner = namedMatches[0];
     if (this.isRetiredChannelProvider(owner)) {
-      this.rejectExecutionTarget("provider_retired", "terminal_name");
+      this.rejectExecutionTarget(
+        "provider_retired",
+        "terminal_name",
+        descriptor.terminal_name,
+        descriptor,
+        expectedProvider,
+        namedMatches,
+      );
     }
     if (owner !== expectedProvider) {
-      this.rejectExecutionTarget("wrong_authority", "terminal_name");
+      this.rejectExecutionTarget(
+        "wrong_authority",
+        "terminal_name",
+        descriptor.terminal_name,
+        descriptor,
+        expectedProvider,
+        namedMatches,
+      );
     }
   }
 
   private rejectExecutionTarget(
-    failure:
-      | "host_target"
-      | "wrong_authority"
-      | "provider_retired"
-      | "ambiguous_name"
-      | "not_found",
-    targetKind: string,
+    failure: TerminalTargetFailure,
+    targetKind: TerminalTargetKind,
+    targetValue: string,
+    descriptor: TerminalExecuteOptions,
+    expectedProvider: TerminalProvider,
+    targetProviders: readonly TerminalProvider[],
   ): never {
     this.options.recordExecutionAudit?.({
       type: "execution_failed",
@@ -891,9 +1023,102 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
       resultStatus: `target_${failure}`,
       failure,
     });
-    throw new Error(
-      `Terminal target ${targetKind} was rejected: ${failure.replaceAll("_", " ")}`,
+    const requiredAuthority = this.authorityForProvider(expectedProvider);
+    const compatibleTerminals = this.candidatesForProvider(
+      expectedProvider,
+      descriptor.owner,
     );
+    const availableTerminals = this.activeProviders()
+      .flatMap((provider) =>
+        this.candidatesForProvider(provider, descriptor.owner),
+      )
+      .sort(
+        (left, right) =>
+          left.authority!.localeCompare(right.authority!) ||
+          left.terminal_id.localeCompare(right.terminal_id),
+      );
+    const targetAuthorities = [
+      ...new Set(
+        targetProviders.map((provider) => this.authorityForProvider(provider)),
+      ),
+    ];
+    const guidance: string[] = [];
+    if (failure === "wrong_authority" && targetAuthorities.length === 1) {
+      guidance.push(
+        `To preserve this target's identity, retry with ${targetAuthorities[0]} authority and the same ${targetKind}="${targetValue}"; AgentLink will not change authority automatically.`,
+      );
+    }
+    const compatible = compatibleTerminals[0];
+    if (compatible) {
+      guidance.push(
+        targetKind === "split_from"
+          ? `Retry with split_from="${compatible.terminal_id}" to split from a current ${requiredAuthority} terminal.`
+          : `Under ${requiredAuthority} authority, retry with terminal_id="${compatible.terminal_id}" or terminal_name="${compatible.terminal_name}".`,
+      );
+    } else if (targetKind === "terminal_name") {
+      guidance.push(
+        `Under ${requiredAuthority} authority, retry with a new unique terminal_name instead of reusing "${targetValue}".`,
+      );
+    }
+    if (targetKind === "split_from") {
+      guidance.push(
+        "If an independent ungrouped terminal is intended, retry without split_from.",
+      );
+    } else {
+      guidance.push(
+        `If an independent terminal is intended, omit ${targetKind} or choose a new unique terminal_name.`,
+      );
+    }
+    throw new TerminalTargetRecoveryError({
+      failure,
+      target_kind: targetKind,
+      target_value: targetValue,
+      required_authority: requiredAuthority,
+      ...(targetAuthorities.length > 0
+        ? { target_authorities: targetAuthorities }
+        : {}),
+      compatible_terminals: compatibleTerminals,
+      available_terminals: availableTerminals,
+      retry_guidance: guidance,
+    });
+  }
+
+  private authorityForProvider(
+    provider: TerminalProvider,
+  ): TerminalTargetAuthority {
+    return provider === this.sandboxProvider ||
+      this.retiredSandboxProviders.has(
+        provider as ConfinementPreparingTerminalProvider,
+      )
+      ? "sandbox"
+      : "native-agent";
+  }
+
+  private activeProviders(): TerminalProvider[] {
+    return [
+      this.sandboxProvider,
+      this.nativeAgentProvider,
+      this.nativeProvider,
+    ].filter(
+      (provider): provider is TerminalProvider => provider !== undefined,
+    );
+  }
+
+  private candidatesForProvider(
+    provider: TerminalProvider,
+    owner: TerminalExecutionOwner | undefined,
+  ): TerminalTargetCandidate[] {
+    if (this.isRetiredChannelProvider(provider)) return [];
+    const authority = this.authorityForProvider(provider);
+    return provider
+      .listTerminals({ owner })
+      .filter((terminal) => !terminal.stale)
+      .map((terminal) => ({
+        terminal_id: terminal.id,
+        terminal_name: terminal.name,
+        authority,
+      }))
+      .sort((left, right) => left.terminal_id.localeCompare(right.terminal_id));
   }
 
   private providersForTerminalId(

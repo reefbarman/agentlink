@@ -259,14 +259,13 @@ const TOOL_ERROR_KIND = "tool_error";
 
 /** Create a ToolResult containing a canonical JSON-serialized payload. */
 export function jsonResult(payload: unknown, pretty = false): ToolResult {
+  const serialized = JSON.stringify(payload, null, pretty ? 2 : undefined);
+  if (serialized === undefined) {
+    throw new TypeError("Tool result payload must be JSON-serializable");
+  }
   return {
-    data: payload,
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(payload, null, pretty ? 2 : undefined),
-      },
-    ],
+    data: JSON.parse(serialized) as unknown,
+    content: [{ type: "text", text: serialized }],
     isError: false,
   };
 }

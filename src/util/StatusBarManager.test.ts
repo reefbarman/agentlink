@@ -11,7 +11,9 @@ const mocks = vi.hoisted(() => {
     text: string;
     tooltip?: string;
     backgroundColor?: { id: string };
-    command?: string;
+    command?:
+      | string
+      | { command: string; title: string; arguments?: unknown[] };
     show: ReturnType<typeof vi.fn>;
     hide: ReturnType<typeof vi.fn>;
     dispose: ReturnType<typeof vi.fn>;
@@ -108,22 +110,62 @@ describe("StatusBarManager retained approval and error behavior", () => {
     manager.dispose();
   });
 
-  it("does not let an older alert disposable clear a newer alert", () => {
+  it("keeps the newest active alert visible and restores the previous target", () => {
     const manager = new StatusBarManager();
     const primary = mocks.items[0];
+    const firstCommand = {
+      command: "agentLink.focusApproval",
+      title: "Focus first approval",
+      arguments: [{ sessionId: "session-1" }],
+    };
+    const secondCommand = {
+      command: "agentLink.focusApproval",
+      title: "Focus second question",
+      arguments: [{ sessionId: "session-2" }],
+    };
 
-    const first = manager.showAlert("First approval required");
-    const second = manager.showAlert("Second approval required");
+    const first = manager.showAlert("First approval required", firstCommand);
+    const second = manager.showAlert(
+      "Question requires a response",
+      secondCommand,
+    );
+    expect(primary).toMatchObject({
+      text: "$(link) AgentLink — Question requires a response (+1 pending)",
+      tooltip:
+        "Question requires a response\n1 more AgentLink interaction pending",
+      command: secondCommand,
+    });
+
     first.dispose();
 
     expect(primary).toMatchObject({
-      text: "$(link) AgentLink — Second approval required",
-      tooltip: "Second approval required",
-      command: "agentLink.focusApproval",
+      text: "$(link) AgentLink — Question requires a response",
+      tooltip: "Question requires a response",
+      command: secondCommand,
     });
     expect(primary.hide).not.toHaveBeenCalled();
 
     second.dispose();
+    expect(primary.hide).toHaveBeenCalledOnce();
+    manager.dispose();
+  });
+
+  it("restores an older pending alert when the newest request resolves", () => {
+    const manager = new StatusBarManager();
+    const primary = mocks.items[0];
+    const first = manager.showAlert("First approval required");
+    const second = manager.showAlert("Question requires a response");
+
+    second.dispose();
+
+    expect(primary).toMatchObject({
+      text: "$(link) AgentLink — First approval required",
+      tooltip: "First approval required",
+      command: "agentLink.focusApproval",
+    });
+    expect(primary.hide).not.toHaveBeenCalled();
+
+    first.dispose();
     expect(primary.hide).toHaveBeenCalledOnce();
     manager.dispose();
   });
@@ -146,15 +188,15 @@ describe("StatusBarManager retained approval and error behavior", () => {
     manager.dispose();
   });
 
-  it("combines the current approval alert and queued count", () => {
+  it("does not mix queued-provider counts into an active interaction alert", () => {
     const manager = new StatusBarManager();
     const item = mocks.items[0];
-    const alert = manager.showAlert("Command approval required");
+    const alert = manager.showAlert("Question requires a response");
 
     manager.setPendingCount(2);
     expect(item).toMatchObject({
-      text: "$(link) AgentLink — Command approval required (+2 pending)",
-      tooltip: "Command approval required\n2 more approvals pending",
+      text: "$(link) AgentLink — Question requires a response",
+      tooltip: "Question requires a response",
       command: "agentLink.focusApproval",
     });
 

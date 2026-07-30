@@ -206,6 +206,7 @@ describe("journaled staged repository publication", () => {
       async abortStagedPublication(id) {
         states.delete(id);
       },
+      async optimizeStagedStore() {},
       async activate(id) {
         states.set(id, "activated");
         events.push(`activate:${id}`);

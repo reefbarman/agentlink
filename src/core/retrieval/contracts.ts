@@ -424,6 +424,14 @@ export interface RetrievalRepository {
   deleteSource(
     request: RetrievalDeleteSourceRequest,
   ): Promise<RetrievalDeleteSourceOutcome>;
+  /**
+   * Batch variant of deleteSource. Requests must have unique source IDs;
+   * outcomes are returned in request order. Implementations should group
+   * storage mutations so a large batch does not pay per-source commit costs.
+   */
+  deleteSources(
+    requests: RetrievalDeleteSourceRequest[],
+  ): Promise<RetrievalDeleteSourceOutcome[]>;
   deleteScope(
     request: RetrievalDeleteScopeRequest,
   ): Promise<RetrievalDeleteScopeOutcome>;

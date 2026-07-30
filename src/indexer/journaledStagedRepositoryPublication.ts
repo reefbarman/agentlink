@@ -47,6 +47,8 @@ export interface StagedRepositoryPublicationPort {
   abortStagedPublication(publicationId: string): Promise<void>;
   activate(publicationId: string): Promise<unknown>;
   finalizeActivation(publicationId: string): Promise<void>;
+  /** Compacts staged tables and prunes their old versions. */
+  optimizeStagedStore(): Promise<void>;
 }
 
 const STAGED_BATCH_SIZE = 100;

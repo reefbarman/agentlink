@@ -3,7 +3,13 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
+import {
+  scanShellLexLiteralOccurrences,
+  type ShellLexLiteralOccurrence,
+} from "./shellLex.js";
+
 export const INLINE_FILE_TOKEN_RE = /\$AL_FILE\(([A-Za-z0-9_.-]+)\)/g;
+const INLINE_FILE_TOKEN_PREFIX = "$AL_FILE(";
 export const MAX_INLINE_COMMAND_FILE_BYTES = 2 * 1024 * 1024;
 export const MAX_INLINE_COMMAND_FILES = 8;
 
@@ -44,6 +50,7 @@ export type InlineCommandFileErrorCode =
   | "unknown_reference"
   | "unreferenced_file"
   | "unresolved_token"
+  | "unsupported_context"
   | "size_limit_exceeded";
 
 export class InlineCommandFileError extends Error {
@@ -56,12 +63,73 @@ export class InlineCommandFileError extends Error {
   }
 }
 
+interface InlineFileTokenOccurrence extends ShellLexLiteralOccurrence {
+  name: string;
+}
+
+function scanInlineFileTokens(command: string): InlineFileTokenOccurrence[] {
+  const scan = scanShellLexLiteralOccurrences(
+    command,
+    INLINE_FILE_TOKEN_PREFIX,
+  );
+  if (scan.occurrences.length > 0 && scan.unsupportedSyntax.length > 0) {
+    const kinds = [...new Set(scan.unsupportedSyntax.map(({ kind }) => kind))];
+    throw new InlineCommandFileError(
+      "unsupported_context",
+      `Inline command files do not support ${kinds.join(", ")} in the same command. Use a simpler direct command.`,
+    );
+  }
+
+  if (
+    scan.occurrences.length > 0 &&
+    (scan.finalState.quote !== null || scan.finalState.danglingEscape)
+  ) {
+    throw new InlineCommandFileError(
+      "unsupported_context",
+      "Inline command file tokens require balanced shell quotes and no dangling trailing escape.",
+    );
+  }
+
+  const occurrences: InlineFileTokenOccurrence[] = [];
+  for (const occurrence of scan.occurrences) {
+    if (occurrence.escaped || occurrence.comment) {
+      throw new InlineCommandFileError(
+        "unsupported_context",
+        occurrence.escaped
+          ? "Inline command file tokens cannot be shell-escaped. Use an unquoted, single-quoted, or double-quoted $AL_FILE(name) token."
+          : "Inline command file tokens cannot appear in shell comments.",
+      );
+    }
+    const close = command.indexOf(")", occurrence.end);
+    if (close < 0) {
+      throw new InlineCommandFileError(
+        "unresolved_token",
+        `Invalid inline command file token starting at '${command.slice(occurrence.start)}'. Use $AL_FILE(name) with /^[A-Za-z0-9_.-]{1,64}$/.`,
+      );
+    }
+    const name = command.slice(occurrence.end, close);
+    const token = command.slice(occurrence.start, close + 1);
+    if (!NAME_RE.test(name) || name.includes("..")) {
+      throw new InlineCommandFileError(
+        "unresolved_token",
+        `Invalid inline command file token '${token}'. Use $AL_FILE(name) with /^[A-Za-z0-9_.-]{1,64}$/.`,
+      );
+    }
+    occurrences.push({ ...occurrence, end: close + 1, name });
+  }
+
+  return occurrences;
+}
+
 export function materializeInlineCommandFiles(
   command: string,
   files: InlineCommandFileInput[] | undefined,
 ): MaterializedInlineCommandFiles | undefined {
   if (!files || files.length === 0) return undefined;
-  validateInlineCommandFiles(command, files);
+  const occurrences = validateInlineCommandFilesAndGetOccurrences(
+    command,
+    files,
+  );
 
   const dir = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-cmd-")),
@@ -97,19 +165,42 @@ export function materializeInlineCommandFiles(
       });
     }
 
-    const substituted = command.replace(
-      INLINE_FILE_TOKEN_RE,
-      (_token, name) => {
-        const filePath = pathByName.get(String(name));
-        if (!filePath) {
-          throw new InlineCommandFileError(
-            "unknown_reference",
-            `No inline command file named '${String(name)}' was provided.`,
-          );
-        }
-        return quotePosixShellArg(filePath);
-      },
-    );
+    const substitutedParts: string[] = [];
+    let sourceOffset = 0;
+    for (const occurrence of occurrences) {
+      const source = command.slice(sourceOffset, occurrence.start);
+      if (source.includes(INLINE_FILE_TOKEN_PREFIX)) {
+        throw new InlineCommandFileError(
+          "unresolved_token",
+          "Command contains an unresolved $AL_FILE(name) token before substitution.",
+        );
+      }
+      substitutedParts.push(source);
+
+      const filePath = pathByName.get(occurrence.name);
+      if (!filePath) {
+        throw new InlineCommandFileError(
+          "unknown_reference",
+          `No inline command file named '${occurrence.name}' was provided.`,
+        );
+      }
+      const quotedPath = quotePosixShellArg(filePath);
+      substitutedParts.push(
+        occurrence.quote
+          ? `${occurrence.quote === "single" ? "'" : '"'}${quotedPath}${occurrence.quote === "single" ? "'" : '"'}`
+          : quotedPath,
+      );
+      sourceOffset = occurrence.end;
+    }
+    const sourceTail = command.slice(sourceOffset);
+    if (sourceTail.includes(INLINE_FILE_TOKEN_PREFIX)) {
+      throw new InlineCommandFileError(
+        "unresolved_token",
+        "Command contains an unresolved $AL_FILE(name) token after substitution.",
+      );
+    }
+    substitutedParts.push(sourceTail);
+    const substituted = substitutedParts.join("");
 
     return {
       commandTemplate: command,
@@ -127,10 +218,10 @@ export function materializeInlineCommandFiles(
   }
 }
 
-export function validateInlineCommandFiles(
+function validateInlineCommandFilesAndGetOccurrences(
   command: string,
   files: InlineCommandFileInput[],
-): void {
+): InlineFileTokenOccurrence[] {
   if (files.length > MAX_INLINE_COMMAND_FILES) {
     throw new InlineCommandFileError(
       "too_many_files",
@@ -184,10 +275,8 @@ export function validateInlineCommandFiles(
     );
   }
 
-  const referenced = new Set<string>();
-  for (const match of command.matchAll(INLINE_FILE_TOKEN_RE)) {
-    referenced.add(match[1]);
-  }
+  const occurrences = scanInlineFileTokens(command);
+  const referenced = new Set(occurrences.map(({ name }) => name));
 
   if (referenced.size === 0) {
     throw new InlineCommandFileError(
@@ -214,18 +303,18 @@ export function validateInlineCommandFiles(
     }
   }
 
-  assertNoInvalidInlineFileTokens(command);
+  return occurrences;
+}
+
+export function validateInlineCommandFiles(
+  command: string,
+  files: InlineCommandFileInput[],
+): void {
+  validateInlineCommandFilesAndGetOccurrences(command, files);
 }
 
 export function assertNoInvalidInlineFileTokens(command: string): void {
-  const leftover = command.match(/\$AL_FILE\([^)]*\)/);
-  if (!leftover) return;
-  if (!leftover[0].match(/^\$AL_FILE\([A-Za-z0-9_.-]+\)$/)) {
-    throw new InlineCommandFileError(
-      "unresolved_token",
-      `Invalid inline command file token '${leftover[0]}'. Use $AL_FILE(name) with /^[A-Za-z0-9_.-]{1,64}$/.`,
-    );
-  }
+  scanInlineFileTokens(command);
 }
 
 export function quotePosixShellArg(value: string): string {

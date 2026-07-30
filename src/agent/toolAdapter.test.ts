@@ -32,9 +32,43 @@ import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
 import { handleGetModuleNeighbors } from "../tools/getModuleNeighbors.js";
 import { handleGetRepoMap } from "../tools/getRepoMap.js";
 
+const composeRuntimeMocks = vi.hoisted(() => ({
+  handleCompose: vi.fn().mockResolvedValue({
+    content: [{ type: "text", text: "compose result" }],
+    data: { ok: true },
+    isError: false,
+    uiMeta: {
+      composeTrace: {
+        status: "completed",
+        totalChildren: 5,
+        completedChildren: 5,
+        succeededChildren: 3,
+        failedChildren: 1,
+        cancelledChildren: 1,
+        toolAllBatchCount: 2,
+        toolAllSettledBatchCount: 1,
+        bridgedBytes: 1234,
+        children: [],
+      },
+    },
+  }),
+}));
+
 const feedbackToolMocks = vi.hoisted(() => ({
   handleDeleteFeedback: vi.fn().mockResolvedValue({
     content: [{ type: "text", text: "deleted" }],
+  }),
+  handleGetFeedback: vi.fn().mockResolvedValue({
+    content: [{ type: "text", text: "feedback" }],
+  }),
+  handleTriageFeedback: vi.fn().mockResolvedValue({
+    content: [{ type: "text", text: "triaged" }],
+  }),
+}));
+
+vi.mock("./compose/composeRuntimeLoader.js", () => ({
+  loadComposeRuntime: vi.fn().mockResolvedValue({
+    handleCompose: composeRuntimeMocks.handleCompose,
   }),
 }));
 
@@ -197,6 +231,12 @@ vi.mock("../tools/renameSymbol.js", () => ({
 vi.mock("../tools/deleteFeedback.js", () => ({
   handleDeleteFeedback: feedbackToolMocks.handleDeleteFeedback,
 }));
+vi.mock("../tools/getFeedback.js", () => ({
+  handleGetFeedback: feedbackToolMocks.handleGetFeedback,
+}));
+vi.mock("../tools/triageFeedback.js", () => ({
+  handleTriageFeedback: feedbackToolMocks.handleTriageFeedback,
+}));
 
 const mockOnApprovalRequest = vi.fn();
 const mockCtx: ToolDispatchContext = {
@@ -276,6 +316,53 @@ describe("tool usage telemetry project attribution", () => {
     );
     expect(JSON.stringify(record.mock.calls)).not.toContain(
       "/sensitive/project",
+    );
+  });
+
+  it("forwards the exact run-scoped artifact writer into compose", async () => {
+    composeRuntimeMocks.handleCompose.mockClear();
+    const retainToolResultArtifact = vi.fn(async () => null);
+    const record = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      extensionUri: { fsPath: "/extension" } as any,
+      toolUsageTelemetry: { record } as any,
+    });
+
+    const result = await runtime.executeTool({
+      name: "compose",
+      input: { script: "return null;" },
+      context: {
+        sessionId: "test-session",
+        mode: "code",
+        availableToolNames: new Set(["compose"]),
+        toolCallBudget: new (
+          await import("../core/tools/toolCallBudget.js")
+        ).ToolCallBudget(4),
+        toolCallId: "compose-call",
+        retainToolResultArtifact,
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(composeRuntimeMocks.handleCompose).toHaveBeenCalledOnce();
+    expect(composeRuntimeMocks.handleCompose).toHaveBeenCalledWith(
+      expect.objectContaining({ retainArtifact: retainToolResultArtifact }),
+    );
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "compose",
+        metrics: expect.objectContaining({
+          childCount: 5,
+          completedChildCount: 5,
+          succeededChildCount: 3,
+          failedChildCount: 1,
+          cancelledChildCount: 1,
+          toolAllBatchCount: 2,
+          toolAllSettledBatchCount: 1,
+          bridgedBytes: 1234,
+        }),
+      }),
     );
   });
 
@@ -942,11 +1029,15 @@ describe("getAgentTools", () => {
     if (__DEV_BUILD__) {
       expect(names).toContain("send_feedback");
       expect(names).toContain("get_feedback");
+      expect(names).toContain("triage_feedback");
       expect(names).toContain("delete_feedback");
       const sendFeedback = tools.find((tool) => tool.name === "send_feedback");
       const toolNameSchema = sendFeedback?.input_schema.properties
         ?.tool_name as { description?: string } | undefined;
       const getFeedback = tools.find((tool) => tool.name === "get_feedback");
+      const triageFeedback = tools.find(
+        (tool) => tool.name === "triage_feedback",
+      );
       const deleteFeedback = tools.find(
         (tool) => tool.name === "delete_feedback",
       );
@@ -963,6 +1054,15 @@ describe("getAgentTools", () => {
         "Never report a specific MCP server or its server__tool",
       );
       expect(getFeedback?.description).toContain("stable ID");
+      expect(getFeedback?.input_schema.properties).toHaveProperty("triaged");
+      expect(getFeedback?.input_schema.properties).toHaveProperty("priorities");
+      expect(triageFeedback?.description).toContain("P0-P3 priority");
+      expect(triageFeedback?.input_schema.required).toEqual(
+        expect.arrayContaining(["ids", "triaged"]),
+      );
+      expect(triageFeedback?.input_schema.properties).toHaveProperty(
+        "priority",
+      );
       expect(deleteFeedback?.description).toContain("stable ID");
       expect(deleteFeedback?.input_schema.required ?? []).not.toContain(
         "indices",
@@ -972,6 +1072,7 @@ describe("getAgentTools", () => {
     } else {
       expect(names).not.toContain("send_feedback");
       expect(names).not.toContain("get_feedback");
+      expect(names).not.toContain("triage_feedback");
       expect(names).not.toContain("delete_feedback");
     }
   });
@@ -1005,11 +1106,32 @@ describe("getAgentTools", () => {
       expect(
         command.input_schema.properties?.additional_permissions,
       ).toBeDefined();
+      expect(command.input_schema.properties).toHaveProperty("temporary_home");
+      const temporaryHomeSchema = command.input_schema.properties
+        ?.temporary_home as { description?: string } | undefined;
+      const cwdSchema = command.input_schema.properties?.cwd as
+        | { description?: string }
+        | undefined;
+      const sandboxPermissionsSchema = command.input_schema.properties
+        ?.sandbox_permissions as { description?: string } | undefined;
+      expect(temporaryHomeSchema?.description).toContain(
+        "fresh writable per-command HOME",
+      );
+      expect(cwdSchema?.description).toContain("sandbox_cwd_outside_workspace");
+      expect(sandboxPermissionsSchema?.description).toContain(
+        "managed_network_ssh_git_transport",
+      );
+      expect(sandboxPermissionsSchema?.description).toContain(
+        "managed_network_tls_trust",
+      );
       expect(command.description).toContain("loopback client access");
+      expect(command.description).toContain("temporary_home=true");
       expect(command.description).toContain("allow_local_binding=true");
       expect(command.description).toContain(
-        "every non-default intent requires approval",
+        "every non-default intent requires authority from a matching native command rule or fresh approval",
       );
+      expect(command.description).toContain("retry_guidance");
+      expect(command.description).toContain("automatic_retry: false");
     }
 
     const readOnlyCommand = getAgentTools(
@@ -1020,6 +1142,15 @@ describe("getAgentTools", () => {
     ).find((tool) => tool.name === "execute_command");
     expect(readOnlyCommand?.input_schema.properties).not.toHaveProperty(
       "sandbox_permissions",
+    );
+    expect(readOnlyCommand?.input_schema.properties).not.toHaveProperty(
+      "temporary_home",
+    );
+    const readOnlyCwdSchema = readOnlyCommand?.input_schema.properties?.cwd as
+      | { description?: string }
+      | undefined;
+    expect(readOnlyCwdSchema?.description).toContain(
+      "sandbox_cwd_outside_workspace",
     );
   });
 
@@ -1039,23 +1170,23 @@ describe("getAgentTools", () => {
     ).not.toContain("compose");
   });
 
-  it("keeps composability metadata canonical and registered", () => {
-    const definitions = new Set(
-      getAgentTools({
-        slug: "language-benchmark",
-        name: "Language Benchmark",
-        icon: "beaker",
-        toolGroups: [
-          "read",
-          "edit",
-          "command",
-          "language",
-          "language-benchmark",
-          "search",
-          "mcp",
-        ],
-      }).map((tool) => tool.name),
-    );
+  it("keeps composability metadata canonical and generates exact advertised child sets", () => {
+    const benchmarkMode = {
+      slug: "language-benchmark",
+      name: "Language Benchmark",
+      icon: "beaker",
+      toolGroups: [
+        "read",
+        "edit",
+        "command",
+        "language",
+        "language-benchmark",
+        "search",
+        "mcp",
+      ],
+    };
+    const benchmarkTools = getAgentTools(benchmarkMode);
+    const definitions = new Set(benchmarkTools.map((tool) => tool.name));
     for (const name of COMPOSABLE_TOOLS) {
       expect(TOOL_CAPABILITIES[name]).toMatchObject({
         composable: true,
@@ -1069,6 +1200,52 @@ describe("getAgentTools", () => {
     expect(COMPOSABLE_TOOLS.has("compose")).toBe(false);
     expect(COMPOSABLE_TOOLS.has("read_file")).toBe(false);
     expect(COMPOSABLE_TOOLS.has("codebase_search")).toBe(false);
+
+    const childNames = (tools: ToolDefinition[]): string[] => {
+      const description = tools.find(
+        (tool) => tool.name === "compose",
+      )?.description;
+      const match = description?.match(
+        /Composable children in this advertised tool union: ([^.]+)\./,
+      );
+      return match?.[1]?.split(", ") ?? [];
+    };
+    const ordinaryChildren = [
+      "get_call_hierarchy",
+      "get_context",
+      "get_diagnostics",
+      "get_hover",
+      "get_module_neighbors",
+      "get_references",
+      "get_repo_map",
+      "get_symbols",
+      "get_type_hierarchy",
+      "go_to_definition",
+      "go_to_implementation",
+      "go_to_type_definition",
+      "list_files",
+      "search_files",
+    ];
+    expect(childNames(getAgentTools())).toEqual(ordinaryChildren);
+    expect(childNames(benchmarkTools)).toEqual([
+      "get_call_hierarchy",
+      "get_code_actions",
+      "get_completions",
+      "get_context",
+      "get_diagnostics",
+      "get_hover",
+      "get_inlay_hints",
+      "get_module_neighbors",
+      "get_references",
+      "get_repo_map",
+      "get_symbols",
+      "get_type_hierarchy",
+      "go_to_definition",
+      "go_to_implementation",
+      "go_to_type_definition",
+      "list_files",
+      "search_files",
+    ]);
   });
 
   it("includes the core file tools and foreground task status tool", () => {
@@ -1332,8 +1509,14 @@ describe("getAgentTools", () => {
       "background",
     );
     expect(askCommand?.input_schema.properties).not.toHaveProperty("env");
+    expect(askCommand?.input_schema.properties).not.toHaveProperty(
+      "temporary_home",
+    );
     expect(codeCommand?.input_schema.properties).toHaveProperty("background");
     expect(codeCommand?.input_schema.properties).toHaveProperty("env");
+    expect(codeCommand?.input_schema.properties).toHaveProperty(
+      "temporary_home",
+    );
   });
 
   it("uses the restricted command schema for custom modes with the read-only command capability", () => {
@@ -1883,7 +2066,7 @@ describe("spawn_background_agent tool", () => {
       },
     ];
 
-    await dispatchToolCall(
+    const result = await dispatchToolCall(
       "spawn_background_agent",
       {
         task: "Review UI",
@@ -1916,6 +2099,16 @@ describe("spawn_background_agent tool", () => {
       }),
       undefined,
     );
+
+    // The result must echo which images were attached so the coordinator can
+    // detect a drifted image_N mapping.
+    const payload = JSON.parse(
+      (result.content[0] as { type: "text"; text: string }).text,
+    );
+    expect(payload.attachedImages).toEqual([
+      { id: "image_1", name: "user-reference.png", mimeType: "image/png" },
+      { id: "image_2", name: "captured-ui.png", mimeType: "image/png" },
+    ]);
   });
 
   it("dispatches present_images with images from the current session", async () => {
@@ -2344,6 +2537,88 @@ describe("spawn_background_agent tool", () => {
 });
 
 describe("dispatchToolCall", () => {
+  it("forwards complete feedback read filters", async () => {
+    feedbackToolMocks.handleGetFeedback.mockClear();
+
+    await dispatchToolCall(
+      "get_feedback",
+      {
+        tool_name: "execute_command",
+        triaged: true,
+        priorities: ["P0", "P2"],
+      },
+      mockCtx,
+    );
+
+    expect(feedbackToolMocks.handleGetFeedback).toHaveBeenCalledWith({
+      tool_name: "execute_command",
+      triaged: true,
+      priorities: ["P0", "P2"],
+    });
+  });
+
+  it("rejects invalid feedback priority filters", async () => {
+    feedbackToolMocks.handleGetFeedback.mockClear();
+
+    const result = await dispatchToolCall(
+      "get_feedback",
+      { priorities: ["P0", "invalid"] },
+      mockCtx,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(feedbackToolMocks.handleGetFeedback).not.toHaveBeenCalled();
+  });
+
+  it("forwards complete feedback triage requests", async () => {
+    feedbackToolMocks.handleTriageFeedback.mockClear();
+
+    await dispatchToolCall(
+      "triage_feedback",
+      {
+        ids: ["feedback-id", 7, null],
+        triaged: true,
+        priority: "P1",
+      },
+      mockCtx,
+    );
+
+    expect(feedbackToolMocks.handleTriageFeedback).toHaveBeenCalledWith({
+      ids: ["feedback-id"],
+      triaged: true,
+      priority: "P1",
+    });
+  });
+
+  it("forwards untriage requests without a priority", async () => {
+    feedbackToolMocks.handleTriageFeedback.mockClear();
+
+    await dispatchToolCall(
+      "triage_feedback",
+      { ids: ["feedback-id"], triaged: false },
+      mockCtx,
+    );
+
+    expect(feedbackToolMocks.handleTriageFeedback).toHaveBeenCalledWith({
+      ids: ["feedback-id"],
+      triaged: false,
+      priority: undefined,
+    });
+  });
+
+  it("rejects triage requests without a boolean state", async () => {
+    feedbackToolMocks.handleTriageFeedback.mockClear();
+
+    const result = await dispatchToolCall(
+      "triage_feedback",
+      { ids: ["feedback-id"], priority: "P1" },
+      mockCtx,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(feedbackToolMocks.handleTriageFeedback).not.toHaveBeenCalled();
+  });
+
   it("forwards feedback IDs and strict numeric global indices", async () => {
     feedbackToolMocks.handleDeleteFeedback.mockClear();
 
@@ -3345,16 +3620,16 @@ describe("dispatchToolCall", () => {
     );
   });
 
-  it("dispatches execute_command to handleExecuteCommand", async () => {
+  it("dispatches the complete execute_command request to handleExecuteCommand", async () => {
     const { handleExecuteCommand } = await import("../tools/executeCommand.js");
     vi.mocked(handleExecuteCommand).mockClear();
     const result = await dispatchToolCall(
       "execute_command",
-      { command: "ls" },
+      { command: "npm test", temporary_home: true },
       mockCtx,
     );
     expect(handleExecuteCommand).toHaveBeenCalledWith(
-      { command: "ls" },
+      { command: "npm test", temporary_home: true },
       mockCtx.approvalManager,
       mockCtx.approvalPanel,
       mockCtx.sessionId,

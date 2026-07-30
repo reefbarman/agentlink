@@ -118,12 +118,14 @@ describe("CommandCard terminal presentation", () => {
         "Runs with your normal user permissions, including host files, credentials, network, and local processes.",
       ),
     ).toBeTruthy();
-    expect(
-      container.querySelector<HTMLDetailsElement>("details.command-context")
-        ?.open,
-    ).toBe(false);
-    expect(screen.queryByText("human review")).toBeNull();
-    expect(screen.queryByText("Human approval required")).toBeNull();
+    const contexts = container.querySelectorAll<HTMLDetailsElement>(
+      "details.command-context",
+    );
+    expect(contexts).toHaveLength(2);
+    expect([...contexts].every((context) => !context.open)).toBe(true);
+    expect(screen.getByText("Why this reached you")).toBeTruthy();
+    expect(screen.getByText("Human approval required")).toBeTruthy();
+    expect(screen.getByText(approval.humanOnlyReason)).toBeTruthy();
     fireEvent.click(
       screen.getByText("Full terminal access").closest("summary")!,
     );
@@ -148,16 +150,11 @@ describe("CommandCard terminal presentation", () => {
       screen.getByRole("button", { name: /Auto Approval Rules/ }),
     );
     expect(screen.queryByText("Save Rules & Run")).toBeNull();
-    expect(screen.getByRole("button", { name: "Allow (native)" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Approval only" }).classList,
+    ).toContain("active");
     fireEvent.click(screen.getByRole("button", { name: "Session" }));
-    expect(
-      screen.getByText(
-        /may run matching commands outside the Protected Terminal/,
-      ),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(/Every parsed command segment must have an explicit/),
-    ).toBeTruthy();
+    expect(screen.queryByText(/may run matching commands outside/)).toBeNull();
   });
 
   it("warns when a manually selected native prefix is broad", () => {
@@ -169,6 +166,7 @@ describe("CommandCard terminal presentation", () => {
       screen.getByRole("button", { name: /Auto Approval Rules/ }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow (native)" }));
     fireEvent.input(
       container.querySelector<HTMLInputElement>(".rule-pattern-input")!,
       { target: { value: "git" } },
@@ -282,13 +280,17 @@ describe("CommandCard terminal presentation", () => {
 
     expect(screen.getByText(approval.reason)).toBeTruthy();
     expect(screen.getByText("medium risk")).toBeTruthy();
-    const context = container.querySelector<HTMLDetailsElement>(
+    const contexts = container.querySelectorAll<HTMLDetailsElement>(
       "details.command-context",
     );
-    expect(context?.open).toBe(false);
+    expect(contexts).toHaveLength(2);
+    expect([...contexts].every((context) => !context.open)).toBe(true);
 
-    fireEvent.click(screen.getByText("Protected Terminal").closest("summary")!);
-    expect(context?.open).toBe(true);
+    fireEvent.click(
+      screen.getByText("Why this reached you").closest("summary")!,
+    );
+    expect(contexts[0]?.open).toBe(false);
+    expect(contexts[1]?.open).toBe(true);
     expect(screen.getByText(approval.humanOnlyReason)).toBeTruthy();
     expect(
       screen.getByText("Guardian denied · medium risk · low authorization"),

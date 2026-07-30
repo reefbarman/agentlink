@@ -29,6 +29,7 @@
 
 ### Fixed
 
+- Fixed slow AgentLink terminal rendering during sustained heavy output. PTY and sandbox output is now coalesced for a few milliseconds before parsing and delivery (mirroring VS Code's pty-host data buffering), and the terminal webview writes each run of output to xterm in one call, cutting per-chunk postMessage/acknowledgment round trips and eliminating forced replay resyncs caused by render-queue batch overflow.
 - Default new installations to flagship GPT-5.6 Sol while keeping the Pro-only GPT-5.3 Codex Spark model available.
 - Migrate persisted selections only after their model is retired, including the former GPT-5.3 Codex default, before session creation, restore, mode switches, or manual model updates.
 - Report an unavailable selected model directly instead of misdiagnosing it as unavailable native web search during request preflight.

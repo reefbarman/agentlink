@@ -18,11 +18,17 @@ export type ReviewScope =
       include?: Array<"staged" | "unstaged" | "untracked">;
       /** Optional root-relative or absolute path filter inside an open workspace root. */
       paths?: string[];
+      /** Optional root-relative path prefixes to drop from the capture. */
+      excludePaths?: string[];
+      /** Workspace root selector (absolute path or folder name) for multi-root workspaces. */
+      root?: string;
     }
   | {
       kind: "files";
       /** Root-relative or absolute files inside open workspace roots. May span roots. */
       paths: string[];
+      /** Optional root-relative path prefixes to drop from the capture. */
+      excludePaths?: string[];
     }
   | {
       kind: "commit_range";
@@ -30,6 +36,10 @@ export type ReviewScope =
       range: string;
       /** Optional root-relative or absolute path filter inside one open Git root. */
       paths?: string[];
+      /** Optional root-relative path prefixes to drop from the capture. */
+      excludePaths?: string[];
+      /** Workspace root selector (absolute path or folder name) for multi-root workspaces. */
+      root?: string;
     }
   | {
       kind: "diff";

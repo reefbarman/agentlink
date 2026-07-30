@@ -81,6 +81,7 @@ interface ManagedNativeChannel {
     commandId: string;
     process: SandboxCommandProcess;
     finalizer?: () => void;
+    detachForeground?: () => void;
   };
 }
 
@@ -310,6 +311,15 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     );
   }
 
+  detachTerminal(request: TerminalTargetRequest): boolean {
+    const active = this.ownedChannel(request.terminalId, request.owner)?.active;
+    if (!active?.detachForeground) return false;
+    const detach = active.detachForeground;
+    active.detachForeground = undefined;
+    detach();
+    return true;
+  }
+
   getRecentlyClosedTerminals(
     request: TerminalRecentlyClosedRequest,
   ): ClosedTerminalSnapshot[] {
@@ -504,7 +514,17 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
     });
     const process = preparedCommand.process;
     const finalizer = finalizedOnce(options.onCommandFinalized);
-    channel.active = { commandId, process, finalizer };
+    let resolveDetach!: () => void;
+    const detachPromise = new Promise<void>((resolve) => {
+      resolveDetach = resolve;
+    });
+    const detachForeground = () => resolveDetach();
+    channel.active = {
+      commandId,
+      process,
+      finalizer,
+      detachForeground: options.background ? undefined : detachForeground,
+    };
     try {
       channel.session.startCommand({
         command: options.command,
@@ -540,32 +560,49 @@ export class NativeAgentTerminalCoordinator implements NativePreparingTerminalPr
       return this.backgroundResult(channel, commandId);
     }
 
-    if (options.timeout !== undefined) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timedOut = await Promise.race([
-        completion.then(() => false),
-        new Promise<true>((resolve) => {
-          timer = setTimeout(() => resolve(true), options.timeout);
-          timer.unref();
-        }),
-      ]).finally(() => {
-        if (timer) clearTimeout(timer);
-      });
-      if (timedOut) {
-        options.onCommandFinalizationDeferred?.();
-        void completion.catch((error) =>
-          this.log?.(
-            `[native-agent-terminal] Timed-out command failed: ${error}`,
-          ),
-        );
-        return {
-          ...this.backgroundResult(channel, commandId),
-          timed_out: true,
-        };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      completion.then(() => "completed" as const),
+      detachPromise.then(() => "detached" as const),
+      ...(options.timeout !== undefined
+        ? [
+            new Promise<"timed_out">((resolve) => {
+              timer = setTimeout(() => resolve("timed_out"), options.timeout);
+              timer.unref();
+            }),
+          ]
+        : []),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+      if (channel.active?.detachForeground === detachForeground) {
+        channel.active.detachForeground = undefined;
       }
+    });
+
+    if (outcome === "detached" && channel.active?.commandId === commandId) {
+      options.onCommandFinalizationDeferred?.();
+      void completion.catch((error) =>
+        this.log?.(
+          `[native-agent-terminal] Background command failed: ${error}`,
+        ),
+      );
+      return this.backgroundResult(channel, commandId);
     }
 
-    await completion;
+    if (outcome === "detached") await completion;
+
+    if (outcome === "timed_out") {
+      options.onCommandFinalizationDeferred?.();
+      void completion.catch((error) =>
+        this.log?.(
+          `[native-agent-terminal] Timed-out command failed: ${error}`,
+        ),
+      );
+      return {
+        ...this.backgroundResult(channel, commandId),
+        timed_out: true,
+      };
+    }
     const snapshot = channel.session.snapshot();
     const completed = snapshot.commands.find(
       (candidate) => candidate.commandId === commandId,

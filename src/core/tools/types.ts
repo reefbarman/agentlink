@@ -95,6 +95,23 @@ export interface PendingQuestionRecoveryContext {
   toolInput: Record<string, unknown>;
 }
 
+export interface ToolResultArtifactWriteRequest {
+  content: string;
+  extension: string;
+  signal?: AbortSignal;
+}
+
+export interface ToolResultArtifactReference {
+  path: string;
+  bytes: number;
+  chars: number;
+  sha256: string;
+}
+
+export type ToolResultArtifactWriter = (
+  request: ToolResultArtifactWriteRequest,
+) => Promise<ToolResultArtifactReference | null>;
+
 export interface AgentToolExecutionContext {
   sessionId: string;
   mode?: string;
@@ -153,6 +170,8 @@ export interface AgentToolExecutionContext {
   getSessionImages?: () => SessionImageReference[];
   getSessionTranscript?: () => SessionTranscriptSnapshot;
   pendingQuestionRecovery?: PendingQuestionRecoveryContext;
+  /** Run-scoped private artifact retention for oversized exact tool results. */
+  retainToolResultArtifact?: ToolResultArtifactWriter;
 }
 
 export interface AgentToolExecutionRequest {

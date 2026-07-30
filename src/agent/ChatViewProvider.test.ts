@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentMessage } from "./types.js";
 import type { AppAction } from "../shared/chatProjection.js";
+import type { ChatTab } from "./ChatTabController.js";
 
 type Listener<T> = (value: T) => void;
 
@@ -7264,6 +7265,76 @@ describe("ChatViewProvider session state sync", () => {
     ).toBe(false);
   });
 
+  it("shows session-targeted status attention until a question is answered", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const disposeAttention = vi.fn();
+    const showAlert = vi.fn(() => ({ dispose: disposeAttention }));
+    provider.setPendingInteractionAlertProvider(showAlert);
+
+    const questionPromise = provider.requestQuestion(
+      "Need input.",
+      [{ id: "q1", type: "yes_no", question: "Proceed?" }],
+      "session-1",
+    );
+    const questionId = (
+      provider as unknown as { pendingQuestions: Map<string, unknown> }
+    ).pendingQuestions
+      .keys()
+      .next().value as string;
+
+    expect(showAlert).toHaveBeenCalledWith(
+      "Question requires a response",
+      expect.objectContaining({
+        command: "agentLink.focusApproval",
+        arguments: [{ sessionId: "session-1" }],
+      }),
+    );
+    await expect(
+      provider.submitBrowserQuestionResponse({
+        id: questionId,
+        answers: { q1: true },
+      }),
+    ).resolves.toBe(true);
+    await expect(questionPromise).resolves.toMatchObject({
+      answers: { q1: true },
+    });
+    expect(disposeAttention).toHaveBeenCalledOnce();
+  });
+
+  it("clears question attention when its session is no longer active", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const disposeAttention = vi.fn();
+    provider.setPendingInteractionAlertProvider(() => ({
+      dispose: disposeAttention,
+    }));
+
+    const questionPromise = provider.requestQuestion(
+      "Need input.",
+      [{ id: "q1", type: "yes_no", question: "Proceed?" }],
+      "session-stopped",
+    );
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      clearPendingQuestionRecovery: vi.fn(),
+      getSession: vi.fn(() => undefined),
+      getPendingQuestionRecovery: vi.fn(() => null),
+    };
+
+    (
+      provider as unknown as { reconcileQuestionAttention(): void }
+    ).reconcileQuestionAttention();
+
+    await expect(questionPromise).resolves.toMatchObject({ answers: {} });
+    expect(disposeAttention).toHaveBeenCalledOnce();
+  });
+
   it("publishes question cleared after resolving a browser question response", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
@@ -7757,6 +7828,10 @@ describe("chat tab host routing", () => {
     };
     const chatTabController = {
       getFocusedTabId: vi.fn(() => "tab-1"),
+      getTabForSession: vi.fn<(sessionId: string) => ChatTab | undefined>(
+        () => undefined,
+      ),
+      getWorkspaceSnapshot: vi.fn(() => ({ controllerEpoch: "epoch-1" })),
       validateAction: vi.fn(() => ({
         ok: true,
         tab: {
@@ -7771,6 +7846,7 @@ describe("chat tab host routing", () => {
     const panelHost = {
       popOut: vi.fn(async () => true),
       dock: vi.fn(async () => true),
+      focusPanel: vi.fn(() => false),
       releaseTab: vi.fn(),
       isAuthoritativeAddress: vi.fn(() => false),
     };
@@ -7820,6 +7896,119 @@ describe("chat tab host routing", () => {
       snapshot,
     };
   }
+
+  it("focuses the docked chat tab that owns a pending interaction", async () => {
+    const { provider, chatTabController, coordinator } =
+      await makeTabRoutingProvider();
+    const tab: ChatTab = {
+      id: "tab-2",
+      displayNumber: 2,
+      sessionId: "session-2",
+      placement: "docked",
+      terminalGeneration: 1,
+    };
+    chatTabController.getTabForSession = vi.fn(() => tab);
+    chatTabController.getWorkspaceSnapshot = vi.fn(() => ({
+      controllerEpoch: "epoch-1",
+    }));
+    coordinator.focus.mockResolvedValue({ ok: true, tab });
+    const revealPanel = vi.fn();
+    const refresh = provider as unknown as {
+      revealPanel: typeof revealPanel;
+      sendChatWorkspaceUpdate(): void;
+      sendInitialState(): void;
+    };
+    refresh.revealPanel = revealPanel;
+    refresh.sendChatWorkspaceUpdate = vi.fn();
+    refresh.sendInitialState = vi.fn();
+
+    await expect(provider.focusPendingInteraction("session-2")).resolves.toBe(
+      true,
+    );
+
+    expect(coordinator.focus).toHaveBeenCalledWith({
+      controllerEpoch: "epoch-1",
+      tabId: "tab-2",
+      sessionId: "session-2",
+    });
+    expect(revealPanel).toHaveBeenCalledWith(false);
+  });
+
+  it("focuses the nearest open ancestor tab for a background interaction", async () => {
+    const { provider, chatTabController, coordinator } =
+      await makeTabRoutingProvider();
+    const parentTab: ChatTab = {
+      id: "tab-parent",
+      displayNumber: 1,
+      sessionId: "session-parent",
+      placement: "docked",
+      terminalGeneration: 1,
+    };
+    chatTabController.getTabForSession = vi.fn((sessionId: string) =>
+      sessionId === "session-parent" ? parentTab : undefined,
+    );
+    coordinator.focus.mockResolvedValue({ ok: true, tab: parentTab });
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getBackgroundParentSessionId: vi.fn((sessionId: string) =>
+        sessionId === "session-child" ? "session-parent" : undefined,
+      ),
+    };
+    const refresh = provider as unknown as {
+      revealPanel(preserveFocus?: boolean): void;
+      sendChatWorkspaceUpdate(): void;
+      sendInitialState(): void;
+    };
+    refresh.revealPanel = vi.fn();
+    refresh.sendChatWorkspaceUpdate = vi.fn();
+    refresh.sendInitialState = vi.fn();
+
+    await expect(
+      provider.focusPendingInteraction("session-child"),
+    ).resolves.toBe(true);
+
+    expect(coordinator.focus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tabId: "tab-parent",
+        sessionId: "session-parent",
+      }),
+    );
+  });
+
+  it("returns false when the docked tab can no longer be focused", async () => {
+    const { provider, chatTabController, coordinator } =
+      await makeTabRoutingProvider();
+    chatTabController.getTabForSession = vi.fn(() => ({
+      id: "tab-stale",
+      displayNumber: 2,
+      sessionId: "session-stale",
+      placement: "docked",
+      terminalGeneration: 1,
+    }));
+    coordinator.focus.mockResolvedValue({ ok: false, reason: "not_found" });
+
+    await expect(
+      provider.focusPendingInteraction("session-stale"),
+    ).resolves.toBe(false);
+  });
+
+  it("focuses the popped-out chat panel that owns a pending interaction", async () => {
+    const { provider, chatTabController, panelHost } =
+      await makeTabRoutingProvider();
+    chatTabController.getTabForSession = vi.fn(() => ({
+      id: "tab-2",
+      displayNumber: 2,
+      sessionId: "session-2",
+      placement: "popped",
+      terminalGeneration: 1,
+    }));
+    panelHost.focusPanel = vi.fn(() => true);
+
+    await expect(provider.focusPendingInteraction("session-2")).resolves.toBe(
+      true,
+    );
+
+    expect(panelHost.focusPanel).toHaveBeenCalledWith("tab-2");
+  });
 
   async function makeEditorRoutingProvider() {
     const fixture = await makeTabRoutingProvider();
@@ -7919,6 +8108,14 @@ describe("chat tab host routing", () => {
     (
       provider as unknown as { buildChatState(): Record<string, unknown> }
     ).buildChatState = vi.fn(() => ({ sessionId: createdSession.id }));
+    const submitSessionSetModel = vi.fn(async () => ({ ok: true }));
+    const setSessionWriteApproval = vi.fn(() => ({ ok: true }));
+    const setSessionCommandApprovalPolicy = vi.fn(() => ({ ok: true }));
+    Object.assign(provider as object, {
+      submitSessionSetModel,
+      setSessionWriteApproval,
+      setSessionCommandApprovalPolicy,
+    });
 
     await (
       provider as unknown as {
@@ -7931,6 +8128,9 @@ describe("chat tab host routing", () => {
       sessionId: null,
       text: "exact tab prompt",
       mode: "code",
+      model: "model-selected-before-send",
+      agentWriteApproval: "project",
+      commandApprovalPolicy: "approve-for-me",
     });
 
     expect(coordinator.newChat).toHaveBeenCalledWith(
@@ -7944,6 +8144,29 @@ describe("chat tab host routing", () => {
     );
     expect(createSession).not.toHaveBeenCalled();
     expect(switchTo).toHaveBeenCalledWith(createdSession.id);
+    expect(submitSessionSetModel).toHaveBeenCalledWith(
+      createdSession.id,
+      "model-selected-before-send",
+    );
+    expect(setSessionWriteApproval).toHaveBeenCalledWith(
+      createdSession.id,
+      "project",
+      projectScope.rootPath,
+    );
+    expect(setSessionCommandApprovalPolicy).toHaveBeenCalledWith(
+      createdSession.id,
+      "approve-for-me",
+      projectScope.rootPath,
+    );
+    expect(submitSessionSetModel.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessage.mock.invocationCallOrder[0]!,
+    );
+    expect(setSessionWriteApproval.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessage.mock.invocationCallOrder[0]!,
+    );
+    expect(
+      setSessionCommandApprovalPolicy.mock.invocationCallOrder[0],
+    ).toBeLessThan(sendMessage.mock.invocationCallOrder[0]!);
     expect(sendMessage).toHaveBeenCalledWith(
       createdSession.id,
       "exact tab prompt",

@@ -318,6 +318,11 @@ function makePayload(args: {
     0,
     args.externalDependencyTotal - args.externalDependencies.length,
   );
+  const note = buildNote(
+    args.graphExists,
+    args.entries.length,
+    args.scopeRelPath,
+  );
 
   return {
     workspace_root: args.workspaceRoot ?? args.graph.workspaceRoot,
@@ -374,7 +379,7 @@ function makePayload(args: {
       omitted_directories: omittedDirectories,
       omitted_external_dependencies: omittedExternalDependencies,
     },
-    note: buildNote(args.graphExists, args.entries.length, args.scopeRelPath),
+    ...(note ? { note } : {}),
   };
 }
 

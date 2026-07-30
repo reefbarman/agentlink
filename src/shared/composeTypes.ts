@@ -18,7 +18,11 @@ export interface ComposeTrace {
   status: "running" | "completed" | "error" | "cancelled";
   totalChildren: number;
   completedChildren: number;
+  succeededChildren?: number;
+  failedChildren?: number;
+  cancelledChildren?: number;
   toolAllBatchCount?: number;
+  toolAllSettledBatchCount?: number;
   bridgedBytes?: number;
   errorKind?: string;
   children: ComposeTraceChild[];

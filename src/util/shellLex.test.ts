@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   scanShellLexBoundaries,
+  scanShellLexLiteralOccurrences,
   scanShellLexTokens,
   scanShellLexWords,
 } from "./shellLex.js";
@@ -158,6 +159,88 @@ describe("scanShellLexWords", () => {
       ],
       finalState: { quote: null, danglingEscape: true },
     });
+  });
+});
+
+describe("scanShellLexLiteralOccurrences", () => {
+  it("reports exact quote, escape, and comment context for every occurrence", () => {
+    const literal = "$AL_FILE(";
+    const input = String.raw`cmd $AL_FILE(a) '$AL_FILE(b)' "$AL_FILE(c)" \$AL_FILE(d) # $AL_FILE(e)`;
+
+    expect(scanShellLexLiteralOccurrences(input, literal).occurrences).toEqual([
+      {
+        start: input.indexOf("$AL_FILE(a)"),
+        end: input.indexOf("$AL_FILE(a)") + literal.length,
+        quote: null,
+        escaped: false,
+        comment: false,
+      },
+      {
+        start: input.indexOf("$AL_FILE(b)"),
+        end: input.indexOf("$AL_FILE(b)") + literal.length,
+        quote: "single",
+        escaped: false,
+        comment: false,
+      },
+      {
+        start: input.indexOf("$AL_FILE(c)"),
+        end: input.indexOf("$AL_FILE(c)") + literal.length,
+        quote: "double",
+        escaped: false,
+        comment: false,
+      },
+      {
+        start: input.indexOf("$AL_FILE(d)"),
+        end: input.indexOf("$AL_FILE(d)") + literal.length,
+        quote: null,
+        escaped: true,
+        comment: false,
+      },
+      {
+        start: input.indexOf("$AL_FILE(e)"),
+        end: input.indexOf("$AL_FILE(e)") + literal.length,
+        quote: null,
+        escaped: false,
+        comment: true,
+      },
+    ]);
+  });
+
+  it("reports full parameter-expansion spans", () => {
+    const input = "echo $WORKSPACE $AL_FILE(a)";
+    const syntax = scanShellLexLiteralOccurrences(
+      input,
+      "$AL_FILE(",
+    ).unsupportedSyntax;
+
+    expect(syntax).toContainEqual({
+      kind: "parameter-expansion",
+      start: input.indexOf("$WORKSPACE"),
+      end: input.indexOf("$WORKSPACE") + "$WORKSPACE".length,
+    });
+  });
+
+  it("does not treat a hash adjacent to a placeholder as a comment", () => {
+    const input = "cmd $AL_FILE(a)#$AL_FILE(b)";
+    expect(
+      scanShellLexLiteralOccurrences(input, "$AL_FILE(").occurrences.map(
+        ({ comment }) => comment,
+      ),
+    ).toEqual([false, false]);
+  });
+
+  it.each([
+    ["command-substitution", "echo $(cat $AL_FILE(a))"],
+    ["backtick-substitution", "echo `cat $AL_FILE(a)`"],
+    ["parameter-expansion", "echo ${value:-$AL_FILE(a)}"],
+    ["arithmetic-expansion", "echo $((1 + $AL_FILE(a)))"],
+    ["process-substitution", "diff <(cat $AL_FILE(a)) expected"],
+    ["heredoc", "cat <<EOF\n$AL_FILE(a)\nEOF"],
+    ["ansi-c-quote", "printf $'$AL_FILE(a)'"],
+  ] as const)("reports %s without interpreting it", (kind, input) => {
+    expect(
+      scanShellLexLiteralOccurrences(input, "$AL_FILE(").unsupportedSyntax,
+    ).toContainEqual(expect.objectContaining({ kind }));
   });
 });
 

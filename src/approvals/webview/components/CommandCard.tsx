@@ -114,7 +114,10 @@ export function CommandCard({
       return {
         pattern: entry.command,
         mode: "prefix" as const,
-        decision: "allow" as const,
+        decision:
+          request.security?.route === "sandbox"
+            ? undefined
+            : ("allow" as const),
         scope: "skip" as const,
       };
     }),
@@ -138,7 +141,10 @@ export function CommandCard({
         return {
           pattern: entry.command,
           mode: "prefix" as const,
-          decision: "allow" as const,
+          decision:
+            request.security?.route === "sandbox"
+              ? undefined
+              : ("allow" as const),
           scope: "skip" as const,
         };
       }),

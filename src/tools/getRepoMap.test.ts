@@ -199,9 +199,11 @@ describe("handleGetRepoMap", () => {
       makeProvider(),
     );
 
+    const payload = parseTextResult(result);
     expect(result.isError).toBe(false);
-    expect(result.data).toEqual(parseTextResult(result));
-    expect(parseTextResult(result)).toMatchObject({
+    expect(result.data).toStrictEqual(payload);
+    expect(Object.hasOwn(result.data as object, "note")).toBe(false);
+    expect(payload).toMatchObject({
       workspace_root: "/workspace",
       cache: {
         index_name: "al-test",
@@ -223,6 +225,7 @@ describe("buildRepoMapPayload", () => {
       maxChars: 20_000,
     });
 
+    expect(Object.hasOwn(payload, "note")).toBe(false);
     expect(payload).toMatchObject({
       workspace_root: "/workspace",
       cache: {

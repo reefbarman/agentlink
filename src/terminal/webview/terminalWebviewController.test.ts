@@ -773,6 +773,56 @@ describe("TerminalWebviewController", () => {
     expect(test.postMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("joins consecutive write operations into a single xterm write", async () => {
+    const test = harness();
+    await test.controller.receive(bootstrap());
+    const renderer = test.renderers[0];
+    test.postMessage.mockClear();
+
+    await test.controller.receive({
+      type: "terminal-view/render-batch",
+      terminalId: "terminal-1",
+      terminalInstanceId: "instance-1",
+      sequence: 1,
+      operations: [
+        { type: "write", data: "one " },
+        { type: "write", data: "two" },
+        {
+          type: "block-boundary",
+          boundary: "command-start",
+          blockId: "block-1",
+        },
+        { type: "write", data: "three " },
+        { type: "write", data: "four" },
+      ],
+      droppedRenderBytes: 0,
+      replayTruncated: false,
+      replayPendingControl: false,
+      suppressedOutputCharacters: 0,
+      outputPolicyDecisions: [],
+    });
+    await waitFor(() =>
+      expect(test.postMessage).toHaveBeenCalledWith({
+        type: "terminal-view/output-ack",
+        terminalId: "terminal-1",
+        terminalInstanceId: "instance-1",
+        rendererEpoch: "renderer-1",
+        sequence: 1,
+      }),
+    );
+
+    // One write-callback wait per run of writes, with the block boundary
+    // still registered at its position between the runs.
+    expect(renderer.writes).toEqual([
+      { data: "one two", source: "live" },
+      { data: "three four", source: "live" },
+    ]);
+    expect(renderer.registerBlockBoundary).toHaveBeenCalledWith(
+      "block-1",
+      "command-start",
+    );
+  });
+
   it("drains a terminal render before applying its exit and close lifecycle", async () => {
     const test = harness();
     await test.controller.receive(bootstrap());

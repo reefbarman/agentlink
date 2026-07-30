@@ -15,6 +15,24 @@ export interface WorkspaceMutationDomain {
   readonly roots: readonly string[];
   /** Optional foreground agent-tree identity. Different trees coordinate independently. */
   readonly scopeId?: string;
+  /**
+   * Canonical file:// prefixes this writer is enforced to stay within
+   * (delegated ownedPaths). A delegated domain coexists with the unrestricted
+   * tree writer that delegated it and only conflicts with overlapping
+   * delegated domains or exclusive domains.
+   */
+  readonly delegatedPaths?: readonly string[];
+  /**
+   * Exclusive domains (checkpoint capture/revert) conflict with every lease in
+   * scope, including path-delegated writers.
+   */
+  readonly exclusive?: boolean;
+}
+
+export interface CreateWorkspaceMutationDomainOptions {
+  scopeId?: string;
+  delegatedPaths?: readonly string[];
+  exclusive?: boolean;
 }
 
 export interface WorkspaceMutationSnapshot {
@@ -105,8 +123,12 @@ export class WorkspaceMutationCoordinator {
 
   createDomain(
     roots: readonly string[],
-    scopeId?: string,
+    scopeIdOrOptions?: string | CreateWorkspaceMutationDomainOptions,
   ): WorkspaceMutationDomain {
+    const options =
+      typeof scopeIdOrOptions === "string"
+        ? { scopeId: scopeIdOrOptions }
+        : (scopeIdOrOptions ?? {});
     const canonicalRoots = [
       ...new Set(
         roots.map((root) => pathToFileURL(canonicalizePath(root)).toString()),
@@ -115,9 +137,22 @@ export class WorkspaceMutationCoordinator {
     if (canonicalRoots.length === 0) {
       throw new Error("Workspace mutation domains require at least one root.");
     }
+    const delegatedPaths = options.delegatedPaths?.length
+      ? [
+          ...new Set(
+            options.delegatedPaths.map((path) =>
+              pathToFileURL(canonicalizePath(path)).toString(),
+            ),
+          ),
+        ].sort()
+      : undefined;
     return Object.freeze({
       roots: Object.freeze(canonicalRoots),
-      ...(scopeId ? { scopeId } : {}),
+      ...(options.scopeId ? { scopeId: options.scopeId } : {}),
+      ...(delegatedPaths
+        ? { delegatedPaths: Object.freeze(delegatedPaths) }
+        : {}),
+      ...(options.exclusive ? { exclusive: true } : {}),
     });
   }
 
@@ -263,7 +298,12 @@ export class WorkspaceMutationCoordinator {
     if (!this.activeLeases.has(lease)) {
       throw new Error("workspace_mutation_lease_inactive");
     }
-    if (lease.mutationSnapshots) return lease.mutationSnapshots;
+    // Delegated writers run alongside the tree writer, so checkpoints can be
+    // captured mid-lease; bumping on every mutation keeps later writes visible
+    // to the revert conflict gate instead of hiding behind the first bump.
+    if (lease.mutationSnapshots && !lease.domain.delegatedPaths) {
+      return lease.mutationSnapshots;
+    }
 
     const snapshots = new Map<string, WorkspaceMutationSnapshot>();
     for (const root of lease.domain.roots) {
@@ -410,7 +450,26 @@ function domainsIntersect(
 ): boolean {
   if (left.scopeId !== right.scopeId) return false;
   const rightRoots = new Set(right.roots);
-  return left.roots.some((root) => rightRoots.has(root));
+  if (!left.roots.some((root) => rightRoots.has(root))) return false;
+  if (left.exclusive || right.exclusive) return true;
+  if (left.delegatedPaths && right.delegatedPaths) {
+    return left.delegatedPaths.some((leftPath) =>
+      right.delegatedPaths!.some((rightPath) =>
+        fileUrlPrefixesOverlap(leftPath, rightPath),
+      ),
+    );
+  }
+  // A path-delegated writer's writes are enforced to stay inside its
+  // delegatedPaths, so it may run alongside the unrestricted tree writer that
+  // delegated that scope to it.
+  if (left.delegatedPaths || right.delegatedPaths) return false;
+  return true;
+}
+
+function fileUrlPrefixesOverlap(left: string, right: string): boolean {
+  const a = left.endsWith("/") ? left.slice(0, -1) : left;
+  const b = right.endsWith("/") ? right.slice(0, -1) : right;
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

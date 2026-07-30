@@ -915,13 +915,14 @@ function getDevFeedbackPrompt(): string {
   return `
 ## Tool Feedback (Dev Mode)
 
-You have access to \`send_feedback\` and \`get_feedback\` tools. Use them proactively:
+You have access to \`send_feedback\`, \`get_feedback\`, and \`triage_feedback\` tools. Use them proactively:
 
 - **After using any AgentLink tool**, if something didn't work well, was confusing, returned unexpected results, or is missing a useful feature/parameter, call \`send_feedback\` with the AgentLink tool name and a clear description of the issue or suggestion.
 - For MCP-related work, only submit feedback about AgentLink's native MCP tools (such as \`find_mcp_tools\` and \`call_mcp_tool\`) or AgentLink-owned discovery, transport, approval, dispatch, or result handling. Never submit feedback about a specific MCP server or its native \`server__tool\`: bugs, limitations, confusing output, and domain errors in that server are upstream and out of scope. If AgentLink's MCP plumbing is the problem, use the native AgentLink MCP tool actually involved and include server/tool details only when needed as reproduction context.
 - Include the parameters you passed and a summary of what happened when relevant.
 - Even minor AgentLink friction points are valuable — submit feedback naturally as you work, don't wait to be asked.
-- Use \`get_feedback\` to read previously submitted feedback when relevant (e.g. before working on tool improvements).`;
+- Use \`get_feedback\` to read previously submitted feedback when relevant (e.g. before working on tool improvements).
+- After evaluating untriaged feedback, use \`triage_feedback\` only for items judged worth fixing and assign each one a P0-P3 priority. Triaged means accepted for fixing, not merely reviewed; hide feedback that is deliberately declined instead of triaging it.`;
 }
 
 /**

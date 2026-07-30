@@ -176,12 +176,11 @@ describe("ApprovalManager session approval persistence", () => {
     return resource;
   }
 
-  it("persists built-in tool approval for only the selected session", async () => {
+  it("keeps built-in tool approval runtime-only and session-isolated", async () => {
     const memento = new MockMemento();
     const first = await createManagers(memento);
 
     first.approvalManager.approveBuiltInTool("session-a", "generate_image");
-    await memento.flush();
 
     expect(
       first.approvalManager.isBuiltInToolApproved(
@@ -203,7 +202,7 @@ describe("ApprovalManager session approval persistence", () => {
         "session-a",
         "generate_image",
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("approves an entire MCP server for only the selected session", async () => {
@@ -599,7 +598,7 @@ describe("ApprovalManager session approval persistence", () => {
   );
 
   it.each(["command", "path", "write"] as const)(
-    "persists %s rules independently across session, project, and global scopes",
+    "keeps %s session rules runtime-only while project and global scopes persist",
     async (channel) => {
       const memento = new MockMemento();
       const sessionId = `persisted-${channel}`;
@@ -647,7 +646,7 @@ describe("ApprovalManager session approval persistence", () => {
       {
         const { approvalManager, configStore } = await createManagers(memento);
         expect(getRules(approvalManager)).toMatchObject({
-          session: [rules.session],
+          session: [],
           project: [rules.project],
           global: [rules.global],
         });
@@ -868,31 +867,7 @@ describe("ApprovalManager session approval persistence", () => {
     disposeManagers({ approvalManager, configStore });
   });
 
-  it("exposes session persistence only after the memento commit completes", async () => {
-    const memento = new MockMemento();
-    const sessionId = "pending-persistence";
-    const first = await createManagers(memento);
-    memento.pauseWrites();
-
-    first.approvalManager.addCommandRule(
-      sessionId,
-      { pattern: "pending-rule", mode: "exact" },
-      "session",
-    );
-    const beforeCommit = await createManagers(memento);
-    expect(
-      beforeCommit.approvalManager.getCommandRules(sessionId).session,
-    ).toEqual([]);
-
-    memento.resumeWrites();
-    await memento.flush();
-    const afterCommit = await createManagers(memento);
-    expect(
-      afterCommit.approvalManager.getCommandRules(sessionId).session,
-    ).toEqual([{ pattern: "pending-rule", mode: "exact" }]);
-  });
-
-  it("persists session-scoped agent write approval across manager recreation", async () => {
+  it("does not persist session-scoped agent write approval across manager recreation", async () => {
     const memento = new MockMemento();
     const sessionId = "session-1";
 
@@ -909,159 +884,39 @@ describe("ApprovalManager session approval persistence", () => {
 
     {
       const { approvalManager, configStore } = await createManagers(memento);
-      expect(approvalManager.isAgentWriteApproved(sessionId)).toBe(true);
+      expect(approvalManager.isAgentWriteApproved(sessionId)).toBe(false);
       expect(approvalManager.getAgentWriteApprovalState(sessionId)).toBe(
-        "session",
+        "prompt",
       );
       disposeManagers({ approvalManager, configStore });
     }
   });
 
-  it("persists unrelated session changes independently across live managers", async () => {
+  it("removes legacy persisted session authority without restoring it", async () => {
     const memento = new MockMemento();
-    const first = await createManagers(memento);
-    const second = await createManagers(memento);
-
-    first.approvalManager.setAgentWriteApproval("session-a", "session");
-    second.approvalManager.setAgentWriteApproval("session-b", "session");
-    await memento.flush();
-
-    const restored = await createManagers(memento);
-    expect(
-      restored.approvalManager.getAgentWriteApprovalState("session-a"),
-    ).toBe("session");
-    expect(
-      restored.approvalManager.getAgentWriteApprovalState("session-b"),
-    ).toBe("session");
-
-    disposeManagers(first);
-    disposeManagers(second);
-    disposeManagers(restored);
-  });
-
-  it("merges same-session changes and stale activity touches across live managers", async () => {
-    const memento = new MockMemento();
-    await memento.update("approvalSessionStorageVersion", 3);
-    const first = await createManagers(memento);
-    const second = await createManagers(memento);
-    const sessionId = "shared-live-session";
-
-    first.approvalManager.setAgentWriteApproval(sessionId, "session");
-    await memento.flush();
-    second.approvalManager.addCommandRule(
-      sessionId,
-      { pattern: "npm test", mode: "exact", decision: "allow" },
-      "session",
-    );
-    await memento.flush();
-    first.approvalManager.touchSession(sessionId);
-    await memento.flush();
-
-    const restored = await createManagers(memento);
-    expect(restored.approvalManager.getAgentWriteApprovalState(sessionId)).toBe(
-      "session",
-    );
-    expect(restored.approvalManager.getCommandRules(sessionId).session).toEqual(
-      [{ pattern: "npm test", mode: "exact", decision: "allow" }],
-    );
-
-    disposeManagers(first);
-    disposeManagers(second);
-    disposeManagers(restored);
-  });
-
-  it("merges concurrent MCP session grants across live managers", async () => {
-    const memento = new MockMemento();
-    await memento.update("approvalSessionStorageVersion", 3);
-    const first = await createManagers(memento);
-    const second = await createManagers(memento);
-
-    first.approvalManager.approveMcpTool(
-      "shared-mcp-session",
-      "linear__create_issue",
-    );
-    await memento.flush();
-    second.approvalManager.approveMcpServer("shared-mcp-session", "github");
-    await memento.flush();
-
-    const restored = await createManagers(memento);
-    expect(
-      restored.approvalManager.isMcpApproved(
-        "shared-mcp-session",
-        "linear__create_issue",
-      ),
-    ).toBe(true);
-    expect(
-      restored.approvalManager.isMcpApproved(
-        "shared-mcp-session",
-        "github__get_issue",
-      ),
-    ).toBe(true);
-
-    disposeManagers(first);
-    disposeManagers(second);
-    disposeManagers(restored);
-  });
-
-  it("retries a failed per-session persistence write on the next touch", async () => {
-    const memento = new MockMemento();
-    await memento.update("approvalSessionStorageVersion", 3);
-    const first = await createManagers(memento);
-    memento.rejectNextUpdate("approvalSession:retry-session");
-
-    first.approvalManager.setAgentWriteApproval("retry-session", "session");
-    await memento.flush();
-    const beforeRetry = await createManagers(memento);
-    expect(
-      beforeRetry.approvalManager.getAgentWriteApprovalState("retry-session"),
-    ).toBe("prompt");
-
-    first.approvalManager.touchSession("retry-session");
-    await memento.flush();
-    const afterRetry = await createManagers(memento);
-    expect(
-      afterRetry.approvalManager.getAgentWriteApprovalState("retry-session"),
-    ).toBe("session");
-
-    disposeManagers(first);
-    disposeManagers(beforeRetry);
-    disposeManagers(afterRetry);
-  });
-
-  it("migrates the legacy whole-session map to per-session records", async () => {
-    const memento = new MockMemento();
-    await memento.update("approvalSessions", {
-      version: 1,
-      sessions: {
-        legacy: {
-          writeApproved: false,
-          agentWriteApproved: true,
-          commandRules: [],
-          networkRules: [],
-          pathRules: [],
-          writeRules: [],
-          lastActivity: Date.now(),
-        },
-      },
+    await memento.update("approvalSessions", { version: 1, sessions: {} });
+    await memento.update("approvalSession:legacy", {
+      agentWriteApproved: true,
     });
+    await memento.update("approvalSessionStorageVersion", 3);
+    const { approvalManager, configStore } = await createManagers(memento);
 
-    const migrated = await createManagers(memento);
-    expect(migrated.approvalManager.getAgentWriteApprovalState("legacy")).toBe(
-      "session",
-    );
-    await vi.waitFor(() => {
-      expect(memento.get("approvalSessionStorageVersion")).toBe(3);
-      expect(memento.get("approvalSessions")).toBeUndefined();
+    await approvalManager.clearLegacyPersistedSessions();
+
+    expect(approvalManager.getAgentWriteApprovalState("legacy")).toBe("prompt");
+    expect(memento.get("approvalSessions")).toBeUndefined();
+    expect(memento.get("approvalSession:legacy")).toBeUndefined();
+    expect(memento.get("approvalSessionStorageVersion")).toBeUndefined();
+    expect(memento.get("approvalSessionCleanupVersion")).toBe(1);
+
+    await memento.update("approvalSession:after-cleanup", {
+      writeApproved: true,
     });
-    expect(memento.keys()).toContain("approvalSession:legacy");
-
-    const restored = await createManagers(memento);
-    expect(restored.approvalManager.getAgentWriteApprovalState("legacy")).toBe(
-      "session",
-    );
-
-    disposeManagers(migrated);
-    disposeManagers(restored);
+    await approvalManager.clearLegacyPersistedSessions();
+    expect(memento.get("approvalSession:after-cleanup")).toEqual({
+      writeApproved: true,
+    });
+    disposeManagers({ approvalManager, configStore });
   });
 
   it("changes the selected write scope without clearing another session", async () => {
@@ -1093,44 +948,21 @@ describe("ApprovalManager session approval persistence", () => {
     disposeManagers({ approvalManager, configStore });
   });
 
-  it("refreshes active session approval TTL and publishes expiration", async () => {
-    vi.useFakeTimers();
-    try {
-      const startedAt = Date.parse("2026-07-01T00:00:00Z");
-      vi.setSystemTime(startedAt);
-      const memento = new MockMemento();
-      const { approvalManager, configStore } = await createManagers(memento);
-      approvalManager.bindSessionProject("active-session", {
-        schemaVersion: 1,
-        kind: "project",
-        projectId: "project-a",
-        workspaceFolderUri: `file://${workspaceDir}`,
-        displayName: "Project A",
-        rootPath: workspaceDir,
-      });
-      approvalManager.setAgentWriteApproval("active-session", "session");
+  it("keeps runtime authority until the owning session is explicitly cleared", async () => {
+    const { approvalManager, configStore } = await createManagers(
+      new MockMemento(),
+    );
+    approvalManager.setAgentWriteApproval("active-session", "session");
+    approvalManager.touchSession("active-session");
 
-      vi.setSystemTime(startedAt + 24 * 60 * 60_000 - 1_000);
-      approvalManager.touchSession("active-session");
-      vi.setSystemTime(startedAt + 24 * 60 * 60_000 + 1_000);
-      approvalManager.pruneExpiredSessions();
-      expect(approvalManager.getAgentWriteApprovalState("active-session")).toBe(
-        "session",
-      );
-
-      const onDidChange = vi.fn();
-      const listener = approvalManager.onDidChange(onDidChange);
-      vi.setSystemTime(startedAt + 2 * 24 * 60 * 60_000 + 1_000);
-      approvalManager.pruneExpiredSessions();
-      expect(approvalManager.getAgentWriteApprovalState("active-session")).toBe(
-        "prompt",
-      );
-      expect(onDidChange).toHaveBeenCalledOnce();
-      listener.dispose();
-      disposeManagers({ approvalManager, configStore });
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(approvalManager.getAgentWriteApprovalState("active-session")).toBe(
+      "session",
+    );
+    approvalManager.clearSession("active-session");
+    expect(approvalManager.getAgentWriteApprovalState("active-session")).toBe(
+      "prompt",
+    );
+    disposeManagers({ approvalManager, configStore });
   });
 
   it("expires stale restored authority when the session becomes active", async () => {
@@ -1244,30 +1076,95 @@ describe("ApprovalManager session approval persistence", () => {
     disposeManagers({ approvalManager, configStore });
   });
 
-  it("does not restore cleared session approval state", async () => {
-    const memento = new MockMemento();
-    const sessionId = "session-2";
+  it("does not project grant-free runtime sessions as active approvals", async () => {
+    const { approvalManager, configStore } = await createManagers(
+      new MockMemento(),
+    );
 
-    {
-      const { approvalManager, configStore } = await createManagers(memento);
-      approvalManager.setAgentWriteApproval(sessionId, "session");
-      approvalManager.clearSession(sessionId);
-      await memento.flush();
-      expect(approvalManager.isAgentWriteApproved(sessionId)).toBe(false);
-      expect(approvalManager.getAgentWriteApprovalState(sessionId)).toBe(
-        "prompt",
-      );
-      disposeManagers({ approvalManager, configStore });
-    }
+    approvalManager.touchSession("bookkeeping-only");
 
-    {
-      const { approvalManager, configStore } = await createManagers(memento);
-      expect(approvalManager.isAgentWriteApproved(sessionId)).toBe(false);
-      expect(approvalManager.getAgentWriteApprovalState(sessionId)).toBe(
-        "prompt",
-      );
-      disposeManagers({ approvalManager, configStore });
-    }
+    expect(approvalManager.getActiveSessions()).toEqual([]);
+    disposeManagers({ approvalManager, configStore });
+  });
+
+  it("preserves project routing when runtime session authority is cleared", async () => {
+    const secondWorkspaceDir = path.join(tempDir, "workspace-second");
+    fs.mkdirSync(secondWorkspaceDir, { recursive: true });
+    mockWorkspace.workspaceFolders = [
+      { uri: { fsPath: workspaceDir } },
+      { uri: { fsPath: secondWorkspaceDir } },
+    ];
+    const { approvalManager, configStore } = await createManagers(
+      new MockMemento(),
+    );
+    approvalManager.bindSessionProject("session-a", {
+      schemaVersion: 1,
+      kind: "project",
+      projectId: "project-a",
+      workspaceFolderUri: `file://${workspaceDir}`,
+      displayName: "Project A",
+      rootPath: workspaceDir,
+    });
+    approvalManager.setAgentWriteApproval("session-a", "session");
+
+    approvalManager.clearSession("session-a");
+    approvalManager.addCommandRule(
+      "session-a",
+      { pattern: "npm test", mode: "exact" },
+      "project",
+    );
+
+    expect(approvalManager.getAgentWriteApprovalState("session-a")).toBe(
+      "prompt",
+    );
+    expect(approvalManager.getCommandRules("session-a").project).toEqual([
+      { pattern: "npm test", mode: "exact" },
+    ]);
+    disposeManagers({ approvalManager, configStore });
+  });
+
+  it("clears multiple sessions with one change event", async () => {
+    const { approvalManager, configStore } = await createManagers(
+      new MockMemento(),
+    );
+    approvalManager.setAgentWriteApproval("session-a", "session");
+    approvalManager.addCommandRule(
+      "session-a",
+      { pattern: "npm test", mode: "exact" },
+      "session",
+    );
+    approvalManager.approveBuiltInTool("session-b", "generate_image");
+    approvalManager.approveMcpServer("session-b", "github");
+    approvalManager.setAgentWriteApproval("session-c", "session");
+    const onDidChange = vi.fn();
+    const listener = approvalManager.onDidChange(onDidChange);
+
+    approvalManager.clearSessions([
+      "session-a",
+      "missing",
+      "session-b",
+      "session-a",
+    ]);
+
+    expect(approvalManager.getAgentWriteApprovalState("session-a")).toBe(
+      "prompt",
+    );
+    expect(approvalManager.getCommandRules("session-a").session).toEqual([]);
+    expect(
+      approvalManager.isBuiltInToolApproved("session-b", "generate_image"),
+    ).toBe(false);
+    expect(
+      approvalManager.isMcpApproved("session-b", "github__get_issue"),
+    ).toBe(false);
+    expect(approvalManager.getAgentWriteApprovalState("session-c")).toBe(
+      "session",
+    );
+    expect(onDidChange).toHaveBeenCalledOnce();
+    approvalManager.clearSessions(["missing"]);
+    expect(onDidChange).toHaveBeenCalledOnce();
+
+    listener.dispose();
+    disposeManagers({ approvalManager, configStore });
   });
 
   it("treats a bare directory glob rule as recursive for descendant files", async () => {
@@ -1607,6 +1504,16 @@ describe("ApprovalManager session approval persistence", () => {
     expect(approvalManager.getWriteRules("child").session).toEqual([
       { pattern: "src/**", mode: "glob" },
     ]);
+    expect(approvalManager.getExplicitSessionRules("child")).toEqual({
+      commandRules: [],
+      pathRules: [],
+      writeRules: [],
+    });
+    expect(approvalManager.getExplicitSessionRules("parent")).toEqual({
+      commandRules: [{ pattern: "npm test", mode: "prefix" }],
+      pathRules: [{ pattern: "/outside/review", mode: "prefix" }],
+      writeRules: [{ pattern: "src/**", mode: "glob" }],
+    });
     expect(
       approvalManager.getAgentWriteApprovalDiagnostics(
         "child",
@@ -1679,6 +1586,9 @@ describe("ApprovalManager session approval persistence", () => {
       { pattern: "child-only/**", mode: "glob" },
       "session",
     );
+    expect(approvalManager.getExplicitSessionRules("child").writeRules).toEqual(
+      [{ pattern: "child-only/**", mode: "glob" }],
+    );
     expect(approvalManager.getWriteRules("parent").session).not.toContainEqual({
       pattern: "child-only/**",
       mode: "glob",
@@ -1687,92 +1597,78 @@ describe("ApprovalManager session approval persistence", () => {
     expect(approvalManager.getAgentWriteApprovalState("parent")).toBe("prompt");
     expect(approvalManager.getAgentWriteApprovalState("child")).toBe("session");
 
+    approvalManager.addWriteRule(
+      "child",
+      { pattern: "src/**", mode: "glob" },
+      "session",
+    );
+    approvalManager.addWriteRule(
+      "parent",
+      { pattern: "src/**", mode: "glob" },
+      "session",
+    );
+    expect(approvalManager.inheritSessionState("parent", "child")).toBe(false);
+    expect(approvalManager.getExplicitSessionRules("child").writeRules).toEqual(
+      [
+        { pattern: "src/**", mode: "glob" },
+        { pattern: "child-only/**", mode: "glob" },
+      ],
+    );
+
     disposeManagers({ approvalManager, configStore });
   });
 
-  it("does not inherit stale authority from a restored parent session", async () => {
-    vi.useFakeTimers();
-    try {
-      const startedAt = Date.parse("2026-07-01T00:00:00Z");
-      vi.setSystemTime(startedAt);
-      const memento = new MockMemento();
-      await memento.update("approvalSessionStorageVersion", 3);
-      const first = await createManagers(memento);
-      first.approvalManager.setAgentWriteApproval("parent", "session");
-      first.approvalManager.addWriteRule(
-        "parent",
-        { pattern: "src/**", mode: "glob" },
-        "session",
-      );
-      await memento.flush();
-      disposeManagers(first);
+  it("preserves child rules created before the parent gains session authority", async () => {
+    const memento = new MockMemento();
+    const { approvalManager, configStore } = await createManagers(memento);
+    const projectScope = {
+      schemaVersion: 1 as const,
+      kind: "project" as const,
+      projectId: "project-a",
+      workspaceFolderUri: `file://${workspaceDir}`,
+      displayName: "Project A",
+      rootPath: workspaceDir,
+    };
+    approvalManager.bindSessionProject("parent", projectScope);
+    approvalManager.bindSessionProject("child", projectScope);
+    approvalManager.addWriteRule(
+      "child",
+      { pattern: "src/**", mode: "glob" },
+      "session",
+    );
 
-      vi.setSystemTime(startedAt + 24 * 60 * 60_000 + 1);
-      const restored = await createManagers(memento);
-      const projectScope = {
-        schemaVersion: 1 as const,
-        kind: "project" as const,
-        projectId: "project-a",
-        workspaceFolderUri: `file://${workspaceDir}`,
-        displayName: "Project A",
-        rootPath: workspaceDir,
-      };
-      restored.approvalManager.bindSessionProject("parent", projectScope);
-      restored.approvalManager.bindSessionProject("child", projectScope);
+    expect(approvalManager.inheritSessionState("parent", "child")).toBe(false);
+    approvalManager.addWriteRule(
+      "parent",
+      { pattern: "src/**", mode: "glob" },
+      "session",
+    );
+    expect(approvalManager.inheritSessionState("parent", "child")).toBe(false);
+    expect(approvalManager.getExplicitSessionRules("child").writeRules).toEqual(
+      [{ pattern: "src/**", mode: "glob" }],
+    );
 
-      expect(
-        restored.approvalManager.inheritSessionState("parent", "child"),
-      ).toBe(false);
-      expect(
-        restored.approvalManager.getAgentWriteApprovalState("parent"),
-      ).toBe("prompt");
-      expect(restored.approvalManager.getAgentWriteApprovalState("child")).toBe(
-        "prompt",
-      );
-      expect(restored.approvalManager.getWriteRules("child").session).toEqual(
-        [],
-      );
-
-      disposeManagers(restored);
-    } finally {
-      vi.useRealTimers();
-    }
+    disposeManagers({ approvalManager, configStore });
   });
 
-  it("expires MCP-only authority with its bound session", async () => {
-    vi.useFakeTimers();
-    try {
-      const startedAt = Date.parse("2026-07-01T00:00:00Z");
-      vi.setSystemTime(startedAt);
-      const { approvalManager, configStore } = await createManagers(
-        new MockMemento(),
-      );
-      approvalManager.bindSessionProject("mcp-only", {
-        schemaVersion: 1,
-        kind: "project",
-        projectId: "project-a",
-        workspaceFolderUri: `file://${workspaceDir}`,
-        displayName: "Project A",
-        rootPath: workspaceDir,
-      });
-      approvalManager.approveMcpServer("mcp-only", "github");
-      expect(
-        approvalManager.isMcpApproved("mcp-only", "github__get_issue"),
-      ).toBe(true);
+  it("clears MCP-only authority with its owning session", async () => {
+    const { approvalManager, configStore } = await createManagers(
+      new MockMemento(),
+    );
+    approvalManager.approveMcpServer("mcp-only", "github");
+    expect(approvalManager.isMcpApproved("mcp-only", "github__get_issue")).toBe(
+      true,
+    );
 
-      vi.setSystemTime(startedAt + 24 * 60 * 60_000 + 1);
-      approvalManager.pruneExpiredSessions();
+    approvalManager.clearSession("mcp-only");
 
-      expect(
-        approvalManager.isMcpApproved("mcp-only", "github__get_issue"),
-      ).toBe(false);
-      disposeManagers({ approvalManager, configStore });
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(approvalManager.isMcpApproved("mcp-only", "github__get_issue")).toBe(
+      false,
+    );
+    disposeManagers({ approvalManager, configStore });
   });
 
-  it("restores MCP session authority after an extension reload", async () => {
+  it("does not restore MCP session authority after an extension reload", async () => {
     const memento = new MockMemento();
     const first = await createManagers(memento);
     first.approvalManager.approveMcpTool(
@@ -1789,13 +1685,13 @@ describe("ApprovalManager session approval persistence", () => {
         "restored-mcp",
         "linear__create_issue",
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       restored.approvalManager.isMcpApproved(
         "restored-mcp",
         "github__get_issue",
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       restored.approvalManager.isMcpApproved(
         "restored-mcp",
@@ -2111,6 +2007,17 @@ describe("ApprovalManager session approval persistence", () => {
     ).toBe(true);
     expect(configStore.getProjectConfig(secondWorkspaceDir)).toMatchObject({
       commandRules: [{ pattern: "npm test", mode: "exact", decision: "allow" }],
+    });
+
+    const outsideEvaluation = approvalManager.evaluateCommandRules(
+      "multi-root-command",
+      "npm test",
+      tempDir,
+    );
+    expect(outsideEvaluation).toMatchObject({
+      decision: "unmatched",
+      allSegmentsExplicitlyAllowed: false,
+      allSegmentsApprovedByRule: false,
     });
 
     disposeManagers({ approvalManager, configStore });

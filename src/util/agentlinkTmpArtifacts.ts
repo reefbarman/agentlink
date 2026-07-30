@@ -2,6 +2,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
+export const AGENTLINK_RESULT_RUN_PREFIX = "agentlink-results-";
+
 function trimTrailingSeparators(value: string): string {
   return value.replace(/[/\\]+$/, "");
 }
@@ -46,7 +48,9 @@ function addParentVariants(
 // AgentLink-written temp artifacts that are safe to read without outside-
 // workspace approval because the extension created them itself.
 //
-// - AgentEngine stores truncated tool results under /tmp/agentlink-results/.
+// - AgentEngine stores legacy truncated tool results under /tmp/agentlink-results/.
+// - ToolResultArtifactManager stores private run artifacts under
+//   <os.tmpdir()>/agentlink-results-<rand>/.
 // - outputFilter.saveOutputTempFile stores terminal output under
 //   <os.tmpdir()>/agentlink-output-<rand>/output.txt.
 //
@@ -55,6 +59,7 @@ function addParentVariants(
 export const AGENTLINK_TMP_ARTIFACT_PREFIXES: readonly string[] = (() => {
   const out = new Set<string>();
   addParentVariants(out, "/tmp", "agentlink-results/");
+  addParentVariants(out, os.tmpdir(), AGENTLINK_RESULT_RUN_PREFIX);
   addParentVariants(out, os.tmpdir(), "agentlink-output-");
   return [...out];
 })();

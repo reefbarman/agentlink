@@ -25,6 +25,30 @@ describe("ToolResult JSON helpers", () => {
     expect(pretty).toMatchObject({ data: payload, isError: false });
   });
 
+  it("normalizes canonical data from the serialized payload", () => {
+    const result = jsonResult({
+      present: "value",
+      omitted: undefined,
+      items: ["value", undefined],
+    });
+
+    expect(text(result)).toBe('{"present":"value","items":["value",null]}');
+    expect(result.data).toStrictEqual({
+      present: "value",
+      items: ["value", null],
+    });
+    expect(Object.hasOwn(result.data as object, "omitted")).toBe(false);
+  });
+
+  it("rejects unsupported top-level payloads", () => {
+    expect(() => jsonResult(undefined)).toThrow(
+      "Tool result payload must be JSON-serializable",
+    );
+    expect(() => jsonResult(() => undefined)).toThrow(
+      "Tool result payload must be JSON-serializable",
+    );
+  });
+
   it("preserves success formatting and canonical data", () => {
     const payload = { status: "ok" };
     const result = successResult(payload);

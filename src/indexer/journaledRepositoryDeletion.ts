@@ -8,6 +8,13 @@ import {
   writeFileIndexJournal,
 } from "./fileIndexJournal.js";
 
+/**
+ * Files deleted per repository call and journal checkpoint. Removals are
+ * batched so bulk deletes pay per-batch (not per-file) commit, journal
+ * rewrite, and cache checkpoint costs.
+ */
+export const REMOVED_FILE_DELETE_BATCH_SIZE = 100;
+
 export interface RepositoryFileDeletion {
   file: string;
   oldRecordIds: string[];
@@ -27,15 +34,20 @@ export interface JournaledRepositoryDeletionResult {
   failure?: string;
 }
 
+export interface RepositoryDeletionProgress {
+  (completedFiles: number, totalFiles: number): void;
+}
+
 export async function executeJournaledRepositoryDeletions(args: {
   journalPath: string;
   requestedFiles: RepositoryFileDeletion[];
-  repository: Pick<RetrievalRepository, "deleteSource">;
+  repository: Pick<RetrievalRepository, "deleteSources">;
   resolveSource: (file: string) => RepositorySourceDeletion;
   checkpointCompleted: (files: string[]) => void;
   runFenced<T>(operation: () => Promise<T>): Promise<T>;
   isCancelled: () => boolean;
   createId: () => string;
+  onProgress?: RepositoryDeletionProgress;
 }): Promise<JournaledRepositoryDeletionResult> {
   const loaded = loadFileIndexJournal(args.journalPath);
   if (loaded.status === "corrupt") {
@@ -50,6 +62,8 @@ export async function executeJournaledRepositoryDeletions(args: {
     );
   }
 
+  const intendedTotal =
+    loaded.journal.operations.length + args.requestedFiles.length;
   const recovered = await recoverJournaledRepositoryDeletions({
     journalPath: args.journalPath,
     repository: args.repository,
@@ -57,6 +71,12 @@ export async function executeJournaledRepositoryDeletions(args: {
     checkpointCompleted: args.checkpointCompleted,
     runFenced: args.runFenced,
     isCancelled: args.isCancelled,
+    ...(args.onProgress
+      ? {
+          onProgress: (completed: number) =>
+            args.onProgress?.(completed, intendedTotal),
+        }
+      : {}),
   });
   if (recovered.pending || recovered.cancelled) return recovered;
   const recoveredFiles = new Set(recovered.completedFiles);
@@ -79,6 +99,7 @@ export async function executeJournaledRepositoryDeletions(args: {
       })),
     });
   });
+  const removalTotal = recovered.completedFiles.length + requested.length;
   const removed = await recoverJournaledRepositoryDeletions({
     journalPath: args.journalPath,
     repository: args.repository,
@@ -86,6 +107,15 @@ export async function executeJournaledRepositoryDeletions(args: {
     checkpointCompleted: args.checkpointCompleted,
     runFenced: args.runFenced,
     isCancelled: args.isCancelled,
+    ...(args.onProgress
+      ? {
+          onProgress: (completed: number) =>
+            args.onProgress?.(
+              recovered.completedFiles.length + completed,
+              removalTotal,
+            ),
+        }
+      : {}),
   });
   return {
     completedFiles: [...recovered.completedFiles, ...removed.completedFiles],
@@ -98,68 +128,101 @@ export async function executeJournaledRepositoryDeletions(args: {
 
 export async function recoverJournaledRepositoryDeletions(args: {
   journalPath: string;
-  repository: Pick<RetrievalRepository, "deleteSource">;
+  repository: Pick<RetrievalRepository, "deleteSources">;
   resolveSource: (file: string) => RepositorySourceDeletion;
   checkpointCompleted: (files: string[]) => void;
   runFenced<T>(operation: () => Promise<T>): Promise<T>;
   isCancelled: () => boolean;
+  onProgress?: RepositoryDeletionProgress;
 }): Promise<JournaledRepositoryDeletionResult> {
   const loaded = loadFileIndexJournal(args.journalPath);
   if (loaded.status === "corrupt") {
     throw new Error(`File index journal is corrupt: ${loaded.error}`);
   }
-  const completedFiles: string[] = [];
-  const remaining = [...loaded.journal.operations];
-  let recordsDeleted = 0;
-  for (const operation of loaded.journal.operations) {
+  const operations = loaded.journal.operations;
+  for (const operation of operations) {
     if (operation.kind !== "remove") {
       throw new Error(
         `Replacement journal recovery is not implemented for ${operation.file}`,
       );
     }
+  }
+
+  const completedFiles: string[] = [];
+  const remaining = [...operations];
+  let recordsDeleted = 0;
+  args.onProgress?.(0, operations.length);
+
+  const checkpointBatch = async (
+    batchCompleted: Array<(typeof operations)[number]>,
+  ): Promise<void> => {
+    if (batchCompleted.length === 0) return;
+    await args.runFenced(async () => {
+      args.checkpointCompleted(batchCompleted.map((op) => op.file));
+      const completedIds = new Set(batchCompleted.map((op) => op.operationId));
+      for (let index = remaining.length - 1; index >= 0; index--) {
+        if (completedIds.has(remaining[index].operationId)) {
+          remaining.splice(index, 1);
+        }
+      }
+      writeFileIndexJournal(args.journalPath, {
+        ...loaded.journal,
+        operations: remaining,
+      });
+    });
+    for (const operation of batchCompleted) {
+      completedFiles.push(operation.file);
+    }
+    args.onProgress?.(completedFiles.length, operations.length);
+  };
+
+  for (
+    let offset = 0;
+    offset < operations.length;
+    offset += REMOVED_FILE_DELETE_BATCH_SIZE
+  ) {
     if (args.isCancelled()) {
       return { completedFiles, recordsDeleted, cancelled: true, pending: true };
     }
-    const request = args.resolveSource(operation.file);
-    let outcome: RetrievalDeleteSourceOutcome;
+    const batch = operations.slice(
+      offset,
+      offset + REMOVED_FILE_DELETE_BATCH_SIZE,
+    );
+    let outcomes: RetrievalDeleteSourceOutcome[];
     try {
-      outcome = await args.repository.deleteSource({
-        sourceId: request.sourceId,
-        ...(request.expectedRevisionId
-          ? { expectedRevisionId: request.expectedRevisionId }
-          : {}),
-      });
+      outcomes = await args.repository.deleteSources(
+        batch.map((operation) => args.resolveSource(operation.file)),
+      );
     } catch (error) {
       return {
         completedFiles,
         recordsDeleted,
         cancelled: false,
         pending: true,
-        failure: `Repository source deletion failed for ${operation.file}: ${error}`,
+        failure: `Repository source deletion failed for ${batch[0].file}: ${error}`,
       };
     }
-    if (outcome.status === "stale_source") {
+    const batchCompleted: Array<(typeof operations)[number]> = [];
+    let staleFile: string | undefined;
+    for (let index = 0; index < batch.length; index++) {
+      const outcome = outcomes[index];
+      if (outcome.status === "stale_source") {
+        staleFile = batch[index].file;
+        break;
+      }
+      batchCompleted.push(batch[index]);
+      recordsDeleted += outcome.recordsRemoved;
+    }
+    await checkpointBatch(batchCompleted);
+    if (staleFile !== undefined) {
       return {
         completedFiles,
         recordsDeleted,
         cancelled: false,
         pending: true,
-        failure: `Repository source deletion retained stale ownership for ${operation.file}`,
+        failure: `Repository source deletion retained stale ownership for ${staleFile}`,
       };
     }
-    await args.runFenced(async () => {
-      args.checkpointCompleted([operation.file]);
-      const completedIndex = remaining.findIndex(
-        (candidate) => candidate.operationId === operation.operationId,
-      );
-      if (completedIndex >= 0) remaining.splice(completedIndex, 1);
-      writeFileIndexJournal(args.journalPath, {
-        ...loaded.journal,
-        operations: remaining,
-      });
-    });
-    completedFiles.push(operation.file);
-    recordsDeleted += outcome.recordsRemoved;
   }
   return {
     completedFiles,

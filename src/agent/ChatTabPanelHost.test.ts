@@ -184,6 +184,25 @@ describe("ChatTabPanelHost", () => {
     expect(onLayoutChanged).toHaveBeenCalledOnce();
   });
 
+  it("focuses an authoritative popped-out panel without preserving focus", async () => {
+    const tabs = createController();
+    await tabs.bindFocusedSession("session-1");
+    const second = await tabs.createTab("session-2");
+    const panel = new FakePanel();
+    createWebviewPanel.mockReturnValue(panel);
+    const { host } = createHost(tabs);
+
+    await host.popOut(second.id);
+    sendReady(panel);
+    await vi.waitFor(() =>
+      expect(host.getEditorConnection(second.id)?.isFrozen()).toBe(false),
+    );
+    panel.reveal.mockClear();
+
+    expect(host.focusPanel(second.id)).toBe(true);
+    expect(panel.reveal).toHaveBeenCalledWith(undefined, false);
+  });
+
   it("keeps the tab docked when its panel closes during editor hydration", async () => {
     const tabs = createController();
     await tabs.bindFocusedSession("session-1");

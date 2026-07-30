@@ -519,6 +519,22 @@ export class InMemoryRetrievalRepository implements RetrievalRepository {
     };
   }
 
+  async deleteSources(
+    requests: RetrievalDeleteSourceRequest[],
+  ): Promise<RetrievalDeleteSourceOutcome[]> {
+    if (
+      new Set(requests.map((request) => request.sourceId)).size !==
+      requests.length
+    ) {
+      throw new Error("Batch source deletions require unique source IDs");
+    }
+    const outcomes: RetrievalDeleteSourceOutcome[] = [];
+    for (const request of requests) {
+      outcomes.push(await this.deleteSource(request));
+    }
+    return outcomes;
+  }
+
   async deleteScope(
     request: RetrievalDeleteScopeRequest,
   ): Promise<RetrievalDeleteScopeOutcome> {

@@ -20,6 +20,7 @@ import type {
 } from "../core/capabilities/terminal.js";
 
 import type { SandboxViolation } from "../core/sandboxPolicy.js";
+import { TerminalTargetRecoveryError } from "../core/capabilities/terminalTargetError.js";
 import {
   commandRulePolicyFingerprint,
   type CommandRulePolicyEvaluation,
@@ -89,6 +90,7 @@ type CommandApprovalAudit =
   | { by: "explicit_rule" }
   | { by: "recent_approval" }
   | { by: "coordinator" }
+  | { by: "sandbox_verification" }
   | { by: "tier"; tier: CommandTier; threshold: "safe" | "sensitive" }
   | {
       by: "model_reviewer";
@@ -258,6 +260,7 @@ function routeContextFor(
   permissionIntent: "default" | "additional-permissions" | "native-escalation",
   commandExecutionPolicySnapshot?: CommandExecutionPolicy,
   explicitRuleAuthority = false,
+  requireSandbox = false,
 ): TerminalExecutionRouteContext {
   const executionPresetSnapshot = approvalMode.executionPreset;
   const explicitEscalation = permissionIntent === "native-escalation";
@@ -266,10 +269,11 @@ function routeContextFor(
     approvalPolicySnapshot: approvalMode.approvalPolicy,
     approvalReviewerSnapshot: approvalMode.approvalReviewer,
     executionPresetSnapshot,
-    requiredAuthority:
-      explicitEscalation ||
-      explicitRuleAuthority ||
-      executionPresetSnapshot === "native-manual"
+    requiredAuthority: requireSandbox
+      ? "sandbox"
+      : explicitEscalation ||
+          explicitRuleAuthority ||
+          executionPresetSnapshot === "native-manual"
         ? "native-agent"
         : "sandbox",
     permissionIntent,
@@ -278,12 +282,12 @@ function routeContextFor(
       : additionalPermissions
         ? "explicit-permissions"
         : "policy",
-    authorityReason: explicitEscalation
-      ? "explicit-escalation"
-      : additionalPermissions
-        ? "additional-permissions"
-        : explicitRuleAuthority
-          ? "explicit-rule"
+    authorityReason: explicitRuleAuthority
+      ? "explicit-rule"
+      : explicitEscalation
+        ? "explicit-escalation"
+        : additionalPermissions
+          ? "additional-permissions"
           : "approval-policy",
     commandApprovalPolicySnapshot: approvalMode.commandApprovalPolicy,
     ...(commandExecutionPolicySnapshot
@@ -331,10 +335,339 @@ function policyDriftResult(
   };
 }
 
+type ExecuteCommandRetryGuidance = {
+  code:
+    | "sandbox_cwd_outside_workspace"
+    | "sandbox_missing_capabilities"
+    | "managed_network_ssh_git_transport"
+    | "managed_network_tls_trust";
+  message: string;
+  automatic_retry: false;
+  options: Array<Record<string, unknown>>;
+  prohibited_workarounds?: string[];
+};
+
+const GIT_NETWORK_SUBCOMMANDS = new Set([
+  "clone",
+  "fetch",
+  "pull",
+  "push",
+  "ls-remote",
+  "submodule",
+]);
+
+const SSH_GIT_FAILURE_PATTERNS = [
+  /ssh: connect to host/i,
+  /permission denied \(publickey\)/i,
+  /could not read from remote repository/i,
+  /could not resolve hostname/i,
+];
+
+const TLS_TRUST_FAILURE_PATTERNS = [
+  /x509: certificate signed by unknown authority/i,
+  /tls: failed to verify certificate: x509: OSStatus -26276\b/i,
+];
+
+const LOOPBACK_LISTEN_DENIAL_PATTERNS = [
+  /listen EPERM: operation not permitted 127\.0\.0\.1(?::\d+)?\b/i,
+  /listen EPERM: operation not permitted ::1(?::\d+)?\b/i,
+];
+
+const HOME_WRITE_DENIAL_PATTERNS = [
+  /(?:not written|error writing|failed to write|cannot write|unable to write)/i,
+  /(?:\bEPERM\b|operation not permitted|permission denied|read-only file system).*\b(?:create|mkdir|rename|truncate|unlink|write|writing)\b/i,
+  /\b(?:create|mkdir|rename|truncate|unlink|write|writing)\b.*(?:\bEPERM\b|operation not permitted|permission denied|read-only file system)/i,
+];
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} bytes`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+}
+
+function singleCommandTokens(command: string): string[] | undefined {
+  const boundaryScan = scanShellLexBoundaries(command);
+  const tokenScan = scanShellLexTokens(command);
+  if (
+    boundaryScan.boundaries.length > 0 ||
+    boundaryScan.finalState.quote !== null ||
+    boundaryScan.finalState.danglingEscape ||
+    tokenScan.finalState.quote !== null ||
+    tokenScan.finalState.danglingEscape ||
+    /[`$<>&]/.test(command)
+  ) {
+    return undefined;
+  }
+  return tokenScan.tokens;
+}
+
+function directGitNetworkCommandTokens(command: string): string[] | undefined {
+  const tokens = singleCommandTokens(command);
+  if (
+    !tokens ||
+    tokens[0] !== "git" ||
+    !GIT_NETWORK_SUBCOMMANDS.has(tokens[1] ?? "")
+  ) {
+    return undefined;
+  }
+  return tokens;
+}
+
+function isDirectGhCommand(command: string): boolean {
+  return singleCommandTokens(command)?.[0] === "gh";
+}
+
+function isGhOnlyCommand(command: string): boolean {
+  const segments = splitCompoundCommand(command);
+  return (
+    segments.length > 0 &&
+    segments.every((segment) => isDirectGhCommand(segment))
+  );
+}
+
+function isExplicitSshGitRemote(value: string): boolean {
+  if (/^(?:ssh|git\+ssh):\/\//i.test(value)) return true;
+  return /^(?:[^/@:\s]+@(?:\[[0-9a-f:]+\]|[^/:\s]+)|(?:\[[0-9a-f:]+\]|[a-z0-9][a-z0-9.-]*\.[a-z]{2,})):[^/\s].+$/i.test(
+    value,
+  );
+}
+
+function managedNetworkSshGitGuidance(): ExecuteCommandRetryGuidance {
+  return {
+    code: "managed_network_ssh_git_transport",
+    message:
+      "Git-over-SSH is not carried automatically by managed HTTP/HTTPS/SOCKS networking. Use the repository's HTTPS URL to remain sandboxed, or make a separate explicitly reviewed native request for SSH.",
+    automatic_retry: false,
+    options: [
+      {
+        transport: "https",
+        sandbox_permissions: "require_managed_network",
+        reason_required: true,
+      },
+      {
+        transport: "ssh",
+        sandbox_permissions: "require_escalated",
+        reason_required: true,
+        reviewed_native_execution: true,
+      },
+    ],
+  };
+}
+
+function outsideWorkspaceCwdResult(input: {
+  command: string;
+  cwd: string;
+  workspaceRoots: readonly string[];
+  allowReviewedNativeOption: boolean;
+}): ToolResult {
+  const options: Array<Record<string, unknown>> = [
+    {
+      action: "open_or_add_workspace_root",
+      cwd: input.cwd,
+      active_workspace_roots: [...input.workspaceRoots],
+    },
+  ];
+  if (input.allowReviewedNativeOption) {
+    options.push({
+      cwd: input.cwd,
+      sandbox_permissions: "require_escalated",
+      reason_required: true,
+      reviewed_native_execution: true,
+    });
+  }
+  const retryGuidance: ExecuteCommandRetryGuidance = {
+    code: "sandbox_cwd_outside_workspace",
+    message:
+      "Sandbox execution requires cwd to be inside an active workspace root. Add or open the directory as a workspace root, or request native execution when command policy or review permits it.",
+    automatic_retry: false,
+    options,
+  };
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          status: "retry_required",
+          command: input.command,
+          cwd: input.cwd,
+          command_sent: false,
+          process_launched: false,
+          retry_safe: true,
+          failure_stage: "preparation",
+          retry_guidance: retryGuidance,
+        }),
+      },
+    ],
+  };
+}
+
+function attachManagedNetworkFailureGuidance(input: {
+  result: TerminalCommandResult;
+  command: string;
+  output: string;
+}): void {
+  const { result, command, output } = input;
+  if (
+    hasRetryGuidance(result) ||
+    result.security?.route !== "sandbox" ||
+    result.exit_code === 0 ||
+    result.exit_code === null ||
+    result.backgrounded ||
+    result.is_running ||
+    result.timed_out ||
+    result.output_complete === false ||
+    result.output_finalized === false
+  ) {
+    return;
+  }
+
+  const gitTokens = directGitNetworkCommandTokens(command);
+  let guidance: ExecuteCommandRetryGuidance | undefined;
+  if (
+    gitTokens &&
+    SSH_GIT_FAILURE_PATTERNS.some((pattern) => pattern.test(output))
+  ) {
+    guidance = managedNetworkSshGitGuidance();
+  } else if (
+    isGhOnlyCommand(command) &&
+    TLS_TRUST_FAILURE_PATTERNS.some((pattern) => pattern.test(output))
+  ) {
+    guidance = {
+      code: "managed_network_tls_trust",
+      message:
+        "Managed networking preserves server TLS and does not provide a replacement CA. Repair the host/client trust configuration before retrying; do not disable certificate verification or install an unverified proxy CA.",
+      automatic_retry: false,
+      options: [
+        {
+          action: "fix_trust_and_retry",
+          sandbox_permissions: "require_managed_network",
+          same_command: true,
+        },
+        {
+          action: "reviewed_native_retry",
+          sandbox_permissions: "require_escalated",
+          reason_required: true,
+          reviewed_native_execution: true,
+          same_command: true,
+        },
+      ],
+      prohibited_workarounds: [
+        "disable_tls_verification",
+        "inject_unverified_ca",
+      ],
+    };
+  }
+
+  if (guidance) {
+    Object.assign(result, { retry_guidance: guidance });
+  }
+}
+
+function hasRetryGuidance(result: TerminalCommandResult): boolean {
+  return "retry_guidance" in result;
+}
+
+function outputHasHostHomeWriteDenial(
+  output: string,
+  workspaceRoots: readonly string[],
+): boolean {
+  const homePrefix = `${path.resolve(os.homedir())}${path.sep}`;
+  const excludedRoots = [...workspaceRoots, os.tmpdir()].map((root) =>
+    path.resolve(root),
+  );
+  return output.split(/\r?\n/).some((line) => {
+    if (!line.includes(homePrefix)) return false;
+    if (
+      excludedRoots.some(
+        (root) => line.includes(root) && line.includes(`${root}${path.sep}`),
+      )
+    ) {
+      return false;
+    }
+    return HOME_WRITE_DENIAL_PATTERNS.some((pattern) => pattern.test(line));
+  });
+}
+
+function attachSandboxCapabilityRetryGuidance(input: {
+  result: TerminalCommandResult;
+  command: string;
+  output: string;
+  temporaryHome: boolean;
+  localBinding: boolean;
+  replayable: boolean;
+  hasHomeOverride: boolean;
+  allowTemporaryHome: boolean;
+  workspaceRoots: readonly string[];
+}): void {
+  const {
+    result,
+    command,
+    output,
+    temporaryHome,
+    localBinding,
+    replayable,
+    hasHomeOverride,
+    allowTemporaryHome,
+    workspaceRoots,
+  } = input;
+  if (
+    hasRetryGuidance(result) ||
+    !replayable ||
+    !singleCommandTokens(command) ||
+    result.security?.route !== "sandbox" ||
+    result.security.confinement !== "verified-baseline" ||
+    result.security.permissionIntent !== "default" ||
+    result.security.commandExecutionPolicySnapshot === "read-only" ||
+    result.exit_code === 0 ||
+    result.exit_code === null ||
+    result.backgrounded ||
+    result.is_running ||
+    result.timed_out ||
+    result.termination_reason === "interactive_prompt" ||
+    result.output_complete === false ||
+    result.output_finalized === false
+  ) {
+    return;
+  }
+
+  const needsLocalBinding =
+    !localBinding &&
+    LOOPBACK_LISTEN_DENIAL_PATTERNS.some((pattern) => pattern.test(output));
+  const needsTemporaryHome =
+    allowTemporaryHome &&
+    !temporaryHome &&
+    !hasHomeOverride &&
+    outputHasHostHomeWriteDenial(output, workspaceRoots);
+  if (!needsLocalBinding && !needsTemporaryHome) return;
+
+  const missingCapabilities = [
+    ...(needsTemporaryHome ? ["temporary_home"] : []),
+    ...(needsLocalBinding ? ["network.allow_local_binding"] : []),
+  ];
+  const option: Record<string, unknown> = {
+    action: "retry_with_missing_sandbox_capabilities",
+    same_command: true,
+    ...(needsTemporaryHome ? { temporary_home: true } : {}),
+    ...(needsLocalBinding
+      ? {
+          sandbox_permissions: "with_additional_permissions",
+          additional_permissions: {
+            network: { allow_local_binding: true },
+          },
+          reason_required: true,
+        }
+      : {}),
+  };
+  const guidance: ExecuteCommandRetryGuidance = {
+    code: "sandbox_missing_capabilities",
+    message: `The command failed with bounded evidence that the default sandbox is missing ${missingCapabilities.join(" and ")}. Retry only if those capabilities match the intended workflow; AgentLink will not broaden the sandbox automatically.`,
+    automatic_retry: false,
+    options: [option],
+  };
+  Object.assign(result, {
+    retry_guidance: guidance,
+    missing_sandbox_capabilities: missingCapabilities,
+  });
 }
 
 function sandboxCapabilityDenial(
@@ -603,6 +936,14 @@ async function protectedGitMetadataRetryResult(input: {
     hasInlineFiles: input.hasInlineFiles,
   });
   if (!classification) return undefined;
+  const gitSubcommandFields =
+    classification.subcommands.length === 1
+      ? { git_subcommand: classification.subcommands[0] }
+      : { git_subcommands: [...classification.subcommands] };
+  const subcommandDescription =
+    classification.subcommands.length === 1
+      ? classification.subcommands[0]
+      : classification.subcommands.join(" and ");
   let protection;
   try {
     protection = await resolveBaselineProtectedGitMetadataForCwd(
@@ -623,7 +964,7 @@ async function protectedGitMetadataRetryResult(input: {
               : {}),
             reason: `Unable to verify protected Git metadata safely: ${message}`,
             capability_code: "protected_git_metadata",
-            git_subcommand: classification.subcommand,
+            ...gitSubcommandFields,
             command_sent: false,
             process_launched: false,
             retry_safe: true,
@@ -634,7 +975,7 @@ async function protectedGitMetadataRetryResult(input: {
     };
   }
   if (!protection) return undefined;
-  const suggestedReason = `Git ${classification.subcommand} mutates protected repository metadata and requires reviewed native execution.`;
+  const suggestedReason = `Git ${subcommandDescription} ${classification.subcommands.length === 1 ? "mutates" : "mutate"} protected repository metadata and requires reviewed native execution.`;
   return {
     content: [
       {
@@ -646,9 +987,9 @@ async function protectedGitMetadataRetryResult(input: {
             ? { original_command: input.originalCommand }
             : {}),
           reason:
-            "The workspace sandbox keeps this repository's Git metadata read-only. Retry the exact command with reviewed native escalation.",
+            "The workspace sandbox keeps this repository's Git metadata read-only. Retry the exact command with native escalation; an applicable native allow rule or fresh review must authorize it.",
           capability_code: "protected_git_metadata",
-          git_subcommand: classification.subcommand,
+          ...gitSubcommandFields,
           protected_path: protection.marker,
           required_sandbox_permissions: "require_escalated",
           suggested_reason: suggestedReason,
@@ -688,6 +1029,7 @@ export async function handleExecuteCommand(
     background?: boolean;
     timeout?: number;
     env?: Record<string, string>;
+    temporary_home?: true;
     sandbox_permissions?:
       | "use_default"
       | "with_additional_permissions"
@@ -749,6 +1091,7 @@ export async function handleExecuteCommand(
       params.sandbox_permissions === "with_additional_permissions";
     const localBinding =
       params.additional_permissions?.network?.allow_local_binding === true;
+    const temporaryHome = params.temporary_home === true;
     if (additionalPermissions !== localBinding) {
       return rejectedCommandResult(
         params.command,
@@ -767,6 +1110,26 @@ export async function handleExecuteCommand(
       );
     }
     const approvalMode = approvalModeFor(providers, sessionId);
+    if (temporaryHome) {
+      if (nativeEscalation) {
+        return rejectedCommandResult(
+          params.command,
+          'temporary_home cannot be combined with sandbox_permissions="require_escalated" because native execution cannot provide a disposable sandbox-owned HOME.',
+        );
+      }
+      if (params.background) {
+        return rejectedCommandResult(
+          params.command,
+          "temporary_home is limited to foreground commands so its HOME remains available for the complete process lifecycle.",
+        );
+      }
+      if (approvalMode.commandApprovalPolicy !== "approve-for-me") {
+        return rejectedCommandResult(
+          params.command,
+          "temporary_home requires Approve for Me because it must run in the verified sandbox without native fallback.",
+        );
+      }
+    }
     const initialRulePolicy = commandRulePolicyFor(
       approvalManager,
       sessionId,
@@ -782,14 +1145,13 @@ export async function handleExecuteCommand(
     const initialRulePolicyFingerprint =
       commandRulePolicyFingerprint(initialRulePolicy);
     const explicitRuleAuthority =
-      !nativeEscalation &&
       !managedNetwork &&
       !additionalPermissions &&
       !params.files?.length &&
       !params.env &&
+      !temporaryHome &&
       !params.force &&
       !params.force_reason &&
-      approvalMode.commandApprovalPolicy === "approve-for-me" &&
       initialRulePolicy.allSegmentsExplicitlyAllowed;
     const routeContext = routeContextFor(
       approvalMode,
@@ -800,9 +1162,35 @@ export async function handleExecuteCommand(
           : "default",
       providers.commandExecutionPolicy,
       explicitRuleAuthority,
+      temporaryHome || managedNetwork || additionalPermissions,
     );
     const readOnlyPolicy =
       routeContext.commandExecutionPolicySnapshot === "read-only";
+    if (
+      routeContext.requiredAuthority === "sandbox" &&
+      params.env &&
+      Object.prototype.hasOwnProperty.call(params.env, "HOME")
+    ) {
+      return rejectedCommandResult(
+        params.command,
+        "Sandbox environment override is reserved: HOME. Use temporary_home=true only when the command needs a fresh empty writable HOME that is deleted after completion; the host home remains readable by absolute path.",
+      );
+    }
+    if (
+      routeContext.requiredAuthority === "sandbox" &&
+      !isCommandPathInsideWorkspace(cwd, workspaceRoots)
+    ) {
+      return outsideWorkspaceCwdResult({
+        command: params.command,
+        cwd,
+        workspaceRoots,
+        allowReviewedNativeOption:
+          !readOnlyPolicy &&
+          !temporaryHome &&
+          !managedNetwork &&
+          !additionalPermissions,
+      });
+    }
     if (readOnlyPolicy) {
       if (localBinding) {
         return rejectedCommandResult(
@@ -975,6 +1363,28 @@ export async function handleExecuteCommand(
         };
       }
 
+      const directGitNetworkTokens = managedNetwork
+        ? directGitNetworkCommandTokens(commandToRun)
+        : undefined;
+      if (directGitNetworkTokens?.slice(2).some(isExplicitSshGitRemote)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "retry_required",
+                command: commandToRun,
+                command_sent: false,
+                process_launched: false,
+                retry_safe: true,
+                failure_stage: "validation",
+                retry_guidance: managedNetworkSshGitGuidance(),
+              }),
+            },
+          ],
+        };
+      }
+
       const terminalOptions = (): TerminalExecuteOptions => ({
         owner: undefined,
         command: commandToRun,
@@ -985,6 +1395,7 @@ export async function handleExecuteCommand(
         background: params.background,
         timeout: params.timeout ? params.timeout * 1000 : undefined,
         env: params.env,
+        temporaryHome: temporaryHome || undefined,
         sandboxSessionId: sessionId,
         sandboxCapabilityRequest:
           managedNetwork || localBinding
@@ -1030,9 +1441,9 @@ export async function handleExecuteCommand(
           command: commandToRun,
           cwd,
           workspaceRoots,
-          hasEnvironmentOverrides: Boolean(
-            params.env && Object.keys(params.env).length > 0,
-          ),
+          hasEnvironmentOverrides:
+            temporaryHome ||
+            Boolean(params.env && Object.keys(params.env).length > 0),
           hasInlineFiles: inlineFiles !== undefined,
         });
         if (gitRetry) {
@@ -1073,19 +1484,21 @@ export async function handleExecuteCommand(
               displayCommand: commandToRun,
               inlineFiles,
               requireHumanApproval: inlineFiles !== undefined,
-              requireFreshReview:
-                nativeEscalation || managedNetwork || additionalPermissions,
+              requireFreshReview: managedNetwork || additionalPermissions,
               rulePolicy: initialRulePolicy,
+              commandPolicyFingerprint: initialRulePolicyFingerprint,
+              explicitNativeEscalation: nativeEscalation,
               ruleFastPathAllowed:
                 !inlineFiles &&
                 !managedNetwork &&
                 !additionalPermissions &&
                 !params.env &&
+                !temporaryHome &&
                 !params.force &&
                 !params.force_reason,
-              hasEnvOverrides: Boolean(
-                params.env && Object.keys(params.env).length > 0,
-              ),
+              hasEnvOverrides:
+                temporaryHome ||
+                Boolean(params.env && Object.keys(params.env).length > 0),
               forceRequested: Boolean(params.force || params.force_reason),
               routeContext,
               providers,
@@ -1173,9 +1586,9 @@ export async function handleExecuteCommand(
                     originalCommand: params.command,
                     cwd,
                     workspaceRoots,
-                    hasEnvironmentOverrides: Boolean(
-                      params.env && Object.keys(params.env).length > 0,
-                    ),
+                    hasEnvironmentOverrides:
+                      temporaryHome ||
+                      Boolean(params.env && Object.keys(params.env).length > 0),
                     hasInlineFiles: inlineFiles !== undefined,
                   })
                 : undefined;
@@ -1291,6 +1704,36 @@ export async function handleExecuteCommand(
       preparedExecution = undefined;
       let result = await execution.execute();
       result.security = execution.security;
+      const replayableWithNarrowSandboxCapabilities =
+        !inlineFiles &&
+        !commandEditedByUser &&
+        !params.terminal_id &&
+        !params.terminal_name &&
+        !params.split_from;
+      const hasHomeOverride = Boolean(
+        params.env &&
+        [
+          "HOME",
+          "XDG_CACHE_HOME",
+          "XDG_CONFIG_HOME",
+          "GOCACHE",
+          "GOLANGCI_LINT_CACHE",
+        ].some((name) => Object.hasOwn(params.env!, name)),
+      );
+      if (result.output) {
+        attachSandboxCapabilityRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+          temporaryHome,
+          localBinding,
+          replayable: replayableWithNarrowSandboxCapabilities,
+          hasHomeOverride,
+          allowTemporaryHome:
+            approvalMode.commandApprovalPolicy === "approve-for-me",
+          workspaceRoots,
+        });
+      }
 
       const capabilityDenial = sandboxCapabilityDenial(result);
       if (capabilityDenial) {
@@ -1304,32 +1747,38 @@ export async function handleExecuteCommand(
           cwd,
           workspaceRoots,
         });
-        const retryUnsupportedReason = !isNativeRetryEligibleDenial(
-          capabilityDenial,
-          retryClassification,
-        )
-          ? capabilityDenial.operation === "network-connect"
-            ? "Managed network capability review is required; native retry was not attempted."
-            : capabilityDenial.operation === "resource-limit"
-              ? "Resource-limit denials are not retried outside the sandbox."
-              : `Native retry was not attempted because the command is not a recognized read-only, version, or project-toolchain operation (${
-                  retryClassification.perSubCommand
-                    .map(({ command, result }) => `${command}: ${result.code}`)
-                    .join("; ") || "no classified command"
-                }).`
-          : routeContext.commandApprovalPolicySnapshot !== "approve-for-me"
-            ? "Automatic native retry requires Approve for Me."
-            : readOnlyPolicy
-              ? "Read-only execution policy does not permit native retry."
-              : inlineFiles
-                ? "Commands with temporary inline files cannot be replayed after sandbox completion."
-                : commandEditedByUser
-                  ? "Commands edited during approval require a new explicit invocation before native retry."
-                  : params.terminal_id ||
-                      params.terminal_name ||
-                      params.split_from
-                    ? "Commands pinned to a terminal target cannot switch execution authority automatically."
-                    : undefined;
+        const retryUnsupportedReason = hasRetryGuidance(result)
+          ? "A narrower reviewed sandbox retry is available; native retry was not attempted."
+          : temporaryHome
+            ? "Commands using temporary_home cannot switch to native execution because native execution cannot preserve the disposable HOME contract."
+            : !isNativeRetryEligibleDenial(
+                  capabilityDenial,
+                  retryClassification,
+                )
+              ? capabilityDenial.operation === "network-connect"
+                ? "Managed network capability review is required; native retry was not attempted."
+                : capabilityDenial.operation === "resource-limit"
+                  ? "Resource-limit denials are not retried outside the sandbox."
+                  : `Native retry was not attempted because the command is not a recognized read-only, version, or project-toolchain operation (${
+                      retryClassification.perSubCommand
+                        .map(
+                          ({ command, result }) => `${command}: ${result.code}`,
+                        )
+                        .join("; ") || "no classified command"
+                    }).`
+              : routeContext.commandApprovalPolicySnapshot !== "approve-for-me"
+                ? "Automatic native retry requires Approve for Me."
+                : readOnlyPolicy
+                  ? "Read-only execution policy does not permit native retry."
+                  : inlineFiles
+                    ? "Commands with temporary inline files cannot be replayed after sandbox completion."
+                    : commandEditedByUser
+                      ? "Commands edited during approval require a new explicit invocation before native retry."
+                      : params.terminal_id ||
+                          params.terminal_name ||
+                          params.split_from
+                        ? "Commands pinned to a terminal target cannot switch execution authority automatically."
+                        : undefined;
 
         if (retryUnsupportedReason) {
           result.capability_denial = { ...capabilityDenial };
@@ -1412,9 +1861,9 @@ export async function handleExecuteCommand(
                 {
                   displayCommand: commandToRun,
                   requireFreshReview: true,
-                  hasEnvOverrides: Boolean(
-                    params.env && Object.keys(params.env).length > 0,
-                  ),
+                  hasEnvOverrides:
+                    temporaryHome ||
+                    Boolean(params.env && Object.keys(params.env).length > 0),
                   forceRequested: Boolean(params.force || params.force_reason),
                   routeContext: retryRouteContext,
                   providers,
@@ -1641,6 +2090,27 @@ export async function handleExecuteCommand(
         result.output_complete = true;
         result.output_finalized = !result.is_running;
       }
+      if (result.output) {
+        if (managedNetwork) {
+          attachManagedNetworkFailureGuidance({
+            result,
+            command: commandToRun,
+            output: result.output,
+          });
+        }
+        attachSandboxCapabilityRetryGuidance({
+          result,
+          command: commandToRun,
+          output: result.output,
+          temporaryHome,
+          localBinding,
+          replayable: replayableWithNarrowSandboxCapabilities,
+          hasHomeOverride,
+          allowTemporaryHome:
+            approvalMode.commandApprovalPolicy === "approve-for-me",
+          workspaceRoots,
+        });
+      }
       if (result.output_captured && result.output) {
         const fullOutput = result.output;
         const filterOptions = {
@@ -1726,6 +2196,37 @@ export async function handleExecuteCommand(
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof TerminalTargetRecoveryError) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "retry_required",
+              error: message,
+              error_code: err.code,
+              target_failure: err.failure,
+              target_kind: err.target_kind,
+              target_value: err.target_value,
+              ...(err.required_authority
+                ? { required_authority: err.required_authority }
+                : {}),
+              ...(err.target_authorities
+                ? { target_authorities: err.target_authorities }
+                : {}),
+              compatible_terminals: err.compatible_terminals,
+              available_terminals: err.available_terminals,
+              retry_guidance: err.retry_guidance,
+              command: params.command,
+              command_sent: false,
+              process_launched: false,
+              retry_safe: true,
+              failure_stage: "preparation",
+            }),
+          },
+        ],
+      };
+    }
     const lowerMessage = message.toLowerCase();
     const newlineRegexHint =
       lowerMessage.includes("ripgrep error") &&
@@ -1760,6 +2261,7 @@ function getReadOnlyCommandRejectionReason(
     ["background", params.background],
     ["timeout", params.timeout],
     ["env", params.env],
+    ["temporary_home", params.temporary_home],
     ["files", params.files],
     ["sandbox_permissions", params.sandbox_permissions],
     ["force", params.force],
@@ -1886,6 +2388,8 @@ async function approveSubCommands(
     requireHumanApproval?: boolean;
     requireFreshReview?: boolean;
     rulePolicy?: ReturnType<ApprovalManager["evaluateCommandRules"]>;
+    commandPolicyFingerprint?: string;
+    explicitNativeEscalation?: boolean;
     ruleFastPathAllowed?: boolean;
     hasEnvOverrides?: boolean;
     forceRequested?: boolean;
@@ -1932,10 +2436,13 @@ async function approveSubCommands(
         "Command execution is forbidden by an applicable command policy rule.",
     };
   }
+  const ruleAuthorityMatchesRoute = options?.explicitNativeEscalation
+    ? rulePolicy.allSegmentsExplicitlyAllowed
+    : rulePolicy.allSegmentsApprovedByRule;
   const allApproved =
     options?.ruleFastPathAllowed !== false &&
     rulePolicy.decision !== "prompt" &&
-    rulePolicy.allSegmentsApprovedByRule;
+    ruleAuthorityMatchesRoute;
   if (
     !options?.requireHumanApproval &&
     !options?.requireFreshReview &&
@@ -1955,11 +2462,36 @@ async function approveSubCommands(
   const policy =
     options?.routeContext.commandApprovalPolicySnapshot ?? "manual";
   const threshold = policy === "sensitive" ? "sensitive" : "safe";
+  const sandboxVerificationApproved =
+    policy === "approve-for-me" &&
+    rulePolicy.decision !== "prompt" &&
+    !options?.requireHumanApproval &&
+    !retainedDenial &&
+    !options?.requireFreshReview &&
+    !options?.inlineFiles?.length &&
+    !options?.hasEnvOverrides &&
+    !options?.forceRequested &&
+    options?.security?.route === "sandbox" &&
+    options.security.confinement === "verified-baseline" &&
+    options.routeContext.permissionIntent === "default" &&
+    workspaceRoots.some((root) => isCommandPathInsideWorkspace(cwd, [root])) &&
+    tierInfo.perSubCommand.length > 0 &&
+    tierInfo.perSubCommand.every(
+      ({ result }) => result.code === "project_toolchain",
+    );
+  if (sandboxVerificationApproved) {
+    return {
+      approved: true,
+      approval: { by: "sandbox_verification" },
+    };
+  }
+
   const deterministicallyApproved =
     rulePolicy.decision !== "prompt" &&
     !options?.requireHumanApproval &&
     !retainedDenial &&
     !options?.requireFreshReview &&
+    options?.routeContext.permissionIntent !== "native-escalation" &&
     ((tierInfo.tier === "safe" && policy !== "manual") ||
       (tierInfo.tier === "sensitive" && policy === "sensitive"));
   if (deterministicallyApproved) {
@@ -1977,6 +2509,33 @@ async function approveSubCommands(
   let humanOnlyReason: string | undefined;
   if (circuitInterrupted) {
     return { approved: false, reviewCircuitInterrupted: true };
+  }
+  const commandPolicyFingerprint =
+    options?.commandPolicyFingerprint ??
+    commandRulePolicyFingerprint(rulePolicy);
+  const recentApprovalLookup = (
+    approvalPanel as ApprovalPanelProvider & {
+      isCommandRecentlyApproved?: ApprovalPanelProvider["isCommandRecentlyApproved"];
+    }
+  ).isCommandRecentlyApproved;
+  const recentlyApproved = Boolean(
+    !options?.requireHumanApproval &&
+    !retainedDenial &&
+    !options?.requireFreshReview &&
+    !options?.inlineFiles?.length &&
+    !options?.hasEnvOverrides &&
+    !options?.forceRequested &&
+    options?.security &&
+    recentApprovalLookup?.call(approvalPanel, {
+      command: fullCommand,
+      cwd,
+      sessionId,
+      security: options.security,
+      commandPolicyFingerprint,
+    }),
+  );
+  if (recentlyApproved) {
+    return { approved: true, approval: { by: "recent_approval" } };
   }
   if (policy === "approve-for-me" && reviewProviders?.commandApprovalReviewer) {
     const eligibility = getCommandAutoApprovalEligibility({
@@ -2119,11 +2678,17 @@ async function approveSubCommands(
         cwd,
         commandReview,
         humanOnlyReason,
+        commandPolicyFingerprint,
         security: options?.security,
         sessionId,
         signal: reviewProviders?.toolAbortSignal,
         deferApprovalRecording: true,
-        bypassRecentApproval: options?.requireFreshReview,
+        bypassRecentApproval:
+          options?.requireFreshReview ||
+          options?.requireHumanApproval ||
+          Boolean(options?.inlineFiles?.length) ||
+          options?.hasEnvOverrides ||
+          options?.forceRequested,
       },
     );
   const response = await promise;

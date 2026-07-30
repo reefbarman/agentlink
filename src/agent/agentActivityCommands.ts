@@ -4,6 +4,10 @@ interface ApprovalFocusTarget {
   focusApproval(): void;
 }
 
+interface PendingInteractionFocusTarget {
+  focusPendingInteraction(sessionId: string): Promise<boolean>;
+}
+
 interface ToolCallControlTarget {
   cancelCall(id: string): void;
   continueInBackground(id: string): void;
@@ -24,6 +28,7 @@ interface SessionApprovalTarget {
 export interface AgentActivityCommandDependencies {
   addTrustedCommand(): void | Promise<void>;
   approvalPanel: ApprovalFocusTarget;
+  pendingInteractionTarget: PendingInteractionFocusTarget;
   toolCallTracker: ToolCallControlTarget;
   approvalManager: SessionApprovalTarget;
 }
@@ -31,6 +36,7 @@ export interface AgentActivityCommandDependencies {
 export function registerAgentActivityCommands({
   addTrustedCommand,
   approvalPanel,
+  pendingInteractionTarget,
   toolCallTracker,
   approvalManager,
 }: AgentActivityCommandDependencies): vscode.Disposable[] {
@@ -39,8 +45,24 @@ export function registerAgentActivityCommands({
       "agentlink.addTrustedCommand",
       addTrustedCommand,
     ),
-    vscode.commands.registerCommand("agentLink.focusApproval", () =>
-      approvalPanel.focusApproval(),
+    vscode.commands.registerCommand(
+      "agentLink.focusApproval",
+      async (target?: { sessionId?: string }) => {
+        if (target?.sessionId) {
+          try {
+            if (
+              await pendingInteractionTarget.focusPendingInteraction(
+                target.sessionId,
+              )
+            ) {
+              return;
+            }
+          } catch {
+            // Fall back to the external approval panel below.
+          }
+        }
+        approvalPanel.focusApproval();
+      },
     ),
     vscode.commands.registerCommand("agentlink.cancelToolCall", (id: string) =>
       toolCallTracker.cancelCall(id),

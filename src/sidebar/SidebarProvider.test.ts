@@ -3,11 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 type MessageHandler = (message: Record<string, unknown>) => void;
 
 const commandExec = vi.fn();
+const feedbackStoreMocks = vi.hoisted(() => ({
+  readFeedback: vi.fn(() => []),
+  deleteFeedback: vi.fn(),
+  triageFeedback: vi.fn(),
+}));
 
 const mockVscode = {
   window: {
     showWarningMessage: vi.fn(),
     showInformationMessage: vi.fn(),
+    showErrorMessage: vi.fn(),
     showTextDocument: vi.fn(),
     createTerminal: vi.fn(() => ({ show: vi.fn(), sendText: vi.fn() })),
   },
@@ -39,6 +45,7 @@ const mockVscode = {
 };
 
 vi.mock("vscode", () => mockVscode);
+vi.mock("../util/feedbackStore.js", () => feedbackStoreMocks);
 
 function makeApprovalManager() {
   return {
@@ -60,7 +67,9 @@ function makeApprovalManager() {
       session:
         sessionId === "session-a"
           ? [{ pattern: "npm test", mode: "exact" as const }]
-          : [],
+          : sessionId === "background-session"
+            ? [{ pattern: "npm test", mode: "exact" as const }]
+            : [],
       project: [{ pattern: "npm", mode: "prefix" as const }],
       global: [{ pattern: "git status", mode: "exact" as const }],
     }),
@@ -68,7 +77,9 @@ function makeApprovalManager() {
       session:
         sessionId === "session-a"
           ? [{ pattern: "src/**", mode: "glob" as const }]
-          : [],
+          : sessionId === "background-session"
+            ? [{ pattern: "src/**", mode: "glob" as const }]
+            : [],
       project: [],
       global: [],
     }),
@@ -76,10 +87,26 @@ function makeApprovalManager() {
       session:
         sessionId === "session-a"
           ? [{ pattern: "src/**", mode: "glob" as const }]
-          : [],
+          : sessionId === "background-session"
+            ? [{ pattern: "src/**", mode: "glob" as const }]
+            : [],
       project: [],
       global: [],
       settings: ["**/*.test.ts"],
+    }),
+    getExplicitSessionRules: (sessionId: string) => ({
+      commandRules:
+        sessionId === "session-a"
+          ? [{ pattern: "npm test", mode: "exact" as const }]
+          : [],
+      pathRules:
+        sessionId === "session-a"
+          ? [{ pattern: "src/**", mode: "glob" as const }]
+          : [],
+      writeRules:
+        sessionId === "session-a"
+          ? [{ pattern: "src/**", mode: "glob" as const }]
+          : [],
     }),
     resetWriteApproval: vi.fn(),
     resetAgentWriteApproval: vi.fn(),
@@ -275,6 +302,84 @@ describe("SidebarProvider write approval sync", () => {
   });
 });
 
+describe("SidebarProvider feedback triage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    feedbackStoreMocks.readFeedback.mockReturnValue([]);
+  });
+
+  it("forwards triage state and priority through the extension host", async () => {
+    const { SidebarProvider } = await import("./SidebarProvider.js");
+    const provider = new SidebarProvider({ path: "/ext" } as never);
+    const webview = makeWebviewView();
+
+    provider.resolveWebviewView(
+      webview.view as never,
+      {} as never,
+      {} as never,
+    );
+    webview.getMessageHandler()!({
+      command: "triageFeedbackEntry",
+      id: "feedback-id",
+      triaged: true,
+      priority: "P1",
+    });
+
+    expect(feedbackStoreMocks.triageFeedback).toHaveBeenCalledWith({
+      ids: ["feedback-id"],
+      triaged: true,
+      priority: "P1",
+    });
+    expect(webview.postMessage).toHaveBeenCalledWith({
+      type: "updateFeedback",
+      entries: [],
+    });
+
+    webview.getMessageHandler()!({
+      command: "triageFeedbackEntry",
+      id: "feedback-id",
+      triaged: false,
+    });
+    expect(feedbackStoreMocks.triageFeedback).toHaveBeenLastCalledWith({
+      ids: ["feedback-id"],
+      triaged: false,
+      priority: undefined,
+    });
+  });
+
+  it("logs invalid triage messages and still refreshes feedback", async () => {
+    feedbackStoreMocks.triageFeedback.mockImplementationOnce(() => {
+      throw new Error("invalid triage");
+    });
+    const { SidebarProvider } = await import("./SidebarProvider.js");
+    const log = vi.fn();
+    const provider = new SidebarProvider({ path: "/ext" } as never, log);
+    const webview = makeWebviewView();
+
+    provider.resolveWebviewView(
+      webview.view as never,
+      {} as never,
+      {} as never,
+    );
+    webview.getMessageHandler()!({
+      command: "triageFeedbackEntry",
+      id: "feedback-id",
+      triaged: true,
+    });
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Could not triage feedback"),
+    );
+    expect(mockVscode.window.showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining("Could not triage feedback"),
+    );
+    expect(webview.postMessage).toHaveBeenCalledWith({
+      type: "updateFeedback",
+      entries: [],
+    });
+  });
+});
+
 describe("SidebarProvider retained activity behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -360,6 +465,50 @@ describe("SidebarProvider retained activity behavior", () => {
     expect(webview.postMessage).toHaveBeenCalledWith({
       type: "updateToolCalls",
       calls: toolCalls,
+    });
+  });
+
+  it("omits automatically inherited rules from session rule projections", async () => {
+    const { SidebarProvider } = await import("./SidebarProvider.js");
+    const provider = new SidebarProvider({ path: "/ext" } as never);
+    const approvalManager = makeApprovalManager();
+    approvalManager.getActiveSessions = () => [
+      ...makeApprovalManager().getActiveSessions(),
+      {
+        id: "background-session",
+        writeApproved: false,
+        agentWriteApproved: true,
+        commandRuleCount: 1,
+        pathRuleCount: 1,
+        writeRuleCount: 1,
+        lastActivity: Date.now(),
+      },
+    ];
+    provider.setApprovalManager(approvalManager as never);
+    const webview = makeWebviewView();
+
+    provider.resolveWebviewView(
+      webview.view as never,
+      {} as never,
+      {} as never,
+    );
+    webview.getMessageHandler()?.({ command: "webviewReady" });
+
+    expect(webview.postMessage).toHaveBeenCalledWith({
+      type: "stateUpdate",
+      state: expect.objectContaining({
+        activeSessions: [
+          expect.objectContaining({ id: "session-a" }),
+          {
+            id: "background-session",
+            writeApproved: false,
+            agentWriteApproved: true,
+            commandRules: [],
+            pathRules: [],
+            writeRules: [],
+          },
+        ],
+      }),
     });
   });
 

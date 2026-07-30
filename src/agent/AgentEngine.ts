@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "crypto";
 import * as fs from "fs/promises";
 import * as path from "path";
 import type { AgentSession } from "./AgentSession.js";
+import { ToolResultArtifactManager } from "./toolResultArtifacts.js";
 import type {
   AgentEvent,
   AgentMessage,
@@ -788,12 +789,10 @@ const TOOL_RESULT_CHAR_LIMITS: Record<string, number> = {
 const DEFAULT_TOOL_RESULT_CHARS = 32_000; // ~8k tokens
 const TOOL_RESULT_RETENTION_MIN_CHARS = 8_000; // ~2k tokens
 
-// Truncated and retained tool results are saved here so the agent can read_file
-// the full output when needed. Allowlisted in handleReadFile to bypass the
-// approval gate.
+// Legacy fire-and-forget truncated outputs are saved here. Awaited retained
+// history and compose artifacts use ToolResultArtifactManager's private
+// os.tmpdir() run root. Both roots are allowlisted for read_file recovery.
 const AGENTLINK_TMP_DIR = "/tmp/agentlink-results";
-const RETAINED_TOOL_RESULT_DIR = path.join(AGENTLINK_TMP_DIR, "retained");
-
 interface RetainedToolResultArtifact {
   hash: string;
   path: string;
@@ -868,7 +867,7 @@ async function retainToolResultHistoryContent(
   canonicalContent: CoreModelToolResultBlock["content"],
   toolCallId: string,
   toolName: string,
-  runArtifactId: string,
+  artifactManager: ToolResultArtifactManager,
   index: ToolResultRetentionIndex,
 ): Promise<CoreModelToolResultBlock["content"]> {
   if (typeof canonicalContent !== "string") return canonicalContent;
@@ -884,28 +883,17 @@ async function retainToolResultHistoryContent(
       : canonicalContent;
   }
 
-  const artifactPath = path.join(
-    RETAINED_TOOL_RESULT_DIR,
-    runArtifactId,
-    `${hash}.txt`,
-  );
   const write = (async (): Promise<RetainedToolResultArtifact | null> => {
-    try {
-      await fs.mkdir(path.dirname(artifactPath), { recursive: true });
-      await fs.writeFile(artifactPath, exactText, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-      return {
-        hash,
-        path: artifactPath,
-        originalToolCallId: toolCallId,
-        originalToolName: toolName,
-        chars: exactText.length,
-      };
-    } catch {
-      return null;
-    }
+    const artifact = await artifactManager.writeText(exactText, "txt");
+    return artifact
+      ? {
+          hash,
+          path: artifact.path,
+          originalToolCallId: toolCallId,
+          originalToolName: toolName,
+          chars: exactText.length,
+        }
+      : null;
   })();
   index.set(hash, write);
   const artifact = await write;
@@ -1159,7 +1147,7 @@ export class AgentEngine {
     let pendingCompletedTodoUpdate: TodoItem[] | null = null;
     let currentTodos: TodoItem[] = getLatestTodoState(session.getAllMessages());
     const retainedToolResults: ToolResultRetentionIndex = new Map();
-    const retainedToolResultRunId = randomUUID();
+    const toolResultArtifactManager = new ToolResultArtifactManager();
 
     try {
       let requestRetryCount = 0;
@@ -2057,6 +2045,12 @@ export class AgentEngine {
               retryAttempt,
               retryMaxAttempts: maxRetries,
             };
+            // A backing-off request must not hold provider admission capacity:
+            // rate-limit waits can last many seconds, and other sessions can
+            // use the slot in the meantime. The retry reacquires a permit at
+            // the top of the next iteration.
+            requestPermit?.release();
+            requestPermit = undefined;
             await sleep(delayMs);
             if (signal.aborted) break;
             continue;
@@ -2433,6 +2427,8 @@ export class AgentEngine {
               ? "read-only"
               : undefined,
           pendingQuestionRecovery,
+          retainToolResultArtifact: ({ content, extension, signal }) =>
+            toolResultArtifactManager.writeText(content, extension, signal),
           onFinalStatus: (marker) => {
             pendingFinalMarker = marker;
           },
@@ -2450,8 +2446,11 @@ export class AgentEngine {
           },
           getSessionTranscript: () =>
             buildSessionTranscriptSnapshot(session.getAllMessages()),
-          getSessionImages: () =>
-            collectSessionImages(session.getAllMessages()),
+          // Number image_N ids over the model-visible history (post-condense,
+          // no diagnostic-only messages): the model counts the images it can
+          // see, so numbering the raw transcript makes ids silently drift onto
+          // older captures after a condense or revert.
+          getSessionImages: () => collectSessionImages(session.getMessages()),
         };
         const resolvedToolUseBlocks: ResolvedToolUseBlock[] = toolUseBlocks.map(
           (block) => {
@@ -2688,7 +2687,7 @@ export class AgentEngine {
             canonicalContent,
             tr.tool_use_id,
             tr.toolName,
-            retainedToolResultRunId,
+            toolResultArtifactManager,
             retainedToolResults,
           );
           toolResultContents.push(tr.historyContent);

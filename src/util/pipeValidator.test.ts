@@ -652,6 +652,36 @@ describe("validateCommand", () => {
       expect(result).not.toBeNull();
       expect(result!.strippedCommand).toBe("docker ps");
     });
+
+    it.each([
+      "git diff --check -- plans | grep . && echo staged plans found",
+      "if git diff --check -- plans | grep .; then exit 1; fi",
+      "result=$(git status --short | grep plans)",
+      "{ git status --short | grep plans; }",
+      "git ls-files | grep generated | xargs rm",
+      "git log | grep fix |",
+    ])("does not rewrite unsafe pipeline: %s", (command) => {
+      const result = validateCommand(command);
+
+      expect(result?.type).toBe("pipe");
+      expect(result?.strippedCommand).toBeUndefined();
+      expect(result?.message).not.toContain("Run this command instead:");
+      expect(result?.message).toContain(
+        "exact command cannot be safely rewritten",
+      );
+      expect(result?.message).toContain(
+        "producer-native pathspec or predicate",
+      );
+    });
+
+    it.each([
+      ["make build 2>&1 | grep error", "make build 2>&1"],
+      ["npm test 2> /dev/null | grep failed", "npm test 2> /dev/null"],
+      ["cmd < input.txt | grep found", "cmd < input.txt"],
+      ["git log --oneline | grep for", "git log --oneline"],
+    ])("preserves safe top-level rewrite: %s", (command, stripped) => {
+      expect(validateCommand(command)?.strippedCommand).toBe(stripped);
+    });
   });
 
   // ── cat in pipelines ──────────────────────────────────────────────

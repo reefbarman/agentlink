@@ -30,6 +30,10 @@ import {
   createShellIntegrationParser,
 } from "./shellIntegration.js";
 import {
+  TerminalDataCoalescer,
+  type TerminalDataCoalescerOptions,
+} from "./TerminalDataCoalescer.js";
+import {
   TerminalSessionService,
   type HostPtyDisposable,
 } from "./TerminalSessionService.js";
@@ -142,6 +146,9 @@ export interface LiveHostTerminalSurfaceControllerOptions {
     maxBytes: number;
     maxBatches: number;
   };
+  /** Tuning for PTY output coalescing; tests pass `flushDelayMs: 0` for
+   * synchronous delivery or an explicit scheduler to control flush timing. */
+  dataCoalescing?: Omit<TerminalDataCoalescerOptions, "onFlush">;
   ensureRuntimeRoot?(): Promise<void>;
   materializeBootstrap?: typeof materializeHostShellBootstrap;
   sandboxChannelHub?: SandboxTerminalChannelHub;
@@ -208,6 +215,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
   >();
   private readonly sandboxSubscription: { dispose(): void } | undefined;
   private readonly agentRawDataSubscription: { dispose(): void } | undefined;
+  private readonly dataCoalescer: TerminalDataCoalescer;
   private readonly pendingConfirmations = new Map<
     string,
     PendingTerminalConfirmation
@@ -222,6 +230,20 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
   constructor(
     private readonly options: LiveHostTerminalSurfaceControllerOptions,
   ) {
+    this.dataCoalescer = new TerminalDataCoalescer({
+      ...options.dataCoalescing,
+      onFlush: (terminalId, data) => {
+        // Timer-driven flushes run outside the session service's listener
+        // guard, so failures must not escape to the event loop.
+        try {
+          this.processCoalescedData(terminalId, data);
+        } catch (error) {
+          this.options.log?.(
+            `Host terminal output processing failed: ${String(error)}`,
+          );
+        }
+      },
+    });
     this.sandboxSubscription = options.sandboxChannelHub?.subscribe((update) =>
       this.handleSandboxEvent(update),
     );
@@ -670,6 +692,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.dataCoalescer.dispose();
     this.readyConnections.clear();
     this.connections.clear();
     this.pendingConfirmations.clear();
@@ -688,6 +711,9 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     connection: HostTerminalSurfaceConnection,
   ): Promise<void> {
     if (!this.isCurrent(connection)) return;
+    // Buffered output must be folded into replay retention before snapshots
+    // are taken, or the bootstrap replay would miss the freshest tail.
+    this.dataCoalescer.flushAll();
     this.readyConnections.add(connection);
     this.refreshSandboxChannels();
     const replay = [];
@@ -828,6 +854,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       return;
     }
     if (update.event.type === "closed") {
+      this.dataCoalescer.discard(terminal.terminalId);
       this.sandboxTerminals.delete(terminal.terminalId);
       this.state = reduceHostTerminalState(this.state, {
         type: "host-terminal/closed",
@@ -1100,6 +1127,8 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
   private resetSandboxProcessBoundary(
     terminal: ManagedSandboxSurfaceTerminal,
   ): void {
+    // The boundary must observe everything the command produced.
+    this.dataCoalescer.flush(terminal.terminalId);
     const update = terminal.runtime.resetProcessBoundary();
     if (update.batch) this.enqueueSandboxBatch(terminal, update.batch);
   }
@@ -1108,8 +1137,9 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     terminal: ManagedSandboxSurfaceTerminal,
     data: string,
   ): void {
-    const update = terminal.runtime.processData(data);
-    if (update.batch) this.enqueueSandboxBatch(terminal, update.batch);
+    // Synthetic prompts and markers share the coalescer with raw channel
+    // output so per-terminal ordering is preserved.
+    this.dataCoalescer.push(terminal.terminalId, data);
   }
 
   private requestSandboxResync(
@@ -1349,26 +1379,19 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
     if (this.disposed || !this.terminals.has(terminal.terminalId)) return;
 
     if (event.type === "host-terminal/data") {
-      this.deleteConfirmationsForTerminal(terminal.terminalId);
-      const previousCwd = terminal.runtime.currentCwd;
-      const update = terminal.runtime.processData(event.data);
-      if (update.batch) this.enqueueBatch(terminal, update.batch);
-      if (terminal.runtime.currentCwd !== previousCwd) {
-        const cwdEvent: HostTerminalEvent = {
-          type: "host-terminal/cwd",
-          terminalId: terminal.terminalId,
-          cwd: terminal.runtime.currentCwd,
-        };
-        this.state = reduceHostTerminalState(this.state, cwdEvent);
-        this.postLifecycle(terminal, cwdEvent);
-      }
-      // Renderer pressure pauses delivery, not the PTY. Keep draining the
-      // child process while replay retention records the authoritative tail.
-      return terminal.renderPaused || update.continueOutput;
+      // Coalesce bursts of PTY chunks into large writes before parsing and
+      // delivery; per-chunk batches multiply postMessage/ack round trips and
+      // made sustained output render slowly. Renderer pressure pauses
+      // delivery, not the PTY: keep draining the child process while replay
+      // retention records the authoritative tail.
+      this.dataCoalescer.push(terminal.terminalId, event.data);
+      return true;
     }
 
     this.state = reduceHostTerminalState(this.state, event);
     if (event.type === "host-terminal/exited") {
+      // Buffered output must land before the exit summary to keep order.
+      this.dataCoalescer.flush(terminal.terminalId);
       this.deleteConfirmationsForTerminal(terminal.terminalId);
       const update = terminal.runtime.finish();
       if (update.batch) this.enqueueBatch(terminal, update.batch);
@@ -1379,6 +1402,7 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       return;
     }
     if (event.type === "host-terminal/closed") {
+      this.dataCoalescer.discard(terminal.terminalId);
       this.deleteConfirmationsForTerminal(terminal.terminalId);
       this.terminals.delete(terminal.terminalId);
       terminal.deliveryQueue = terminal.deliveryQueue.then(async () => {
@@ -1388,6 +1412,33 @@ export class LiveHostTerminalSurfaceController implements HostTerminalSurfaceCon
       return;
     }
     void this.postLifecycle(terminal, event);
+  }
+
+  /** Applies a coalesced run of PTY or sandbox output to the owning
+   * terminal's runtime and delivery queue. */
+  private processCoalescedData(terminalId: string, data: string): void {
+    if (this.disposed) return;
+    const terminal = this.terminals.get(terminalId);
+    if (terminal) {
+      this.deleteConfirmationsForTerminal(terminal.terminalId);
+      const previousCwd = terminal.runtime.currentCwd;
+      const update = terminal.runtime.processData(data);
+      if (update.batch) this.enqueueBatch(terminal, update.batch);
+      if (terminal.runtime.currentCwd !== previousCwd) {
+        const cwdEvent: HostTerminalEvent = {
+          type: "host-terminal/cwd",
+          terminalId: terminal.terminalId,
+          cwd: terminal.runtime.currentCwd,
+        };
+        this.state = reduceHostTerminalState(this.state, cwdEvent);
+        void this.postLifecycle(terminal, cwdEvent);
+      }
+      return;
+    }
+    const sandboxTerminal = this.sandboxTerminals.get(terminalId);
+    if (!sandboxTerminal) return;
+    const update = sandboxTerminal.runtime.processData(data);
+    if (update.batch) this.enqueueSandboxBatch(sandboxTerminal, update.batch);
   }
 
   private enqueueBatch(

@@ -144,6 +144,129 @@ describe("App chat workspace integration", () => {
     ]);
   });
 
+  it("keeps composer selections made before the first message", async () => {
+    const vscodeApi = createVsCodeApi();
+    const snapshot = createSnapshot("tab-1");
+    snapshot.tabs[0] = {
+      ...snapshot.tabs[0]!,
+      sessionId: null,
+      status: "idle",
+      busy: false,
+    };
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot });
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: null,
+        mode: "code",
+        model: "model-a",
+        streaming: false,
+        reasoningEffort: "high",
+        thinkingEnabled: true,
+        agentWriteApproval: "prompt",
+        commandApprovalPolicy: "safe",
+        configuredCommandApprovalPolicy: "safe",
+        projects: [
+          {
+            projectId: "project-1",
+            displayName: "Project",
+            availability: "available",
+          },
+        ],
+      },
+    });
+    deliver({
+      type: "agentModesUpdate",
+      modes: [
+        { slug: "code", name: "Code", icon: "code" },
+        { slug: "ask", name: "Ask", icon: "comment-discussion" },
+      ],
+    });
+    deliver({
+      type: "agentModelsUpdate",
+      models: [
+        {
+          id: "model-a",
+          displayName: "Model A",
+          provider: "test",
+          authenticated: true,
+          reasoningEfforts: ["none", "low", "high"],
+        },
+        {
+          id: "model-b",
+          displayName: "Model B",
+          provider: "test",
+          authenticated: true,
+          reasoningEfforts: ["none", "low", "high"],
+        },
+      ],
+    });
+
+    fireEvent.click(screen.getByTitle("Mode: Code"));
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    expect(screen.getByTitle("Mode: Ask")).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle(/Model: Model A/));
+    fireEvent.click(screen.getByRole("button", { name: /Model B/ }));
+    expect(screen.getByTitle(/Model: Model B/)).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle("Reasoning: High"));
+    fireEvent.click(screen.getByRole("button", { name: "Low" }));
+    expect(screen.getByTitle("Reasoning: Low")).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle("Writes: Prompt"));
+    fireEvent.click(screen.getByRole("button", { name: "Project" }));
+    expect(screen.getByTitle("Writes: Project")).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle(/Let a separate reviewer approve/));
+
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: null,
+        mode: "code",
+        model: "model-a",
+        streaming: false,
+        reasoningEffort: "high",
+        thinkingEnabled: true,
+        agentWriteApproval: "prompt",
+        commandApprovalPolicy: "safe",
+        configuredCommandApprovalPolicy: "safe",
+      },
+    });
+    expect(screen.getByTitle("Mode: Ask")).toBeTruthy();
+    expect(screen.getByTitle(/Model: Model B/)).toBeTruthy();
+    expect(screen.getByTitle("Reasoning: Low")).toBeTruthy();
+    expect(screen.getByTitle("Writes: Project")).toBeTruthy();
+
+    const composer = container.querySelector(
+      ".chat-input",
+    ) as HTMLTextAreaElement;
+    fireEvent.input(composer, { target: { value: "first message" } });
+    fireEvent.click(screen.getByTitle("Send message (Enter)"));
+
+    expect(postedCommands(vscodeApi.postMessage, "chatTabNewChat")).toEqual([]);
+    expect(postedCommands(vscodeApi.postMessage, "agentSetModel")).toEqual([]);
+    expect(
+      postedCommands(vscodeApi.postMessage, "agentSetWriteApproval"),
+    ).toEqual([]);
+    expect(
+      postedCommands(vscodeApi.postMessage, "agentSetCommandApprovalPolicy"),
+    ).toEqual([]);
+    expect(postedCommands(vscodeApi.postMessage, "agentSend")).toEqual([
+      expect.objectContaining({
+        sessionId: null,
+        mode: "ask",
+        model: "model-b",
+        reasoningEffort: "low",
+        thinkingEnabled: true,
+        agentWriteApproval: "project",
+        commandApprovalPolicy: "approve-for-me",
+      }),
+    ]);
+  });
+
   it("renders ask_user from an explicitly correlated question request", () => {
     const vscodeApi = createVsCodeApi();
     render(<App vscodeApi={vscodeApi} />);

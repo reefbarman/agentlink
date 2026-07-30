@@ -667,6 +667,9 @@ export async function activate(
   approvalManager.migrateFromGlobalState().catch((err) => {
     log(`Migration warning: ${err}`);
   });
+  approvalManager.clearLegacyPersistedSessions().catch((err) => {
+    log(`Session approval cleanup warning: ${err}`);
+  });
 
   context.subscriptions.push(registerDiffViewContentProvider());
 
@@ -1214,6 +1217,9 @@ export async function activate(
     projectCustomizationRegistry,
     extVersion,
   );
+  chatViewProvider.setPendingInteractionAlertProvider((message, command) =>
+    statusBarManager.showAlert(message, command),
+  );
   chatViewProvider.setChatTabController(chatTabController);
   chatTabPanelHost = new ChatTabPanelHost({
     extensionUri: context.extensionUri,
@@ -1589,7 +1595,11 @@ export async function activate(
         for (const sessionId of subtreeIds) {
           toolCallTracker.cancelSessionCalls(sessionId);
         }
-        await agentSessionManager.stopSessionAndWait(tab.sessionId);
+        const stoppedSessionIds = await agentSessionManager.stopSessionAndWait(
+          tab.sessionId,
+        );
+        approvalManager.clearSessions(stoppedSessionIds);
+        builtinApprovalPanel.clearRecentApprovalsForSessions(stoppedSessionIds);
       }
       tabTerminalProviders.retireOwner(
         terminalOwnerForTab(tab, tab.sessionId ?? "retired"),
@@ -2741,6 +2751,7 @@ export async function activate(
     ...registerAgentActivityCommands({
       addTrustedCommand: () => addTrustedCommandViaUi(approvalManager),
       approvalPanel,
+      pendingInteractionTarget: chatViewProvider,
       toolCallTracker,
       approvalManager,
     }),

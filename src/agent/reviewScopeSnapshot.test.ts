@@ -201,6 +201,79 @@ describe("captureReviewScope", () => {
     ).rejects.toThrow(/not a Git repository.*kind "files"/);
   });
 
+  it("drops excluded paths from working-tree captures with an explicit manifest entry", async () => {
+    const cwd = await createRepository();
+    await fs.writeFile(
+      path.join(cwd, "tracked.ts"),
+      "export const value = 2;\n",
+    );
+    await fs.writeFile(path.join(cwd, "asset.bin"), "binary-ish payload\n");
+
+    const snapshot = await captureReviewScope(cwd, {
+      kind: "working_tree",
+      excludePaths: ["asset.bin"],
+    });
+
+    expect(snapshot).toContain("+export const value = 2;");
+    expect(snapshot).toContain("Excluded paths: asset.bin");
+    expect(snapshot).not.toContain("binary-ish payload");
+  });
+
+  it("records oversized files as metadata instead of rejecting the capture", async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "review-large-test-"));
+    await fs.writeFile(path.join(cwd, "small.ts"), "export const ok = 1;\n");
+    await fs.writeFile(path.join(cwd, "huge.png"), Buffer.alloc(1_100_000, 7));
+
+    const snapshot = await captureReviewScope(cwd, {
+      kind: "files",
+      paths: ["small.ts", "huge.png"],
+    });
+
+    expect(snapshot).toContain("export const ok = 1;");
+    expect(snapshot).toContain("Oversized file");
+    expect(snapshot).toContain("1100000 bytes");
+    expect(snapshot).toContain("content omitted");
+  });
+
+  it("names the largest captured files when the total capture exceeds the limit", async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "review-limit-test-"));
+    await fs.writeFile(path.join(cwd, "big-a.txt"), "a".repeat(600_000) + "\n");
+    await fs.writeFile(path.join(cwd, "big-b.txt"), "b".repeat(600_000) + "\n");
+
+    await expect(
+      captureReviewScope(cwd, {
+        kind: "files",
+        paths: ["big-a.txt", "big-b.txt"],
+      }),
+    ).rejects.toThrow(/Largest captured items: big-[ab]\.txt \(\d+ bytes\)/);
+  });
+
+  it("selects the requested workspace root for multi-root working-tree captures", async () => {
+    const firstRoot = await createRepository();
+    const secondRoot = await createRepository();
+    await fs.writeFile(
+      path.join(secondRoot, "tracked.ts"),
+      "export const value = 42;\n",
+    );
+
+    const snapshot = await captureReviewScope(
+      firstRoot,
+      { kind: "working_tree", root: secondRoot },
+      { workspaceRoots: [firstRoot, secondRoot] },
+    );
+
+    expect(snapshot).toContain("+export const value = 42;");
+    expect(snapshot).toContain(`Git root: ${await fs.realpath(secondRoot)}`);
+
+    await expect(
+      captureReviewScope(
+        firstRoot,
+        { kind: "working_tree", root: "/nonexistent/root" },
+        { workspaceRoots: [firstRoot, secondRoot] },
+      ),
+    ).rejects.toThrow(/does not match an open workspace root/);
+  });
+
   it("resolves commit ranges into diff snapshots", async () => {
     const cwd = await createRepository();
     const base = (await runGit(cwd, ["rev-parse", "HEAD"])).trim();

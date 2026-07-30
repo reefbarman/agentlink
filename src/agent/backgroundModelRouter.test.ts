@@ -561,6 +561,60 @@ describe("resolveBackgroundRoute", () => {
     expect(route.routingReason).toContain("fallback");
   });
 
+  it("routes around a provider on availability cooldown even when authenticated", async () => {
+    const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
+    const codexModel = makeModel("gpt-5", "codex");
+    const registry = makeRegistry([
+      makeProvider("anthropic", [anthModel], true),
+      makeProvider("codex", [codexModel], true),
+    ]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      {
+        task: "Review PR",
+        message: "Do a critical review",
+        taskClass: "review_code",
+      },
+      {
+        mode: "code",
+        model: "gpt-5",
+        // The opposite provider (anthropic) recently failed with a billing
+        // error, so review routing must fall back instead of failing again.
+        unavailableProviders: ["anthropic"],
+      },
+    );
+
+    expect(route.resolvedProvider).toBe("codex");
+    expect(route.fallbackUsed).toBe(true);
+  });
+
+  it("still honors an explicit provider request during its cooldown", async () => {
+    const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
+    const codexModel = makeModel("gpt-5", "codex");
+    const registry = makeRegistry([
+      makeProvider("anthropic", [anthModel], true),
+      makeProvider("codex", [codexModel], true),
+    ]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      {
+        task: "Review PR",
+        message: "Do a critical review",
+        taskClass: "review_code",
+        provider: "anthropic",
+      },
+      {
+        mode: "code",
+        model: "gpt-5",
+        unavailableProviders: ["anthropic"],
+      },
+    );
+
+    expect(route.resolvedProvider).toBe("anthropic");
+  });
+
   it("routes plan reviews to the opposite provider", async () => {
     const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
     const codexModel = makeModel("gpt-5", "codex");

@@ -94,6 +94,12 @@ function harness(
   options: {
     runtimeWatermarks?: { high: number; low: number };
     renderQueueLimits?: { maxBytes: number; maxBatches: number };
+    dataCoalescing?: {
+      flushDelayMs?: number;
+      maxBufferedBytes?: number;
+      schedule?: (callback: () => void, delayMs: number) => unknown;
+      cancel?: (handle: unknown) => void;
+    };
     multiLinePasteWarning?: "auto" | "always" | "never";
     ensureRuntimeRoot?: () => Promise<void>;
     materializeBootstrap?: (
@@ -164,6 +170,9 @@ function harness(
     log: options.log,
     runtimeWatermarks: options.runtimeWatermarks,
     renderQueueLimits: options.renderQueueLimits,
+    // Most tests assert on synchronous event ordering; coalescing behavior is
+    // exercised explicitly with an injected scheduler.
+    dataCoalescing: options.dataCoalescing ?? { flushDelayMs: 0 },
     ensureRuntimeRoot: options.ensureRuntimeRoot,
     materializeBootstrap: options.materializeBootstrap,
   });
@@ -2510,5 +2519,200 @@ describe("LiveHostTerminalSurfaceController", () => {
 
     expect(test.processes[0].killCount).toBe(1);
     expect(test.processes[0].writes).toEqual([]);
+  });
+
+  function manualScheduler() {
+    let nextHandle = 1;
+    const scheduled = new Map<number, () => void>();
+    return {
+      schedule: (callback: () => void) => {
+        const handle = nextHandle++;
+        scheduled.set(handle, callback);
+        return handle;
+      },
+      cancel: (handle: unknown) => {
+        scheduled.delete(handle as number);
+      },
+      runAll() {
+        const batch = Array.from(scheduled);
+        for (const [handle, callback] of batch) {
+          scheduled.delete(handle);
+          callback();
+        }
+      },
+      get pendingCount() {
+        return scheduled.size;
+      },
+    };
+  }
+
+  function renderBatches(events: TerminalSurfaceEvent[]) {
+    return events.flatMap((event) =>
+      event.type === "terminal-view/render-batch" ? [event] : [],
+    );
+  }
+
+  function writtenData(events: TerminalSurfaceEvent[]): string {
+    return renderBatches(events)
+      .flatMap((batch) => batch.operations)
+      .flatMap((operation) =>
+        operation.type === "write" ? [operation.data] : [],
+      )
+      .join("");
+  }
+
+  it("coalesces bursts of PTY output into a single render batch", async () => {
+    const scheduler = manualScheduler();
+    const test = harness(snapshot(), {
+      dataCoalescing: {
+        flushDelayMs: 5,
+        schedule: scheduler.schedule,
+        cancel: scheduler.cancel,
+      },
+    });
+    await ready(test);
+    await create(test);
+    const process = test.processes[0];
+
+    for (let index = 0; index < 50; index += 1) {
+      process.emitData(`chunk-${index}\r\n`);
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(renderBatches(test.events)).toHaveLength(0);
+    expect(scheduler.pendingCount).toBe(1);
+
+    scheduler.runAll();
+    await vi.waitFor(() => expect(renderBatches(test.events)).toHaveLength(1));
+    expect(writtenData(test.events)).toBe(
+      Array.from({ length: 50 }, (_, index) => `chunk-${index}\r\n`).join(""),
+    );
+  });
+
+  it("flushes coalesced output immediately at the byte cap", async () => {
+    const scheduler = manualScheduler();
+    const test = harness(snapshot(), {
+      dataCoalescing: {
+        flushDelayMs: 5,
+        maxBufferedBytes: 8,
+        schedule: scheduler.schedule,
+        cancel: scheduler.cancel,
+      },
+    });
+    await ready(test);
+    await create(test);
+
+    test.processes[0].emitData("1234");
+    test.processes[0].emitData("5678");
+    await vi.waitFor(() => expect(renderBatches(test.events)).toHaveLength(1));
+    expect(writtenData(test.events)).toBe("12345678");
+    expect(scheduler.pendingCount).toBe(0);
+  });
+
+  it("delivers buffered output before the terminal exit", async () => {
+    const scheduler = manualScheduler();
+    const test = harness(snapshot(), {
+      dataCoalescing: {
+        flushDelayMs: 5,
+        schedule: scheduler.schedule,
+        cancel: scheduler.cancel,
+      },
+    });
+    await ready(test);
+    await create(test);
+
+    test.processes[0].emitData("final output");
+    test.processes[0].emitExit(0);
+    await vi.waitFor(() =>
+      expect(
+        test.events.some((event) => event.type === "host-terminal/exited"),
+      ).toBe(true),
+    );
+
+    expect(writtenData(test.events)).toContain("final output");
+    const batchIndex = test.events.findIndex(
+      (event) => event.type === "terminal-view/render-batch",
+    );
+    const exitIndex = test.events.findIndex(
+      (event) => event.type === "host-terminal/exited",
+    );
+    expect(batchIndex).toBeGreaterThanOrEqual(0);
+    expect(batchIndex).toBeLessThan(exitIndex);
+    expect(scheduler.pendingCount).toBe(0);
+  });
+
+  it("folds buffered output into the bootstrap replay on reattach", async () => {
+    const scheduler = manualScheduler();
+    const test = harness(snapshot(), {
+      dataCoalescing: {
+        flushDelayMs: 5,
+        schedule: scheduler.schedule,
+        cancel: scheduler.cancel,
+      },
+    });
+    await ready(test);
+    const opened = await create(test);
+
+    test.processes[0].emitData("buffered tail");
+    test.controller.detach(test.connection);
+
+    const replayEvents: TerminalSurfaceEvent[] = [];
+    const replacement = test.controller.attach(async (event) => {
+      replayEvents.push(event);
+      return true;
+    });
+    await test.controller.handleRequest(replacement, {
+      type: "terminal-view/ready",
+      protocolVersion: TERMINAL_SURFACE_PROTOCOL_VERSION,
+    });
+
+    expect(replayEvents[0]).toMatchObject({
+      type: "terminal-view/bootstrap",
+      replay: [
+        {
+          terminalId: opened.terminalId,
+          data: "buffered tail",
+        },
+      ],
+    });
+  });
+
+  it("coalesces sandbox output bursts into a single render batch", async () => {
+    const scheduler = manualScheduler();
+    const sandbox = sandboxHubHarness();
+    const test = harness(snapshot(), {
+      sandboxChannelHub: sandbox.hub,
+      dataCoalescing: {
+        flushDelayMs: 5,
+        schedule: scheduler.schedule,
+        cancel: scheduler.cancel,
+      },
+    });
+    await ready(test);
+
+    for (const data of ["part one ", "part two"]) {
+      sandbox.emit({
+        event: { type: "data", commandId: "command-2", generation: 2, data },
+        snapshot: {
+          ...sandboxSnapshot("running"),
+          activeCommandId: "command-2",
+        },
+      });
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(renderBatches(test.events)).toHaveLength(0);
+
+    scheduler.runAll();
+    await vi.waitFor(() => expect(renderBatches(test.events)).toHaveLength(1));
+    expect(test.events).toContainEqual(
+      expect.objectContaining({
+        type: "terminal-view/render-batch",
+        terminalId: "sandbox-1",
+        operations: expect.arrayContaining([
+          { type: "write", data: "part one part two" },
+        ]),
+      }),
+    );
   });
 });

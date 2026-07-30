@@ -49,6 +49,9 @@ export async function handleStartWorktreeAgent(
   params: StartWorktreeAgentParams,
   deps: StartWorktreeAgentDeps,
 ): Promise<ToolResult> {
+  // Populated as launch context resolves so every failure path — including
+  // the catch-all for git errors — can report where the launch got to.
+  const launchContext: Record<string, unknown> = {};
   try {
     const task = normalizeRequired(params.task, "task");
     const prompt = normalizeRequired(params.prompt, "prompt");
@@ -83,14 +86,21 @@ export async function handleStartWorktreeAgent(
         (await runGit(["rev-parse", "--git-common-dir"], repoRoot)).trim(),
       ),
     );
+    launchContext.sourceRoot = sourceRoot;
+    launchContext.repoRoot = repoRoot;
     const baseRef =
       params.baseRef?.trim() ||
       (await runGit(["rev-parse", "HEAD"], repoRoot)).trim();
     if (!baseRef)
-      return worktreeError("Unable to resolve baseRef from current HEAD.");
+      return worktreeError(
+        "Unable to resolve baseRef from current HEAD.",
+        launchContext,
+      );
+    launchContext.baseRef = baseRef;
 
     const branch = params.branch?.trim() || generatedBranchName(task);
     validateBranchName(branch);
+    launchContext.branch = branch;
 
     const worktreePath = await resolveWorktreePath({
       requestedPath: params.worktreePath,
@@ -104,9 +114,11 @@ export async function handleStartWorktreeAgent(
         ),
     });
 
+    launchContext.worktreePath = worktreePath;
     const dirtyStatus = (
       await runGit(["status", "--porcelain"], repoRoot)
     ).trim();
+    launchContext.sourceTreeDirty = dirtyStatus.length > 0;
     const worktrees = parseWorktreeList(
       await runGit(["worktree", "list", "--porcelain"], repoRoot),
     );
@@ -161,6 +173,13 @@ export async function handleStartWorktreeAgent(
         worktreePath,
         branch,
         baseRef,
+        sourceRoot,
+        repoRoot,
+        sourceTreeDirty: dirtyStatus.length > 0,
+        decision: approval.decision,
+        ...(existingTarget
+          ? { existingWorktreeBranch: existingTarget.branch }
+          : {}),
         message: approval.message,
       });
     }
@@ -227,7 +246,7 @@ export async function handleStartWorktreeAgent(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return worktreeError(message);
+    return worktreeError(message, launchContext);
   }
 }
 
@@ -444,7 +463,7 @@ async function requestWorktreeApproval(args: {
   sessionId?: string;
 }): Promise<
   | { status: "approved"; autoSubmit: boolean }
-  | { status: "rejected"; message: string }
+  | { status: "rejected"; decision: string; message: string }
 > {
   const detail = buildApprovalDetail(args);
   const choices = [
@@ -490,7 +509,9 @@ async function requestWorktreeApproval(args: {
       ? "approve-autosubmit"
       : selection === "Approve, prefill only"
         ? "approve-prefill"
-        : "deny";
+        : selection === "Deny"
+          ? "deny"
+          : undefined;
   return approvalDecisionToResult(decision);
 }
 
@@ -499,15 +520,25 @@ function approvalDecisionToResult(
   rejectionReason?: string,
 ):
   | { status: "approved"; autoSubmit: boolean }
-  | { status: "rejected"; message: string } {
+  | { status: "rejected"; decision: string; message: string } {
   if (decision === "approve-autosubmit") {
     return { status: "approved", autoSubmit: true };
   }
   if (decision === "approve-prefill") {
     return { status: "approved", autoSubmit: false };
   }
+  if (decision === undefined) {
+    return {
+      status: "rejected",
+      decision: "dismissed",
+      message:
+        rejectionReason?.trim() ||
+        "The worktree approval was dismissed without a selection.",
+    };
+  }
   return {
     status: "rejected",
+    decision,
     message: rejectionReason?.trim() || "User denied worktree agent startup.",
   };
 }

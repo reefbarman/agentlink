@@ -16,6 +16,9 @@ function createDependencies(): AgentActivityCommandDependencies {
     approvalPanel: {
       focusApproval: vi.fn(),
     },
+    pendingInteractionTarget: {
+      focusPendingInteraction: vi.fn(async () => false),
+    },
     toolCallTracker: {
       cancelCall: vi.fn(),
       continueInBackground: vi.fn(),
@@ -68,7 +71,7 @@ describe("registerAgentActivityCommands", () => {
     expect(disposables).toHaveLength(6);
   });
 
-  it("forwards trusted-command and approval-focus actions", async () => {
+  it("forwards trusted-command and external approval-focus actions", async () => {
     const dependencies = createDependencies();
     registerAgentActivityCommands(dependencies);
 
@@ -76,6 +79,48 @@ describe("registerAgentActivityCommands", () => {
     await invoke("agentLink.focusApproval");
 
     expect(dependencies.addTrustedCommand).toHaveBeenCalledOnce();
+    expect(
+      dependencies.pendingInteractionTarget.focusPendingInteraction,
+    ).not.toHaveBeenCalled();
+    expect(dependencies.approvalPanel.focusApproval).toHaveBeenCalledOnce();
+  });
+
+  it("focuses the requested built-in session without opening the external panel", async () => {
+    const dependencies = createDependencies();
+    vi.mocked(
+      dependencies.pendingInteractionTarget.focusPendingInteraction,
+    ).mockResolvedValue(true);
+    registerAgentActivityCommands(dependencies);
+
+    await invoke("agentLink.focusApproval", { sessionId: "session-2" });
+
+    expect(
+      dependencies.pendingInteractionTarget.focusPendingInteraction,
+    ).toHaveBeenCalledWith("session-2");
+    expect(dependencies.approvalPanel.focusApproval).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the external panel when a built-in session cannot be focused", async () => {
+    const dependencies = createDependencies();
+    registerAgentActivityCommands(dependencies);
+
+    await invoke("agentLink.focusApproval", { sessionId: "missing-session" });
+
+    expect(
+      dependencies.pendingInteractionTarget.focusPendingInteraction,
+    ).toHaveBeenCalledWith("missing-session");
+    expect(dependencies.approvalPanel.focusApproval).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to the external panel when built-in focus throws", async () => {
+    const dependencies = createDependencies();
+    vi.mocked(
+      dependencies.pendingInteractionTarget.focusPendingInteraction,
+    ).mockRejectedValue(new Error("session hydration failed"));
+    registerAgentActivityCommands(dependencies);
+
+    await invoke("agentLink.focusApproval", { sessionId: "session-2" });
+
     expect(dependencies.approvalPanel.focusApproval).toHaveBeenCalledOnce();
   });
 

@@ -384,6 +384,14 @@ export function App({
   );
   const stateRef = useRef(state.chatState);
   stateRef.current = state.chatState;
+  const pendingSessionSelectionsRef = useRef<{
+    tabId: string | null;
+    mode?: string;
+    model?: string;
+    reasoningEffort?: ReasoningEffort;
+    agentWriteApproval?: WriteApprovalSelection;
+    commandApprovalPolicy?: CommandApprovalPolicy;
+  }>({ tabId: null });
   const fullStateRef = useRef(state);
   fullStateRef.current = state;
 
@@ -535,7 +543,6 @@ export function App({
   const [bgSessions, setBgSessions] = useState<BgSessionInfoProps[]>([]);
   const bgSessionsRef = useRef<BgSessionInfoProps[]>([]);
   bgSessionsRef.current = bgSessions;
-  const [openFleetToActiveRequest, setOpenFleetToActiveRequest] = useState(0);
   const [showFleetRequest, setShowFleetRequest] = useState(0);
   const [transcriptView, setTranscriptView] =
     useState<OpenTranscriptState | null>(null);
@@ -768,18 +775,39 @@ export function App({
           );
           break;
         case "stateUpdate": {
+          const snapshot = workspaceSnapshotRef.current;
           const selectedSessionId = selectedWorkspaceSessionId(
-            workspaceSnapshotRef.current,
+            snapshot,
             pinnedTabId,
           );
-          if (
-            workspaceSnapshotRef.current &&
-            msg.state.sessionId !== selectedSessionId
-          ) {
+          if (snapshot && msg.state.sessionId !== selectedSessionId) break;
+          streamingRef.current = Boolean(msg.state.streaming);
+          if (msg.state.sessionId) {
+            pendingSessionSelectionsRef.current = { tabId: null };
+            dispatch({ type: "SET_STATE", state: msg.state });
             break;
           }
-          streamingRef.current = Boolean(msg.state.streaming);
-          dispatch({ type: "SET_STATE", state: msg.state });
+          const tabId = pinnedTabId ?? snapshot?.focusedTabId ?? null;
+          const pending = pendingSessionSelectionsRef.current;
+          if (pending.tabId !== tabId) {
+            pendingSessionSelectionsRef.current = { tabId };
+            dispatch({ type: "SET_STATE", state: msg.state });
+            break;
+          }
+          const { tabId: _tabId, reasoningEffort, ...selections } = pending;
+          dispatch({
+            type: "SET_STATE",
+            state: {
+              ...msg.state,
+              ...selections,
+              ...(reasoningEffort
+                ? {
+                    reasoningEffort,
+                    thinkingEnabled: reasoningEffort !== "none",
+                  }
+                : {}),
+            },
+          });
           break;
         }
         case "agentRestoreSessionStart":
@@ -1569,17 +1597,6 @@ export function App({
           setBgSessions(msg.sessions as BgSessionInfoProps[]);
           break;
 
-        case "agentFleetEvent":
-          if (
-            typeof msg.event === "object" &&
-            msg.event !== null &&
-            "type" in msg.event &&
-            msg.event.type === "queued"
-          ) {
-            setOpenFleetToActiveRequest((request) => request + 1);
-          }
-          break;
-
         // Background-only stream events are intentionally not rendered into the
         // foreground transcript. When the transcript overlay is open, project the
         // matching background session through the same reducer used by foreground
@@ -2169,9 +2186,27 @@ export function App({
         images: images.length > 0 ? images : undefined,
         documents: documents.length > 0 ? documents : undefined,
         sessionId: stateRef.current.sessionId,
-        mode: stateRef.current.mode,
-        reasoningEffort: reasoningEffortRef.current,
-        thinkingEnabled: reasoningEffortRef.current !== "none",
+        mode: pendingSessionSelectionsRef.current.mode ?? stateRef.current.mode,
+        reasoningEffort: pendingSessionSelectionsRef.current.reasoningEffort,
+        thinkingEnabled:
+          pendingSessionSelectionsRef.current.reasoningEffort === undefined
+            ? undefined
+            : pendingSessionSelectionsRef.current.reasoningEffort !== "none",
+        ...(pendingSessionSelectionsRef.current.model
+          ? { model: pendingSessionSelectionsRef.current.model }
+          : {}),
+        ...(pendingSessionSelectionsRef.current.agentWriteApproval
+          ? {
+              agentWriteApproval:
+                pendingSessionSelectionsRef.current.agentWriteApproval,
+            }
+          : {}),
+        ...(pendingSessionSelectionsRef.current.commandApprovalPolicy
+          ? {
+              commandApprovalPolicy:
+                pendingSessionSelectionsRef.current.commandApprovalPolicy,
+            }
+          : {}),
       });
     },
     [vscodeApi, state.streaming, state.chatState.reasoningEffort],
@@ -2537,33 +2572,59 @@ export function App({
     [vscodeApi],
   );
 
+  const updateSessionlessSelections = useCallback(
+    (
+      updates: Partial<
+        Pick<
+          typeof stateRef.current,
+          | "mode"
+          | "model"
+          | "reasoningEffort"
+          | "thinkingEnabled"
+          | "agentWriteApproval"
+          | "commandApprovalPolicy"
+        >
+      >,
+    ) => {
+      const snapshot = workspaceSnapshotRef.current;
+      const tabId = pinnedTabId ?? snapshot?.focusedTabId ?? null;
+      if (pendingSessionSelectionsRef.current.tabId !== tabId) {
+        pendingSessionSelectionsRef.current = { tabId };
+      }
+      Object.assign(pendingSessionSelectionsRef.current, updates);
+      stateRef.current = { ...stateRef.current, ...updates };
+      dispatch({ type: "SET_SESSIONLESS_SELECTIONS", selections: updates });
+    },
+    [pinnedTabId],
+  );
+
   const handleSwitchMode = useCallback(
     (slug: string) => {
-      // If there's an active session, switch mode in-place without creating
-      // a new session. Otherwise create a fresh session in the target mode.
+      startupRestorePendingRef.current = false;
+      dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
       if (stateRef.current.sessionId) {
-        startupRestorePendingRef.current = false;
-        dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
         vscodeApi.postMessage(
           toVsCodeSelectionMessage({ type: "mode", mode: slug }),
         );
       } else {
-        startupRestorePendingRef.current = false;
-        dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
         setTranscriptView(null);
-        vscodeApi.postMessage({ command: "chatTabNewChat", mode: slug });
+        updateSessionlessSelections({ mode: slug });
       }
     },
-    [vscodeApi],
+    [updateSessionlessSelections, vscodeApi],
   );
 
   const handleSelectModel = useCallback(
     (modelId: string) => {
+      if (!stateRef.current.sessionId) {
+        updateSessionlessSelections({ model: modelId });
+        return;
+      }
       vscodeApi.postMessage(
         toVsCodeSelectionMessage({ type: "model", model: modelId }),
       );
     },
-    [vscodeApi],
+    [updateSessionlessSelections, vscodeApi],
   );
 
   const handleSetCondenseThreshold = useCallback(
@@ -2597,20 +2658,28 @@ export function App({
 
   const handleSetAgentWriteApproval = useCallback(
     (mode: WriteApprovalSelection) => {
+      if (!stateRef.current.sessionId) {
+        updateSessionlessSelections({ agentWriteApproval: mode });
+        return;
+      }
       vscodeApi.postMessage(
         toVsCodeSelectionMessage({ type: "writeApproval", mode }),
       );
     },
-    [vscodeApi],
+    [updateSessionlessSelections, vscodeApi],
   );
 
   const handleSetCommandApprovalPolicy = useCallback(
     (policy: CommandApprovalPolicy) => {
+      if (!stateRef.current.sessionId) {
+        updateSessionlessSelections({ commandApprovalPolicy: policy });
+        return;
+      }
       vscodeApi.postMessage(
         toVsCodeSelectionMessage({ type: "commandApprovalPolicy", policy }),
       );
     },
-    [vscodeApi],
+    [updateSessionlessSelections, vscodeApi],
   );
 
   const handleExecuteBuiltinCommand = useCallback(
@@ -2632,12 +2701,7 @@ export function App({
           break;
         }
         case "model":
-          vscodeApi.postMessage(
-            toVsCodeSelectionMessage({
-              type: "model",
-              model: args.trim(),
-            }),
-          );
+          handleSelectModel(args.trim());
           break;
         case "help":
           // Inject a help message as user text so the agent responds
@@ -2646,9 +2710,25 @@ export function App({
             text: "List all available slash commands and what they do.",
             attachments: [],
             sessionId: stateRef.current.sessionId,
-            mode: stateRef.current.mode,
+            mode:
+              pendingSessionSelectionsRef.current.mode ?? stateRef.current.mode,
             reasoningEffort: "none",
             thinkingEnabled: false,
+            ...(pendingSessionSelectionsRef.current.model
+              ? { model: pendingSessionSelectionsRef.current.model }
+              : {}),
+            ...(pendingSessionSelectionsRef.current.agentWriteApproval
+              ? {
+                  agentWriteApproval:
+                    pendingSessionSelectionsRef.current.agentWriteApproval,
+                }
+              : {}),
+            ...(pendingSessionSelectionsRef.current.commandApprovalPolicy
+              ? {
+                  commandApprovalPolicy:
+                    pendingSessionSelectionsRef.current.commandApprovalPolicy,
+                }
+              : {}),
           });
           break;
         case "fleet":
@@ -2679,7 +2759,7 @@ export function App({
         vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
       }
     },
-    [vscodeApi, handleSwitchMode],
+    [vscodeApi, handleSelectModel, handleSwitchMode],
   );
 
   const handleElicitSubmit = useCallback(
@@ -2886,12 +2966,19 @@ export function App({
 
   const handleSetReasoningEffort = useCallback(
     (effort: ReasoningEffort) => {
+      if (!stateRef.current.sessionId) {
+        updateSessionlessSelections({
+          reasoningEffort: effort,
+          thinkingEnabled: effort !== "none",
+        });
+        return;
+      }
       dispatch({ type: "SET_REASONING_EFFORT", effort });
       vscodeApi.postMessage(
         toVsCodeSelectionMessage({ type: "reasoningEffort", effort }),
       );
     },
-    [vscodeApi],
+    [updateSessionlessSelections, vscodeApi],
   );
 
   const handleExportTranscript = useCallback(() => {
@@ -3969,7 +4056,6 @@ export function App({
               <BackgroundSessionStrip
                 key={state.chatState.sessionId ?? "no-session"}
                 sessions={bgSessions}
-                openToActiveRequest={openFleetToActiveRequest}
                 showFleetRequest={showFleetRequest}
                 onStop={handleStopBackground}
                 onOpenTranscript={handleOpenBgTranscript}

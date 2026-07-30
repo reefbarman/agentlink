@@ -146,8 +146,6 @@ export interface BgSessionInfoProps {
 
 interface Props {
   sessions: BgSessionInfoProps[];
-  /** Incremented when a newly admitted agent should reveal the active fleet view. */
-  openToActiveRequest?: number;
   /** Incremented when the user explicitly asks to reveal the full fleet. */
   showFleetRequest?: number;
   onStop: (sessionId: string) => void;
@@ -272,7 +270,6 @@ function statusText(
 
 export function BackgroundSessionStrip({
   sessions,
-  openToActiveRequest = 0,
   showFleetRequest = 0,
   onStop,
   onOpenTranscript,
@@ -298,9 +295,9 @@ export function BackgroundSessionStrip({
   const [goalFilter, setGoalFilter] = useState("");
   const [startedAt, setStartedAt] = useState<Map<string, number>>(new Map());
   const [now, setNow] = useState(Date.now());
-  const previousOpenRequestRef = useRef(openToActiveRequest);
   const previousShowRequestRef = useRef(showFleetRequest);
   const previouslyHadUnfinishedRef = useRef(hasUnfinished);
+  const sessionsSeenRunningRef = useRef<Set<string> | null>(null);
 
   useEffect(() => {
     const previouslyHadUnfinished = previouslyHadUnfinishedRef.current;
@@ -315,12 +312,33 @@ export function BackgroundSessionStrip({
   }, [hasUnfinished]);
 
   useEffect(() => {
-    if (openToActiveRequest === previousOpenRequestRef.current) return;
-    previousOpenRequestRef.current = openToActiveRequest;
-    setHidden(false);
-    setCollapsed(false);
-    setFilter("active");
-  }, [openToActiveRequest]);
+    if (sessions.length === 0) return;
+
+    const runningSessions = sessions.filter(
+      (session) =>
+        session.status === "streaming" || session.status === "tool_executing",
+    );
+    if (sessionsSeenRunningRef.current === null) {
+      sessionsSeenRunningRef.current = new Set(
+        runningSessions.map((session) => session.id),
+      );
+      return;
+    }
+
+    const newlyRunningSessions = runningSessions.filter(
+      (session) => !sessionsSeenRunningRef.current!.has(session.id),
+    );
+    if (newlyRunningSessions.length === 0) return;
+
+    for (const session of newlyRunningSessions) {
+      sessionsSeenRunningRef.current.add(session.id);
+    }
+    if (collapsed) {
+      setHidden(false);
+      setCollapsed(false);
+      setFilter("active");
+    }
+  }, [collapsed, sessions]);
 
   useEffect(() => {
     if (showFleetRequest === previousShowRequestRef.current) return;

@@ -15,7 +15,10 @@ import type {
   ResolvedAgentToolCall,
 } from "../core/tools/types.js";
 import type { BackgroundAgentStatusResult } from "../core/capabilities/background.js";
-import { PARALLEL_SAFE_TOOLS } from "../core/tools/toolCapabilities.js";
+import {
+  COMPOSABLE_TOOLS,
+  PARALLEL_SAFE_TOOLS,
+} from "../core/tools/toolCapabilities.js";
 import {
   discoverNativeTools,
   getDeferredNativeTool,
@@ -142,6 +145,7 @@ import {
 } from "../tools/sessionTranscriptRecall.js";
 import { handleSendFeedback } from "../tools/sendFeedback.js";
 import { handleShowNotification } from "../tools/showNotification.js";
+import { handleTriageFeedback } from "../tools/triageFeedback.js";
 
 import { handleWriteFile } from "../tools/writeFile.js";
 import type {
@@ -322,6 +326,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
     ? {
         send_feedback: schemas.sendFeedbackSchema,
         get_feedback: schemas.getFeedbackSchema,
+        triage_feedback: schemas.triageFeedbackSchema,
         delete_feedback: schemas.deleteFeedbackSchema,
       }
     : {}),
@@ -689,7 +694,7 @@ function resolveBackgroundImages(params: {
   imageIds?: unknown;
   useRecentImages?: unknown;
   getSessionImages?: () => SessionImageReference[];
-}): Array<{ name: string; mimeType: string; base64: string }> {
+}): Array<{ id: string; name: string; mimeType: string; base64: string }> {
   const sessionImages = params.getSessionImages?.() ?? [];
   const byId = new Map(sessionImages.map((image) => [image.id, image]));
   const selected: SessionImageReference[] = [];
@@ -742,7 +747,8 @@ function resolveBackgroundImages(params: {
     throw new Error("No images are available in the current session");
   }
 
-  return unique.map(({ name, mimeType, base64 }) => ({
+  return unique.map(({ id, name, mimeType, base64 }) => ({
+    id,
     name,
     mimeType,
     base64,
@@ -809,7 +815,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           type: "array",
           items: { type: "string" },
           description:
-            "Specific image IDs from the current foreground session to copy into the background agent's first message. IDs follow image_1, image_2 attachment/session order. Native in-process backgrounds only; not supported for ACP agents.",
+            "Specific image IDs from the current foreground session to copy into the background agent's first message. IDs follow image_1, image_2 order over the images currently visible in your context. The spawn result echoes attachedImages (id, name, mimeType) — verify it matches the images you intended. Native in-process backgrounds only; not supported for ACP agents.",
         },
         useRecentImages: {
           oneOf: [{ type: "boolean" }, { type: "number" }],
@@ -818,7 +824,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         },
         reviewScope: {
           description:
-            "Structured review target captured into an immutable snapshot when the background agent is spawned. Relative paths resolve from the executing project; absolute paths inside any open workspace root are accepted. working_tree defaults to unstaged tracked changes plus untracked files; Git scopes must stay within one root. files captures exact current files and may span roots, including non-Git workspaces. commit_range resolves Git diff output immediately. diff accepts already captured content.",
+            "Structured review target captured into an immutable snapshot when the background agent is spawned. Relative paths resolve from the executing project; absolute paths inside any open workspace root are accepted. working_tree defaults to unstaged tracked changes plus untracked files; Git scopes must stay within one root — in multi-root workspaces pass root (absolute path or folder name) to pick which one. files captures exact current files and may span roots, including non-Git workspaces. commit_range resolves Git diff output immediately. diff accepts already captured content. excludePaths drops matching root-relative path prefixes from the capture (e.g. large binary assets); oversized files are recorded as metadata with content omitted instead of failing the capture.",
           oneOf: [
             {
               type: "object",
@@ -832,6 +838,8 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
                   },
                 },
                 paths: { type: "array", items: { type: "string" } },
+                excludePaths: { type: "array", items: { type: "string" } },
+                root: { type: "string" },
               },
               required: ["kind"],
               additionalProperties: false,
@@ -841,6 +849,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
               properties: {
                 kind: { type: "string", enum: ["files"] },
                 paths: { type: "array", items: { type: "string" } },
+                excludePaths: { type: "array", items: { type: "string" } },
               },
               required: ["kind", "paths"],
               additionalProperties: false,
@@ -851,6 +860,8 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
                 kind: { type: "string", enum: ["commit_range"] },
                 range: { type: "string" },
                 paths: { type: "array", items: { type: "string" } },
+                excludePaths: { type: "array", items: { type: "string" } },
+                root: { type: "string" },
               },
               required: ["kind", "range"],
               additionalProperties: false,
@@ -1192,7 +1203,7 @@ export function getAgentTools(
   const usesReadOnlyCommand =
     mode?.toolGroups.includes("read-only-command") ||
     (toolProfile !== undefined && READ_ONLY_COMMAND_PROFILES.has(toolProfile));
-  const nativeTools = Object.entries(TOOL_SCHEMAS)
+  const nativeToolEntries = Object.entries(TOOL_SCHEMAS)
     .sort(([a], [b]) => a.localeCompare(b))
     .filter(([name]) => !EXCLUDED_TOOLS.has(name))
     .filter(
@@ -1225,21 +1236,26 @@ export function getAgentTools(
         !skillAllowlist ||
         skillAllowlist.has(name) ||
         NATIVE_DISCOVERY_BRIDGE_TOOLS.has(name),
-    )
-    .map(([name, zodSchema]) => ({
-      name,
-      description:
-        name === "execute_command" && usesReadOnlyCommand
-          ? "Run a recognized read-only command synchronously inside the workspace. Unknown, mutating, redirected, networked, privileged, opaque, background, timed, environment-bearing, forced, and inline-file commands are rejected. Git diff/show/log/blame require --no-pager, --no-ext-diff, and --no-textconv; git grep requires --no-pager."
+    );
+  const composableChildNames = nativeToolEntries
+    .map(([name]) => name)
+    .filter((name) => COMPOSABLE_TOOLS.has(name));
+  const nativeTools = nativeToolEntries.map(([name, zodSchema]) => ({
+    name,
+    description:
+      name === "execute_command" && usesReadOnlyCommand
+        ? "Run a recognized read-only command synchronously inside the workspace. Unknown, mutating, redirected, networked, privileged, opaque, background, timed, environment-bearing, forced, and inline-file commands are rejected. Git diff/show/log/blame require --no-pager, --no-ext-diff, and --no-textconv; git grep requires --no-pager."
+        : name === "compose"
+          ? `${TOOL_REGISTRY.compose.description} Composable children in this advertised tool union: ${composableChildNames.join(", ") || "none"}. list_files is composable only without query; search_files is composable only with semantic omitted or false.`
           : (TOOL_REGISTRY[name]?.description ?? name),
-      input_schema:
-        name === "execute_command" && usesReadOnlyCommand
-          ? cachedJsonSchemaFor(
-              "execute_command:read-only",
-              schemas.readOnlyExecuteCommandSchema,
-            )
-          : cachedJsonSchemaFor(name, zodSchema),
-    }));
+    input_schema:
+      name === "execute_command" && usesReadOnlyCommand
+        ? cachedJsonSchemaFor(
+            "execute_command:read-only",
+            schemas.readOnlyExecuteCommandSchema,
+          )
+        : cachedJsonSchemaFor(name, zodSchema),
+  }));
 
   // Restrictive profiles are authoritative: native tools come from the profile
   // allowlist, and selected background profiles can opt into MCP or restricted
@@ -2305,6 +2321,7 @@ export function createAgentToolRuntime(
                     signal:
                       request.context.toolAbortSignal ??
                       new AbortController().signal,
+                    retainArtifact: request.context.retainToolResultArtifact,
                     wasmPath: path.join(
                       ctx.extensionUri.fsPath,
                       "dist",
@@ -2363,7 +2380,12 @@ export function createAgentToolRuntime(
                 metrics: {
                   childCount: composeTrace.totalChildren,
                   completedChildCount: composeTrace.completedChildren,
+                  succeededChildCount: composeTrace.succeededChildren ?? 0,
+                  failedChildCount: composeTrace.failedChildren ?? 0,
+                  cancelledChildCount: composeTrace.cancelledChildren ?? 0,
                   toolAllBatchCount: composeTrace.toolAllBatchCount ?? 0,
+                  toolAllSettledBatchCount:
+                    composeTrace.toolAllSettledBatchCount ?? 0,
                   bridgedBytes: composeTrace.bridgedBytes ?? 0,
                   ...(composeTrace.errorKind
                     ? { errorKind: composeTrace.errorKind }
@@ -4185,11 +4207,16 @@ export async function dispatchToolCall(
           ],
         };
       }
-      const images = resolveBackgroundImages({
+      const resolvedImages = resolveBackgroundImages({
         imageIds: params.imageIds,
         useRecentImages: params.useRecentImages,
         getSessionImages: ctx.getSessionImages,
       });
+      const images = resolvedImages.map(({ name, mimeType, base64 }) => ({
+        name,
+        mimeType,
+        base64,
+      }));
       const result = await spawnBackground({
         task: String(params.task ?? ""),
         message: String(params.message ?? ""),
@@ -4240,6 +4267,13 @@ export async function dispatchToolCall(
                 const paths = Array.isArray(scope.paths)
                   ? scope.paths.map(String)
                   : undefined;
+                const excludePaths = Array.isArray(scope.excludePaths)
+                  ? scope.excludePaths.map(String)
+                  : undefined;
+                const root =
+                  typeof scope.root === "string" && scope.root.trim()
+                    ? scope.root
+                    : undefined;
                 if (scope.kind === "working_tree") {
                   const include = Array.isArray(scope.include)
                     ? scope.include.filter(
@@ -4249,16 +4283,28 @@ export async function dispatchToolCall(
                           value === "untracked",
                       )
                     : undefined;
-                  return { kind: "working_tree" as const, include, paths };
+                  return {
+                    kind: "working_tree" as const,
+                    include,
+                    paths,
+                    excludePaths,
+                    root,
+                  };
                 }
                 if (scope.kind === "files") {
-                  return { kind: "files" as const, paths: paths ?? [] };
+                  return {
+                    kind: "files" as const,
+                    paths: paths ?? [],
+                    excludePaths,
+                  };
                 }
                 if (scope.kind === "commit_range") {
                   return {
                     kind: "commit_range" as const,
                     range: String(scope.range ?? ""),
                     paths,
+                    excludePaths,
+                    root,
                   };
                 }
                 if (scope.kind === "diff") {
@@ -4306,8 +4352,25 @@ export async function dispatchToolCall(
         goalId:
           typeof params.goalId === "string" ? params.goalId.trim() : undefined,
       });
+      // Echo which images were actually attached (id -> name/type) so the
+      // coordinator can detect a drifted image_N mapping instead of the
+      // reviewer silently receiving the wrong captures.
+      const attachedImages = resolvedImages.map(({ id, name, mimeType }) => ({
+        id,
+        name,
+        mimeType,
+      }));
       return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              attachedImages.length > 0
+                ? { ...result, attachedImages }
+                : result,
+            ),
+          },
+        ],
       };
     }
 
@@ -4592,9 +4655,64 @@ export async function dispatchToolCall(
           ],
         };
       }
+      let priorities: Array<"P0" | "P1" | "P2" | "P3"> | undefined;
+      if (params.priorities !== undefined) {
+        if (
+          !Array.isArray(params.priorities) ||
+          params.priorities.length === 0 ||
+          params.priorities.some(
+            (value: unknown) =>
+              value !== "P0" &&
+              value !== "P1" &&
+              value !== "P2" &&
+              value !== "P3",
+          )
+        ) {
+          return errorResult(
+            "get_feedback priorities must be a non-empty array containing only P0, P1, P2, or P3",
+          );
+        }
+        priorities = params.priorities;
+      }
       return handleGetFeedback({
         tool_name:
           params.tool_name !== undefined ? String(params.tool_name) : undefined,
+        triaged:
+          typeof params.triaged === "boolean" ? params.triaged : undefined,
+        priorities,
+      });
+    }
+
+    case "triage_feedback": {
+      if (!__DEV_BUILD__) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: "Unknown tool: triage_feedback" }),
+            },
+          ],
+        };
+      }
+      if (typeof params.triaged !== "boolean") {
+        return errorResult("triage_feedback requires a boolean triaged value");
+      }
+      const ids = Array.isArray(params.ids)
+        ? params.ids.filter(
+            (value: unknown): value is string => typeof value === "string",
+          )
+        : [];
+      const priority =
+        params.priority === "P0" ||
+        params.priority === "P1" ||
+        params.priority === "P2" ||
+        params.priority === "P3"
+          ? params.priority
+          : undefined;
+      return handleTriageFeedback({
+        ids,
+        triaged: params.triaged,
+        priority,
       });
     }
 

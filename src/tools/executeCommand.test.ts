@@ -7,6 +7,8 @@ import {
   createRetainedCommandReviewDenials,
 } from "../approvals/commandApprovalReview.js";
 
+import { AgentTerminalProviderRouter } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
+import { TerminalTargetRecoveryError } from "../core/capabilities/terminalTargetError.js";
 import { evaluateCommandRulePolicy } from "../approvals/commandRulePolicy.js";
 
 const {
@@ -137,7 +139,7 @@ describe("handleExecuteCommand", () => {
   it("returns native escalation guidance after preparing but before executing a protected Git writer", async () => {
     classifyPredictableGitMetadataWriter.mockReturnValue({
       kind: "predictable_git_metadata_writer",
-      subcommand: "commit",
+      subcommands: ["commit"],
     });
     resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
       marker: "/workspace/.git",
@@ -180,6 +182,82 @@ describe("handleExecuteCommand", () => {
       failure_stage: "validation",
     });
   });
+
+  it.each([
+    {
+      command: "git add src/a.ts && git commit -m fix",
+      subcommands: ["add", "commit"],
+      sandbox_permissions: undefined,
+      reason: undefined,
+    },
+    {
+      command: "git fetch origin",
+      subcommands: ["fetch"],
+      sandbox_permissions: "require_managed_network" as const,
+      reason: "Refresh the reviewed remote refs.",
+    },
+    {
+      command: "git rebase main",
+      subcommands: ["rebase"],
+      sandbox_permissions: undefined,
+      reason: undefined,
+    },
+  ])(
+    "returns escalation guidance for protected writer $command",
+    async ({ command, subcommands, sandbox_permissions, reason }) => {
+      classifyPredictableGitMetadataWriter.mockReturnValue({
+        kind: "predictable_git_metadata_writer",
+        subcommands,
+      });
+      resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
+        marker: "/workspace/.git",
+      });
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        { command, sandbox_permissions, reason },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        `session-git-${subcommands.join("-")}`,
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          networkApprovalReviewer: {
+            review: async () => ({
+              outcome: "allow",
+              risk: "medium",
+              userAuthorization: "high",
+              rationale: "The destination is user-requested",
+              model: "review-model",
+              status: "reviewed",
+            }),
+          },
+        },
+      );
+
+      expect(terminalProvider.prepareExecution).toHaveBeenCalledOnce();
+      expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+      const payload = textPayload(result);
+      expect(payload).toMatchObject({
+        status: "retry_required",
+        command,
+        capability_code: "protected_git_metadata",
+        protected_path: "/workspace/.git",
+        required_sandbox_permissions: "require_escalated",
+        command_sent: false,
+        process_launched: false,
+        retry_safe: true,
+      });
+      if (subcommands.length === 1) {
+        expect(payload.git_subcommand).toBe(subcommands[0]);
+        expect(payload.git_subcommands).toBeUndefined();
+      } else {
+        expect(payload.git_subcommands).toEqual(subcommands);
+        expect(payload.git_subcommand).toBeUndefined();
+      }
+    },
+  );
 
   it.each([
     {
@@ -234,7 +312,7 @@ describe("handleExecuteCommand", () => {
   it("executes a classified writer when the cwd has no protected baseline Git metadata", async () => {
     classifyPredictableGitMetadataWriter.mockReturnValue({
       kind: "predictable_git_metadata_writer",
-      subcommand: "add",
+      subcommands: ["add"],
     });
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
@@ -258,7 +336,7 @@ describe("handleExecuteCommand", () => {
   it("fails closed after preparation but before execution when Git metadata resolution fails", async () => {
     classifyPredictableGitMetadataWriter.mockReturnValue({
       kind: "predictable_git_metadata_writer",
-      subcommand: "add",
+      subcommands: ["add"],
     });
     resolveBaselineProtectedGitMetadataForCwd.mockRejectedValue(
       new Error("invalid Git metadata marker"),
@@ -293,7 +371,7 @@ describe("handleExecuteCommand", () => {
   it("does not preflight Git metadata when preparation selects a native route", async () => {
     classifyPredictableGitMetadataWriter.mockReturnValue({
       kind: "predictable_git_metadata_writer",
-      subcommand: "commit",
+      subcommands: ["commit"],
     });
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
@@ -559,7 +637,7 @@ describe("handleExecuteCommand", () => {
       .mockReturnValueOnce(null)
       .mockReturnValueOnce({
         kind: "predictable_git_metadata_writer",
-        subcommand: "commit",
+        subcommands: ["commit"],
       });
     resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
       marker: "/workspace/.git",
@@ -889,6 +967,155 @@ describe("handleExecuteCommand", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("forces and forwards a temporary HOME through the sandbox terminal request", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "run-once" }),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test", temporary_home: true },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-temporary-home",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(terminalProvider.prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "npm test",
+        temporaryHome: true,
+        sandboxSessionId: "session-temporary-home",
+      }),
+      expect.objectContaining({
+        requiredAuthority: "sandbox",
+        permissionIntent: "default",
+      }),
+    );
+    expect(enqueueCommandApproval).toHaveBeenCalledOnce();
+    expect(executeCommand).toHaveBeenCalledOnce();
+    expect(textPayload(result)).toMatchObject({
+      approval: { by: "human" },
+      security: { route: "sandbox" },
+    });
+  });
+
+  it.each([
+    {
+      case: "manual approval policy",
+      params: { command: "npm test", temporary_home: true as const },
+      policy: "manual" as const,
+      reason: "requires Approve for Me",
+    },
+    {
+      case: "native escalation",
+      params: {
+        command: "npm test",
+        temporary_home: true as const,
+        sandbox_permissions: "require_escalated" as const,
+        reason: "Needs native execution",
+      },
+      policy: "approve-for-me" as const,
+      reason: "cannot be combined",
+    },
+    {
+      case: "background execution",
+      params: {
+        command: "npm test",
+        temporary_home: true as const,
+        background: true,
+      },
+      policy: "approve-for-me" as const,
+      reason: "limited to foreground",
+    },
+    {
+      case: "explicit HOME override",
+      params: { command: "npm test", env: { HOME: "/tmp/home" } },
+      policy: "approve-for-me" as const,
+      reason: "Use temporary_home=true",
+    },
+  ])(
+    "rejects temporary-home incompatible $case before preparation",
+    async ({ params, policy, reason }) => {
+      const prepareExecution = vi.fn();
+      const enqueueCommandApproval = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        params,
+        { isCommandApproved: () => false } as never,
+        { enqueueCommandApproval } as never,
+        `session-temporary-home-${policy}`,
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () => policy,
+        },
+      );
+
+      expect(textPayload(result)).toMatchObject({
+        status: "rejected",
+        reason: expect.stringContaining(reason),
+        command_sent: false,
+      });
+      expect(prepareExecution).not.toHaveBeenCalled();
+      expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows a HOME override on a reviewed manual native route", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "run-once" }),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test", env: { HOME: "/tmp/home" } },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      { enqueueCommandApproval } as never,
+      "session-manual-home",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "manual",
+      },
+    );
+
+    expect(enqueueCommandApproval).toHaveBeenCalledWith(
+      expect.any(String),
+      "npm test",
+      expect.objectContaining({ bypassRecentApproval: true }),
+    );
+    expect(terminalProvider.prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ env: { HOME: "/tmp/home" } }),
+      expect.objectContaining({ requiredAuthority: "native-agent" }),
+    );
+    expect(textPayload(result)).toMatchObject({
+      approval: { by: "human" },
+      security: { route: "native" },
+    });
+  });
+
   it("returns explicit unavailable output before validation or approvals when no terminal provider is supplied", async () => {
     const enqueueCommandApproval = vi.fn();
     const { handleExecuteCommand } = await import("./executeCommand.js");
@@ -1160,16 +1387,53 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("requires fresh reviewer approval before a matching native escalation rule", async () => {
-    const enqueueCommandApproval = vi.fn();
+  it("does not let tier approval authorize explicit native escalation", async () => {
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "run-once" }),
+    }));
     const review = vi.fn(async () => ({
-      outcome: "allow" as const,
+      outcome: "deny" as const,
       risk: "medium" as const,
-      userAuthorization: "high" as const,
-      rationale: "Fresh native review approved the bounded build",
+      userAuthorization: "unknown" as const,
+      rationale: "Native execution needs human confirmation",
       model: "review-model",
       status: "reviewed" as const,
     }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: "pwd",
+        sandbox_permissions: "require_escalated",
+        reason: "Inspect the native working directory.",
+      },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      { enqueueCommandApproval } as never,
+      "session-safe-native-escalation",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+      },
+    );
+
+    expect(review).toHaveBeenCalledOnce();
+    expect(enqueueCommandApproval).toHaveBeenCalledOnce();
+    expect(textPayload(result)).toMatchObject({
+      approval: { by: "human" },
+      security: { permissionIntent: "native-escalation" },
+    });
+    expect(textPayload(result).approval).not.toMatchObject({ by: "tier" });
+  });
+
+  it("reuses a matching recent native approval before reviewing explicit escalation", async () => {
+    const enqueueCommandApproval = vi.fn();
+    const review = vi.fn();
+    const isCommandRecentlyApproved = vi.fn(() => true);
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
@@ -1179,11 +1443,69 @@ describe("handleExecuteCommand", () => {
         reason: "The SDK needs a host facility unavailable in the sandbox.",
       },
       {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      { isCommandRecentlyApproved, enqueueCommandApproval } as never,
+      "session-native-escalation-recent",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+      },
+    );
+
+    expect(isCommandRecentlyApproved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "dotnet build",
+        cwd: "/workspace",
+        sessionId: "session-native-escalation-recent",
+        security: expect.objectContaining({
+          requiredAuthority: "native-agent",
+          permissionIntent: "native-escalation",
+        }),
+        commandPolicyFingerprint: expect.any(String),
+      }),
+    );
+    expect(review).not.toHaveBeenCalled();
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      approval: { by: "recent_approval" },
+      security: {
+        route: "native",
+        permissionIntent: "native-escalation",
+      },
+    });
+  });
+
+  it("honors a matching native allow rule before reviewing explicit escalation", async () => {
+    const enqueueCommandApproval = vi.fn();
+    const review = vi.fn();
+    const rules = {
+      session: [],
+      project: [
+        {
+          pattern: "dotnet build",
+          mode: "exact" as const,
+          decision: "allow" as const,
+        },
+      ],
+      global: [],
+    };
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: "dotnet build",
+        sandbox_permissions: "require_escalated",
+        reason: "The SDK needs a host facility unavailable in the sandbox.",
+      },
+      {
+        evaluateCommandRules: (_sessionId: string, command: string) =>
+          evaluateCommandRulePolicy(rules, command),
         isCommandApproved: () => true,
-        findMatchingCommandRule: vi.fn(() => ({
-          rule: { pattern: "dotnet build", mode: "exact" },
-          scope: "project",
-        })),
+        findMatchingCommandRule: vi.fn(),
       } as never,
       { enqueueCommandApproval } as never,
       "session-native-escalation-rule",
@@ -1195,13 +1517,14 @@ describe("handleExecuteCommand", () => {
       },
     );
 
-    expect(review).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
     expect(textPayload(result)).toMatchObject({
-      approval: { by: "model_reviewer" },
+      approval: { by: "explicit_rule" },
       security: {
         route: "native",
         permissionIntent: "native-escalation",
+        authorityReason: "explicit-rule",
       },
     });
   });
@@ -1326,6 +1649,52 @@ describe("handleExecuteCommand", () => {
     );
     expect(retained.list("session-retained-denial")).toEqual([]);
     expect(textPayload(approved)).toMatchObject({ approval: { by: "human" } });
+  });
+
+  it("uses explicit all-segment allow rules as native authority in manual mode", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const rules = {
+      session: [
+        {
+          pattern: "dotnet build",
+          mode: "exact" as const,
+          decision: "allow" as const,
+        },
+      ],
+      project: [],
+      global: [],
+    };
+    const evaluateCommandRules = vi.fn((_sessionId, command) =>
+      evaluateCommandRulePolicy(rules, command),
+    );
+    const enqueueCommandApproval = vi.fn();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "dotnet build" },
+      {
+        evaluateCommandRules,
+        isCommandApproved: () => true,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      { enqueueCommandApproval } as never,
+      "session-manual-explicit-native-rule",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "manual",
+      },
+    );
+
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      approval: { by: "explicit_rule" },
+      security: { route: "native", authorityReason: "explicit-rule" },
+    });
   });
 
   it("uses explicit all-segment allow rules as native authority under Approve for Me", async () => {
@@ -1456,6 +1825,61 @@ describe("handleExecuteCommand", () => {
     },
   );
 
+  it.each([
+    {
+      ruleKind: "regex allow",
+      rule: {
+        pattern: "^npm test$",
+        mode: "regex" as const,
+        decision: "allow" as const,
+      },
+    },
+    {
+      ruleKind: "legacy approval-only",
+      rule: {
+        pattern: "npm test",
+        mode: "exact" as const,
+      },
+    },
+  ])(
+    "reuses $ruleKind rules without prompting in manual mode",
+    async ({ rule }) => {
+      getConfiguration.mockReturnValue({
+        get: vi.fn((key: string, fallback?: unknown) =>
+          key === "masterBypass" ? false : fallback,
+        ),
+      });
+      const rules = { session: [rule], project: [], global: [] };
+      const evaluateCommandRules = vi.fn((_sessionId, command) =>
+        evaluateCommandRulePolicy(rules, command),
+      );
+      const enqueueCommandApproval = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        { command: "npm test" },
+        {
+          evaluateCommandRules,
+          isCommandApproved: () => true,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        { enqueueCommandApproval } as never,
+        `session-manual-${rule.mode}-rule`,
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "manual",
+        },
+      );
+
+      expect(enqueueCommandApproval).not.toHaveBeenCalled();
+      expect(textPayload(result)).toMatchObject({
+        approval: { by: "explicit_rule" },
+        security: { route: "native", authorityReason: "approval-policy" },
+      });
+    },
+  );
+
   it("does not let a command-only allow rule grant native authority to env overrides", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
@@ -1509,7 +1933,7 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("keeps a partially allowed compound command sandboxed and requires approval", async () => {
+  it("auto-approves a verification-only compound command despite a partial allow rule", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
         key === "masterBypass" ? false : fallback,
@@ -1556,9 +1980,9 @@ describe("handleExecuteCommand", () => {
         authorityReason: "approval-policy",
       }),
     );
-    expect(enqueueCommandApproval).toHaveBeenCalledOnce();
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
     expect(textPayload(result)).toMatchObject({
-      approval: { by: "human" },
+      approval: { by: "sandbox_verification" },
       security: { route: "sandbox" },
     });
   });
@@ -2128,6 +2552,22 @@ describe("handleExecuteCommand", () => {
         "Read-only execution policy does not permit native retry.",
     },
     {
+      guard: "temporary HOME after a host-home denial",
+      command: "dotnet build",
+      params: { temporary_home: true as const },
+      operation: "file-write" as const,
+      expectedReason:
+        "Commands using temporary_home cannot switch to native execution because native execution cannot preserve the disposable HOME contract.",
+    },
+    {
+      guard: "temporary HOME after a non-home denial",
+      command: "dotnet build",
+      params: { temporary_home: true as const },
+      operation: "ipc-connect" as const,
+      expectedReason:
+        "Commands using temporary_home cannot switch to native execution because native execution cannot preserve the disposable HOME contract.",
+    },
+    {
       guard: "temporary inline files",
       command: "dotnet build --configfile $AL_FILE(input)",
       params: {
@@ -2140,7 +2580,7 @@ describe("handleExecuteCommand", () => {
     {
       guard: "human-edited command",
       command: "dotnet build",
-      params: {},
+      params: { force: true, force_reason: "Exercise human command edit" },
       operation: "ipc-connect" as const,
       editedCommand: "dotnet build --no-restore",
       expectedReason:
@@ -2612,6 +3052,705 @@ describe("handleExecuteCommand", () => {
       execution_attempts: [{ attempt: 1, route: "sandbox" }],
     });
   });
+
+  it("returns structured guidance before preparing a sandbox cwd outside the workspace", async () => {
+    const prepareExecution = vi.fn();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test", cwd: "/outside/project" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-outside-workspace-cwd",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(prepareExecution).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "retry_required",
+      command: "npm test",
+      cwd: "/outside/project",
+      command_sent: false,
+      process_launched: false,
+      retry_safe: true,
+      failure_stage: "preparation",
+      retry_guidance: {
+        code: "sandbox_cwd_outside_workspace",
+        automatic_retry: false,
+        options: [
+          { action: "open_or_add_workspace_root" },
+          {
+            sandbox_permissions: "require_escalated",
+            reviewed_native_execution: true,
+          },
+        ],
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "managed network",
+      params: {
+        command: "npm view vite version",
+        cwd: "/outside/project",
+        sandbox_permissions: "require_managed_network" as const,
+        reason: "Read public package metadata.",
+      },
+    },
+    {
+      name: "temporary HOME",
+      params: {
+        command: "npm test",
+        cwd: "/outside/project",
+        temporary_home: true as const,
+      },
+    },
+  ])(
+    "keeps $name outside-workspace guidance sandbox-only",
+    async ({ params }) => {
+      const prepareExecution = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        params,
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-outside-workspace-sandbox-only",
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () => "approve-for-me",
+        },
+      );
+
+      expect(prepareExecution).not.toHaveBeenCalled();
+      const payload = textPayload(result);
+      expect(payload.retry_guidance).toMatchObject({
+        code: "sandbox_cwd_outside_workspace",
+        automatic_retry: false,
+      });
+      expect(payload.retry_guidance.options).toHaveLength(1);
+      expect(payload.retry_guidance.options[0]).toMatchObject({
+        action: "open_or_add_workspace_root",
+      });
+    },
+  );
+
+  it("does not block an explicitly reviewed native cwd outside the workspace", async () => {
+    const prepareExecution = vi.fn(async (options, routeContext) => ({
+      security: {
+        auditId: "audit-native-outside-cwd",
+        route: "native" as const,
+        executionSurface: "agentlink-native" as const,
+        confinement: "native-unsandboxed" as const,
+        routeReason: "verified-local-macos" as const,
+        ...routeContext,
+        executionPolicy: "native-legacy-v1" as const,
+        preparedAt: 100,
+      },
+      execute: async () => ({
+        exit_code: 0,
+        output: "ok",
+        output_captured: true,
+        terminal_id: "native-outside-cwd",
+        command_sent: true,
+        process_launched: true,
+        execution_mode: "native_pty" as const,
+      }),
+      dispose: vi.fn(),
+    }));
+    const review = vi.fn(async () => ({
+      outcome: "allow" as const,
+      risk: "medium" as const,
+      userAuthorization: "high" as const,
+      rationale: "The user explicitly requested the external project.",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: "npm test",
+        cwd: "/outside/project",
+        sandbox_permissions: "require_escalated",
+        reason: "Run tests in the external project.",
+      },
+      {
+        isCommandApproved: () => true,
+        findMatchingCommandRule: vi.fn(),
+      } as never,
+      {
+        isRecentlyApproved: () => true,
+        enqueueCommandApproval: vi.fn(),
+      } as never,
+      "session-native-outside-workspace-cwd",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+      },
+    );
+
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/outside/project" }),
+      expect.objectContaining({ requiredAuthority: "native-agent" }),
+    );
+    expect(review).toHaveBeenCalledOnce();
+    expect(textPayload(result)).toMatchObject({ exit_code: 0 });
+  });
+
+  it.each([
+    "git clone git@github.com:owner/repo.git",
+    "git fetch ssh://git@example.com/owner/repo.git",
+    "git push git+ssh://example.com/owner/repo.git main",
+  ])(
+    "returns HTTPS or reviewed-native guidance for explicit managed Git-over-SSH before preparation: %s",
+    async (command) => {
+      const prepareExecution = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        {
+          command,
+          sandbox_permissions: "require_managed_network",
+          reason: "Access the reviewed Git remote.",
+        },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-managed-network-explicit-ssh",
+        undefined,
+        { terminalProvider: { ...terminalProvider, prepareExecution } },
+      );
+
+      expect(prepareExecution).not.toHaveBeenCalled();
+      expect(textPayload(result)).toMatchObject({
+        status: "retry_required",
+        command,
+        command_sent: false,
+        process_launched: false,
+        retry_safe: true,
+        failure_stage: "validation",
+        retry_guidance: {
+          code: "managed_network_ssh_git_transport",
+          automatic_retry: false,
+          options: [
+            {
+              transport: "https",
+              sandbox_permissions: "require_managed_network",
+            },
+            {
+              transport: "ssh",
+              sandbox_permissions: "require_escalated",
+              reviewed_native_execution: true,
+            },
+          ],
+        },
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "indirect SSH Git failure",
+      command: "git fetch origin",
+      output: "git@example.com: Permission denied (publickey).",
+      code: "managed_network_ssh_git_transport",
+    },
+    {
+      name: "GitHub CLI TLS trust failure",
+      command: "gh api /user",
+      output: "x509: certificate signed by unknown authority",
+      code: "managed_network_tls_trust",
+    },
+    {
+      name: "macOS GitHub CLI TLS trust failure",
+      command: "gh run list --repo owner/repo",
+      output:
+        "failed to run query: tls: failed to verify certificate: x509: OSStatus -26276",
+      code: "managed_network_tls_trust",
+    },
+    {
+      name: "chained GitHub CLI TLS trust failure",
+      command:
+        "gh pr view 42 --repo owner/repo && gh pr checks 42 --repo owner/repo",
+      output:
+        "Post https://api.github.com/graphql: tls: failed to verify certificate: x509: OSStatus -26276",
+      code: "managed_network_tls_trust",
+    },
+  ])(
+    "attaches bounded guidance after a managed-network $name without retrying natively",
+    async ({ command, output, code }) => {
+      const execute = vi.fn(async () => ({
+        exit_code: 1,
+        output,
+        output_captured: true,
+        terminal_id: "sandbox-managed-failure",
+        command_sent: true,
+        process_launched: true,
+        execution_mode: "sandbox_pty" as const,
+      }));
+      const prepareExecution = vi.fn(async (_options, routeContext) => ({
+        security: {
+          auditId: "audit-managed-failure",
+          route: "sandbox" as const,
+          executionSurface: "verified-sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "sandbox-baseline-v2" as const,
+          preparedAt: 100,
+        },
+        execute,
+        dispose: vi.fn(),
+      }));
+      const review = vi.fn(async () => ({
+        outcome: "allow" as const,
+        risk: "low" as const,
+        userAuthorization: "high" as const,
+        rationale: "The requested destination is authorized.",
+        model: "review-model",
+        status: "reviewed" as const,
+      }));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        {
+          command,
+          sandbox_permissions: "require_managed_network",
+          reason: "Access the reviewed public service.",
+        },
+        {
+          isCommandApproved: () => true,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        {
+          isRecentlyApproved: () => true,
+          enqueueCommandApproval: vi.fn(),
+        } as never,
+        "session-managed-network-failure-guidance",
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+        },
+      );
+
+      expect(prepareExecution).toHaveBeenCalledOnce();
+      expect(execute).toHaveBeenCalledOnce();
+      const payload = textPayload(result);
+      expect(payload).toMatchObject({
+        exit_code: 1,
+        output,
+        security: { route: "sandbox" },
+        retry_guidance: { code, automatic_retry: false },
+      });
+      expect(payload.retry_lineage_id).toBeUndefined();
+    },
+  );
+
+  it.each([
+    {
+      command: "git fetch https://github.com/owner/repo.git",
+      output: "remote: repository not found",
+    },
+    {
+      command: "npm view vite version",
+      output: "x509: certificate signed by unknown authority",
+    },
+    {
+      command: "gh api /user && echo done",
+      output: "x509: certificate signed by unknown authority",
+    },
+    {
+      command: "gh api /user & curl https://example.com",
+      output: "x509: certificate signed by unknown authority",
+    },
+  ])(
+    "does not attach managed transport guidance to unrelated failure: $command",
+    async ({ command, output }) => {
+      const execute = vi.fn(async () => ({
+        exit_code: 1,
+        output,
+        output_captured: true,
+        terminal_id: "sandbox-unrelated-failure",
+        command_sent: true,
+        process_launched: true,
+        execution_mode: "sandbox_pty" as const,
+      }));
+      const prepareExecution = vi.fn(async (_options, routeContext) => ({
+        security: {
+          auditId: "audit-managed-unrelated",
+          route: "sandbox" as const,
+          executionSurface: "verified-sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "sandbox-baseline-v2" as const,
+          preparedAt: 100,
+        },
+        execute,
+        dispose: vi.fn(),
+      }));
+      const review = vi.fn(async () => ({
+        outcome: "allow" as const,
+        risk: "low" as const,
+        userAuthorization: "high" as const,
+        rationale: "The requested destination is authorized.",
+        model: "review-model",
+        status: "reviewed" as const,
+      }));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        {
+          command,
+          sandbox_permissions: "require_managed_network",
+          reason: "Access the reviewed public service.",
+        },
+        {
+          isCommandApproved: () => true,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        {
+          isRecentlyApproved: () => true,
+          enqueueCommandApproval: vi.fn(),
+        } as never,
+        "session-managed-network-unrelated-failure",
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+        },
+      );
+
+      expect(textPayload(result).retry_guidance).toBeUndefined();
+    },
+  );
+
+  it.each([
+    {
+      name: "loopback listener denial",
+      output: "Error: listen EPERM: operation not permitted 127.0.0.1:47200",
+      missing: ["network.allow_local_binding"],
+      option: {
+        sandbox_permissions: "with_additional_permissions",
+        additional_permissions: { network: { allow_local_binding: true } },
+        reason_required: true,
+      },
+    },
+    {
+      name: "host HOME write denial",
+      output: `npm error Log files were not written due to an error writing to the directory: ${os.homedir()}/.npm/_logs`,
+      missing: ["temporary_home"],
+      option: { temporary_home: true },
+    },
+    {
+      name: "combined listener and host HOME denial",
+      output: `Error: listen EPERM: operation not permitted ::1\nnpm error failed to write '${os.homedir()}/.agentlink/state.json'`,
+      missing: ["temporary_home", "network.allow_local_binding"],
+      option: {
+        temporary_home: true,
+        sandbox_permissions: "with_additional_permissions",
+        additional_permissions: { network: { allow_local_binding: true } },
+        reason_required: true,
+      },
+    },
+  ])(
+    "attaches narrow sandbox retry guidance for $name",
+    async ({ output, missing, option }) => {
+      const execute = vi.fn(async () => ({
+        exit_code: 1,
+        output,
+        output_captured: true,
+        output_complete: true,
+        output_finalized: true,
+        terminal_id: "sandbox-missing-capability",
+        command_sent: true,
+        process_launched: true,
+        execution_mode: "sandbox_pty" as const,
+      }));
+      const prepareExecution = vi.fn(async (_options, routeContext) => ({
+        security: {
+          auditId: "audit-missing-capability",
+          route: "sandbox" as const,
+          executionSurface: "verified-sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "sandbox-baseline-v2" as const,
+          preparedAt: 100,
+        },
+        execute,
+        dispose: vi.fn(),
+      }));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        { command: "npm test" },
+        { isCommandApproved: () => true } as never,
+        { isRecentlyApproved: () => true } as never,
+        "session-missing-sandbox-capability",
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () => "approve-for-me",
+        },
+      );
+
+      expect(textPayload(result)).toMatchObject({
+        exit_code: 1,
+        output,
+        missing_sandbox_capabilities: missing,
+        retry_guidance: {
+          code: "sandbox_missing_capabilities",
+          automatic_retry: false,
+          options: [
+            {
+              action: "retry_with_missing_sandbox_capabilities",
+              same_command: true,
+              ...option,
+            },
+          ],
+        },
+      });
+    },
+  );
+
+  it("suppresses generic native retry when a structured HOME denial has a narrow sandbox retry", async () => {
+    const violation = {
+      operation: "file-write" as const,
+      target: `${os.homedir()}/.npm/_logs/error.log`,
+      reason: "The sandbox denied a host HOME write",
+      occurredAt: 123,
+    };
+    const execute = vi.fn(async () => ({
+      exit_code: 1,
+      output: `npm error failed to write '${os.homedir()}/.npm/_logs/error.log'`,
+      output_captured: true,
+      output_complete: true,
+      output_finalized: true,
+      terminal_id: "sandbox-structured-home-denial",
+      command_sent: true,
+      process_launched: true,
+      execution_mode: "sandbox_pty" as const,
+      sandbox: {
+        policyVersion: "policy-v1",
+        profileId: "workspace-write",
+        backend: "seatbelt",
+        capabilities: {
+          backend: "seatbelt",
+          processTree: true,
+          filesystemRead: "host-visible" as const,
+          filesystemWrite: "strict" as const,
+          network: "loopback" as const,
+          privateHome: false,
+          privateTmp: false,
+          hostIpcBlocked: false,
+          resourceLimits: "partial" as const,
+          warnings: [],
+        },
+        violations: [violation],
+      },
+    }));
+    const prepareExecution = vi.fn(async (_options, routeContext) => ({
+      security: {
+        auditId: "audit-structured-home-denial",
+        route: "sandbox" as const,
+        executionSurface: "verified-sandbox" as const,
+        confinement: "verified-baseline" as const,
+        routeReason: "verified-local-macos" as const,
+        ...routeContext,
+        executionPolicy: "sandbox-baseline-v2" as const,
+        preparedAt: 100,
+      },
+      execute,
+      dispose: vi.fn(),
+    }));
+    const review = vi.fn();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      {
+        isCommandApproved: () => true,
+        findMatchingCommandRule: vi.fn(() => ({
+          rule: { pattern: "npm test", mode: "exact" },
+          scope: "project",
+        })),
+      } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-structured-home-denial",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+      },
+    );
+
+    expect(prepareExecution).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      exit_code: 1,
+      capability_denial: violation,
+      retry_outcome: "not_attempted",
+      retry_reason:
+        "A narrower reviewed sandbox retry is available; native retry was not attempted.",
+      missing_sandbox_capabilities: ["temporary_home"],
+      retry_guidance: {
+        code: "sandbox_missing_capabilities",
+        automatic_retry: false,
+        options: [{ temporary_home: true }],
+      },
+      execution_attempts: [{ attempt: 1, route: "sandbox" }],
+    });
+  });
+
+  it.each([
+    {
+      name: "non-loopback listener denial",
+      params: { command: "npm test" },
+      output: "Error: listen EPERM: operation not permitted 0.0.0.0:47200",
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+    },
+    {
+      name: "host HOME mention without a write denial",
+      params: { command: "npm test" },
+      output: `Reading configuration from ${os.homedir()}/.config/tool/config.json`,
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+    },
+    {
+      name: "read-shaped host HOME permission denial",
+      params: { command: "npm test" },
+      output: `permission denied while reading ${os.homedir()}/.config/tool/config.json`,
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+    },
+    {
+      name: "write denial inside a workspace under HOME",
+      params: { command: "npm test" },
+      output: `failed to write ${os.homedir()}/workspace/project/report.json`,
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+      workspaceRoots: [`${os.homedir()}/workspace/project`],
+    },
+    {
+      name: "incomplete output",
+      params: { command: "npm test" },
+      output: `failed to write ${os.homedir()}/.npm/_logs/error.log`,
+      outputComplete: false,
+      approvalPolicy: "approve-for-me" as const,
+    },
+    {
+      name: "manual approval policy",
+      params: { command: "npm test" },
+      output: `failed to write ${os.homedir()}/.npm/_logs/error.log`,
+      outputComplete: true,
+      approvalPolicy: "manual" as const,
+    },
+    {
+      name: "listener capability already requested",
+      params: {
+        command: "npm test",
+        sandbox_permissions: "with_additional_permissions" as const,
+        additional_permissions: {
+          network: { allow_local_binding: true as const },
+        },
+        reason: "Run listener tests.",
+      },
+      output: "Error: listen EPERM: operation not permitted 127.0.0.1:47200",
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+    },
+    {
+      name: "temporary HOME already requested",
+      params: { command: "npm test", temporary_home: true as const },
+      output: `npm error failed to write '${os.homedir()}/.npm/_logs/error.log'`,
+      outputComplete: true,
+      approvalPolicy: "approve-for-me" as const,
+    },
+  ])(
+    "does not attach redundant or unsafe sandbox retry guidance for $name",
+    async ({
+      params,
+      output,
+      outputComplete,
+      approvalPolicy,
+      workspaceRoots,
+    }) => {
+      if (workspaceRoots) {
+        getWorkspaceRoots.mockReturnValue(workspaceRoots);
+        tryGetFirstWorkspaceRoot.mockReturnValue(workspaceRoots[0]);
+      }
+      const execute = vi.fn(async () => ({
+        exit_code: 1,
+        output,
+        output_captured: true,
+        output_complete: outputComplete,
+        output_finalized: true,
+        terminal_id: "sandbox-no-missing-capability",
+        command_sent: true,
+        process_launched: true,
+        execution_mode: "sandbox_pty" as const,
+      }));
+      const prepareExecution = vi.fn(async (_options, routeContext) => ({
+        security: {
+          auditId: "audit-no-missing-capability",
+          route: "sandbox" as const,
+          executionSurface: "verified-sandbox" as const,
+          confinement: "verified-baseline" as const,
+          routeReason: "verified-local-macos" as const,
+          ...routeContext,
+          executionPolicy: "sandbox-baseline-v2" as const,
+          preparedAt: 100,
+        },
+        execute,
+        dispose: vi.fn(),
+      }));
+      const review = vi.fn(async () => ({
+        outcome: "allow" as const,
+        risk: "low" as const,
+        userAuthorization: "high" as const,
+        rationale: "The narrow sandbox capability is required.",
+        model: "review-model",
+        status: "reviewed" as const,
+      }));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        params,
+        {
+          isCommandApproved: () => true,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        {
+          isRecentlyApproved: () => true,
+          enqueueCommandApproval: vi.fn(),
+        } as never,
+        "session-no-missing-sandbox-capability",
+        undefined,
+        {
+          terminalProvider: { ...terminalProvider, prepareExecution },
+          getCommandApprovalPolicy: () => approvalPolicy,
+          commandApprovalReviewer: { review },
+        },
+      );
+
+      expect(textPayload(result).retry_guidance).toBeUndefined();
+    },
+  );
 
   it("requires a reason before preparing managed public network", async () => {
     const prepareExecution = vi.fn();
@@ -3560,6 +4699,154 @@ describe("handleExecuteCommand", () => {
     ]);
   });
 
+  it("keeps approved inline-file bytes readable through native route composition", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    let consumedPath = "";
+    const nativeExecute = vi.fn(async (options) => {
+      const inlineFile = options.sandboxInlineFiles?.[0];
+      expect(inlineFile).toBeDefined();
+      if (!inlineFile) throw new Error("expected native inline file");
+      consumedPath = inlineFile.path;
+      expect(options.command).toContain(`'${consumedPath}'`);
+      expect(fs.readFileSync(consumedPath, "utf8")).toBe("native body\n");
+      return {
+        exit_code: 0,
+        output: "native body received",
+        output_captured: true,
+        terminal_id: "native-inline-1",
+        command_sent: true,
+        process_launched: true,
+      };
+    });
+    const nativeProvider = {
+      executeCommand: nativeExecute,
+      getBackgroundState: vi.fn(),
+      interruptTerminal: vi.fn(() => false),
+      getRecentlyClosedTerminals: vi.fn(() => []),
+      listTerminals: vi.fn(() => []),
+      closeTerminals: vi.fn(() => ({ closed: 0 })),
+      dispose: vi.fn(),
+    };
+    const router = new AgentTerminalProviderRouter({
+      isEnabled: () => true,
+      getHost: () => ({
+        platform: "darwin",
+        architecture: "arm64",
+        workspaceTrusted: true,
+      }),
+      createNativeProvider: () => nativeProvider as never,
+      createNativeAgentProvider: () => nativeProvider as never,
+      createSandboxProvider: () => {
+        throw new Error("native escalation must not create a sandbox provider");
+      },
+      getSandboxAvailability: () => ({
+        status: "runtime-unavailable",
+      }),
+    });
+    const review = vi.fn(async () => ({
+      outcome: "allow" as const,
+      risk: "medium" as const,
+      userAuthorization: "high" as const,
+      rationale: "The user explicitly requested bounded native execution",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    try {
+      const result = await handleExecuteCommand(
+        {
+          command: "gh pr create --body-file $AL_FILE(pr-body)",
+          files: [{ name: "pr-body", content: "native body\n", ext: "md" }],
+          sandbox_permissions: "require_escalated",
+          reason: "GitHub CLI requires the reviewed native credential context.",
+        },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        { enqueueCommandApproval: vi.fn() } as never,
+        "session-native-inline",
+        undefined,
+        {
+          terminalProvider: router,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+          isSessionActive: () => true,
+        },
+      );
+
+      expect(nativeExecute).toHaveBeenCalledOnce();
+      expect(consumedPath).toMatch(/\/agentlink-cmd-[^/]+\/pr-body\.md$/);
+      expect(fs.existsSync(consumedPath)).toBe(false);
+      expect(textPayload(result)).toMatchObject({
+        exit_code: 0,
+        output: "native body received",
+        security: {
+          route: "native",
+          requiredAuthority: "native-agent",
+          permissionIntent: "native-escalation",
+        },
+        inline_files: [
+          {
+            name: "pr-body",
+            bytes: Buffer.byteLength("native body\n", "utf8"),
+            sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+        ],
+      });
+    } finally {
+      router.dispose();
+    }
+  });
+
+  it("opens the exact inline file from a double-quoted placeholder", async () => {
+    vi.mocked(terminalProvider.executeCommand).mockImplementationOnce(
+      async (options) => {
+        const match = options.command.match(/--body-file (.+)$/);
+        expect(match).toBeTruthy();
+        const resolvedPath = match
+          ? (await import("node:child_process")).execFileSync(
+              "/bin/zsh",
+              ["-c", `printf %s ${match[1]}`],
+              { encoding: "utf8" },
+            )
+          : "";
+        expect(resolvedPath).toBe(options.sandboxInlineFiles?.[0]?.path);
+        expect(fs.readFileSync(resolvedPath, "utf8")).toBe("quoted body");
+        return {
+          exit_code: 0,
+          output: resolvedPath,
+          output_captured: true,
+          terminal_id: "term_inline_quoted",
+          command_sent: true,
+        };
+      },
+    );
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    await handleExecuteCommand(
+      {
+        command: 'gh pr comment 1 --body-file "$AL_FILE(body)"',
+        files: [{ name: "body", content: "quoted body", ext: "md" }],
+      },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-inline-quoted",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(terminalProvider.executeCommand).toHaveBeenCalledOnce();
+    expect(terminalProvider.executeCommand.mock.calls[0][0].command).toMatch(
+      /^gh pr comment 1 --body-file ""'\/.*\/body\.md'""$/,
+    );
+  });
+
   it("defers inline-file cleanup for background commands", async () => {
     let finalizeCommand!: () => void;
     vi.mocked(terminalProvider.executeCommand).mockImplementationOnce(
@@ -3883,7 +5170,7 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("rejects malformed materialized inline-file commands and cleans up", async () => {
+  it("rejects malformed inline-file commands before materialization", async () => {
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
@@ -3905,13 +5192,11 @@ describe("handleExecuteCommand", () => {
     const payload = textPayload(result);
     expect(payload).toMatchObject({
       status: "rejected",
-      command_template: `cat "$AL_FILE(body)`,
-      reason: expect.stringContaining("malformed shell syntax"),
+      command: `cat "$AL_FILE(body)`,
+      reason: expect.stringContaining("balanced shell quotes"),
+      command_sent: false,
     });
-    expect(payload.command).toMatch(/^cat "'\/.*\/body'$/);
-    const tempPath = (payload.command as string).match(/'([^']+\/body)'/)?.[1];
-    expect(tempPath).toBeTruthy();
-    expect(fs.existsSync(tempPath!)).toBe(false);
+    expect(payload.command_template).toBeUndefined();
   });
 
   it("rejects single-quote dangling escapes before command execution", async () => {
@@ -4047,6 +5332,196 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it.each([
+    "npm test",
+    "npm run lint",
+    "npm run build",
+    "go test ./...",
+    "cargo check",
+    "dotnet build",
+  ])(
+    "auto-approves recognized project verification in the verified sandbox: %s",
+    async (command) => {
+      getConfiguration.mockReturnValue({
+        get: vi.fn((key: string, fallback?: unknown) =>
+          key === "masterBypass" ? false : fallback,
+        ),
+      });
+      const enqueueCommandApproval = vi.fn();
+      const review = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        { command },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: () => undefined,
+        } as never,
+        { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+        `session-sandbox-verification-${command}`,
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+        },
+      );
+
+      expect(review).not.toHaveBeenCalled();
+      expect(enqueueCommandApproval).not.toHaveBeenCalled();
+      expect(executeCommand).toHaveBeenCalledOnce();
+      expect(textPayload(result)).toMatchObject({
+        approval: { by: "sandbox_verification" },
+        security: {
+          route: "sandbox",
+          confinement: "verified-baseline",
+          permissionIntent: "default",
+        },
+      });
+    },
+  );
+
+  it.each([
+    ["unknown package script", { command: "npm run custom" }],
+    [
+      "trusted-looking custom package script",
+      { command: "npm run test:reset" },
+    ],
+    ["package install", { command: "npm install package" }],
+    [
+      "verification with environment override",
+      { command: "npm test", env: { CI: "1" } },
+    ],
+    [
+      "verification with workspace redirection",
+      { command: "npm test > src/test-output.txt" },
+    ],
+  ])(
+    "does not use sandbox-verification approval for %s",
+    async (_label, params) => {
+      getConfiguration.mockReturnValue({
+        get: vi.fn((key: string, fallback?: unknown) =>
+          key === "masterBypass" ? false : fallback,
+        ),
+      });
+      const enqueueCommandApproval = vi.fn(() => ({
+        promise: Promise.resolve({ decision: "run-once" }),
+      }));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        params,
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: () => undefined,
+        } as never,
+        { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+        `session-not-sandbox-verification-${_label}`,
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+        },
+      );
+
+      expect(enqueueCommandApproval).toHaveBeenCalledOnce();
+      expect(textPayload(result).approval).toEqual({ by: "human" });
+    },
+  );
+
+  it("rejects verification outside a workspace cwd before approval", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "run-once" }),
+    }));
+    const prepareExecution = vi.fn(async (options, routeContext) => ({
+      security: {
+        auditId: "outside-workspace-verification",
+        route: "sandbox" as const,
+        executionSurface: "verified-sandbox" as const,
+        confinement: "verified-baseline" as const,
+        routeReason: "verified-local-macos" as const,
+        ...routeContext,
+        executionPolicy: "sandbox-baseline-v2" as const,
+        preparedAt: 100,
+      },
+      execute: async () => terminalProvider.executeCommand(options),
+      dispose: vi.fn(),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test", cwd: "/outside/project" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-outside-workspace-verification",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(prepareExecution).not.toHaveBeenCalled();
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "retry_required",
+      retry_guidance: { code: "sandbox_cwd_outside_workspace" },
+      command_sent: false,
+      process_launched: false,
+    });
+  });
+
+  it("preserves an explicit prompt rule for a recognized verification command", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const rules = {
+      session: [
+        {
+          pattern: "npm test",
+          mode: "exact" as const,
+          decision: "prompt" as const,
+        },
+      ],
+      project: [],
+      global: [],
+    };
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "run-once" }),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      {
+        evaluateCommandRules: (_sessionId: string, command: string) =>
+          evaluateCommandRulePolicy(rules, command),
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-verification-prompt-rule",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(enqueueCommandApproval).toHaveBeenCalledOnce();
+    expect(textPayload(result).approval).toEqual({ by: "human" });
+  });
+
   it("auto-approves safe commands when the safe threshold is enabled", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) => {
@@ -4168,6 +5643,55 @@ describe("handleExecuteCommand", () => {
     expect(enqueueCommandApproval).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    [
+      "environment override",
+      { command: "npm test", env: { NODE_OPTIONS: "--trace-warnings" } },
+    ],
+    [
+      "force request",
+      {
+        command: "npm test",
+        force: true,
+        force_reason: "Validator false positive.",
+      },
+    ],
+  ])("bypasses panel recent approval for %s", async (_label, params) => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "run-once" }),
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    await handleExecuteCommand(
+      params,
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      {
+        isCommandRecentlyApproved: vi.fn(() => true),
+        enqueueCommandApproval,
+      } as never,
+      `session-panel-cache-${_label}`,
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(enqueueCommandApproval).toHaveBeenCalledWith(
+      expect.any(String),
+      "npm test",
+      expect.objectContaining({ bypassRecentApproval: true }),
+    );
+  });
+
   it("records human approval when the user accepts a prompted command", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) => {
@@ -4210,9 +5734,24 @@ describe("handleExecuteCommand", () => {
     const result = await handleExecuteCommand(
       { command: "go test ./..." },
       {
+        evaluateCommandRules: (_sessionId: string, command: string) =>
+          evaluateCommandRulePolicy(
+            {
+              session: [
+                {
+                  pattern: "go test",
+                  mode: "prefix",
+                  decision: "allow",
+                },
+              ],
+              project: [],
+              global: [],
+            },
+            command,
+          ),
         isCommandApproved: () => true,
         findMatchingCommandRule: () => ({
-          rule: { pattern: "go test", mode: "prefix" },
+          rule: { pattern: "go test", mode: "prefix", decision: "allow" },
           scope: "session",
         }),
       } as never,
@@ -5243,11 +6782,7 @@ describe("handleExecuteCommand", () => {
         { command: "pwd", split_from: "term_1" },
         "split_from parameter",
       ],
-      [
-        "outside-workspace cwd",
-        { command: "pwd", cwd: "/tmp" },
-        "inside the workspace",
-      ],
+
       [
         "mixed compound command",
         { command: "pwd && mkdir generated" },
@@ -5334,6 +6869,102 @@ describe("handleExecuteCommand", () => {
         });
       },
     );
+
+    it("returns structured outside-workspace guidance before approval or execution", async () => {
+      const enqueueCommandApproval = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        { command: "pwd", cwd: "/tmp" },
+        {
+          isCommandApproved: () => true,
+          findMatchingCommandRule: () => undefined,
+        } as never,
+        {
+          isRecentlyApproved: () => true,
+          enqueueCommandApproval,
+        } as never,
+        "readonly-reject-outside-workspace",
+        undefined,
+        providers(),
+      );
+
+      expect(executeCommand).not.toHaveBeenCalled();
+      expect(terminalProvider.prepareExecution).not.toHaveBeenCalled();
+      expect(enqueueCommandApproval).not.toHaveBeenCalled();
+      expect(textPayload(result)).toMatchObject({
+        status: "retry_required",
+        cwd: "/tmp",
+        retry_guidance: {
+          code: "sandbox_cwd_outside_workspace",
+          automatic_retry: false,
+          options: [{ action: "open_or_add_workspace_root" }],
+        },
+        command_sent: false,
+        process_launched: false,
+      });
+    });
+  });
+
+  it("preserves structured terminal target recovery guidance", async () => {
+    const prepareExecution = vi.fn(async () => {
+      throw new TerminalTargetRecoveryError({
+        failure: "wrong_authority",
+        target_kind: "terminal_name",
+        target_value: "Tests",
+        required_authority: "native-agent",
+        target_authorities: ["sandbox"],
+        compatible_terminals: [
+          {
+            terminal_id: "native-1",
+            terminal_name: "Native Tests",
+            authority: "native-agent",
+          },
+        ],
+        retry_guidance: [
+          'Retry with terminal_id="native-1" under native-agent authority.',
+        ],
+      });
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: "npm test",
+        terminal_name: "Tests",
+        sandbox_permissions: "require_escalated",
+        reason: "Run the approved native test command.",
+      },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-target-recovery",
+      undefined,
+      { terminalProvider: { ...terminalProvider, prepareExecution } },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      status: "retry_required",
+      error_code: "terminal_target_rejected",
+      target_failure: "wrong_authority",
+      target_kind: "terminal_name",
+      target_value: "Tests",
+      required_authority: "native-agent",
+      target_authorities: ["sandbox"],
+      compatible_terminals: [
+        {
+          terminal_id: "native-1",
+          terminal_name: "Native Tests",
+          authority: "native-agent",
+        },
+      ],
+      retry_guidance: [
+        'Retry with terminal_id="native-1" under native-agent authority.',
+      ],
+      command_sent: false,
+      process_launched: false,
+      retry_safe: true,
+      failure_stage: "preparation",
+    });
   });
 
   it("returns actionable newline regex hint on ripgrep newline error", async () => {

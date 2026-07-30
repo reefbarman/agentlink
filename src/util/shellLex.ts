@@ -51,6 +51,35 @@ export interface ShellLexTokenScanResult {
   finalState: ShellLexFinalState;
 }
 
+export interface ShellLexLiteralOccurrence {
+  start: number;
+  end: number;
+  quote: ShellLexQuote | null;
+  escaped: boolean;
+  comment: boolean;
+}
+
+export type ShellLexUnsupportedSyntaxKind =
+  | "ansi-c-quote"
+  | "command-substitution"
+  | "backtick-substitution"
+  | "parameter-expansion"
+  | "arithmetic-expansion"
+  | "process-substitution"
+  | "heredoc";
+
+export interface ShellLexUnsupportedSyntax {
+  kind: ShellLexUnsupportedSyntaxKind;
+  start: number;
+  end: number;
+}
+
+export interface ShellLexLiteralScanResult {
+  occurrences: ShellLexLiteralOccurrence[];
+  unsupportedSyntax: ShellLexUnsupportedSyntax[];
+  finalState: ShellLexFinalState;
+}
+
 /**
  * Scans the legacy command-splitter dialect without interpreting shell syntax.
  *
@@ -271,6 +300,149 @@ export function scanShellLexTokens(
 
   finishToken();
   return { tokens, finalState: { quote, danglingEscape } };
+}
+
+/**
+ * Finds exact literal occurrences while sharing the bounded shell quote,
+ * escape, and comment dialect used by command validation.
+ *
+ * Unsupported expansion constructs are reported rather than interpreted. This
+ * lets source-rewriting consumers fail closed without growing a second shell
+ * parser or guessing about nested shell evaluation.
+ */
+export function scanShellLexLiteralOccurrences(
+  input: string,
+  literal: string,
+): ShellLexLiteralScanResult {
+  if (!literal)
+    throw new Error("Shell literal scan requires a non-empty literal");
+
+  const occurrences: ShellLexLiteralOccurrence[] = [];
+  const unsupportedSyntax: ShellLexUnsupportedSyntax[] = [];
+  let quote: ShellLexQuote | null = null;
+  let danglingEscape = false;
+  let inComment = false;
+  let index = 0;
+
+  const recordOccurrence = (
+    start: number,
+    escaped: boolean,
+    comment: boolean,
+  ) => {
+    if (!input.startsWith(literal, start)) return false;
+    occurrences.push({
+      start,
+      end: start + literal.length,
+      quote,
+      escaped,
+      comment,
+    });
+    return true;
+  };
+  const recordUnsupported = (
+    kind: ShellLexUnsupportedSyntaxKind,
+    length: number,
+  ) => {
+    unsupportedSyntax.push({ kind, start: index, end: index + length });
+  };
+
+  while (index < input.length) {
+    const ch = input[index];
+
+    if (inComment) {
+      if (recordOccurrence(index, false, true)) {
+        index += literal.length;
+        continue;
+      }
+      if (ch === "\n") inComment = false;
+      index++;
+      continue;
+    }
+
+    if (ch === "\\" && quote !== "single") {
+      if (index + 1 < input.length) {
+        if (recordOccurrence(index + 1, true, false)) {
+          index += literal.length + 1;
+        } else {
+          index += 2;
+        }
+        continue;
+      }
+      danglingEscape = true;
+      index++;
+      continue;
+    }
+
+    if (recordOccurrence(index, false, false)) {
+      index += literal.length;
+      continue;
+    }
+
+    if (
+      ch === "#" &&
+      quote === null &&
+      (index === 0 || /[\s;&|]/.test(input[index - 1] ?? ""))
+    ) {
+      inComment = true;
+      index++;
+      continue;
+    }
+
+    if (quote !== "single") {
+      if (input.startsWith("$((", index) || input.startsWith("$[", index)) {
+        recordUnsupported(
+          "arithmetic-expansion",
+          input[index + 1] === "[" ? 2 : 3,
+        );
+      } else if (input.startsWith("$(", index)) {
+        recordUnsupported("command-substitution", 2);
+      } else if (input.startsWith("${", index)) {
+        recordUnsupported("parameter-expansion", 2);
+      } else {
+        const parameterExpansion = input
+          .slice(index)
+          .match(/^\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!_-])/);
+        if (parameterExpansion) {
+          recordUnsupported(
+            "parameter-expansion",
+            parameterExpansion[0].length,
+          );
+        } else if (ch === "`") {
+          recordUnsupported("backtick-substitution", 1);
+        }
+      }
+    }
+    if (quote === null) {
+      if (input.startsWith("$'", index)) {
+        recordUnsupported("ansi-c-quote", 2);
+      } else if (
+        input.startsWith("<(", index) ||
+        input.startsWith(">(", index) ||
+        input.startsWith("=(", index)
+      ) {
+        recordUnsupported("process-substitution", 2);
+      } else if (input.startsWith("<<<", index)) {
+        recordUnsupported("heredoc", 3);
+      } else if (input.startsWith("<<-", index)) {
+        recordUnsupported("heredoc", 3);
+      } else if (input.startsWith("<<", index)) {
+        recordUnsupported("heredoc", 2);
+      }
+    }
+
+    if (ch === "'" && quote !== "double") {
+      quote = quote === "single" ? null : "single";
+    } else if (ch === '"' && quote !== "single") {
+      quote = quote === "double" ? null : "double";
+    }
+    index++;
+  }
+
+  return {
+    occurrences,
+    unsupportedSyntax,
+    finalState: { quote, danglingEscape },
+  };
 }
 
 function readSeparator(

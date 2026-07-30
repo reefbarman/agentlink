@@ -3,8 +3,13 @@ import type {
   TerminalExecutionRouteContext,
 } from "../../core/capabilities/terminal.js";
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 
 import { AgentTerminalProviderRouter } from "./AgentTerminalProviderRouter.js";
+import { TerminalTargetRecoveryError } from "../../core/capabilities/terminalTargetError.js";
+import { createHash } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 
 function provider(label: string) {
   const instance: ConfinementPreparingTerminalProvider & {
@@ -503,11 +508,14 @@ describe("AgentTerminalProviderRouter", () => {
     },
   );
 
-  it("rejects an explicit terminal owned by the wrong authority", async () => {
+  it("returns authority-compatible recovery for an explicit wrong-authority target", async () => {
     const test = harness();
     test.setEnabled(true);
     vi.mocked(test.nativeAgent.listTerminals).mockReturnValue([
-      { id: "native-agent-1", name: "Native Agent", busy: false },
+      { id: "native-agent-1", name: "Server", busy: false },
+    ]);
+    vi.mocked(test.sandbox.listTerminals).mockReturnValue([
+      { id: "sandbox-1", name: "Tests", busy: false },
     ]);
     const nativePrepared = await test.router.prepareExecution(
       { owner: undefined, command: "pwd", cwd: "/workspace" },
@@ -515,17 +523,190 @@ describe("AgentTerminalProviderRouter", () => {
     );
     await nativePrepared.execute();
 
-    await expect(
-      test.router.prepareExecution(
+    let error: unknown;
+    try {
+      await test.router.prepareExecution(
         {
           owner: undefined,
           command: "pwd",
           cwd: "/workspace",
-          terminal_id: "native-agent-1",
+          terminal_name: "Server",
         },
         sandboxRoute,
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(TerminalTargetRecoveryError);
+    expect(error).toMatchObject({
+      code: "terminal_target_rejected",
+      failure: "wrong_authority",
+      target_kind: "terminal_name",
+      target_value: "Server",
+      required_authority: "sandbox",
+      target_authorities: ["native-agent"],
+      compatible_terminals: [
+        {
+          terminal_id: "sandbox-1",
+          terminal_name: "Tests",
+          authority: "sandbox",
+        },
+      ],
+    });
+    expect((error as Error).message).toContain(
+      'retry with native-agent authority and the same terminal_name="Server"',
+    );
+    expect((error as Error).message).toContain(
+      'terminal_id="sandbox-1" or terminal_name="Tests"',
+    );
+    expect((error as Error).message).toContain("No terminal was retargeted");
+    expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("de-escalates a native-authority command pinned to an existing sandbox terminal", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    // Materialize the sandbox provider and its terminal first.
+    const sandboxPrepared = await test.router.prepareExecution(
+      { owner: undefined, command: "pwd", cwd: "/workspace" },
+      sandboxRoute,
+    );
+    await sandboxPrepared.execute();
+    vi.mocked(test.sandbox.listTerminals).mockReturnValue([
+      { id: "sandbox-1", name: "Tests", busy: false },
+    ]);
+
+    // An allowlisted command would route native, but it is pinned to the
+    // sandbox terminal: running there is strictly more confined than native,
+    // so the pin wins instead of a wrong_authority rejection.
+    const prepared = await test.router.prepareExecution(
+      {
+        owner: undefined,
+        command: "npx vitest run",
+        cwd: "/workspace",
+        terminal_id: "sandbox-1",
+      },
+      { ...nativeAgentRoute, authorityReason: "explicit-rule" },
+    );
+    await expect(prepared.execute()).resolves.toMatchObject({
+      security: { route: "sandbox", requiredAuthority: "sandbox" },
+    });
+
+    // Explicit user escalation is never overridden by a pinned target.
+    await expect(
+      test.router.prepareExecution(
+        {
+          owner: undefined,
+          command: "npx vitest run",
+          cwd: "/workspace",
+          terminal_id: "sandbox-1",
+        },
+        {
+          ...nativeAgentRoute,
+          permissionIntent: "native-escalation",
+          approvalRequirement: "explicit-escalation",
+          authorityReason: "explicit-escalation",
+        },
       ),
-    ).rejects.toThrow("wrong authority");
+    ).rejects.toThrow(/wrong authority/);
+  });
+
+  it("rejects native inline-file tampering after preparation and before dispatch", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    const createdRoot = await mkdtemp(
+      path.join(os.tmpdir(), "al-router-inline-"),
+    );
+    const root = await realpath(createdRoot);
+    const filePath = path.join(root, "input.txt");
+    const content = "approved bytes\n";
+    const innerDispose = vi.fn();
+    Object.assign(test.nativeAgent, {
+      prepareNativeExecution: vi.fn(async (_options, security) => ({
+        security,
+        execute: vi.fn(),
+        dispose: innerDispose,
+      })),
+    });
+    try {
+      await writeFile(filePath, content);
+      const prepared = await test.router.prepareExecution(
+        {
+          owner: undefined,
+          command: `cat '${filePath}'`,
+          cwd: "/workspace",
+          sandboxInlineFiles: [
+            {
+              name: "input",
+              path: filePath,
+              bytes: Buffer.byteLength(content),
+              sha256: createHash("sha256").update(content).digest("hex"),
+            },
+          ],
+        },
+        nativeAgentRoute,
+      );
+      await writeFile(filePath, "changed bytes\n");
+
+      await expect(prepared.execute()).rejects.toThrow(
+        "Inline file changed after materialization: input",
+      );
+      expect(test.nativeAgent.executeCommand).not.toHaveBeenCalled();
+      expect(innerDispose).toHaveBeenCalledOnce();
+      expect(test.audit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "execution_failed",
+          failure: "launch_failed",
+        }),
+      );
+      expect(test.audit).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "execution_started" }),
+      );
+    } finally {
+      await rm(createdRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("returns current split sources for a stale split_from target", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    vi.mocked(test.sandbox.listTerminals).mockReturnValue([
+      { id: "sandbox-live", name: "Tests", busy: false },
+    ]);
+
+    let error: unknown;
+    try {
+      await test.router.prepareExecution(
+        {
+          owner: undefined,
+          command: "pwd",
+          cwd: "/workspace",
+          split_from: "closed-terminal",
+        },
+        sandboxRoute,
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(TerminalTargetRecoveryError);
+    expect(error).toMatchObject({
+      failure: "not_found",
+      target_kind: "split_from",
+      target_value: "closed-terminal",
+      compatible_terminals: [
+        {
+          terminal_id: "sandbox-live",
+          terminal_name: "Tests",
+          authority: "sandbox",
+        },
+      ],
+    });
+    expect((error as Error).message).toContain(
+      'Retry with split_from="sandbox-live"',
+    );
+    expect((error as Error).message).toContain("retry without split_from");
     expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
   });
 

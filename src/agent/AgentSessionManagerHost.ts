@@ -51,6 +51,7 @@ import type {
 import { WorkspaceMutationCoordinator } from "./WorkspaceMutationCoordinator.js";
 import type { SkillCatalogFallbackProvider } from "./skillCatalogFallbackProvider.js";
 import { normalizePromptProfileOverrides } from "../core/promptProfile.js";
+import { commandApprovalPolicyFromLegacyTier } from "../approvals/commandApprovalPolicy.js";
 
 export interface AgentWorkspaceHost {
   getWorkspaceFolders(): WorkspaceFolderInfo[];
@@ -76,6 +77,12 @@ export interface AgentSessionConfigHost {
     mode: string,
     scope?: Readonly<SessionProjectScope>,
   ): import("./providers/types.js").ReasoningEffort;
+  getCommandApprovalPolicy?(
+    scope?: Readonly<SessionProjectScope>,
+  ): Exclude<
+    import("../approvals/commandApprovalPolicy.js").CommandApprovalPolicy,
+    "approve-for-me"
+  >;
   getBgSummaryMode(scope?: Readonly<SessionProjectScope>): BgSummaryMode;
   getBackgroundAgentSettings(
     scope?: Readonly<SessionProjectScope>,
@@ -243,6 +250,12 @@ export function createDefaultAgentSessionManagerHost(args: {
         resolveModelForMode(configurationFor(scope), mode, fallbackModel),
       resolveReasoningEffortForMode: (mode, scope) =>
         resolveReasoningEffortForMode(configurationFor(scope), mode),
+      getCommandApprovalPolicy: (scope) =>
+        commandApprovalPolicyFromLegacyTier(
+          configurationFor(scope).get<"off" | "safe" | "sensitive">(
+            "commandAutoApproveTier",
+          ),
+        ),
       getBgSummaryMode: (scope) => {
         const value = configurationFor(scope).get<string>(
           "bgSummary.mode",

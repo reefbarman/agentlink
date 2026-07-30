@@ -83,6 +83,7 @@ const DELETE_SCOPE_ID_BATCH_SIZE = 200;
 // count that hydration can block the host process for minutes (chunk payloads
 // embed full source content), so the query degrades instead.
 const MAXIMUM_UNINDEXED_QUERY_CHUNKS = 2_048;
+const RETRIEVAL_VERSION_RETENTION_MS = 60 * 60 * 1_000;
 const REQUIRED_RETRIEVAL_TABLES = [
   RETRIEVAL_TABLES.sources,
   RETRIEVAL_TABLES.chunks,
@@ -228,6 +229,12 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   private aggregate: RetrievalAggregateMetrics = clone(EMPTY_METRICS);
   private inspectedFingerprint: RetrievalFingerprint | undefined;
   private readonly staleSourceIds = new Set<string>();
+  private readonly activeReads = new Set<Promise<unknown>>();
+  private readonly pendingQueryMetrics = {
+    lexical: 0,
+    vector: 0,
+    hybrid: 0,
+  };
   private closePromise: Promise<void> | undefined;
   private closing = false;
 
@@ -241,13 +248,16 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
     expected: RetrievalFingerprint,
   ): Promise<RetrievalFingerprintDisposition> {
     this.inspectedFingerprint = clone(expected);
-    return this.withTables(expected.embedding?.dimensions, async (tables) => {
-      const metadata = await readRows<MetadataRow>(tables.metadata);
-      return classifyRetrievalFingerprint(
-        metadataValue<RetrievalFingerprint>(metadata, FINGERPRINT_KEY),
-        expected,
-      );
-    });
+    return this.withReadableTables(
+      expected.embedding?.dimensions,
+      async (tables) => {
+        const metadata = await readRows<MetadataRow>(tables.metadata);
+        return classifyRetrievalFingerprint(
+          metadataValue<RetrievalFingerprint>(metadata, FINGERPRINT_KEY),
+          expected,
+        );
+      },
+    );
   }
 
   async migrate(
@@ -591,7 +601,7 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   }
 
   async inspectSource(sourceId: string): Promise<RetrievalActiveSource | null> {
-    return this.withTables(undefined, async (tables) => {
+    return this.withReadableTables(undefined, async (tables) => {
       const rows = await readFilteredRows<SourceRow>(
         tables.sources,
         sqlEquals("source_id", sourceId),
@@ -609,7 +619,7 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   async listSources(
     filters?: RetrievalQueryFilter,
   ): Promise<RetrievalActiveSource[]> {
-    return this.withState(undefined, async (state) =>
+    return this.withReadableState(undefined, async (state) =>
       activeSourceRows(state.sources)
         .flatMap((row) => {
           if (!row.generation) return [];
@@ -628,13 +638,9 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
     if (this.closing) throw new Error("retrieval_store_closed");
     if (!(await this.hasStoreMarker())) return missingStructuralSnapshot();
 
-    return withRetrievalStoreLock(this.root, async () => {
-      if (this.closing) throw new Error("retrieval_store_closed");
+    return this.withReadConnection(async (connection) => {
       if (!(await this.hasStoreMarker())) return missingStructuralSnapshot();
 
-      const connection = await connect(this.root, {
-        readConsistencyInterval: 0,
-      });
       let sourcesTable: Table | undefined;
       let relationsTable: Table | undefined;
       let metadataTable: Table | undefined;
@@ -648,15 +654,16 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
           return missingStructuralSnapshot();
         }
 
-        [sourcesTable, relationsTable, metadataTable] = await Promise.all([
+        const openedTables = await Promise.all([
           connection.openTable(RETRIEVAL_TABLES.sources),
           connection.openTable(RETRIEVAL_TABLES.relations),
           connection.openTable(RETRIEVAL_TABLES.metadata),
         ]);
+        [sourcesTable, relationsTable, metadataTable] = openedTables;
         const [sourceRows, relationRows, metadata] = await Promise.all([
-          readRows<SourceRow>(sourcesTable),
-          readRows<RelationRow>(relationsTable),
-          readRows<MetadataRow>(metadataTable),
+          readRows<SourceRow>(openedTables[0]),
+          readRows<RelationRow>(openedTables[1]),
+          readRows<MetadataRow>(openedTables[2]),
         ]);
         const fingerprint = metadataValue<RetrievalFingerprint>(
           metadata,
@@ -721,7 +728,6 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
         sourcesTable?.close();
         relationsTable?.close();
         metadataTable?.close();
-        connection.close();
       }
     });
   }
@@ -738,36 +744,88 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   async deleteSource(
     request: RetrievalDeleteSourceRequest,
   ): Promise<RetrievalDeleteSourceOutcome> {
+    const [outcome] = await this.deleteSources([request]);
+    return outcome;
+  }
+
+  async deleteSources(
+    requests: RetrievalDeleteSourceRequest[],
+  ): Promise<RetrievalDeleteSourceOutcome[]> {
+    if (requests.length === 0) return [];
+    const uniqueIds = new Set(requests.map((request) => request.sourceId));
+    if (uniqueIds.size !== requests.length) {
+      throw new Error("Batch source deletions require unique source IDs");
+    }
     return this.withTables(undefined, async (tables) => {
-      const predicate = sqlEquals("source_id", request.sourceId);
-      const sourceRows = await readFilteredRows<SourceRow>(
-        tables.sources,
-        predicate,
-      );
-      const current = activeSourceRows(sourceRows)[0];
-      if (!current) {
-        return {
-          sourceId: request.sourceId,
-          status: "not_found",
-          recordsRemoved: 0,
-        };
-      }
-      if (
-        request.expectedRevisionId &&
-        current.revision_id !== request.expectedRevisionId
-      ) {
-        return {
-          sourceId: request.sourceId,
-          status: "stale_source",
-          recordsRemoved: 0,
-        };
+      const currentBySourceId = new Map<string, SourceRow>();
+      for (const sourceIds of batchValues(
+        [...uniqueIds],
+        DELETE_SCOPE_ID_BATCH_SIZE,
+      )) {
+        const rows = await readFilteredRows<SourceRow>(
+          tables.sources,
+          sqlIn("source_id", sourceIds),
+        );
+        for (const row of activeSourceRows(rows)) {
+          currentBySourceId.set(row.source_id, row);
+        }
       }
 
-      const [chunksRemoved, relationsRemoved] = await Promise.all([
-        tables.chunks.countRows(predicate),
-        tables.relations.countRows(predicate),
-      ]);
-      const source = parseJson<RetrievalSourceDocument>(current.payload_json);
+      const deletable: SourceRow[] = [];
+      const outcomes = requests.map((request): RetrievalDeleteSourceOutcome => {
+        const current = currentBySourceId.get(request.sourceId);
+        if (!current) {
+          return {
+            sourceId: request.sourceId,
+            status: "not_found",
+            recordsRemoved: 0,
+          };
+        }
+        if (
+          request.expectedRevisionId &&
+          current.revision_id !== request.expectedRevisionId
+        ) {
+          return {
+            sourceId: request.sourceId,
+            status: "stale_source",
+            recordsRemoved: 0,
+          };
+        }
+        deletable.push(current);
+        return {
+          sourceId: request.sourceId,
+          status: "deleted",
+          recordsRemoved: 1,
+        };
+      });
+      if (deletable.length === 0) return outcomes;
+
+      const outcomeBySourceId = new Map(
+        outcomes.map((outcome) => [outcome.sourceId, outcome]),
+      );
+      const deletableBatches = batchValues(
+        deletable.map((row) => row.source_id),
+        DELETE_SCOPE_ID_BATCH_SIZE,
+      );
+      for (const sourceIds of deletableBatches) {
+        const predicate = sqlIn("source_id", sourceIds);
+        const countRemoved = async (table: Table) => {
+          const rows = await table
+            .query()
+            .where(predicate)
+            .select(["source_id"])
+            .toArray();
+          for (const row of normalizeRows<{ source_id: string }>(rows)) {
+            const outcome = outcomeBySourceId.get(row.source_id);
+            if (outcome) outcome.recordsRemoved += 1;
+          }
+        };
+        await Promise.all([
+          countRemoved(tables.chunks),
+          countRemoved(tables.relations),
+        ]);
+      }
+
       await upsertMetadataValue(
         tables.metadata,
         NATIVE_INDEXES_DIRTY_KEY,
@@ -779,30 +837,36 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
         .whenNotMatchedInsertAll()
         .execute(
           makeArrowTable(
-            [
-              tombstoneRow(request.sourceId, source.revision),
-            ] as unknown as Record<string, unknown>[],
+            deletable.map((row) =>
+              tombstoneRow(
+                row.source_id,
+                parseJson<RetrievalSourceDocument>(row.payload_json).revision,
+              ),
+            ) as unknown as Record<string, unknown>[],
             { schema: retrievalSourceSchema() },
           ),
         );
-      await Promise.all([
-        tables.chunks.delete(predicate),
-        tables.relations.delete(predicate),
-      ]);
+      for (const sourceIds of deletableBatches) {
+        const predicate = sqlIn("source_id", sourceIds);
+        await Promise.all([
+          tables.chunks.delete(predicate),
+          tables.relations.delete(predicate),
+        ]);
+      }
       if (!this.options.deferNativeIndexRefresh) {
         await this.refreshNativeIndexesFromTables(tables);
       }
-      this.staleSourceIds.delete(request.sourceId);
-      const recordsRemoved = 1 + chunksRemoved + relationsRemoved;
+      let recordsRemoved = 0;
+      for (const row of deletable) {
+        this.staleSourceIds.delete(row.source_id);
+        recordsRemoved +=
+          outcomeBySourceId.get(row.source_id)?.recordsRemoved ?? 0;
+      }
       await this.updateMetrics(tables, (metrics) => {
-        metrics.sourcesDeleted += 1;
+        metrics.sourcesDeleted += deletable.length;
         metrics.recordsRemoved += recordsRemoved;
       });
-      return {
-        sourceId: request.sourceId,
-        status: "deleted",
-        recordsRemoved,
-      };
+      return outcomes;
     });
   }
 
@@ -952,85 +1016,89 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   }
 
   async query(request: RetrievalQuery): Promise<RetrievalQueryResult> {
-    return this.withTables(undefined, async (tables) => {
-      const nativeState = await readNativeIndexState(tables);
-      const candidateLimit = Math.min(
-        MAXIMUM_NATIVE_CANDIDATES,
-        Math.max(MINIMUM_NATIVE_CANDIDATES, request.limit * 8),
-      );
-      const nativeIds = await this.nativeCandidateIds(
-        request,
-        candidateLimit,
-        nativeState,
-        tables,
-      );
-      let engine: InMemoryRetrievalRepository;
-      if (nativeIds) {
-        engine = await this.buildScopedEngine(nativeState, tables, nativeIds);
-      } else {
-        const chunkRowCount = await tables.chunks.countRows();
-        const maxUnindexedChunks =
-          this.options.maxUnindexedQueryChunks ??
-          MAXIMUM_UNINDEXED_QUERY_CHUNKS;
-        if (chunkRowCount > maxUnindexedChunks) {
-          await this.updateMetrics(tables, (metrics) => {
-            metrics.queries += 1;
-            metrics[`${request.mode}Queries`] += 1;
-          });
-          return {
-            query: clone(request),
-            candidates: [],
-            mode: request.mode,
-            degradedReason: "lexical_index_unavailable",
-          };
-        }
-        engine = await this.buildEngine(await readState(tables));
-      }
-      const expandedRequest: RetrievalQuery = {
-        ...request,
-        limit: candidateLimit,
-        diversity: {
-          maxPerSource: candidateLimit,
-          collapseOverlaps: false,
-        },
-      };
-      const expanded = await engine.query(expandedRequest);
-      const result: RetrievalQueryResult = {
-        ...expanded,
-        query: clone(request),
-        candidates: diversifyRetrievalCandidates(
-          nativeIds
-            ? expanded.candidates.filter((candidate) =>
-                nativeIds.has(candidate.chunk.id),
-              )
-            : expanded.candidates,
-          request,
-        ),
-      };
-      if (request.freshness === "required") {
-        const observed = new Set(
-          result.freshness?.staleSources.map((source) => source.sourceId) ?? [],
+    return this.trackRead(() => this.runQuery(request));
+  }
+
+  private async runQuery(
+    request: RetrievalQuery,
+  ): Promise<RetrievalQueryResult> {
+    const result = await this.withReadableTables<RetrievalQueryResult>(
+      undefined,
+      async (tables) => {
+        const nativeState = await readNativeIndexState(tables);
+        const candidateLimit = Math.min(
+          MAXIMUM_NATIVE_CANDIDATES,
+          Math.max(MINIMUM_NATIVE_CANDIDATES, request.limit * 8),
         );
-        for (const candidate of result.candidates) {
-          if (!observed.has(candidate.source.id)) {
-            this.staleSourceIds.delete(candidate.source.id);
+        const nativeIds = await this.nativeCandidateIds(
+          request,
+          candidateLimit,
+          nativeState,
+          tables,
+        );
+        let engine: InMemoryRetrievalRepository;
+        if (nativeIds) {
+          engine = await this.buildScopedEngine(nativeState, tables, nativeIds);
+        } else {
+          const chunkRowCount = await tables.chunks.countRows();
+          const maxUnindexedChunks =
+            this.options.maxUnindexedQueryChunks ??
+            MAXIMUM_UNINDEXED_QUERY_CHUNKS;
+          if (chunkRowCount > maxUnindexedChunks) {
+            return {
+              query: clone(request),
+              candidates: [],
+              mode: request.mode,
+              degradedReason: "lexical_index_unavailable",
+            };
+          }
+          engine = await this.buildEngine(await readState(tables));
+        }
+        const expandedRequest: RetrievalQuery = {
+          ...request,
+          limit: candidateLimit,
+          diversity: {
+            maxPerSource: candidateLimit,
+            collapseOverlaps: false,
+          },
+        };
+        const expanded = await engine.query(expandedRequest);
+        const result: RetrievalQueryResult = {
+          ...expanded,
+          query: clone(request),
+          candidates: diversifyRetrievalCandidates(
+            nativeIds
+              ? expanded.candidates.filter((candidate) =>
+                  nativeIds.has(candidate.chunk.id),
+                )
+              : expanded.candidates,
+            request,
+          ),
+        };
+        if (request.freshness === "required") {
+          const observed = new Set(
+            result.freshness?.staleSources.map((source) => source.sourceId) ??
+              [],
+          );
+          for (const candidate of result.candidates) {
+            if (!observed.has(candidate.source.id)) {
+              this.staleSourceIds.delete(candidate.source.id);
+            }
+          }
+          for (const sourceId of observed) this.staleSourceIds.add(sourceId);
+          for (const sourceId of result.freshness?.deletedSourceIds ?? []) {
+            this.staleSourceIds.delete(sourceId);
           }
         }
-        for (const sourceId of observed) this.staleSourceIds.add(sourceId);
-        for (const sourceId of result.freshness?.deletedSourceIds ?? []) {
-          this.staleSourceIds.delete(sourceId);
-        }
-      }
-      await this.updateMetrics(tables, (metrics) => {
-        metrics.queries += 1;
-        metrics[`${request.mode}Queries`] += 1;
-      });
-      return result;
-    });
+        return result;
+      },
+    );
+    await this.updateQueryMetrics(request.mode);
+    return result;
   }
 
   async relations(sourceIds?: string[]): Promise<RetrievalRelationRecord[]> {
-    return this.withState(undefined, async (state) => {
+    return this.withReadableState(undefined, async (state) => {
       const engine = await this.buildEngine(state);
       return engine.relations(sourceIds);
     });
@@ -1044,77 +1112,84 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
       return { status: "unavailable", reason: "missing_index" };
     }
 
-    return withRetrievalStoreLock(this.root, async () => {
-      if (this.closing) throw new Error("retrieval_store_closed");
-      if (!(await this.hasStoreMarker())) {
-        return { status: "unavailable", reason: "missing_index" };
-      }
+    return this.withReadConnection<RetrievalLexicalReadiness>(
+      async (connection) => {
+        if (!(await this.hasStoreMarker())) {
+          return { status: "unavailable", reason: "missing_index" };
+        }
 
-      let connection: Connection | undefined;
-      let metadataTable: Table | undefined;
-      try {
-        connection = await connect(this.root, { readConsistencyInterval: 0 });
-        const names = new Set(await connection.tableNames());
-        if (
-          REQUIRED_RETRIEVAL_TABLES.some((tableName) => !names.has(tableName))
-        ) {
-          return { status: "unavailable", reason: "missing_index" };
-        }
-        metadataTable = await connection.openTable(RETRIEVAL_TABLES.metadata);
-        const metadata = await readRows<MetadataRow>(metadataTable);
-        const fingerprint = metadataValue<RetrievalFingerprint>(
-          metadata,
-          FINGERPRINT_KEY,
-        );
-        if (!fingerprint) {
-          return { status: "unavailable", reason: "missing_index" };
-        }
-        if (
-          this.inspectedFingerprint &&
-          classifyRetrievalFingerprint(
-            fingerprint,
-            this.inspectedFingerprint,
-          ) === "rebuild_required"
-        ) {
-          return { status: "unavailable", reason: "rebuild_required" };
-        }
-        const capabilities = metadataValue<NativeCapabilities>(
-          metadata,
-          NATIVE_CAPABILITIES_KEY,
-        );
-        const nativeIndexesDirty =
-          metadataValue<boolean>(metadata, NATIVE_INDEXES_DIRTY_KEY) ?? true;
-        if (
-          nativeIndexesDirty ||
-          !capabilities ||
-          capabilities.lexical.status !== "ready"
-        ) {
+        let metadataTable: Table | undefined;
+        try {
+          const names = new Set(await connection.tableNames());
+          if (
+            REQUIRED_RETRIEVAL_TABLES.some((tableName) => !names.has(tableName))
+          ) {
+            return { status: "unavailable", reason: "missing_index" };
+          }
+          const openedMetadataTable = await connection.openTable(
+            RETRIEVAL_TABLES.metadata,
+          );
+          metadataTable = openedMetadataTable;
+          const metadata = await readRows<MetadataRow>(openedMetadataTable);
+          const fingerprint = metadataValue<RetrievalFingerprint>(
+            metadata,
+            FINGERPRINT_KEY,
+          );
+          if (!fingerprint) {
+            return { status: "unavailable", reason: "missing_index" };
+          }
+          if (
+            this.inspectedFingerprint &&
+            classifyRetrievalFingerprint(
+              fingerprint,
+              this.inspectedFingerprint,
+            ) === "rebuild_required"
+          ) {
+            return { status: "unavailable", reason: "rebuild_required" };
+          }
+          const capabilities = metadataValue<NativeCapabilities>(
+            metadata,
+            NATIVE_CAPABILITIES_KEY,
+          );
+          const nativeIndexesDirty =
+            metadataValue<boolean>(metadata, NATIVE_INDEXES_DIRTY_KEY) ?? true;
+          if (
+            nativeIndexesDirty ||
+            !capabilities ||
+            capabilities.lexical.status !== "ready"
+          ) {
+            return {
+              status: "unavailable",
+              reason: "lexical_index_unavailable",
+              ...(nativeIndexesDirty
+                ? { detail: "Native indexes require refresh" }
+                : capabilities?.lexical.detail
+                  ? { detail: capabilities.lexical.detail }
+                  : {}),
+            };
+          }
+          return { status: "ready" };
+        } catch (error) {
           return {
             status: "unavailable",
-            reason: "lexical_index_unavailable",
-            ...(nativeIndexesDirty
-              ? { detail: "Native indexes require refresh" }
-              : capabilities?.lexical.detail
-                ? { detail: capabilities.lexical.detail }
-                : {}),
+            reason: "store_unavailable",
+            detail: error instanceof Error ? error.message : String(error),
           };
+        } finally {
+          metadataTable?.close();
         }
-        return { status: "ready" };
-      } catch (error) {
-        return {
-          status: "unavailable",
-          reason: "store_unavailable",
-          detail: error instanceof Error ? error.message : String(error),
-        };
-      } finally {
-        metadataTable?.close();
-        connection?.close();
-      }
-    });
+      },
+    ).catch(
+      (error): RetrievalLexicalReadiness => ({
+        status: "unavailable",
+        reason: "store_unavailable",
+        detail: error instanceof Error ? error.message : String(error),
+      }),
+    );
   }
 
   async health(): Promise<RetrievalHealthSnapshot> {
-    return this.withTables(undefined, async (tables) => {
+    return this.withReadableTables(undefined, async (tables) => {
       const metadata = await readRows<MetadataRow>(tables.metadata);
       const fingerprint = metadataValue<RetrievalFingerprint>(
         metadata,
@@ -1292,7 +1367,10 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
       let fragmentsRemoved = 0;
       let bytesReclaimed = 0;
       await this.refreshNativeIndexesFromTables(tables);
-      const options = { cleanupOlderThan: new Date(), deleteUnverified: false };
+      const options = {
+        cleanupOlderThan: new Date(Date.now() - RETRIEVAL_VERSION_RETENTION_MS),
+        deleteUnverified: false,
+      };
       for (const table of Object.values(tables)) {
         const stats = await table.optimize(options);
         fragmentsRemoved += stats.compaction.fragmentsRemoved;
@@ -1340,16 +1418,20 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   async close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closing = true;
+    this.closePromise = this.finishClose();
+    return this.closePromise;
+  }
+
+  private async finishClose(): Promise<void> {
+    await Promise.allSettled(this.activeReads);
     if (!this.tables && !this.connection) {
       this.staleSourceIds.clear();
-      this.closePromise = Promise.resolve();
-      return this.closePromise;
+      return;
     }
-    this.closePromise = withRetrievalStoreLock(this.root, async () => {
+    await withRetrievalStoreLock(this.root, async () => {
       this.closeNativeHandles();
       this.staleSourceIds.clear();
     });
-    return this.closePromise;
   }
 
   private async withState<T>(
@@ -1358,11 +1440,145 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
   ): Promise<T> {
     return this.withTables(dimensions, async (tables) => {
       const state = await readState(tables);
-      this.aggregate = clone(state.metrics);
+      this.aggregate = this.metricsWithPendingQueries(state.metrics);
       const result = await operation(state, tables);
-      this.aggregate = clone(state.metrics);
+      this.aggregate = this.metricsWithPendingQueries(state.metrics);
       return result;
     });
+  }
+
+  private async withReadableState<T>(
+    dimensions: number | undefined,
+    operation: (state: DurableState, tables: RetrievalTables) => Promise<T>,
+  ): Promise<T> {
+    return this.withReadableTables(dimensions, async (tables) => {
+      const state = await readState(tables);
+      this.aggregate = this.metricsWithPendingQueries(state.metrics);
+      return operation(state, tables);
+    });
+  }
+
+  private async withReadableTables<T>(
+    dimensions: number | undefined,
+    operation: (tables: RetrievalTables) => Promise<T>,
+  ): Promise<T> {
+    if (!(await this.hasStoreMarker())) {
+      return this.withTables(dimensions, operation);
+    }
+    if (dimensions !== undefined) this.validateDimensions(dimensions);
+    return this.withReadConnection(async (connection) => {
+      const names = new Set(await connection.tableNames());
+      if (REQUIRED_RETRIEVAL_TABLES.some((name) => !names.has(name))) {
+        throw new Error("retrieval_store_incomplete");
+      }
+      const opened: Table[] = [];
+      try {
+        for (const name of REQUIRED_RETRIEVAL_TABLES) {
+          opened.push(await connection.openTable(name));
+        }
+      } catch (error) {
+        for (const table of opened) table.close();
+        throw error;
+      }
+      const tables: RetrievalTables = {
+        sources: opened[0],
+        chunks: opened[1],
+        relations: opened[2],
+        publications: opened[3],
+        metadata: opened[4],
+        snapshots: opened[5],
+      };
+      try {
+        return await operation(tables);
+      } finally {
+        for (const table of opened) table.close();
+      }
+    });
+  }
+
+  private async withReadConnection<T>(
+    operation: (connection: Connection) => Promise<T>,
+  ): Promise<T> {
+    return this.trackRead(() => this.runReadConnection(operation));
+  }
+
+  private async trackRead<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.closing) throw new Error("retrieval_store_closed");
+    const read = Promise.resolve().then(operation);
+    this.activeReads.add(read);
+    try {
+      return await read;
+    } finally {
+      this.activeReads.delete(read);
+    }
+  }
+
+  private async runReadConnection<T>(
+    operation: (connection: Connection) => Promise<T>,
+  ): Promise<T> {
+    const connection = await connect(this.root, { readConsistencyInterval: 0 });
+    try {
+      return await operation(connection);
+    } finally {
+      connection.close();
+    }
+  }
+
+  private async updateQueryMetrics(
+    mode: RetrievalQuery["mode"],
+  ): Promise<void> {
+    this.pendingQueryMetrics[mode] += 1;
+    this.aggregate.queries += 1;
+    this.aggregate[`${mode}Queries`] += 1;
+    try {
+      await withRetrievalStoreLock(
+        this.root,
+        async () => {
+          if (this.options.codeIndexWriterLease) {
+            assertCodeIndexWriterFenceCurrent(
+              this.options.codeIndexWriterLease,
+            );
+          }
+          const pending = { ...this.pendingQueryMetrics };
+          try {
+            const tables = await this.ensureTables(undefined);
+            const metadata = await readRows<MetadataRow>(tables.metadata);
+            const metrics =
+              metadataValue<RetrievalAggregateMetrics>(metadata, METRICS_KEY) ??
+              clone(EMPTY_METRICS);
+            metrics.queries +=
+              pending.lexical + pending.vector + pending.hybrid;
+            metrics.lexicalQueries += pending.lexical;
+            metrics.vectorQueries += pending.vector;
+            metrics.hybridQueries += pending.hybrid;
+            await upsertMetadataValue(tables.metadata, METRICS_KEY, metrics);
+            this.pendingQueryMetrics.lexical -= pending.lexical;
+            this.pendingQueryMetrics.vector -= pending.vector;
+            this.pendingQueryMetrics.hybrid -= pending.hybrid;
+            this.aggregate = this.metricsWithPendingQueries(metrics);
+          } finally {
+            this.closeNativeHandles();
+          }
+        },
+        { timeoutMs: 1, maxWaitMs: 1 },
+      );
+    } catch {
+      // Query telemetry is best-effort; pending counters flush on a later query.
+    }
+  }
+
+  private metricsWithPendingQueries(
+    metrics: RetrievalAggregateMetrics,
+  ): RetrievalAggregateMetrics {
+    const pending = this.pendingQueryMetrics;
+    return {
+      ...clone(metrics),
+      queries:
+        metrics.queries + pending.lexical + pending.vector + pending.hybrid,
+      lexicalQueries: metrics.lexicalQueries + pending.lexical,
+      vectorQueries: metrics.vectorQueries + pending.vector,
+      hybridQueries: metrics.hybridQueries + pending.hybrid,
+    };
   }
 
   private async withTables<T>(
@@ -1392,7 +1608,7 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
       metadataValue<RetrievalAggregateMetrics>(metadata, METRICS_KEY) ??
       clone(EMPTY_METRICS);
     update(metrics);
-    this.aggregate = clone(metrics);
+    this.aggregate = this.metricsWithPendingQueries(metrics);
     await upsertMetadataValue(tables.metadata, METRICS_KEY, metrics);
   }
 
@@ -1438,14 +1654,7 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
     requestedDimensions: number | undefined,
   ): Promise<RetrievalTables> {
     if (requestedDimensions !== undefined) {
-      if (
-        this.dimensions !== undefined &&
-        this.dimensions !== requestedDimensions
-      ) {
-        throw new Error(
-          `Retrieval vector dimensions changed from ${this.dimensions} to ${requestedDimensions}`,
-        );
-      }
+      this.validateDimensions(requestedDimensions);
       this.dimensions = requestedDimensions;
     }
     if (this.tables) return this.tables;
@@ -1490,6 +1699,17 @@ export class LanceDbRetrievalRepository implements RetrievalRepository {
       snapshots: await this.connection.openTable(RETRIEVAL_TABLES.snapshots),
     };
     return this.tables;
+  }
+
+  private validateDimensions(requestedDimensions: number): void {
+    if (
+      this.dimensions !== undefined &&
+      this.dimensions !== requestedDimensions
+    ) {
+      throw new Error(
+        `Retrieval vector dimensions changed from ${this.dimensions} to ${requestedDimensions}`,
+      );
+    }
   }
 
   private requireDimensions(): number {

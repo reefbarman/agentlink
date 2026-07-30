@@ -191,8 +191,8 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
           path.join(canonicalWorkspace, ".git", "config"),
           path.join(canonicalWorkspace, ".git", "hooks"),
           path.join(canonicalWorkspace, ".agentlink", "policy.json"),
-          path.join(canonicalWorkspace, ".agents"),
-          path.join(canonicalWorkspace, ".codex"),
+          path.join(canonicalWorkspace, ".agents", "config.json"),
+          path.join(canonicalWorkspace, ".codex", "config.toml"),
           path.join(canonicalWorkspace, "AGENTS.md"),
         ]),
       );
@@ -389,6 +389,97 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
     }
   });
 
+  it("uses a disposable writable HOME and sandbox-owned Go caches", async () => {
+    const test = await fixture();
+    try {
+      const launch = await test.authorizer.authorize(
+        request(test.workspace, { temporaryHome: true }),
+      );
+      const environment = launch.authorization.policy.environment.values;
+      const privateRoot = path.dirname(environment.HOME);
+      expect(environment.HOME).toBe(path.join(privateRoot, "h"));
+      expect(environment.XDG_CACHE_HOME).toBe(path.join(privateRoot, "c"));
+      expect(environment.GOCACHE).toBe(path.join(privateRoot, "c", "go-build"));
+      expect(environment.GOLANGCI_LINT_CACHE).toBe(
+        path.join(privateRoot, "c", "golangci-lint"),
+      );
+      expect(await readdir(environment.HOME)).toEqual([]);
+      expect(launch.authorization.policy.readableRoots).toEqual(["/"]);
+      expect(launch.authorization.policy.writableRoots).toContain(privateRoot);
+      expect(launch.metadata.capabilities.privateHome).toBe(true);
+      expect(launch.metadata.capabilities.warnings).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("fresh writable per-command directory"),
+          expect.stringContaining("host home remains readable"),
+          expect.stringContaining("Go and GolangCI caches"),
+        ]),
+      );
+
+      launch.finalize?.();
+      expect(await exists(privateRoot)).toBe(false);
+    } finally {
+      await test.dispose();
+    }
+  });
+
+  it("keeps the host HOME by default while overriding inherited Go cache paths", async () => {
+    const test = await fixture();
+    const authorizer = new BaselineSandboxLaunchAuthorizer({
+      workspaceRoots: [test.workspace],
+      privateDirectoryPrefix: path.join(test.privateRoot, "al-cache-defaults-"),
+      homeDirectory: path.join(test.root, "real-home"),
+      hostEnvironment: {
+        PATH: process.env.PATH,
+        GOCACHE: path.join(test.root, "host-go-cache"),
+        GOLANGCI_LINT_CACHE: path.join(test.root, "host-golangci-cache"),
+      },
+    });
+    try {
+      const launch = await authorizer.authorize(request(test.workspace));
+      const environment = launch.authorization.policy.environment.values;
+      const privateRoot = path.dirname(environment.XDG_CACHE_HOME);
+
+      expect(environment.HOME).toBe(path.join(test.root, "real-home"));
+      expect(environment.GOCACHE).toBe(path.join(privateRoot, "c", "go-build"));
+      expect(environment.GOLANGCI_LINT_CACHE).toBe(
+        path.join(privateRoot, "c", "golangci-lint"),
+      );
+      expect(launch.metadata.capabilities.privateHome).toBe(false);
+      launch.finalize?.();
+    } finally {
+      await test.dispose();
+    }
+  });
+
+  it("preserves explicit reviewed Go cache overrides", async () => {
+    const test = await fixture();
+    try {
+      const launch = await test.authorizer.authorize(
+        request(test.workspace, {
+          env: {
+            GOCACHE: path.join(test.workspace, ".cache", "go"),
+            GOLANGCI_LINT_CACHE: path.join(
+              test.workspace,
+              ".cache",
+              "golangci-lint",
+            ),
+          },
+        }),
+      );
+      expect(launch.authorization.policy.environment.values).toMatchObject({
+        GOCACHE: path.join(test.workspace, ".cache", "go"),
+        GOLANGCI_LINT_CACHE: path.join(
+          test.workspace,
+          ".cache",
+          "golangci-lint",
+        ),
+      });
+      launch.finalize?.();
+    } finally {
+      await test.dispose();
+    }
+  });
+
   it("lets explicit command environment override shared agent defaults", async () => {
     const test = await fixture();
     try {
@@ -403,6 +494,169 @@ describe("BaselineSandboxLaunchAuthorizer", () => {
       await test.dispose();
     }
   });
+
+  it("ignores unrelated nested policy aliases while retaining namespace write denial", async () => {
+    const test = await fixture();
+    const external = path.join(test.root, "external-clickhouse-skill");
+    const skills = path.join(test.workspace, ".claude", "skills");
+    const alias = path.join(skills, "clickhouse");
+    try {
+      await mkdir(external);
+      await mkdir(skills, { recursive: true });
+      await writeFile(path.join(external, "SKILL.md"), "# External\n");
+      await writeFile(path.join(skills, "local.md"), "# Local\n");
+      await symlink(external, alias);
+
+      const launch = await test.authorizer.authorize(request(test.workspace));
+      const policy = launch.authorization.policy;
+      expect(policy.deniedWriteRoots).toContain(
+        path.join(await realpath(test.workspace), ".claude"),
+      );
+      expect(policy.protectedReadOnlyRoots).toContain(
+        await realpath(path.join(skills, "local.md")),
+      );
+      expect(policy.protectedReadOnlyRoots).not.toContain(
+        await realpath(alias),
+      );
+      expect(policy.protectedReadOnlyRoots).not.toContain(
+        await realpath(path.join(external, "SKILL.md")),
+      );
+      launch.finalize?.();
+    } finally {
+      await test.dispose();
+    }
+  });
+
+  it.each([
+    ["namespace root", ".claude"],
+    ["selected subtree", path.join(".claude", "skills")],
+    ["direct config file", path.join(".claude", "CLAUDE.md")],
+  ])(
+    "fails closed when a protected policy %s is a symlink",
+    async (_label, relative) => {
+      const test = await fixture();
+      const candidate = path.join(test.workspace, relative);
+      const external = path.join(
+        test.root,
+        `external-${relative.replaceAll(path.sep, "-")}`,
+      );
+      try {
+        await mkdir(path.dirname(candidate), { recursive: true });
+        await mkdir(external);
+        if (relative.endsWith(".md")) {
+          await rm(candidate, { force: true });
+          await writeFile(path.join(external, "target.md"), "# External\n");
+          await symlink(path.join(external, "target.md"), candidate);
+        } else {
+          await rm(candidate, { recursive: true, force: true });
+          await symlink(external, candidate);
+        }
+
+        await expect(
+          test.authorizer.authorize(request(test.workspace)),
+        ).rejects.toThrow(
+          /policy (?:namespace|entry) must not be a symbolic link/,
+        );
+        await expect.poll(async () => readdir(test.privateRoot)).toEqual([]);
+      } finally {
+        await test.dispose();
+      }
+    },
+  );
+
+  it.each(["agents", "history"])(
+    "fails closed when .agentlink/%s is a symlink",
+    async (entry) => {
+      const test = await fixture();
+      const candidate = path.join(test.workspace, ".agentlink", entry);
+      const external = path.join(test.root, `external-agentlink-${entry}`);
+      try {
+        await mkdir(external);
+        await rm(candidate, { recursive: true, force: true });
+        await symlink(external, candidate);
+
+        await expect(
+          test.authorizer.authorize(request(test.workspace)),
+        ).rejects.toThrow("policy entry must not be a symbolic link");
+        await expect.poll(async () => readdir(test.privateRoot)).toEqual([]);
+      } finally {
+        await test.dispose();
+      }
+    },
+  );
+
+  it("allows a root instruction alias to another declared regular instruction file", async () => {
+    const test = await fixture();
+    const instruction = path.join(test.workspace, "AGENTS.md");
+    const target = path.join(test.workspace, "CLAUDE.md");
+    try {
+      await writeFile(target, "# Shared instructions\n");
+      await rm(instruction);
+      await symlink("CLAUDE.md", instruction);
+
+      const launch = await test.authorizer.authorize(request(test.workspace));
+      const canonicalWorkspace = await realpath(test.workspace);
+      expect(launch.authorization.policy.deniedWriteRoots).toEqual(
+        expect.arrayContaining([
+          path.join(canonicalWorkspace, "AGENTS.md"),
+          path.join(canonicalWorkspace, "CLAUDE.md"),
+        ]),
+      );
+      expect(launch.authorization.policy.protectedReadOnlyRoots).toContain(
+        await realpath(target),
+      );
+      launch.finalize?.();
+    } finally {
+      await test.dispose();
+    }
+  });
+
+  it.each([
+    ["external target", "external"],
+    ["undeclared workspace file", "undeclared"],
+    ["path-bearing declared target", "path-bearing"],
+    ["missing declared target", "missing"],
+    ["instruction symlink chain", "chain"],
+  ])(
+    "fails closed for a root instruction alias with %s",
+    async (_label, kind) => {
+      const test = await fixture();
+      const instruction = path.join(test.workspace, "AGENTS.md");
+      try {
+        await rm(instruction);
+        if (kind === "external") {
+          const external = path.join(test.root, "external-AGENTS.md");
+          await writeFile(external, "# External\n");
+          await symlink(external, instruction);
+        } else if (kind === "undeclared") {
+          const target = path.join(test.workspace, "README.md");
+          await writeFile(target, "# Readme\n");
+          await symlink("README.md", instruction);
+        } else if (kind === "path-bearing") {
+          const target = path.join(test.workspace, "CLAUDE.md");
+          await writeFile(target, "# Shared instructions\n");
+          await symlink("nested/../CLAUDE.md", instruction);
+        } else if (kind === "missing") {
+          await rm(path.join(test.workspace, "CLAUDE.md"), { force: true });
+          await symlink("CLAUDE.md", instruction);
+        } else {
+          const target = path.join(test.workspace, "CLAUDE.md");
+          const finalTarget = path.join(test.workspace, "AGENT.md");
+          await rm(target, { force: true });
+          await writeFile(finalTarget, "# Final\n");
+          await symlink("AGENT.md", target);
+          await symlink("CLAUDE.md", instruction);
+        }
+
+        await expect(
+          test.authorizer.authorize(request(test.workspace)),
+        ).rejects.toThrow(/Workspace instruction alias/);
+        await expect.poll(async () => readdir(test.privateRoot)).toEqual([]);
+      } finally {
+        await test.dispose();
+      }
+    },
+  );
 
   it("fails closed when the workspace .git path is a symbolic link", async () => {
     const test = await fixture();

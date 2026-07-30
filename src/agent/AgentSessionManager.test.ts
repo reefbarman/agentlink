@@ -4358,6 +4358,32 @@ describe("AgentSessionManager in-flight persistence", () => {
     expect(anyMgr.nextInFlightPersistDelayMs("s1")).toBe(30_000);
   });
 
+  it("multiplies the in-flight checkpoint delay by the number of running loops", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const anyMgr = mgr as any;
+
+    const stopA = anyMgr.startInFlightPersistLoop("a", () => {});
+    const stopB = anyMgr.startInFlightPersistLoop("b", () => {});
+    const stopC = anyMgr.startInFlightPersistLoop("c", () => {});
+
+    // Three concurrent loops: the 1 s floor becomes 3 s per session, keeping
+    // the aggregate cadence at ~1 checkpoint/s across all running turns.
+    expect(anyMgr.nextInFlightPersistDelayMs("a")).toBe(3_000);
+    anyMgr.sessionPersistDurationsMs.set("a", 200);
+    expect(anyMgr.nextInFlightPersistDelayMs("a")).toBe(15_000);
+    // The 30 s staleness cap still bounds the scaled delay.
+    anyMgr.sessionPersistDurationsMs.set("a", 1_000);
+    expect(anyMgr.nextInFlightPersistDelayMs("a")).toBe(30_000);
+
+    // Stopping loops restores the faster cadence; stop() is idempotent.
+    stopC();
+    stopC();
+    expect(anyMgr.nextInFlightPersistDelayMs("b")).toBe(2_000);
+    stopB();
+    stopA();
+    expect(anyMgr.nextInFlightPersistDelayMs("b")).toBe(1_000);
+  });
+
   it("reschedules in-flight checkpoints using the adaptive delay until stopped", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
     const anyMgr = mgr as any;

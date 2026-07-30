@@ -73,6 +73,8 @@ export interface TrackedCallInfo {
   canContinueInBackground?: boolean;
 }
 
+export type FeedbackPriority = "P0" | "P1" | "P2" | "P3";
+
 export interface FeedbackEntry {
   id: string;
   global_index: number;
@@ -84,6 +86,9 @@ export interface FeedbackEntry {
   extension_version: string;
   tool_params?: string;
   tool_result_summary?: string;
+  triaged: boolean;
+  priority?: FeedbackPriority;
+  triaged_at?: string;
 }
 
 // Extension → Webview messages
@@ -197,6 +202,12 @@ export type WebviewCommand =
   | { command: "clearSessionRules"; sessionId: string }
   | ToolCallControlMessage
   | { command: "deleteFeedbackEntry"; id: string }
+  | {
+      command: "triageFeedbackEntry";
+      id: string;
+      triaged: boolean;
+      priority?: FeedbackPriority;
+    }
   | { command: "setupSemanticSearch"; reason?: string };
 
 type DataWebviewCommand = Exclude<

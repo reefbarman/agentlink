@@ -8,6 +8,8 @@ import {
 export interface PathRule {
   pattern: string;
   mode: "glob" | "prefix" | "exact";
+  /** Rule authority copied automatically from another session. */
+  inherited?: true;
 }
 
 export type ScopedPathRules = ScopedRules<PathRule>;

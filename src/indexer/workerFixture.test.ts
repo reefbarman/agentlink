@@ -822,6 +822,26 @@ describe("indexer worker fixture", () => {
       expect(stats.filesIndexed).toBe(1);
       expect(stats.recordsDeleted).toBeGreaterThan(0);
       expect(stats.errors).toEqual([]);
+      const removalTick = fixture.messages.find(
+        (message) =>
+          message.type === "progress" &&
+          message.phase === "cleanup" &&
+          message.detail === undefined &&
+          message.current === 1 &&
+          message.total === 1,
+      );
+      expect(removalTick).toBeDefined();
+      const finalizingTick = fixture.messages.find(
+        (message) =>
+          message.type === "progress" && message.phase === "finalizing",
+      );
+      expect(finalizingTick).toMatchObject({
+        current: 0,
+        total: 0,
+        detail: expect.stringMatching(
+          /optimizing retrieval store|refreshing retrieval indexes/,
+        ),
+      });
       expect(Object.keys(requireCache(workspace).files)).toEqual([
         "changed.sql",
       ]);

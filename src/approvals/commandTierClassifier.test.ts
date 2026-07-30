@@ -41,6 +41,18 @@ describe("command tier classifier", () => {
     expect(tier("/bin/ls")).toBe("sensitive");
   });
 
+  it.each([
+    "npm test > src/test-output.txt",
+    "npm run build >> src/build-output.txt",
+    "go test ./... > test-results.txt",
+  ])("preserves workspace redirection classification for %s", (command) => {
+    expect(classify(command).perSubCommand[0]?.result).toMatchObject({
+      tier: "sensitive",
+      code: "workspace_redirection",
+      reason: "shell redirection",
+    });
+  });
+
   it("classifies destructive and external commands as dangerous", () => {
     expect(tier("rm -rf dist")).toBe("dangerous");
     expect(tier("sudo git status")).toBe("dangerous");
@@ -48,6 +60,44 @@ describe("command tier classifier", () => {
     expect(tier("curl https://example.com")).toBe("dangerous");
     expect(tier("find src -execdir rm {} ;")).toBe("dangerous");
     expect(tier("find src -fprint generated.txt")).toBe("dangerous");
+  });
+
+  it.each([
+    "git push origin main > push.log",
+    "git reset --hard HEAD > reset.log",
+    "git clean -fdx > clean.log",
+    "npm publish > publish.log",
+  ])(
+    "does not downgrade dangerous operations with redirection: %s",
+    (command) => {
+      expect(tier(command)).toBe("dangerous");
+    },
+  );
+
+  it("does not trust a custom package script based on a verification-like prefix", () => {
+    expect(
+      classify("npm run test:reset").perSubCommand[0]?.result,
+    ).toMatchObject({
+      tier: "sensitive",
+      code: "unrecognized_operation",
+    });
+  });
+
+  it.each(["yarn", "yarn -s", "npm --silent"])(
+    "does not classify a bare package manager as project verification: %s",
+    (command) => {
+      expect(classify(command).perSubCommand[0]?.result).toMatchObject({
+        tier: "sensitive",
+        code: "unrecognized_operation",
+      });
+    },
+  );
+
+  it("does not treat file descriptor duplication as a workspace write", () => {
+    expect(classify("npm test 2>&1").perSubCommand[0]?.result).toMatchObject({
+      tier: "sensitive",
+      code: "project_toolchain",
+    });
   });
 
   it("does not classify networked package metadata queries as safe", () => {

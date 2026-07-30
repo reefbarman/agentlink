@@ -196,6 +196,127 @@ describe("WorkspaceMutationCoordinator", () => {
     });
   });
 
+  it("admits a path-delegated writer alongside the unrestricted tree writer", async () => {
+    const coordinator = new WorkspaceMutationCoordinator();
+    const treeDomain = coordinator.createDomain(["/tmp/project"], "root-1");
+    const delegatedDomain = coordinator.createDomain(["/tmp/project"], {
+      scopeId: "root-1",
+      delegatedPaths: ["/tmp/project/src/feature.test.ts"],
+    });
+
+    const treeLease = await coordinator.acquire("session-parent", treeDomain);
+    const delegatedLease = await coordinator.acquire(
+      "session-child",
+      delegatedDomain,
+    );
+    expect(delegatedLease.sessionId).toBe("session-child");
+
+    delegatedLease.release();
+    treeLease.release();
+  });
+
+  it("serializes delegated writers with overlapping paths and admits disjoint ones", async () => {
+    const coordinator = new WorkspaceMutationCoordinator();
+    const first = coordinator.createDomain(["/tmp/project"], {
+      scopeId: "root-1",
+      delegatedPaths: ["/tmp/project/src/agent"],
+    });
+    const overlapping = coordinator.createDomain(["/tmp/project"], {
+      scopeId: "root-1",
+      delegatedPaths: ["/tmp/project/src/agent/tools/adapter.ts"],
+    });
+    const disjoint = coordinator.createDomain(["/tmp/project"], {
+      scopeId: "root-1",
+      delegatedPaths: ["/tmp/project/src/util"],
+    });
+
+    const firstLease = await coordinator.acquire("session-1", first);
+    let overlappingResolved = false;
+    const queued = coordinator
+      .acquire("session-2", overlapping)
+      .then((lease) => {
+        overlappingResolved = true;
+        return lease;
+      });
+    const disjointLease = await coordinator.acquire("session-3", disjoint);
+
+    await Promise.resolve();
+    expect(overlappingResolved).toBe(false);
+
+    firstLease.release();
+    const overlappingLease = await queued;
+    overlappingLease.release();
+    disjointLease.release();
+  });
+
+  it("blocks delegated writers behind an exclusive checkpoint domain", async () => {
+    const coordinator = new WorkspaceMutationCoordinator();
+    const delegated = coordinator.createDomain(["/tmp/project"], {
+      scopeId: "root-1",
+      delegatedPaths: ["/tmp/project/src/feature.test.ts"],
+    });
+    const exclusive = coordinator.createDomain(["/tmp/project"], {
+      scopeId: "root-1",
+      exclusive: true,
+    });
+
+    const delegatedLease = await coordinator.acquire("session-1", delegated);
+    let exclusiveResolved = false;
+    const queuedExclusive = coordinator
+      .acquire("session-2", exclusive)
+      .then((lease) => {
+        exclusiveResolved = true;
+        return lease;
+      });
+    await Promise.resolve();
+    expect(exclusiveResolved).toBe(false);
+
+    delegatedLease.release();
+    const exclusiveLease = await queuedExclusive;
+
+    let delegatedBlocked = true;
+    const queuedDelegated = coordinator
+      .acquire("session-3", delegated)
+      .then((lease) => {
+        delegatedBlocked = false;
+        return lease;
+      });
+    await Promise.resolve();
+    expect(delegatedBlocked).toBe(true);
+    exclusiveLease.release();
+    (await queuedDelegated).release();
+  });
+
+  it("advances the generation on every delegated mutation so checkpoints stay conflict-aware", async () => {
+    const coordinator = new WorkspaceMutationCoordinator(undefined, {
+      createEpoch: () => "epoch-1",
+    });
+    const delegated = coordinator.createDomain(["/tmp/project"], {
+      scopeId: "root-1",
+      delegatedPaths: ["/tmp/project/src/feature.test.ts"],
+    });
+    const lease = await coordinator.acquire("session-child", delegated);
+
+    await lease.markMutation();
+    const checkpoint = coordinator.getSnapshot(
+      "/tmp/project",
+      "session-parent",
+      "root-1",
+    );
+    expect(
+      coordinator.findConflict("/tmp/project", checkpoint, "root-1"),
+    ).toBeUndefined();
+
+    await lease.markMutation();
+    expect(
+      coordinator.findConflict("/tmp/project", checkpoint, "root-1"),
+    ).toMatchObject({
+      conflictingSessionId: "session-child",
+      conflictingGeneration: 2,
+    });
+    lease.release();
+  });
+
   it("fails closed when checkpoint epoch differs from current durable state", () => {
     const coordinator = new WorkspaceMutationCoordinator(undefined, {
       createEpoch: () => "epoch-new",

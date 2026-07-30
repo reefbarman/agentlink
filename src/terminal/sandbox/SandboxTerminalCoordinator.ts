@@ -46,6 +46,7 @@ import {
   type SandboxTerminalSessionEvent,
   type SandboxTerminalSessionSnapshot,
 } from "./SandboxTerminalSession.js";
+import { verifyTerminalInlineFiles } from "../inlineFileIntegrity.js";
 
 const DEFAULT_DIMENSIONS: TerminalDimensions = { columns: 80, rows: 24 };
 const DEFAULT_RECENTLY_CLOSED_LIMIT = 20;
@@ -113,6 +114,7 @@ interface ManagedSandboxChannel {
       outputTail: string;
       timer?: ReturnType<typeof setTimeout>;
     };
+    detachForeground?: () => void;
   };
   latestMetadata?: SandboxExecutionMetadata;
   latestTermination?: {
@@ -269,6 +271,18 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
           throw new Error("Prepared sandbox terminal target changed");
         }
         prepared.authorized.assertLaunchValid?.();
+        if (descriptor.sandboxInlineFiles?.length) {
+          try {
+            await verifyTerminalInlineFiles(descriptor.sandboxInlineFiles, {
+              requireCanonicalPaths: true,
+            });
+          } catch (error) {
+            state = "disposed";
+            this.channelReservations.delete(prepared.before.channelId);
+            prepared.authorized.finalize?.();
+            throw error;
+          }
+        }
         state = "consumed";
         this.channelReservations.delete(prepared.before.channelId);
         const result = await this.executeAuthorized(
@@ -350,6 +364,11 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
         authorized.finalize?.();
       }
     });
+    let resolveDetach!: () => void;
+    const detachPromise = new Promise<void>((resolve) => {
+      resolveDetach = resolve;
+    });
+    const detachForeground = () => resolveDetach();
     channel.active = {
       commandId,
       generation: authorized.helperRequest.generation,
@@ -371,6 +390,7 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       interactivePromptWatchdog: options.background
         ? undefined
         : { outputTail: "" },
+      detachForeground: options.background ? undefined : detachForeground,
     };
     channel.latestMetadata = authorized.metadata;
     channel.latestTermination = undefined;
@@ -408,32 +428,48 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
       return this.backgroundResult(channel, commandId, authorized.metadata);
     }
 
-    if (options.timeout !== undefined) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timedOut = await Promise.race([
-        completion.then(() => false),
-        new Promise<true>((resolve) => {
-          timer = setTimeout(() => resolve(true), options.timeout);
-          timer.unref();
-        }),
-      ]).finally(() => {
-        if (timer) clearTimeout(timer);
-      });
-      if (timedOut) {
-        this.disableInteractivePromptWatchdog(channel.active);
-        channel.active?.networkAbortController.abort();
-        options.onCommandFinalizationDeferred?.();
-        void completion.catch((error) =>
-          this.log?.(`[sandbox-terminal] Timed-out command failed: ${error}`),
-        );
-        return {
-          ...this.backgroundResult(channel, commandId, authorized.metadata),
-          timed_out: true,
-        };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      completion.then(() => "completed" as const),
+      detachPromise.then(() => "detached" as const),
+      ...(options.timeout !== undefined
+        ? [
+            new Promise<"timed_out">((resolve) => {
+              timer = setTimeout(() => resolve("timed_out"), options.timeout);
+              timer.unref();
+            }),
+          ]
+        : []),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+      if (channel.active?.detachForeground === detachForeground) {
+        channel.active.detachForeground = undefined;
       }
+    });
+
+    if (outcome === "detached" && channel.active?.commandId === commandId) {
+      this.disableInteractivePromptWatchdog(channel.active);
+      options.onCommandFinalizationDeferred?.();
+      void completion.catch((error) =>
+        this.log?.(`[sandbox-terminal] Background command failed: ${error}`),
+      );
+      return this.backgroundResult(channel, commandId, authorized.metadata);
     }
 
-    await completion;
+    if (outcome === "detached") await completion;
+
+    if (outcome === "timed_out") {
+      this.disableInteractivePromptWatchdog(channel.active);
+      channel.active?.networkAbortController.abort();
+      options.onCommandFinalizationDeferred?.();
+      void completion.catch((error) =>
+        this.log?.(`[sandbox-terminal] Timed-out command failed: ${error}`),
+      );
+      return {
+        ...this.backgroundResult(channel, commandId, authorized.metadata),
+        timed_out: true,
+      };
+    }
     const snapshot = channel.session.snapshot();
     const completed = snapshot.commands.find(
       (candidate) => candidate.commandId === commandId,
@@ -606,6 +642,15 @@ export class SandboxTerminalCoordinator implements ConfinementPreparingTerminalP
     const channel = this.ownedChannel(request.terminalId, request.owner);
     this.clearInteractivePromptWatchdog(channel?.active);
     return channel?.session.interrupt() ?? false;
+  }
+
+  detachTerminal(request: TerminalTargetRequest): boolean {
+    const active = this.ownedChannel(request.terminalId, request.owner)?.active;
+    if (!active?.detachForeground) return false;
+    const detach = active.detachForeground;
+    active.detachForeground = undefined;
+    detach();
+    return true;
   }
 
   getRecentlyClosedTerminals(

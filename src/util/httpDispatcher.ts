@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER } from "../core/modelRequestScheduler.js";
 import {
   Agent,
   EnvHttpProxyAgent,
@@ -12,7 +13,13 @@ import {
 const KEEP_ALIVE_TIMEOUT_MS = 60_000;
 const HEADERS_TIMEOUT_MS = 300_000;
 const BODY_TIMEOUT_MS = 300_000;
-const CONNECTIONS_PER_ORIGIN = 6;
+// Must never cap below what the model-request scheduler can admit
+// (`agentlink.provider.maxConcurrentRequests`): streaming turns hold a
+// connection for their entire duration, so a lower socket cap queues whole
+// turns inside undici with no admission-phase visibility. Undici opens
+// connections lazily and reaps idle ones after KEEP_ALIVE_TIMEOUT_MS, so the
+// high ceiling costs nothing while unused.
+const CONNECTIONS_PER_ORIGIN = MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER;
 
 export interface AgentLinkHttpActivity {
   kind: "headers" | "body";

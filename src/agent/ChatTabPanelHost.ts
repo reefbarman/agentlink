@@ -98,6 +98,15 @@ export class ChatTabPanelHost
       : undefined;
   }
 
+  focusPanel(tabId: string): boolean {
+    const registration = this.editorPanes.get(tabId);
+    if (!registration || !this.authority.isAuthoritative(registration.lease)) {
+      return false;
+    }
+    registration.panel.reveal(undefined, false);
+    return true;
+  }
+
   isRegisteredConnection(
     tabId: string,
     connection: ChatPaneConnection,

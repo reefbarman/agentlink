@@ -1,4 +1,6 @@
 import {
+  COMPOSE_MAX_ARTIFACT_INPUT_BYTES,
+  COMPOSE_MAX_ARTIFACT_RECORD_BYTES,
   COMPOSE_MAX_BATCH_SIZE,
   COMPOSE_MAX_CHILD_BYTES,
   COMPOSE_MAX_CHILD_CALLS,
@@ -10,11 +12,15 @@ import {
   COMPOSE_MAX_TRACE_BYTES,
   COMPOSE_MEMORY_LIMIT_BYTES,
   COMPOSE_TIMEOUT_MS,
+  createChunkedJsonArtifact,
   handleCompose,
 } from "./composeRuntime.js";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ComposeExecutionScope } from "./composeScope.js";
+import {
+  ComposeScopeError,
+  type ComposeExecutionScope,
+} from "./composeScope.js";
 import type { ToolResult } from "../../shared/types.js";
 
 const wasmPath =
@@ -38,6 +44,16 @@ function fakeScope(
 ): ComposeExecutionScope {
   return {
     canExecuteChild: canExecute,
+    preflightChild: (name) => {
+      if (!canExecute(name)) {
+        throw new ComposeScopeError(
+          "authorization",
+          `Tool '${name}' is not available`,
+          "tool_not_in_request",
+        );
+      }
+    },
+    reserveChildren: () => undefined,
     executeChild: async (name, input) => execute(name, input),
   };
 }
@@ -99,7 +115,11 @@ describe("compose runtime", () => {
       children: [],
       totalChildren: 0,
       completedChildren: 0,
+      succeededChildren: 0,
+      failedChildren: 0,
+      cancelledChildren: 0,
       toolAllBatchCount: 0,
+      toolAllSettledBatchCount: 0,
       bridgedBytes: 0,
     });
   });
@@ -164,6 +184,173 @@ describe("compose runtime", () => {
     expect(peak).toBe(COMPOSE_MAX_CONCURRENCY);
     expect(result.uiMeta.composeTrace.toolAllBatchCount).toBe(1);
     expect(result.uiMeta.composeTrace.bridgedBytes).toBe(6);
+  });
+
+  it("preflights every toolAll descriptor before reservation or dispatch", async () => {
+    const executeChild = vi.fn(
+      async (
+        _name: string,
+        _input: Record<string, unknown>,
+        _signal?: AbortSignal,
+        _options?: { budgetReserved?: boolean },
+      ) => success(null),
+    );
+    const preflightChild = vi.fn((name: string) => {
+      if (name === "denied") {
+        throw new ComposeScopeError(
+          "authorization",
+          "Tool 'denied' is not available",
+          "tool_not_in_request",
+        );
+      }
+    });
+    const reserveChildren = vi.fn();
+    const scope: ComposeExecutionScope = {
+      canExecuteChild: () => true,
+      preflightChild,
+      reserveChildren,
+      executeChild,
+    };
+
+    const result = await run(
+      `return toolAll([
+        { name: "allowed", input: { index: 0 } },
+        { name: "denied", input: { index: 1 } },
+      ]);`,
+      scope,
+    );
+
+    expect(errorKind(result)).toBe("policy");
+    expect(result.data).toMatchObject({ code: "tool_not_in_request" });
+    expect(preflightChild).toHaveBeenCalledTimes(2);
+    expect(reserveChildren).not.toHaveBeenCalled();
+    expect(executeChild).not.toHaveBeenCalled();
+  });
+
+  it("bulk-reserves toolAll and marks each execution as prepared", async () => {
+    const reserveChildren = vi.fn();
+    const executeChild = vi.fn(
+      async (
+        _name: string,
+        _input: Record<string, unknown>,
+        _signal?: AbortSignal,
+        _options?: { budgetReserved?: boolean },
+      ) => success(null),
+    );
+    const scope: ComposeExecutionScope = {
+      canExecuteChild: () => true,
+      preflightChild: () => undefined,
+      reserveChildren,
+      executeChild,
+    };
+
+    const result = await run(
+      `return toolAll([
+        { name: "first", input: {} },
+        { name: "second", input: {} },
+      ]);`,
+      scope,
+    );
+
+    expect(result.isError).toBe(false);
+    expect(reserveChildren).toHaveBeenCalledOnce();
+    expect(reserveChildren).toHaveBeenCalledWith(2);
+    expect(executeChild).toHaveBeenCalledTimes(2);
+    expect(executeChild.mock.calls[0]![3]).toEqual({ budgetReserved: true });
+    expect(executeChild.mock.calls[1]![3]).toEqual({ budgetReserved: true });
+  });
+
+  it("runs toolAllSettled with ordered mixed results and continues scheduling", async () => {
+    let active = 0;
+    let peak = 0;
+    const scope = fakeScope(async (_name, input) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, Number(input.delay)));
+      active -= 1;
+      if (input.fail) {
+        throw new ComposeScopeError(
+          "child_handler_failed",
+          `failed-${input.index}`,
+          "child_handler_failed",
+        );
+      }
+      return success(input.index);
+    });
+
+    const result = await run(
+      `return toolAllSettled([
+        { name: "item", input: { index: 0, delay: 8 } },
+        { name: "item", input: { index: 1, delay: 1, fail: true } },
+        { name: "item", input: { index: 2, delay: 4 } },
+        { name: "item", input: { index: 3, delay: 2, fail: true } },
+        { name: "item", input: { index: 4, delay: 1 } },
+      ]);`,
+      scope,
+    );
+
+    expect(result.isError).toBe(false);
+    expect(result.data).toEqual([
+      { status: "fulfilled", value: 0 },
+      {
+        status: "rejected",
+        reason: { code: "child_handler_failed", message: "failed-1" },
+      },
+      { status: "fulfilled", value: 2 },
+      {
+        status: "rejected",
+        reason: { code: "child_handler_failed", message: "failed-3" },
+      },
+      { status: "fulfilled", value: 4 },
+    ]);
+    expect(peak).toBe(COMPOSE_MAX_CONCURRENCY);
+    expect(result.uiMeta.composeTrace).toMatchObject({
+      totalChildren: 5,
+      completedChildren: 5,
+      succeededChildren: 3,
+      failedChildren: 2,
+      cancelledChildren: 0,
+      toolAllBatchCount: 1,
+      toolAllSettledBatchCount: 1,
+    });
+  });
+
+  it("settles per-child result overflow without hiding cumulative overflow", async () => {
+    const perChild = await run(
+      'return toolAllSettled([{ name: "large", input: {} }]);',
+      fakeScope(() => success("x".repeat(COMPOSE_MAX_CHILD_BYTES))),
+    );
+    expect(perChild.isError).toBe(false);
+    expect(perChild.data).toEqual([
+      {
+        status: "rejected",
+        reason: expect.objectContaining({ code: "child_result_too_large" }),
+      },
+    ]);
+
+    const cumulative = await run(
+      `return toolAllSettled(Array.from({ length: 9 }, (_, index) => ({
+        name: "large",
+        input: { index },
+      })));`,
+      fakeScope(() => success("x".repeat(950 * 1024))),
+    );
+    expect(errorKind(cumulative)).toBe("serialization");
+    expect(cumulative.error?.message).toContain("cumulative limit");
+  });
+
+  it("keeps toolAllSettled authorization failures fatal before dispatch", async () => {
+    const execute = vi.fn(() => success(null));
+    const result = await run(
+      `return toolAllSettled([
+        { name: "allowed", input: {} },
+        { name: "denied", input: {} },
+      ]);`,
+      fakeScope(execute, (name) => name === "allowed"),
+    );
+
+    expect(errorKind(result)).toBe("policy");
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("supports an empty toolAll batch without child dispatch", async () => {
@@ -265,6 +452,125 @@ describe("compose runtime", () => {
 
     expect(errorKind(result)).toBe("serialization");
     expect(result.error?.message).toContain("cumulative limit");
+  });
+
+  it("encodes exact oversized JSON as bounded chunked-json-v1 records", () => {
+    const serialized = JSON.stringify({
+      prefix: "x".repeat(COMPOSE_MAX_ARTIFACT_RECORD_BYTES),
+      unicode: "😀雪\n".repeat(2_000),
+    });
+
+    const artifact = createChunkedJsonArtifact(serialized);
+    const lines = artifact.content.trimEnd().split("\n");
+    const records = lines.map(
+      (line) => JSON.parse(line) as { index: number; data: string },
+    );
+
+    expect(records.map((record) => record.index)).toEqual(
+      records.map((_, index) => index),
+    );
+    expect(records.map((record) => record.data).join("")).toBe(serialized);
+    expect(
+      lines.every(
+        (line) => Buffer.byteLength(line) <= COMPOSE_MAX_ARTIFACT_RECORD_BYTES,
+      ),
+    ).toBe(true);
+    expect(artifact.chunkCount).toBe(records.length);
+  });
+
+  it("retains exact oversized final data with bounded recovery metadata", async () => {
+    let retainedContent = "";
+    const result = await handleCompose({
+      params: {
+        script: `return { value: "😀雪".repeat(${COMPOSE_MAX_FINAL_BYTES}) };`,
+        description: "artifact retention test",
+      },
+      scope: fakeScope(),
+      signal: new AbortController().signal,
+      wasmPath,
+      retainArtifact: async (request) => {
+        retainedContent = request.content;
+        return {
+          path: "/tmp/agentlink-results-test/output.jsonl",
+          bytes: Buffer.byteLength(request.content),
+          chars: [...request.content].length,
+          sha256: "artifact-sha",
+        };
+      },
+    });
+
+    const recovery = (result.data as { recovery: Record<string, unknown> })
+      .recovery;
+    const reconstructed = retainedContent
+      .trimEnd()
+      .split("\n")
+      .map((line) => (JSON.parse(line) as { data: string }).data)
+      .join("");
+    expect(JSON.parse(reconstructed)).toEqual({
+      value: "😀雪".repeat(COMPOSE_MAX_FINAL_BYTES),
+    });
+    expect(recovery).toMatchObject({
+      output_file: "/tmp/agentlink-results-test/output.jsonl",
+      output_format: "chunked-json-v1",
+      max_record_bytes: COMPOSE_MAX_ARTIFACT_RECORD_BYTES,
+    });
+    expect(recovery.output_bytes).toBe(Buffer.byteLength(reconstructed));
+    expect(recovery.output_sha256).toBe(
+      createChunkedJsonArtifact(reconstructed).sha256,
+    );
+    expect(recovery.chunk_count).toBe(
+      retainedContent.trimEnd().split("\n").length,
+    );
+    expect(Buffer.byteLength(JSON.stringify(result.data))).toBeLessThan(
+      COMPOSE_MAX_FINAL_BYTES,
+    );
+    expect(JSON.stringify(result.data)).not.toBe(reconstructed);
+  });
+
+  it("falls back to bounded preview when artifact input exceeds its cap", async () => {
+    const retainArtifact = vi.fn(async () => null);
+    const result = await handleCompose({
+      params: {
+        script: `return "x".repeat(${COMPOSE_MAX_ARTIFACT_INPUT_BYTES + 1});`,
+        description: "artifact input cap test",
+      },
+      scope: fakeScope(),
+      signal: new AbortController().signal,
+      wasmPath,
+      retainArtifact,
+    });
+
+    const recovery = (result.data as { recovery: Record<string, unknown> })
+      .recovery;
+    expect(recovery).not.toHaveProperty("output_file");
+    expect(recovery.warning).toContain("retention was unavailable");
+    expect(retainArtifact).not.toHaveBeenCalled();
+    expect(Buffer.byteLength(JSON.stringify(result.data))).toBeLessThan(
+      COMPOSE_MAX_FINAL_BYTES,
+    );
+  });
+
+  it("falls back to bounded preview when artifact retention fails", async () => {
+    const result = await handleCompose({
+      params: {
+        script: `return "x".repeat(${COMPOSE_MAX_FINAL_BYTES + 1});`,
+        description: "artifact failure test",
+      },
+      scope: fakeScope(),
+      signal: new AbortController().signal,
+      wasmPath,
+      retainArtifact: async () => {
+        throw new Error("disk unavailable");
+      },
+    });
+
+    const recovery = (result.data as { recovery: Record<string, unknown> })
+      .recovery;
+    expect(recovery).not.toHaveProperty("output_file");
+    expect(recovery.warning).toContain("retention was unavailable");
+    expect(Buffer.byteLength(JSON.stringify(result.data))).toBeLessThan(
+      COMPOSE_MAX_FINAL_BYTES,
+    );
   });
 
   it("returns bounded recovery evidence for oversized final data", async () => {

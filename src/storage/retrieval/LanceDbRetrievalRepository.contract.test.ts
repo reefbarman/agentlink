@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import { LanceDbRetrievalRepository } from "./LanceDbRetrievalRepository.js";
 import { describeRetrievalRepositoryContract } from "../../test/retrievalRepositoryContract.js";
+import { withRetrievalStoreLock } from "./retrievalStoreLock.js";
 
 const fingerprint: RetrievalFingerprint = {
   schemaVersion: 1,
@@ -640,6 +641,108 @@ describe("LanceDbRetrievalRepository persistence", () => {
         expect(await reopened.lexicalReadiness()).toEqual({ status: "ready" });
       } finally {
         await reopened.close();
+      }
+    });
+  });
+
+  it("serves committed reads while index maintenance holds the writer lock", async () => {
+    await withStore(async (root) => {
+      const writer = repository(root);
+      const request = publication(
+        "concurrent-read",
+        "revision-concurrent-read",
+      );
+      await writer.migrate(fingerprint);
+      await writer.preparePublication(request);
+      await writer.commitPublication(request.publicationId);
+      await writer.close();
+
+      let releaseMaintenance!: () => void;
+      const maintenanceReleased = new Promise<void>((resolve) => {
+        releaseMaintenance = resolve;
+      });
+      let maintenanceStarted!: () => void;
+      const maintenanceWasStarted = new Promise<void>((resolve) => {
+        maintenanceStarted = resolve;
+      });
+      const maintenance = withRetrievalStoreLock(root, async () => {
+        maintenanceStarted();
+        await maintenanceReleased;
+      });
+      await maintenanceWasStarted;
+
+      const reader = repository(root);
+      try {
+        const reads = Promise.all([
+          reader.inspectFingerprint(fingerprint),
+          reader.structuralSnapshot({ expectedFingerprint: fingerprint }),
+          reader.lexicalReadiness(),
+          reader.health(),
+          reader.query({
+            text: "durable retrieval",
+            mode: "lexical",
+            limit: 10,
+          }),
+        ]);
+        const [disposition, structural, readiness, health, query] =
+          await Promise.race([
+            reads,
+            new Promise<never>((_, reject) => {
+              const timeout = setTimeout(
+                () =>
+                  reject(new Error("concurrent reads blocked on writer lock")),
+                1_000,
+              );
+              timeout.unref();
+            }),
+          ]);
+
+        expect(disposition).toBe("compatible");
+        expect(structural).toMatchObject({
+          status: "ready",
+          sources: [{ source: { id: request.source.id } }],
+        });
+        expect(readiness).toEqual({ status: "ready" });
+        expect(health).toMatchObject({
+          status: "ready",
+          sourceCount: 1,
+          chunkCount: 1,
+        });
+        expect(query.candidates.map((candidate) => candidate.chunk.id)).toEqual(
+          [request.chunks[0]!.id],
+        );
+        expect(reader.metrics()).toMatchObject({
+          queries: 1,
+          lexicalQueries: 1,
+        });
+
+        releaseMaintenance();
+        await maintenance;
+        await reader.query({
+          text: "durable retrieval",
+          mode: "lexical",
+          limit: 10,
+        });
+        expect(reader.metrics()).toMatchObject({
+          queries: 2,
+          lexicalQueries: 2,
+        });
+        await reader.close();
+
+        const reopened = repository(root);
+        try {
+          await reopened.listSources();
+          expect(reopened.metrics()).toMatchObject({
+            queries: 2,
+            lexicalQueries: 2,
+          });
+        } finally {
+          await reopened.close();
+        }
+      } finally {
+        releaseMaintenance();
+        await maintenance;
+        await reader.close();
       }
     });
   });

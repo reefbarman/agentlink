@@ -38,11 +38,15 @@ export function IndexStatus({ state, postCommand }: Props) {
     }
   }
 
+  const hasCounts =
+    isIndexing && status?.current != null && Boolean(status.total);
   const statusText = isError
     ? `Error: ${status?.error ?? "Unknown error"}`
     : isIndexing
       ? status?.phase
-        ? `${capitalize(status.phase)}${status.current != null && status.total ? ` ${status.current}/${status.total}` : ""}`
+        ? hasCounts
+          ? `${capitalize(status.phase)} ${status.current}/${status.total}`
+          : `${capitalize(status.phase)}${status.detail ? ` — ${status.detail}` : ""}`
         : "Discovering files..."
       : completedText;
 

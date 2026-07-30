@@ -50,6 +50,7 @@ export function CommandExecutionContext({
       ? `${review.risk} risk`
       : review.status.replace("_", " ")
     : undefined;
+  const showHandoffContext = Boolean(review || humanOnlyReason);
   const reviewerLabel =
     security?.approvalReviewerSnapshot === "auto-review"
       ? "Auto reviewer"
@@ -64,76 +65,93 @@ export function CommandExecutionContext({
         : undefined;
 
   return (
-    <details
-      class={`command-context ${nativeEscalation || !protectedTerminal ? "native" : "verified"}`}
-    >
-      <summary class="command-context-summary">
-        <span aria-hidden="true" class={`codicon ${icon}`} />
-        <span class="command-context-summary-copy">
-          <span class="command-context-summary-line">
-            <strong>{label}</strong>
-            <span class="command-context-boundary">{shortDescription}</span>
-          </span>
-          {reason && (
-            <span class="command-context-reason" title={reason}>
-              {reason}
-            </span>
-          )}
-        </span>
-        {reviewLabel && (
-          <span
-            class={`command-context-review-badge${review?.status === "reviewed" ? ` risk-${review.risk}` : ""}`}
-          >
-            {reviewLabel}
-          </span>
-        )}
-      </summary>
-
-      <div class="command-context-details">
-        <div class="command-context-detail-row">
+    <>
+      <details
+        class={`command-context ${nativeEscalation || !protectedTerminal ? "native" : "verified"}`}
+      >
+        <summary class="command-context-summary">
           <span aria-hidden="true" class={`codicon ${icon}`} />
-          <div>
-            <div>{description}</div>
-            {edited && (
-              <div>Edited command will be re-prepared before execution.</div>
+          <span class="command-context-summary-copy">
+            <span class="command-context-summary-line">
+              <strong>{label}</strong>
+              <span class="command-context-boundary">{shortDescription}</span>
+            </span>
+            {reason && (
+              <span class="command-context-reason" title={reason}>
+                {reason}
+              </span>
             )}
-          </div>
-        </div>
-        {(reviewerLabel || presetLabel) && (
+          </span>
+        </summary>
+
+        <div class="command-context-details">
           <div class="command-context-detail-row">
-            <span aria-hidden="true" class="codicon codicon-settings-gear" />
+            <span aria-hidden="true" class={`codicon ${icon}`} />
             <div>
-              <strong>Approval mode</strong>
+              <div>{description}</div>
+              {edited && (
+                <div>Edited command will be re-prepared before execution.</div>
+              )}
+            </div>
+          </div>
+          {(reviewerLabel || presetLabel) && (
+            <div class="command-context-detail-row">
+              <span aria-hidden="true" class="codicon codicon-settings-gear" />
               <div>
-                {[reviewerLabel, presetLabel].filter(Boolean).join(" · ")}
+                <strong>Approval mode</strong>
+                <div>
+                  {[reviewerLabel, presetLabel].filter(Boolean).join(" · ")}
+                </div>
               </div>
             </div>
+          )}
+        </div>
+      </details>
+
+      {showHandoffContext && (
+        <details class="command-context command-handoff-context">
+          <summary class="command-context-summary">
+            <span aria-hidden="true" class="codicon codicon-info" />
+            <span class="command-context-summary-copy">
+              <span class="command-context-summary-line">
+                <strong>Why this reached you</strong>
+              </span>
+            </span>
+            {reviewLabel && (
+              <span
+                class={`command-context-review-badge${review?.status === "reviewed" ? ` risk-${review.risk}` : ""}`}
+              >
+                {reviewLabel}
+              </span>
+            )}
+          </summary>
+          <div class="command-context-details">
+            {review && (
+              <div class="command-context-detail-row">
+                <span aria-hidden="true" class="codicon codicon-shield" />
+                <div>
+                  <strong>
+                    Guardian {review.outcome === "allow" ? "allowed" : "denied"}
+                    {review.status === "reviewed"
+                      ? ` · ${review.risk} risk · ${review.userAuthorization} authorization`
+                      : ` · ${review.status.replace("_", " ")}`}
+                  </strong>
+                  <div>{review.rationale}</div>
+                </div>
+              </div>
+            )}
+            {humanOnlyReason && (
+              <div class="command-context-detail-row">
+                <span aria-hidden="true" class="codicon codicon-lock" />
+                <div>
+                  <strong>Human approval required</strong>
+                  <div>{humanOnlyReason}</div>
+                </div>
+              </div>
+            )}
           </div>
-        )}
-        {review && (
-          <div class="command-context-detail-row">
-            <span aria-hidden="true" class="codicon codicon-shield" />
-            <div>
-              <strong>
-                Guardian {review.outcome === "allow" ? "allowed" : "denied"}
-                {review.status === "reviewed"
-                  ? ` · ${review.risk} risk · ${review.userAuthorization} authorization`
-                  : ` · ${review.status.replace("_", " ")}`}
-              </strong>
-              <div>{review.rationale}</div>
-            </div>
-          </div>
-        )}
-        {humanOnlyReason && !nativeEscalation && (
-          <div class="command-context-detail-row">
-            <span aria-hidden="true" class="codicon codicon-lock" />
-            <div>
-              <strong>Human approval required</strong>
-              <div>{humanOnlyReason}</div>
-            </div>
-          </div>
-        )}
-      </div>
-    </details>
+        </details>
+      )}
+    </>
   );
 }

@@ -655,6 +655,10 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain(
       "bugs, limitations, confusing output, and domain errors in that server are upstream and out of scope",
     );
+    expect(result).toContain("`triage_feedback`");
+    expect(result).toContain(
+      "Triaged means accepted for fixing, not merely reviewed",
+    );
   });
 
   it("includes custom instructions when AGENTS.md exists", async () => {

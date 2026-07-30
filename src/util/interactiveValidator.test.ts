@@ -386,6 +386,25 @@ describe("validateInteractiveCommand", () => {
     });
 
     it.each([
+      "vsce package --help",
+      "vsce package -h",
+      "npx --no-install @vscode/vsce package --help",
+      "npx @vscode/vsce@latest package -h",
+      "npx --no-install @vscode/vsce package --help && echo checked",
+    ])("allows exact package help requests: %s", (command) => {
+      expect(validateInteractiveCommand(command)).toBeNull();
+    });
+
+    it.each([
+      "vsce package --help --out extension.vsix",
+      "npx --no-install @vscode/vsce package -h --out extension.vsix",
+    ])("keeps non-help packaging guarded: %s", (command) => {
+      expect(validateInteractiveCommand(command)?.message).toContain(
+        "--allow-star-activation",
+      );
+    });
+
+    it.each([
       "npm run package",
       "npx echo @vscode/vsce package",
       "npx --no-install unrelated-package package",

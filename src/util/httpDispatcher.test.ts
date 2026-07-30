@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER } from "../core/modelRequestScheduler.js";
 
 const PROXY_ENV_KEYS = [
   "HTTPS_PROXY",
@@ -76,7 +77,7 @@ describe("installAgentLinkHttpDispatcher", () => {
       keepAliveTimeout: 60_000,
       headersTimeout: 300_000,
       bodyTimeout: 300_000,
-      connections: 6,
+      connections: MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER,
       allowH2: true,
     });
     expect(mocks.EnvHttpProxyAgent).not.toHaveBeenCalled();
@@ -97,7 +98,7 @@ describe("installAgentLinkHttpDispatcher", () => {
       keepAliveTimeout: 60_000,
       headersTimeout: 300_000,
       bodyTimeout: 300_000,
-      connections: 6,
+      connections: MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER,
       allowH2: true,
     });
     expect(mocks.dns).not.toHaveBeenCalled();
@@ -157,7 +158,7 @@ describe("installAgentLinkHttpDispatcher", () => {
       keepAliveTimeout: 60_000,
       headersTimeout: 300_000,
       bodyTimeout: 300_000,
-      connections: 6,
+      connections: MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER,
       allowH2: true,
     });
   });

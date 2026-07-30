@@ -1,10 +1,9 @@
-import { createHash } from "node:crypto";
 import { rmSync } from "node:fs";
 import {
   lstat,
   mkdir,
   mkdtemp,
-  readFile,
+  readlink,
   readdir,
   realpath,
 } from "node:fs/promises";
@@ -34,6 +33,7 @@ import {
 } from "./sandboxEnvironmentPolicy.js";
 import { resolveWorkspaceGitProtection } from "./gitMetadataProtection.js";
 import { compileSandboxHelperLaunchRequest } from "./sandboxPolicyCompiler.js";
+import { verifyTerminalInlineFiles } from "../inlineFileIntegrity.js";
 
 const PROFILE_ID = "workspace-write";
 const DEFAULT_CAPABILITY_GRANT_TTL_MS = 10 * 60_000;
@@ -50,6 +50,9 @@ const PROTECTED_WORKSPACE_ENTRIES = [
   "AGENTS.local.md",
   "CLAUDE.md",
 ] as const;
+const PROTECTED_INSTRUCTION_FILENAMES: ReadonlySet<string> = new Set(
+  PROTECTED_WORKSPACE_ENTRIES.filter((entry) => !entry.startsWith(".")),
+);
 const AGENTLINK_RUNTIME_ENTRIES = new Set([
   "history",
   "transcripts",
@@ -57,6 +60,7 @@ const AGENTLINK_RUNTIME_ENTRIES = new Set([
   "checkpoints",
   "tool-usage-report",
 ]);
+const PROTECTED_POLICY_SUBTREE_RE = /^(?:commands|rules|skills)(?:-|$)/;
 
 const RUNTIME_COMPATIBILITY_WRITE_ROOTS = [
   "/tmp/claude",
@@ -134,62 +138,170 @@ function uniqueRoots(roots: readonly string[]): string[] {
   return result.sort((left, right) => left.localeCompare(right));
 }
 
-async function existingCanonicalPath(
+async function resolveProtectedInstructionFile(
   candidate: string,
+  workspaceRoot: string,
 ): Promise<string | undefined> {
+  let metadata;
   try {
-    const metadata = await lstat(candidate);
-    if (!metadata.isDirectory() && !metadata.isFile()) return undefined;
-    return realpath(candidate);
+    metadata = await lstat(candidate);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
+  if (metadata.isSymbolicLink()) {
+    const target = await readlink(candidate);
+    if (
+      path.basename(target) !== target ||
+      !PROTECTED_INSTRUCTION_FILENAMES.has(target)
+    ) {
+      throw new Error(
+        `Workspace instruction alias must target another declared instruction file in the same workspace root: ${candidate}`,
+      );
+    }
+    const resolvedTarget = path.join(workspaceRoot, target);
+    let targetMetadata;
+    try {
+      targetMetadata = await lstat(resolvedTarget);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(
+          `Workspace instruction alias target must exist: ${candidate}`,
+        );
+      }
+      throw error;
+    }
+    if (targetMetadata.isSymbolicLink() || !targetMetadata.isFile()) {
+      throw new Error(
+        `Workspace instruction alias target must be a regular non-symlink file: ${candidate}`,
+      );
+    }
+    try {
+      const canonicalTarget = await realpath(resolvedTarget);
+      if (canonicalTarget !== resolvedTarget) {
+        throw new Error(
+          `Workspace instruction alias target must resolve directly within the workspace root: ${candidate}`,
+        );
+      }
+      return canonicalTarget;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(
+          `Workspace instruction alias target must exist: ${candidate}`,
+        );
+      }
+      throw error;
+    }
+  }
+  if (!metadata.isFile()) {
+    throw new Error(
+      `Workspace instruction path must be a regular file: ${candidate}`,
+    );
+  }
+  return realpath(candidate);
 }
 
-async function resolveAgentlinkIntegrityRoots(
-  workspaceRoot: string,
+async function resolveRegularPolicyFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  for (const name of (await readdir(root)).sort()) {
+    const candidate = path.join(root, name);
+    const metadata = await lstat(candidate);
+    if (metadata.isSymbolicLink()) continue;
+    if (metadata.isFile()) {
+      files.push(await realpath(candidate));
+      continue;
+    }
+    if (metadata.isDirectory()) {
+      files.push(...(await resolveRegularPolicyFiles(candidate)));
+    }
+  }
+  return files;
+}
+
+async function resolvePolicyNamespaceIntegrityRoots(
+  namespaceRoot: string,
+  options: { runtimeEntries?: ReadonlySet<string> } = {},
 ): Promise<string[]> {
-  const agentlinkRoot = path.join(workspaceRoot, ".agentlink");
   let rootMetadata;
   try {
-    rootMetadata = await lstat(agentlinkRoot);
+    rootMetadata = await lstat(namespaceRoot);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
   if (rootMetadata.isSymbolicLink()) {
     throw new Error(
-      `Workspace .agentlink directory must not be a symbolic link: ${agentlinkRoot}`,
+      `Workspace policy namespace must not be a symbolic link: ${namespaceRoot}`,
     );
   }
-  if (rootMetadata.isFile()) return [await realpath(agentlinkRoot)];
   if (!rootMetadata.isDirectory()) {
     throw new Error(
-      `Workspace .agentlink path must be a regular file or directory: ${agentlinkRoot}`,
+      `Workspace policy namespace must be a directory: ${namespaceRoot}`,
     );
   }
 
   const protectedRoots: string[] = [];
-  for (const name of (await readdir(agentlinkRoot)).sort()) {
-    const candidate = path.join(agentlinkRoot, name);
+  for (const name of (await readdir(namespaceRoot)).sort()) {
+    const candidate = path.join(namespaceRoot, name);
     const metadata = await lstat(candidate);
+    if (options.runtimeEntries?.has(name)) {
+      if (metadata.isSymbolicLink()) {
+        throw new Error(
+          `Workspace policy entry must not be a symbolic link: ${candidate}`,
+        );
+      }
+      continue;
+    }
+    const selectedSubtree = PROTECTED_POLICY_SUBTREE_RE.test(name);
     if (metadata.isSymbolicLink()) {
-      throw new Error(
-        `Workspace .agentlink entry must not be a symbolic link: ${candidate}`,
-      );
+      if (
+        namespaceRoot.endsWith(`${path.sep}.agentlink`) ||
+        selectedSubtree ||
+        path.extname(name)
+      ) {
+        throw new Error(
+          `Workspace policy entry must not be a symbolic link: ${candidate}`,
+        );
+      }
+      continue;
     }
-    if (!metadata.isDirectory() && !metadata.isFile()) {
-      throw new Error(
-        `Workspace .agentlink entry must be a regular file or directory: ${candidate}`,
-      );
+    if (metadata.isFile()) {
+      protectedRoots.push(await realpath(candidate));
+      continue;
     }
-    if (metadata.isDirectory() && AGENTLINK_RUNTIME_ENTRIES.has(name)) continue;
-    // This early check improves diagnostics; the packaged helper independently
-    // canonicalizes and snapshots every returned root immediately before spawn.
-    protectedRoots.push(await realpath(candidate));
+    if (metadata.isDirectory() && selectedSubtree) {
+      protectedRoots.push(...(await resolveRegularPolicyFiles(candidate)));
+    }
   }
   return uniqueRoots(protectedRoots);
+}
+
+async function resolveWorkspacePolicyIntegrityRoots(
+  workspaceRoot: string,
+): Promise<string[]> {
+  const namespaceRoots = await Promise.all([
+    resolvePolicyNamespaceIntegrityRoots(
+      path.join(workspaceRoot, ".agentlink"),
+      {
+        runtimeEntries: AGENTLINK_RUNTIME_ENTRIES,
+      },
+    ),
+    ...[".agents", ".claude", ".codex"].map((name) =>
+      resolvePolicyNamespaceIntegrityRoots(path.join(workspaceRoot, name)),
+    ),
+  ]);
+  const instructionFiles = (
+    await Promise.all(
+      PROTECTED_WORKSPACE_ENTRIES.filter((entry) => !entry.startsWith(".")).map(
+        (entry) =>
+          resolveProtectedInstructionFile(
+            path.join(workspaceRoot, entry),
+            workspaceRoot,
+          ),
+      ),
+    )
+  ).filter((entry): entry is string => entry !== undefined);
+  return uniqueRoots([...namespaceRoots.flat(), ...instructionFiles]);
 }
 
 async function resolveDeveloperToolchain(): Promise<{
@@ -245,36 +357,11 @@ async function verifyInlineFiles(
   binding: SandboxLaunchBindingInput["inlineFiles"];
   readableRoots: string[];
 }> {
-  const binding: Array<{ name: string; bytes: number; sha256: string }> = [];
-  const readableRoots: string[] = [];
-  const names = new Set<string>();
-  for (const file of files ?? []) {
-    if (names.has(file.name))
-      throw new Error(`Duplicate inline file: ${file.name}`);
-    names.add(file.name);
-    if (!path.isAbsolute(file.path) || file.path.includes("\0")) {
-      throw new Error(
-        `Inline file path must be absolute without NUL: ${file.name}`,
-      );
-    }
-    const metadata = await lstat(file.path);
-    if (!metadata.isFile() || metadata.isSymbolicLink()) {
-      throw new Error(
-        `Inline file must be a regular non-symlink file: ${file.name}`,
-      );
-    }
-    const content = await readFile(file.path);
-    const digest = createHash("sha256").update(content).digest("hex");
-    if (content.byteLength !== file.bytes || digest !== file.sha256) {
-      throw new Error(
-        `Inline file changed after materialization: ${file.name}`,
-      );
-    }
-    const canonicalPath = await realpath(file.path);
-    binding.push({ name: file.name, bytes: file.bytes, sha256: file.sha256 });
-    readableRoots.push(path.dirname(canonicalPath));
-  }
-  return { binding, readableRoots: uniqueRoots(readableRoots) };
+  const verified = await verifyTerminalInlineFiles(files);
+  return {
+    binding: verified.binding,
+    readableRoots: uniqueRoots(verified.canonicalPaths.map(path.dirname)),
+  };
 }
 
 function isReservedEnvironmentName(name: string): boolean {
@@ -292,6 +379,7 @@ function buildEnvironment(
   homeDirectory: string,
   hostTemporaryDirectory: string,
   developerDirectory: string | undefined,
+  temporaryHome: boolean,
 ): ReturnType<typeof buildSandboxPolicyEnvironment> {
   const resolved = buildSandboxPolicyEnvironment(hostEnvironment, policy);
   if (resolved.policy.useProfile) {
@@ -320,9 +408,13 @@ function buildEnvironment(
     policy: resolved.policy,
     environment: {
       ...environment,
-      HOME: homeDirectory,
+      HOME: temporaryHome ? directories.home : homeDirectory,
       TMPDIR: hostTemporaryDirectory,
       XDG_CACHE_HOME: directories.cache,
+      GOCACHE: explicit?.GOCACHE ?? path.join(directories.cache, "go-build"),
+      GOLANGCI_LINT_CACHE:
+        explicit?.GOLANGCI_LINT_CACHE ??
+        path.join(directories.cache, "golangci-lint"),
       CLAUDE_CODE_TMPDIR: directories.tmp,
       PATH: executablePath,
       TERM: "xterm-256color",
@@ -429,17 +521,10 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
         path.join(root, ".agentlink"),
         ...PROTECTED_WORKSPACE_ENTRIES.map((entry) => path.join(root, entry)),
       ]);
-      const existingPolicyRoots = (
+      const policyIntegrityRoots = (
         await Promise.all(
-          workspaceRoots.flatMap((root) =>
-            PROTECTED_WORKSPACE_ENTRIES.map((entry) =>
-              existingCanonicalPath(path.join(root, entry)),
-            ),
-          ),
+          workspaceRoots.map(resolveWorkspacePolicyIntegrityRoots),
         )
-      ).filter((entry): entry is string => entry !== undefined);
-      const agentlinkIntegrityRoots = (
-        await Promise.all(workspaceRoots.map(resolveAgentlinkIntegrityRoots))
       ).flat();
       const developerToolchain = await resolveDeveloperToolchain();
       await Promise.all(
@@ -473,6 +558,7 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
         this.homeDirectory,
         hostTemporaryDirectory,
         developerToolchain.developerDirectory,
+        options.temporaryHome === true,
       );
       const { set: environmentOverrides, ...environmentPolicyFields } =
         environmentResult.policy;
@@ -489,8 +575,7 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
       ]);
       const protectedReadOnlyRoots = uniqueRoots([
         ...gitProtection.flatMap((item) => item.integrity),
-        ...existingPolicyRoots,
-        ...agentlinkIntegrityRoots,
+        ...policyIntegrityRoots,
       ]);
       const structurallyProtectedRoots = uniqueRoots(
         gitProtection.flatMap((item) => item.structural),
@@ -599,12 +684,15 @@ export class BaselineSandboxLaunchAuthorizer implements SandboxLaunchAuthorizer 
             : capability.publicNetwork
               ? "proxy-only"
               : "loopback",
-          privateHome: false,
+          privateHome: options.temporaryHome === true,
           privateTmp: false,
           hostIpcBlocked: false,
           resourceLimits: "partial",
           warnings: [
-            "The host home directory is readable but not writable; the configured shell environment policy controls inherited variables.",
+            options.temporaryHome === true
+              ? "HOME is a fresh writable per-command directory; normal user configuration and credentials are absent, while the host home remains readable by absolute path."
+              : "The host home directory is readable but not writable; the configured shell environment policy controls inherited variables.",
+            "Go and GolangCI caches use writable per-command sandbox directories unless explicitly overridden.",
             "Host temporary directories and POSIX IPC are available for development toolchain compatibility.",
             "CPU, memory, process-count, and disk quotas are not fully enforced.",
           ],

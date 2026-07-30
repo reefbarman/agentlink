@@ -812,9 +812,20 @@ export class TerminalWebviewController {
     }
 
     if (batch.sequence === entry.lastSequence + 1) {
-      for (const operation of batch.operations) {
+      const operations = batch.operations;
+      for (let index = 0; index < operations.length; index += 1) {
+        const operation = operations[index];
         if (operation.type === "write") {
-          await entry.renderer.write(operation.data);
+          // Consecutive writes parse fastest as one xterm write: a single
+          // write-callback wait per run instead of one per chunk.
+          let data = operation.data;
+          let next = operations[index + 1];
+          while (next?.type === "write") {
+            data += next.data;
+            index += 1;
+            next = operations[index + 1];
+          }
+          await entry.renderer.write(data);
           if (
             this.entries.get(entry.terminalId) !== entry ||
             entry.renderGeneration !== renderGeneration

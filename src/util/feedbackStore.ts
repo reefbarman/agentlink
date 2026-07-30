@@ -9,6 +9,8 @@ const MAX_SERIALIZED_ENTRY_BYTES = 4_000;
 const FEEDBACK_FILE = "agentlink-feedback.jsonl";
 const LEGACY_TOMBSTONE_FILE = "agentlink-feedback-deletions.jsonl";
 const TOMBSTONE_DIRECTORY = "agentlink-feedback-deletions";
+const TRIAGE_FILE = "agentlink-feedback-triage.jsonl";
+const FEEDBACK_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
 
 function getStorePath(fileName: string): string {
   return path.join(os.homedir(), ".agentlink", fileName);
@@ -26,6 +28,12 @@ function getTombstoneDirectory(): string {
   return getStorePath(TOMBSTONE_DIRECTORY);
 }
 
+function getTriagePath(): string {
+  return getStorePath(TRIAGE_FILE);
+}
+
+export type FeedbackPriority = (typeof FEEDBACK_PRIORITIES)[number];
+
 export interface FeedbackEntry {
   timestamp: string;
   tool_name: string;
@@ -37,9 +45,39 @@ export interface FeedbackEntry {
   tool_result_summary?: string;
 }
 
-export interface FeedbackRecord extends FeedbackEntry {
+interface StoredFeedbackRecord extends FeedbackEntry {
   id: string;
   global_index: number;
+}
+
+export interface FeedbackRecord extends StoredFeedbackRecord {
+  triaged: boolean;
+  priority?: FeedbackPriority;
+  triaged_at?: string;
+}
+
+export interface FeedbackReadFilter {
+  tool_name?: string;
+  triaged?: boolean;
+  priorities?: FeedbackPriority[];
+}
+
+export interface TriageFeedbackRequest {
+  ids: string[];
+  triaged: boolean;
+  priority?: FeedbackPriority;
+}
+
+export interface TriageFeedbackResult {
+  updated: FeedbackRecord[];
+  unknown_ids: string[];
+}
+
+interface FeedbackTriageEvent {
+  id: string;
+  triaged: boolean;
+  priority?: FeedbackPriority;
+  updated_at: string;
 }
 
 interface FeedbackTombstone {
@@ -107,6 +145,55 @@ function tombstonePath(id: string): string {
   return path.join(getTombstoneDirectory(), fileName);
 }
 
+function isFeedbackPriority(value: unknown): value is FeedbackPriority {
+  return FEEDBACK_PRIORITIES.includes(value as FeedbackPriority);
+}
+
+function appendTriageEvent(event: FeedbackTriageEvent): void {
+  appendLine(getTriagePath(), event);
+}
+
+function readLatestTriageEvents(): Map<string, FeedbackTriageEvent> {
+  const triagePath = getTriagePath();
+  if (!fs.existsSync(triagePath)) return new Map();
+
+  const latest = new Map<string, FeedbackTriageEvent>();
+  for (const rawLine of fs.readFileSync(triagePath, "utf-8").split(/\r?\n/)) {
+    if (!rawLine.trim()) continue;
+    try {
+      const event = JSON.parse(rawLine) as FeedbackTriageEvent;
+      if (
+        typeof event === "object" &&
+        event !== null &&
+        typeof event.id === "string" &&
+        event.id.trim() &&
+        typeof event.triaged === "boolean" &&
+        typeof event.updated_at === "string" &&
+        ((!event.triaged && event.priority === undefined) ||
+          (event.triaged && isFeedbackPriority(event.priority)))
+      ) {
+        latest.set(event.id, event);
+      }
+    } catch {
+      // Skip malformed metadata without hiding feedback.
+    }
+  }
+  return latest;
+}
+
+function projectFeedbackRecord(
+  entry: StoredFeedbackRecord,
+  triageEvents: ReadonlyMap<string, FeedbackTriageEvent>,
+): FeedbackRecord {
+  const triage = triageEvents.get(entry.id);
+  return {
+    ...entry,
+    triaged: triage?.triaged ?? false,
+    priority: triage?.priority,
+    triaged_at: triage?.triaged ? triage.updated_at : undefined,
+  };
+}
+
 function appendTombstone(tombstone: FeedbackTombstone): boolean {
   const directory = getTombstoneDirectory();
   fs.mkdirSync(directory, { recursive: true });
@@ -143,7 +230,7 @@ export function appendFeedback(entry: FeedbackEntry): FeedbackRecord {
   if (!record) {
     throw new Error("Appended feedback could not be read back safely.");
   }
-  return record;
+  return { ...record, triaged: false };
 }
 
 function canonicalLegacyEntry(entry: FeedbackEntry): string {
@@ -170,12 +257,12 @@ function legacyFeedbackId(
     .digest("hex")}`;
 }
 
-function readAllFeedbackRecords(): FeedbackRecord[] {
+function readAllFeedbackRecords(): StoredFeedbackRecord[] {
   const feedbackPath = getFeedbackPath();
   if (!fs.existsSync(feedbackPath)) return [];
 
   const raw = fs.readFileSync(feedbackPath, "utf-8");
-  const records: FeedbackRecord[] = [];
+  const records: StoredFeedbackRecord[] = [];
   const duplicateOrdinals = new Map<string, number>();
 
   for (const rawLine of raw.split(/\r?\n/)) {
@@ -243,15 +330,75 @@ function tombstoneName(id: string): string {
   return path.basename(tombstonePath(id));
 }
 
-export function readFeedback(toolName?: string): FeedbackRecord[] {
+export function readFeedback(
+  filter: string | FeedbackReadFilter = {},
+): FeedbackRecord[] {
+  const normalized =
+    typeof filter === "string" ? { tool_name: filter } : filter;
   const legacyDeletedIds = readLegacyDeletedIds();
   const deletedTombstones = readDeletedTombstoneNames();
-  return readAllFeedbackRecords().filter(
-    (entry) =>
-      !legacyDeletedIds.has(entry.id) &&
-      !deletedTombstones.has(tombstoneName(entry.id)) &&
-      (toolName === undefined || entry.tool_name === toolName),
-  );
+  const triageEvents = readLatestTriageEvents();
+  return readAllFeedbackRecords()
+    .filter(
+      (entry) =>
+        !legacyDeletedIds.has(entry.id) &&
+        !deletedTombstones.has(tombstoneName(entry.id)),
+    )
+    .map((entry) => projectFeedbackRecord(entry, triageEvents))
+    .filter(
+      (entry) =>
+        (normalized.tool_name === undefined ||
+          entry.tool_name === normalized.tool_name) &&
+        (normalized.triaged === undefined ||
+          entry.triaged === normalized.triaged) &&
+        (normalized.priorities === undefined ||
+          (entry.priority !== undefined &&
+            normalized.priorities.includes(entry.priority))),
+    );
+}
+
+export function triageFeedback(
+  request: TriageFeedbackRequest,
+): TriageFeedbackResult {
+  if (
+    !request.ids.length ||
+    request.ids.some((id) => typeof id !== "string" || !id.trim())
+  ) {
+    throw new Error(
+      "Feedback ids must be a non-empty array of non-empty strings.",
+    );
+  }
+  if (request.triaged && !isFeedbackPriority(request.priority)) {
+    throw new Error("Triaged feedback requires a priority from P0 to P3.");
+  }
+  if (!request.triaged && request.priority !== undefined) {
+    throw new Error("Untriaged feedback cannot have a priority.");
+  }
+
+  const activeById = new Map(readFeedback().map((entry) => [entry.id, entry]));
+  const updated: FeedbackRecord[] = [];
+  const unknownIds: string[] = [];
+  for (const id of new Set(request.ids)) {
+    const active = activeById.get(id);
+    if (!active) {
+      unknownIds.push(id);
+      continue;
+    }
+    const updatedAt = new Date().toISOString();
+    appendTriageEvent({
+      id,
+      triaged: request.triaged,
+      priority: request.triaged ? request.priority : undefined,
+      updated_at: updatedAt,
+    });
+    updated.push({
+      ...active,
+      triaged: request.triaged,
+      priority: request.triaged ? request.priority : undefined,
+      triaged_at: request.triaged ? updatedAt : undefined,
+    });
+  }
+  return { updated, unknown_ids: unknownIds };
 }
 
 export function deleteFeedback(
@@ -283,6 +430,9 @@ export function deleteFeedback(
   }
 
   const allRecords = readAllFeedbackRecords();
+  const activeRecordById = new Map(
+    readFeedback().map((record) => [record.id, record]),
+  );
   const recordById = new Map(allRecords.map((record) => [record.id, record]));
   const unknownIndices = hasIndices
     ? [
@@ -323,7 +473,13 @@ export function deleteFeedback(
       alreadyDeletedIds.push(id);
       continue;
     }
-    removed.push(record);
+    const activeRecord = activeRecordById.get(id);
+    if (!activeRecord) {
+      throw new Error(
+        `Active feedback record disappeared during deletion: ${id}`,
+      );
+    }
+    removed.push(activeRecord);
   }
 
   return {

@@ -623,6 +623,15 @@ const toolCapabilities = [
     true,
   ),
   metadata(
+    "triage_feedback",
+    "dev",
+    ["dev.feedback"],
+    "write",
+    "policy",
+    false,
+    true,
+  ),
+  metadata(
     "delete_feedback",
     "dev",
     ["dev.feedback"],

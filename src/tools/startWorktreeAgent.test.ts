@@ -187,7 +187,15 @@ describe("handleStartWorktreeAgent", () => {
       },
     );
 
-    expect(textPayload(result)).toMatchObject({ status: "rejected" });
+    expect(textPayload(result)).toMatchObject({
+      status: "rejected",
+      decision: "deny",
+      worktreePath,
+      branch,
+      baseRef: "abc123",
+      repoRoot,
+      sourceTreeDirty: false,
+    });
     expect(onApprovalRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "worktree",

@@ -762,20 +762,29 @@ function detectPipedFiltering(command: string): ValidationResult | null {
 
   const violations: PipeViolation[] = [];
   const keptSegments: string[] = [segments[0]];
+  let sawViolation = false;
+  let keptAfterViolation = false;
 
   for (let i = 1; i < segments.length; i++) {
     const segment = segments[i].trim();
     const violation = checkSegment(segment);
     if (violation) {
       violations.push(violation);
+      sawViolation = true;
     } else {
       keptSegments.push(segments[i]);
+      if (sawViolation) keptAfterViolation = true;
     }
   }
 
   if (violations.length === 0) return null;
 
   const strippedCommand = keptSegments.join(" | ").trim();
+  const canSafelyRewrite = canSafelyStripPipeFilters(
+    command,
+    segments,
+    keptAfterViolation,
+  );
 
   // Build the message
   const lines: string[] = [];
@@ -807,8 +816,13 @@ function detectPipedFiltering(command: string): ValidationResult | null {
       `Set ${unresolvedSuggestions.join(" and ")} explicitly; the exact value could not be safely inferred from nested shell syntax.`,
     );
     lines.push("");
-  } else {
+  } else if (canSafelyRewrite) {
     lines.push(`Run this command instead: ${strippedCommand}`);
+    lines.push("");
+  } else {
+    lines.push(
+      "The exact command cannot be safely rewritten because removing pipe filters would change shell control flow. Use a producer-native pathspec or predicate, or run a separate inspection command before applying output_* parameters to a simple top-level producer command.",
+    );
     lines.push("");
   }
   lines.push(
@@ -818,8 +832,84 @@ function detectPipedFiltering(command: string): ValidationResult | null {
   return {
     type: "pipe",
     message: lines.join("\n"),
-    ...(unresolvedSuggestions.length === 0 ? { strippedCommand } : {}),
+    ...(unresolvedSuggestions.length === 0 && canSafelyRewrite
+      ? { strippedCommand }
+      : {}),
   };
+}
+
+const SHELL_CONTROL_WORDS = new Set([
+  "!",
+  "case",
+  "do",
+  "done",
+  "elif",
+  "else",
+  "esac",
+  "fi",
+  "for",
+  "function",
+  "if",
+  "then",
+  "until",
+  "while",
+]);
+
+function canSafelyStripPipeFilters(
+  command: string,
+  segments: readonly string[],
+  keptAfterViolation: boolean,
+): boolean {
+  if (
+    keptAfterViolation ||
+    segments.some((segment) => segment.trim().length === 0)
+  ) {
+    return false;
+  }
+
+  const scan = scanShellLexBoundaries(command, {
+    separators: ["&&", "||", ";", "\n"],
+    comments: true,
+  });
+  if (
+    scan.boundaries.length > 0 ||
+    scan.finalState.quote !== null ||
+    scan.finalState.danglingEscape ||
+    segments.some((segment) => {
+      const firstWord = scanShellLexWords(segment).words[0]?.raw;
+      return firstWord !== undefined && SHELL_CONTROL_WORDS.has(firstWord);
+    })
+  ) {
+    return false;
+  }
+
+  let quote: "single" | "double" | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === "\\" && quote !== "single") {
+      i++;
+      continue;
+    }
+    if (ch === "'" && quote !== "double") {
+      quote = quote === "single" ? null : "single";
+      continue;
+    }
+    if (ch === '"' && quote !== "single") {
+      quote = quote === "double" ? null : "double";
+      continue;
+    }
+    if (quote === "single") continue;
+    if (ch === "`" || (ch === "$" && command[i + 1] === "(")) {
+      return false;
+    }
+    if (
+      quote === null &&
+      (ch === "(" || ch === ")" || ch === "{" || ch === "}")
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 const REJECTED_COMMANDS = new Set(["head", "tail", "grep"]);

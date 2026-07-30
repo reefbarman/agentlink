@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ToolCallBudget } from "../../core/tools/toolCallBudget.js";
 import type { ToolResult } from "../../shared/types.js";
 import { createComposeExecutionScope } from "./composeScope.js";
+import { createNativeToolDisclosureSnapshot } from "../../core/tools/nativeToolDisclosure.js";
 
 function canonicalResult(data: unknown): ToolResult {
   return {
@@ -22,6 +23,8 @@ function makeHarness(
     available?: string[];
     limit?: number;
     execute?: AgentToolRuntime["executeTool"];
+    composable?: string[];
+    context?: Partial<AgentToolExecutionContext>;
   } = {},
 ) {
   const events: Array<Record<string, unknown>> = [];
@@ -49,11 +52,13 @@ function makeHarness(
     onNestedToolStart: (event) => events.push({ phase: "start", ...event }),
     onNestedToolComplete: (event) =>
       events.push({ phase: "complete", ...event }),
+    ...options.context,
   };
+  const composable = new Set(options.composable ?? ["read_file"]);
   const scope = createComposeExecutionScope({
     runtime,
     parentContext: context,
-    isComposable: (name) => name === "read_file",
+    isComposable: (name) => composable.has(name),
     createCallId: () => "child-1",
     now: (() => {
       let value = 100;
@@ -101,6 +106,9 @@ describe("createComposeExecutionScope", () => {
         interactionPolicy: "deny",
       }),
     });
+    const childContext = harness.executeTool.mock.calls[0]![0].context;
+    expect(childContext).not.toHaveProperty("providerToolName");
+    expect(childContext).not.toHaveProperty("providerToolInput");
     expect(harness.events).toEqual([
       expect.objectContaining({
         phase: "start",
@@ -119,6 +127,71 @@ describe("createComposeExecutionScope", () => {
     );
   });
 
+  it("dispatches a deferred child with child-owned bridge identity", async () => {
+    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
+      {
+        name: "get_diagnostics",
+        description: "Get diagnostics",
+        input_schema: { type: "object", properties: {} },
+      },
+    ]);
+    const inheritedCallback = vi.fn();
+    const skillAuthority = Object.freeze({
+      schemaVersion: 1 as const,
+      sources: Object.freeze([]),
+      allowedTools: Object.freeze(["get_diagnostics"]),
+    });
+    const harness = makeHarness({
+      available: ["call_native_tool", "compose"],
+      composable: ["get_diagnostics"],
+      context: {
+        modeAllowedToolNames: new Set(["get_diagnostics"]),
+        nativeToolDisclosure,
+        providerToolName: "call_native_tool",
+        providerToolInput: { name: "compose", input: { script: "..." } },
+        skillAuthority,
+        getSessionTranscript: inheritedCallback,
+      },
+    });
+
+    expect(harness.scope.canExecuteChild("get_diagnostics")).toBe(true);
+    await harness.scope.executeChild("get_diagnostics", { path: "src" });
+
+    expect(harness.executeTool).toHaveBeenCalledOnce();
+    const request = harness.executeTool.mock.calls[0]![0];
+    expect(request).toMatchObject({
+      name: "get_diagnostics",
+      input: { path: "src" },
+      context: {
+        providerToolName: "call_native_tool",
+        providerToolInput: {
+          name: "get_diagnostics",
+          input: { path: "src" },
+        },
+        interactionPolicy: "deny",
+      },
+    });
+    expect(request.context.skillAuthority).toBe(skillAuthority);
+    expect(request.context.getSessionTranscript).toBe(inheritedCallback);
+    expect(request.context.toolCallBudget).toBe(harness.context.toolCallBudget);
+    expect(request.context.nativeToolDisclosure).toBe(nativeToolDisclosure);
+  });
+
+  it("strips a deferred parent identity from an inline child", async () => {
+    const harness = makeHarness({
+      context: {
+        providerToolName: "call_native_tool",
+        providerToolInput: { name: "compose", input: { script: "..." } },
+      },
+    });
+
+    await harness.scope.executeChild("read_file", { path: "src/index.ts" });
+
+    const childContext = harness.executeTool.mock.calls[0]![0].context;
+    expect(childContext).not.toHaveProperty("providerToolName");
+    expect(childContext).not.toHaveProperty("providerToolInput");
+  });
+
   it("rejects hidden, non-composable, and recursive tools before reservation", async () => {
     const harness = makeHarness({
       available: ["read_file", "compose", "open_file"],
@@ -127,7 +200,8 @@ describe("createComposeExecutionScope", () => {
     await expect(
       harness.scope.executeChild("write_file", { path: "x" }),
     ).rejects.toMatchObject({
-      kind: "tool_not_in_request",
+      kind: "authorization",
+      code: "tool_not_in_request",
     });
     await expect(
       harness.scope.executeChild("open_file", { path: "x" }),
@@ -143,6 +217,74 @@ describe("createComposeExecutionScope", () => {
     expect(harness.context.toolCallBudget?.snapshot().used).toBe(0);
     expect(harness.executeTool).not.toHaveBeenCalled();
     expect(harness.registerAgentCall).not.toHaveBeenCalled();
+  });
+
+  it("rejects forged and mode-denied deferred children before reservation", async () => {
+    const nativeToolDisclosure = createNativeToolDisclosureSnapshot([
+      {
+        name: "get_diagnostics",
+        description: "Get diagnostics",
+        input_schema: { type: "object", properties: {} },
+      },
+    ]);
+    const harness = makeHarness({
+      available: ["call_native_tool", "compose"],
+      composable: ["get_diagnostics", "get_hover"],
+      context: {
+        mode: "ask",
+        modeAllowedToolNames: new Set(["read_file"]),
+        nativeToolDisclosure,
+      },
+    });
+
+    expect(harness.scope.canExecuteChild("get_hover")).toBe(false);
+    await expect(
+      harness.scope.executeChild("get_hover", { path: "x" }),
+    ).rejects.toMatchObject({
+      kind: "authorization",
+      code: "tool_not_in_request",
+    });
+    await expect(
+      harness.scope.executeChild("get_diagnostics", { path: "x" }),
+    ).rejects.toMatchObject({
+      kind: "authorization",
+      code: "tool_not_in_mode",
+    });
+    expect(harness.context.toolCallBudget?.snapshot().used).toBe(0);
+    expect(harness.executeTool).not.toHaveBeenCalled();
+    expect(harness.registerAgentCall).not.toHaveBeenCalled();
+  });
+
+  it("preserves structured authorization and handler failure codes", async () => {
+    for (const [result, expected] of [
+      [
+        {
+          ...canonicalResult({
+            status: "rejected",
+            reason: "interaction_denied",
+          }),
+          isError: true,
+          error: { kind: "rejected", message: "Path denied" },
+        },
+        { kind: "authorization", code: "interaction_denied" },
+      ],
+      [
+        {
+          ...canonicalResult({ status: "error" }),
+          isError: true,
+          error: { kind: "handler_error", message: "Missing file" },
+        },
+        {
+          kind: "child_handler_failed",
+          code: "child_handler_failed",
+        },
+      ],
+    ] as const) {
+      const harness = makeHarness({ execute: async () => result });
+      await expect(
+        harness.scope.executeChild("read_file", { path: "x" }),
+      ).rejects.toMatchObject(expected);
+    }
   });
 
   it("rejects semantic variants before reservation or dispatch", async () => {

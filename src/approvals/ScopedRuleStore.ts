@@ -6,7 +6,6 @@ export type { RuleScope, ScopedRules, StoredRule } from "./ruleTypes.js";
 export interface RuleSessionHost<TSession> {
   get(sessionId: string): TSession | undefined;
   create(sessionId: string): TSession;
-  persist(): void;
 }
 
 export interface RuleStoreDescriptor<
@@ -56,7 +55,6 @@ export class ScopedRuleStore<
     upsertRule(rules, rule);
     this.descriptor.setSessionRules(session, rules);
     session.lastActivity = Date.now();
-    this.sessions.persist();
     return true;
   }
 
@@ -94,7 +92,7 @@ export class ScopedRuleStore<
           oldRule,
         )
       ) {
-        this.sessions.persist();
+        session.lastActivity = Date.now();
       }
     }
     return true;
@@ -133,7 +131,7 @@ export class ScopedRuleStore<
               (candidate) => !matchesStoredRule(candidate, pattern, rule),
             ),
         );
-        this.sessions.persist();
+        session.lastActivity = Date.now();
       }
     }
     return true;
@@ -155,7 +153,7 @@ export class ScopedRuleStore<
     const session = this.sessions.get(sessionId);
     if (session) {
       this.descriptor.setSessionRules(session, []);
-      this.sessions.persist();
+      session.lastActivity = Date.now();
     }
   }
 

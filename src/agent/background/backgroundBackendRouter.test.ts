@@ -28,6 +28,39 @@ describe("resolveBackgroundBackendRoute", () => {
     });
   });
 
+  it("falls back to native when the configured ACP agent is cooling down", () => {
+    const settings = normalizeBackgroundAgentSettings({
+      defaultAgent: "acp:claude",
+      reviewAgent: "acp:claude",
+      acpAgents: [
+        { id: "claude", command: "claude-agent-acp", provider: "anthropic" },
+      ],
+    });
+    const context = {
+      foregroundProvider: "codex",
+      unavailableReferences: new Set(["acp:claude"]),
+    };
+
+    expect(resolveBackgroundBackendRoute(settings, {}, context)).toEqual({
+      backend: "native",
+    });
+    expect(
+      resolveBackgroundBackendRoute(
+        settings,
+        { taskClass: "review_code" },
+        context,
+      ),
+    ).toEqual({ backend: "native" });
+    // An explicit override still wins during the cooldown.
+    expect(
+      resolveBackgroundBackendRoute(
+        settings,
+        { provider: "acp:claude" },
+        context,
+      ),
+    ).toMatchObject({ backend: "acp", reason: "explicit_provider" });
+  });
+
   it("explicit ACP provider beats native default", () => {
     const settings = normalizeBackgroundAgentSettings({
       acpAgents: [{ id: "claude", command: "claude-agent-acp" }],

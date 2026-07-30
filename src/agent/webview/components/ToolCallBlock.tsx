@@ -492,6 +492,11 @@ export function getCommandApprovalBadge(
           text: `approved · recent${routeSuffix}`,
           title: `Approved by recent single-use approval TTL${securityTitle}`,
         };
+      case "sandbox_verification":
+        return {
+          text: `auto · verification${routeSuffix}`,
+          title: `Auto-approved as a recognized project verification command in the verified baseline sandbox${securityTitle}`,
+        };
       case "tier":
         return typeof record.tier === "string"
           ? {

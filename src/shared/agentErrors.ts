@@ -77,6 +77,72 @@ function extractTagText(html: string, tag: string): string | undefined {
   return text || undefined;
 }
 
+const MAX_ERROR_DATA_CHARS = 600;
+
+/**
+ * buildAgentErrorMessage plus any bounded structured `.data` payloads found on
+ * the cause chain. JSON-RPC transports (e.g. ACP agents) put the real failure
+ * in `error.data` while `error.message` is a generic string like
+ * "Internal error"; without this the diagnostic detail is dropped.
+ */
+export function buildAgentErrorMessageWithData(err: unknown): string {
+  const base = buildAgentErrorMessage(err) || String(err);
+  const seen = new Set<unknown>();
+  const dataParts: string[] = [];
+  let e: unknown = err;
+  while (e instanceof Error && !seen.has(e)) {
+    seen.add(e);
+    const data = (e as { data?: unknown }).data;
+    if (data !== undefined && data !== null) {
+      let serialized: string | undefined;
+      if (typeof data === "string") {
+        serialized = data;
+      } else {
+        try {
+          serialized = JSON.stringify(data);
+        } catch {
+          serialized = undefined;
+        }
+      }
+      const trimmed = serialized?.trim();
+      if (trimmed && trimmed !== "{}") {
+        dataParts.push(trimmed.slice(0, MAX_ERROR_DATA_CHARS));
+      }
+    }
+    e = (e as { cause?: unknown }).cause;
+  }
+  const unique = [...new Set(dataParts)].filter(
+    (part) => part && !base.includes(part),
+  );
+  return unique.length > 0 ? `${base} (${unique.join("; ")})` : base;
+}
+
+/**
+ * Returns true for errors that indicate the provider is unusable for new work
+ * (auth expired/missing, billing or quota exhausted) rather than a transient
+ * request failure. Used to steer background routing away from the provider.
+ */
+export function isProviderAvailabilityErrorMessage(msg: string): boolean {
+  const lower = msg.toLowerCase();
+  return (
+    lower.includes("credit balance") ||
+    lower.includes("insufficient credit") ||
+    lower.includes("billing") ||
+    lower.includes("payment required") ||
+    lower.includes("quota") ||
+    lower.includes("401") ||
+    lower.includes("402") ||
+    lower.includes("403") ||
+    lower.includes("unauthorized") ||
+    lower.includes("forbidden") ||
+    lower.includes("authentication") ||
+    lower.includes("invalid api key") ||
+    lower.includes("api key not") ||
+    (lower.includes("oauth") &&
+      (lower.includes("expired") || lower.includes("refresh")))
+  );
+}
+
 /** Returns true for transient errors that are safe to retry. */
 export function isAgentRetryableErrorMessage(msg: string): boolean {
   const lower = msg.toLowerCase();

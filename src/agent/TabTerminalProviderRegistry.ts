@@ -10,6 +10,10 @@ import type {
   TerminalProvider,
   TerminalTargetRequest,
 } from "../core/capabilities/terminal.js";
+import {
+  TerminalTargetRecoveryError,
+  type TerminalTargetCandidate,
+} from "../core/capabilities/terminalTargetError.js";
 
 export interface TabTerminalOwner {
   tabId: string;
@@ -188,7 +192,12 @@ class ScopedTabTerminalProvider implements TerminalProvider {
         "Tab-owned terminal execution requires an approval-aware terminal provider.",
       );
     }
-    const prepared = await base.prepareExecution(transformed, routeContext);
+    let prepared: PreparedTerminalExecution;
+    try {
+      prepared = await base.prepareExecution(transformed, routeContext);
+    } catch (error) {
+      throw this.logicalRecoveryError(error);
+    }
     return {
       security: prepared.security,
       execute: async () => {
@@ -389,6 +398,56 @@ class ScopedTabTerminalProvider implements TerminalProvider {
     return { owner: executionOwner(this.owner), terminalId };
   }
 
+  private ownerCandidates(): TerminalTargetCandidate[] {
+    return this.registry
+      .activeOwnedTerminals(this.owner)
+      .map(([terminalId, terminal]) => ({
+        terminal_id: terminalId,
+        terminal_name: terminal.logicalName,
+      }))
+      .sort((left, right) => left.terminal_id.localeCompare(right.terminal_id));
+  }
+
+  private logicalRecoveryError(error: unknown): unknown {
+    if (!(error instanceof TerminalTargetRecoveryError)) return error;
+    const owned = this.registry.ownedTerminals(this.owner);
+    const logicalTarget =
+      owned.find(
+        ([terminalId, terminal]) =>
+          terminalId === error.target_value ||
+          terminal.physicalName === error.target_value,
+      )?.[1].logicalName ?? error.target_value;
+    const mapCandidate = (
+      candidate: TerminalTargetCandidate,
+    ): TerminalTargetCandidate => ({
+      ...candidate,
+      terminal_name:
+        this.registry.ownedTerminal(candidate.terminal_id, this.owner)
+          ?.logicalName ?? candidate.terminal_name,
+    });
+    const replacements = owned
+      .map(
+        ([, terminal]) =>
+          [terminal.physicalName, terminal.logicalName] as const,
+      )
+      .sort((left, right) => right[0].length - left[0].length);
+    const mapGuidance = (guidance: string): string =>
+      replacements.reduce(
+        (result, [physical, logical]) => result.replaceAll(physical, logical),
+        guidance,
+      );
+    return new TerminalTargetRecoveryError({
+      failure: error.failure,
+      target_kind: error.target_kind,
+      target_value: logicalTarget,
+      required_authority: error.required_authority,
+      target_authorities: error.target_authorities,
+      compatible_terminals: error.compatible_terminals.map(mapCandidate),
+      available_terminals: error.available_terminals.map(mapCandidate),
+      retry_guidance: error.retry_guidance.map(mapGuidance),
+    });
+  }
+
   private transformOptions(
     options: TerminalExecuteOptions,
   ): TerminalExecuteOptions {
@@ -410,7 +469,28 @@ class ScopedTabTerminalProvider implements TerminalProvider {
             candidateId === splitFrom || terminal.logicalName === splitFrom,
         );
       if (matches.length !== 1) {
-        throw new Error(`Terminal split source not found: ${splitFrom}`);
+        const candidates = this.ownerCandidates();
+        const ambiguous = matches.length > 1;
+        throw new TerminalTargetRecoveryError({
+          failure: ambiguous ? "ambiguous_name" : "not_found",
+          target_kind: "split_from",
+          target_value: splitFrom,
+          compatible_terminals: candidates,
+          available_terminals: candidates,
+          retry_guidance: [
+            ...(ambiguous
+              ? matches.map(
+                  ([candidateId]) =>
+                    `The split source name is ambiguous; retry with split_from="${candidateId}" to select this exact terminal.`,
+                )
+              : candidates[0]
+                ? [
+                    `Retry with split_from="${candidates[0].terminal_id}" to split from a current terminal in this chat tab.`,
+                  ]
+                : []),
+            "If an independent ungrouped terminal is intended, retry without split_from.",
+          ],
+        });
       }
       splitFrom = matches[0][0];
     }

@@ -208,7 +208,16 @@ function unique(values: string[]): string[] {
 export async function resolveBackgroundRoute(
   registry: ProviderRegistry,
   request: SpawnBackgroundRequest,
-  foreground: { mode: string; model: string },
+  foreground: {
+    mode: string;
+    model: string;
+    /**
+     * Providers that recently failed background work before doing any turns
+     * (auth/billing/quota). Treated as unauthenticated during automatic
+     * selection; an explicit provider/model request still wins.
+     */
+    unavailableProviders?: readonly string[];
+  },
 ): Promise<BackgroundRouteResolution> {
   const registeredModels = registry.listAllModels();
   const requestedProvider = request.provider?.trim();
@@ -228,6 +237,10 @@ export async function resolveBackgroundRoute(
   }
 
   const authStatus = await registry.getAuthStatus();
+  const unavailable = new Set(foreground.unavailableProviders ?? []);
+  const isRouteable = (provider: string): boolean =>
+    Boolean(authStatus[provider]) &&
+    (!unavailable.has(provider) || provider === requestedProvider);
   const providersWithModels = unique(allModels.map((m) => m.provider));
 
   const foregroundProvider =
@@ -338,8 +351,8 @@ export async function resolveBackgroundRoute(
       !preferredOrder.includes(provider),
   );
 
-  const preferredAuthenticated = preferredOrder.filter((p) => authStatus[p]);
-  const fallbackAuthenticated = fallbackOrder.filter((p) => authStatus[p]);
+  const preferredAuthenticated = preferredOrder.filter(isRouteable);
+  const fallbackAuthenticated = fallbackOrder.filter(isRouteable);
   const providerPasses = [preferredAuthenticated, fallbackAuthenticated].filter(
     (providers) => providers.length > 0,
   );
@@ -410,7 +423,7 @@ export async function resolveBackgroundRoute(
     };
   }
 
-  const authenticatedModels = allModels.filter((m) => authStatus[m.provider]);
+  const authenticatedModels = allModels.filter((m) => isRouteable(m.provider));
   const fallbackModel = authenticatedModels[0] ?? allModels[0];
   return {
     resolvedMode,

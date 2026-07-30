@@ -6,6 +6,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createServer } from "http";
+import { MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER } from "../core/modelRequestScheduler.js";
 
 describe("installAgentLinkHttpDispatcher integration", () => {
   const originalDispatcher = getGlobalDispatcher();
@@ -54,7 +55,7 @@ describe("installAgentLinkHttpDispatcher integration", () => {
     }
   });
 
-  it("bounds concurrent sockets per origin", async () => {
+  it("bounds concurrent sockets per origin at the scheduler ceiling", async () => {
     vi.resetModules();
     const { agentLinkFetch } = await import("./httpDispatcher.js");
     let active = 0;
@@ -66,7 +67,7 @@ describe("installAgentLinkHttpDispatcher integration", () => {
         active--;
         res.writeHead(200, { "Content-Type": "text/plain" });
         res.end("ok");
-      }, 20);
+      }, 50);
     });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
@@ -79,12 +80,20 @@ describe("installAgentLinkHttpDispatcher integration", () => {
       }
       const url = `http://127.0.0.1:${address.port}/bounded`;
       const responses = await Promise.all(
-        Array.from({ length: 12 }, () => agentLinkFetch(url)),
+        Array.from(
+          { length: MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER + 8 },
+          () => agentLinkFetch(url),
+        ),
       );
       await Promise.all(responses.map((response) => response.text()));
 
-      expect(peakActive).toBeGreaterThan(1);
-      expect(peakActive).toBeLessThanOrEqual(6);
+      // The transport cap must sit at (not below) the scheduler's admission
+      // ceiling: a lower socket cap silently queues admitted streaming turns
+      // inside undici, serializing concurrent sessions on the same provider.
+      expect(peakActive).toBeGreaterThan(6);
+      expect(peakActive).toBeLessThanOrEqual(
+        MAX_CONCURRENT_MODEL_REQUESTS_PER_PROVIDER,
+      );
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

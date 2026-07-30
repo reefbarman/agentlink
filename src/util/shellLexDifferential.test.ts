@@ -12,6 +12,7 @@ import { validateCommand } from "./pipeValidator.js";
 import { validateProtectedWriteCommand } from "./protectedWriteValidator.js";
 import {
   scanShellLexBoundaries,
+  scanShellLexLiteralOccurrences,
   scanShellLexTokens,
   scanShellLexWords,
   type ShellLexFinalState,
@@ -20,6 +21,7 @@ import {
 const workspace = path.resolve("/workspace/project");
 const scannerNames = [
   "boundaries",
+  "literalOccurrences",
   "words",
   "tokens",
   "tokensWithSingleQuoteEscapes",
@@ -56,6 +58,7 @@ type DifferentialExpectation = {
 
 const cleanScannerFinalStates: ScannerFinalStates = {
   boundaries: cleanFinalState,
+  literalOccurrences: cleanFinalState,
   words: cleanFinalState,
   tokens: cleanFinalState,
   tokensWithSingleQuoteEscapes: cleanFinalState,
@@ -64,6 +67,7 @@ const cleanScannerFinalStates: ScannerFinalStates = {
 function scannerFinalStates(state: ShellLexFinalState): ScannerFinalStates {
   return {
     boundaries: state,
+    literalOccurrences: state,
     words: state,
     tokens: state,
     tokensWithSingleQuoteEscapes: state,
@@ -87,6 +91,7 @@ const singleQuoteScannerStates = scannerFinalStates({
 
 const singleQuoteDanglingEscapeScannerStates: ScannerFinalStates = {
   boundaries: { quote: "single", danglingEscape: true },
+  literalOccurrences: { quote: "single", danglingEscape: false },
   words: { quote: "single", danglingEscape: false },
   tokens: { quote: "single", danglingEscape: false },
   tokensWithSingleQuoteEscapes: { quote: "single", danglingEscape: true },
@@ -274,6 +279,7 @@ const corpus: DifferentialExpectation[] = [
     requiredAggregateDisposition: "reject",
     detectingScanners: [
       "boundaries",
+      "literalOccurrences",
       "words",
       "tokens",
       "tokensWithSingleQuoteEscapes",
@@ -293,6 +299,7 @@ const corpus: DifferentialExpectation[] = [
     requiredAggregateDisposition: "reject",
     detectingScanners: [
       "boundaries",
+      "literalOccurrences",
       "words",
       "tokens",
       "tokensWithSingleQuoteEscapes",
@@ -312,6 +319,7 @@ const corpus: DifferentialExpectation[] = [
     requiredAggregateDisposition: "reject",
     detectingScanners: [
       "boundaries",
+      "literalOccurrences",
       "words",
       "tokens",
       "tokensWithSingleQuoteEscapes",
@@ -331,6 +339,7 @@ const corpus: DifferentialExpectation[] = [
     requiredAggregateDisposition: "reject",
     detectingScanners: [
       "boundaries",
+      "literalOccurrences",
       "words",
       "tokens",
       "tokensWithSingleQuoteEscapes",
@@ -374,6 +383,7 @@ const corpus: DifferentialExpectation[] = [
     requiredAggregateDisposition: "reject",
     detectingScanners: [
       "boundaries",
+      "literalOccurrences",
       "words",
       "tokens",
       "tokensWithSingleQuoteEscapes",
@@ -393,6 +403,7 @@ const corpus: DifferentialExpectation[] = [
     requiredAggregateDisposition: "reject",
     detectingScanners: [
       "boundaries",
+      "literalOccurrences",
       "words",
       "tokens",
       "tokensWithSingleQuoteEscapes",
@@ -412,6 +423,7 @@ const corpus: DifferentialExpectation[] = [
     requiredAggregateDisposition: "reject",
     detectingScanners: [
       "boundaries",
+      "literalOccurrences",
       "words",
       "tokens",
       "tokensWithSingleQuoteEscapes",
@@ -431,6 +443,7 @@ const corpus: DifferentialExpectation[] = [
     requiredAggregateDisposition: "reject",
     detectingScanners: [
       "boundaries",
+      "literalOccurrences",
       "words",
       "tokens",
       "tokensWithSingleQuoteEscapes",
@@ -450,6 +463,7 @@ const corpus: DifferentialExpectation[] = [
     requiredAggregateDisposition: "reject",
     detectingScanners: [
       "boundaries",
+      "literalOccurrences",
       "words",
       "tokens",
       "tokensWithSingleQuoteEscapes",
@@ -494,6 +508,8 @@ function observe(command: string) {
     protectedWrite: validateProtectedWriteCommand(command, workspace) !== null,
     scannerFinalStates: {
       boundaries: scanShellLexBoundaries(command).finalState,
+      literalOccurrences: scanShellLexLiteralOccurrences(command, "$AL_FILE(")
+        .finalState,
       words: scanShellLexWords(command).finalState,
       tokens: scanShellLexTokens(command).finalState,
       tokensWithSingleQuoteEscapes: scanShellLexTokens(command, {

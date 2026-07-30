@@ -523,6 +523,180 @@ describe("NativeAgentTerminalCoordinator", () => {
     ).rejects.toThrow("terminal not found");
   });
 
+  it("hands a foreground command to background execution on assignment", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const deferredFinalization = vi.fn();
+      const finalized = vi.fn();
+      let detached = false;
+      const resultPromise = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "sleep 10",
+        cwd: "/workspace",
+        timeout: 100,
+        onTerminalAssigned: (terminalId) => {
+          detached = test.coordinator.detachTerminal({
+            owner: undefined,
+            terminalId,
+          });
+        },
+        onCommandFinalizationDeferred: deferredFinalization,
+        onCommandFinalized: finalized,
+      });
+      await flush();
+
+      await expect(resultPromise).resolves.toMatchObject({
+        terminal_id: "native-agent-1",
+        backgrounded: true,
+        is_running: true,
+        command_sent: true,
+        process_launched: true,
+        retry_safe: false,
+      });
+      expect(detached).toBe(true);
+      expect(test.starts[0]).toHaveBeenCalledOnce();
+      expect(
+        test.coordinator.detachTerminal({
+          owner: undefined,
+          terminalId: "native-agent-1",
+        }),
+      ).toBe(false);
+      expect(deferredFinalization).toHaveBeenCalledOnce();
+      expect(finalized).not.toHaveBeenCalled();
+
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 2, pgid: 2, backend: "native-pty" });
+      await flush();
+      process.emit({ type: "data", data: "still running\r\n" });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(process.interrupt).not.toHaveBeenCalled();
+      expect(process.terminate).not.toHaveBeenCalled();
+      expect(
+        test.coordinator.getBackgroundState({
+          owner: undefined,
+          terminalId: "native-agent-1",
+        }),
+      ).toMatchObject({
+        is_running: true,
+        state: "running",
+        output: "still running",
+      });
+
+      process.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+      await flush();
+      expect(finalized).toHaveBeenCalledOnce();
+      expect(
+        test.coordinator.detachTerminal({
+          owner: undefined,
+          terminalId: "native-agent-1",
+        }),
+      ).toBe(false);
+      test.coordinator.closeTerminals({ owner: undefined });
+      expect(finalized).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("detaches a running foreground command and clears its timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const deferredFinalization = vi.fn();
+      const finalized = vi.fn();
+      const resultPromise = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "sleep 10",
+        cwd: "/workspace",
+        timeout: 100,
+        onCommandFinalizationDeferred: deferredFinalization,
+        onCommandFinalized: finalized,
+      });
+      await flush();
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 2, pgid: 2, backend: "native-pty" });
+      await flush();
+
+      expect(
+        test.coordinator.detachTerminal({
+          owner: undefined,
+          terminalId: "native-agent-1",
+        }),
+      ).toBe(true);
+      await expect(resultPromise).resolves.toMatchObject({
+        terminal_id: "native-agent-1",
+        backgrounded: true,
+        is_running: true,
+      });
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(process.interrupt).not.toHaveBeenCalled();
+      expect(process.terminate).not.toHaveBeenCalled();
+      expect(deferredFinalization).toHaveBeenCalledOnce();
+      expect(finalized).not.toHaveBeenCalled();
+      expect(
+        test.coordinator.getBackgroundState({
+          owner: undefined,
+          terminalId: "native-agent-1",
+        }),
+      ).toMatchObject({ is_running: true, state: "running" });
+
+      process.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+      await flush();
+      expect(finalized).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves completion when detach is requested in the same turn", async () => {
+    const test = harness();
+    const deferredFinalization = vi.fn();
+    const resultPromise = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf done",
+      cwd: "/workspace",
+      onCommandFinalizationDeferred: deferredFinalization,
+    });
+    await flush();
+    const process = test.processes[0];
+    process.readyDeferred.resolve({ pid: 2, pgid: 2, backend: "native-pty" });
+    process.emit({ type: "data", data: "done\r\n" });
+    process.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+    expect(
+      test.coordinator.detachTerminal({
+        owner: undefined,
+        terminalId: "native-agent-1",
+      }),
+    ).toBe(true);
+
+    const result = await resultPromise;
+    expect(result).toMatchObject({ exit_code: 0, is_running: false });
+    expect(result).not.toHaveProperty("backgrounded");
+    expect(deferredFinalization).not.toHaveBeenCalled();
+  });
+
+  it("preserves foreground process failures", async () => {
+    const test = harness();
+    const result = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "fail",
+      cwd: "/workspace",
+    });
+    await flush();
+
+    test.processes[0].completionDeferred.reject(new Error("pty failed"));
+
+    await expect(result).rejects.toThrow("pty failed");
+    expect(
+      test.coordinator.detachTerminal({
+        owner: undefined,
+        terminalId: "native-agent-1",
+      }),
+    ).toBe(false);
+  });
+
   it("supports background output, interrupt, and deferred cleanup", async () => {
     const test = harness();
     const deferredFinalization = vi.fn();
@@ -604,6 +778,12 @@ describe("NativeAgentTerminalCoordinator", () => {
         is_running: true,
         execution_mode: "native_pty",
       });
+      expect(
+        test.coordinator.detachTerminal({
+          owner: undefined,
+          terminalId: "native-agent-1",
+        }),
+      ).toBe(false);
       expect(finalized).not.toHaveBeenCalled();
 
       test.processes[0].completionDeferred.resolve({

@@ -34,6 +34,8 @@ export type { RuleScope } from "./ScopedRuleStore.js";
 interface SessionState {
   writeApproved: boolean;
   agentWriteApproved: boolean;
+  /** Whether inherited rule provenance has been initialized for this session. */
+  inheritanceInitialized: boolean;
   commandRules: CommandRule[];
   networkRules: NetworkRule[];
   pathRules: PathRule[];
@@ -44,21 +46,10 @@ interface SessionState {
   lastActivity: number;
 }
 
-interface PersistedApprovalSessions {
-  version: 1;
-  sessions: Record<string, SessionState>;
-}
-
 interface SessionProjectBinding {
   projectId: string;
   workspaceFolderUri: string;
   rootPath: string;
-}
-
-interface PendingSessionPersistence {
-  snapshot?: string;
-  value?: SessionState;
-  baseSnapshot?: string;
 }
 
 export interface AgentWriteApprovalDiagnostics {
@@ -80,28 +71,18 @@ export interface AgentWriteApprovalDiagnostics {
   };
 }
 
-const SESSION_TTL = 24 * 60 * 60_000; // 24 hours
-const PRUNE_INTERVAL = 60 * 60_000; // 1 hour
 const APPROVAL_SESSIONS_KEY = "approvalSessions";
 const APPROVAL_SESSION_KEY_PREFIX = "approvalSession:";
 const APPROVAL_SESSION_STORAGE_VERSION_KEY = "approvalSessionStorageVersion";
-const APPROVAL_SESSION_STORAGE_VERSION = 3;
+const APPROVAL_SESSION_CLEANUP_VERSION_KEY = "approvalSessionCleanupVersion";
+const APPROVAL_SESSION_CLEANUP_VERSION = 1;
 
 export class ApprovalManager {
-  private pruneTimer: ReturnType<typeof setInterval>;
   private _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
 
-  // Session-scoped approvals, keyed by chat session ID.
-  // Persisted so restored chat sessions keep their session-level approvals.
+  // Runtime-only session approvals, keyed by chat session ID.
   private sessions = new Map<string, SessionState>();
-  /** Last locally observed value for differential, per-session persistence. */
-  private persistedSessionSnapshots = new Map<string, string>();
-  private pendingSessionPersistence = new Map<
-    string,
-    PendingSessionPersistence
-  >();
-  private activeSessionPersistence = new Map<string, Promise<void>>();
   private sessionProjects = new Map<string, SessionProjectBinding>();
 
   private configStoreListener: vscode.Disposable;
@@ -114,7 +95,6 @@ export class ApprovalManager {
     private globalState: vscode.Memento, // kept for migration
     private configStore: ConfigStore,
   ) {
-    this.loadPersistedSessions();
     const sessionHost = {
       get: (sessionId: string) => this.sessions.get(sessionId),
       create: (sessionId: string) => {
@@ -122,17 +102,11 @@ export class ApprovalManager {
         this.sessions.set(sessionId, session);
         return session;
       },
-      persist: () => this.persistSessions(),
     };
     this.commandRuleStore = new CommandRuleStore(configStore, sessionHost);
     this.networkRuleStore = new NetworkRuleStore(configStore, sessionHost);
     this.pathRuleStore = new PathRuleStore(configStore, sessionHost);
     this.writeRuleStore = new WriteRuleStore(configStore, sessionHost);
-    this.pruneExpiredSessions();
-    this.pruneTimer = setInterval(
-      () => this.pruneExpiredSessions(),
-      PRUNE_INTERVAL,
-    );
     // Forward config file changes to our own onDidChange
     this.configStoreListener = configStore.onDidChange(() =>
       this._onDidChange.fire(),
@@ -166,7 +140,7 @@ export class ApprovalManager {
     });
   }
 
-  // --- Built-in tool approvals (persisted, session-scoped) ---
+  // --- Built-in tool approvals (runtime-only, session-scoped) ---
 
   isBuiltInToolApproved(sessionId: string, toolName: string): boolean {
     return this.getSession(sessionId).builtInToolApprovals.includes(toolName);
@@ -178,11 +152,10 @@ export class ApprovalManager {
     if (session.builtInToolApprovals.includes(toolName)) return;
     session.builtInToolApprovals.push(toolName);
     session.lastActivity = Date.now();
-    this.persistSessions();
     this._onDidChange.fire();
   }
 
-  // --- MCP tool approvals (persisted, session-scoped) ---
+  // --- MCP tool approvals (runtime-only, session-scoped) ---
 
   /** True if this tool (or its server) has been approved for this session. */
   isMcpApproved(sessionId: string, toolName: string): boolean {
@@ -206,7 +179,6 @@ export class ApprovalManager {
     if (session.mcpToolApprovals.includes(toolName)) return;
     session.mcpToolApprovals.push(toolName);
     session.lastActivity = Date.now();
-    this.persistSessions();
     this._onDidChange.fire();
   }
 
@@ -217,12 +189,10 @@ export class ApprovalManager {
     if (session.mcpServerApprovals.includes(serverName)) return;
     session.mcpServerApprovals.push(serverName);
     session.lastActivity = Date.now();
-    this.persistSessions();
     this._onDidChange.fire();
   }
 
   dispose(): void {
-    clearInterval(this.pruneTimer);
     this.configStoreListener.dispose();
     this._onDidChange.dispose();
   }
@@ -287,44 +257,54 @@ export class ApprovalManager {
   // --- Session management ---
 
   touchSession(sessionId: string): void {
-    const now = Date.now();
-    let session = this.sessions.get(sessionId);
-    const expired = Boolean(
-      session && now - session.lastActivity > SESSION_TTL,
-    );
-    if (expired) {
-      session = undefined;
-    }
-    session ??= this.newSession();
-    session.lastActivity = now;
+    const session = this.sessions.get(sessionId) ?? this.newSession();
+    session.lastActivity = Date.now();
     this.sessions.set(sessionId, session);
-    this.persistSessions();
-    if (expired) this._onDidChange.fire();
   }
 
-  clearSession(sessionId: string): void {
-    this.sessions.delete(sessionId);
-    this.sessionProjects.delete(sessionId);
-    this.persistSessions();
+  clearSession(
+    sessionId: string,
+    options?: { forgetProjectBinding?: boolean },
+  ): void {
+    this.clearSessions([sessionId], options);
   }
 
-  pruneExpiredSessions(): void {
-    const now = Date.now();
+  clearSessions(
+    sessionIds: Iterable<string>,
+    options?: { forgetProjectBinding?: boolean },
+  ): void {
     let changed = false;
-    for (const [id, session] of this.sessions) {
-      // Another VS Code window may own other persisted session IDs. Only the
-      // window that has bound a session to a project may expire its authority.
-      if (!this.sessionProjects.has(id)) continue;
-      if (now - session.lastActivity > SESSION_TTL) {
-        this.sessions.delete(id);
-        this.sessionProjects.delete(id);
-        changed = true;
+    for (const sessionId of new Set(sessionIds)) {
+      changed = this.sessions.delete(sessionId) || changed;
+      if (options?.forgetProjectBinding) {
+        this.sessionProjects.delete(sessionId);
       }
     }
-    if (changed) {
-      this.persistSessions();
-      this._onDidChange.fire();
+    if (changed) this._onDidChange.fire();
+  }
+
+  async clearLegacyPersistedSessions(): Promise<void> {
+    const cleanupVersion = this.globalState.get<number>(
+      APPROVAL_SESSION_CLEANUP_VERSION_KEY,
+      0,
+    );
+    if (cleanupVersion >= APPROVAL_SESSION_CLEANUP_VERSION) return;
+
+    const legacyKeys = this.globalState
+      .keys()
+      .filter((key) => key.startsWith(APPROVAL_SESSION_KEY_PREFIX));
+    for (const key of legacyKeys) {
+      await this.globalState.update(key, undefined);
     }
+    await this.globalState.update(APPROVAL_SESSIONS_KEY, undefined);
+    await this.globalState.update(
+      APPROVAL_SESSION_STORAGE_VERSION_KEY,
+      undefined,
+    );
+    await this.globalState.update(
+      APPROVAL_SESSION_CLEANUP_VERSION_KEY,
+      APPROVAL_SESSION_CLEANUP_VERSION,
+    );
   }
 
   // --- Write approval (MCP / sidebar path) ---
@@ -367,7 +347,6 @@ export class ApprovalManager {
       session.writeApproved = true;
       session.lastActivity = Date.now();
       this.sessions.set(sessionId, session);
-      this.persistSessions();
     }
     this._onDidChange.fire();
   }
@@ -389,7 +368,6 @@ export class ApprovalManager {
     for (const session of this.sessions.values()) {
       session.writeApproved = false;
     }
-    this.persistSessions();
     this._onDidChange.fire();
   }
 
@@ -474,7 +452,6 @@ export class ApprovalManager {
       session.agentWriteApproved = true;
       session.lastActivity = Date.now();
       this.sessions.set(sessionId, session);
-      this.persistSessions();
     }
     if (saved) this._onDidChange.fire();
     return saved;
@@ -510,6 +487,7 @@ export class ApprovalManager {
     if (destination) {
       destination.writeApproved ||= source.writeApproved;
       destination.agentWriteApproved ||= source.agentWriteApproved;
+      destination.inheritanceInitialized ||= source.inheritanceInitialized;
       destination.commandRules = deduplicateRules([
         ...destination.commandRules,
         ...source.commandRules,
@@ -551,7 +529,14 @@ export class ApprovalManager {
       );
     } else {
       this.sessions.set(toId, {
-        ...this.cloneSessionState(source),
+        ...source,
+        commandRules: source.commandRules.map((rule) => ({ ...rule })),
+        networkRules: source.networkRules.map((rule) => ({ ...rule })),
+        pathRules: source.pathRules.map((rule) => ({ ...rule })),
+        writeRules: source.writeRules.map((rule) => ({ ...rule })),
+        builtInToolApprovals: [...source.builtInToolApprovals],
+        mcpToolApprovals: [...source.mcpToolApprovals],
+        mcpServerApprovals: [...source.mcpServerApprovals],
         lastActivity: Date.now(),
       });
     }
@@ -561,7 +546,6 @@ export class ApprovalManager {
       this.sessionProjects.delete(fromId);
     }
     this.sessions.delete(fromId);
-    this.persistSessions();
     this._onDidChange.fire();
   }
 
@@ -592,34 +576,32 @@ export class ApprovalManager {
     }
 
     const now = Date.now();
-    const restoredSource = this.sessions.get(fromId);
-    if (restoredSource && now - restoredSource.lastActivity > SESSION_TTL) {
-      this.sessions.delete(fromId);
-      this.persistSessions();
-      this._onDidChange.fire();
-    }
-
     const source = this.sessions.get(fromId);
     const destination = this.sessions.get(toId);
     let changed = false;
     let sessionChanged = false;
 
     if (source) {
+      const firstInheritance = !(destination?.inheritanceInitialized ?? false);
       const commandRules = mergeInheritedRules(
         destination?.commandRules ?? [],
-        source.commandRules,
+        source.commandRules.map(markRuleInherited),
+        firstInheritance,
       );
       const networkRules = mergeInheritedRules(
         destination?.networkRules ?? [],
-        source.networkRules,
+        source.networkRules.map(markRuleInherited),
+        firstInheritance,
       );
       const pathRules = mergeInheritedRules(
         destination?.pathRules ?? [],
-        source.pathRules,
+        source.pathRules.map(markRuleInherited),
+        firstInheritance,
       );
       const writeRules = mergeInheritedRules(
         destination?.writeRules ?? [],
-        source.writeRules,
+        source.writeRules.map(markRuleInherited),
+        firstInheritance,
       );
       const builtInToolApprovals = [
         ...new Set([
@@ -640,6 +622,7 @@ export class ApprovalManager {
         ]),
       ];
       sessionChanged =
+        firstInheritance ||
         (!(destination?.writeApproved ?? false) && source.writeApproved) ||
         (!(destination?.agentWriteApproved ?? false) &&
           source.agentWriteApproved) ||
@@ -667,6 +650,7 @@ export class ApprovalManager {
           agentWriteApproved:
             (destination?.agentWriteApproved ?? false) ||
             source.agentWriteApproved,
+          inheritanceInitialized: true,
           commandRules,
           networkRules,
           pathRules,
@@ -679,7 +663,6 @@ export class ApprovalManager {
         changed = true;
       }
     }
-    if (sessionChanged) this.persistSessions();
     if (changed) this._onDidChange.fire();
     return changed;
   }
@@ -689,7 +672,6 @@ export class ApprovalManager {
     const session = this.sessions.get(sessionId);
     if (session?.agentWriteApproved) {
       session.agentWriteApproved = false;
-      this.persistSessions();
       this._onDidChange.fire();
     }
   }
@@ -709,7 +691,6 @@ export class ApprovalManager {
     for (const session of this.sessions.values()) {
       session.agentWriteApproved = false;
     }
-    this.persistSessions();
     this._onDidChange.fire();
   }
 
@@ -754,7 +735,6 @@ export class ApprovalManager {
       session.agentWriteApproved = true;
       session.lastActivity = Date.now();
       this.sessions.set(sessionId, session);
-      this.persistSessions();
     }
 
     let success = true;
@@ -783,7 +763,6 @@ export class ApprovalManager {
     if (selection !== "session" && session?.agentWriteApproved) {
       session.agentWriteApproved = false;
       session.lastActivity = Date.now();
-      this.persistSessions();
       localChanged = true;
     }
 
@@ -906,7 +885,9 @@ export class ApprovalManager {
     project: PathRule[];
     global: PathRule[];
   } {
-    return this.pathRuleStore.get(sessionId, this.getProjectRoot(sessionId));
+    return stripScopedRuleProvenance(
+      this.pathRuleStore.get(sessionId, this.getProjectRoot(sessionId)),
+    );
   }
 
   // --- File-level write approval ---
@@ -956,7 +937,7 @@ export class ApprovalManager {
             allowed: true,
             basis: "write_rule",
             scope,
-            rule: { ...rule },
+            rule: stripRuleProvenance(rule),
           };
         }
       }
@@ -1023,7 +1004,9 @@ export class ApprovalManager {
   } {
     const projectBinding = this.getProjectBinding(sessionId, targetPath);
     return {
-      ...this.writeRuleStore.get(sessionId, projectBinding?.rootPath),
+      ...stripScopedRuleProvenance(
+        this.writeRuleStore.get(sessionId, projectBinding?.rootPath),
+      ),
       settings: this.getProjectConfiguration(projectBinding).get<string[]>(
         "writeRules",
         [],
@@ -1044,7 +1027,12 @@ export class ApprovalManager {
     cwd?: string,
   ): CommandRulePolicyEvaluation {
     return evaluateCommandRulePolicy(
-      this.commandRuleStore.get(sessionId, this.getProjectRoot(sessionId, cwd)),
+      stripScopedRuleProvenance(
+        this.commandRuleStore.get(
+          sessionId,
+          this.getProjectRoot(sessionId, cwd, false),
+        ),
+      ),
       command,
     );
   }
@@ -1071,7 +1059,9 @@ export class ApprovalManager {
     destination: NetworkRuleDestination,
   ): NetworkRulePolicyEvaluation {
     return evaluateNetworkRulePolicy(
-      this.networkRuleStore.get(sessionId, this.getProjectRoot(sessionId)),
+      stripScopedRuleProvenance(
+        this.networkRuleStore.get(sessionId, this.getProjectRoot(sessionId)),
+      ),
       destination,
     );
   }
@@ -1096,7 +1086,9 @@ export class ApprovalManager {
     project: NetworkRule[];
     global: NetworkRule[];
   } {
-    return this.networkRuleStore.get(sessionId, this.getProjectRoot(sessionId));
+    return stripScopedRuleProvenance(
+      this.networkRuleStore.get(sessionId, this.getProjectRoot(sessionId)),
+    );
   }
 
   addCommandRule(
@@ -1160,7 +1152,9 @@ export class ApprovalManager {
     project: CommandRule[];
     global: CommandRule[];
   } {
-    return this.commandRuleStore.get(sessionId, this.getProjectRoot(sessionId));
+    return stripScopedRuleProvenance(
+      this.commandRuleStore.get(sessionId, this.getProjectRoot(sessionId)),
+    );
   }
 
   clearSessionCommandRules(sessionId: string): void {
@@ -1169,6 +1163,25 @@ export class ApprovalManager {
   }
 
   // --- State for sidebar ---
+
+  getExplicitSessionRules(sessionId: string): {
+    commandRules: CommandRule[];
+    pathRules: PathRule[];
+    writeRules: PathRule[];
+  } {
+    const session = this.getSession(sessionId);
+    return {
+      commandRules: session.commandRules
+        .filter((rule) => !rule.inherited)
+        .map(stripRuleProvenance),
+      pathRules: session.pathRules
+        .filter((rule) => !rule.inherited)
+        .map(stripRuleProvenance),
+      writeRules: session.writeRules
+        .filter((rule) => !rule.inherited)
+        .map(stripRuleProvenance),
+    };
+  }
 
   getActiveSessions(): Array<{
     id: string;
@@ -1179,16 +1192,29 @@ export class ApprovalManager {
     writeRuleCount: number;
     lastActivity: number;
   }> {
-    return Array.from(this.sessions.entries()).map(([id, s]) => ({
-      id,
-      writeApproved: s.writeApproved,
-      agentWriteApproved: s.agentWriteApproved,
-      commandRuleCount: s.commandRules.length,
-      networkRuleCount: (s.networkRules ?? []).length,
-      pathRuleCount: (s.pathRules ?? []).length,
-      writeRuleCount: (s.writeRules ?? []).length,
-      lastActivity: s.lastActivity,
-    }));
+    return Array.from(this.sessions.entries())
+      .filter(
+        ([, session]) =>
+          session.writeApproved ||
+          session.agentWriteApproved ||
+          session.commandRules.length > 0 ||
+          session.networkRules.length > 0 ||
+          session.pathRules.length > 0 ||
+          session.writeRules.length > 0 ||
+          session.builtInToolApprovals.length > 0 ||
+          session.mcpToolApprovals.length > 0 ||
+          session.mcpServerApprovals.length > 0,
+      )
+      .map(([id, session]) => ({
+        id,
+        writeApproved: session.writeApproved,
+        agentWriteApproved: session.agentWriteApproved,
+        commandRuleCount: session.commandRules.length,
+        networkRuleCount: session.networkRules.length,
+        pathRuleCount: session.pathRules.length,
+        writeRuleCount: session.writeRules.length,
+        lastActivity: session.lastActivity,
+      }));
   }
 
   // --- Internal ---
@@ -1196,6 +1222,7 @@ export class ApprovalManager {
   private getProjectBinding(
     sessionId: string | undefined,
     targetPath?: string,
+    fallbackWhenOutsideWorkspace = true,
   ): SessionProjectBinding | undefined {
     if (targetPath && path.isAbsolute(targetPath)) {
       const resolvedTarget = path.resolve(targetPath);
@@ -1222,6 +1249,7 @@ export class ApprovalManager {
           rootPath,
         };
       }
+      if (!fallbackWhenOutsideWorkspace) return undefined;
     }
     if (sessionId) {
       const binding = this.sessionProjects.get(sessionId);
@@ -1240,8 +1268,13 @@ export class ApprovalManager {
   private getProjectRoot(
     sessionId: string | undefined,
     targetPath?: string,
+    fallbackWhenOutsideWorkspace = true,
   ): string | undefined {
-    return this.getProjectBinding(sessionId, targetPath)?.rootPath;
+    return this.getProjectBinding(
+      sessionId,
+      targetPath,
+      fallbackWhenOutsideWorkspace,
+    )?.rootPath;
   }
 
   private getProjectConfig(
@@ -1359,225 +1392,10 @@ export class ApprovalManager {
     return this.sessions.get(sessionId) ?? this.emptySession;
   }
 
-  private loadPersistedSessions(): void {
-    for (const key of this.globalState.keys()) {
-      if (!key.startsWith(APPROVAL_SESSION_KEY_PREFIX)) continue;
-      const sessionId = key.slice(APPROVAL_SESSION_KEY_PREFIX.length);
-      const session = this.globalState.get<SessionState | undefined>(key);
-      if (!sessionId || !session) continue;
-      const normalized = this.normalizeSessionState(session);
-      this.sessions.set(sessionId, normalized);
-      this.persistedSessionSnapshots.set(sessionId, JSON.stringify(normalized));
-    }
-
-    const storageVersion = this.globalState.get<number>(
-      APPROVAL_SESSION_STORAGE_VERSION_KEY,
-      1,
-    );
-    if (storageVersion < APPROVAL_SESSION_STORAGE_VERSION) {
-      const legacy = this.globalState.get<
-        PersistedApprovalSessions | SessionState[] | undefined
-      >(APPROVAL_SESSIONS_KEY);
-      if (
-        legacy &&
-        !Array.isArray(legacy) &&
-        legacy.version === 1 &&
-        legacy.sessions
-      ) {
-        for (const [sessionId, session] of Object.entries(legacy.sessions)) {
-          if (!this.sessions.has(sessionId)) {
-            this.sessions.set(sessionId, this.normalizeSessionState(session));
-          }
-        }
-      }
-
-      const migrationSessionIds = Array.from(this.sessions.keys());
-      const migrationWrites = migrationSessionIds.map((sessionId) =>
-        this.queueSessionPersistence(sessionId, this.sessions.get(sessionId)),
-      );
-      void this.finishSessionStorageMigration(
-        migrationSessionIds,
-        migrationWrites,
-      );
-    }
-  }
-
-  private persistSessions(): void {
-    for (const [sessionId, session] of this.sessions) {
-      this.queueSessionPersistence(sessionId, session);
-    }
-
-    const knownSessionIds = new Set([
-      ...this.persistedSessionSnapshots.keys(),
-      ...this.pendingSessionPersistence.keys(),
-    ]);
-    for (const sessionId of knownSessionIds) {
-      if (this.sessions.has(sessionId)) continue;
-      this.queueSessionPersistence(sessionId);
-    }
-  }
-
-  private queueSessionPersistence(
-    sessionId: string,
-    value?: SessionState,
-  ): Promise<void> {
-    const snapshot = value ? JSON.stringify(value) : undefined;
-    const pending = this.pendingSessionPersistence.get(sessionId);
-    if (pending?.snapshot === snapshot) {
-      return this.startSessionPersistence(sessionId);
-    }
-    if (
-      !this.activeSessionPersistence.has(sessionId) &&
-      this.persistedSessionSnapshots.get(sessionId) === snapshot
-    ) {
-      this.pendingSessionPersistence.delete(sessionId);
-      return Promise.resolve();
-    }
-
-    this.pendingSessionPersistence.set(sessionId, {
-      snapshot,
-      baseSnapshot:
-        pending?.baseSnapshot ?? this.persistedSessionSnapshots.get(sessionId),
-      ...(value ? { value: this.cloneSessionState(value) } : {}),
-    });
-    return this.startSessionPersistence(sessionId);
-  }
-
-  private startSessionPersistence(sessionId: string): Promise<void> {
-    const active = this.activeSessionPersistence.get(sessionId);
-    if (active) return active;
-
-    let failedEntry: PendingSessionPersistence | undefined;
-    const task = (async () => {
-      while (true) {
-        const entry = this.pendingSessionPersistence.get(sessionId);
-        if (!entry) return;
-
-        if (this.persistedSessionSnapshots.get(sessionId) === entry.snapshot) {
-          if (this.pendingSessionPersistence.get(sessionId) === entry) {
-            this.pendingSessionPersistence.delete(sessionId);
-          }
-          continue;
-        }
-
-        let committedValue = entry.value;
-        if (entry.value) {
-          const remote = this.globalState.get<SessionState | undefined>(
-            `${APPROVAL_SESSION_KEY_PREFIX}${sessionId}`,
-          );
-          if (remote) {
-            committedValue = mergeConcurrentSessionState(
-              entry.baseSnapshot
-                ? (JSON.parse(entry.baseSnapshot) as SessionState)
-                : undefined,
-              entry.value,
-              this.normalizeSessionState(remote),
-            );
-          }
-        }
-        const committedSnapshot = committedValue
-          ? JSON.stringify(committedValue)
-          : undefined;
-        try {
-          await this.globalState.update(
-            `${APPROVAL_SESSION_KEY_PREFIX}${sessionId}`,
-            committedValue ? this.cloneSessionState(committedValue) : undefined,
-          );
-        } catch {
-          // Keep the latest entry queued so the next session mutation or touch
-          // retries it. The successful-snapshot cache must only advance after
-          // Memento confirms the write.
-          failedEntry = entry;
-          return;
-        }
-
-        if (committedSnapshot === undefined) {
-          this.persistedSessionSnapshots.delete(sessionId);
-        } else {
-          this.persistedSessionSnapshots.set(sessionId, committedSnapshot);
-          const local = this.sessions.get(sessionId);
-          if (local && JSON.stringify(local) === entry.snapshot) {
-            this.sessions.set(
-              sessionId,
-              this.cloneSessionState(committedValue!),
-            );
-          }
-        }
-        if (this.pendingSessionPersistence.get(sessionId) === entry) {
-          this.pendingSessionPersistence.delete(sessionId);
-        }
-      }
-    })();
-
-    const trackedTask = task.finally(() => {
-      this.activeSessionPersistence.delete(sessionId);
-      const pending = this.pendingSessionPersistence.get(sessionId);
-      if (pending && pending !== failedEntry) {
-        void this.startSessionPersistence(sessionId);
-      }
-    });
-    this.activeSessionPersistence.set(sessionId, trackedTask);
-    return trackedTask;
-  }
-
-  private async finishSessionStorageMigration(
-    sessionIds: string[],
-    migrationWrites: Promise<void>[],
-  ): Promise<void> {
-    await Promise.all(migrationWrites);
-    const persisted = sessionIds.every((sessionId) => {
-      const session = this.sessions.get(sessionId);
-      return (
-        !this.pendingSessionPersistence.has(sessionId) &&
-        (!session ||
-          this.persistedSessionSnapshots.get(sessionId) ===
-            JSON.stringify(session))
-      );
-    });
-    if (!persisted) return;
-
-    try {
-      await this.globalState.update(
-        APPROVAL_SESSION_STORAGE_VERSION_KEY,
-        APPROVAL_SESSION_STORAGE_VERSION,
-      );
-      await this.globalState.update(APPROVAL_SESSIONS_KEY, undefined);
-    } catch {
-      // Leave the legacy marker/data intact so startup can safely retry.
-    }
-  }
-
-  private normalizeSessionState(session: SessionState): SessionState {
-    return {
-      writeApproved: !!session.writeApproved,
-      agentWriteApproved: !!session.agentWriteApproved,
-      commandRules: [...(session.commandRules ?? [])],
-      networkRules: [...(session.networkRules ?? [])],
-      pathRules: [...(session.pathRules ?? [])],
-      writeRules: [...(session.writeRules ?? [])],
-      builtInToolApprovals: [...(session.builtInToolApprovals ?? [])],
-      mcpToolApprovals: [...(session.mcpToolApprovals ?? [])],
-      mcpServerApprovals: [...(session.mcpServerApprovals ?? [])],
-      lastActivity: session.lastActivity || Date.now(),
-    };
-  }
-
-  private cloneSessionState(session: SessionState): SessionState {
-    return {
-      ...session,
-      commandRules: session.commandRules.map((rule) => ({ ...rule })),
-      networkRules: session.networkRules.map((rule) => ({ ...rule })),
-      pathRules: session.pathRules.map((rule) => ({ ...rule })),
-      writeRules: session.writeRules.map((rule) => ({ ...rule })),
-      builtInToolApprovals: [...session.builtInToolApprovals],
-      mcpToolApprovals: [...session.mcpToolApprovals],
-      mcpServerApprovals: [...session.mcpServerApprovals],
-    };
-  }
-
   private readonly emptySession: Readonly<SessionState> = Object.freeze({
     writeApproved: false,
     agentWriteApproved: false,
+    inheritanceInitialized: false,
     commandRules: [],
     networkRules: [],
     pathRules: [],
@@ -1592,6 +1410,7 @@ export class ApprovalManager {
     return {
       writeApproved: false,
       agentWriteApproved: false,
+      inheritanceInitialized: true,
       commandRules: [],
       networkRules: [],
       pathRules: [],
@@ -1620,20 +1439,51 @@ type InheritableRule = {
   pattern: string;
   mode: string;
   decision?: string;
+  inherited?: true;
 };
+
+function markRuleInherited<T extends InheritableRule>(rule: T): T {
+  return { ...rule, inherited: true };
+}
+
+function stripRuleProvenance<T extends InheritableRule>(
+  rule: T,
+): Omit<T, "inherited"> {
+  const { inherited: _, ...explicitRule } = rule;
+  return explicitRule;
+}
+
+function stripScopedRuleProvenance<T extends InheritableRule>(rules: {
+  session: T[];
+  project: T[];
+  global: T[];
+}): {
+  session: Array<Omit<T, "inherited">>;
+  project: Array<Omit<T, "inherited">>;
+  global: Array<Omit<T, "inherited">>;
+} {
+  return {
+    session: rules.session.map(stripRuleProvenance),
+    project: rules.project.map(stripRuleProvenance),
+    global: rules.global.map(stripRuleProvenance),
+  };
+}
 
 function mergeInheritedRules<T extends InheritableRule>(
   destination: T[],
   source: T[],
+  firstInheritance: boolean,
 ): T[] {
   const merged = new Map<string, T>();
   for (const rule of destination) {
     merged.set(`${rule.pattern}\0${rule.mode}`, { ...rule });
   }
   for (const rule of source) {
-    // The parent's current decision replaces the child's previously inherited
-    // decision for the same rule. Child-only rules remain additive.
-    merged.set(`${rule.pattern}\0${rule.mode}`, { ...rule });
+    const identity = `${rule.pattern}\0${rule.mode}`;
+    const existing = merged.get(identity);
+    if (firstInheritance || !existing || existing.inherited) {
+      merged.set(identity, { ...rule });
+    }
   }
   return Array.from(merged.values());
 }
@@ -1646,7 +1496,8 @@ function rulesEqual<T extends InheritableRule>(left: T[], right: T[]): boolean {
       return (
         rule.pattern === other?.pattern &&
         rule.mode === other.mode &&
-        rule.decision === other.decision
+        rule.decision === other.decision &&
+        rule.inherited === other.inherited
       );
     })
   );
@@ -1656,97 +1507,4 @@ function stringSetsEqual(left: string[], right: string[]): boolean {
   return (
     left.length === right.length && left.every((value) => right.includes(value))
   );
-}
-
-function mergeConcurrentSessionState(
-  base: SessionState | undefined,
-  local: SessionState,
-  remote: SessionState,
-): SessionState {
-  const baseline: SessionState = base ?? {
-    writeApproved: false,
-    agentWriteApproved: false,
-    commandRules: [],
-    networkRules: [],
-    pathRules: [],
-    writeRules: [],
-    builtInToolApprovals: [],
-    mcpToolApprovals: [],
-    mcpServerApprovals: [],
-    lastActivity: 0,
-  };
-  return {
-    writeApproved:
-      local.writeApproved !== baseline.writeApproved
-        ? local.writeApproved
-        : remote.writeApproved,
-    agentWriteApproved:
-      local.agentWriteApproved !== baseline.agentWriteApproved
-        ? local.agentWriteApproved
-        : remote.agentWriteApproved,
-    commandRules: mergeConcurrentRules(
-      baseline.commandRules,
-      local.commandRules,
-      remote.commandRules,
-    ),
-    networkRules: mergeConcurrentRules(
-      baseline.networkRules,
-      local.networkRules,
-      remote.networkRules,
-    ),
-    pathRules: mergeConcurrentRules(
-      baseline.pathRules,
-      local.pathRules,
-      remote.pathRules,
-    ),
-    writeRules: mergeConcurrentRules(
-      baseline.writeRules,
-      local.writeRules,
-      remote.writeRules,
-    ),
-    builtInToolApprovals: [
-      ...new Set([
-        ...remote.builtInToolApprovals,
-        ...local.builtInToolApprovals,
-      ]),
-    ],
-    mcpToolApprovals: [
-      ...new Set([...remote.mcpToolApprovals, ...local.mcpToolApprovals]),
-    ],
-    mcpServerApprovals: [
-      ...new Set([...remote.mcpServerApprovals, ...local.mcpServerApprovals]),
-    ],
-    lastActivity: Math.max(local.lastActivity, remote.lastActivity),
-  };
-}
-
-function mergeConcurrentRules<T extends InheritableRule>(
-  base: T[],
-  local: T[],
-  remote: T[],
-): T[] {
-  const identity = (rule: T) => `${rule.pattern}\0${rule.mode}`;
-  const baseByIdentity = new Map(base.map((rule) => [identity(rule), rule]));
-  const localByIdentity = new Map(local.map((rule) => [identity(rule), rule]));
-  const changedIdentities = new Set<string>();
-  for (const key of new Set([
-    ...baseByIdentity.keys(),
-    ...localByIdentity.keys(),
-  ])) {
-    if (
-      JSON.stringify(baseByIdentity.get(key)) !==
-      JSON.stringify(localByIdentity.get(key))
-    ) {
-      changedIdentities.add(key);
-    }
-  }
-
-  return [
-    ...remote
-      .filter((rule) => !changedIdentities.has(identity(rule)))
-      .map((rule) => ({ ...rule })),
-    ...local
-      .filter((rule) => changedIdentities.has(identity(rule)))
-      .map((rule) => ({ ...rule })),
-  ];
 }

@@ -22,7 +22,15 @@ export type BackgroundBackendRoute =
 export function resolveBackgroundBackendRoute(
   settings: BackgroundAgentSettings,
   request: Pick<SpawnBackgroundRequest, "model" | "provider" | "taskClass">,
-  context: { foregroundProvider?: string } = {},
+  context: {
+    foregroundProvider?: string;
+    /**
+     * ACP references (e.g. `acp:claude`) that recently failed to start.
+     * Automatic routing skips them and falls back to the native backend;
+     * an explicit provider override still wins.
+     */
+    unavailableReferences?: ReadonlySet<string>;
+  } = {},
 ): BackgroundBackendRoute {
   const requestedProvider = request.provider?.trim();
   if (isAcpBackgroundAgentReference(requestedProvider)) {
@@ -43,7 +51,8 @@ export function resolveBackgroundBackendRoute(
   const taskClass = request.taskClass?.trim().toLowerCase();
   if (
     taskClass?.startsWith("review_") &&
-    isAcpBackgroundAgentReference(settings.reviewAgent)
+    isAcpBackgroundAgentReference(settings.reviewAgent) &&
+    !context.unavailableReferences?.has(settings.reviewAgent)
   ) {
     const reviewAgent = resolveAcpBackgroundAgent(
       settings,
@@ -75,7 +84,10 @@ export function resolveBackgroundBackendRoute(
     return { backend: "native" };
   }
 
-  if (isAcpBackgroundAgentReference(settings.defaultAgent)) {
+  if (
+    isAcpBackgroundAgentReference(settings.defaultAgent) &&
+    !context.unavailableReferences?.has(settings.defaultAgent)
+  ) {
     return {
       backend: "acp",
       reference: settings.defaultAgent,

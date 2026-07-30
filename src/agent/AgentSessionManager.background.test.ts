@@ -84,6 +84,9 @@ const mocks = vi.hoisted(() => {
         setMode: vi.fn(async (mode: string) => {
           mockSession.mode = mode;
         }),
+        appendUserMessage: vi.fn((message: any) => {
+          messages.push(message);
+        }),
         appendAssistantTurn: vi.fn((content: any[]) => {
           messages.push({ role: "assistant", content });
           const text = content
@@ -1010,6 +1013,275 @@ describe("AgentSessionManager background agents", () => {
     ]);
   });
 
+  it("preserves ordered ACP messages, thoughts, and interleaved tool calls", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    let releaseRunner!: () => void;
+    const runnerBlocked = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    let updatesEmitted!: () => void;
+    const emitted = new Promise<void>((resolve) => {
+      updatesEmitted = resolve;
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        const updates = [
+          {
+            sessionUpdate: "agent_thought_chunk",
+            messageId: "thought-1",
+            content: { type: "text", text: "Inspecting " },
+          },
+          {
+            sessionUpdate: "usage_update",
+            used: 100,
+            size: 1_000,
+          },
+          {
+            sessionUpdate: "agent_thought_chunk",
+            messageId: "thought-1",
+            content: { type: "text", text: "the code." },
+          },
+          {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "message-1",
+            content: { type: "text", text: "I found the first path." },
+          },
+          {
+            sessionUpdate: "tool_call",
+            toolCallId: "read-1",
+            title: "Read",
+            status: "in_progress",
+            rawInput: { path: "src/first.ts" },
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "read-1",
+            status: "completed",
+            rawOutput: "first contents",
+          },
+          {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "message-2",
+            content: { type: "text", text: "Now checking the second path." },
+          },
+          {
+            sessionUpdate: "tool_call",
+            toolCallId: "search-1",
+            title: "Search",
+            status: "in_progress",
+            rawInput: { query: "second" },
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "search-1",
+            status: "completed",
+            rawOutput: "second match",
+          },
+          {
+            sessionUpdate: "user_message_chunk",
+            messageId: "user-1",
+            content: { type: "text", text: "Include the related test." },
+          },
+          {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "message-3",
+            content: { type: "text", text: "Both paths are relevant." },
+          },
+        ];
+        for (const update of updates) {
+          request.onEvent({ type: "update", update });
+        }
+        updatesEmitted();
+        await runnerBlocked;
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "end_turn" },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.setToolContext(toolCtx);
+    const events: any[] = [];
+    mgr.onEvent = (sessionId, event) => {
+      events.push({ sessionId, ...event });
+    };
+
+    const spawned = await mgr.spawnBackground({
+      task: "inspect ordered output",
+      message: "inspect both paths",
+      provider: "acp:claude",
+    });
+    await emitted;
+
+    const expected = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Inspecting the code.",
+            signature: "",
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "I found the first path." }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "read-1",
+            name: "Read",
+            input: { path: "src/first.ts" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "read-1",
+            content: [{ type: "text", text: "first contents" }],
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Now checking the second path." }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "search-1",
+            name: "Search",
+            input: { query: "second" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "search-1",
+            content: [{ type: "text", text: "second match" }],
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: "Include the related test.",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Both paths are relevant." }],
+      },
+    ];
+
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual(
+      expected,
+    );
+    releaseRunner();
+    const result = await mgr.waitForBackground(spawned.sessionId);
+    expect(result).toBe(
+      [
+        "I found the first path.",
+        "Now checking the second path.",
+        "Both paths are relevant.",
+      ].join("\n\n"),
+    );
+    expect(mgr.getBackgroundTranscriptMessages(spawned.sessionId)).toEqual(
+      expected,
+    );
+    expect(
+      events.filter(
+        (event) =>
+          event.sessionId === spawned.sessionId &&
+          (event.type === "thinking_start" || event.type === "thinking_end"),
+      ),
+    ).toEqual([
+      expect.objectContaining({ type: "thinking_start" }),
+      expect.objectContaining({ type: "thinking_end" }),
+    ]);
+  });
+
+  it("retains ACP assistant output when conversion warnings are present", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "answer",
+            content: { type: "text", text: "Substantive ACP answer" },
+          },
+        });
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "answer",
+            content: {
+              type: "image",
+              mimeType: "image/bmp",
+              data: "YWJjZA==",
+            },
+          },
+        });
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "end_turn" },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "inspect warning output",
+      message: "inspect output",
+      provider: "acp:claude",
+    });
+    const result = await mgr.waitForBackground(spawned.sessionId);
+
+    expect(result).toContain("Substantive ACP answer");
+    expect(result).toContain(
+      "[ACP image omitted: unsupported MIME type image/bmp]",
+    );
+    expect(mgr.getBackgroundStatus(spawned.sessionId).partialOutput).toContain(
+      "Substantive ACP answer",
+    );
+  });
+
   it("projects and persists ACP tool lifecycle updates without renaming tools", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
@@ -1548,6 +1820,20 @@ describe("AgentSessionManager background agents", () => {
       {
         role: "assistant",
         content: [
+          { type: "text", text: "Here are the images." },
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: "YWJjZA==",
+            },
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
           {
             type: "tool_use",
             id: "generate-1",
@@ -1572,20 +1858,6 @@ describe("AgentSessionManager background agents", () => {
                 },
               },
             ],
-          },
-        ],
-      },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Here are the images." },
-          {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: "image/png",
-              data: "YWJjZA==",
-            },
           },
         ],
       },
@@ -2139,6 +2411,173 @@ describe("AgentSessionManager background agents", () => {
     (mgr as any).releaseWorkspaceMutationLease(leaseHolder);
   });
 
+  it("admits a path-delegated writer child while its parent owns the mutation lease", async () => {
+    const coordinator = new WorkspaceMutationCoordinator();
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          config: configHost,
+          workspaceMutationCoordinator: coordinator,
+        },
+      },
+    );
+    const parent = await mgr.createSession("code");
+    mgr.setToolContext(toolCtx);
+    const leaseHolder = { sessionId: parent.id };
+    await (mgr as any).ensureWorkspaceMutationLease(parent, leaseHolder);
+
+    await expect(
+      mgr.spawnBackground(
+        {
+          task: "writer child without owned paths",
+          message: "write",
+          permissionProfile: "workspace-safe",
+        },
+        parent.id,
+      ),
+    ).rejects.toMatchObject({
+      result: expect.objectContaining({
+        code: "workspace_conflict",
+        message: expect.stringContaining("Declare ownedPaths"),
+      }),
+    });
+
+    const spawn = await mgr.spawnBackground(
+      {
+        task: "delegated writer child",
+        message: "write tests",
+        permissionProfile: "workspace-safe",
+        ownedPaths: ["src/agent/feature.test.ts"],
+      },
+      parent.id,
+    );
+    expect(spawn.sessionId).toBeDefined();
+    // The child's own lease acquisition must not queue behind the parent's
+    // tree-wide lease: the run only starts once the lease is granted.
+    await waitFor(
+      () => mocks.runArgs.mock.calls.length,
+      (calls) => calls === 1,
+    );
+
+    const child = (mgr as any).sessions.get(spawn.sessionId);
+    const domain = (mgr as any).createWorkspaceMutationDomain(child);
+    expect(domain.delegatedPaths).toHaveLength(1);
+    expect(domain.delegatedPaths[0]).toContain("feature.test.ts");
+
+    (mgr as any).releaseWorkspaceMutationLease(leaseHolder);
+  });
+
+  it("runs an explicit review-only ACP spawn read-only without contending for the writer lease", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [
+        {
+          id: "writer",
+          command: "writer-acp",
+          readonlyOnly: false,
+        },
+      ],
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async () => {}),
+    };
+    const coordinator = new WorkspaceMutationCoordinator();
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          config: configHost,
+          acpBackgroundRunner,
+          workspaceMutationCoordinator: coordinator,
+        },
+      },
+    );
+    const parent = await mgr.createSession("code");
+    mgr.setToolContext(toolCtx);
+    const leaseHolder = { sessionId: parent.id };
+    await (mgr as any).ensureWorkspaceMutationLease(parent, leaseHolder);
+
+    const spawn = await mgr.spawnBackground(
+      {
+        task: "review the working tree",
+        message: "review",
+        provider: "acp:writer",
+        permissionProfile: "review-only",
+        taskClass: "review_code",
+      },
+      parent.id,
+    );
+    await mgr.waitForBackground(spawn.sessionId);
+    expect(acpBackgroundRunner.run).toHaveBeenCalledTimes(1);
+    const child = (mgr as any).sessions.get(spawn.sessionId);
+    expect(child?.fleetMetadata?.readonlyOnly).toBe(true);
+
+    (mgr as any).releaseWorkspaceMutationLease(leaseHolder);
+  });
+
+  it("preserves ACP failure causes, cools the agent down, and reroutes the next spawn natively", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      defaultAgent: "acp:claude",
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    const rpcError = new Error("Internal error");
+    (rpcError as { data?: unknown }).data = {
+      details: "OAuth token expired; re-authenticate the agent",
+    };
+    const acpBackgroundRunner = {
+      run: vi.fn(async () => {
+        throw rpcError;
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          config: configHost,
+          acpBackgroundRunner,
+          workspaceMutationCoordinator: new WorkspaceMutationCoordinator(),
+        },
+      },
+    );
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+
+    const first = await mgr.spawnBackground({ task: "review", message: "go" });
+    expect(first.resolvedProvider).toBe("acp");
+    const result = JSON.parse(await mgr.waitForBackground(first.sessionId));
+    expect(result.status).toBe("failed");
+    // The JSON-RPC error.data cause must survive instead of a bare
+    // "Internal error", and a zero-turn startup failure is agent-retryable.
+    expect(result.terminalReason).toContain("OAuth token expired");
+    expect(result.agentRetryable).toBe(true);
+
+    // The failed agent is cooling down, so automatic routing falls back to
+    // the native backend instead of repeating the startup failure.
+    const second = await mgr.spawnBackground({
+      task: "review again",
+      message: "go",
+    });
+    expect(second.resolvedProvider).not.toBe("acp");
+  });
+
   it("allows only classifier-approved commands for read-only ACP agents", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       defaultAgent: "acp:claude",
@@ -2653,7 +3092,17 @@ describe("AgentSessionManager background agents", () => {
 
     (mgr as any).applyAcpSessionUpdate({
       session,
-      assistantTextParts: [],
+      output: {
+        assistantTextParts: [],
+        directImages: [],
+        toolCalls: new Map(),
+        transcriptEntries: [],
+        toolStartsRecorded: new Set(),
+        toolResultsRecorded: new Set(),
+        nextThinkingId: 0,
+        warnings: new Set(),
+        transcriptCommitted: false,
+      },
       update: { sessionUpdate: "usage_update", used: 150_000, size: 200_000 },
     });
 
@@ -3701,6 +4150,86 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("keeps a direct child authorized when fleet metadata is dropped but bgParents survives", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const child = await mgr.spawnBackground(
+      { task: "child", message: "work" },
+      foreground.id,
+    );
+    // Simulate restore drift: the child record lost its fleet identity while
+    // bgParents kept the spawn-time attribution.
+    (mgr as any).sessions.get(child.sessionId).fleetMetadata = undefined;
+    expect((mgr as any).bgParents.get(child.sessionId)?.sessionId).toBe(
+      foreground.id,
+    );
+
+    const status = mgr.getAuthorizedBackgroundStatus(
+      foreground.id,
+      child.sessionId,
+    );
+    expect(status.terminalReason).not.toBe("outside_caller_subtree");
+    expect(status.resultState).not.toBe("authorization_lost");
+  });
+
+  it("keeps a steered direct child authorized for later status checks", async () => {
+    mocks.runBehavior.mockImplementation(() =>
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const child = await mgr.spawnBackground(
+      { task: "long child", message: "work" },
+      foreground.id,
+    );
+    await waitFor(
+      () => (mgr as any).sessions.get(child.sessionId)?.status,
+      (status) => status === "streaming",
+    );
+
+    const steered = mgr.steerAuthorizedBackground(
+      foreground.id,
+      child.sessionId,
+      "wrap up and report",
+    );
+    expect(steered.accepted).toBe(true);
+
+    // Status access must survive the steer, including with fleet-metadata
+    // drift (the bgParents record alone still proves direct ancestry).
+    let status = mgr.getAuthorizedBackgroundStatus(
+      foreground.id,
+      child.sessionId,
+    );
+    expect(status.resultState).not.toBe("authorization_lost");
+    (mgr as any).sessions.get(child.sessionId).fleetMetadata = undefined;
+    status = mgr.getAuthorizedBackgroundStatus(foreground.id, child.sessionId);
+    expect(status.resultState).not.toBe("authorization_lost");
+  });
+
+  it("reports a missing background session distinctly from an authorization loss", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+
+    const status = mgr.getAuthorizedBackgroundStatus(
+      foreground.id,
+      "no-such-session",
+    );
+    expect(status.terminalReason).toBe("background_session_not_found");
+    expect(status.partialOutput).toContain("not loaded");
+
+    const result = JSON.parse(
+      await mgr.waitForAuthorizedBackground(foreground.id, "no-such-session"),
+    );
+    expect(result.terminalReason).toBe("background_session_not_found");
+    expect(result.error).toContain("not loaded");
+  });
+
   it("persists and publishes child terminal reasons after parent completion", async () => {
     mocks.runBehavior.mockImplementation(() =>
       (async function* () {
@@ -4221,9 +4750,57 @@ describe("AgentSessionManager background agents", () => {
     expect(JSON.parse(resolved.resultText)).toEqual({
       status: "incomplete_expected_result",
       terminalReason: "incomplete_expected_result",
+      expectedResultIssue: expect.stringContaining(
+        'Expected a "review_findings" envelope',
+      ),
       retrySafe: true,
       agentRetryable: false,
       partialOutput: "I inspected the change but did not finalize.",
+    });
+  });
+
+  it("salvages a fenced review envelope with tolerable deviations as a completed result", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const finalText = [
+      "Here is my review of the change set.",
+      "",
+      "```json",
+      JSON.stringify({
+        type: "review_findings",
+        findings: [
+          {
+            severity: "warning",
+            message: "The retry counter is never reset.",
+            path: "/tmp/src/agent/retry.ts",
+            line: 12,
+          },
+        ],
+        reviewedScope: "working tree",
+        emptyDiff: false,
+      }),
+      "```",
+    ].join("\n");
+    const session = {
+      id: "bg-salvage",
+      status: "idle",
+      getLastFinalMarker: () => undefined,
+      getLastAssistantText: () => finalText,
+      fleetMetadata: { delegation: { expectedResult: "review_findings" } },
+    };
+
+    const resolved = (mgr as any).resolveBackgroundResult(session, "fallback");
+    expect(resolved.resultState).toBe("completed");
+    expect(resolved.structuredResult).toMatchObject({
+      type: "review_findings",
+      findings: [
+        expect.objectContaining({
+          severity: "medium",
+          message: "The retry counter is never reset.",
+          line: 12,
+        }),
+      ],
+      reviewedScope: "working tree",
+      emptyDiff: false,
     });
   });
 

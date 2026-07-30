@@ -9,6 +9,7 @@ import {
   type TerminalMetadata,
   type TerminalProvider,
 } from "../core/capabilities/terminal.js";
+import { TerminalTargetRecoveryError } from "../core/capabilities/terminalTargetError.js";
 import {
   TabTerminalProviderRegistry,
   type TabTerminalOwner,
@@ -287,6 +288,193 @@ describe("TabTerminalProviderRegistry", () => {
     });
     expect(secondNamed.terminal_id).not.toBe(created.terminal_id);
     expect(secondNamed.terminal_name).toBe("Tests");
+  });
+
+  it("returns owner-scoped logical candidates for stale split_from", async () => {
+    const base = createProvider();
+    const registry = new TabTerminalProviderRegistry(base.provider);
+    const first = registry.forOwner(t1);
+    const second = registry.forOwner(t2);
+    const firstTerminal = await first.executeCommand({
+      owner: undefined,
+      command: "one",
+      cwd: "/tmp",
+      terminal_name: "Tests",
+    });
+    const secondTerminal = await second.executeCommand({
+      owner: undefined,
+      command: "two",
+      cwd: "/tmp",
+      terminal_name: "Other",
+    });
+
+    let error: unknown;
+    try {
+      await first.prepareExecution?.(
+        {
+          owner: undefined,
+          command: "three",
+          cwd: "/tmp",
+          split_from: "closed-terminal",
+        },
+        {
+          approvalPolicySnapshot: "on-request",
+          approvalReviewerSnapshot: "auto-review",
+          executionPresetSnapshot: "workspace-write",
+          requiredAuthority: "sandbox",
+          permissionIntent: "default",
+          approvalRequirement: "policy",
+          authorityReason: "approval-policy",
+          commandApprovalPolicySnapshot: "approve-for-me",
+        },
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(TerminalTargetRecoveryError);
+    expect(error).toMatchObject({
+      failure: "not_found",
+      target_kind: "split_from",
+      target_value: "closed-terminal",
+      compatible_terminals: [
+        {
+          terminal_id: firstTerminal.terminal_id,
+          terminal_name: "Tests",
+        },
+      ],
+    });
+    expect((error as Error).message).toContain(
+      `split_from="${firstTerminal.terminal_id}"`,
+    );
+    expect((error as Error).message).toContain("retry without split_from");
+    expect((error as Error).message).not.toContain(secondTerminal.terminal_id);
+    expect((error as Error).message).not.toContain("AgentLink T1");
+  });
+
+  it("reports an ambiguous split_from name and lists exact terminal IDs", async () => {
+    const base = createProvider();
+    const registry = new TabTerminalProviderRegistry(base.provider);
+    const provider = registry.forOwner(t1);
+    const first = await provider.executeCommand({
+      owner: undefined,
+      command: "one",
+      cwd: "/tmp",
+      terminal_name: "Tests",
+    });
+    const second = await provider.executeCommand({
+      owner: undefined,
+      command: "two",
+      cwd: "/tmp",
+      terminal_name: "Tests",
+    });
+
+    let error: unknown;
+    try {
+      await provider.prepareExecution?.(
+        {
+          owner: undefined,
+          command: "three",
+          cwd: "/tmp",
+          split_from: "Tests",
+        },
+        {
+          approvalPolicySnapshot: "on-request",
+          approvalReviewerSnapshot: "auto-review",
+          executionPresetSnapshot: "workspace-write",
+          requiredAuthority: "sandbox",
+          permissionIntent: "default",
+          approvalRequirement: "policy",
+          authorityReason: "approval-policy",
+          commandApprovalPolicySnapshot: "approve-for-me",
+        },
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(TerminalTargetRecoveryError);
+    expect(error).toMatchObject({
+      failure: "ambiguous_name",
+      target_kind: "split_from",
+      target_value: "Tests",
+    });
+    expect((error as Error).message).toContain(
+      `split_from="${first.terminal_id}"`,
+    );
+    expect((error as Error).message).toContain(
+      `split_from="${second.terminal_id}"`,
+    );
+    expect((error as Error).message).toContain("retry without split_from");
+  });
+
+  it("translates physical recovery targets back to logical names", async () => {
+    const base = createProvider();
+    const registry = new TabTerminalProviderRegistry(base.provider);
+    const provider = registry.forOwner(t1);
+    const created = await provider.executeCommand({
+      owner: undefined,
+      command: "one",
+      cwd: "/tmp",
+      terminal_name: "Tests",
+    });
+    base.provider.prepareExecution = vi.fn(async () => {
+      throw new TerminalTargetRecoveryError({
+        failure: "wrong_authority",
+        target_kind: "terminal_name",
+        target_value: "AgentLink T1 · Tests",
+        required_authority: "native-agent",
+        target_authorities: ["sandbox"],
+        compatible_terminals: [
+          {
+            terminal_id: created.terminal_id,
+            terminal_name: "AgentLink T1 · Tests",
+            authority: "sandbox",
+          },
+        ],
+        retry_guidance: [
+          'Retry with terminal_name="AgentLink T1 · Tests" under sandbox authority.',
+        ],
+      });
+    });
+
+    let error: unknown;
+    try {
+      await provider.prepareExecution?.(
+        {
+          owner: undefined,
+          command: "two",
+          cwd: "/tmp",
+          terminal_name: "Tests",
+        },
+        {
+          approvalPolicySnapshot: "on-request",
+          approvalReviewerSnapshot: "user",
+          executionPresetSnapshot: "native-manual",
+          requiredAuthority: "native-agent",
+          permissionIntent: "native-escalation",
+          approvalRequirement: "explicit-escalation",
+          authorityReason: "explicit-escalation",
+          commandApprovalPolicySnapshot: "manual",
+        },
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(TerminalTargetRecoveryError);
+    expect(error).toMatchObject({
+      target_value: "Tests",
+      compatible_terminals: [
+        {
+          terminal_id: created.terminal_id,
+          terminal_name: "Tests",
+          authority: "sandbox",
+        },
+      ],
+    });
+    expect((error as Error).message).toContain('terminal_name="Tests"');
+    expect((error as Error).message).not.toContain("AgentLink T1 · Tests");
   });
 
   it("scopes close-all and recently closed output to one owner", async () => {

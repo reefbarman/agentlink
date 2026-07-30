@@ -242,6 +242,7 @@ function createStagedPublicationPort(
     activate: (publicationId) => activator.activate(publicationId),
     finalizeActivation: (publicationId) =>
       activator.finalizeActivation(publicationId),
+    optimizeStagedStore: () => staging.optimizeStagedTables(),
   };
 }
 
@@ -342,17 +343,47 @@ function sendError(message: string, fatal: boolean): void {
   send(errorMessage(message, fatal));
 }
 
+/**
+ * Minimum interval between retrieval store optimizations. Lance tables keep
+ * every committed version until pruned, so mutations without periodic
+ * optimize() grow the store without bound and slow every later operation.
+ * The first mutating job after worker startup always optimizes, which lets a
+ * store that bloated under an older worker recover on its next job.
+ */
+const RETRIEVAL_OPTIMIZE_INTERVAL_MS = 30 * 60 * 1_000;
+let lastRetrievalOptimizeAt = 0;
+
 async function refreshRetrievalIndexes(
   repository: LanceDbRetrievalRepository,
-  current: number,
-  total: number,
+  stagedPort?: StagedRepositoryPublicationPort,
 ): Promise<void> {
+  const optimizeDue =
+    Date.now() - lastRetrievalOptimizeAt >= RETRIEVAL_OPTIMIZE_INTERVAL_MS;
+  // Indeterminate phase: no per-item counts exist for index refresh/optimize.
   const report = () =>
-    sendProgress("cleanup", current, total, "refreshing retrieval indexes");
+    sendProgress(
+      "finalizing",
+      0,
+      0,
+      optimizeDue
+        ? "optimizing retrieval store"
+        : "refreshing retrieval indexes",
+    );
   report();
   const heartbeat = setInterval(report, 30_000);
   heartbeat.unref();
   try {
+    if (optimizeDue) {
+      lastRetrievalOptimizeAt = Date.now();
+      try {
+        // optimize() refreshes native indexes before compacting and pruning.
+        await repository.optimize();
+        await stagedPort?.optimizeStagedStore();
+        return;
+      } catch (error) {
+        console.error(`Retrieval store optimization failed: ${error}`);
+      }
+    }
     await repository.refreshNativeIndexes();
   } finally {
     clearInterval(heartbeat);
@@ -657,9 +688,10 @@ async function removeFilesFromIndex(args: {
   cache: IndexCache;
   structuralCache: StructuralGraphCache;
   workspaceScopeId: string;
-  repository: Pick<RetrievalRepository, "deleteSource">;
+  repository: Pick<RetrievalRepository, "deleteSources">;
   checkpoints: CacheCheckpointCoordinator;
   runFenced<T>(operation: () => Promise<T>): Promise<T>;
+  onProgress?: (completedFiles: number, totalFiles: number) => void;
 }): Promise<{
   completed: number;
   errors: string[];
@@ -699,6 +731,7 @@ async function removeFilesFromIndex(args: {
     runFenced: args.runFenced,
     isCancelled: () => aborted,
     createId: randomUUID,
+    ...(args.onProgress ? { onProgress: args.onProgress } : {}),
   });
 
   return {
@@ -1402,11 +1435,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     recordsDeleted += replacementRecovery.recordsDeleted;
     if (replacementRecovery.pending || replacementRecovery.cancelled) {
       if (replacementRecovery.refreshRequired) {
-        await refreshRetrievalIndexes(
-          repository,
-          filesIndexed,
-          Object.keys(cache.files).length,
-        );
+        await refreshRetrievalIndexes(repository, writer.port);
       }
       terminalMessage = deferComplete(
         {
@@ -1444,16 +1473,14 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
           repository,
           checkpoints,
           runFenced: writer.port.runFenced,
+          onProgress: (completedFiles, totalFiles) =>
+            sendProgress("cleanup", completedFiles, totalFiles),
         });
     recordsDeleted += recovery.recordsDeleted;
     errors.push(...recovery.errors);
     if (recovery.pending || recovery.cancelled) {
       if (recordsDeleted > 0) {
-        await refreshRetrievalIndexes(
-          repository,
-          filesIndexed,
-          Object.keys(cache.files).length,
-        );
+        await refreshRetrievalIndexes(repository, writer.port);
       }
       terminalMessage = deferComplete(
         {
@@ -1547,17 +1574,15 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         repository,
         checkpoints,
         runFenced: writer.port.runFenced,
+        onProgress: (completedFiles, totalFiles) =>
+          sendProgress("cleanup", completedFiles, totalFiles),
       });
       recordsDeleted += removal.recordsDeleted;
       errors.push(...removal.errors);
       sendProgress("cleanup", removal.completed, removedRelPaths.length);
       if (removal.pending || removal.cancelled) {
         if (recordsDeleted > 0) {
-          await refreshRetrievalIndexes(
-            repository,
-            filesIndexed,
-            Object.keys(cache.files).length,
-          );
+          await refreshRetrievalIndexes(repository, writer.port);
         }
         terminalMessage = deferComplete(
           {
@@ -1611,11 +1636,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
           replacementRecovery.refreshRequired ||
           recordsDeleted > 0)
       ) {
-        await refreshRetrievalIndexes(
-          repository,
-          msg.files.length,
-          msg.files.length,
-        );
+        await refreshRetrievalIndexes(repository, writer.port);
       }
       terminalMessage = deferComplete(
         {
@@ -1686,11 +1707,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         recordsUpserted > 0 ||
         recordsDeleted > 0)
     ) {
-      await refreshRetrievalIndexes(
-        repository,
-        msg.files.length,
-        msg.files.length,
-      );
+      await refreshRetrievalIndexes(repository, writer.port);
     }
 
     terminalMessage = deferComplete(
@@ -1827,11 +1844,7 @@ async function handleIncrementalUpdate(
     recordsDeleted += replacementRecovery.recordsDeleted;
     if (replacementRecovery.pending || replacementRecovery.cancelled) {
       if (replacementRecovery.refreshRequired) {
-        await refreshRetrievalIndexes(
-          repository,
-          filesIndexed,
-          Object.keys(cache.files).length,
-        );
+        await refreshRetrievalIndexes(repository, writer.port);
       }
       terminalMessage = deferComplete(
         {
@@ -1858,16 +1871,14 @@ async function handleIncrementalUpdate(
       repository,
       checkpoints,
       runFenced: writer.port.runFenced,
+      onProgress: (completedFiles, totalFiles) =>
+        sendProgress("cleanup", completedFiles, totalFiles),
     });
     recordsDeleted += recovery.recordsDeleted;
     errors.push(...recovery.errors);
     if (recovery.pending || recovery.cancelled) {
       if (recordsDeleted > 0) {
-        await refreshRetrievalIndexes(
-          repository,
-          filesIndexed,
-          Object.keys(cache.files).length,
-        );
+        await refreshRetrievalIndexes(repository, writer.port);
       }
       terminalMessage = deferComplete(
         {
@@ -1903,16 +1914,14 @@ async function handleIncrementalUpdate(
       repository,
       checkpoints,
       runFenced: writer.port.runFenced,
+      onProgress: (completedFiles, totalFiles) =>
+        sendProgress("cleanup", completedFiles, totalFiles),
     });
     recordsDeleted += removal.recordsDeleted;
     errors.push(...removal.errors);
     if (removal.pending || removal.cancelled) {
       if (recordsDeleted > 0) {
-        await refreshRetrievalIndexes(
-          repository,
-          filesIndexed,
-          Object.keys(cache.files).length,
-        );
+        await refreshRetrievalIndexes(repository, writer.port);
       }
       terminalMessage = deferComplete(
         {
@@ -1987,11 +1996,7 @@ async function handleIncrementalUpdate(
         recordsUpserted > 0 ||
         recordsDeleted > 0)
     ) {
-      await refreshRetrievalIndexes(
-        repository,
-        filesIndexed,
-        Object.keys(cache.files).length,
-      );
+      await refreshRetrievalIndexes(repository, writer.port);
     }
 
     terminalMessage = deferComplete(

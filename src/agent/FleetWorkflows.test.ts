@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatFleetResultEnvelope,
   parseFleetResultEnvelope,
+  parseFleetResultEnvelopeDetailed,
   planFleetWorkflow,
   scoreFleetCandidate,
   withFleetResultInstruction,
@@ -132,32 +133,119 @@ describe("fleet workflows", () => {
     }
   });
 
-  it("fails closed for ambiguous, unsupported, or incomplete fenced results", () => {
+  it("salvages envelopes from repeated, mislabeled, unclosed, or unfenced output", () => {
+    const parsed = {
+      type: "review_findings" as const,
+      findings: [],
+      reviewedScope: "src/agent",
+      emptyDiff: false,
+    };
+    const envelope = JSON.stringify(parsed);
+    const revised = JSON.stringify({ ...parsed, reviewedScope: "src/core" });
+
+    // The last occurrence is the agent's answer when the envelope repeats.
+    expect(
+      parseFleetResultEnvelope(
+        "review_findings",
+        `\`\`\`json\n${envelope}\n\`\`\`\n\n\`\`\`json\n${revised}\n\`\`\``,
+      ),
+    ).toEqual({ ...parsed, reviewedScope: "src/core" });
+    // Truncation or a stream cut can eat the closing fence.
+    expect(
+      parseFleetResultEnvelope("review_findings", `\`\`\`json\n${envelope}`),
+    ).toEqual(parsed);
+    // Payload on the opener line and json-family info strings.
+    expect(
+      parseFleetResultEnvelope(
+        "review_findings",
+        `\`\`\`json ${envelope}\`\`\``,
+      ),
+    ).toEqual(parsed);
+    expect(
+      parseFleetResultEnvelope(
+        "review_findings",
+        `\`\`\`jsonc\n${envelope}\n\`\`\``,
+      ),
+    ).toEqual(parsed);
+    // No json fence at all: the brace scan recovers mislabeled or bare JSON.
+    expect(
+      parseFleetResultEnvelope(
+        "review_findings",
+        `\`\`\`typescript\n${envelope}\n\`\`\``,
+      ),
+    ).toEqual(parsed);
+    expect(
+      parseFleetResultEnvelope("review_findings", `Final result: ${envelope}`),
+    ).toEqual(parsed);
+  });
+
+  it("fails closed when fenced JSON exists but no candidate validates", () => {
     const envelope = JSON.stringify({
       type: "review_findings",
       findings: [],
       reviewedScope: "src/agent",
       emptyDiff: false,
     });
-    const ambiguous = `\`\`\`json\n${envelope}\n\`\`\`\n\n\`\`\`json\n${envelope}\n\`\`\``;
-    const unsupported = `\`\`\`typescript\n${envelope}\n\`\`\``;
-    const unclosed = `\`\`\`json\n${envelope}`;
     const trailing = `\`\`\`json\n${envelope}\nnot-json\n\`\`\``;
-    const nestedInUnsupportedOuter = `\`\`\`\`markdown\n\`\`\`json\n${envelope}\n\`\`\`\n\`\`\`\``;
 
-    for (const response of [
-      ambiguous,
-      unsupported,
-      unclosed,
+    const result = parseFleetResultEnvelopeDetailed(
+      "review_findings",
       trailing,
-      nestedInUnsupportedOuter,
-      `Example inline: ${envelope}`,
-    ]) {
-      expect(parseFleetResultEnvelope("review_findings", response)).toEqual({
-        type: "text",
-        text: response,
-      });
-    }
+    );
+    expect(result.envelope).toEqual({ type: "text", text: trailing });
+    expect(result.issue).toContain("No review_findings envelope candidate");
+
+    const structural = `\`\`\`json\n{"type":"review_findings","findings":"none"}\n\`\`\``;
+    const detailed = parseFleetResultEnvelopeDetailed(
+      "review_findings",
+      structural,
+    );
+    expect(detailed.envelope.type).toBe("text");
+    expect(detailed.issue).toContain("findings is not an array");
+  });
+
+  it("normalizes tolerable finding deviations instead of rejecting the envelope", () => {
+    const raw = JSON.stringify({
+      type: "Review-Findings",
+      findings: [
+        {
+          severity: "warning",
+          message: "Absolute path finding",
+          path: "/workspace/repo/src/agent/toolAdapter.ts",
+          line: "42",
+        },
+        {
+          severity: "nit",
+          message: "Zero line and traversal path are dropped",
+          path: "../outside.ts",
+          line: 0,
+        },
+      ],
+      reviewedScope: "src/agent",
+      emptyDiff: "no",
+    });
+
+    expect(
+      parseFleetResultEnvelope("review_findings", raw, {
+        workspaceRoots: ["/workspace/repo"],
+      }),
+    ).toEqual({
+      type: "review_findings",
+      findings: [
+        {
+          severity: "medium",
+          message: "Absolute path finding",
+          path: "src/agent/toolAdapter.ts",
+          line: 42,
+        },
+        {
+          severity: "low",
+          message: "Zero line and traversal path are dropped",
+        },
+      ],
+      reviewedScope: "src/agent",
+      emptyDiff: false,
+    });
   });
 
   it("does not recover a fenced envelope of the wrong expected type", () => {
@@ -201,6 +289,7 @@ describe("fleet workflows", () => {
       type: "text",
       text: raw,
     });
+    // Unknown severities and stringy emptyDiff are normalized, not rejected.
     expect(
       parseFleetResultEnvelope(
         "review_findings",
@@ -208,8 +297,11 @@ describe("fleet workflows", () => {
           type: "review_findings",
           findings: [{ severity: "urgent", message: "bad" }],
         }),
-      ).type,
-    ).toBe("text");
+      ),
+    ).toEqual({
+      type: "review_findings",
+      findings: [{ severity: "medium", message: "bad" }],
+    });
     expect(
       parseFleetResultEnvelope(
         "review_findings",
@@ -217,6 +309,16 @@ describe("fleet workflows", () => {
           type: "review_findings",
           findings: [],
           emptyDiff: "yes",
+        }),
+      ),
+    ).toEqual({ type: "review_findings", findings: [], emptyDiff: true });
+    // Structural absence still fails: a finding without a message.
+    expect(
+      parseFleetResultEnvelope(
+        "review_findings",
+        JSON.stringify({
+          type: "review_findings",
+          findings: [{ severity: "high" }],
         }),
       ).type,
     ).toBe("text");

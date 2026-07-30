@@ -507,6 +507,60 @@ export function describeRetrievalRepositoryContract(
       });
     });
 
+    it("deletes source batches with per-request outcomes in request order", async () => {
+      await withRepository(factory, async (repository) => {
+        const first = publication(
+          "batch-first",
+          "revision-a",
+          "2026-07-25T02:00:00.000Z",
+          { sourceId: "source:batch-first", path: "src/batch-first.ts" },
+        );
+        const second = publication(
+          "batch-second",
+          "revision-b",
+          "2026-07-25T02:00:00.000Z",
+          { sourceId: "source:batch-second", path: "src/batch-second.ts" },
+        );
+        await publish(repository, first);
+        await publish(repository, second);
+
+        expect(
+          await repository.deleteSources([
+            { sourceId: first.source.id },
+            {
+              sourceId: second.source.id,
+              expectedRevisionId: "wrong-revision",
+            },
+            { sourceId: "missing-source" },
+          ]),
+        ).toEqual([
+          { sourceId: first.source.id, status: "deleted", recordsRemoved: 3 },
+          {
+            sourceId: second.source.id,
+            status: "stale_source",
+            recordsRemoved: 0,
+          },
+          {
+            sourceId: "missing-source",
+            status: "not_found",
+            recordsRemoved: 0,
+          },
+        ]);
+        expect(
+          await repository.deleteSources([{ sourceId: first.source.id }]),
+        ).toEqual([
+          { sourceId: first.source.id, status: "not_found", recordsRemoved: 0 },
+        ]);
+        expect(await repository.inspectSource(second.source.id)).not.toBeNull();
+        await expect(
+          repository.deleteSources([
+            { sourceId: second.source.id },
+            { sourceId: second.source.id },
+          ]),
+        ).rejects.toThrow("unique source IDs");
+      });
+    });
+
     it("resets one workspace code scope without touching other workspaces or namespaces", async () => {
       await withRepository(factory, async (repository) => {
         const tombstoned = publication(

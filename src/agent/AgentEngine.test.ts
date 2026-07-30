@@ -3390,7 +3390,7 @@ describe("AgentEngine", () => {
         /^\[Unchanged large tool result; exact content retained from read_file call call-first\.\]/,
       );
       expect(storedResults[1]?.content).toContain(
-        "Full output: /tmp/agentlink-results/retained/",
+        `${path.sep}agentlink-results-`,
       );
       expect(storedResults[1]?.content).toMatch(/SHA-256: [a-f0-9]{64}/);
       expect(storedResults[2]?.content).toBe(changedResult);
@@ -3411,19 +3411,15 @@ describe("AgentEngine", () => {
       expect(mocks.mockWriteFile).toHaveBeenCalledTimes(2);
       expect(mocks.mockWriteFile).toHaveBeenNthCalledWith(
         1,
-        expect.stringMatching(
-          /^\/tmp\/agentlink-results\/retained\/[a-f0-9-]+\/[a-f0-9]{64}\.txt$/,
-        ),
+        expect.stringContaining(`${path.sep}agentlink-results-`),
         largeResult,
-        { encoding: "utf-8", mode: 0o600 },
+        { encoding: "utf8", flag: "wx", mode: 0o600 },
       );
       expect(mocks.mockWriteFile).toHaveBeenNthCalledWith(
         2,
-        expect.stringMatching(
-          /^\/tmp\/agentlink-results\/retained\/[a-f0-9-]+\/[a-f0-9]{64}\.txt$/,
-        ),
+        expect.stringContaining(`${path.sep}agentlink-results-`),
         changedResult,
-        { encoding: "utf-8", mode: 0o600 },
+        { encoding: "utf8", flag: "wx", mode: 0o600 },
       );
       for (let index = 0; index < calls.length; index += 1) {
         const assistantIndex = index * 2 + 1;
@@ -5137,6 +5133,54 @@ describe("AgentEngine", () => {
           retryAttempt: 1,
           retryMaxAttempts: 8,
         });
+        expect(session.getLastAssistantText()).toBe(
+          "Recovered after rate limit",
+        );
+      } finally {
+        timerSpy.mockRestore();
+      }
+    });
+
+    it("releases the provider admission slot while backing off between retries", async () => {
+      let attempts = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        attempts += 1;
+        if (attempts === 1) {
+          throw Object.assign(new Error("rate limited"), {
+            status: 429,
+            headers: new Headers({ "retry-after-ms": "1250" }),
+          });
+        }
+        yield* makeProviderStream({ text: "Recovered after rate limit" });
+      };
+      const registry = makeRegistry(provider);
+      registry.requestScheduler.setMaxConcurrentPerProvider(1);
+      const capacityDuringBackoff: boolean[] = [];
+      const timerSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((fn: TimerHandler, delay?: number) => {
+          if (delay === 1250) {
+            capacityDuringBackoff.push(
+              registry.requestScheduler.hasCapacity("mock", "interactive"),
+            );
+          }
+          if (typeof fn === "function") fn();
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        });
+
+      try {
+        const session = await makeSession();
+        session.addUserMessage("hello");
+        const engine = new AgentEngine(registry);
+
+        const events = await collectEvents(engine.run(session));
+
+        expect(attempts).toBe(2);
+        expect(events.find((e) => e.type === "error")).toBeUndefined();
+        // With a single provider slot, the backoff wait must not keep holding
+        // it: another session's request could run during the sleep.
+        expect(capacityDuringBackoff).toEqual([true]);
         expect(session.getLastAssistantText()).toBe(
           "Recovered after rate limit",
         );

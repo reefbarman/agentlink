@@ -253,6 +253,16 @@ export class StaticCommandTierClassifier implements CommandTierClassifier {
     const redirection = classifyRedirection(tokens, ctx, command);
     if (redirection?.tier === "dangerous") return redirection;
 
+    const semanticClassification =
+      command === "git"
+        ? classifyGit(args)
+        : command === "npm" || command === "pnpm" || command === "yarn"
+          ? classifyPackageManager(command, args)
+          : undefined;
+    if (semanticClassification?.tier === "dangerous") {
+      return semanticClassification;
+    }
+
     if (isVersionOnly(command, args)) {
       return safe("version check", "version_check", command);
     }
@@ -279,9 +289,9 @@ export class StaticCommandTierClassifier implements CommandTierClassifier {
     const mutationGuard = classifyMutationPathGuard(command, args, ctx);
     if (mutationGuard?.tier === "dangerous") return mutationGuard;
 
-    if (command === "git") {
-      return classifyGit(args);
-    }
+    if (redirection) return redirection;
+
+    if (semanticClassification) return semanticClassification;
 
     if (command === "arch" && args.length > 0) {
       return sensitive(
@@ -359,10 +369,6 @@ export class StaticCommandTierClassifier implements CommandTierClassifier {
         "workspace_mutation",
         command,
       );
-    }
-
-    if (command === "npm" || command === "pnpm" || command === "yarn") {
-      return classifyPackageManager(command, args);
     }
 
     if (SENSITIVE_COMMANDS.has(command)) {
@@ -714,7 +720,7 @@ function classifyPackageManager(
 ): CommandTierResult {
   const subcommand = args.find((arg) => arg && !arg.startsWith("-"));
   if (!subcommand) {
-    return sensitive(`${command} command`, "project_toolchain", command);
+    return sensitive(`${command} command`, "unrecognized_operation", command);
   }
 
   if (["publish", "login", "logout", "token", "owner"].includes(subcommand)) {
@@ -772,7 +778,7 @@ function classifyProjectOperation(
   if (/^(?:deploy|publish|release)(?::|$)/i.test(operation)) {
     return "network_or_external_effect";
   }
-  return /^(?:build|check|clippy|compile|fmt|format|lint|test|typecheck|verify)(?::|$)/i.test(
+  return /^(?:build|check|clippy|compile|fmt|format|lint|test|typecheck|verify)$/i.test(
     operation,
   )
     ? "project_toolchain"
@@ -834,6 +840,7 @@ function hasRedirection(tokens: string[]): boolean {
   return tokens.some((rawToken) => {
     if (isFullyQuoted(rawToken)) return false;
     const token = stripQuotes(rawToken);
+    if (/^\d*>&\d+$/.test(token)) return false;
     return /(?:\d?>\|?|\d?>>|&>|\d?<)/.test(token);
   });
 }
@@ -841,6 +848,7 @@ function hasRedirection(tokens: string[]): boolean {
 function findRedirectionTarget(tokens: string[]): string | undefined {
   for (let i = 0; i < tokens.length; i++) {
     const token = stripQuotes(tokens[i] ?? "");
+    if (/^\d*>&\d+$/.test(token)) continue;
     if (
       /^\d?>\|?$/.test(token) ||
       /^\d?>>$/.test(token) ||

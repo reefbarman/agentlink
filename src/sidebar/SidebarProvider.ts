@@ -15,7 +15,11 @@ import type {
   SidebarState,
   WebviewCommand,
 } from "./webview/types.js";
-import { deleteFeedback, readFeedback } from "../util/feedbackStore.js";
+import {
+  deleteFeedback,
+  readFeedback,
+  triageFeedback,
+} from "../util/feedbackStore.js";
 
 import type { CommandRuleDecision } from "../approvals/CommandRuleStore.js";
 import type { ContextHealthSnapshot } from "../shared/contextHealth.js";
@@ -383,6 +387,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             this.refreshFeedback();
           }
           break;
+        case "triageFeedbackEntry":
+          if (__DEV_BUILD__) {
+            try {
+              triageFeedback({
+                ids: [message.id],
+                triaged: message.triaged,
+                priority: message.priority,
+              });
+            } catch (error) {
+              const message = `Could not triage feedback: ${String(error)}`;
+              this.log(message);
+              vscode.window.showErrorMessage(message);
+            }
+            this.refreshFeedback();
+          }
+          break;
         case "clearAllFeedback":
           if (__DEV_BUILD__) {
             const entries = readFeedback();
@@ -626,14 +646,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this.state.globalWriteRules = writeRules.global;
       this.state.projectWriteRules = writeRules.project;
       this.state.settingsWriteRules = writeRules.settings;
-      this.state.activeSessions = sessions.map((s) => ({
-        id: s.id,
-        writeApproved: s.writeApproved,
-        agentWriteApproved: s.agentWriteApproved,
-        commandRules: this.approvalManager!.getCommandRules(s.id).session,
-        pathRules: this.approvalManager!.getPathRules(s.id).session,
-        writeRules: this.approvalManager!.getWriteRules(s.id).session,
-      }));
+      this.state.activeSessions = sessions.map((s) => {
+        const rules = this.approvalManager!.getExplicitSessionRules(s.id);
+        return {
+          id: s.id,
+          writeApproved: s.writeApproved,
+          agentWriteApproved: s.agentWriteApproved,
+          ...rules,
+        };
+      });
     }
     this.state.masterBypass = getConfiguredMasterBypass();
     // Send state via postMessage instead of full HTML replacement

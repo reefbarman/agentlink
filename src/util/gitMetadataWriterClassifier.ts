@@ -11,7 +11,9 @@ export type PredictableGitMetadataWriterSubcommand =
   | "checkout"
   | "switch"
   | "merge"
-  | "reset";
+  | "reset"
+  | "fetch"
+  | "rebase";
 
 export interface GitMetadataWriterClassificationInput {
   readonly command: string;
@@ -21,7 +23,7 @@ export interface GitMetadataWriterClassificationInput {
 
 export interface PredictableGitMetadataWriterClassification {
   readonly kind: "predictable_git_metadata_writer";
-  readonly subcommand: PredictableGitMetadataWriterSubcommand;
+  readonly subcommands: readonly PredictableGitMetadataWriterSubcommand[];
 }
 
 const SUBCOMMANDS = new Set<PredictableGitMetadataWriterSubcommand>([
@@ -36,6 +38,8 @@ const SUBCOMMANDS = new Set<PredictableGitMetadataWriterSubcommand>([
   "switch",
   "merge",
   "reset",
+  "fetch",
+  "rebase",
 ]);
 
 interface ParsedArguments {
@@ -429,6 +433,111 @@ function classifyReset(args: readonly string[]): boolean {
   );
 }
 
+function classifyFetch(args: readonly string[]): boolean {
+  const booleanOptions = new Set([
+    "-a",
+    "--append",
+    "--atomic",
+    "--all",
+    "-f",
+    "--force",
+    "-k",
+    "--keep",
+    "--multiple",
+    "-n",
+    "--no-tags",
+    "-p",
+    "--prune",
+    "--prune-tags",
+    "--refetch",
+    "--show-forced-updates",
+    "--no-show-forced-updates",
+    "-t",
+    "--tags",
+    "-u",
+    "--update-head-ok",
+    "-v",
+    "--verbose",
+    "-q",
+    "--quiet",
+    "--write-fetch-head",
+    "--no-write-fetch-head",
+  ]);
+  const valueOptions = new Set([
+    "--depth",
+    "--deepen",
+    "--shallow-since",
+    "--shallow-exclude",
+    "--negotiation-tip",
+    "--filter",
+    "-j",
+    "--jobs",
+  ]);
+  const operands: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const argument = args[index];
+    if (
+      argument === "--" ||
+      argument === "--dry-run" ||
+      argument === "--help"
+    ) {
+      return false;
+    }
+    const equals = argument.indexOf("=");
+    const name = equals < 0 ? argument : argument.slice(0, equals);
+    if (booleanOptions.has(name)) {
+      if (equals >= 0) return false;
+      continue;
+    }
+    if (valueOptions.has(name)) {
+      const value = equals < 0 ? args[++index] : argument.slice(equals + 1);
+      if (!value || value.startsWith("-")) return false;
+      continue;
+    }
+    if (argument.startsWith("-")) return false;
+    operands.push(argument);
+  }
+  if (operands.length > 2) return false;
+  const remote = operands[0];
+  return remote === undefined || /^[a-z0-9._-]+$/i.test(remote);
+}
+
+function classifyRebase(args: readonly string[]): boolean {
+  if (
+    args.length === 1 &&
+    ["--continue", "--abort", "--skip", "--quit"].includes(args[0])
+  ) {
+    return true;
+  }
+  if (
+    args.some((argument) =>
+      [
+        "-i",
+        "--interactive",
+        "-x",
+        "--exec",
+        "--edit-todo",
+        "--show-current-patch",
+        "--help",
+      ].some(
+        (option) => argument === option || argument.startsWith(`${option}=`),
+      ),
+    )
+  ) {
+    return false;
+  }
+  if (args[0] === "--onto") {
+    return (
+      (args.length === 3 || args.length === 4) &&
+      args.slice(1).every((argument) => !argument.startsWith("-"))
+    );
+  }
+  return (
+    (args.length === 1 || args.length === 2) &&
+    args.every((argument) => !argument.startsWith("-"))
+  );
+}
+
 const CLASSIFIERS: Record<
   PredictableGitMetadataWriterSubcommand,
   (args: readonly string[]) => boolean
@@ -444,33 +553,14 @@ const CLASSIFIERS: Record<
   switch: classifySwitch,
   merge: classifyMerge,
   reset: classifyReset,
+  fetch: classifyFetch,
+  rebase: classifyRebase,
 };
 
-/**
- * Recognizes a deliberately narrow set of direct local Git metadata writers.
- * A match enables guidance only; it never grants or selects execution authority.
- * `null` means unrecognized or ineligible, not safe.
- */
-export function classifyPredictableGitMetadataWriter(
-  input: GitMetadataWriterClassificationInput,
-): PredictableGitMetadataWriterClassification | null {
-  const { command } = input;
-  if (
-    input.hasEnvironmentOverrides ||
-    input.hasInlineFiles ||
-    !command.trim() ||
-    hasUnsupportedShellSyntax(command)
-  ) {
-    return null;
-  }
-  const boundaries = scanShellLexBoundaries(command);
-  if (
-    boundaries.boundaries.length > 0 ||
-    boundaries.finalState.quote !== null ||
-    boundaries.finalState.danglingEscape
-  ) {
-    return null;
-  }
+function classifyDirectGitMetadataWriter(
+  command: string,
+): PredictableGitMetadataWriterSubcommand | null {
+  if (!command.trim() || hasUnsupportedShellSyntax(command)) return null;
   const wordScan = scanShellLexWords(command);
   if (
     wordScan.finalState.quote !== null ||
@@ -486,7 +576,49 @@ export function classifyPredictableGitMetadataWriter(
   if (!SUBCOMMANDS.has(subcommand)) return null;
   const args = wordScan.words.slice(2).map(({ raw }) => decodeWord(raw));
   if (args.some((argument) => argument === null)) return null;
-  return CLASSIFIERS[subcommand](args as string[])
-    ? { kind: "predictable_git_metadata_writer", subcommand }
-    : null;
+  return CLASSIFIERS[subcommand](args as string[]) ? subcommand : null;
+}
+
+/**
+ * Recognizes a deliberately narrow set of direct Git metadata writers, including
+ * all-writer chains joined only by top-level `&&`. A match enables guidance only;
+ * it never grants or selects execution authority. `null` means unrecognized or
+ * ineligible, not safe.
+ */
+export function classifyPredictableGitMetadataWriter(
+  input: GitMetadataWriterClassificationInput,
+): PredictableGitMetadataWriterClassification | null {
+  if (
+    input.hasEnvironmentOverrides ||
+    input.hasInlineFiles ||
+    !input.command.trim()
+  ) {
+    return null;
+  }
+  const scan = scanShellLexBoundaries(input.command, {
+    separators: ["&&", "||", "|", ";", "\n"],
+    comments: true,
+  });
+  if (
+    scan.finalState.quote !== null ||
+    scan.finalState.danglingEscape ||
+    scan.boundaries.some(
+      (boundary) => boundary.kind === "comment" || boundary.operator !== "&&",
+    )
+  ) {
+    return null;
+  }
+  const segments: string[] = [];
+  let start = 0;
+  for (const boundary of scan.boundaries) {
+    segments.push(input.command.slice(start, boundary.start));
+    start = boundary.end;
+  }
+  segments.push(input.command.slice(start));
+  const subcommands = segments.map(classifyDirectGitMetadataWriter);
+  if (subcommands.some((subcommand) => subcommand === null)) return null;
+  return {
+    kind: "predictable_git_metadata_writer",
+    subcommands: subcommands as PredictableGitMetadataWriterSubcommand[],
+  };
 }

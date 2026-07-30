@@ -566,80 +566,80 @@
   "toolsByMode": [
     {
       "mode": "code",
-      "toolCount": 62,
-      "chars": 74686,
-      "estimatedTokens": 18672,
-      "sha256": "ce2ed99cf564bc98e6e41970c999ff4f9dc51f2a16c43f18119f2eed8119b548"
+      "toolCount": 63,
+      "chars": 78079,
+      "estimatedTokens": 19520,
+      "sha256": "fcc04b133650c2fbb8ad127de628669862b9e4dab6745990e16868d4c4f6ca9c"
     },
     {
       "mode": "architect",
-      "toolCount": 57,
-      "chars": 68483,
-      "estimatedTokens": 17121,
-      "sha256": "635cb537a8191548dc1135019e5bba46370d3c04fc00f128bb6d8b072f7eadc6"
+      "toolCount": 58,
+      "chars": 71876,
+      "estimatedTokens": 17969,
+      "sha256": "f16bf7b2a26f68da7ce4d1f356c654a369abda34d4c2e0f2c929c1bd4ba79163"
     },
     {
       "mode": "ask",
-      "toolCount": 38,
-      "chars": 49020,
-      "estimatedTokens": 12255,
-      "sha256": "957da0935952d7fd54e8e687df40af9072c00dbf6cbda76a983469f66cbde29c"
+      "toolCount": 39,
+      "chars": 50503,
+      "estimatedTokens": 12626,
+      "sha256": "df47f411a6ef5af31ed5ce93b67456337185266ddc2375b9aac8cbc667229a17"
     },
     {
       "mode": "debug",
-      "toolCount": 56,
-      "chars": 66383,
-      "estimatedTokens": 16596,
-      "sha256": "2b6a82ddb7a9086bddd25c364ff096408dfa94064b9a75f063b6b8e1cd102bd7"
+      "toolCount": 57,
+      "chars": 69776,
+      "estimatedTokens": 17444,
+      "sha256": "f7cf03f9714e47a84ee0ebc65a1869b0beb3928d68e61a39fcc07f06119d9aa4"
     },
     {
       "mode": "review",
-      "toolCount": 46,
-      "chars": 53349,
-      "estimatedTokens": 13338,
-      "sha256": "ef708ff534085595e5cdc5b6eec10648259a1a10d3e0d9b1e51c009e0302e7db"
+      "toolCount": 47,
+      "chars": 54852,
+      "estimatedTokens": 13713,
+      "sha256": "1c11fa3824dfe3e8d733e4214989c2f33eb6f9dfc1036177f0835d8035b0f931"
     }
   ],
   "projectedToolsByMode": [
     {
       "mode": "code",
       "toolCount": 34,
-      "deferredToolCount": 28,
-      "chars": 47165,
-      "estimatedTokens": 11792,
-      "sha256": "ef7064954fae6ec61384f978b49771ef023effc3fde25aa689f28cda0a4359e3"
+      "deferredToolCount": 29,
+      "chars": 49713,
+      "estimatedTokens": 12429,
+      "sha256": "eaf861d8cc55ca338897dafa480e5f037e9852e225f2c797f345af6d31bf6404"
     },
     {
       "mode": "architect",
       "toolCount": 33,
-      "deferredToolCount": 24,
-      "chars": 45963,
-      "estimatedTokens": 11491,
-      "sha256": "ef70ca8980fa7d9e722c2d43dc8c8a3bbf1ebdc82d3d6a376b57f2857f4a5f29"
+      "deferredToolCount": 25,
+      "chars": 48511,
+      "estimatedTokens": 12128,
+      "sha256": "2079cad71e7bf306f7ff861ee35352d05acbc1dcb578a1657e9465c50a068985"
     },
     {
       "mode": "ask",
       "toolCount": 24,
-      "deferredToolCount": 14,
-      "chars": 34373,
-      "estimatedTokens": 8594,
-      "sha256": "e0eee87ff6e02224214edd53f8ded7e01880355d420bc5147287c2bbb83d0877"
+      "deferredToolCount": 15,
+      "chars": 35171,
+      "estimatedTokens": 8793,
+      "sha256": "0cee120d8af7f6f417a337314e2dfb9c724ebb547dfd6f2dea9f4dac3136d024"
     },
     {
       "mode": "debug",
       "toolCount": 31,
-      "deferredToolCount": 25,
-      "chars": 43322,
-      "estimatedTokens": 10831,
-      "sha256": "024d04ea4dcc0ce2c1bf6d64262e48a7749c817af6a5073c837441c9330f57f3"
+      "deferredToolCount": 26,
+      "chars": 45870,
+      "estimatedTokens": 11468,
+      "sha256": "142291b6c1c5966a4ee2a7fcd6214dca0f8cb4d3678f458253c3f57a682e4a44"
     },
     {
       "mode": "review",
       "toolCount": 23,
-      "deferredToolCount": 23,
-      "chars": 32814,
-      "estimatedTokens": 8204,
-      "sha256": "209cf8aa3a6d1664b18d5db38a3f4c8c7c976a25410e007b10a96c054486f4c3"
+      "deferredToolCount": 24,
+      "chars": 33472,
+      "estimatedTokens": 8368,
+      "sha256": "8f845e2c0afda78eefee27fdc445ebddff8d8f6bd821bc8eff6e3e626866f5c7"
     }
   ],
   "profileMatrix": {
@@ -674,7 +674,7 @@
     "sha256": "113715b131248b7fe98c7b810d91751f16458e60cb5134d97db467fe7776ea44"
   },
   "toolInventory": {
-    "count": 68,
+    "count": 69,
     "driftCount": 0,
     "missingBySource": {
       "registry": [],
@@ -684,6 +684,6 @@
       "definition": [],
       "dispatch": []
     },
-    "sha256": "659ac77a76e22afa28434fc8da23c890a8545a2b0c20e06233498948d9c4c3c1"
+    "sha256": "8bffa17773f8e11c222f0425877acd158b631e4520225ddc6b8caa76539c060b"
   }
 }

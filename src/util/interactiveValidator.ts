@@ -459,6 +459,7 @@ function checkSingleCommand(command: string): InteractiveViolation | null {
 
   if (
     isVscePackageCommand(cmd, args) &&
+    !isVscePackageHelpOnly(cmd, args) &&
     !args.includes("--allow-star-activation")
   ) {
     return {
@@ -550,17 +551,31 @@ function splitOnCompoundOperators(command: string): string[] {
   return segments;
 }
 
-function isVscePackageCommand(cmd: string, args: string[]): boolean {
+function vscePackageArgIndex(cmd: string, args: string[]): number | undefined {
   if (cmd === "vsce" || cmd === "vsce.cmd") {
-    return args[0] === "package";
+    return args[0] === "package" ? 0 : undefined;
   }
-  if (cmd !== "npx") return false;
+  if (cmd !== "npx") return undefined;
 
   const packageIndex = args.findIndex((arg) => !arg.startsWith("-"));
-  return (
-    packageIndex >= 0 &&
+  return packageIndex >= 0 &&
     /^@vscode\/vsce(?:@[^/]+)?$/.test(args[packageIndex]) &&
     args[packageIndex + 1] === "package"
+    ? packageIndex + 1
+    : undefined;
+}
+
+function isVscePackageCommand(cmd: string, args: string[]): boolean {
+  return vscePackageArgIndex(cmd, args) !== undefined;
+}
+
+function isVscePackageHelpOnly(cmd: string, args: string[]): boolean {
+  const packageIndex = vscePackageArgIndex(cmd, args);
+  if (packageIndex === undefined) return false;
+  const packageArgs = args.slice(packageIndex + 1);
+  return (
+    packageArgs.length === 1 &&
+    (packageArgs[0] === "--help" || packageArgs[0] === "-h")
   );
 }
 

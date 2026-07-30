@@ -3,6 +3,10 @@ import {
   CURRENT_SANDBOX_POLICY_VERSION,
   type SandboxExecutionMetadata,
 } from "../../core/sandboxPolicy.js";
+import { createHash } from "node:crypto";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -267,6 +271,73 @@ describe("SandboxTerminalCoordinator", () => {
     });
     expect(test.authorizedFinalizer).toHaveBeenCalledTimes(1);
     await expect(prepared.execute()).rejects.toThrow("no longer available");
+  });
+
+  it("rejects sandbox inline-file tampering before launch and releases preparation", async () => {
+    const test = harness();
+    const createdRoot = await mkdtemp(
+      path.join(os.tmpdir(), "al-sandbox-inline-"),
+    );
+    const root = await realpath(createdRoot);
+    const filePath = path.join(root, "input.txt");
+    const content = "approved bytes\n";
+    try {
+      await writeFile(filePath, content);
+      const prepared = await test.coordinator.prepareConfinementExecution(
+        {
+          owner: undefined,
+          command: `cat '${filePath}'`,
+          cwd: "/workspace",
+          sandboxSessionId: "session-inline-integrity",
+          sandboxInlineFiles: [
+            {
+              name: "input",
+              path: filePath,
+              bytes: Buffer.byteLength(content),
+              sha256: createHash("sha256").update(content).digest("hex"),
+            },
+          ],
+        },
+        {
+          auditId: "audit-inline-integrity",
+          route: "sandbox",
+          confinement: "verified-baseline",
+          routeReason: "verified-local-macos",
+          executionSurface: "verified-sandbox",
+          requiredAuthority: "sandbox",
+          permissionIntent: "default",
+          approvalRequirement: "policy",
+          authorityReason: "approval-policy",
+          approvalPolicySnapshot: "on-request",
+          approvalReviewerSnapshot: "auto-review",
+          executionPresetSnapshot: "workspace-write",
+          commandApprovalPolicySnapshot: "approve-for-me",
+          executionPolicy: "sandbox-baseline-v2",
+          preparedAt: 100,
+        },
+      );
+      await writeFile(filePath, "changed bytes\n");
+
+      await expect(prepared.execute()).rejects.toThrow(
+        "Inline file changed after materialization: input",
+      );
+      expect(test.runtime.launch).not.toHaveBeenCalled();
+      expect(test.authorizedFinalizer).toHaveBeenCalledOnce();
+      await expect(prepared.execute()).rejects.toThrow("no longer available");
+
+      const next = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "pwd",
+        cwd: "/workspace",
+        sandboxSessionId: "session-after-inline-integrity",
+      });
+      await flush();
+      expect(test.runtime.launch).toHaveBeenCalledOnce();
+      await finish(test.processes[0]);
+      await expect(next).resolves.toMatchObject({ exit_code: 0 });
+    } finally {
+      await rm(createdRoot, { recursive: true, force: true });
+    }
   });
 
   it("reserves separate terminals for parallel prepared executions", async () => {
@@ -1339,6 +1410,231 @@ describe("SandboxTerminalCoordinator", () => {
     });
   });
 
+  it("hands a foreground command to background execution on assignment", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const deferredFinalization = vi.fn();
+      const finalized = vi.fn();
+      let detached = false;
+      const resultPromise = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "sleep 10",
+        cwd: "/workspace",
+        timeout: 100,
+        sandboxSessionId: "agent-session",
+        onTerminalAssigned: (terminalId) => {
+          detached = test.coordinator.detachTerminal({
+            owner: undefined,
+            terminalId,
+          });
+        },
+        onCommandFinalizationDeferred: deferredFinalization,
+        onCommandFinalized: finalized,
+      });
+      await flush();
+
+      await expect(resultPromise).resolves.toMatchObject({
+        terminal_id: "sandbox-1",
+        backgrounded: true,
+        is_running: true,
+        command_sent: true,
+        retry_safe: false,
+      });
+      expect(detached).toBe(true);
+      expect(
+        test.coordinator.detachTerminal({
+          owner: undefined,
+          terminalId: "sandbox-1",
+        }),
+      ).toBe(false);
+      expect(deferredFinalization).toHaveBeenCalledOnce();
+      expect(finalized).not.toHaveBeenCalled();
+
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+      await flush();
+      process.emit({ type: "data", data: "still running\r\nContinue? " });
+      await vi.advanceTimersByTimeAsync(
+        Math.max(100, SANDBOX_INTERACTIVE_PROMPT_GRACE_MS * 2),
+      );
+
+      expect(process.interrupt).not.toHaveBeenCalled();
+      expect(process.terminate).not.toHaveBeenCalled();
+      expect(
+        test.coordinator.getBackgroundState({
+          owner: undefined,
+          terminalId: "sandbox-1",
+        }),
+      ).toMatchObject({
+        is_running: true,
+        state: "running",
+        output: "still running\nContinue?",
+      });
+
+      process.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+      await flush();
+      expect(finalized).toHaveBeenCalledOnce();
+      expect(test.authorizedFinalizer).toHaveBeenCalledOnce();
+      expect(
+        test.coordinator.detachTerminal({
+          owner: undefined,
+          terminalId: "sandbox-1",
+        }),
+      ).toBe(false);
+      test.coordinator.closeTerminals({ owner: undefined });
+      expect(finalized).toHaveBeenCalledOnce();
+      expect(test.authorizedFinalizer).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("detaches a running foreground command and clears foreground timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const test = harness();
+      const deferredFinalization = vi.fn();
+      const finalized = vi.fn();
+      const resultPromise = test.coordinator.executeCommand({
+        owner: undefined,
+        command: "wait for input",
+        cwd: "/workspace",
+        timeout: SANDBOX_INTERACTIVE_PROMPT_GRACE_MS * 2,
+        sandboxSessionId: "agent-session",
+        onCommandFinalizationDeferred: deferredFinalization,
+        onCommandFinalized: finalized,
+      });
+      await flush();
+      const process = test.processes[0];
+      process.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+      await flush();
+      process.emit({ type: "data", data: "Continue? " });
+      await flush();
+
+      expect(
+        test.coordinator.detachTerminal({
+          owner: undefined,
+          terminalId: "sandbox-1",
+        }),
+      ).toBe(true);
+      await expect(resultPromise).resolves.toMatchObject({
+        terminal_id: "sandbox-1",
+        backgrounded: true,
+        is_running: true,
+      });
+      await vi.advanceTimersByTimeAsync(
+        SANDBOX_INTERACTIVE_PROMPT_GRACE_MS * 3,
+      );
+
+      expect(process.terminate).not.toHaveBeenCalled();
+      expect(deferredFinalization).toHaveBeenCalledOnce();
+      expect(finalized).not.toHaveBeenCalled();
+      expect(
+        test.coordinator.getBackgroundState({
+          owner: undefined,
+          terminalId: "sandbox-1",
+        }),
+      ).toMatchObject({ is_running: true, state: "running" });
+
+      process.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+      await flush();
+      expect(finalized).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves completion when detach is requested in the same turn", async () => {
+    const test = harness();
+    const deferredFinalization = vi.fn();
+    const resultPromise = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "printf done",
+      cwd: "/workspace",
+      sandboxSessionId: "agent-session",
+      onCommandFinalizationDeferred: deferredFinalization,
+    });
+    await flush();
+    const process = test.processes[0];
+    process.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });
+    process.emit({ type: "data", data: "done\r\n" });
+    process.completionDeferred.resolve({ exitCode: 0, timedOut: false });
+    expect(
+      test.coordinator.detachTerminal({
+        owner: undefined,
+        terminalId: "sandbox-1",
+      }),
+    ).toBe(true);
+
+    const result = await resultPromise;
+    expect(result).toMatchObject({ exit_code: 0, is_running: false });
+    expect(result).not.toHaveProperty("backgrounded");
+    expect(deferredFinalization).not.toHaveBeenCalled();
+  });
+
+  it("keeps managed-network review active after foreground detachment", async () => {
+    const test = harness();
+    enableManagedNetworking(test);
+    const review = deferred<"allow-once" | "reject">();
+    let terminalId = "";
+    const resultPromise = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "curl https://example.com",
+      cwd: "/workspace",
+      sandboxSessionId: "session-network",
+      onManagedNetworkRequest: () => review.promise,
+      onTerminalAssigned: (assigned) => {
+        terminalId = assigned;
+        expect(
+          test.coordinator.detachTerminal({
+            owner: undefined,
+            terminalId: assigned,
+          }),
+        ).toBe(true);
+      },
+    });
+    await flush();
+    await expect(resultPromise).resolves.toMatchObject({
+      terminal_id: terminalId,
+      backgrounded: true,
+    });
+
+    const process = test.processes[0];
+    process.emit({ type: "network-request", request: managedDestination });
+    await flush();
+    expect(process.respondToNetworkRequest).not.toHaveBeenCalled();
+    review.resolve("allow-once");
+    await flush();
+    expect(process.respondToNetworkRequest).toHaveBeenCalledWith(
+      "network-1",
+      "allow-once",
+    );
+
+    await finish(process);
+  });
+
+  it("preserves foreground process failures", async () => {
+    const test = harness();
+    const result = test.coordinator.executeCommand({
+      owner: undefined,
+      command: "fail",
+      cwd: "/workspace",
+      sandboxSessionId: "agent-session",
+    });
+    await flush();
+
+    test.processes[0].completionDeferred.reject(new Error("helper failed"));
+
+    await expect(result).rejects.toThrow("helper failed");
+    expect(
+      test.coordinator.detachTerminal({
+        owner: undefined,
+        terminalId: "sandbox-1",
+      }),
+    ).toBe(false);
+  });
+
   it("detaches on timeout and finalizes inline files exactly once", async () => {
     vi.useFakeTimers();
     try {
@@ -1363,6 +1659,12 @@ describe("SandboxTerminalCoordinator", () => {
       });
       expect(deferred).toHaveBeenCalledTimes(1);
       expect(finalized).not.toHaveBeenCalled();
+      expect(
+        test.coordinator.detachTerminal({
+          owner: undefined,
+          terminalId: "sandbox-1",
+        }),
+      ).toBe(false);
 
       const process = test.processes[0];
       process.readyDeferred.resolve({ pid: 1, pgid: 1, backend: "seatbelt" });

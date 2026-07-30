@@ -68,7 +68,8 @@ export type IndexPhase =
   | "chunking"
   | "embedding"
   | "upserting"
-  | "cleanup";
+  | "cleanup"
+  | "finalizing";
 
 export interface ProgressMessage {
   type: "progress";

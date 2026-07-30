@@ -7,6 +7,7 @@ import {
   appendFeedback,
   deleteFeedback,
   readFeedback,
+  triageFeedback,
 } from "./feedbackStore.js";
 
 import type { FeedbackEntry } from "./feedbackStore.js";
@@ -15,6 +16,7 @@ let tmpHome: string;
 let feedbackPath: string;
 let legacyTombstonePath: string;
 let tombstoneDirectory: string;
+let triagePath: string;
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
 
@@ -44,6 +46,11 @@ beforeEach(() => {
     tmpHome,
     ".agentlink",
     "agentlink-feedback-deletions",
+  );
+  triagePath = path.join(
+    tmpHome,
+    ".agentlink",
+    "agentlink-feedback-triage.jsonl",
   );
 });
 
@@ -121,6 +128,120 @@ describe("feedbackStore", () => {
     expect(entry?.feedback).toContain("…(truncated)");
     expect(entry?.tool_params?.length).toBeLessThanOrEqual(520);
     expect(Buffer.byteLength(`${line}\n`, "utf-8")).toBeLessThanOrEqual(4000);
+  });
+
+  it("projects triage metadata without modifying raw feedback", () => {
+    const entry = appendFeedback(makeEntry({ feedback: "accept me" }));
+    const primaryBefore = fs.readFileSync(feedbackPath, "utf-8");
+
+    const result = triageFeedback({
+      ids: [entry.id],
+      triaged: true,
+      priority: "P1",
+    });
+
+    expect(result).toEqual({
+      updated: [
+        expect.objectContaining({
+          id: entry.id,
+          triaged: true,
+          priority: "P1",
+          triaged_at: expect.any(String),
+        }),
+      ],
+      unknown_ids: [],
+    });
+    expect(fs.readFileSync(feedbackPath, "utf-8")).toBe(primaryBefore);
+    expect(
+      fs.readFileSync(triagePath, "utf-8").trim().split("\n"),
+    ).toHaveLength(1);
+  });
+
+  it("reprioritizes feedback and clears priority when untriaged", () => {
+    const entry = appendFeedback(makeEntry());
+    triageFeedback({ ids: [entry.id], triaged: true, priority: "P2" });
+    triageFeedback({ ids: [entry.id], triaged: true, priority: "P0" });
+
+    expect(readFeedback()).toEqual([
+      expect.objectContaining({
+        id: entry.id,
+        triaged: true,
+        priority: "P0",
+      }),
+    ]);
+
+    triageFeedback({ ids: [entry.id], triaged: false });
+
+    expect(readFeedback()).toEqual([
+      expect.objectContaining({
+        id: entry.id,
+        triaged: false,
+        priority: undefined,
+        triaged_at: undefined,
+      }),
+    ]);
+  });
+
+  it("filters by tool, triage state, and priority", () => {
+    const p0 = appendFeedback(
+      makeEntry({ tool_name: "tool_a", feedback: "p0" }),
+    );
+    const p2 = appendFeedback(
+      makeEntry({ tool_name: "tool_a", feedback: "p2" }),
+    );
+    appendFeedback(makeEntry({ tool_name: "tool_b", feedback: "new" }));
+    triageFeedback({ ids: [p0.id], triaged: true, priority: "P0" });
+    triageFeedback({ ids: [p2.id], triaged: true, priority: "P2" });
+
+    expect(
+      readFeedback({
+        tool_name: "tool_a",
+        triaged: true,
+        priorities: ["P0"],
+      }).map((entry) => entry.id),
+    ).toEqual([p0.id]);
+    expect(readFeedback({ triaged: false })).toEqual([
+      expect.objectContaining({ tool_name: "tool_b", triaged: false }),
+    ]);
+    expect(readFeedback({ priorities: ["P0", "P2"] })).toHaveLength(2);
+  });
+
+  it("validates triage invariants and reports unknown IDs", () => {
+    const entry = appendFeedback(makeEntry());
+
+    expect(() => triageFeedback({ ids: [entry.id], triaged: true })).toThrow(
+      /requires a priority/,
+    );
+    expect(() =>
+      triageFeedback({ ids: [entry.id], triaged: false, priority: "P1" }),
+    ).toThrow(/cannot have a priority/);
+    expect(() => triageFeedback({ ids: [], triaged: false })).toThrow(
+      /non-empty array/,
+    );
+    expect(
+      triageFeedback({
+        ids: [entry.id, "missing-id"],
+        triaged: true,
+        priority: "P3",
+      }),
+    ).toEqual({
+      updated: [expect.objectContaining({ id: entry.id, priority: "P3" })],
+      unknown_ids: ["missing-id"],
+    });
+  });
+
+  it("uses append order and skips malformed triage metadata", () => {
+    const entry = appendFeedback(makeEntry());
+    triageFeedback({ ids: [entry.id], triaged: true, priority: "P2" });
+    fs.appendFileSync(triagePath, "not json\n", "utf-8");
+    triageFeedback({ ids: [entry.id], triaged: true, priority: "P0" });
+
+    expect(readFeedback()).toEqual([
+      expect.objectContaining({ id: entry.id, triaged: true, priority: "P0" }),
+    ]);
+    expect(
+      fs.readFileSync(triagePath, "utf-8").trim().split("\n"),
+    ).toHaveLength(3);
   });
 
   it("deletes by stable ID using append-only tombstones", () => {

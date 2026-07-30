@@ -1,10 +1,10 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { h } from "preact";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
 import { BackgroundSessionStrip } from "./BackgroundSessionStrip";
+import { h } from "preact";
 
 describe("BackgroundSessionStrip defaults", () => {
   afterEach(() => {
@@ -41,45 +41,88 @@ describe("BackgroundSessionStrip defaults", () => {
     ).toBe(true);
   });
 
-  it("opens to the active filter when a background agent is admitted", () => {
+  it("opens when a new background agent starts running", () => {
     const onStop = vi.fn();
-    const sessions = [
-      { id: "active", task: "Active review", status: "streaming" as const },
-      { id: "done", task: "Old result", status: "idle" as const },
-    ];
+    const existingSession = {
+      id: "existing",
+      task: "Existing review",
+      status: "streaming" as const,
+    };
     const { container, rerender } = render(
       h(BackgroundSessionStrip, {
-        sessions,
-        openToActiveRequest: 0,
+        sessions: [],
         onStop,
       }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
-    fireEvent.click(screen.getByRole("button", { name: "completed" }));
-    expect(screen.getByText("Old result")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+    rerender(
+      h(BackgroundSessionStrip, {
+        sessions: [existingSession],
+        onStop,
+      }),
+    );
     expect(container.querySelector(".bg-session-strip-body")).toBeNull();
 
     rerender(
       h(BackgroundSessionStrip, {
         sessions: [
-          ...sessions,
+          existingSession,
           { id: "new", task: "New review", status: "queued" as const },
         ],
-        openToActiveRequest: 1,
         onStop,
       }),
     );
+    expect(container.querySelector(".bg-session-strip-body")).toBeNull();
 
+    rerender(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          existingSession,
+          { id: "new", task: "New review", status: "streaming" as const },
+        ],
+        onStop,
+      }),
+    );
     expect(container.querySelector(".bg-session-strip-body")).toBeTruthy();
     expect(screen.getByText("New review")).toBeTruthy();
-    expect(screen.queryByText("Old result")).toBeNull();
     expect(
       screen
         .getByRole("button", { name: "active" })
         .classList.contains("active"),
     ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+    rerender(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          existingSession,
+          {
+            id: "new",
+            task: "New review",
+            status: "tool_executing" as const,
+          },
+        ],
+        onStop,
+      }),
+    );
+    expect(container.querySelector(".bg-session-strip-body")).toBeNull();
+
+    rerender(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          existingSession,
+          { id: "new", task: "New review", status: "idle" as const },
+          {
+            id: "another",
+            task: "Another review",
+            status: "streaming" as const,
+          },
+        ],
+        onStop,
+      }),
+    );
+    expect(container.querySelector(".bg-session-strip-body")).toBeTruthy();
+    expect(screen.getByText("Another review")).toBeTruthy();
   });
 
   it("hides after the last unfinished agent completes and /fleet reveals it", () => {

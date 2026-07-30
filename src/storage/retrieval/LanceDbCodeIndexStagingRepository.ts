@@ -76,6 +76,7 @@ interface StagedSourceVerification {
 }
 
 const MAX_STAGED_BATCH_RECORDS = 256;
+const STAGED_VERSION_RETENTION_MS = 60 * 60 * 1_000;
 const MAX_STAGED_PUBLICATION_RECORDS = 50_000;
 const COMPACT_MANIFEST_COLUMNS = [
   "publication_id",
@@ -429,6 +430,23 @@ export class LanceDbCodeIndexStagingRepository implements StagedRetrievalPublica
       const manifest = rows[0];
       if (!manifest) return null;
       return inspection(manifest);
+    });
+  }
+
+  /**
+   * Compacts staged-table fragments and prunes old table versions. Staged
+   * tables churn on every publication batch, so without periodic pruning
+   * their version history grows without bound and slows every operation.
+   */
+  async optimizeStagedTables(): Promise<void> {
+    await this.withTables(async (tables) => {
+      const options = {
+        cleanupOlderThan: new Date(Date.now() - STAGED_VERSION_RETENTION_MS),
+        deleteUnverified: false,
+      };
+      for (const table of Object.values(tables)) {
+        await table.optimize(options);
+      }
     });
   }
 

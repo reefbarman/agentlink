@@ -487,6 +487,27 @@ describe("getCommandApprovalBadge", () => {
     });
   });
 
+  it("identifies sandbox verification auto-approval", () => {
+    expect(
+      getCommandApprovalBadge({
+        approval: { by: "sandbox_verification" },
+        security: {
+          route: "sandbox",
+          confinement: "verified-baseline",
+          sandbox: {
+            profileId: "workspace-write",
+            attestationVersion: "sandbox-behavior-v3",
+          },
+        },
+      }),
+    ).toEqual({
+      text: "auto · verification · sandbox",
+      title: expect.stringContaining(
+        "recognized project verification command in the verified baseline sandbox",
+      ),
+    });
+  });
+
   it("identifies unsandboxed native approvals and their route reason", () => {
     expect(
       getCommandApprovalBadge({

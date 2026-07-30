@@ -153,18 +153,191 @@ interface MarkdownFence {
   bodyChars: number;
 }
 
+type ExpectedFleetResult = Exclude<
+  SpawnBackgroundRequest["expectedResult"],
+  "text" | undefined
+>;
+
+export interface FleetEnvelopeParseOptions {
+  /** Absolute workspace roots used to normalize absolute finding paths. */
+  workspaceRoots?: readonly string[];
+}
+
+type CandidateOutcome =
+  | { ok: true; envelope: FleetResultEnvelope }
+  | { ok: false; reason: string };
+
+const SEVERITY_SYNONYMS: Record<
+  string,
+  "critical" | "high" | "medium" | "low"
+> = {
+  critical: "critical",
+  blocker: "critical",
+  fatal: "critical",
+  p0: "critical",
+  high: "high",
+  major: "high",
+  error: "high",
+  p1: "high",
+  medium: "medium",
+  moderate: "medium",
+  warning: "medium",
+  warn: "medium",
+  p2: "medium",
+  low: "low",
+  minor: "low",
+  info: "low",
+  informational: "low",
+  suggestion: "low",
+  nit: "low",
+  note: "low",
+  style: "low",
+  p3: "low",
+};
+
+function normalizeEnvelopeType(value: unknown): string | undefined {
+  return typeof value === "string"
+    ? value.trim().toLowerCase().replaceAll("-", "_")
+    : undefined;
+}
+
+/**
+ * Coerce a finding path toward workspace-relative form: strip a matching
+ * workspace-root prefix from absolute paths. Paths that stay absolute or
+ * traverse upward are dropped (the finding keeps its message) rather than
+ * invalidating the whole envelope.
+ */
+function normalizeFindingPath(
+  raw: unknown,
+  workspaceRoots: readonly string[],
+): string | undefined {
+  if (typeof raw !== "string" || !raw.trim()) return undefined;
+  const candidate = raw.trim().replaceAll("\\", "/");
+  if (isWorkspaceRelativeArtifact(candidate)) return candidate;
+  const comparisonKey = (value: string): string =>
+    process.platform === "win32" ? value.toLowerCase() : value;
+  for (const root of workspaceRoots) {
+    const normalizedRoot = root.replaceAll("\\", "/").replace(/\/+$/, "");
+    if (
+      comparisonKey(candidate).startsWith(`${comparisonKey(normalizedRoot)}/`)
+    ) {
+      const relative = candidate.slice(normalizedRoot.length + 1);
+      if (isWorkspaceRelativeArtifact(relative)) return relative;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Tolerant interpretation of a review_findings candidate. Agents routinely
+ * deviate in ways that do not reduce the review's substance — synonym
+ * severities ("warning", "nit"), absolute paths, zero/float line numbers —
+ * and rejecting the entire envelope for those loses structured integration.
+ * Normalize what can be normalized; only structural absence (no findings
+ * array, findings without a message) fails the candidate.
+ */
+function interpretReviewFindingsCandidate(
+  value: Record<string, unknown>,
+  options: FleetEnvelopeParseOptions,
+): CandidateOutcome {
+  if (!Array.isArray(value.findings)) {
+    return { ok: false, reason: "findings is not an array" };
+  }
+  const findings: Array<{
+    severity: "critical" | "high" | "medium" | "low";
+    message: string;
+    path?: string;
+    line?: number;
+  }> = [];
+  for (const [index, rawFinding] of value.findings.entries()) {
+    if (!rawFinding || typeof rawFinding !== "object") {
+      return { ok: false, reason: `findings[${index}] is not an object` };
+    }
+    const item = rawFinding as Record<string, unknown>;
+    if (typeof item.message !== "string" || !item.message.trim()) {
+      return {
+        ok: false,
+        reason: `findings[${index}].message is missing or empty`,
+      };
+    }
+    const severity =
+      SEVERITY_SYNONYMS[String(item.severity).trim().toLowerCase()] ?? "medium";
+    const path = normalizeFindingPath(item.path, options.workspaceRoots ?? []);
+    const line =
+      typeof item.line === "number" || typeof item.line === "string"
+        ? Number(item.line)
+        : undefined;
+    const validLine =
+      line !== undefined && Number.isInteger(line) && line > 0
+        ? line
+        : undefined;
+    findings.push({
+      severity,
+      message: item.message,
+      ...(path ? { path } : {}),
+      ...(validLine !== undefined ? { line: validLine } : {}),
+    });
+  }
+  const emptyDiff =
+    typeof value.emptyDiff === "boolean"
+      ? value.emptyDiff
+      : typeof value.emptyDiff === "string" &&
+          ["true", "yes"].includes(value.emptyDiff.trim().toLowerCase())
+        ? true
+        : typeof value.emptyDiff === "string" &&
+            ["false", "no"].includes(value.emptyDiff.trim().toLowerCase())
+          ? false
+          : undefined;
+  return {
+    ok: true,
+    envelope: {
+      type: "review_findings",
+      findings,
+      ...(typeof value.reviewedScope === "string"
+        ? { reviewedScope: value.reviewedScope }
+        : {}),
+      ...(emptyDiff !== undefined ? { emptyDiff } : {}),
+    },
+  };
+}
+
+function interpretFleetResultCandidate(
+  expected: ExpectedFleetResult,
+  value: unknown,
+  options: FleetEnvelopeParseOptions,
+): CandidateOutcome {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, reason: "candidate is not a JSON object" };
+  }
+  const record = value as Record<string, unknown>;
+  const type = normalizeEnvelopeType(record.type);
+  if (type !== expected) {
+    return {
+      ok: false,
+      reason: `candidate type is ${JSON.stringify(record.type)}, expected "${expected}"`,
+    };
+  }
+  if (expected === "review_findings") {
+    return interpretReviewFindingsCandidate(record, options);
+  }
+  const normalized = { ...record, type };
+  if (isFleetResultEnvelope(normalized)) {
+    return { ok: true, envelope: normalized as FleetResultEnvelope };
+  }
+  return {
+    ok: false,
+    reason: `candidate has type "${expected}" but does not match the ${expected} envelope schema`,
+  };
+}
+
 function parseExpectedFleetResult(
-  expected: Exclude<
-    SpawnBackgroundRequest["expectedResult"],
-    "text" | undefined
-  >,
+  expected: ExpectedFleetResult,
   text: string,
-): FleetResultEnvelope | undefined {
+  options: FleetEnvelopeParseOptions,
+): CandidateOutcome | undefined {
   try {
     const parsed = JSON.parse(text) as unknown;
-    return isFleetResultEnvelope(parsed) && parsed.type === expected
-      ? parsed
-      : undefined;
+    return interpretFleetResultCandidate(expected, parsed, options);
   } catch {
     return undefined;
   }
@@ -176,6 +349,17 @@ function extractFleetResultFenceBodies(text: string): {
 } {
   const bodies: string[] = [];
   let fence: MarkdownFence | undefined;
+  const flushFence = (current: MarkdownFence): boolean => {
+    if (
+      current.accepted &&
+      current.body.length > 0 &&
+      current.bodyChars <= MAX_FLEET_RESULT_FENCE_BODY_CHARS
+    ) {
+      bodies.push(current.body.join("\n"));
+      if (bodies.length > MAX_FLEET_RESULT_FENCES) return false;
+    }
+    return true;
+  };
 
   for (const line of text.split(/\r?\n/)) {
     if (fence) {
@@ -184,15 +368,7 @@ function extractFleetResultFenceBodies(text: string): {
         closer?.[1]?.[0] === fence.character &&
         closer[1].length >= fence.length
       ) {
-        if (
-          fence.accepted &&
-          fence.bodyChars <= MAX_FLEET_RESULT_FENCE_BODY_CHARS
-        ) {
-          bodies.push(fence.body.join("\n"));
-          if (bodies.length > MAX_FLEET_RESULT_FENCES) {
-            return { bodies: [], overflowed: true };
-          }
-        }
+        if (!flushFence(fence)) return { bodies: [], overflowed: true };
         fence = undefined;
       } else if (fence.accepted) {
         fence.bodyChars += line.length + 1;
@@ -205,36 +381,149 @@ function extractFleetResultFenceBodies(text: string): {
 
     const opener = line.match(/^ {0,3}(`{3,}|~{3,})([^\r\n]*)$/);
     if (!opener?.[1]) continue;
-    const info = opener[2]?.trim().toLowerCase() ?? "";
+    const rawInfo = opener[2]?.trim() ?? "";
+    // Accept bare fences, json-family info strings (json, jsonc, json5),
+    // and fences whose opener line already carries the payload — models
+    // frequently emit "```json {...}" or "```{...}" on one line.
+    const infoMatch = rawInfo.match(/^(?:json[a-z0-9]*)?\s*(.*)$/i);
+    const inlinePayload = infoMatch?.[1] ?? "";
+    const accepted =
+      rawInfo === "" ||
+      /^json[a-z0-9]*$/i.test(rawInfo) ||
+      ((/^json[a-z0-9]*\s/i.test(rawInfo) || rawInfo.startsWith("{")) &&
+        inlinePayload.startsWith("{"));
+    const character = opener[1][0] as "`" | "~";
+    // A one-line fence ("```json {...}```") closes on its opener line.
+    const inlineClose = inlinePayload.match(/^(.*?)(`{3,}|~{3,})[ \t]*$/);
+    if (accepted && inlineClose && inlineClose[2][0] === character) {
+      const payload = inlineClose[1].trim();
+      if (payload) {
+        bodies.push(payload);
+        if (bodies.length > MAX_FLEET_RESULT_FENCES) {
+          return { bodies: [], overflowed: true };
+        }
+      }
+      continue;
+    }
     fence = {
-      character: opener[1][0] as "`" | "~",
+      character,
       length: opener[1].length,
-      accepted: info === "" || info === "json",
-      body: [],
-      bodyChars: 0,
+      accepted,
+      body: accepted && inlinePayload ? [inlinePayload] : [],
+      bodyChars: inlinePayload ? inlinePayload.length + 1 : 0,
     };
   }
 
+  // A final unclosed fence still contributes: truncation or a stream cut can
+  // eat the closing fence of the envelope the agent actually produced.
+  if (fence && !flushFence(fence)) return { bodies: [], overflowed: true };
+
   return { bodies, overflowed: false };
+}
+
+const MAX_BRACE_SCAN_CANDIDATES = 8;
+
+/** Extract a balanced JSON object starting at `start`, string-aware. */
+function extractBalancedJsonObject(
+  text: string,
+  start: number,
+): string | undefined {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  const limit = Math.min(
+    text.length,
+    start + MAX_FLEET_RESULT_FENCE_BODY_CHARS,
+  );
+  for (let index = start; index < limit; index++) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{") depth++;
+    else if (char === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+  return undefined;
+}
+
+export interface FleetEnvelopeParseResult {
+  envelope: FleetResultEnvelope;
+  /** Why no candidate was accepted, when the expected envelope is missing. */
+  issue?: string;
+}
+
+export function parseFleetResultEnvelopeDetailed(
+  expected: SpawnBackgroundRequest["expectedResult"],
+  text: string,
+  options: FleetEnvelopeParseOptions = {},
+): FleetEnvelopeParseResult {
+  if (!expected || expected === "text") {
+    return { envelope: { type: "text", text } };
+  }
+
+  const failures: string[] = [];
+  const record = (outcome: CandidateOutcome | undefined): void => {
+    if (outcome && !outcome.ok && !failures.includes(outcome.reason)) {
+      failures.push(outcome.reason);
+    }
+  };
+
+  const exact = parseExpectedFleetResult(expected, text, options);
+  if (exact?.ok) return { envelope: exact.envelope };
+  record(exact);
+
+  const fenced = extractFleetResultFenceBodies(text);
+  if (!fenced.overflowed) {
+    // Prefer the last valid candidate: when an agent repeats or revises the
+    // envelope, the final occurrence is its answer.
+    let lastValid: FleetResultEnvelope | undefined;
+    for (const body of fenced.bodies) {
+      const outcome = parseExpectedFleetResult(expected, body.trim(), options);
+      if (outcome?.ok) lastValid = outcome.envelope;
+      else record(outcome);
+    }
+    if (lastValid) return { envelope: lastValid };
+  }
+
+  // Last resort, only when no json-labeled fence produced a candidate at all:
+  // balanced JSON objects announcing a "type" field in plain text, newest
+  // first. This rescues envelopes behind a truncated or mislabeled opening
+  // fence without second-guessing messages whose fenced JSON simply failed.
+  if (fenced.overflowed || fenced.bodies.length === 0) {
+    const starts: number[] = [];
+    for (const match of text.matchAll(/\{\s*"type"\s*:/g)) {
+      starts.push(match.index);
+    }
+    for (const start of starts.slice(-MAX_BRACE_SCAN_CANDIDATES).reverse()) {
+      const candidate = extractBalancedJsonObject(text, start);
+      if (!candidate) continue;
+      const outcome = parseExpectedFleetResult(expected, candidate, options);
+      if (outcome?.ok) return { envelope: outcome.envelope };
+      record(outcome);
+    }
+  }
+
+  return {
+    envelope: { type: "text", text },
+    issue: failures.length
+      ? `Envelope candidates were found but rejected: ${failures.slice(0, 3).join("; ")}`
+      : `No ${expected} envelope candidate was found in the final output`,
+  };
 }
 
 export function parseFleetResultEnvelope(
   expected: SpawnBackgroundRequest["expectedResult"],
   text: string,
+  options: FleetEnvelopeParseOptions = {},
 ): FleetResultEnvelope {
-  if (expected && expected !== "text") {
-    const exact = parseExpectedFleetResult(expected, text);
-    if (exact) return exact;
-
-    const fenced = extractFleetResultFenceBodies(text);
-    if (fenced.overflowed) return { type: "text", text };
-    const validFencedResults = fenced.bodies.flatMap((body) => {
-      const parsed = parseExpectedFleetResult(expected, body.trim());
-      return parsed ? [parsed] : [];
-    });
-    if (validFencedResults.length === 1) return validFencedResults[0];
-  }
-  return { type: "text", text };
+  return parseFleetResultEnvelopeDetailed(expected, text, options).envelope;
 }
 
 export function isFleetResultEnvelope(
@@ -405,5 +694,5 @@ export function withFleetResultInstruction(
     expected === "review_findings"
       ? " Before reviewing, resolve the exact change set you were asked to review and describe it in reviewedScope. If that change set is empty or cannot be found (for example the changes were already committed, stashed, or reverted), set emptyDiff to true and explain what you checked in reviewedScope — never return an empty findings list that is indistinguishable from a clean review."
       : "";
-  return `${message}\n\nReturn the final answer as JSON matching this exact result envelope: ${shapes[expected]}${guidance}`;
+  return `${message}\n\nReturn the final answer as JSON matching this exact result envelope: ${shapes[expected]}${guidance} End your final message with exactly one \`\`\`json fenced block containing only this envelope — no prose after the closing fence, and do not repeat the envelope elsewhere.`;
 }

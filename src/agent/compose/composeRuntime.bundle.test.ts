@@ -36,6 +36,10 @@ function runBundledCompose(
   params: ComposeParams,
   scope: ComposeExecutionScope = {
     canExecuteChild: () => false,
+    preflightChild: () => {
+      throw new Error("No child calls expected");
+    },
+    reserveChildren: () => undefined,
     executeChild: async () => {
       throw new Error("No child calls expected");
     },
@@ -76,25 +80,41 @@ describe("bundled compose runtime", () => {
     expect(result.data).toEqual({ value: 42, text: "ok" });
   });
 
-  it("returns bounded recovery evidence after bundled child calls produce an oversized final result", async () => {
-    const result = await runBundledCompose(
-      {
-        script:
-          'const value = tool("lookup", {}); return { value, duplicate: value };',
-        description: "bundle oversized recovery smoke",
+  it("retains exact oversized results through the bundled runtime callback", async () => {
+    let retainedContent = "";
+    const scope: ComposeExecutionScope = {
+      canExecuteChild: (name) => name === "lookup",
+      preflightChild: () => undefined,
+      reserveChildren: () => undefined,
+      executeChild: async () => {
+        const data = "x".repeat(COMPOSE_MAX_FINAL_BYTES / 2);
+        return {
+          content: [{ type: "text", text: JSON.stringify(data) }],
+          data,
+          isError: false,
+        };
       },
-      {
-        canExecuteChild: (name) => name === "lookup",
-        executeChild: async () => {
-          const data = "x".repeat(COMPOSE_MAX_FINAL_BYTES / 2);
-          return {
-            content: [{ type: "text", text: JSON.stringify(data) }],
-            data,
-            isError: false,
-          };
-        },
+    };
+    const params = {
+      script:
+        'const value = tool("lookup", {}); return { value, duplicate: value };',
+      description: "bundle oversized recovery smoke",
+    };
+    const result = await runtime.handleCompose({
+      params,
+      scope,
+      signal: new AbortController().signal,
+      wasmPath: require.resolve("@jitl/quickjs-wasmfile-release-asyncify/wasm"),
+      retainArtifact: async (request) => {
+        retainedContent = request.content;
+        return {
+          path: "/tmp/bundled-compose-result.jsonl",
+          bytes: Buffer.byteLength(request.content),
+          chars: [...request.content].length,
+          sha256: "artifact-sha",
+        };
       },
-    );
+    });
 
     expect(result).toMatchObject({
       isError: true,
@@ -114,10 +134,21 @@ describe("bundled compose runtime", () => {
       limit_bytes: COMPOSE_MAX_FINAL_BYTES,
       preview_truncated: true,
       children: [{ name: "lookup", status: "completed" }],
+      output_file: "/tmp/bundled-compose-result.jsonl",
+      output_format: "chunked-json-v1",
     });
     expect(recovery.preview_bytes).toBeLessThanOrEqual(
       COMPOSE_MAX_RECOVERY_PREVIEW_BYTES,
     );
+    const reconstructed = retainedContent
+      .trimEnd()
+      .split("\n")
+      .map((line) => (JSON.parse(line) as { data: string }).data)
+      .join("");
+    expect(JSON.parse(reconstructed)).toEqual({
+      value: "x".repeat(COMPOSE_MAX_FINAL_BYTES / 2),
+      duplicate: "x".repeat(COMPOSE_MAX_FINAL_BYTES / 2),
+    });
   });
 
   it("bridges child tool calls from the bundle", async () => {
@@ -129,6 +160,8 @@ describe("bundled compose runtime", () => {
       },
       {
         canExecuteChild: (name) => name === "lookup",
+        preflightChild: () => undefined,
+        reserveChildren: () => undefined,
         executeChild: async (name, input) => {
           calls.push([name, input]);
           const data = { matches: 3 };

@@ -851,6 +851,15 @@ export class AgentSession {
     this.lastActiveAt = Date.now();
   }
 
+  appendUserMessage(message: AgentMessage): void {
+    if (message.role !== "user") {
+      throw new Error("appendUserMessage requires a user message");
+    }
+    this.messagesRevision++;
+    this.messages.push(message);
+    this.lastActiveAt = Date.now();
+  }
+
   appendAssistantTurn(content: ContentBlock[]): void {
     this.appendAssistantMessage({ role: "assistant", content });
   }

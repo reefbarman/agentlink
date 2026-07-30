@@ -1,9 +1,11 @@
 import * as os from "os";
 import * as path from "path";
 
+import {
+  AGENTLINK_RESULT_RUN_PREFIX,
+  isAgentlinkTmpArtifact,
+} from "./agentlinkTmpArtifacts.js";
 import { describe, expect, it } from "vitest";
-
-import { isAgentlinkTmpArtifact } from "./agentlinkTmpArtifacts.js";
 
 describe("isAgentlinkTmpArtifact", () => {
   it("recognizes terminal output files emitted under os.tmpdir", () => {
@@ -11,6 +13,16 @@ describe("isAgentlinkTmpArtifact", () => {
       os.tmpdir(),
       "agentlink-output-abc123",
       "output.txt",
+    );
+
+    expect(isAgentlinkTmpArtifact(filePath)).toBe(true);
+  });
+
+  it("recognizes private run-scoped result artifacts under os.tmpdir", () => {
+    const filePath = path.join(
+      os.tmpdir(),
+      `${AGENTLINK_RESULT_RUN_PREFIX}abc123`,
+      "output.jsonl",
     );
 
     expect(isAgentlinkTmpArtifact(filePath)).toBe(true);
@@ -39,6 +51,14 @@ describe("isAgentlinkTmpArtifact", () => {
 
       expect(isAgentlinkTmpArtifact(varPath)).toBe(true);
       expect(isAgentlinkTmpArtifact(privateVarPath)).toBe(true);
+
+      const resultPath = path.join(
+        varBase,
+        `${AGENTLINK_RESULT_RUN_PREFIX}abc123`,
+        "output.jsonl",
+      );
+      expect(isAgentlinkTmpArtifact(resultPath)).toBe(true);
+      expect(isAgentlinkTmpArtifact(`/private${resultPath}`)).toBe(true);
     },
   );
 
@@ -49,6 +69,11 @@ describe("isAgentlinkTmpArtifact", () => {
     expect(
       isAgentlinkTmpArtifact(
         path.join(os.tmpdir(), "agentlink-outputish", "output.txt"),
+      ),
+    ).toBe(false);
+    expect(
+      isAgentlinkTmpArtifact(
+        path.join(os.tmpdir(), "agentlink-result-other", "output.jsonl"),
       ),
     ).toBe(false);
   });
