@@ -1,4 +1,5 @@
 import type { ChatMessage, ContentBlock } from "../types";
+import { ImagePreview, imageDownloadName } from "./ImagePreview";
 import { ToolCallGroup, segmentBlocks } from "./ToolCallGroup";
 import {
   useCallback,
@@ -24,7 +25,6 @@ import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ThinkingContent } from "./ThinkingContent";
 import { ToolCallBlock } from "./ToolCallBlock";
-import { createPortal } from "preact/compat";
 import { getFinalMessageContinueAction } from "../../../shared/finalStatus";
 import { getStreamingActivity } from "./activityPresentation";
 import { normalizeProjectedToolName } from "../../../shared/chatProjection";
@@ -883,12 +883,6 @@ function parseAttachments(content: string): {
 }
 
 /** Renders attachment chips above user message text */
-function imageDownloadName(image: { name?: string; mimeType: string }): string {
-  if (image.name?.trim()) return image.name.trim();
-  const extension = image.mimeType === "image/jpeg" ? "jpg" : "png";
-  return `agentlink-image.${extension}`;
-}
-
 function UserAttachments({
   files,
   mediaLabel,
@@ -908,19 +902,6 @@ function UserAttachments({
   imageAlt?: string;
   onOpenFile?: (path: string, line?: number) => void;
 }) {
-  const [selectedImage, setSelectedImage] = useState<
-    NonNullable<ChatMessage["displayMedia"]>["images"][number] | null
-  >(null);
-
-  useEffect(() => {
-    if (!selectedImage) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSelectedImage(null);
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedImage]);
-
   if (
     files.length === 0 &&
     !mediaLabel &&
@@ -943,25 +924,22 @@ function UserAttachments({
           {displayMedia.images.map((image, index) => {
             const label = image.name || `${imageLabel} ${index + 1}`;
             const alt = image.name || `${imageAlt} ${index + 1}`;
-            const downloadName = imageDownloadName(image);
             return (
               <div
                 key={`${image.name}-${index}`}
                 class="user-image-preview-card"
               >
-                <button
-                  class="user-image-preview-button"
-                  type="button"
-                  title={`Open ${label}`}
-                  aria-label={`Open ${label}`}
-                  onClick={() => setSelectedImage(image)}
-                >
-                  <img class="user-image-preview" src={image.src} alt={alt} />
-                </button>
+                <ImagePreview
+                  image={image}
+                  alt={alt}
+                  className="user-image-preview"
+                  buttonClassName="user-image-preview-button"
+                  showDownload
+                />
                 <a
                   class="icon-button user-image-download"
                   href={image.src}
-                  download={downloadName}
+                  download={imageDownloadName(image)}
                   rel="noopener"
                   title={`Download ${label}`}
                   aria-label={`Download ${label}`}
@@ -1018,54 +996,6 @@ function UserAttachments({
           )}
         </div>
       )}
-      {selectedImage &&
-        createPortal(
-          <div
-            class="user-image-lightbox"
-            role="dialog"
-            aria-modal="true"
-            aria-label={selectedImage.name || "Attached image preview"}
-            onClick={() => setSelectedImage(null)}
-          >
-            <div
-              class="user-image-lightbox-content"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <div class="user-image-lightbox-header">
-                <span class="user-image-lightbox-title">
-                  {selectedImage.name || "Attached image"}
-                </span>
-                <a
-                  class="icon-button user-image-lightbox-download"
-                  href={selectedImage.src}
-                  download={imageDownloadName(selectedImage)}
-                  rel="noopener"
-                  title="Download image"
-                  aria-label="Download image"
-                >
-                  <i class="codicon codicon-save" />
-                </a>
-                <button
-                  class="icon-button user-image-lightbox-close"
-                  type="button"
-                  title="Close"
-                  aria-label="Close image preview"
-                  onClick={() => setSelectedImage(null)}
-                >
-                  <i class="codicon codicon-close" />
-                </button>
-              </div>
-              <img
-                class="user-image-lightbox-image"
-                src={selectedImage.src}
-                alt={selectedImage.name || imageAlt}
-                title="Click to close"
-                onClick={() => setSelectedImage(null)}
-              />
-            </div>
-          </div>,
-          document.body,
-        )}
     </>
   );
 }

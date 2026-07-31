@@ -10,6 +10,8 @@ import * as http from "http";
 import { URL } from "url";
 import type { ExtensionContext } from "vscode";
 
+import { getCodexOriginator } from "../../../core/model/providers/codex/clientIdentity.js";
+
 // ── OAuth Configuration ──
 
 const OAUTH_CONFIG = {
@@ -1128,7 +1130,7 @@ export class CodexOAuthManager {
       response_type: "code",
       state,
       codex_cli_simplified_flow: "true",
-      originator: "agentlink",
+      originator: getCodexOriginator(),
     });
 
     return `${OAUTH_CONFIG.authorizationEndpoint}?${params.toString()}`;

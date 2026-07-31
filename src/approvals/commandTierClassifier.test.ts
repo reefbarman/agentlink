@@ -125,32 +125,48 @@ describe("command tier classifier", () => {
     });
   });
 
-  it("requires hook-disabling flags for git diff-style readonly execution", () => {
-    expect(isCommandEligibleForReadOnlyExecution("git diff", ctx)).toEqual({
-      eligible: false,
-      reason: expect.stringContaining("requires --no-pager"),
+  it.each([
+    "git diff --no-ext-diff --no-textconv",
+    "git show --no-ext-diff --no-textconv HEAD",
+    "git log --no-ext-diff --no-textconv -n 5",
+    "git blame --no-textconv -L 1,5 src/a.ts",
+    "git grep token -- src",
+    "git status --short",
+    "git --no-pager log --no-ext-diff --no-textconv -n 5",
+  ])("accepts correctly scoped git inspection: %s", (command) => {
+    expect(isCommandEligibleForReadOnlyExecution(command, ctx)).toEqual({
+      eligible: true,
     });
-    expect(
-      isCommandEligibleForReadOnlyExecution(
-        "git --no-pager diff --no-ext-diff --no-textconv",
-        ctx,
-      ),
-    ).toEqual({ eligible: true });
-    expect(
-      isCommandEligibleForReadOnlyExecution(
-        "git --no-pager diff --no-ext-diff --no-textconv --no-index a b",
-        ctx,
-      ),
-    ).toEqual({
+  });
+
+  it.each([
+    ["git diff", "git diff --no-ext-diff --no-textconv"],
+    ["git diff --no-ext-diff", "--no-textconv"],
+    ["git --no-ext-diff --no-textconv diff", "after the subcommand"],
+    ["git diff --no-ext-diff -- --no-textconv", "--no-textconv"],
+    ["git log --no-textconv -- --no-ext-diff", "--no-ext-diff"],
+    ["git blame -- --no-textconv src/a.ts", "--no-textconv"],
+    [
+      "git blame --no-ext-diff --no-textconv src/a.ts",
+      "does not accept --no-ext-diff",
+    ],
+    [
+      "git diff --no-pager --no-ext-diff --no-textconv",
+      "must appear before diff",
+    ],
+    ["git diff --no-ext-diff --no-textconv --no-index a b", "--no-index"],
+    ["git -C ../outside status", "git path or config override (-C)"],
+  ])("rejects incorrectly scoped git inspection: %s", (command, reason) => {
+    expect(isCommandEligibleForReadOnlyExecution(command, ctx)).toEqual({
       eligible: false,
-      reason: expect.stringContaining("--no-index"),
+      reason: expect.stringContaining(reason),
     });
   });
 
   it("requires ripgrep config isolation for readonly execution", () => {
     expect(isCommandEligibleForReadOnlyExecution("rg token src", ctx)).toEqual({
       eligible: false,
-      reason: expect.stringContaining("requires --no-config"),
+      reason: expect.stringContaining("rg --no-config <pattern> [path ...]"),
     });
     expect(
       isCommandEligibleForReadOnlyExecution("rg --no-config token src", ctx),

@@ -1,8 +1,12 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveProjectAttachments } from "./attachmentResolver.js";
+import {
+  resolveProjectAttachments,
+  resolveProjectImagePreviews,
+} from "./attachmentResolver.js";
 
 describe("resolveProjectAttachments", () => {
   const workspaces: string[] = [];
@@ -47,6 +51,31 @@ describe("resolveProjectAttachments", () => {
     });
     expect(result.text).not.toContain("PNG");
     expect(result.text).not.toContain("\uFFFD");
+  });
+
+  it("returns safe image previews without reading non-images or escaped paths", async () => {
+    const workspace = makeWorkspace();
+    const projectRoot = path.join(workspace, "project");
+    fs.mkdirSync(projectRoot);
+    const imageBytes = Buffer.from("preview-image");
+    fs.writeFileSync(path.join(projectRoot, "preview.webp"), imageBytes);
+    fs.writeFileSync(path.join(projectRoot, "notes.txt"), "not an image");
+    const externalImage = path.join(workspace, "external.png");
+    fs.writeFileSync(externalImage, "must-not-leak");
+    fs.symlinkSync(externalImage, path.join(projectRoot, "escaped.png"));
+
+    await expect(
+      resolveProjectImagePreviews(
+        ["preview.webp", "notes.txt", "escaped.png"],
+        projectRoot,
+      ),
+    ).resolves.toEqual([
+      {
+        path: "preview.webp",
+        mimeType: "image/webp",
+        base64: imageBytes.toString("base64"),
+      },
+    ]);
   });
 
   it("converts an attached PDF into document media", async () => {

@@ -139,6 +139,12 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     builtin: true,
   },
   {
+    name: "environment",
+    description: "Show runtime environment and agent context details",
+    source: "builtin",
+    builtin: true,
+  },
+  {
     name: "memory",
     description: "Inspect and manage autonomous low-authority memory",
     source: "builtin",

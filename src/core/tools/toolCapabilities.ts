@@ -116,6 +116,7 @@ const ESSENTIAL_TOOLS = new Set([
   "todo_write",
   "set_task_status",
   "switch_mode",
+  "send_feedback",
   "load_rule",
   "load_skill",
   "find_native_tools",

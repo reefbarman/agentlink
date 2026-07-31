@@ -29,7 +29,7 @@ function humanizeTerminalReason(
     return "This session is no longer authorized to access that background result.";
   }
   if (trimmed === "background_session_not_found") {
-    return "That background session is not loaded in this window; it may not have been restored with the current foreground session.";
+    return "No loaded background session matches that id; the id may be mistyped, or the session was not restored with the current foreground session.";
   }
   if (trimmed === "cancelled_by_user") return "Cancelled by the user.";
   if (trimmed.startsWith("budget_exhausted:")) {

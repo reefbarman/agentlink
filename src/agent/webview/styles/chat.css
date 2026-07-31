@@ -4657,30 +4657,24 @@ body.chat-activity-shelf-resizing * {
   opacity: 0.9;
 }
 
-/* ── Debug Info ── */
+/* ── Environment Panel ── */
 
-.debug-info {
-  border-bottom: 1px solid var(--vscode-panel-border);
-  font-size: 11px;
-}
-
-.debug-info-header {
+.environment-panel {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  background: var(--vscode-textCodeBlock-background);
-  border: none;
-  color: var(--vscode-descriptionForeground);
-  cursor: pointer;
-  padding: 4px 10px;
-  font-family: inherit;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-sideBar-background, var(--ag-panel));
   font-size: 11px;
-  text-align: left;
 }
 
-.debug-info-header:hover {
-  background: var(--vscode-list-hoverBackground);
+.environment-panel > .pane-header {
+  min-height: 32px;
+  text-transform: none;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  font-weight: 600;
 }
 
 .debug-info-content {
@@ -4690,6 +4684,11 @@ body.chat-activity-shelf-resizing * {
 .debug-info-scroll {
   max-height: 300px;
   overflow-y: auto;
+}
+
+.environment-panel-loading {
+  padding: 12px 6px;
+  color: var(--vscode-descriptionForeground);
 }
 
 .debug-info-content table {

@@ -57,7 +57,7 @@ import { ChatTabConfirmation } from "./components/ChatTabConfirmation";
 import { ChatSessionPane, ChatWorkspace } from "./components/ChatWorkspace";
 import { ChatView } from "./components/ChatView";
 import { ContextUsageRow } from "./components/ContextUsageRow";
-import { DebugInfo } from "./components/DebugInfo";
+import { EnvironmentPanel } from "./components/EnvironmentPanel";
 import { ElicitationModal } from "./components/ElicitationModal";
 import {
   InputArea,
@@ -394,6 +394,10 @@ export function App({
   }>({ tabId: null });
   const fullStateRef = useRef(state);
   fullStateRef.current = state;
+  const optimisticFirstSendRef = useRef<{
+    tabId: string;
+    sessionId: string | null;
+  } | null>(null);
 
   // Flag the extension host as unresponsive when heartbeats stop arriving.
   // The webview renderer keeps running while the host event loop is blocked,
@@ -459,6 +463,7 @@ export function App({
   const [mcpManagerSnapshot, setMcpManagerSnapshot] =
     useState<McpConfigSnapshot | null>(null);
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
+  const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(false);
   const [memoryPanelSnapshot, setMemoryPanelSnapshot] =
     useState<MemoryPanelSnapshot | null>(null);
   const [memoryPanelScope, setMemoryPanelScope] =
@@ -546,7 +551,7 @@ export function App({
   const [showFleetRequest, setShowFleetRequest] = useState(0);
   const [transcriptView, setTranscriptView] =
     useState<OpenTranscriptState | null>(null);
-  const [btwState, setBtwState] = useState<BtwState | null>(null);
+  const [btwStates, setBtwStates] = useState<Record<string, BtwState>>({});
   const [worktreeSetupState, setWorktreeSetupState] =
     useState<WorktreeSetupState | null>(null);
 
@@ -624,54 +629,108 @@ export function App({
         projectionStateCacheRef.current.clear();
         restoredCachedSessionRef.current = null;
         hydratedSessionsRef.current.clear();
+        optimisticFirstSendRef.current = null;
+        setBtwStates({});
       }
       const nextSessionId = selectedWorkspaceSessionId(snapshot, pinnedTabId);
+      const previousSelectedTabId =
+        pinnedTabId ?? previousSnapshot?.focusedTabId;
+      const nextSelectedTabId = pinnedTabId ?? snapshot.focusedTabId;
+      const selectedTabChanged = previousSelectedTabId !== nextSelectedTabId;
+      const optimisticFirstSend = optimisticFirstSendRef.current;
+      const boundSelectedTabToSession = Boolean(
+        !controllerEpochChanged &&
+        previousSnapshot &&
+        previousSelectedTabId === nextSelectedTabId &&
+        previousSessionId === null &&
+        nextSessionId &&
+        optimisticFirstSend?.tabId === nextSelectedTabId &&
+        optimisticFirstSend.sessionId === null,
+      );
       const openSessionIds = new Set(
         snapshot.tabs.flatMap((tab) => (tab.sessionId ? [tab.sessionId] : [])),
       );
-      if (previousSessionId !== nextSessionId) {
-        flushConnectionDeltasRef.current();
-        // Only a projection that came from a real hydration — or that visibly
-        // accumulated session state while live — may be cached. Saving a
-        // pristine placeholder (switching away before the session's first
-        // load arrived) would poison the cache with an empty transcript that
-        // later gets trusted.
-        const outgoing = fullStateRef.current;
-        const outgoingHasSubstance =
-          outgoing.messages.length > 0 ||
-          outgoing.messageQueue.length > 0 ||
-          outgoing.streaming ||
-          outgoing.estimatedTotalUsed > 0;
-        if (
-          !controllerEpochChanged &&
-          previousSessionId &&
-          (hydratedSessionsRef.current.has(previousSessionId) ||
-            outgoingHasSubstance)
-        ) {
-          projectionStateCacheRef.current.save(outgoing);
-        }
-        restoredCachedSessionRef.current =
-          nextSessionId && projectionStateCacheRef.current.has(nextSessionId)
-            ? nextSessionId
-            : null;
-        if (nextSessionId && restoredCachedSessionRef.current === null) {
-          // The incoming projection is a fresh placeholder, not session state.
-          hydratedSessionsRef.current.delete(nextSessionId);
-        }
-        const restored = projectionStateCacheRef.current.restore(
-          nextSessionId,
-          {
-            modes: fullStateRef.current.modes,
-            availableModels: fullStateRef.current.availableModels,
-            slashCommands: fullStateRef.current.slashCommands,
-          },
+      if (!controllerEpochChanged) {
+        setBtwStates((previous) =>
+          Object.fromEntries(
+            Object.entries(previous).filter(([sessionId]) =>
+              openSessionIds.has(sessionId),
+            ),
+          ),
         );
-        fullStateRef.current = restored;
-        stateRef.current = restored.chatState;
-        messageQueueRef.current = restored.messageQueue;
-        streamingRef.current = restored.streaming;
-        workspaceSnapshotRef.current = snapshot;
-        dispatch({ type: "RESTORE_PROJECTION", state: restored });
+      }
+      if (
+        previousSessionId !== nextSessionId ||
+        (selectedTabChanged && (!previousSessionId || !nextSessionId))
+      ) {
+        flushConnectionDeltasRef.current();
+        if (selectedTabChanged) {
+          optimisticFirstSendRef.current = null;
+        }
+        if (boundSelectedTabToSession && nextSessionId) {
+          // The first send renders optimistically before the host creates a
+          // session. Binding that same tab must adopt the session identity
+          // without restoring a fresh, empty projection over the first turn.
+          const bound = {
+            ...fullStateRef.current,
+            chatState: {
+              ...fullStateRef.current.chatState,
+              sessionId: nextSessionId,
+            },
+          };
+          fullStateRef.current = bound;
+          stateRef.current = bound.chatState;
+          streamingRef.current = bound.streaming;
+          optimisticFirstSendRef.current = {
+            tabId: optimisticFirstSend!.tabId,
+            sessionId: nextSessionId,
+          };
+          hydratedSessionsRef.current.delete(nextSessionId);
+          workspaceSnapshotRef.current = snapshot;
+          dispatch({ type: "RESTORE_PROJECTION", state: bound });
+        } else {
+          // Only a projection that came from a real hydration — or that visibly
+          // accumulated session state while live — may be cached. Saving a
+          // pristine placeholder (switching away before the session's first
+          // load arrived) would poison the cache with an empty transcript that
+          // later gets trusted.
+          const outgoing = fullStateRef.current;
+          const outgoingHasSubstance =
+            outgoing.messages.length > 0 ||
+            outgoing.messageQueue.length > 0 ||
+            outgoing.streaming ||
+            outgoing.estimatedTotalUsed > 0;
+          if (
+            !controllerEpochChanged &&
+            previousSessionId &&
+            (hydratedSessionsRef.current.has(previousSessionId) ||
+              outgoingHasSubstance)
+          ) {
+            projectionStateCacheRef.current.save(outgoing);
+          }
+          restoredCachedSessionRef.current =
+            nextSessionId && projectionStateCacheRef.current.has(nextSessionId)
+              ? nextSessionId
+              : null;
+          if (nextSessionId && restoredCachedSessionRef.current === null) {
+            // The incoming projection is a fresh placeholder, not session state.
+            hydratedSessionsRef.current.delete(nextSessionId);
+          }
+          const restored = projectionStateCacheRef.current.restore(
+            nextSessionId,
+            {
+              modes: fullStateRef.current.modes,
+              availableModels: fullStateRef.current.availableModels,
+              slashCommands: fullStateRef.current.slashCommands,
+            },
+          );
+          fullStateRef.current = restored;
+          stateRef.current = restored.chatState;
+          messageQueueRef.current = restored.messageQueue;
+          streamingRef.current = restored.streaming;
+          workspaceSnapshotRef.current = snapshot;
+          dispatch({ type: "RESTORE_PROJECTION", state: restored });
+        }
       }
       inactiveProjectionCacheRef.current.retainSessions(openSessionIds);
       projectionStateCacheRef.current.retainSessions(openSessionIds);
@@ -684,6 +743,13 @@ export function App({
         if (!openSessionIds.has(sessionId)) {
           hydratedSessionsRef.current.delete(sessionId);
         }
+      }
+      const optimisticFirstSendAfterUpdate = optimisticFirstSendRef.current;
+      if (
+        optimisticFirstSendAfterUpdate?.sessionId &&
+        !openSessionIds.has(optimisticFirstSendAfterUpdate.sessionId)
+      ) {
+        optimisticFirstSendRef.current = null;
       }
       workspaceSnapshotRef.current = snapshot;
       setWorkspaceSnapshot(snapshot);
@@ -1041,6 +1107,8 @@ export function App({
           break;
         }
         case "agentDebugInfo":
+          if (msg.sessionId && msg.sessionId !== stateRef.current.sessionId)
+            break;
           dispatch({
             type: "SET_DEBUG_INFO",
             info: msg.info,
@@ -1072,6 +1140,7 @@ export function App({
           dispatch({ type: "SET_SLASH_COMMANDS", commands: msg.commands });
           break;
         case "agentProviderUsage": {
+          setEnvironmentPanelOpen(false);
           setMcpManagerSnapshot(null);
           setProviderUsage(msg.data);
           break;
@@ -1129,7 +1198,10 @@ export function App({
           setMemoryPanelScope(msg.scope);
           setMemoryPanelAvailableScopes(msg.availableScopes);
           setMemoryPanelError(msg.error ?? null);
-          if (msg.open) setMemoryPanelOpen(true);
+          if (msg.open) {
+            setEnvironmentPanelOpen(false);
+            setMemoryPanelOpen(true);
+          }
           if (msg.snapshot) {
             setMemoryPanelSnapshot(msg.snapshot);
           } else if ("selected" in msg) {
@@ -1142,6 +1214,7 @@ export function App({
         case "agentMcpStatus":
           if (msg.configSnapshot) {
             if (msg.open) {
+              setEnvironmentPanelOpen(false);
               setProviderUsage(null);
               setMcpManagerSnapshot(msg.configSnapshot);
               setMcpManagerView(msg.view ?? "status");
@@ -1305,6 +1378,14 @@ export function App({
               )
           ) {
             break;
+          }
+          const optimisticFirstSend = optimisticFirstSendRef.current;
+          if (optimisticFirstSend?.sessionId === msg.sessionId) {
+            const hasCommittedUserMessage = (
+              msg.messages as Array<{ role?: unknown }>
+            ).some((message) => message.role === "user");
+            if (!hasCommittedUserMessage) break;
+            optimisticFirstSendRef.current = null;
           }
           // Drain buffered deltas first so the projection we evaluate (and
           // possibly keep serving) is current.
@@ -1836,42 +1917,51 @@ export function App({
         }
 
         case "agentBtwLoading":
-          setBtwState({
-            requestId: msg.requestId,
-            question: msg.question,
-            answer: "",
-            tools: [],
-            warnings: [],
-          });
+          setBtwStates((previous) => ({
+            ...previous,
+            [msg.sessionId]: {
+              requestId: msg.requestId,
+              question: msg.question,
+              answer: "",
+              tools: [],
+              warnings: [],
+            },
+          }));
           break;
 
         case "agentBtwProgress":
-          setBtwState((prev) => {
-            // Discard stale progress
-            if (!prev || prev.requestId !== msg.requestId) return prev;
+          setBtwStates((previous) => {
+            const state = previous[msg.sessionId];
+            if (!state || state.requestId !== msg.requestId) return previous;
             return {
-              ...prev,
-              answer: msg.answer,
-              tools: msg.tools,
-              warnings: msg.warnings,
-              budget: msg.budget,
+              ...previous,
+              [msg.sessionId]: {
+                ...state,
+                answer: msg.answer,
+                tools: msg.tools,
+                warnings: msg.warnings,
+                budget: msg.budget,
+              },
             };
           });
           break;
 
         case "agentBtwResponse":
-          setBtwState((prev) => {
-            // Discard stale responses
-            if (!prev || prev.requestId !== msg.requestId) return prev;
+          setBtwStates((previous) => {
+            const state = previous[msg.sessionId];
+            if (!state || state.requestId !== msg.requestId) return previous;
             return {
-              ...prev,
-              answer: msg.answer,
-              error: msg.error,
-              done: true,
-              cancelled: msg.cancelled,
-              tools: msg.tools ?? prev.tools,
-              warnings: msg.warnings ?? prev.warnings,
-              budget: msg.budget ?? prev.budget,
+              ...previous,
+              [msg.sessionId]: {
+                ...state,
+                answer: msg.answer,
+                error: msg.error,
+                done: true,
+                cancelled: msg.cancelled,
+                tools: msg.tools ?? state.tools,
+                warnings: msg.warnings ?? state.warnings,
+                budget: msg.budget ?? state.budget,
+              },
             };
           });
           break;
@@ -2156,6 +2246,13 @@ export function App({
       }
 
       // displayText is shown in the chat UI; fullText is sent to the agent
+      if (!stateRef.current.sessionId) {
+        const snapshot = workspaceSnapshotRef.current;
+        const tabId = pinnedTabId ?? snapshot?.focusedTabId;
+        if (tabId) {
+          optimisticFirstSendRef.current = { tabId, sessionId: null };
+        }
+      }
       streamingRef.current = true;
       dispatch({
         type: "ADD_USER_MESSAGE",
@@ -2734,7 +2831,18 @@ export function App({
         case "fleet":
           setShowFleetRequest((request) => request + 1);
           break;
+        case "environment":
+          setEnvironmentPanelOpen(true);
+          setMemoryPanelOpen(false);
+          setMcpManagerSnapshot(null);
+          setProviderUsage(null);
+          vscodeApi.postMessage({
+            command: "agentRefreshDebugInfo",
+            sessionId: stateRef.current.sessionId,
+          });
+          break;
         case "memory": {
+          setEnvironmentPanelOpen(false);
           const request: MemoryInspectionQueryRequest = {
             scope: "global",
             limit: 100,
@@ -3338,6 +3446,11 @@ export function App({
     [resetDropOverlay, vscodeApi],
   );
 
+  const activeBtwSessionId = state.chatState.sessionId;
+  const btwState = activeBtwSessionId
+    ? btwStates[activeBtwSessionId]
+    : undefined;
+
   return (
     <>
       {elicitation && (
@@ -3486,13 +3599,6 @@ export function App({
                 </div>
               </div>
             )}
-            {state.debugInfo && (
-              <DebugInfo
-                info={state.debugInfo}
-                systemPrompt={state.systemPrompt}
-                loadedInstructions={state.loadedInstructions ?? undefined}
-              />
-            )}
             <ChatView
               messages={state.messages}
               streaming={state.streaming}
@@ -3528,9 +3634,14 @@ export function App({
             />
             <ChatActivityShelf
               revealKey={
-                globalApproval?.id ?? state.approvalRequest?.id ?? null
+                globalApproval?.id ??
+                state.approvalRequest?.id ??
+                (environmentPanelOpen ? "environment" : null)
               }
-              revealMinHeight={approvalPanelHeight + 10}
+              revealMinHeight={Math.max(
+                approvalPanelHeight + 10,
+                environmentPanelOpen ? 320 : 0,
+              )}
             >
               <MessageQueuePanel
                 queue={state.messageQueue}
@@ -3678,6 +3789,14 @@ export function App({
                 defaultMaxTokens={DEFAULT_MAX_TOKENS}
               />
 
+              {environmentPanelOpen && (
+                <EnvironmentPanel
+                  info={state.debugInfo}
+                  systemPrompt={state.systemPrompt}
+                  loadedInstructions={state.loadedInstructions ?? undefined}
+                  onClose={() => setEnvironmentPanelOpen(false)}
+                />
+              )}
               {memoryPanelOpen && (
                 <MemoryPanel
                   snapshot={memoryPanelSnapshot}
@@ -3952,7 +4071,13 @@ export function App({
                         requestId: btwState.requestId,
                       });
                     }
-                    setBtwState(null);
+                    if (activeBtwSessionId) {
+                      setBtwStates((previous) => {
+                        const next = { ...previous };
+                        delete next[activeBtwSessionId];
+                        return next;
+                      });
+                    }
                   }}
                   onCancel={(requestId) =>
                     vscodeApi.postMessage({
@@ -3966,7 +4091,13 @@ export function App({
                       question,
                       answer,
                     });
-                    setBtwState(null);
+                    if (activeBtwSessionId) {
+                      setBtwStates((previous) => {
+                        const next = { ...previous };
+                        delete next[activeBtwSessionId];
+                        return next;
+                      });
+                    }
                   }}
                 />
               )}

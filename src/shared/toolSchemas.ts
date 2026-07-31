@@ -928,7 +928,7 @@ export const executeCommandSchema = {
     ])
     .optional()
     .describe(
-      'Execution authority intent. Omit or use "use_default" for the normal sandbox route with loopback client access and public/LAN egress blocked. Use "with_additional_permissions" with additional_permissions for a narrow sandbox capability such as local listener binding. Recognized default-sandbox HOME/listener failures may return retry_guidance code "sandbox_missing_capabilities" with the exact narrow retry parameters; AgentLink never broadens permissions automatically. "require_managed_network" is the compatibility intent for one exact sandboxed command that needs reviewed public network access; Git-over-SSH and recognized gh TLS trust failures may return non-automatic retry_guidance codes "managed_network_ssh_git_transport" or "managed_network_tls_trust". Never replace trust repair with disabled TLS verification. Use "require_escalated" only when execution must occur outside the sandbox. Every non-default intent requires a non-empty reason and approval.',
+      'Execution authority intent. Omit or use "use_default" for the normal sandbox route with loopback client access but public/LAN egress and listener binding blocked. Use "with_additional_permissions" with additional_permissions for a narrow sandbox capability such as local listener binding. Recognized default-sandbox HOME/listener failures may return retry_guidance code "sandbox_missing_capabilities" with the exact narrow retry parameters; changed sandbox preparation security may return "sandbox_preparation_changed" with the changed fields; predictable Git metadata writers may return "protected_git_metadata" guidance before launch. AgentLink never broadens permissions automatically. "require_managed_network" is the compatibility intent for one exact sandboxed command that needs reviewed public network access; Git-over-SSH and recognized gh TLS trust failures may return non-automatic retry_guidance codes "managed_network_ssh_git_transport" or "managed_network_tls_trust". Never replace trust repair with disabled TLS verification. Use "require_escalated" only when execution must occur outside the sandbox. Every non-default intent requires a non-empty reason and approval.',
     ),
   additional_permissions: z
     .object({
@@ -1036,7 +1036,7 @@ export const readOnlyExecuteCommandSchema = {
   command: z
     .string()
     .describe(
-      "Recognized read-only shell command to execute. Unknown, mutating, redirected, networked, privileged, or opaque commands are rejected.",
+      "Recognized read-only shell command to execute. Unknown, mutating, redirected, networked, privileged, or opaque commands are rejected. AgentLink already disables interactive pagers. Use `rg --no-config <pattern> [path ...]`. Place Git helper guards after the subcommand: `git diff --no-ext-diff --no-textconv ...`, `git show --no-ext-diff --no-textconv ...`, `git log --no-ext-diff --no-textconv ...`, and `git blame --no-textconv ...`.",
     ),
   cwd: z
     .string()

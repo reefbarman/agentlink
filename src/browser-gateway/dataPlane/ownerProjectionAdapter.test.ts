@@ -771,6 +771,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
         previousReasoningEffort: "high",
         reasoningEffort: "low",
       },
+      mode: { previousMode: "ask", mode: "code" },
     };
 
     expect(adapter.getCheckpoint().transcript.messages[0]).toMatchObject({
@@ -781,6 +782,7 @@ describe("BrowserGatewayOwnerProjectionAdapter", () => {
           previousReasoningEffort: "high",
           reasoningEffort: "low",
         },
+        mode: { previousMode: "ask", mode: "code" },
       },
     });
   });

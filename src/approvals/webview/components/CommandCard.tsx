@@ -107,17 +107,14 @@ export function CommandCard({
         return {
           pattern: entry.existingRule.pattern,
           mode: entry.existingRule.mode,
-          decision: entry.existingRule.decision,
+          decision: entry.existingRule.decision ?? "allow",
           scope: entry.existingRule.scope,
         };
       }
       return {
         pattern: entry.command,
         mode: "prefix" as const,
-        decision:
-          request.security?.route === "sandbox"
-            ? undefined
-            : ("allow" as const),
+        decision: "allow" as const,
         scope: "skip" as const,
       };
     }),
@@ -134,17 +131,14 @@ export function CommandCard({
           return {
             pattern: entry.existingRule.pattern,
             mode: entry.existingRule.mode,
-            decision: entry.existingRule.decision,
+            decision: entry.existingRule.decision ?? "allow",
             scope: entry.existingRule.scope,
           };
         }
         return {
           pattern: entry.command,
           mode: "prefix" as const,
-          decision:
-            request.security?.route === "sandbox"
-              ? undefined
-              : ("allow" as const),
+          decision: "allow" as const,
           scope: "skip" as const,
         };
       }),

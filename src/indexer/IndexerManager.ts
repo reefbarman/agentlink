@@ -6,6 +6,7 @@
  */
 
 import * as vscode from "vscode";
+import * as os from "os";
 import * as path from "path";
 import { fork, type ChildProcess } from "child_process";
 import { openAiCodexAuthManager } from "../agent/providers/index.js";
@@ -44,6 +45,7 @@ import {
   createWorkerJobWatchdog,
   type WorkerJobWatchdog,
 } from "./workerJobWatchdog.js";
+import { indexerWorkerResourceEnv } from "./workerResourceLimits.js";
 
 // --- Public types ---
 
@@ -522,10 +524,16 @@ export class IndexerManager implements vscode.Disposable {
       "indexer-worker.js",
     );
 
-    this.log(`Forking indexer worker: ${workerPath}`);
+    const resourceEnv = indexerWorkerResourceEnv(os.cpus().length, process.env);
+    this.log(
+      `Forking indexer worker: ${workerPath} ` +
+        `(threads: compute=${resourceEnv.LANCE_CPU_THREADS}, ` +
+        `runtime=${resourceEnv.TOKIO_WORKER_THREADS}, io=${resourceEnv.LANCE_IO_THREADS})`,
+    );
     this.worker = fork(workerPath, [], {
       stdio: ["ignore", "pipe", "pipe", "ipc"],
       execArgv: ["--max-old-space-size=1024"],
+      env: { ...process.env, ...resourceEnv },
     });
     const worker = this.worker;
     const workerPid = worker.pid ?? "unknown";

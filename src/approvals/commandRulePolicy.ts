@@ -4,10 +4,7 @@ import type { RuleScope, ScopedRules } from "./ruleTypes.js";
 import { scanShellLexTokens } from "../util/shellLex.js";
 import { splitCompoundCommand } from "./commandSplitter.js";
 
-export type EffectiveCommandRuleDecision =
-  | CommandRuleDecision
-  | "legacy_allow"
-  | "unmatched";
+export type EffectiveCommandRuleDecision = CommandRuleDecision | "unmatched";
 
 export interface MatchedCommandRule {
   rule: CommandRule;
@@ -43,7 +40,7 @@ export function commandRulePolicyFingerprint(
         scope,
         pattern: rule.pattern,
         mode: rule.mode,
-        decision: rule.decision ?? "legacy_allow",
+        decision: rule.decision ?? "allow",
       })),
     })),
   });
@@ -51,10 +48,9 @@ export function commandRulePolicyFingerprint(
 
 const DECISION_PRIORITY: Record<EffectiveCommandRuleDecision, number> = {
   unmatched: 0,
-  legacy_allow: 1,
-  allow: 2,
-  prompt: 3,
-  forbidden: 4,
+  allow: 1,
+  prompt: 2,
+  forbidden: 3,
 };
 
 /**
@@ -236,8 +232,7 @@ export function evaluateCommandSegmentRules(
 
   let decision: EffectiveCommandRuleDecision = "unmatched";
   for (const { rule } of matches) {
-    const candidate: EffectiveCommandRuleDecision =
-      rule.decision ?? "legacy_allow";
+    const candidate: EffectiveCommandRuleDecision = rule.decision ?? "allow";
     if (DECISION_PRIORITY[candidate] > DECISION_PRIORITY[decision]) {
       decision = candidate;
     }
@@ -247,11 +242,7 @@ export function evaluateCommandSegmentRules(
     command,
     decision,
     matches,
-    explicitlyAllowed:
-      decision === "allow" &&
-      matches.some(
-        ({ rule }) => rule.decision === "allow" && rule.mode !== "regex",
-      ),
+    explicitlyAllowed: decision === "allow",
   };
 }
 
@@ -281,9 +272,6 @@ export function evaluateCommandRulePolicy(
       segments.every((segment) => segment.explicitlyAllowed),
     allSegmentsApprovedByRule:
       segments.length > 0 &&
-      segments.every(
-        (segment) =>
-          segment.decision === "allow" || segment.decision === "legacy_allow",
-      ),
+      segments.every((segment) => segment.decision === "allow"),
   };
 }

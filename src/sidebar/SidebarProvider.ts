@@ -483,22 +483,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     });
     if (!result) return;
     const decisions: Array<
-      vscode.QuickPickItem & { decision: CommandRuleDecision | undefined }
+      vscode.QuickPickItem & { decision: CommandRuleDecision }
     > = [
       {
-        label: "Approval only (legacy)",
-        description: "Skip repeat cards without granting native authority",
-        decision: undefined,
-        picked: oldDecision === undefined,
-      },
-      {
-        label: result.mode === "regex" ? "Allow (sandboxed)" : "Allow (native)",
-        description:
-          result.mode === "regex"
-            ? "Skip review but retain the Protected Terminal"
-            : "Skip review and use normal user permissions when every segment matches",
+        label: "Allow",
+        description: "Run matching commands without another approval card",
         decision: "allow",
-        picked: oldDecision === "allow",
+        picked: oldDecision === undefined || oldDecision === "allow",
       },
       {
         label: "Prompt",

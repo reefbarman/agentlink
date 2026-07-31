@@ -1,3 +1,33 @@
+export type SandboxPreparationDriftField =
+  | "attestationId"
+  | "auditId"
+  | "route"
+  | "approvalPolicySnapshot"
+  | "approvalReviewerSnapshot"
+  | "executionPresetSnapshot"
+  | "requiredAuthority"
+  | "permissionIntent"
+  | "approvalRequirement"
+  | "authorityReason"
+  | "commandApprovalPolicySnapshot";
+
+export class SandboxPreparationDriftError extends Error {
+  readonly code = "sandbox_preparation_changed";
+  readonly changedFields: readonly SandboxPreparationDriftField[];
+
+  constructor(
+    changedFields: readonly SandboxPreparationDriftField[],
+    readonly failureStage: "preparation" | "execution" = "preparation",
+  ) {
+    const fields = Object.freeze([...changedFields]);
+    super(
+      `Prepared sandbox security basis changed: ${fields.join(", ")}. Retry the same command so it can be prepared under the current sandbox policy.`,
+    );
+    this.name = "SandboxPreparationDriftError";
+    this.changedFields = fields;
+  }
+}
+
 export type TerminalTargetFailure =
   | "host_target"
   | "wrong_authority"

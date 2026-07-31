@@ -43,6 +43,10 @@ describe("resolveBackgroundBackendRoute", () => {
 
     expect(resolveBackgroundBackendRoute(settings, {}, context)).toEqual({
       backend: "native",
+      fallback: {
+        reason: "unavailable_reference",
+        reference: "acp:claude",
+      },
     });
     expect(
       resolveBackgroundBackendRoute(
@@ -50,7 +54,13 @@ describe("resolveBackgroundBackendRoute", () => {
         { taskClass: "review_code" },
         context,
       ),
-    ).toEqual({ backend: "native" });
+    ).toEqual({
+      backend: "native",
+      fallback: {
+        reason: "unavailable_reference",
+        reference: "acp:claude",
+      },
+    });
     // An explicit override still wins during the cooldown.
     expect(
       resolveBackgroundBackendRoute(

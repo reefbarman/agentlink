@@ -69,6 +69,19 @@ describe("SlashCommandRegistry", () => {
     );
   });
 
+  it("exposes /environment as a built-in panel command", async () => {
+    const registry = new SlashCommandRegistry(tmpDir, "code");
+    await registry.reload();
+
+    expect(
+      registry.getAll().find((cmd) => cmd.name === "environment"),
+    ).toMatchObject({
+      description: "Show runtime environment and agent context details",
+      source: "builtin",
+      builtin: true,
+    });
+  });
+
   it("exposes /memory as a built-in panel command in both catalogs", async () => {
     const registry = new SlashCommandRegistry(tmpDir, "code");
     await registry.reload();

@@ -332,6 +332,43 @@ describe("useWebviewMessageConnection", () => {
     });
   });
 
+  it("processes BTW events directly for open inactive tabs", () => {
+    const postMessage = vi.fn();
+    const onMessage = vi.fn();
+    const onInactiveSessionMessage = vi.fn();
+    render(
+      <Harness
+        postMessage={postMessage}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: true }}
+        openSessionIdsRef={{ current: new Set(["session-1", "session-2"]) }}
+        dispatchDelta={vi.fn()}
+        onInactiveSessionMessage={onInactiveSessionMessage}
+        onMessage={onMessage}
+      />,
+    );
+
+    const message: ExtensionMessage = {
+      type: "agentBtwProgress",
+      sessionId: "session-2",
+      requestId: "btw-2",
+      answer: "answer for inactive T2",
+      tools: [],
+      warnings: [],
+      budget: {
+        apiTurns: 1,
+        maxApiTurns: 5,
+        toolCalls: 0,
+        maxToolCalls: 10,
+      },
+    };
+    sendMessage(message);
+
+    expect(onMessage).toHaveBeenCalledWith(message, expect.any(Object));
+    expect(onInactiveSessionMessage).not.toHaveBeenCalled();
+    expect(postMessage.mock.calls).toEqual([[{ command: "webviewReady" }]]);
+  });
+
   it("routes open inactive-tab events to the keyed projection cache", () => {
     const postMessage = vi.fn();
     const onMessage = vi.fn();

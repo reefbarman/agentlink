@@ -172,7 +172,7 @@ export interface ApprovalRequest {
 export interface RuleEntry {
   pattern: string;
   mode: "prefix" | "exact" | "regex" | "skip";
-  /** Missing preserves a legacy approval-only rule with no native authority. */
+  /** Missing only for legacy stored rules and interpreted as "allow". */
   decision?: "allow" | "prompt" | "forbidden";
   scope: "session" | "project" | "global" | "skip";
 }

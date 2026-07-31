@@ -66,7 +66,7 @@ describe("commandRulePolicy", () => {
     expect(complete.allSegmentsApprovedByRule).toBe(true);
   });
 
-  it("keeps legacy trust rules useful without granting native authority", () => {
+  it("treats legacy trust rules as allow rules", () => {
     const evaluation = evaluateCommandRulePolicy(
       rules({
         project: [{ pattern: "dotnet build", mode: "exact" }],
@@ -74,9 +74,9 @@ describe("commandRulePolicy", () => {
       "dotnet build",
     );
 
-    expect(evaluation.decision).toBe("legacy_allow");
+    expect(evaluation.decision).toBe("allow");
     expect(evaluation.allSegmentsApprovedByRule).toBe(true);
-    expect(evaluation.allSegmentsExplicitlyAllowed).toBe(false);
+    expect(evaluation.allSegmentsExplicitlyAllowed).toBe(true);
   });
 
   it("keeps quoted wrapped scripts as one opaque invocation", () => {
@@ -99,7 +99,7 @@ describe("commandRulePolicy", () => {
     expect(evaluation.allSegmentsExplicitlyAllowed).toBe(true);
   });
 
-  it("keeps regex allow rules sandboxed instead of treating them as argv authority", () => {
+  it("treats regex matches as allow authority", () => {
     const evaluation = evaluateCommandRulePolicy(
       rules({
         session: [
@@ -115,7 +115,7 @@ describe("commandRulePolicy", () => {
 
     expect(evaluation.decision).toBe("allow");
     expect(evaluation.allSegmentsApprovedByRule).toBe(true);
-    expect(evaluation.allSegmentsExplicitlyAllowed).toBe(false);
+    expect(evaluation.allSegmentsExplicitlyAllowed).toBe(true);
   });
 
   it("matches argv prefixes instead of string prefixes", () => {

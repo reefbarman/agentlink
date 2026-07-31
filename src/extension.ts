@@ -52,6 +52,8 @@ import { LanceDbRetrievalRepository } from "./storage/retrieval/LanceDbRetrieval
 import { RetrievalSkillCatalogFallbackProvider } from "./storage/retrieval/RetrievalSkillCatalogFallbackProvider.js";
 import { getRetrievalStoreRoot } from "./storage/retrieval/retrievalStorePaths.js";
 import { cleanupLegacyCodeRetrievalStore } from "./storage/retrieval/legacyCodeRetrievalCleanup.js";
+import { cleanupSupersededCodeIndexGenerations } from "./storage/retrieval/supersededCodeIndexGenerationCleanup.js";
+import { CODE_INDEX_STORAGE_GENERATION } from "./indexer/codeRetrievalIdentity.js";
 import { SkillCatalogRetrievalService } from "./core/catalog/SkillCatalogRetrievalService.js";
 import { startHostLivenessMonitor } from "./core/hostLiveness.js";
 import { appendJsonlLinesWithLock } from "./telemetry/jsonlAppend.js";
@@ -1046,6 +1048,21 @@ export async function activate(
     log(`[retrieval] Legacy code cleanup failed: ${String(error)}`);
     throw error;
   }
+  void cleanupSupersededCodeIndexGenerations(
+    context.globalStorageUri.fsPath,
+    CODE_INDEX_STORAGE_GENERATION,
+  )
+    .then((result) => {
+      if (result.removed.length > 0 || result.skippedActive.length > 0) {
+        log(
+          `[retrieval] Superseded code-index cleanup removed=[${result.removed.join(", ")}] ` +
+            `skippedActive=[${result.skippedActive.join(", ")}]`,
+        );
+      }
+    })
+    .catch((error) => {
+      log(`[retrieval] Superseded code-index cleanup failed: ${String(error)}`);
+    });
   const autonomousMemoryToolProvider = new AutonomousMemoryToolProvider({
     root: retrievalStoreRoot,
     getMode: getAutonomousMemoryMode,

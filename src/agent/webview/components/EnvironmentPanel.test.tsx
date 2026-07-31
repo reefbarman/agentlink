@@ -1,17 +1,18 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
-import { DebugInfo } from "./DebugInfo.js";
+import { EnvironmentPanel } from "./EnvironmentPanel.js";
 
 afterEach(() => cleanup());
 
-describe("DebugInfo", () => {
+describe("EnvironmentPanel", () => {
   it("shows deferred rule metadata separately from prompt chars", () => {
     render(
-      <DebugInfo
+      <EnvironmentPanel
         info={{ platform: "darwin" }}
+        onClose={vi.fn()}
         loadedInstructions={[
           {
             source: "AGENTS.md",
@@ -45,8 +46,7 @@ describe("DebugInfo", () => {
       />,
     );
 
-    fireEvent.click(screen.getByText("Environment"));
-
+    expect(screen.getByText("Environment")).toBeTruthy();
     expect(
       screen.getByText(
         "Loaded Instructions (3 files, 420 body prompt chars · 1 deferred · 2,820 source chars)",
@@ -71,5 +71,16 @@ describe("DebugInfo", () => {
         "deferred · 0 body prompt chars · 2,400 source chars · summary: TypeScript standards · globs: src/**/*.ts, tests/**/*.ts · load: .agentlink/rules/typescript.md",
       ),
     ).toBeTruthy();
+  });
+
+  it("closes from the shelf panel header", () => {
+    const onClose = vi.fn();
+    render(
+      <EnvironmentPanel info={{ platform: "darwin" }} onClose={onClose} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Environment" }));
+
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });

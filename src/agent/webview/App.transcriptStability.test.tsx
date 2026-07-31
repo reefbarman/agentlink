@@ -116,6 +116,134 @@ function transcriptOccurrences(container: Element, needle: string): number {
 }
 
 describe("transcript stability across hydrations", () => {
+  it("keeps the optimistic first message when its tab is bound to a new session", async () => {
+    const vscodeApi = createVsCodeApi();
+    const snapshot = createSnapshot("tab-1");
+    snapshot.tabs[0] = {
+      ...snapshot.tabs[0]!,
+      sessionId: null,
+      status: "idle",
+      busy: false,
+    };
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot });
+    deliver({
+      type: "stateUpdate",
+      state: {
+        sessionId: null,
+        mode: "code",
+        model: "claude-opus-5",
+        streaming: false,
+        reasoningEffort: "high",
+        thinkingEnabled: true,
+      },
+    });
+
+    const composer = container.querySelector(
+      ".chat-input",
+    ) as HTMLTextAreaElement;
+    fireEvent.input(composer, {
+      target: { value: "FirstPromptMustRemain" },
+    });
+    fireEvent.click(
+      container.querySelector<HTMLButtonElement>(
+        'button[title="Send message (Enter)"]',
+      )!,
+    );
+    expect(transcriptOccurrences(container, "FirstPromptMustRemain")).toBe(1);
+
+    deliver({
+      type: "chatWorkspaceUpdate",
+      snapshot: createSnapshot("tab-1"),
+    });
+
+    // A creation-time hydration may still be empty because the manager has not
+    // committed the user turn yet. It must not replace the optimistic row.
+    deliver({
+      ...sessionLoaded("session-1", {
+        transcriptRevision: 0,
+        origin: "focus",
+        streaming: true,
+      }),
+      messages: [],
+    });
+    expect(transcriptOccurrences(container, "FirstPromptMustRemain")).toBe(1);
+
+    // The first canonical hydration is authoritative and repairs any events
+    // missed before binding without duplicating the optimistic user row.
+    deliver({
+      ...sessionLoaded("session-1", {
+        userText: "FirstPromptMustRemain",
+        transcriptRevision: 1,
+        origin: "focus",
+        streaming: false,
+      }),
+      mode: "ask",
+    });
+
+    await waitFor(() => {
+      expect(transcriptOccurrences(container, "FirstPromptMustRemain")).toBe(1);
+      expect(container.querySelector('[title="Mode: Ask"]')).toBeTruthy();
+    });
+  });
+
+  it("does not preserve an optimistic first message across controller epochs", () => {
+    const vscodeApi = createVsCodeApi();
+    const snapshot = createSnapshot("tab-1", "epoch-1");
+    snapshot.tabs[0] = { ...snapshot.tabs[0]!, sessionId: null };
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot });
+
+    const composer = container.querySelector(
+      ".chat-input",
+    ) as HTMLTextAreaElement;
+    fireEvent.input(composer, { target: { value: "OldEpochPrompt" } });
+    fireEvent.click(
+      container.querySelector<HTMLButtonElement>(
+        'button[title="Send message (Enter)"]',
+      )!,
+    );
+    expect(transcriptOccurrences(container, "OldEpochPrompt")).toBe(1);
+
+    deliver({
+      type: "chatWorkspaceUpdate",
+      snapshot: createSnapshot("tab-1", "epoch-2"),
+    });
+    expect(transcriptOccurrences(container, "OldEpochPrompt")).toBe(0);
+  });
+
+  it("does not transfer an optimistic first message to another tab", () => {
+    const vscodeApi = createVsCodeApi();
+    const snapshot = createSnapshot("tab-1");
+    snapshot.tabs[0] = { ...snapshot.tabs[0]!, sessionId: null };
+    snapshot.tabs[1] = { ...snapshot.tabs[1]!, sessionId: null };
+    const { container } = render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot });
+
+    const composer = container.querySelector(
+      ".chat-input",
+    ) as HTMLTextAreaElement;
+    fireEvent.input(composer, { target: { value: "OnlyForFirstTab" } });
+    fireEvent.click(
+      container.querySelector<HTMLButtonElement>(
+        'button[title="Send message (Enter)"]',
+      )!,
+    );
+    expect(transcriptOccurrences(container, "OnlyForFirstTab")).toBe(1);
+
+    deliver({
+      type: "chatWorkspaceUpdate",
+      snapshot: { ...snapshot, focusedTabId: "tab-2" },
+    });
+    const boundSecondTab = createSnapshot("tab-2");
+    boundSecondTab.tabs[0] = {
+      ...boundSecondTab.tabs[0]!,
+      sessionId: null,
+    };
+    deliver({ type: "chatWorkspaceUpdate", snapshot: boundSecondTab });
+    expect(transcriptOccurrences(container, "OnlyForFirstTab")).toBe(0);
+  });
+
   it("keeps streamed content when a focus hydration arrives mid-turn for the live session", async () => {
     const vscodeApi = createVsCodeApi();
     const { container } = render(<App vscodeApi={vscodeApi} />);

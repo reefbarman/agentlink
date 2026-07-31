@@ -58,18 +58,17 @@ describe("addTrustedCommandViaUi", () => {
       [
         {
           label: "Prefix Match",
-          description: 'Native authority for commands starting with "npm test"',
+          description: 'Allow commands starting with "npm test"',
           mode: "prefix",
         },
         {
           label: "Exact Match",
-          description: 'Native authority only for "npm test"',
+          description: 'Allow only "npm test"',
           mode: "exact",
         },
         {
           label: "Regex Match",
-          description:
-            "Approval shortcut only for commands matching /npm test/",
+          description: "Allow commands matching /npm test/",
           mode: "regex",
         },
       ],
@@ -105,7 +104,7 @@ describe("addTrustedCommandViaUi", () => {
       "project",
     );
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
-      'Added command policy (project): allow prefix "npm test" (native authority; every command segment must match)',
+      'Added command policy (project): allow prefix "npm test"',
     );
   });
 
@@ -135,7 +134,7 @@ describe("addTrustedCommandViaUi", () => {
       "global",
     );
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
-      'Added command policy (global): allow exact "git status" (native authority; every command segment must match)',
+      'Added command policy (global): allow exact "git status"',
     );
   });
 
@@ -149,9 +148,9 @@ describe("addTrustedCommandViaUi", () => {
     await addTrustedCommandViaUi(approvalManager);
 
     expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
-      'Broad native prefix: "git" can authorize any matching command outside the Protected Terminal with your normal user permissions.',
+      'Broad prefix: "git" allows any matching command without another approval card.',
       { modal: true },
-      "Add Broad Native Rule",
+      "Add Broad Rule",
     );
     expect(vscode.window.showQuickPick).toHaveBeenCalledTimes(1);
     expect(approvalManager.addCommandRule).not.toHaveBeenCalled();
@@ -161,7 +160,7 @@ describe("addTrustedCommandViaUi", () => {
     const approvalManager = createApprovalManager();
     vi.mocked(vscode.window.showInputBox).mockResolvedValue("git");
     vi.mocked(vscode.window.showWarningMessage).mockResolvedValue(
-      "Add Broad Native Rule" as never,
+      "Add Broad Rule" as never,
     );
     vi.mocked(vscode.window.showQuickPick)
       .mockImplementationOnce(selectByLabel("Prefix Match") as never)
@@ -176,7 +175,7 @@ describe("addTrustedCommandViaUi", () => {
     );
   });
 
-  it("labels regex allow rules as sandboxed approval shortcuts", async () => {
+  it("labels regex allow rules consistently", async () => {
     const approvalManager = createApprovalManager();
     vi.mocked(vscode.window.showInputBox).mockResolvedValue("npm test .+");
     vi.mocked(vscode.window.showQuickPick)
@@ -191,7 +190,7 @@ describe("addTrustedCommandViaUi", () => {
       "global",
     );
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
-      'Added command policy (global): allow regex "npm test .+" (approval only; sandbox retained)',
+      'Added command policy (global): allow regex "npm test .+"',
     );
   });
 

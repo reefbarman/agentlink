@@ -275,6 +275,21 @@ describe("ToolCallBlock", () => {
     });
     expect(preview.getAttribute("src")).toBe("data:image/png;base64,YWJjZA==");
     expect(screen.queryByText("[image]")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open read_file result image 1" }),
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: "read_file result image 1",
+    });
+    expect(dialog.parentElement).toBe(document.body);
+    expect(
+      dialog.querySelector(".user-image-lightbox-image")?.getAttribute("src"),
+    ).toBe("data:image/png;base64,YWJjZA==");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(
+      screen.queryByRole("dialog", { name: "read_file result image 1" }),
+    ).toBeNull();
   });
 
   it("marks the collapsed header with an image badge when the result contains images", () => {

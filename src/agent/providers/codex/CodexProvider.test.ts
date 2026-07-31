@@ -57,9 +57,12 @@ describe("CodexProvider.complete", () => {
   beforeEach(() => {
     createMock.mockReset();
     openAiConstructorMock.mockClear();
+    vi.stubEnv("AGENTLINK_CODEX_ORIGINATOR", "");
+    vi.stubEnv("AGENTLINK_CODEX_USER_AGENT", "");
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -792,9 +795,12 @@ describe("CodexProvider.stream", () => {
   beforeEach(() => {
     createMock.mockReset();
     openAiConstructorMock.mockClear();
+    vi.stubEnv("AGENTLINK_CODEX_ORIGINATOR", "");
+    vi.stubEnv("AGENTLINK_CODEX_USER_AGENT", "");
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -1155,9 +1161,12 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
   beforeEach(() => {
     createMock.mockReset();
     openAiConstructorMock.mockClear();
+    vi.stubEnv("AGENTLINK_CODEX_ORIGINATOR", "");
+    vi.stubEnv("AGENTLINK_CODEX_USER_AGENT", "");
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 

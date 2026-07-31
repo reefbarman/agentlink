@@ -312,6 +312,7 @@ function buildTranscriptRows(
   let pendingExplicitModel: string | undefined;
   let pendingExplicitReasoningEffort: ReasoningEffort | undefined;
   let previousMode: string | undefined;
+  let pendingExplicitMode: string | undefined;
   let previousCommandApprovalPolicy: CommandApprovalPolicy | undefined;
 
   for (const message of messages) {
@@ -343,6 +344,7 @@ function buildTranscriptRows(
           ...messageRows[0],
           modelChange: message.surfaceChange.model,
           reasoningChange: message.surfaceChange.reasoning,
+          modeChange: message.surfaceChange.mode,
         };
       }
       if (message.surfaceChange.model) {
@@ -354,6 +356,10 @@ function buildTranscriptRows(
           message.surfaceChange.reasoning.reasoningEffort;
         pendingExplicitReasoningEffort =
           message.surfaceChange.reasoning.reasoningEffort;
+      }
+      if (message.surfaceChange.mode) {
+        previousMode = message.surfaceChange.mode.mode;
+        pendingExplicitMode = message.surfaceChange.mode.mode;
       }
       rows.push(...messageRows);
       continue;
@@ -386,7 +392,7 @@ function buildTranscriptRows(
           ? { previousReasoningEffort, reasoningEffort }
           : undefined;
       const modeChange =
-        mode && previousMode && previousMode !== mode
+        mode && !pendingExplicitMode && previousMode && previousMode !== mode
           ? { previousMode, mode }
           : undefined;
       const approvalChange =
@@ -419,7 +425,10 @@ function buildTranscriptRows(
           pendingExplicitReasoningEffort = undefined;
         else previousReasoningEffort = reasoningEffort;
       }
-      if (mode) previousMode = mode;
+      if (mode) {
+        if (pendingExplicitMode) pendingExplicitMode = undefined;
+        else previousMode = mode;
+      }
       if (commandApprovalPolicy)
         previousCommandApprovalPolicy = commandApprovalPolicy;
     }

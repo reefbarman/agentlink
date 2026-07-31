@@ -34,6 +34,14 @@ export interface InlineApprovalRequest {
   id?: string;
   /** When set, shows attribution for which background task is requesting approval. */
   backgroundTask?: string;
+  /** For command cards: exact command text to display instead of raw detail. */
+  commandText?: string;
+  /** For command cards: requestor-provided context shown under the command. */
+  commandReason?: string;
+  /** For command cards: concise reason automatic approval was skipped. */
+  humanOnlyReason?: string;
+  /** For command cards: working directory the command will run in. */
+  cwd?: string;
   /** Optional exact target path for project/cross-project attribution. */
   targetPath?: string;
   /**

@@ -1,6 +1,10 @@
 import * as fs from "fs";
 import * as os from "os";
 
+import {
+  SandboxPreparationDriftError,
+  TerminalTargetRecoveryError,
+} from "../core/capabilities/terminalTargetError.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createCommandReviewTurnCircuit,
@@ -8,7 +12,6 @@ import {
 } from "../approvals/commandApprovalReview.js";
 
 import { AgentTerminalProviderRouter } from "../terminal/sandbox/AgentTerminalProviderRouter.js";
-import { TerminalTargetRecoveryError } from "../core/capabilities/terminalTargetError.js";
 import { evaluateCommandRulePolicy } from "../approvals/commandRulePolicy.js";
 
 const {
@@ -136,7 +139,7 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("returns native escalation guidance after preparing but before executing a protected Git writer", async () => {
+  it("returns native escalation guidance after resolving a protected Git writer to the sandbox", async () => {
     classifyPredictableGitMetadataWriter.mockReturnValue({
       kind: "predictable_git_metadata_writer",
       subcommands: ["commit"],
@@ -333,7 +336,7 @@ describe("handleExecuteCommand", () => {
     expect(terminalProvider.executeCommand).toHaveBeenCalledOnce();
   });
 
-  it("fails closed after preparation but before execution when Git metadata resolution fails", async () => {
+  it("fails closed after route preparation when Git metadata resolution fails", async () => {
     classifyPredictableGitMetadataWriter.mockReturnValue({
       kind: "predictable_git_metadata_writer",
       subcommands: ["add"],
@@ -633,12 +636,14 @@ describe("handleExecuteCommand", () => {
         key === "masterBypass" ? false : fallback,
       ),
     });
-    classifyPredictableGitMetadataWriter
-      .mockReturnValueOnce(null)
-      .mockReturnValueOnce({
-        kind: "predictable_git_metadata_writer",
-        subcommands: ["commit"],
-      });
+    classifyPredictableGitMetadataWriter.mockImplementation(({ command }) =>
+      command === "git commit -m fix"
+        ? {
+            kind: "predictable_git_metadata_writer",
+            subcommands: ["commit"],
+          }
+        : null,
+    );
     resolveBaselineProtectedGitMetadataForCwd.mockResolvedValue({
       marker: "/workspace/.git",
     });
@@ -1479,55 +1484,76 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("honors a matching native allow rule before reviewing explicit escalation", async () => {
-    const enqueueCommandApproval = vi.fn();
-    const review = vi.fn();
-    const rules = {
-      session: [],
-      project: [
+  it.each([
+    {
+      ruleKind: "exact allow",
+      rule: {
+        pattern: "dotnet build",
+        mode: "exact" as const,
+        decision: "allow" as const,
+      },
+    },
+    {
+      ruleKind: "regex allow",
+      rule: {
+        pattern: "^dotnet build$",
+        mode: "regex" as const,
+        decision: "allow" as const,
+      },
+    },
+    {
+      ruleKind: "legacy allow",
+      rule: {
+        pattern: "dotnet build",
+        mode: "exact" as const,
+      },
+    },
+  ])(
+    "honors a matching $ruleKind rule before reviewing explicit escalation",
+    async ({ rule }) => {
+      const enqueueCommandApproval = vi.fn();
+      const review = vi.fn();
+      const rules = {
+        session: [],
+        project: [rule],
+        global: [],
+      };
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
         {
-          pattern: "dotnet build",
-          mode: "exact" as const,
-          decision: "allow" as const,
+          command: "dotnet build",
+          sandbox_permissions: "require_escalated",
+          reason: "The SDK needs a host facility unavailable in the sandbox.",
         },
-      ],
-      global: [],
-    };
-    const { handleExecuteCommand } = await import("./executeCommand.js");
+        {
+          evaluateCommandRules: (_sessionId: string, command: string) =>
+            evaluateCommandRulePolicy(rules, command),
+          isCommandApproved: () => true,
+          findMatchingCommandRule: vi.fn(),
+        } as never,
+        { enqueueCommandApproval } as never,
+        "session-native-escalation-rule",
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: { review },
+        },
+      );
 
-    const result = await handleExecuteCommand(
-      {
-        command: "dotnet build",
-        sandbox_permissions: "require_escalated",
-        reason: "The SDK needs a host facility unavailable in the sandbox.",
-      },
-      {
-        evaluateCommandRules: (_sessionId: string, command: string) =>
-          evaluateCommandRulePolicy(rules, command),
-        isCommandApproved: () => true,
-        findMatchingCommandRule: vi.fn(),
-      } as never,
-      { enqueueCommandApproval } as never,
-      "session-native-escalation-rule",
-      undefined,
-      {
-        terminalProvider,
-        getCommandApprovalPolicy: () => "approve-for-me",
-        commandApprovalReviewer: { review },
-      },
-    );
-
-    expect(review).not.toHaveBeenCalled();
-    expect(enqueueCommandApproval).not.toHaveBeenCalled();
-    expect(textPayload(result)).toMatchObject({
-      approval: { by: "explicit_rule" },
-      security: {
-        route: "native",
-        permissionIntent: "native-escalation",
-        authorityReason: "explicit-rule",
-      },
-    });
-  });
+      expect(review).not.toHaveBeenCalled();
+      expect(enqueueCommandApproval).not.toHaveBeenCalled();
+      expect(textPayload(result)).toMatchObject({
+        approval: { by: "explicit_rule" },
+        security: {
+          route: "native",
+          permissionIntent: "native-escalation",
+          authorityReason: "explicit-rule",
+        },
+      });
+    },
+  );
 
   it("passes filesystem evidence about the command to the guardian review", async () => {
     getConfiguration.mockReturnValue({
@@ -1697,7 +1723,7 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("uses explicit all-segment allow rules as native authority under Approve for Me", async () => {
+  it("keeps the Approve for Me sandbox route when an allow rule skips approval", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
         key === "masterBypass" ? false : fallback,
@@ -1741,7 +1767,7 @@ describe("handleExecuteCommand", () => {
     expect(terminalProvider.prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({ command: "dotnet build" }),
       expect.objectContaining({
-        requiredAuthority: "native-agent",
+        requiredAuthority: "sandbox",
         permissionIntent: "default",
         authorityReason: "explicit-rule",
       }),
@@ -1751,7 +1777,7 @@ describe("handleExecuteCommand", () => {
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
     expect(textPayload(result)).toMatchObject({
       approval: { by: "explicit_rule" },
-      security: { route: "native", authorityReason: "explicit-rule" },
+      security: { route: "sandbox", authorityReason: "explicit-rule" },
     });
   });
 
@@ -1765,14 +1791,14 @@ describe("handleExecuteCommand", () => {
       },
     },
     {
-      ruleKind: "legacy approval-only",
+      ruleKind: "legacy allow",
       rule: {
         pattern: "npm test",
         mode: "exact" as const,
       },
     },
   ])(
-    "keeps $ruleKind rules sandboxed while skipping repeat approval",
+    "keeps the requested sandbox route for $ruleKind rules while skipping approval",
     async ({ rule }) => {
       getConfiguration.mockReturnValue({
         get: vi.fn((key: string, fallback?: unknown) =>
@@ -1812,7 +1838,7 @@ describe("handleExecuteCommand", () => {
         expect.objectContaining({ command: "npm test" }),
         expect.objectContaining({
           requiredAuthority: "sandbox",
-          authorityReason: "approval-policy",
+          authorityReason: "explicit-rule",
         }),
       );
       expect(evaluateCommandRules).toHaveBeenCalledTimes(2);
@@ -1820,7 +1846,7 @@ describe("handleExecuteCommand", () => {
       expect(enqueueCommandApproval).not.toHaveBeenCalled();
       expect(textPayload(result)).toMatchObject({
         approval: { by: "explicit_rule" },
-        security: { route: "sandbox", authorityReason: "approval-policy" },
+        security: { route: "sandbox", authorityReason: "explicit-rule" },
       });
     },
   );
@@ -1835,7 +1861,7 @@ describe("handleExecuteCommand", () => {
       },
     },
     {
-      ruleKind: "legacy approval-only",
+      ruleKind: "legacy allow",
       rule: {
         pattern: "npm test",
         mode: "exact" as const,
@@ -1875,7 +1901,7 @@ describe("handleExecuteCommand", () => {
       expect(enqueueCommandApproval).not.toHaveBeenCalled();
       expect(textPayload(result)).toMatchObject({
         approval: { by: "explicit_rule" },
-        security: { route: "native", authorityReason: "approval-policy" },
+        security: { route: "native", authorityReason: "explicit-rule" },
       });
     },
   );
@@ -3182,11 +3208,11 @@ describe("handleExecuteCommand", () => {
         reason: "Run tests in the external project.",
       },
       {
-        isCommandApproved: () => true,
+        isCommandApproved: () => false,
         findMatchingCommandRule: vi.fn(),
       } as never,
       {
-        isRecentlyApproved: () => true,
+        isCommandRecentlyApproved: () => false,
         enqueueCommandApproval: vi.fn(),
       } as never,
       "session-native-outside-workspace-cwd",
@@ -4483,8 +4509,8 @@ describe("handleExecuteCommand", () => {
 
     await handleExecuteCommand(
       { command: "pwd", sandbox_permissions: "use_default" },
-      { isCommandApproved: () => true } as never,
-      { isRecentlyApproved: () => true } as never,
+      { isCommandApproved: () => false } as never,
+      { isCommandRecentlyApproved: () => false } as never,
       "session-default-permissions",
       undefined,
       {
@@ -5499,6 +5525,14 @@ describe("handleExecuteCommand", () => {
     const enqueueCommandApproval = vi.fn(() => ({
       promise: Promise.resolve({ decision: "run-once" }),
     }));
+    const review = vi.fn(async () => ({
+      outcome: "allow" as const,
+      risk: "low" as const,
+      userAuthorization: "high" as const,
+      rationale: "The command is safe, but the prompt rule requires a human.",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
@@ -5509,15 +5543,20 @@ describe("handleExecuteCommand", () => {
         isCommandApproved: () => false,
         findMatchingCommandRule: () => undefined,
       } as never,
-      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      {
+        isCommandRecentlyApproved: () => true,
+        enqueueCommandApproval,
+      } as never,
       "session-verification-prompt-rule",
       undefined,
       {
         terminalProvider,
         getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
       },
     );
 
+    expect(review).not.toHaveBeenCalled();
     expect(enqueueCommandApproval).toHaveBeenCalledOnce();
     expect(textPayload(result).approval).toEqual({ by: "human" });
   });
@@ -6903,6 +6942,44 @@ describe("handleExecuteCommand", () => {
         command_sent: false,
         process_launched: false,
       });
+    });
+  });
+
+  it("returns structured retry guidance when sandbox preparation security changes", async () => {
+    const prepareExecution = vi.fn(async () => {
+      throw new SandboxPreparationDriftError([
+        "attestationId",
+        "approvalPolicySnapshot",
+      ]);
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-sandbox-preparation-drift",
+      undefined,
+      {
+        terminalProvider: { ...terminalProvider, prepareExecution },
+        getCommandApprovalPolicy: () => "approve-for-me",
+      },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      status: "retry_required",
+      error_code: "sandbox_preparation_changed",
+      changed_security_fields: ["attestationId", "approvalPolicySnapshot"],
+      retry_guidance: {
+        code: "sandbox_preparation_changed",
+        automatic_retry: false,
+        options: [{ action: "retry_same_command", same_command: true }],
+      },
+      command: "npm test",
+      command_sent: false,
+      process_launched: false,
+      retry_safe: true,
+      failure_stage: "preparation",
     });
   });
 

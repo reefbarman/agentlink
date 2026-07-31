@@ -16,8 +16,7 @@ export async function addTrustedCommandViaUi(
 ): Promise<void> {
   const pattern = await vscode.window.showInputBox({
     title: "Built-In Agent Command Policy Pattern",
-    prompt:
-      "Enter a command pattern. Exact and prefix allow rules may run outside the Protected Terminal with normal user permissions.",
+    prompt: "Enter a command pattern to allow without another approval card.",
     ignoreFocusOut: true,
     validateInput: (value) => (value.trim() ? null : "Pattern cannot be empty"),
   });
@@ -27,17 +26,17 @@ export async function addTrustedCommandViaUi(
   const modes: Array<vscode.QuickPickItem & { mode: CommandRule["mode"] }> = [
     {
       label: "Prefix Match",
-      description: `Native authority for commands starting with "${trimmedPattern}"`,
+      description: `Allow commands starting with "${trimmedPattern}"`,
       mode: "prefix",
     },
     {
       label: "Exact Match",
-      description: `Native authority only for "${trimmedPattern}"`,
+      description: `Allow only "${trimmedPattern}"`,
       mode: "exact",
     },
     {
       label: "Regex Match",
-      description: `Approval shortcut only for commands matching /${trimmedPattern}/`,
+      description: `Allow commands matching /${trimmedPattern}/`,
       mode: "regex",
     },
   ];
@@ -54,11 +53,11 @@ export async function addTrustedCommandViaUi(
     isBannedCommandRulePrefixSuggestion(trimmedPattern)
   ) {
     const confirmed = await vscode.window.showWarningMessage(
-      `Broad native prefix: "${trimmedPattern}" can authorize any matching command outside the Protected Terminal with your normal user permissions.`,
+      `Broad prefix: "${trimmedPattern}" allows any matching command without another approval card.`,
       { modal: true },
-      "Add Broad Native Rule",
+      "Add Broad Rule",
     );
-    if (confirmed !== "Add Broad Native Rule") return;
+    if (confirmed !== "Add Broad Rule") return;
   }
 
   const scopeItems: Array<
@@ -89,11 +88,7 @@ export async function addTrustedCommandViaUi(
     { pattern: trimmedPattern, mode: picked.mode, decision: "allow" },
     scopePick.scope,
   );
-  const authority =
-    picked.mode === "regex"
-      ? "approval only; sandbox retained"
-      : "native authority; every command segment must match";
   vscode.window.showInformationMessage(
-    `Added command policy (${scopePick.scope}): allow ${picked.mode} "${trimmedPattern}" (${authority})`,
+    `Added command policy (${scopePick.scope}): allow ${picked.mode} "${trimmedPattern}"`,
   );
 }

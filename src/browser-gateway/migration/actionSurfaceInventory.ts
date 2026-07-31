@@ -240,6 +240,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
   retainedHttp(
     "vscode_gateway",
     "POST",
+    "/api/attachment-previews",
+    "Project-bound image previews remain authenticated HTTP read payloads.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
     "/api/open-file",
     "Project-bound editor reveal remains an authenticated HTTP UI action.",
   ),
@@ -322,6 +328,12 @@ export const VSCODE_GATEWAY_ACTION_INVENTORY = [
     "/api/stop",
     "session.stop",
     "Foreground stop maps to an idempotent operation.",
+  ),
+  retainedHttp(
+    "vscode_gateway",
+    "POST",
+    "/api/retry",
+    "Requires a foreground-session retry command before Stage 5.",
   ),
   retainedHttp(
     "vscode_gateway",

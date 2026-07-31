@@ -203,6 +203,7 @@ interface InputAreaProps {
   allowAttachments?: boolean;
   allowMediaPaste?: boolean;
   allowFileMentions?: boolean;
+  allowUriAttachments?: boolean;
   allowThinkingToggle?: boolean;
   allowExportTranscript?: boolean;
   disabled?: boolean;
@@ -250,6 +251,7 @@ export function InputArea({
   allowAttachments = true,
   allowMediaPaste = true,
   allowFileMentions = true,
+  allowUriAttachments = true,
   allowThinkingToggle = true,
   allowExportTranscript = true,
   disabled = false,
@@ -260,11 +262,19 @@ export function InputArea({
 }: InputAreaProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
+  const [attachmentPreviews, setAttachmentPreviews] = useState<
+    Record<string, string>
+  >({});
   const [mediaAttachments, setMediaAttachments] = useState<MediaAttachment[]>(
     [],
   );
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputWrapperRef = useRef<HTMLDivElement>(null);
+  const requestedAttachmentPreviewsRef = useRef(new Set<string>());
+  const clearAttachmentPreviews = useCallback(() => {
+    requestedAttachmentPreviewsRef.current.clear();
+    setAttachmentPreviews({});
+  }, []);
   const normalDraftRef = useRef<{
     text: string;
     attachments: string[];
@@ -466,6 +476,7 @@ export function InputArea({
     const nextKey = contextMode?.key ?? null;
     if (nextKey === activeContextKeyRef.current) return;
 
+    clearAttachmentPreviews();
     if (nextKey) {
       if (activeContextKeyRef.current === null) {
         normalDraftRef.current = {
@@ -501,7 +512,7 @@ export function InputArea({
       normalDraftRef.current = null;
     }
     activeContextKeyRef.current = nextKey;
-  }, [contextMode?.key]);
+  }, [clearAttachmentPreviews, contextMode?.key]);
 
   const handleSubmit = useCallback(
     (asInterjection = false) => {
@@ -536,6 +547,7 @@ export function InputArea({
         setText("");
         setAttachments([]);
         setMediaAttachments([]);
+        clearAttachmentPreviews();
         closeSlash();
         if (textareaRef.current) textareaRef.current.style.height = "auto";
 
@@ -578,6 +590,7 @@ export function InputArea({
       setText("");
       setAttachments([]);
       setMediaAttachments([]);
+      clearAttachmentPreviews();
       if (textareaRef.current) {
         textareaRef.current.style.height = "auto";
       }
@@ -599,6 +612,7 @@ export function InputArea({
       streaming,
       disabled,
       contextMode,
+      clearAttachmentPreviews,
     ],
   );
 
@@ -856,6 +870,13 @@ export function InputArea({
 
   const handleRemoveAttachment = useCallback((path: string) => {
     setAttachments((prev) => prev.filter((p) => p !== path));
+    requestedAttachmentPreviewsRef.current.delete(path);
+    setAttachmentPreviews((prev) => {
+      if (!(path in prev)) return prev;
+      const next = { ...prev };
+      delete next[path];
+      return next;
+    });
   }, []);
 
   const handleRemoveMedia = useCallback((id: string) => {
@@ -913,7 +934,33 @@ export function InputArea({
         }
       }
 
-      if (mediaItems.length === 0) return; // Let text paste through
+      if (mediaItems.length === 0) {
+        if (!allowAttachments || !allowUriAttachments) return;
+        const uriList = e.clipboardData.getData("text/uri-list");
+        const copiedPaths = uriList
+          .split("\n")
+          .map((entry) => entry.trim())
+          .filter(
+            (entry) =>
+              entry &&
+              !entry.startsWith("#") &&
+              (entry.startsWith("file://") || entry.startsWith("vscode-")),
+          )
+          .map((entry) => {
+            try {
+              return decodeURIComponent(new URL(entry).pathname);
+            } catch {
+              return entry;
+            }
+          });
+        if (copiedPaths.length === 0) return; // Let text paste through
+        e.preventDefault();
+        vscodeApi.postMessage({
+          command: "agentResolveDroppedFiles",
+          paths: copiedPaths,
+        });
+        return;
+      }
 
       e.preventDefault();
 
@@ -972,7 +1019,7 @@ export function InputArea({
         reader.readAsDataURL(file);
       }
     },
-    [allowMediaPaste, vscodeApi],
+    [allowAttachments, allowMediaPaste, allowUriAttachments, vscodeApi],
   );
 
   const handleInput = useCallback(
@@ -1280,11 +1327,50 @@ export function InputArea({
           return next;
         });
         textareaRef.current?.focus();
+        return;
+      }
+
+      if (
+        msg.type === "agentAttachmentPreviewsResolved" &&
+        Array.isArray(msg.images)
+      ) {
+        setAttachmentPreviews((prev) => {
+          const next = { ...prev };
+          for (const image of msg.images as Array<{
+            path?: unknown;
+            mimeType?: unknown;
+            base64?: unknown;
+          }>) {
+            if (
+              typeof image.path === "string" &&
+              typeof image.mimeType === "string" &&
+              typeof image.base64 === "string"
+            ) {
+              next[image.path] =
+                `data:${image.mimeType};base64,${image.base64}`;
+            }
+          }
+          return next;
+        });
       }
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
   }, [allowAttachments, allowFileMentions, openStandalonePicker]);
+
+  useEffect(() => {
+    const unresolved = attachments.filter(
+      (path) => !requestedAttachmentPreviewsRef.current.has(path),
+    );
+    if (unresolved.length === 0) return;
+    for (const path of unresolved) {
+      requestedAttachmentPreviewsRef.current.add(path);
+    }
+    vscodeApi.postMessage({
+      command: "agentResolveAttachmentPreviews",
+      paths: unresolved,
+    });
+  }, [attachments, vscodeApi]);
 
   // Compute picker anchor position relative to input wrapper
   const getPickerAnchor = useCallback(() => {
@@ -1447,6 +1533,7 @@ export function InputArea({
               <AttachmentChip
                 key={path}
                 path={path}
+                previewSrc={attachmentPreviews[path]}
                 onRemove={handleRemoveAttachment}
               />
             ))}

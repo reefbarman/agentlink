@@ -507,21 +507,82 @@ function hasUnquotedShellPathExpansion(raw: string): boolean {
   return quote === null && raw.startsWith("~");
 }
 
+interface ParsedGitInvocation {
+  globalArgs: string[];
+  subcommand?: string;
+  subcommandArgs: string[];
+  subcommandOptionArgs: string[];
+}
+
+const GIT_GLOBAL_OPTIONS_WITH_VALUES = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--config-env",
+]);
+
+function parseGitInvocation(args: string[]): ParsedGitInvocation {
+  const globalArgs: string[] = [];
+  let subcommandIndex = -1;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg) continue;
+    if (!arg.startsWith("-")) {
+      subcommandIndex = index;
+      break;
+    }
+    globalArgs.push(arg);
+    if (GIT_GLOBAL_OPTIONS_WITH_VALUES.has(arg) && index + 1 < args.length) {
+      globalArgs.push(args[index + 1]);
+      index += 1;
+    }
+  }
+  if (subcommandIndex < 0) {
+    return { globalArgs, subcommandArgs: [], subcommandOptionArgs: [] };
+  }
+  const subcommandArgs = args.slice(subcommandIndex + 1);
+  const separatorIndex = subcommandArgs.indexOf("--");
+  return {
+    globalArgs,
+    subcommand: args[subcommandIndex],
+    subcommandArgs,
+    subcommandOptionArgs:
+      separatorIndex < 0
+        ? subcommandArgs
+        : subcommandArgs.slice(0, separatorIndex),
+  };
+}
+
 function validateReadOnlyGit(args: string[]): string | undefined {
-  const subcommand = args.find((arg) => arg && !arg.startsWith("-"));
+  const parsed = parseGitInvocation(args);
+  const { globalArgs, subcommand, subcommandOptionArgs } = parsed;
   if (!subcommand) return "git requires an explicit read-only subcommand";
-  const unsafeFlag = args.find(
+  const unsafeGlobalFlag = globalArgs.find((arg) =>
+    [
+      "-c",
+      "-C",
+      "--git-dir",
+      "--work-tree",
+      "--namespace",
+      "--config-env",
+    ].some((flag) => arg === flag || arg.startsWith(`${flag}=`)),
+  );
+  if (unsafeGlobalFlag) {
+    return `git option is not read-only-safe: ${unsafeGlobalFlag}`;
+  }
+  const misplacedGlobalGuard = globalArgs.find((arg) =>
+    ["--no-ext-diff", "--no-textconv"].includes(arg),
+  );
+  if (misplacedGlobalGuard) {
+    return `git ${subcommand} requires ${misplacedGlobalGuard} after the subcommand`;
+  }
+  if (subcommandOptionArgs.includes("--no-pager")) {
+    return `git --no-pager is a global option and must appear before ${subcommand}; AgentLink already disables interactive pagers, so omit it`;
+  }
+  const unsafeFlag = subcommandOptionArgs.find(
     (arg) =>
-      arg === "-c" ||
-      arg === "-C" ||
-      arg === "--git-dir" ||
-      arg.startsWith("--git-dir=") ||
-      arg === "--work-tree" ||
-      arg.startsWith("--work-tree=") ||
-      arg === "--namespace" ||
-      arg.startsWith("--namespace=") ||
-      arg === "--config-env" ||
-      arg.startsWith("--config-env=") ||
       arg === "--ext-diff" ||
       arg === "--textconv" ||
       arg === "--no-index" ||
@@ -534,23 +595,33 @@ function validateReadOnlyGit(args: string[]): string | undefined {
   );
   if (unsafeFlag) return `git option is not read-only-safe: ${unsafeFlag}`;
 
-  if (["diff", "show", "log", "blame", "grep"].includes(subcommand)) {
-    if (!args.includes("--no-pager")) {
-      return `git ${subcommand} requires --no-pager for read-only execution`;
-    }
-    if (
-      ["diff", "show", "log", "blame"].includes(subcommand) &&
-      (!args.includes("--no-ext-diff") || !args.includes("--no-textconv"))
-    ) {
-      return `git ${subcommand} requires --no-ext-diff and --no-textconv for read-only execution`;
-    }
+  const requiredGuards = ["diff", "show", "log"].includes(subcommand)
+    ? ["--no-ext-diff", "--no-textconv"]
+    : subcommand === "blame"
+      ? ["--no-textconv"]
+      : [];
+  if (
+    subcommand === "blame" &&
+    subcommandOptionArgs.includes("--no-ext-diff")
+  ) {
+    return "git blame does not accept --no-ext-diff; use git blame --no-textconv ...";
+  }
+  const missingGuards = requiredGuards.filter(
+    (guard) => !subcommandOptionArgs.includes(guard),
+  );
+  if (missingGuards.length > 0) {
+    const example =
+      subcommand === "blame"
+        ? "git blame --no-textconv ..."
+        : `git ${subcommand} --no-ext-diff --no-textconv ...`;
+    return `git ${subcommand} requires subcommand option${missingGuards.length === 1 ? "" : "s"} ${missingGuards.join(" and ")} for read-only execution; use ${example}`;
   }
   return undefined;
 }
 
 function validateReadOnlyRipgrep(args: string[]): string | undefined {
   if (!args.includes("--no-config")) {
-    return "ripgrep requires --no-config for read-only execution";
+    return "ripgrep requires --no-config for read-only execution; use rg --no-config <pattern> [path ...]";
   }
   const unsafeFlag = args.find(
     (arg) =>
@@ -572,7 +643,8 @@ export function isTierAtOrBelow(
 }
 
 function classifyGit(args: string[]): CommandTierResult {
-  const unsafeGlobalFlag = args.find((arg) =>
+  const parsed = parseGitInvocation(args);
+  const unsafeGlobalFlag = parsed.globalArgs.find((arg) =>
     [
       "-C",
       "-c",
@@ -590,11 +662,9 @@ function classifyGit(args: string[]): CommandTierResult {
     );
   }
 
-  const subcommand = args.find((arg) => arg && !arg.startsWith("-"));
+  const { subcommand, subcommandArgs, subcommandOptionArgs } = parsed;
   if (!subcommand) return safe("git command inspection", "read_only", "git");
-  const subcommandIndex = args.indexOf(subcommand);
-  const subcommandArgs = args.slice(subcommandIndex + 1);
-  const unsafeInspectionFlag = args.find(
+  const unsafeInspectionFlag = subcommandOptionArgs.find(
     (arg) =>
       arg === "--ext-diff" ||
       arg === "--textconv" ||

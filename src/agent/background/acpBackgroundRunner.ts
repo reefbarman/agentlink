@@ -14,6 +14,29 @@ import type { AcpBackgroundAgentConfig } from "./acpAgentConfig.js";
 
 const POST_COMPLETION_EXIT_GRACE_MS = 1_000;
 
+export function isAcpSuccessfulStopError(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current = err;
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    const data = (current as { data?: unknown }).data;
+    const details =
+      typeof data === "string"
+        ? data
+        : data && typeof data === "object"
+          ? (data as { details?: unknown }).details
+          : undefined;
+    if (
+      typeof details === "string" &&
+      /^claude stopped with success\b/i.test(details.trim())
+    ) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 export type AcpBackgroundRunnerEvent =
   | { type: "update"; update: SessionUpdate }
   | { type: "stop"; response: PromptResponse }

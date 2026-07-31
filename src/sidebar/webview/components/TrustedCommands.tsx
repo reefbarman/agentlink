@@ -19,10 +19,9 @@ export function TrustedCommands({ state, postCommand }: Props) {
   return (
     <CollapsibleSection title="Trusted Commands">
       <p class="help-text">
-        Exact and prefix allow rules may run matching commands with normal user
-        permissions outside the Protected Terminal when every command segment
-        matches. Regex and legacy approval-only rules do not grant native
-        authority.
+        Allow rules run matching commands without another approval card. Prompt
+        rules always ask, and Forbidden rules reject the command. The same rules
+        apply whether Approve for Me is on or off.
       </p>
       <div class="subsection-label">Global Rules</div>
       {(globalCommandRules ?? []).length > 0 ? (
@@ -49,7 +48,7 @@ export function TrustedCommands({ state, postCommand }: Props) {
       <button
         class="btn btn-secondary"
         style={{ marginTop: "6px" }}
-        title="Add a command policy; exact and prefix allow rules may also grant native execution authority"
+        title="Add a command approval rule"
         onClick={() => postCommand("addGlobalRule")}
       >
         + Add Rule

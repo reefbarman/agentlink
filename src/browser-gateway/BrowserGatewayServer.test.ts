@@ -269,10 +269,20 @@ function makeChatViewProviderStub() {
     submitBrowserAttachFile: vi.fn(async () => ({
       files: ["/tmp/from-picker.txt"],
     })),
+    resolveBrowserAttachmentPreviews: vi.fn(async () => ({
+      images: [
+        {
+          path: "media/reference.png",
+          mimeType: "image/png",
+          base64: "preview-data",
+        },
+      ],
+    })),
     submitBrowserOpenFile: vi.fn(async () => ({ ok: true })),
     submitBrowserSteerQueuedMessage: vi.fn(async () => ({ ok: true })),
     submitBrowserInterjectQueuedMessage: vi.fn(() => ({ ok: true })),
     submitBrowserStop: vi.fn(() => ({ ok: true })),
+    submitBrowserRetry: vi.fn(() => ({ ok: true })),
     submitBrowserResume: vi.fn<
       () => Promise<{ ok: true } | { ok: false; error: string }>
     >(async () => ({ ok: true })),
@@ -2200,6 +2210,31 @@ describe("BrowserGatewayServer", () => {
       "project-a",
     );
 
+    const authorizedPreviews = await fetch(
+      `${baseUrl}/api/attachment-previews`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({ paths: ["media/reference.png"] }),
+      },
+    );
+    expect(authorizedPreviews.status).toBe(200);
+    expect(await authorizedPreviews.json()).toEqual({
+      images: [
+        {
+          path: "media/reference.png",
+          mimeType: "image/png",
+          base64: "preview-data",
+        },
+      ],
+    });
+    expect(
+      chatViewProvider.resolveBrowserAttachmentPreviews,
+    ).toHaveBeenCalledWith(["media/reference.png"], "project-a");
+
     const authorizedOpenFile = await fetch(`${baseUrl}/api/open-file`, {
       method: "POST",
       headers: {
@@ -2528,6 +2563,42 @@ describe("BrowserGatewayServer", () => {
     expect(chatViewProvider.submitBrowserStop).toHaveBeenCalledWith(
       "session-1",
     );
+
+    const authorizedRetry = await fetch(`${baseUrl}/api/retry`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ sessionId: "session-1", projectId: "project-a" }),
+    });
+    expect(authorizedRetry.status).toBe(202);
+    expect(await authorizedRetry.json()).toEqual({ ok: true });
+    expect(chatViewProvider.submitBrowserRetry).toHaveBeenCalledWith(
+      "session-1",
+    );
+
+    const unauthorizedRetry = await fetch(`${baseUrl}/api/retry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "session-1", projectId: "project-a" }),
+    });
+    expect(unauthorizedRetry.status).toBe(401);
+
+    const mismatchedRetry = await fetch(`${baseUrl}/api/retry`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ sessionId: "session-1", projectId: "project-b" }),
+    });
+    expect(mismatchedRetry.status).toBe(409);
+    expect(await mismatchedRetry.json()).toMatchObject({
+      error: "project_state_mismatch",
+      reason: "session_project_mismatch",
+    });
+    expect(chatViewProvider.submitBrowserRetry).toHaveBeenCalledTimes(1);
 
     const authorizedResume = await fetch(`${baseUrl}/api/resume`, {
       method: "POST",

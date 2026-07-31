@@ -44,6 +44,7 @@ describe("Codex OpenAI client helpers", () => {
           canRefresh: true,
         },
         "session-1",
+        {},
       ),
     ).toMatchObject({
       baseURL: CODEX_API_BASE_URL,
@@ -70,6 +71,7 @@ describe("Codex OpenAI client helpers", () => {
         canRefresh: false,
       },
       "session-1",
+      {},
     );
 
     expect(config).toMatchObject({
@@ -85,5 +87,26 @@ describe("Codex OpenAI client helpers", () => {
     expect(config.defaultHeaders).not.toHaveProperty("originator");
     expect(config.defaultHeaders).not.toHaveProperty("session_id");
     expect(config.defaultHeaders).not.toHaveProperty("ChatGPT-Account-Id");
+  });
+
+  it("applies originator and User-Agent env overrides to OAuth headers", () => {
+    const config = getCodexEndpointConfig(
+      {
+        method: "oauth",
+        bearerToken: "token",
+        accountId: "acct-1",
+        canRefresh: true,
+      },
+      "session-1",
+      {
+        AGENTLINK_CODEX_ORIGINATOR: "codex_cli_rs",
+        AGENTLINK_CODEX_USER_AGENT: "codex_cli_rs/0.144.1 (Darwin; arm64)",
+      },
+    );
+
+    expect(config.defaultHeaders.originator).toBe("codex_cli_rs");
+    expect(config.defaultHeaders["User-Agent"]).toBe(
+      "codex_cli_rs/0.144.1 (Darwin; arm64)",
+    );
   });
 });

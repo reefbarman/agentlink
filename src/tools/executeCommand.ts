@@ -20,7 +20,10 @@ import type {
 } from "../core/capabilities/terminal.js";
 
 import type { SandboxViolation } from "../core/sandboxPolicy.js";
-import { TerminalTargetRecoveryError } from "../core/capabilities/terminalTargetError.js";
+import {
+  SandboxPreparationDriftError,
+  TerminalTargetRecoveryError,
+} from "../core/capabilities/terminalTargetError.js";
 import {
   commandRulePolicyFingerprint,
   type CommandRulePolicyEvaluation,
@@ -271,9 +274,7 @@ function routeContextFor(
     executionPresetSnapshot,
     requiredAuthority: requireSandbox
       ? "sandbox"
-      : explicitEscalation ||
-          explicitRuleAuthority ||
-          executionPresetSnapshot === "native-manual"
+      : explicitEscalation || executionPresetSnapshot === "native-manual"
         ? "native-agent"
         : "sandbox",
     permissionIntent,
@@ -339,6 +340,7 @@ type ExecuteCommandRetryGuidance = {
   code:
     | "sandbox_cwd_outside_workspace"
     | "sandbox_missing_capabilities"
+    | "sandbox_preparation_changed"
     | "managed_network_ssh_git_transport"
     | "managed_network_tls_trust";
   message: string;
@@ -776,26 +778,30 @@ function commandRulePolicyFor(
   }
 
   // Compatibility for partial ApprovalManager implementations in adapters and
-  // tests. Legacy boolean rules may skip approval, but can never grant native
-  // authority because they are not explicit Codex allow decisions.
+  // tests. Legacy boolean approvals are equivalent to allow rules.
   const commands = expandSubCommands(splitCompoundCommand(command));
   const segments = (commands.length > 0 ? commands : [command.trim()]).map(
-    (segment) => ({
-      command: segment,
-      decision: approvalManager.isCommandApproved(sessionId, segment, cwd)
-        ? ("legacy_allow" as const)
-        : ("unmatched" as const),
-      matches: [],
-      explicitlyAllowed: false,
-    }),
+    (segment) => {
+      const allowed = approvalManager.isCommandApproved(
+        sessionId,
+        segment,
+        cwd,
+      );
+      return {
+        command: segment,
+        decision: allowed ? ("allow" as const) : ("unmatched" as const),
+        matches: [],
+        explicitlyAllowed: allowed,
+      };
+    },
   );
   const allSegmentsApprovedByRule =
     segments.length > 0 &&
-    segments.every((segment) => segment.decision === "legacy_allow");
+    segments.every((segment) => segment.decision === "allow");
   return {
-    decision: allSegmentsApprovedByRule ? "legacy_allow" : "unmatched",
+    decision: allSegmentsApprovedByRule ? "allow" : "unmatched",
     segments,
-    allSegmentsExplicitlyAllowed: false,
+    allSegmentsExplicitlyAllowed: allSegmentsApprovedByRule,
     allSegmentsApprovedByRule,
   };
 }
@@ -2196,6 +2202,33 @@ export async function handleExecuteCommand(
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof SandboxPreparationDriftError) {
+      const retryGuidance: ExecuteCommandRetryGuidance = {
+        code: err.code,
+        message: err.message,
+        automatic_retry: false,
+        options: [{ action: "retry_same_command", same_command: true }],
+      };
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "retry_required",
+              error: message,
+              error_code: err.code,
+              changed_security_fields: err.changedFields,
+              retry_guidance: retryGuidance,
+              command: params.command,
+              command_sent: false,
+              process_launched: false,
+              retry_safe: true,
+              failure_stage: err.failureStage,
+            }),
+          },
+        ],
+      };
+    }
     if (err instanceof TerminalTargetRecoveryError) {
       return {
         content: [
@@ -2436,13 +2469,10 @@ async function approveSubCommands(
         "Command execution is forbidden by an applicable command policy rule.",
     };
   }
-  const ruleAuthorityMatchesRoute = options?.explicitNativeEscalation
-    ? rulePolicy.allSegmentsExplicitlyAllowed
-    : rulePolicy.allSegmentsApprovedByRule;
   const allApproved =
     options?.ruleFastPathAllowed !== false &&
     rulePolicy.decision !== "prompt" &&
-    ruleAuthorityMatchesRoute;
+    rulePolicy.allSegmentsApprovedByRule;
   if (
     !options?.requireHumanApproval &&
     !options?.requireFreshReview &&
@@ -2519,6 +2549,7 @@ async function approveSubCommands(
     }
   ).isCommandRecentlyApproved;
   const recentlyApproved = Boolean(
+    rulePolicy.decision !== "prompt" &&
     !options?.requireHumanApproval &&
     !retainedDenial &&
     !options?.requireFreshReview &&
@@ -2537,7 +2568,11 @@ async function approveSubCommands(
   if (recentlyApproved) {
     return { approved: true, approval: { by: "recent_approval" } };
   }
-  if (policy === "approve-for-me" && reviewProviders?.commandApprovalReviewer) {
+  if (
+    rulePolicy.decision !== "prompt" &&
+    policy === "approve-for-me" &&
+    reviewProviders?.commandApprovalReviewer
+  ) {
     const eligibility = getCommandAutoApprovalEligibility({
       classified: tierInfo,
       cwd,

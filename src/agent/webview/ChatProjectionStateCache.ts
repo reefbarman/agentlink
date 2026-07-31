@@ -9,10 +9,7 @@ type SharedProjectionFields = Pick<
 
 export type SessionProjectionState = Omit<
   AppState,
-  | keyof SharedProjectionFields
-  | "debugInfo"
-  | "systemPrompt"
-  | "loadedInstructions"
+  keyof SharedProjectionFields
 >;
 
 export class ChatProjectionStateCache {
@@ -47,9 +44,6 @@ export class ChatProjectionStateCache {
     return structuredClone({
       ...cached,
       ...shared,
-      debugInfo: null,
-      systemPrompt: null,
-      loadedInstructions: null,
     });
   }
 
@@ -73,9 +67,6 @@ function toSessionProjection(state: AppState): SessionProjectionState {
     modes: _modes,
     availableModels: _availableModels,
     slashCommands: _slashCommands,
-    debugInfo: _debugInfo,
-    systemPrompt: _systemPrompt,
-    loadedInstructions: _loadedInstructions,
     ...sessionState
   } = state;
   // Reducer states are immutable. Retain their nested data here and create the

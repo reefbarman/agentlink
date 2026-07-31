@@ -2527,6 +2527,170 @@ describe("AgentSessionManager background agents", () => {
     (mgr as any).releaseWorkspaceMutationLease(leaseHolder);
   });
 
+  it("treats a success-shaped ACP prompt rejection as completion without cooling the agent", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      reviewAgent: "acp:claude",
+      acpAgents: [
+        {
+          id: "claude",
+          provider: "anthropic",
+          command: "claude-agent-acp",
+        },
+      ],
+    });
+    const successError = new Error("Internal error");
+    (successError as { data?: unknown }).data = {
+      details: "Claude stopped with success.",
+    };
+    const acpBackgroundRunner = {
+      run: vi
+        .fn()
+        .mockImplementationOnce(async (request: any) => {
+          request.onEvent({
+            type: "update",
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "First ACP review" },
+            },
+          });
+          throw successError;
+        })
+        .mockImplementationOnce(async (request: any) => {
+          request.onEvent({
+            type: "update",
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "Second ACP review" },
+            },
+          });
+          request.onEvent({
+            type: "stop",
+            response: { stopReason: "end_turn" },
+          });
+        }),
+    };
+    const mgr = new AgentSessionManager(
+      { ...config, model: "gpt-5.6-sol" },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.setToolContext(toolCtx);
+    const parent = await mgr.createSession("code");
+    parent.providerId = "codex";
+
+    const first = await mgr.spawnBackground(
+      {
+        task: "review",
+        message: "go",
+        taskClass: "review_code",
+      },
+      parent.id,
+    );
+    expect(first.resolvedProvider).toBe("acp");
+    expect(await mgr.waitForBackground(first.sessionId)).toBe(
+      "First ACP review",
+    );
+    expect(mgr.getBackgroundStatus(first.sessionId)).toMatchObject({
+      status: "idle",
+      done: true,
+      resultState: "completed",
+    });
+
+    const second = await mgr.spawnBackground(
+      {
+        task: "review again",
+        message: "go",
+        taskClass: "review_code",
+      },
+      parent.id,
+    );
+    expect(second).toMatchObject({
+      resolvedProvider: "acp",
+      resolvedModel: "acp:claude",
+      fallbackUsed: false,
+    });
+    expect(await mgr.waitForBackground(second.sessionId)).toBe(
+      "Second ACP review",
+    );
+    expect(acpBackgroundRunner.run).toHaveBeenCalledTimes(2);
+    expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
+  });
+
+  it("fails an evidence-free success sentinel without cooling the ACP agent", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      reviewAgent: "acp:claude",
+      acpAgents: [
+        {
+          id: "claude",
+          provider: "anthropic",
+          command: "claude-agent-acp",
+        },
+      ],
+    });
+    const successError = new Error("Internal error");
+    (successError as { data?: unknown }).data =
+      "Claude stopped with success. (exit 0)";
+    const acpBackgroundRunner = {
+      run: vi.fn(async () => {
+        throw successError;
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      { ...config, model: "gpt-5.6-sol" },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.setToolContext(toolCtx);
+    const parent = await mgr.createSession("code");
+    parent.providerId = "codex";
+
+    const first = await mgr.spawnBackground(
+      {
+        task: "review",
+        message: "go",
+        taskClass: "review_code",
+      },
+      parent.id,
+    );
+    const firstResult = JSON.parse(
+      await mgr.waitForBackground(first.sessionId),
+    );
+    expect(firstResult).toMatchObject({
+      status: "failed",
+      agentRetryable: false,
+    });
+    expect(firstResult.terminalReason).toContain(
+      "stopped successfully without producing output",
+    );
+
+    const second = await mgr.spawnBackground(
+      {
+        task: "review again",
+        message: "go",
+        taskClass: "review_code",
+      },
+      parent.id,
+    );
+    expect(second).toMatchObject({
+      resolvedProvider: "acp",
+      resolvedModel: "acp:claude",
+      fallbackUsed: false,
+    });
+    await mgr.waitForBackground(second.sessionId);
+    expect(acpBackgroundRunner.run).toHaveBeenCalledTimes(2);
+    expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
+  });
+
   it("preserves ACP failure causes, cools the agent down, and reroutes the next spawn natively", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       defaultAgent: "acp:claude",
@@ -2575,15 +2739,34 @@ describe("AgentSessionManager background agents", () => {
       task: "review again",
       message: "go",
     });
-    expect(second.resolvedProvider).not.toBe("acp");
+    expect(second).toMatchObject({
+      resolvedProvider: expect.not.stringMatching(/^acp$/),
+      fallbackUsed: true,
+      routingReason: expect.stringContaining(
+        "configured ACP agent acp:claude was unavailable",
+      ),
+    });
   });
 
-  it("allows only classifier-approved commands for read-only ACP agents", async () => {
+  it("applies the read-only command ladder: static approval, contract denial, guardian review", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       defaultAgent: "acp:claude",
       acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
     });
     const onApprovalRequest = vi.fn();
+    const acpReadOnlyCommandReviewer = {
+      review: vi.fn(async (input: any) => {
+        const allow = input.command.startsWith("grep");
+        return {
+          outcome: allow ? "allow" : "deny",
+          risk: "low",
+          userAuthorization: "unknown",
+          rationale: allow ? "read-only inspection" : "deletes files",
+          model: "guardian-model",
+          status: "reviewed",
+        } as const;
+      }),
+    };
     const permissionOutcomes: unknown[] = [];
     const options = [
       { optionId: "allow", name: "Allow", kind: "allow_once" },
@@ -2626,7 +2809,7 @@ describe("AgentSessionManager background agents", () => {
             toolCallId: "tc-unknown-input",
             kind: "execute",
             title: "Read with unknown execution metadata",
-            rawInput: { command: "grep token scene.unity", cwd: "/tmp" },
+            rawInput: { command: "grep -c token scene.unity", cwd: "/tmp" },
           },
         ]) {
           permissionOutcomes.push(
@@ -2650,7 +2833,206 @@ describe("AgentSessionManager background agents", () => {
       undefined,
       undefined,
       { maxConcurrent: 3 },
-      { host: { config: configHost, acpBackgroundRunner } },
+      {
+        host: {
+          config: configHost,
+          acpBackgroundRunner,
+          acpReadOnlyCommandReviewer,
+        },
+      },
+    );
+    mgr.setToolContext({ ...toolCtx, onApprovalRequest });
+
+    const spawned = await mgr.spawnBackground({
+      task: "external review",
+      message: "review this",
+    });
+    await mgr.waitForBackground(spawned.sessionId);
+
+    expect(permissionOutcomes).toEqual([
+      // Static classifier clears the plain read-only pipeline.
+      { outcome: { outcome: "selected", optionId: "allow" } },
+      // Mutating tool kinds are denied by contract, via the reject option.
+      { outcome: { outcome: "selected", optionId: "reject" } },
+      // Guardian denies the destructive command.
+      { outcome: { outcome: "selected", optionId: "reject" } },
+      // Guardian clears read-only commands the strict static gate cannot.
+      { outcome: { outcome: "selected", optionId: "allow" } },
+      { outcome: { outcome: "selected", optionId: "allow" } },
+    ]);
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+    expect(acpReadOnlyCommandReviewer.review).toHaveBeenCalledTimes(3);
+    expect(acpReadOnlyCommandReviewer.review).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        sessionId: spawned.sessionId,
+        command: "rm -rf generated",
+        task: "external review",
+        staticDenialReason: expect.stringContaining("rm"),
+      }),
+    );
+    expect(acpReadOnlyCommandReviewer.review).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        command: "grep token scene.unity",
+        staticDenialReason:
+          "tool input includes parameters beyond the plain command contract",
+      }),
+    );
+    const audit = mgr.getSession(spawned.sessionId)?.fleetMetadata?.policyAudit;
+    expect(audit).toEqual([
+      expect.objectContaining({
+        decision: "denied",
+        operation: "acp:edit",
+      }),
+      expect.objectContaining({
+        decision: "denied",
+        operation: "acp:execute",
+        reason: expect.stringContaining("deletes files"),
+      }),
+      expect.objectContaining({
+        decision: "allowed",
+        operation: "acp:execute",
+      }),
+      expect.objectContaining({
+        decision: "allowed",
+        operation: "acp:execute",
+      }),
+    ]);
+  });
+
+  it("caches guardian verdicts per command and trips the denial circuit", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      defaultAgent: "acp:claude",
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    const acpReadOnlyCommandReviewer = {
+      review: vi.fn(
+        async () =>
+          ({
+            outcome: "deny",
+            risk: "medium",
+            userAuthorization: "unknown",
+            rationale: "not read-only",
+            model: "guardian-model",
+            status: "reviewed",
+          }) as const,
+      ),
+    };
+    const permissionOutcomes: unknown[] = [];
+    const options = [
+      { optionId: "allow", name: "Allow", kind: "allow_once" },
+      { optionId: "reject", name: "Reject", kind: "reject_once" },
+    ];
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        for (const command of [
+          "python build.py",
+          "python build.py",
+          "npm run build",
+          "make all",
+          "cargo build",
+        ]) {
+          permissionOutcomes.push(
+            await request.onRequestPermission({
+              toolCall: {
+                toolCallId: `tc-${command}`,
+                kind: "execute",
+                title: command,
+                rawInput: { command },
+              },
+              options,
+            }),
+          );
+        }
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          config: configHost,
+          acpBackgroundRunner,
+          acpReadOnlyCommandReviewer,
+        },
+      },
+    );
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "external review",
+      message: "review this",
+    });
+    await mgr.waitForBackground(spawned.sessionId);
+
+    expect(permissionOutcomes).toEqual(
+      Array(5).fill({ outcome: { outcome: "selected", optionId: "reject" } }),
+    );
+    // Repeat of an already-denied command is served from the verdict cache,
+    // and three consecutive reviewed denials trip the circuit breaker so the
+    // remaining commands never reach the guardian.
+    expect(acpReadOnlyCommandReviewer.review).toHaveBeenCalledTimes(3);
+  });
+
+  it("escalates to the user only when the guardian is unavailable", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      defaultAgent: "acp:claude",
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    const acpReadOnlyCommandReviewer = {
+      review: vi.fn(
+        async () =>
+          ({
+            outcome: "deny",
+            risk: "high",
+            userAuthorization: "unknown",
+            rationale: "Read-only command review was unavailable",
+            model: "",
+            status: "unavailable",
+          }) as const,
+      ),
+    };
+    const onApprovalRequest = vi.fn(async () => "allow");
+    const permissionOutcomes: unknown[] = [];
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        permissionOutcomes.push(
+          await request.onRequestPermission({
+            toolCall: {
+              toolCallId: "tc-ambiguous",
+              kind: "execute",
+              title: "Summarize workspace metadata",
+              rawInput: { command: "jq '.scripts' package.json" },
+            },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "reject", name: "Reject", kind: "reject_once" },
+            ],
+          }),
+        );
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          config: configHost,
+          acpBackgroundRunner,
+          acpReadOnlyCommandReviewer,
+        },
+      },
     );
     mgr.setToolContext({ ...toolCtx, onApprovalRequest });
 
@@ -2662,12 +3044,20 @@ describe("AgentSessionManager background agents", () => {
 
     expect(permissionOutcomes).toEqual([
       { outcome: { outcome: "selected", optionId: "allow" } },
-      { outcome: { outcome: "cancelled" } },
-      { outcome: { outcome: "cancelled" } },
-      { outcome: { outcome: "cancelled" } },
-      { outcome: { outcome: "cancelled" } },
     ]);
-    expect(onApprovalRequest).not.toHaveBeenCalled();
+    expect(onApprovalRequest).toHaveBeenCalledTimes(1);
+    expect(onApprovalRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "command",
+        backgroundTask: "external review",
+        commandText: "jq '.scripts' package.json",
+        humanOnlyReason: expect.stringContaining("unavailable"),
+        commandReason: expect.stringContaining(
+          "without a workspace write lease",
+        ),
+      }),
+      spawned.sessionId,
+    );
   });
 
   it("surfaces non-success ACP stop reasons as background errors", async () => {
@@ -4228,6 +4618,122 @@ describe("AgentSessionManager background agents", () => {
     );
     expect(result.terminalReason).toBe("background_session_not_found");
     expect(result.error).toContain("not loaded");
+  });
+
+  it("does not present a missing background session as an authorization loss", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+
+    const status = mgr.getAuthorizedBackgroundStatus(
+      foreground.id,
+      "no-such-session",
+    );
+    expect(status.displayStatus).toBe("Not found");
+    expect(status.resultState).toBe("failed");
+    expect(status.retrySafe).toBe(true);
+
+    const waitResult = JSON.parse(
+      await mgr.waitForAuthorizedBackground(foreground.id, "no-such-session"),
+    );
+    expect(waitResult.status).toBe("not_found");
+    expect(waitResult.retrySafe).toBe(true);
+  });
+
+  // The mock harness assigns short `bg-<n>` ids; realistic UUID-length ids
+  // are required to exercise the shorthand resolver, so re-key in place.
+  const rekeySession = (
+    mgr: AgentSessionManager,
+    oldId: string,
+    newId: string,
+  ) => {
+    const session = (mgr as any).sessions.get(oldId);
+    (mgr as any).sessions.delete(oldId);
+    session.id = newId;
+    (mgr as any).sessions.set(newId, session);
+  };
+
+  it("resolves a uniquely truncated or extended background session id", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const child = await mgr.spawnBackground(
+      { task: "review plan", message: "work" },
+      foreground.id,
+    );
+    const realId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    rekeySession(mgr, child.sessionId, realId);
+
+    const truncatedStatus = mgr.getAuthorizedBackgroundStatus(
+      foreground.id,
+      realId.slice(0, -1),
+    );
+    expect(truncatedStatus.terminalReason).not.toBe(
+      "background_session_not_found",
+    );
+    expect(truncatedStatus.status).not.toBe("error");
+
+    const extendedStatus = mgr.getAuthorizedBackgroundStatus(
+      foreground.id,
+      `${realId}a`,
+    );
+    expect(extendedStatus.terminalReason).not.toBe(
+      "background_session_not_found",
+    );
+
+    // Too short to be trusted as shorthand.
+    const shortStatus = mgr.getAuthorizedBackgroundStatus(
+      foreground.id,
+      realId.slice(0, 4),
+    );
+    expect(shortStatus.terminalReason).toBe("background_session_not_found");
+  });
+
+  it("refuses to resolve an ambiguous background session id prefix", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const first = await mgr.spawnBackground(
+      { task: "first", message: "work" },
+      foreground.id,
+    );
+    const second = await mgr.spawnBackground(
+      { task: "second", message: "work" },
+      foreground.id,
+    );
+    rekeySession(mgr, first.sessionId, "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    rekeySession(mgr, second.sessionId, "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaab");
+
+    const status = mgr.getAuthorizedBackgroundStatus(
+      foreground.id,
+      "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaa",
+    );
+    expect(status.terminalReason).toBe("background_session_not_found");
+  });
+
+  it("lists the caller's loaded background agents in a not-found error", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const child = await mgr.spawnBackground(
+      { task: "review mining plan", message: "work" },
+      foreground.id,
+    );
+
+    const status = mgr.getAuthorizedBackgroundStatus(
+      foreground.id,
+      "11111111-2222-3333-4444-555555555555",
+    );
+    expect(status.partialOutput).toContain(child.sessionId);
+    expect(status.partialOutput).toContain("review mining plan");
+    // A well-formed id must not be flagged as malformed.
+    expect(status.partialOutput).not.toContain("not a well-formed session id");
+
+    const malformed = mgr.getAuthorizedBackgroundStatus(
+      foreground.id,
+      "definitely-not-a-session-id",
+    );
+    expect(malformed.partialOutput).toContain("not a well-formed session id");
   });
 
   it("persists and publishes child terminal reasons after parent completion", async () => {

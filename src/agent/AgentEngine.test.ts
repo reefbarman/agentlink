@@ -2542,6 +2542,60 @@ describe("AgentEngine", () => {
       ]);
     });
 
+    it.each([
+      {
+        name: "a restrictive background profile",
+        runOptions: {
+          isBackground: true,
+          toolProfile: "review",
+        },
+      },
+      {
+        name: "an inherited skill allowlist",
+        runOptions: {
+          inheritedSkillAuthority: {
+            schemaVersion: 1 as const,
+            sources: [],
+            allowedTools: ["read_file"],
+          },
+        },
+      },
+    ])(
+      "advertises send_feedback directly through $name",
+      async ({ runOptions }) => {
+        const streamCalls: StreamRequest[] = [];
+        const provider = makeMockProvider();
+        provider.stream = async function* (request: StreamRequest) {
+          streamCalls.push(request);
+          yield* makeProviderStream({ text: "done" });
+        };
+
+        const session = await makeSession();
+        session.addUserMessage("hello");
+        const engine = new AgentEngine(makeRegistry(provider));
+        setEngineToolContext(engine, {
+          ...({} as ToolDispatchContext),
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: "agent",
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        });
+
+        await collectEvents(engine.run(session, runOptions));
+
+        const names = streamCalls[0]?.tools?.map((tool) => tool.name) ?? [];
+        expect(names).toContain("send_feedback");
+        expect(names).not.toContain("get_feedback");
+        expect(names).not.toContain("triage_feedback");
+        expect(names).not.toContain("delete_feedback");
+        expect(
+          streamCalls[0]?.tools?.find(
+            (tool) => tool.name === "find_native_tools",
+          )?.description,
+        ).not.toContain("send_feedback");
+      },
+    );
+
     it("rebuilds cached provider tools when same-name tool definitions change", async () => {
       const streamCalls: StreamRequest[] = [];
       let streamCount = 0;
@@ -2682,11 +2736,17 @@ describe("AgentEngine", () => {
       const providerToolNames = streamCalls[0]?.tools?.map((tool) => tool.name);
       expect(providerToolNames).toContain("call_native_tool");
       expect(providerToolNames).toContain("find_native_tools");
+      if (__DEV_BUILD__) {
+        expect(providerToolNames).toContain("send_feedback");
+      } else {
+        expect(providerToolNames).not.toContain("send_feedback");
+      }
       expect(providerToolNames).not.toContain("get_call_hierarchy");
-      expect(
-        streamCalls[0]?.tools?.find((tool) => tool.name === "find_native_tools")
-          ?.description,
-      ).toContain("generate_image");
+      const nativeDiscoveryDescription = streamCalls[0]?.tools?.find(
+        (tool) => tool.name === "find_native_tools",
+      )?.description;
+      expect(nativeDiscoveryDescription).toContain("generate_image");
+      expect(nativeDiscoveryDescription).not.toContain("send_feedback");
       expect(executeTool).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "get_call_hierarchy",

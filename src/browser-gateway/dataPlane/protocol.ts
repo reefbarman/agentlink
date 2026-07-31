@@ -343,6 +343,7 @@ export interface BrowserGatewayTranscriptMessage {
         | "xhigh"
         | "max";
     };
+    mode?: { previousMode: string; mode: string };
   };
   error?: {
     message: string;
@@ -2675,7 +2676,7 @@ function parseSurfaceChange(
   value: unknown,
   path: string,
 ): NonNullable<BrowserGatewayTranscriptMessage["surfaceChange"]> {
-  const object = strictRecord(value, path, ["model", "reasoning"]);
+  const object = strictRecord(value, path, ["model", "reasoning", "mode"]);
   const model = optionalObject(
     object,
     "model",
@@ -2735,9 +2736,29 @@ function parseSurfaceChange(
       };
     },
   );
+  const mode = optionalObject(
+    object,
+    "mode",
+    path,
+    (candidate, candidatePath) => {
+      const change = strictRecord(candidate, candidatePath, [
+        "previousMode",
+        "mode",
+      ]);
+      return {
+        previousMode: nonEmptyString(
+          change.previousMode,
+          `${candidatePath}.previousMode`,
+          128,
+        ),
+        mode: nonEmptyString(change.mode, `${candidatePath}.mode`, 128),
+      };
+    },
+  );
   return {
     ...(model ? { model } : {}),
     ...(reasoning ? { reasoning } : {}),
+    ...(mode ? { mode } : {}),
   };
 }
 

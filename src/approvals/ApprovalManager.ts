@@ -1049,7 +1049,7 @@ export class ApprovalManager {
     );
     return (
       matchingSegment?.matches.find(
-        ({ rule }) => (rule.decision ?? "legacy_allow") === evaluation.decision,
+        ({ rule }) => (rule.decision ?? "allow") === evaluation.decision,
       ) ?? null
     );
   }

@@ -52,7 +52,10 @@ export interface WebviewMessageConnectionOptions {
 const DELTA_FLUSH_MAX_DELAY_MS = 100;
 const MAX_BUFFERED_DELTA_CHARS = 256 * 1024;
 
-const BACKGROUND_EVENT_TYPES = new Set<ExtensionMessage["type"]>([
+const SESSION_INDEPENDENT_EVENT_TYPES = new Set<ExtensionMessage["type"]>([
+  "agentBtwLoading",
+  "agentBtwProgress",
+  "agentBtwResponse",
   "agentFleetEvent",
   "agentBgThinkingStart",
   "agentBgThinkingDelta",
@@ -189,12 +192,14 @@ export function useWebviewMessageConnection(
         });
       };
 
-      const isBackgroundEvent = BACKGROUND_EVENT_TYPES.has(msg.type);
+      const isSessionIndependentEvent = SESSION_INDEPENDENT_EVENT_TYPES.has(
+        msg.type,
+      );
       if (
         !bypassSessionRouting &&
         eventSessionId !== undefined &&
         eventSessionId !== sessionIdRef.current &&
-        !isBackgroundEvent &&
+        !isSessionIndependentEvent &&
         openSessionIdsRef?.current.has(eventSessionId)
       ) {
         onInactiveSessionMessage?.(msg as SessionScopedExtensionMessage);
@@ -207,7 +212,7 @@ export function useWebviewMessageConnection(
           msg.type,
           eventSessionId,
           sessionIdRef.current,
-          isBackgroundEvent,
+          isSessionIndependentEvent,
         )
       ) {
         console.debug(

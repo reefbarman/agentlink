@@ -11,7 +11,13 @@ import {
 import type { SpawnBackgroundRequest } from "../backgroundTypes.js";
 
 export type BackgroundBackendRoute =
-  | { backend: "native" }
+  | {
+      backend: "native";
+      fallback?: {
+        reason: "unavailable_reference";
+        reference: string;
+      };
+    }
   | {
       backend: "acp";
       reference: string;
@@ -52,7 +58,19 @@ export function resolveBackgroundBackendRoute(
   if (
     taskClass?.startsWith("review_") &&
     isAcpBackgroundAgentReference(settings.reviewAgent) &&
-    !context.unavailableReferences?.has(settings.reviewAgent)
+    context.unavailableReferences?.has(settings.reviewAgent)
+  ) {
+    return {
+      backend: "native",
+      fallback: {
+        reason: "unavailable_reference",
+        reference: settings.reviewAgent,
+      },
+    };
+  }
+  if (
+    taskClass?.startsWith("review_") &&
+    isAcpBackgroundAgentReference(settings.reviewAgent)
   ) {
     const reviewAgent = resolveAcpBackgroundAgent(
       settings,
@@ -86,8 +104,18 @@ export function resolveBackgroundBackendRoute(
 
   if (
     isAcpBackgroundAgentReference(settings.defaultAgent) &&
-    !context.unavailableReferences?.has(settings.defaultAgent)
+    context.unavailableReferences?.has(settings.defaultAgent)
   ) {
+    return {
+      backend: "native",
+      fallback: {
+        reason: "unavailable_reference",
+        reference: settings.defaultAgent,
+      },
+    };
+  }
+
+  if (isAcpBackgroundAgentReference(settings.defaultAgent)) {
     return {
       backend: "acp",
       reference: settings.defaultAgent,

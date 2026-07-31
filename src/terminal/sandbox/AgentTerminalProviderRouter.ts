@@ -22,7 +22,9 @@ import type {
 
 import { randomUUID } from "node:crypto";
 import {
+  SandboxPreparationDriftError,
   TerminalTargetRecoveryError,
+  type SandboxPreparationDriftField,
   type TerminalTargetAuthority,
   type TerminalTargetCandidate,
   type TerminalTargetFailure,
@@ -360,26 +362,27 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
     this.assertGeneration(generation, prepared);
     if (this.currentAttestationId !== decision.attestation.attestationId) {
       prepared.dispose();
-      throw new Error("Prepared sandbox attestation changed before approval");
+      throw new SandboxPreparationDriftError(["attestationId"]);
     }
-    if (
-      prepared.security.route !== "sandbox" ||
-      prepared.security.auditId !== security.auditId ||
-      prepared.security.approvalPolicySnapshot !==
-        security.approvalPolicySnapshot ||
-      prepared.security.approvalReviewerSnapshot !==
-        security.approvalReviewerSnapshot ||
-      prepared.security.executionPresetSnapshot !==
-        security.executionPresetSnapshot ||
-      prepared.security.requiredAuthority !== security.requiredAuthority ||
-      prepared.security.permissionIntent !== security.permissionIntent ||
-      prepared.security.approvalRequirement !== security.approvalRequirement ||
-      prepared.security.authorityReason !== security.authorityReason ||
-      prepared.security.commandApprovalPolicySnapshot !==
-        security.commandApprovalPolicySnapshot
-    ) {
+    const changedFields: SandboxPreparationDriftField[] = [];
+    if (prepared.security.route !== "sandbox") changedFields.push("route");
+    for (const field of [
+      "auditId",
+      "approvalPolicySnapshot",
+      "approvalReviewerSnapshot",
+      "executionPresetSnapshot",
+      "requiredAuthority",
+      "permissionIntent",
+      "approvalRequirement",
+      "authorityReason",
+      "commandApprovalPolicySnapshot",
+    ] as const) {
+      if (prepared.security[field] !== security[field])
+        changedFields.push(field);
+    }
+    if (changedFields.length > 0) {
       prepared.dispose();
-      throw new Error("Sandbox authorizer changed the prepared approval basis");
+      throw new SandboxPreparationDriftError([...new Set(changedFields)]);
     }
     const wrapped = this.wrapPreparedExecution(
       generation,
@@ -812,7 +815,10 @@ export class AgentTerminalProviderRouter implements TerminalProvider {
           this.audit("preparation_revoked", security, {
             failure: "attestation_changed",
           });
-          throw new Error("Prepared sandbox attestation changed");
+          throw new SandboxPreparationDriftError(
+            ["attestationId"],
+            "execution",
+          );
         }
         state = "consumed";
         this.pendingExecutions.delete(revoke);

@@ -375,6 +375,7 @@ export type ExtensionMessage =
   | { type: "agentSessionUpdate"; sessions: SessionInfo[] }
   | {
       type: "agentDebugInfo";
+      sessionId?: string;
       info: Record<string, string | number>;
       systemPrompt?: string;
       loadedInstructions?: LoadedInstructionDebugInfo[];
@@ -1078,6 +1079,7 @@ export interface ChatMessage {
       previousReasoningEffort: ReasoningEffort;
       reasoningEffort: ReasoningEffort;
     };
+    mode?: { previousMode: string; mode: string };
   };
   error?: {
     message: string;

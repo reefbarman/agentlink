@@ -1176,6 +1176,17 @@ function projectMessage(
             ...(message.surfaceChange.reasoning
               ? { reasoning: { ...message.surfaceChange.reasoning } }
               : {}),
+            ...(message.surfaceChange.mode
+              ? {
+                  mode: {
+                    previousMode: bounded(
+                      message.surfaceChange.mode.previousMode,
+                      128,
+                    ),
+                    mode: bounded(message.surfaceChange.mode.mode, 128),
+                  },
+                }
+              : {}),
           },
         }
       : {}),

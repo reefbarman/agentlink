@@ -70,6 +70,29 @@ describe("ChatProjectionStateCache", () => {
     expect(restored.modes).toEqual(shared.modes);
   });
 
+  it("restores environment details only for the matching session", () => {
+    const cache = new ChatProjectionStateCache();
+    const sessionOne = stateFor("session-1", { estimatedTotalUsed: 0 });
+    sessionOne.debugInfo = { model: "model-session-1" };
+    sessionOne.systemPrompt = "system prompt for session one";
+    sessionOne.loadedInstructions = [
+      { source: "AGENTS.md", chars: 120, promptChars: 100 },
+    ];
+    cache.save(sessionOne);
+
+    const fresh = cache.restore("session-2", shared);
+    expect(fresh.debugInfo).toBeNull();
+    expect(fresh.systemPrompt).toBeNull();
+    expect(fresh.loadedInstructions).toBeNull();
+
+    const restored = cache.restore("session-1", shared);
+    expect(restored.debugInfo).toEqual({ model: "model-session-1" });
+    expect(restored.systemPrompt).toBe("system prompt for session one");
+    expect(restored.loadedInstructions).toEqual([
+      { source: "AGENTS.md", chars: 120, promptChars: 100 },
+    ]);
+  });
+
   it("restores approval cards only for the owning session", () => {
     const cache = new ChatProjectionStateCache();
     cache.save(

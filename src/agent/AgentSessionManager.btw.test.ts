@@ -235,7 +235,7 @@ describe("AgentSessionManager /btw side questions", () => {
     ]);
   });
 
-  it("allows /btw while the foreground session is running", async () => {
+  it("keeps full foreground context while constraining the /btw role", async () => {
     const provider = makeProvider(() => textResponse("side answer"));
     providerRegistry.register(provider);
 
@@ -243,23 +243,40 @@ describe("AgentSessionManager /btw side questions", () => {
     mgr.setToolContext(makeToolCtx());
     const fg = await mgr.createSession("code");
     fg.status = "streaming";
+    fg.systemPrompt = "foreground system prompt with project instructions";
     fg.addUserMessage("Foreground context");
+    fg.appendAssistantTurn([
+      { type: "text", text: "A background review completed." },
+    ]);
 
     const result = await mgr.runBtwQuestion("can you check?");
 
     expect(result.answer).toBe("side answer");
     expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]?.systemPrompt).toContain(
+      "foreground system prompt with project instructions",
+    );
+    expect(provider.requests[0]?.systemPrompt).toContain(
+      "You are answering a temporary side question",
+    );
+    expect(provider.requests[0]?.systemPrompt).toContain(
+      "Do not continue, complete, review, summarize",
+    );
     expect(provider.requests[0]?.messages).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           role: "user",
           content: "Foreground context",
         }),
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "A background review completed." }],
+        }),
         expect.objectContaining({ role: "user", content: "can you check?" }),
       ]),
     );
     expect(fg.status).toBe("streaming");
-    expect(fg.getAllMessages()).toHaveLength(1);
+    expect(fg.getAllMessages()).toHaveLength(2);
   });
 
   it("runs /worktree setup as a minimal session while foreground work continues", async () => {
@@ -463,6 +480,45 @@ describe("AgentSessionManager /btw side questions", () => {
     expect(provider.requests).toHaveLength(1);
   });
 
+  it("rejects concurrent /btw questions in the same chat", async () => {
+    const provider = makeProvider(() => textResponse("first answer"));
+    providerRegistry.register(provider);
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(makeToolCtx());
+    const session = await mgr.createSession("code");
+
+    const first = mgr.runBtwQuestion("first", { sessionId: session.id });
+    await expect(
+      mgr.runBtwQuestion("second", { sessionId: session.id }),
+    ).rejects.toThrow("Another /btw question is already running in this chat");
+    await expect(first).resolves.toMatchObject({ answer: "first answer" });
+    expect(provider.requests).toHaveLength(1);
+  });
+
+  it("allows concurrent /btw questions in different chats", async () => {
+    const provider = makeProvider((request) =>
+      textResponse(`answer: ${String(request.messages.at(-1)?.content)}`),
+    );
+    providerRegistry.register(provider);
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(makeToolCtx());
+    const firstSession = await mgr.createSession("code");
+    const secondSession = await mgr.createSession("code", {
+      foreground: false,
+    });
+
+    const [first, second] = await Promise.all([
+      mgr.runBtwQuestion("first", { sessionId: firstSession.id }),
+      mgr.runBtwQuestion("second", { sessionId: secondSession.id }),
+    ]);
+
+    expect(first.answer).toBe("answer: first");
+    expect(second.answer).toBe("answer: second");
+    expect(provider.requests).toHaveLength(2);
+  });
+
   it("clears the in-flight guard so a second /btw can run after the first", async () => {
     const provider = makeProvider(() => textResponse("ok"));
     providerRegistry.register(provider);
@@ -473,7 +529,7 @@ describe("AgentSessionManager /btw side questions", () => {
 
     const first = await mgr.runBtwQuestion("first");
     expect(first.answer).toBe("ok");
-    // Would throw "Another /btw question is already running" if not cleared.
+    // Would throw "Another /btw question is already running in this chat" if not cleared.
     const second = await mgr.runBtwQuestion("second");
     expect(second.answer).toBe("ok");
   });

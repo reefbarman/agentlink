@@ -500,6 +500,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "POST",
+        rawExact("/api/attachment-previews"),
+        ({ req, res }) => this.handleAttachmentPreviewsAction(req, res),
+        json("attachment preview action failed"),
+      ),
+      route(
+        "POST",
         rawExact("/api/open-file"),
         ({ req, res }) => this.handleOpenFileAction(req, res),
         json("open file action failed"),
@@ -641,6 +647,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
         rawExact("/api/stop"),
         ({ req, res }) => this.handleStopAction(req, res),
         json("stop action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/retry"),
+        ({ req, res }) => this.handleRetryAction(req, res),
+        json("retry action failed"),
       ),
       route(
         "POST",
@@ -1634,6 +1646,35 @@ export class BrowserGatewayServer implements vscode.Disposable {
     this.writeJson(res, 200, result);
   }
 
+  private async handleAttachmentPreviewsAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as {
+      paths?: unknown;
+      projectId?: unknown;
+    };
+    if (
+      !Array.isArray(body?.paths) ||
+      body.paths.some((item) => typeof item !== "string")
+    ) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const projectId = this.resolveRequestedProjectId(body?.projectId, res);
+    if (!projectId) return;
+    const result = await this.chatViewProvider.resolveBrowserAttachmentPreviews(
+      body.paths,
+      projectId,
+    );
+    this.writeJson(res, 200, result);
+  }
+
   private async handleOpenFileAction(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -2350,6 +2391,40 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     const result = this.chatViewProvider.submitBrowserStop(body.sessionId);
     this.writeJson(res, result.ok ? 200 : 404, result);
+  }
+
+  private async handleRetryAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as {
+      sessionId?: string;
+      projectId?: unknown;
+    };
+    if (typeof body?.sessionId !== "string" || !body.sessionId.trim()) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const projectId = this.resolveRequestedProjectId(body.projectId, res);
+    if (
+      !projectId ||
+      !this.validateSessionProject(body.sessionId, projectId, res)
+    ) {
+      return;
+    }
+
+    const result = this.chatViewProvider.submitBrowserRetry(body.sessionId);
+    const status = result.ok
+      ? 202
+      : result.error === "session_not_found"
+        ? 404
+        : 409;
+    this.writeJson(res, status, result);
   }
 
   private async handleResumeAction(

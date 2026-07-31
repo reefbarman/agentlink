@@ -6,7 +6,10 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 
 import { AgentTerminalProviderRouter } from "./AgentTerminalProviderRouter.js";
-import { TerminalTargetRecoveryError } from "../../core/capabilities/terminalTargetError.js";
+import {
+  SandboxPreparationDriftError,
+  TerminalTargetRecoveryError,
+} from "../../core/capabilities/terminalTargetError.js";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -331,6 +334,80 @@ describe("AgentTerminalProviderRouter", () => {
     expect(test.createNativeAgentProvider).not.toHaveBeenCalled();
     prepared.dispose();
     router.dispose();
+  });
+
+  it("reports the changed field when a prepared sandbox attestation becomes stale", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    const first = await test.router.prepareExecution(
+      { owner: undefined, command: "npm test", cwd: "/workspace" },
+      sandboxRoute,
+    );
+    test.getSandboxAvailability.mockResolvedValue({
+      status: "verified",
+      attestation: {
+        attestationId: "attestation-2",
+        attestationVersion: "sandbox-behavior-v2",
+        policyVersion: "policy-v1",
+        profileId: "workspace-write",
+        backend: "seatbelt",
+        architecture: "arm64",
+        capabilities: {
+          backend: "seatbelt",
+          processTree: true,
+          filesystemRead: "isolated",
+          filesystemWrite: "strict",
+          network: "blocked",
+          privateHome: true,
+          privateTmp: false,
+          hostIpcBlocked: false,
+          resourceLimits: "partial",
+          warnings: [],
+        },
+      },
+    });
+    const second = await test.router.prepareExecution(
+      { owner: undefined, command: "npm run lint", cwd: "/workspace" },
+      sandboxRoute,
+    );
+
+    await expect(first.execute()).rejects.toMatchObject({
+      name: "SandboxPreparationDriftError",
+      code: "sandbox_preparation_changed",
+      changedFields: ["attestationId"],
+    } satisfies Partial<SandboxPreparationDriftError>);
+    expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
+    second.dispose();
+  });
+
+  it("reports every changed field returned by the sandbox authorizer", async () => {
+    const test = harness();
+    test.setEnabled(true);
+    vi.mocked(test.sandbox.prepareConfinementExecution).mockImplementationOnce(
+      async (_options, security) => ({
+        security: {
+          ...security,
+          auditId: "changed-audit",
+          route: "native",
+          approvalReviewerSnapshot: "user",
+          requiredAuthority: "sandbox",
+        },
+        execute: vi.fn(),
+        dispose: vi.fn(),
+      }),
+    );
+
+    await expect(
+      test.router.prepareExecution(
+        { owner: undefined, command: "npm test", cwd: "/workspace" },
+        sandboxRoute,
+      ),
+    ).rejects.toMatchObject({
+      name: "SandboxPreparationDriftError",
+      code: "sandbox_preparation_changed",
+      changedFields: ["route", "auditId", "approvalReviewerSnapshot"],
+    } satisfies Partial<SandboxPreparationDriftError>);
+    expect(test.sandbox.executeCommand).not.toHaveBeenCalled();
   });
 
   it("prepares sandbox authority without executing and consumes it once", async () => {

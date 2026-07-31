@@ -429,6 +429,142 @@ describe("BrowserGatewayService", () => {
     hub.dispose();
   });
 
+  it("derives detached tab lifecycle and pending-input status from live sources", async () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const baseSession = sessionManager.getSessionInfos()[0]!;
+    let detachedSession: SessionInfo = {
+      ...baseSession,
+      id: "session-2",
+      title: "Detached Session",
+      status: "idle",
+      interactiveExecutionPhase: "running",
+      messageCount: 2,
+    };
+    sessionManager.getSessionInfos.mockImplementation(() => [
+      baseSession,
+      detachedSession,
+    ]);
+    const service = makeService(hub, sessionManager);
+    service.setHasActiveClientsProbe(() => true);
+    service.setChatWorkspaceProvider(
+      () => ({
+        controllerEpoch: "controller-1",
+        focusedTabId: "tab-1",
+        tabs: [
+          {
+            tabId: "tab-1",
+            displayNumber: 1,
+            label: "T1",
+            sessionId: "session-1",
+            placement: "docked",
+            title: "Test Session",
+            status: "completed",
+            busy: false,
+          },
+          {
+            tabId: "tab-2",
+            displayNumber: 2,
+            label: "T2",
+            sessionId: "session-2",
+            placement: "popped",
+            title: "Detached Session",
+            status: "completed",
+            busy: false,
+          },
+        ],
+      }),
+      () => ({ dispose: vi.fn() }),
+    );
+    const ownerChanges = vi.fn();
+    const ownerSubscription = service
+      .getOwnerProjectionSources()
+      .onDidChange(ownerChanges);
+    const snapshotChanges = vi.fn();
+    const snapshotSubscription = service.onDidChange(snapshotChanges);
+
+    expect(
+      service.getSerializableSessionState().chatWorkspace?.tabs[1],
+    ).toMatchObject({
+      tabId: "tab-2",
+      status: "streaming",
+      busy: true,
+      needsAttention: false,
+      interactiveExecutionPhase: "running",
+    });
+
+    detachedSession = {
+      ...detachedSession,
+      interactiveExecutionPhase: undefined,
+    };
+    hub.publishApproval("session-2", {
+      kind: "write",
+      id: "approval-2",
+      filePath: "src/detached.ts",
+      writeOperation: "modify",
+    });
+
+    expect(ownerChanges).toHaveBeenCalledWith("sessions");
+    await vi.waitFor(() => expect(snapshotChanges).toHaveBeenCalledTimes(1));
+    expect(
+      snapshotChanges.mock.calls[0]?.[0].snapshot.session.chatWorkspace
+        ?.tabs[1],
+    ).toMatchObject({
+      tabId: "tab-2",
+      status: "needs_input",
+      busy: true,
+      needsAttention: true,
+    });
+
+    ownerChanges.mockClear();
+    hub.publishApprovalIdle("session-2", "approval-2");
+
+    expect(ownerChanges).toHaveBeenCalledWith("sessions");
+    await vi.waitFor(() => expect(snapshotChanges).toHaveBeenCalledTimes(2));
+    expect(
+      snapshotChanges.mock.calls[1]?.[0].snapshot.session.chatWorkspace
+        ?.tabs[1],
+    ).toMatchObject({
+      tabId: "tab-2",
+      status: "completed",
+      busy: false,
+      needsAttention: false,
+    });
+
+    ownerChanges.mockClear();
+    hub.publishQuestionRequest(
+      "session-2",
+      "question-2",
+      "Choose for the detached session.",
+      [],
+    );
+
+    expect(ownerChanges).toHaveBeenCalledWith("sessions");
+    await vi.waitFor(() => expect(snapshotChanges).toHaveBeenCalledTimes(3));
+    expect(
+      snapshotChanges.mock.calls[2]?.[0].snapshot.session.chatWorkspace
+        ?.tabs[1],
+    ).toMatchObject({
+      status: "needs_input",
+      busy: true,
+      needsAttention: true,
+    });
+
+    detachedSession = { ...detachedSession, status: "error" };
+    expect(
+      service.getSerializableSessionState().chatWorkspace?.tabs[1],
+    ).toMatchObject({
+      status: "failed",
+      busy: false,
+      needsAttention: true,
+    });
+
+    snapshotSubscription.dispose();
+    ownerSubscription.dispose();
+    service.dispose();
+    hub.dispose();
+  });
+
   it("reads detached tab detail without switching, hydrating, or leaking interactions", () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();
@@ -814,11 +950,11 @@ describe("BrowserGatewayService", () => {
     });
 
     expect(legacyChanges).not.toHaveBeenCalled();
-    expect(ownerChanges).toHaveBeenCalledWith("ui");
+    expect(ownerChanges.mock.calls).toEqual([["ui"], ["sessions"]]);
     service.notifyOwnerProjectionSource("policies");
     service.notifyOwnerProjectionSource("theme");
-    expect(ownerChanges).toHaveBeenNthCalledWith(2, "policies");
-    expect(ownerChanges).toHaveBeenNthCalledWith(3, "theme");
+    expect(ownerChanges).toHaveBeenNthCalledWith(3, "policies");
+    expect(ownerChanges).toHaveBeenNthCalledWith(4, "theme");
     expect(legacyChanges).not.toHaveBeenCalled();
     expect(service.getOwnerProjectionSources().capture().interaction).toEqual({
       requestId: "owner-only-approval",

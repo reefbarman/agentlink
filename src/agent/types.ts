@@ -83,6 +83,7 @@ export type AgentMessage = MessageParam & {
         previousReasoningEffort: ReasoningEffort;
         reasoningEffort: ReasoningEffort;
       };
+      mode?: { previousMode: string; mode: string };
     };
     finalMarker?: FinalMessageMarker;
   };

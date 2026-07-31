@@ -1,15 +1,27 @@
 interface AttachmentChipProps {
   path: string;
+  previewSrc?: string;
   onRemove: (path: string) => void;
 }
 
-export function AttachmentChip({ path, onRemove }: AttachmentChipProps) {
+export function AttachmentChip({
+  path,
+  previewSrc,
+  onRemove,
+}: AttachmentChipProps) {
   const parts = path.split("/");
   const name = parts.pop()!;
 
   return (
-    <span class="attachment-chip" title={path}>
-      <i class="codicon codicon-file" />
+    <span
+      class={`attachment-chip${previewSrc ? " image-attachment-chip" : ""}`}
+      title={path}
+    >
+      {previewSrc ? (
+        <img class="attachment-chip-thumbnail" src={previewSrc} alt={name} />
+      ) : (
+        <i class="codicon codicon-file" />
+      )}
       <span class="attachment-chip-name">{name}</span>
       <button
         class="attachment-chip-remove"

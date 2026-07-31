@@ -97,6 +97,8 @@ import { buildFileSearchPattern } from "./fileMentionSearch.js";
 import { getLatestTodoState, type TodoItem } from "./todoTool.js";
 import {
   resolveProjectAttachments,
+  resolveProjectImagePreviews,
+  type ResolvedAttachmentImagePreview,
   type ResolvedAttachments,
 } from "./attachmentResolver.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
@@ -537,6 +539,10 @@ export type ExtensionToWebview =
   | { type: "agentInjectContext"; context: string }
   | { type: "agentDroppedFilesResolved"; files: string[] }
   | {
+      type: "agentAttachmentPreviewsResolved";
+      images: ResolvedAttachmentImagePreview[];
+    }
+  | {
       type: "agentModesUpdate";
       modes: Array<{ slug: string; name: string; icon: string }>;
     }
@@ -890,6 +896,7 @@ export type ExtensionToWebview =
     }
   | {
       type: "agentDebugInfo";
+      sessionId?: string;
       info: Record<string, string | number>;
       systemPrompt?: string;
       loadedInstructions?: LoadedInstructionDebugInfo[];
@@ -1154,6 +1161,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private askAgentMcpHub: McpClientHub;
   private fileWatchers: vscode.Disposable[] = [];
   private readonly watchedCustomizationProjectIds = new Set<string>();
+  private readonly pendingRetrySessionIds = new Set<string>();
   private skillRefreshTail: Promise<void> = Promise.resolve();
   private slashCatalogGlobalGeneration = 0;
   private readonly slashCatalogProjectGenerations = new Map<string, number>();
@@ -2853,8 +2861,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       reason && reason.trim().length > 0 ? reason.trim() : "agent";
 
     let followUp: string | undefined;
-    const targetSessionId =
-      sessionId ?? this.sessionManager?.getForegroundSession()?.id;
+    const foregroundSession = this.sessionManager?.getForegroundSession();
+    const targetSessionId = sessionId ?? foregroundSession?.id;
+    const targetSession = targetSessionId
+      ? (this.sessionManager?.getSession?.(targetSessionId) ??
+        (foregroundSession?.id === targetSessionId
+          ? foregroundSession
+          : undefined))
+      : undefined;
     const approvalMode =
       !silent && targetSessionId
         ? this.sessionManager?.getSessionApprovalMode(
@@ -2920,12 +2934,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
         return { approved: true, mode, followUp };
       }
+      const previousMode = targetSession?.mode;
       const session = await this.withAsyncApprovalStateTransition(async () => {
         const switched = await this.sessionManager!.switchSessionMode(
           targetSessionId,
           mode,
         );
         if (!switched) return null;
+        if (previousMode && previousMode !== switched.mode) {
+          this.recordSurfaceChange(switched, {
+            mode: { previousMode, mode: switched.mode },
+          });
+        }
         this.reconcileSessionApprovalAfterModeSwitch(switched.id);
         if (!switched.background) {
           this.sessionManager!.queueModeSwitchResume(switched.id, mode, {
@@ -3215,6 +3235,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       id?: string;
       backgroundTask?: string;
       targetPath?: string;
+      commandText?: string;
+      commandReason?: string;
+      humanOnlyReason?: string;
+      cwd?: string;
       fileWrite?: { operation: "create" | "modify"; outsideWorkspace: boolean };
     },
     sessionId?: string,
@@ -3290,6 +3314,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         isDanger?: boolean;
       }>;
       targetPath?: string;
+      commandText?: string;
+      commandReason?: string;
+      humanOnlyReason?: string;
+      cwd?: string;
     },
     sessionId?: string,
   ): ApprovalRequest {
@@ -3457,7 +3485,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           kind: request.kind as ApprovalRequest["kind"],
           id,
           ...projectContext,
-          command: request.detail ?? request.title,
+          command: request.commandText ?? request.detail ?? request.title,
+          ...(request.commandReason ? { reason: request.commandReason } : {}),
+          ...(request.humanOnlyReason
+            ? { humanOnlyReason: request.humanOnlyReason }
+            : {}),
+          ...(request.cwd ? { cwd: request.cwd } : {}),
           subCommands: [],
         };
     }
@@ -4100,12 +4133,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     if (session.mode !== mode) {
       try {
+        const previousMode = session.mode;
         const switched = await this.withAsyncApprovalStateTransition(
           async () => {
             const updated = sessionId
               ? await this.sessionManager?.switchSessionMode(session.id, mode)
               : await this.sessionManager?.switchForegroundMode(mode);
             if (!updated) return null;
+            if (previousMode !== updated.mode) {
+              this.recordSurfaceChange(updated, {
+                mode: { previousMode, mode: updated.mode },
+              });
+            }
             this.reconcileSessionApprovalAfterModeSwitch(updated.id);
             if (
               this.sessionManager?.getForegroundSession()?.id === updated.id
@@ -5237,6 +5276,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  public async resolveBrowserAttachmentPreviews(
+    paths: string[],
+    projectId: string,
+  ): Promise<{ images: ResolvedAttachmentImagePreview[] }> {
+    const scope = this.getAvailableBrowserProjectScope(projectId);
+    if (!scope?.rootPath) return { images: [] };
+    return {
+      images: await resolveProjectImagePreviews(paths, scope.rootPath),
+    };
+  }
+
   public async submitBrowserOpenFile(
     filePath: string,
     line: number | undefined,
@@ -5622,6 +5672,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return accepted
       ? { ok: true }
       : { ok: false, error: "interjection_unavailable" };
+  }
+
+  /** Retry the latest failed turn through the same path used by the VS Code webview. */
+  public submitBrowserRetry(
+    sessionId: string,
+  ): { ok: true } | { ok: false; error: string } {
+    if (!sessionId || !this.sessionManager) {
+      return { ok: false, error: "session_unavailable" };
+    }
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session || session.background) {
+      return { ok: false, error: "session_not_found" };
+    }
+    if (session.status !== "error") {
+      return { ok: false, error: "session_not_retryable" };
+    }
+    if (this.pendingRetrySessionIds.has(sessionId)) {
+      return { ok: false, error: "retry_in_progress" };
+    }
+
+    this.pendingRetrySessionIds.add(sessionId);
+    this.log(`[retry] retrying session ${sessionId}`);
+    if (this.sessionManager.getForegroundSession()?.id === sessionId) {
+      this.applyProjectedAction({ type: "CLEAR_ERROR" });
+    }
+    void this.sessionManager
+      .retrySession(sessionId)
+      .catch((err) => {
+        this.log(`[error] retry failed: ${err}`);
+      })
+      .finally(() => {
+        this.pendingRetrySessionIds.delete(sessionId);
+      });
+    return { ok: true };
   }
 
   /**
@@ -6847,6 +6931,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         );
         break;
       }
+      case "agentRefreshDebugInfo":
+        void this.sendDebugInfo(
+          typeof msg.sessionId === "string" ? msg.sessionId : undefined,
+        );
+        break;
+
       case "webviewReady":
         this.updateBrowserGatewayThemeState(() => {
           this.webviewReady = true;
@@ -7470,14 +7560,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "agentRetry": {
         const sessionId = context?.sourceSessionId ?? (msg.sessionId as string);
-        if (sessionId) {
-          this.log(`[retry] retrying session ${sessionId}`);
-          if (this.sessionManager.getForegroundSession()?.id === sessionId) {
-            this.applyProjectedAction({ type: "CLEAR_ERROR" });
-          }
-          this.sessionManager.retrySession(sessionId).catch((err) => {
-            this.log(`[error] retry failed: ${err}`);
-          });
+        if (sessionId && this.submitBrowserRetry(sessionId).ok) {
           const retrySession = this.sessionManager.getSession(sessionId);
           if (retrySession) {
             this.postMessage({
@@ -7523,12 +7606,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentSwitchMode": {
         const mode = (msg.mode as string) ?? "code";
         if (sourceSession && sourceSession.mode !== mode) {
+          const previousMode = sourceSession.mode;
           this.withAsyncApprovalStateTransition(async () => {
             const switched = await this.sessionManager!.switchSessionMode(
               sourceSession.id,
               mode,
             );
             if (!switched) return;
+            if (previousMode !== switched.mode) {
+              this.recordSurfaceChange(switched, {
+                mode: { previousMode, mode: switched.mode },
+              });
+            }
             this.reconcileSessionApprovalAfterModeSwitch(switched.id);
             this.postMessage({
               type: "stateUpdate",
@@ -8355,6 +8444,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "agentResolveAttachmentPreviews": {
+        const paths = Array.isArray(msg.paths)
+          ? msg.paths.filter((item): item is string => typeof item === "string")
+          : [];
+        if (paths.length === 0) break;
+        const projectRoot =
+          sourceSession?.projectScope.rootPath ??
+          (sourceSessionId
+            ? this.getSessionProjectRoot(sourceSessionId)
+            : this.getCurrentProjectScope()?.rootPath);
+        const images = projectRoot
+          ? await resolveProjectImagePreviews(paths, projectRoot)
+          : [];
+        this.postMessage({
+          type: "agentAttachmentPreviewsResolved",
+          images,
+        } as ExtensionToWebview);
+        break;
+      }
+
       case "agentAttachFile": {
         const result = await this.submitBrowserAttachFile();
         if (result.files.length > 0) {
@@ -9094,6 +9203,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
 
       case "agentDebugInfo":
+        if (
+          extMsg.sessionId &&
+          extMsg.sessionId !== this.projectedForegroundStore.sessionId
+        ) {
+          break;
+        }
         this.applyProjectedAction({
           type: "SET_DEBUG_INFO",
           info: extMsg.info,
@@ -10764,7 +10879,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
   }
 
-  private async sendDebugInfo(): Promise<void> {
+  private async sendDebugInfo(requestedSessionId?: string): Promise<void> {
     const os = require("os");
 
     // VS Code environment
@@ -10805,10 +10920,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       info[`env.${key}`] = displayValue;
     }
 
-    // Get system prompt from foreground session. If no foreground session
-    // exists yet (fresh chat), build a fallback prompt for the default mode
-    // so the Environment panel can still show the System Prompt section.
-    const fg = this.sessionManager?.getForegroundSession();
+    // Get system prompt from the requested session. If no session exists yet
+    // (fresh chat), build a fallback prompt for the default mode so the
+    // Environment panel can still show the System Prompt section.
+    const foregroundSession = this.sessionManager?.getForegroundSession();
+    const fg = requestedSessionId
+      ? (this.sessionManager?.getSession?.(requestedSessionId) ??
+        (foregroundSession?.id === requestedSessionId
+          ? foregroundSession
+          : undefined))
+      : foregroundSession;
+    const sessionId = fg?.id;
     const debugRoot = fg?.projectScope
       ? fg.projectScope.rootPath
       : fg
@@ -10873,6 +10995,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     this.postMessage({
       type: "agentDebugInfo",
+      sessionId,
       info,
       systemPrompt: systemPrompt ?? undefined,
       loadedInstructions,
@@ -11159,9 +11282,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         tailTurns: 0,
       });
     } else if (mode) {
+      const previousMode = current.mode;
       const switched = await this.sessionManager.switchForegroundMode(mode);
       if (switched) {
         current = switched;
+        if (previousMode !== switched.mode) {
+          this.recordSurfaceChange(switched, {
+            mode: { previousMode, mode: switched.mode },
+          });
+        }
         this.reconcileSessionApprovalAfterModeSwitch(switched.id);
       }
     }

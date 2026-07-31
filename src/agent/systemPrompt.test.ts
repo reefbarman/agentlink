@@ -339,6 +339,15 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain(
       "Avoid background agents when the task is strictly sequential",
     );
+    expect(result).toContain(
+      "After spawning, inventory safe independent work such as implementation, tests, documentation, self-review, or validation",
+    );
+    expect(result).toContain(
+      "Use this only when the background result is the foreground's next genuine dependency",
+    );
+    expect(result).toContain(
+      "Before waiting, explicitly re-check for remaining independent implementation, tests, documentation, self-review, or validation work",
+    );
   });
 
   it("includes ask mode section for 'ask' mode", async () => {

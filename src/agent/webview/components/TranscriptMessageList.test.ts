@@ -455,6 +455,49 @@ describe("TranscriptMessageList model change rendering", () => {
     );
   });
 
+  it("shows an immediate explicit mode divider without waiting for another response", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "First response" }],
+        apiRequest: apiRequest("gpt-5.4", "high", { mode: "ask" }),
+      },
+      {
+        id: "mode-change",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [],
+        surfaceChange: {
+          mode: { previousMode: "ask", mode: "code" },
+        },
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "",
+        timestamp: 3,
+        blocks: [{ type: "text", text: "Second response" }],
+        apiRequest: apiRequest("gpt-5.4", "high", { mode: "code" }),
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    const dividers = container.querySelectorAll(".model-change-divider");
+    expect(dividers).toHaveLength(1);
+    expect(dividers[0]?.getAttribute("aria-label")).toBe(
+      "Mode changed from Ask to Code",
+    );
+    expect(dividers[0]?.textContent).toContain("Mode changed to");
+    expect(dividers[0]?.textContent).toContain("Code");
+  });
+
   it("shows a divider when Approve for Me is turned on and off", () => {
     const messages: ChatMessage[] = [
       {

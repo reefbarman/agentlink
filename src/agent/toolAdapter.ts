@@ -57,6 +57,7 @@ import type {
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { McpClientHub } from "./McpClientHub.js";
 import type { Question } from "./webview/types.js";
+import { IS_DEV_BUILD } from "../shared/buildFlags.js";
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
 import {
   CALL_MCP_TOOL_DEFINITION,
@@ -228,6 +229,7 @@ const NATIVE_DISCOVERY_BRIDGE_TOOLS = new Set([
   "find_native_tools",
   "call_native_tool",
 ]);
+const ALWAYS_AVAILABLE_DEV_TOOLS = new Set(["send_feedback"]);
 
 const EXCLUDED_TOOLS = new Set([
   "handshake",
@@ -322,7 +324,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   codebase_search: schemas.codebaseSearchSchema,
   respond_to_background_question: schemas.respondToBackgroundQuestionSchema,
   compose: schemas.composeSchema,
-  ...(__DEV_BUILD__
+  ...(IS_DEV_BUILD
     ? {
         send_feedback: schemas.sendFeedbackSchema,
         get_feedback: schemas.getFeedbackSchema,
@@ -899,7 +901,8 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
       properties: {
         sessionId: {
           type: "string",
-          description: "The sessionId returned by spawn_background_agent",
+          description:
+            "The exact sessionId returned by spawn_background_agent — copy it verbatim, a single dropped or altered character targets a different session",
         },
       },
       required: ["sessionId"],
@@ -914,7 +917,8 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
       properties: {
         sessionId: {
           type: "string",
-          description: "The sessionId returned by spawn_background_agent",
+          description:
+            "The exact sessionId returned by spawn_background_agent — copy it verbatim, a single dropped or altered character targets a different session",
         },
       },
       required: ["sessionId"],
@@ -1216,26 +1220,28 @@ export function getAgentTools(
         (name !== "web_search" || nativeWebToolKinds.includes("search")) &&
         (name !== "web_fetch" || nativeWebToolKinds.includes("fetch")),
     )
-    .filter(([name]) => __DEV_BUILD__ || !TOOL_REGISTRY[name]?.devOnly)
+    .filter(([name]) => IS_DEV_BUILD || !TOOL_REGISTRY[name]?.devOnly)
     .filter(
       ([name]) =>
         Boolean(profileAllowlist) ||
         !allowed ||
         allowed.has(name) ||
         NATIVE_DISCOVERY_BRIDGE_TOOLS.has(name) ||
-        (__DEV_BUILD__ && TOOL_REGISTRY[name]?.devOnly),
+        (IS_DEV_BUILD && TOOL_REGISTRY[name]?.devOnly),
     )
     .filter(
       ([name]) =>
         !profileAllowlist ||
         profileAllowlist.has(name) ||
-        NATIVE_DISCOVERY_BRIDGE_TOOLS.has(name),
+        NATIVE_DISCOVERY_BRIDGE_TOOLS.has(name) ||
+        ALWAYS_AVAILABLE_DEV_TOOLS.has(name),
     )
     .filter(
       ([name]) =>
         !skillAllowlist ||
         skillAllowlist.has(name) ||
-        NATIVE_DISCOVERY_BRIDGE_TOOLS.has(name),
+        NATIVE_DISCOVERY_BRIDGE_TOOLS.has(name) ||
+        ALWAYS_AVAILABLE_DEV_TOOLS.has(name),
     );
   const composableChildNames = nativeToolEntries
     .map(([name]) => name)
@@ -1244,7 +1250,7 @@ export function getAgentTools(
     name,
     description:
       name === "execute_command" && usesReadOnlyCommand
-        ? "Run a recognized read-only command synchronously inside the workspace. Unknown, mutating, redirected, networked, privileged, opaque, background, timed, environment-bearing, forced, and inline-file commands are rejected. Git diff/show/log/blame require --no-pager, --no-ext-diff, and --no-textconv; git grep requires --no-pager."
+        ? "Run a recognized read-only command synchronously inside the workspace. Unknown, mutating, redirected, networked, privileged, opaque, background, timed, environment-bearing, forced, and inline-file commands are rejected. AgentLink disables interactive pagers; do not add routine `--no-pager`. Use `rg --no-config <pattern> [path ...]`. Place Git helper guards after the subcommand: `git diff --no-ext-diff --no-textconv ...`, `git show --no-ext-diff --no-textconv ...`, `git log --no-ext-diff --no-textconv ...`, and `git blame --no-textconv ...`. Plain commands such as `git status` and `git grep` need none of these flags."
         : name === "compose"
           ? `${TOOL_REGISTRY.compose.description} Composable children in this advertised tool union: ${composableChildNames.join(", ") || "none"}. list_files is composable only without query; search_files is composable only with semantic omitted or false.`
           : (TOOL_REGISTRY[name]?.description ?? name),
@@ -2309,7 +2315,7 @@ export function createAgentToolRuntime(
           request.name === "find_native_tools"
             ? executeNativeToolDiscovery(request)
             : request.name === "compose"
-              ? __DEV_BUILD__
+              ? IS_DEV_BUILD
                 ? await (
                     await loadComposeRuntime(ctx.extensionUri.fsPath)
                   ).handleCompose({
@@ -2780,7 +2786,7 @@ export async function dispatchToolCall(
   input: Record<string, unknown>,
   ctx: ToolDispatchContext,
 ): Promise<ToolResult> {
-  if (!__DEV_BUILD__ && TOOL_REGISTRY[toolName]?.devOnly) {
+  if (!IS_DEV_BUILD && TOOL_REGISTRY[toolName]?.devOnly) {
     return errorResult(`Tool '${toolName}' is available only in dev builds`);
   }
 
@@ -4616,7 +4622,7 @@ export async function dispatchToolCall(
     }
 
     case "send_feedback": {
-      if (!__DEV_BUILD__) {
+      if (!IS_DEV_BUILD) {
         return {
           content: [
             {
@@ -4645,7 +4651,7 @@ export async function dispatchToolCall(
     }
 
     case "get_feedback": {
-      if (!__DEV_BUILD__) {
+      if (!IS_DEV_BUILD) {
         return {
           content: [
             {
@@ -4684,7 +4690,7 @@ export async function dispatchToolCall(
     }
 
     case "triage_feedback": {
-      if (!__DEV_BUILD__) {
+      if (!IS_DEV_BUILD) {
         return {
           content: [
             {
@@ -4717,7 +4723,7 @@ export async function dispatchToolCall(
     }
 
     case "delete_feedback": {
-      if (!__DEV_BUILD__) {
+      if (!IS_DEV_BUILD) {
         return {
           content: [
             {

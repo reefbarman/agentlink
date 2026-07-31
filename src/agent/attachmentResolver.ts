@@ -1,5 +1,6 @@
-import { readFile, realpath } from "fs/promises";
 import * as path from "path";
+
+import { readFile, realpath, stat } from "fs/promises";
 
 export interface ResolvedAttachmentMedia {
   name: string;
@@ -13,6 +14,14 @@ export interface ResolvedAttachments {
   documents: ResolvedAttachmentMedia[];
 }
 
+export interface ResolvedAttachmentImagePreview {
+  path: string;
+  mimeType: string;
+  base64: string;
+}
+
+const MAX_IMAGE_PREVIEW_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGE_PREVIEW_TOTAL_BYTES = 20 * 1024 * 1024;
 const IMAGE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".gif": "image/gif",
   ".jpeg": "image/jpeg",
@@ -41,6 +50,49 @@ function decodeTextFile(content: Buffer): string | null {
 
 function cleanAttachmentMarkers(text: string): string {
   return text.replace(/\[Attached: [^\]]+\]\n*/g, "").trim();
+}
+
+export async function resolveProjectImagePreviews(
+  attachments: readonly string[],
+  projectRoot: string,
+): Promise<ResolvedAttachmentImagePreview[]> {
+  let canonicalProjectRoot: string;
+  try {
+    canonicalProjectRoot = await realpath(projectRoot);
+  } catch {
+    return [];
+  }
+
+  const previews: ResolvedAttachmentImagePreview[] = [];
+  let totalBytes = 0;
+  for (const attachmentPath of attachments) {
+    try {
+      const mimeType =
+        IMAGE_MIME_BY_EXTENSION[path.extname(attachmentPath).toLowerCase()];
+      if (!mimeType) continue;
+      const absolutePath = await realpath(
+        path.resolve(canonicalProjectRoot, attachmentPath),
+      );
+      if (!isPathInsideRoot(canonicalProjectRoot, absolutePath)) continue;
+      const fileSize = (await stat(absolutePath)).size;
+      if (
+        fileSize > MAX_IMAGE_PREVIEW_BYTES ||
+        totalBytes + fileSize > MAX_IMAGE_PREVIEW_TOTAL_BYTES
+      ) {
+        continue;
+      }
+      const content = await readFile(absolutePath);
+      totalBytes += content.byteLength;
+      previews.push({
+        path: attachmentPath,
+        mimeType,
+        base64: content.toString("base64"),
+      });
+    } catch {
+      // Keep the path as a normal attachment when a preview cannot be read.
+    }
+  }
+  return previews;
 }
 
 /**

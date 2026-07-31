@@ -771,6 +771,16 @@ describe("READ_ONLY_TOOLS", () => {
       telemetryOwner: "runtime",
       disclosure: "essential",
     });
+    expect(TOOL_CAPABILITIES.send_feedback).toMatchObject({
+      availability: { kind: "dev-only" },
+      disclosure: "essential",
+    });
+    for (const name of ["get_feedback", "triage_feedback", "delete_feedback"]) {
+      expect(TOOL_CAPABILITIES[name]).toMatchObject({
+        availability: { kind: "dev-only" },
+        disclosure: "eligible",
+      });
+    }
     expect(TOOL_CAPABILITIES.call_mcp_tool).toMatchObject({
       availability: { kind: "mcp-bridge" },
       definitionSource: "adapter-definition",
@@ -1021,6 +1031,23 @@ describe("getAgentTools", () => {
     for (const name of devOnlyNames) {
       expect(names.includes(name)).toBe(__DEV_BUILD__);
     }
+  });
+
+  it("keeps send_feedback available through restrictive profiles and skill allowlists", () => {
+    const profileNames = getAgentTools(
+      undefined,
+      undefined,
+      true,
+      "review",
+    ).map((tool) => tool.name);
+    const skillNames = getAgentTools(undefined, undefined, false, undefined, [
+      "read_file",
+    ]).map((tool) => tool.name);
+
+    expect(profileNames.includes("send_feedback")).toBe(__DEV_BUILD__);
+    expect(skillNames.includes("send_feedback")).toBe(__DEV_BUILD__);
+    expect(profileNames).not.toContain("get_feedback");
+    expect(skillNames).not.toContain("get_feedback");
   });
 
   it("gates feedback tools by build type", () => {
@@ -1413,6 +1440,19 @@ describe("getAgentTools", () => {
     expect(executeCommand?.description).toContain(
       "recognized read-only command",
     );
+    expect(executeCommand?.description).toContain(
+      "rg --no-config <pattern> [path ...]",
+    );
+    expect(executeCommand?.description).toContain(
+      "git diff --no-ext-diff --no-textconv",
+    );
+    expect(executeCommand?.description).toContain(
+      "git log --no-ext-diff --no-textconv",
+    );
+    expect(executeCommand?.description).toContain("git blame --no-textconv");
+    expect(executeCommand?.description).toContain(
+      "do not add routine `--no-pager`",
+    );
     expect(executeCommand?.input_schema.properties).toHaveProperty("command");
     expect(executeCommand?.input_schema.properties).not.toHaveProperty(
       "background",
@@ -1467,6 +1507,19 @@ describe("getAgentTools", () => {
     );
     expect(executeCommand?.description).toContain(
       "recognized read-only command",
+    );
+    expect(executeCommand?.description).toContain(
+      "rg --no-config <pattern> [path ...]",
+    );
+    expect(executeCommand?.description).toContain(
+      "git diff --no-ext-diff --no-textconv",
+    );
+    expect(executeCommand?.description).toContain(
+      "git log --no-ext-diff --no-textconv",
+    );
+    expect(executeCommand?.description).toContain("git blame --no-textconv");
+    expect(executeCommand?.description).toContain(
+      "do not add routine `--no-pager`",
     );
     expect(executeCommand?.input_schema.properties).toHaveProperty("command");
     expect(executeCommand?.input_schema.properties).toHaveProperty("cwd");

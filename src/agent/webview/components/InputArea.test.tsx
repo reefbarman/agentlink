@@ -369,6 +369,56 @@ describe("InputArea slash popup", () => {
     });
   });
 
+  it("resolves copied Explorer image URIs into attachment thumbnails", async () => {
+    const postMessage = vi.fn();
+    const { container } = renderInputArea([], {
+      vscodeApi: { postMessage },
+      injection: { type: "attachment", path: "media/reference.png" },
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    await waitFor(() => {
+      expect(postMessage).toHaveBeenCalledWith({
+        command: "agentResolveAttachmentPreviews",
+        paths: ["media/reference.png"],
+      });
+    });
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          type: "agentAttachmentPreviewsResolved",
+          images: [
+            {
+              path: "media/reference.png",
+              mimeType: "image/png",
+              base64: "preview-data",
+            },
+          ],
+        },
+      }),
+    );
+    await waitFor(() => {
+      expect(
+        container
+          .querySelector(".attachment-chip-thumbnail")
+          ?.getAttribute("src"),
+      ).toBe("data:image/png;base64,preview-data");
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        items: [],
+        files: [],
+        getData: (type: string) =>
+          type === "text/uri-list" ? "file:///workspace/copied.png" : "",
+      },
+    });
+    expect(postMessage).toHaveBeenCalledWith({
+      command: "agentResolveDroppedFiles",
+      paths: ["/workspace/copied.png"],
+    });
+  });
+
   it("attaches pasted images exposed only through clipboard files", async () => {
     const { container } = renderInputArea([]);
     const input = container.querySelector(".chat-input") as HTMLTextAreaElement;

@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "preact/hooks";
 
 import type { ContentBlock } from "../types";
+import { ImagePreview } from "./ImagePreview";
 import { InlineDiff } from "./InlineDiff";
 import { JsonHighlight } from "../../../shared/ui/JsonHighlight";
 import { matchFilePaths } from "./filePathLinks";
@@ -946,15 +947,23 @@ export function ToolCallBlock({
                 ))}
               {resultImages.length > 0 && (
                 <div class="tool-result-image-previews">
-                  {resultImages.map((image, index) => (
-                    <img
-                      key={`${image.mimeType}-${index}`}
-                      class="tool-result-image-preview"
-                      src={`data:${image.mimeType};base64,${image.data}`}
-                      alt={`${toolCall.name} result image ${index + 1}`}
-                      loading="lazy"
-                    />
-                  ))}
+                  {resultImages.map((image, index) => {
+                    const alt = `${toolCall.name} result image ${index + 1}`;
+                    return (
+                      <ImagePreview
+                        key={`${image.mimeType}-${index}`}
+                        image={{
+                          src: `data:${image.mimeType};base64,${image.data}`,
+                          mimeType: image.mimeType,
+                        }}
+                        alt={alt}
+                        className="tool-result-image-preview"
+                        buttonClassName="tool-result-image-preview-button"
+                        loading="lazy"
+                        showDownload
+                      />
+                    );
+                  })}
                 </div>
               )}
               {resultDocuments.length > 0 && (

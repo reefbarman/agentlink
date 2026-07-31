@@ -24,6 +24,7 @@ import {
   type AcpBackgroundRunner,
 } from "./background/acpBackgroundRunner.js";
 import type { RawBackgroundAgentSettings } from "./background/acpAgentConfig.js";
+import type { ReadOnlyCommandReviewer } from "../approvals/readOnlyCommandReview.js";
 import type { WorkspaceFolderInfo } from "./systemPrompt.js";
 import {
   createAgentToolRuntime,
@@ -162,6 +163,8 @@ export interface AgentSessionManagerHost {
   ) => ToolDispatchContext;
   createToolRuntime: (ctx: ToolDispatchContext) => AgentToolRuntime;
   acpBackgroundRunner: AcpBackgroundRunner;
+  /** Guardian reviewer for ACP read-only command review; defaults to the built-in reviewer. */
+  acpReadOnlyCommandReviewer?: ReadOnlyCommandReviewer;
   workspaceMutationCoordinator: WorkspaceMutationCoordinator;
   persistence?: SessionStore;
   timers: TimerHost;
@@ -376,6 +379,8 @@ export function mergeAgentSessionManagerHost(
     createToolRuntime: overrides?.createToolRuntime ?? base.createToolRuntime,
     acpBackgroundRunner:
       overrides?.acpBackgroundRunner ?? base.acpBackgroundRunner,
+    acpReadOnlyCommandReviewer:
+      overrides?.acpReadOnlyCommandReviewer ?? base.acpReadOnlyCommandReviewer,
     workspaceMutationCoordinator:
       overrides?.workspaceMutationCoordinator ??
       base.workspaceMutationCoordinator,

@@ -1,7 +1,11 @@
 import * as vscode from "vscode";
 
 import type { AgentSessionManager } from "../agent/AgentSessionManager.js";
-import type { ChatWorkspaceViewSnapshot } from "../agent/chatTabProtocol.js";
+import {
+  getChatTabViewStatus,
+  isChatTabSessionBusy,
+  type ChatWorkspaceViewSnapshot,
+} from "../agent/chatTabProtocol.js";
 import { getLatestTodoState } from "../agent/todoTool.js";
 import type { AgentMessage, SessionInfo } from "../agent/types.js";
 
@@ -369,6 +373,10 @@ export class BrowserGatewayService implements vscode.Disposable {
       uiEventHub.onDidPublish((event) => {
         this.applyEvent(event);
         this.onDidChangeOwnerProjectionEmitter.fire("ui");
+        if (affectsChatTabAttention(event.event)) {
+          this.onDidChangeOwnerProjectionEmitter.fire("sessions");
+          this.invalidateBrowserSnapshot();
+        }
       }),
       diffSnapshotHub.onDidChange(() => {
         this.onDidChangeOwnerProjectionEmitter.fire("diffs");
@@ -1267,11 +1275,24 @@ export class BrowserGatewayService implements vscode.Disposable {
         const session = tab.sessionId
           ? sessionsById.get(tab.sessionId)
           : undefined;
+        const pendingInput = tab.sessionId
+          ? this.hasPendingSessionInput(tab.sessionId)
+          : false;
+        const lifecycleStatus = getChatTabViewStatus(session);
+        const status =
+          lifecycleStatus === "failed"
+            ? lifecycleStatus
+            : pendingInput
+              ? "needs_input"
+              : lifecycleStatus;
         const projectedMatches = projected?.sessionId === tab.sessionId;
         return {
           ...tab,
-          needsAttention:
-            tab.status === "needs_input" || tab.status === "failed",
+          status,
+          busy:
+            status !== "failed" &&
+            (pendingInput || isChatTabSessionBusy(session)),
+          needsAttention: status === "needs_input" || status === "failed",
           ...(session?.mode ? { mode: session.mode } : {}),
           ...(session?.model ? { model: session.model } : {}),
           ...(session?.interactiveExecutionPhase
@@ -1290,6 +1311,12 @@ export class BrowserGatewayService implements vscode.Disposable {
         };
       }),
     };
+  }
+
+  private hasPendingSessionInput(sessionId: string): boolean {
+    return this.uiEventHub
+      .getSnapshot(sessionId)
+      .some(({ event }) => isPendingSessionInput(event));
   }
 
   private getForegroundQuestion(): BrowserGatewayUiState["question"] {
@@ -1620,6 +1647,31 @@ export class BrowserGatewayService implements vscode.Disposable {
     }
     return bytes;
   }
+}
+
+function affectsChatTabAttention(event: AgentUiEvent): boolean {
+  switch (event.type) {
+    case "showApproval":
+    case "idle":
+    case "agentQuestionRequest":
+    case "agentQuestionCleared":
+    case "agentFormElicitationRequest":
+    case "agentFormElicitationCleared":
+    case "agentUrlElicitationRequest":
+    case "agentUrlElicitationCleared":
+      return true;
+    case "agentQuestionProgress":
+      return false;
+  }
+}
+
+function isPendingSessionInput(event: AgentUiEvent): boolean {
+  return (
+    event.type === "showApproval" ||
+    event.type === "agentQuestionRequest" ||
+    event.type === "agentFormElicitationRequest" ||
+    event.type === "agentUrlElicitationRequest"
+  );
 }
 
 function createDetachedSessionUiState(

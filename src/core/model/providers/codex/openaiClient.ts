@@ -1,8 +1,7 @@
-import * as os from "os";
-
 import OpenAI from "openai";
 
 import { agentLinkFetch } from "../../../../util/httpDispatcher.js";
+import { getCodexOriginator, getCodexUserAgent } from "./clientIdentity.js";
 import {
   getEndpointCaps,
   type CodexAuthMethod,
@@ -36,13 +35,14 @@ export interface CodexClientCacheKeyParts {
 export function getCodexEndpointConfig(
   auth: CodexResolvedAuthForClient,
   sessionId: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): CodexEndpointConfig {
   const defaultHeaders: Record<string, string> = {
-    "User-Agent": `agentlink/1.0 (${os.platform()} ${os.release()}; ${os.arch()}) node/${process.version.slice(1)}`,
+    "User-Agent": getCodexUserAgent(env),
   };
 
   if (auth.method === "oauth") {
-    defaultHeaders.originator = "agentlink";
+    defaultHeaders.originator = getCodexOriginator(env);
     defaultHeaders.session_id = sessionId;
     if (auth.accountId) {
       defaultHeaders["ChatGPT-Account-Id"] = auth.accountId;

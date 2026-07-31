@@ -890,6 +890,7 @@ describe("browser gateway owner protocol", () => {
           previousReasoningEffort: "high",
           reasoningEffort: "low",
         },
+        mode: { previousMode: "ask", mode: "code" },
       },
       error: {
         message: "Recoverable",

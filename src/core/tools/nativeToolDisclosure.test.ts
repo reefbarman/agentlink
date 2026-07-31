@@ -32,6 +32,10 @@ describe("native tool disclosure snapshots", () => {
       definition("ask_user"),
       dynamicMcp,
       definition("write_file"),
+      definition("send_feedback"),
+      definition("get_feedback"),
+      definition("triage_feedback"),
+      definition("delete_feedback"),
       definition("load_skill"),
       definition("show_notification"),
       definition("manage_memory"),
@@ -41,10 +45,14 @@ describe("native tool disclosure snapshots", () => {
       "ask_user",
       "demo__search",
       "write_file",
+      "send_feedback",
       "load_skill",
     ]);
     expect(snapshot.deferredTools.map((tool) => tool.name)).toEqual([
       "get_call_hierarchy",
+      "get_feedback",
+      "triage_feedback",
+      "delete_feedback",
       "manage_memory",
     ]);
     expect(snapshot.dormantToolNames).toEqual(["show_notification"]);

@@ -141,7 +141,7 @@ describe("CommandCard terminal presentation", () => {
     expect(screen.getByText("Save Rules & Run")).toBeTruthy();
   });
 
-  it("does not mark fresh skipped rule suggestions as modified", () => {
+  it("defaults fresh rule suggestions to allow without marking them modified", () => {
     const approval = request("sandbox");
     approval.subCommands = [{ command: "npm test" }];
     renderCard(approval);
@@ -150,14 +150,14 @@ describe("CommandCard terminal presentation", () => {
       screen.getByRole("button", { name: /Auto Approval Rules/ }),
     );
     expect(screen.queryByText("Save Rules & Run")).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Approval only" }).classList,
-    ).toContain("active");
+    expect(screen.getByRole("button", { name: "Allow" }).classList).toContain(
+      "active",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Session" }));
-    expect(screen.queryByText(/may run matching commands outside/)).toBeNull();
+    expect(screen.getByText(/without another approval card/)).toBeTruthy();
   });
 
-  it("warns when a manually selected native prefix is broad", () => {
+  it("warns when a selected allow prefix is broad", () => {
     const approval = request("sandbox");
     approval.subCommands = [{ command: "git status" }];
     const { container } = renderCard(approval);
@@ -166,17 +166,17 @@ describe("CommandCard terminal presentation", () => {
       screen.getByRole("button", { name: /Auto Approval Rules/ }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Session" }));
-    fireEvent.click(screen.getByRole("button", { name: "Allow (native)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
     fireEvent.input(
       container.querySelector<HTMLInputElement>(".rule-pattern-input")!,
       { target: { value: "git" } },
     );
 
-    expect(screen.getByText(/Broad native prefix/)).toBeTruthy();
+    expect(screen.getByText(/Broad prefix/)).toBeTruthy();
     expect(screen.getByText(/trust the entire command family/)).toBeTruthy();
   });
 
-  it("labels regex allow rules as sandboxed", () => {
+  it("labels regex allow rules consistently", () => {
     const approval = request("sandbox");
     approval.subCommands = [
       {
@@ -194,18 +194,14 @@ describe("CommandCard terminal presentation", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /Auto Approval Rules/ }),
     );
-    expect(
-      screen.getByRole("button", { name: "Allow (sandboxed)" }).classList,
-    ).toContain("active");
-    expect(
-      screen.getByText(/stays inside the Protected Terminal/),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(/do not grant native execution authority/),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow" }).classList).toContain(
+      "active",
+    );
+    expect(screen.getByText(/without another approval card/)).toBeTruthy();
+    expect(screen.getByText(/requested execution route/)).toBeTruthy();
   });
 
-  it("preserves legacy approval-only authority when editing another field", () => {
+  it("upgrades a legacy rule to allow when editing another field", () => {
     const approval = request("sandbox");
     approval.subCommands = [
       {
@@ -222,9 +218,9 @@ describe("CommandCard terminal presentation", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /Auto Approval Rules/ }),
     );
-    expect(
-      screen.getByRole("button", { name: "Approval only" }).classList,
-    ).toContain("active");
+    expect(screen.getByRole("button", { name: "Allow" }).classList).toContain(
+      "active",
+    );
     fireEvent.input(
       container.querySelector<HTMLInputElement>(".rule-pattern-input")!,
       { target: { value: "npm test -- --runInBand" } },
@@ -238,7 +234,7 @@ describe("CommandCard terminal presentation", () => {
           expect.objectContaining({
             pattern: "npm test -- --runInBand",
             mode: "exact",
-            decision: undefined,
+            decision: "allow",
             scope: "project",
           }),
         ],

@@ -422,6 +422,53 @@ describe("App chat workspace integration", () => {
     expect(screen.getByText("Detached review")).toBeTruthy();
   });
 
+  it("keeps BTW cards with their originating chat across tab switches", () => {
+    const vscodeApi = createVsCodeApi();
+    render(<App vscodeApi={vscodeApi} />);
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver(sessionLoaded("session-1", "transcript for A"));
+    deliver({
+      type: "agentBtwLoading",
+      sessionId: "session-1",
+      requestId: "btw-1",
+      question: "Question for A",
+    });
+
+    expect(screen.getByText("Question for A")).toBeTruthy();
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-2") });
+    deliver({
+      ...sessionLoaded("session-2", "transcript for B"),
+      origin: "focus",
+    });
+    expect(screen.queryByText("Question for A")).toBeNull();
+
+    deliver({
+      type: "agentBtwProgress",
+      sessionId: "session-1",
+      requestId: "btw-1",
+      answer: "Answer for A while inactive",
+      tools: [],
+      warnings: [],
+      budget: {
+        apiTurns: 1,
+        maxApiTurns: 5,
+        toolCalls: 0,
+        maxToolCalls: 10,
+      },
+    });
+    expect(screen.queryByText("Answer for A while inactive")).toBeNull();
+
+    deliver({ type: "chatWorkspaceUpdate", snapshot: createSnapshot("tab-1") });
+    deliver({
+      ...sessionLoaded("session-1", "transcript for A"),
+      origin: "focus",
+    });
+
+    expect(screen.getByText("Question for A")).toBeTruthy();
+    expect(screen.getByText("Answer for A while inactive")).toBeTruthy();
+  });
+
   it("isolates context usage and queued messages across tab switches", () => {
     const vscodeApi = createVsCodeApi();
     const { container } = render(<App vscodeApi={vscodeApi} />);

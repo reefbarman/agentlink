@@ -15,21 +15,12 @@ interface Props {
 }
 
 function commandRuleAuthorityLabel(rule: CommandRule): string {
-  if (rule.decision === "allow") {
-    return rule.mode === "regex" ? "allow (sandboxed)" : "allow (native)";
-  }
-  return rule.decision ?? "legacy approval only";
+  return rule.decision ?? "allow";
 }
 
 function commandRuleAuthorityTitle(rule: CommandRule): string {
-  if (rule.decision === "allow" && rule.mode !== "regex") {
-    return "Skips approval and may run outside the Protected Terminal with normal user permissions when every command segment matches an exact or prefix allow rule.";
-  }
-  if (rule.decision === "allow") {
-    return "Skips approval when this regex matches, but does not grant native execution authority.";
-  }
-  if (rule.decision === undefined) {
-    return "Legacy approval-only rule; skips repeat approval cards without granting native execution authority.";
+  if (rule.decision === undefined || rule.decision === "allow") {
+    return "Runs matching commands without another approval card while preserving the requested execution route and permissions.";
   }
   return `${rule.decision} command rule`;
 }
@@ -47,7 +38,7 @@ export function RuleList({
     <>
       {rules.map((r, i) => (
         <div
-          key={`${r.pattern}\0${r.mode}\0${"decision" in r ? (r.decision ?? "legacy") : "path"}\0${i}`}
+          key={`${r.pattern}\0${r.mode}\0${"decision" in r ? (r.decision ?? "allow") : "path"}\0${i}`}
           class="rule-row"
         >
           <span

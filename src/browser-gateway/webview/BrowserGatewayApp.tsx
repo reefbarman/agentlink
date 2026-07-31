@@ -49,7 +49,7 @@ import {
 import { ChatHeader } from "../../agent/webview/components/ChatHeader";
 import { ChatView } from "../../agent/webview/components/ChatView";
 import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow";
-import { DebugInfo } from "../../agent/webview/components/DebugInfo";
+import { EnvironmentPanel } from "../../agent/webview/components/EnvironmentPanel";
 import { BackgroundSessionStrip } from "../../agent/webview/components/BackgroundSessionStrip";
 import { BrowserDiffViewer } from "./components/BrowserDiffViewer";
 import { LazyMcpManagerPanel } from "./components/LazyMcpManagerPanel";
@@ -662,6 +662,12 @@ export function pruneDetachedSessionDetailCache(
       cache.delete(key);
     }
   }
+}
+
+function selectableLogicalTabs(
+  workspace: BrowserGatewayChatWorkspaceSummary,
+): BrowserGatewayChatTabSummary[] {
+  return workspace.tabs.filter((tab) => Boolean(tab.sessionId));
 }
 
 function logicalTabSelection(
@@ -1355,7 +1361,6 @@ export function BrowserGatewayApp({
     setLocalDismissedQuestionId(null);
     setQuestionContextMode(null);
     setQuestionAttachments({});
-    setSelectedDiffId(null);
     setTranscriptView(null);
     forwardedFollowUpRef.current = "";
     setSelectedTabId(tabId);
@@ -1485,7 +1490,6 @@ export function BrowserGatewayApp({
     },
     [],
   );
-  const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
   const [questionContextMode, setQuestionContextMode] =
     useState<QuestionOtherContext | null>(null);
   const [questionAttachments, setQuestionAttachments] = useState<
@@ -1511,6 +1515,8 @@ export function BrowserGatewayApp({
   const pendingNewSessionRef = useRef<Promise<GatewaySnapshot | null> | null>(
     null,
   );
+  const askAgentNewSessionSendTargetRef =
+    useRef<Promise<GatewaySnapshot | null> | null>(null);
   const [askAgentCapabilities, setAskAgentCapabilities] = useState<
     AskAgentCapabilityStatus[]
   >([]);
@@ -1572,6 +1578,7 @@ export function BrowserGatewayApp({
     useState("");
   const [askAgentHandoffPending, setAskAgentHandoffPending] = useState(false);
   const [showMcpStatus, setShowMcpStatus] = useState(false);
+  const [environmentPanelOpen, setEnvironmentPanelOpen] = useState(false);
   const [mcpManagerSnapshot, setMcpManagerSnapshot] =
     useState<McpConfigSnapshot | null>(null);
   const [mcpManagerView, setMcpManagerView] =
@@ -1832,9 +1839,10 @@ export function BrowserGatewayApp({
       workspace,
     );
 
+    const tabs = selectableLogicalTabs(workspace);
     const current = selectedLogicalTabRef.current;
     const selectedTab = current
-      ? workspace.tabs.find(
+      ? tabs.find(
           (tab) =>
             current.instanceId === selectedTabId &&
             current.controllerEpoch === workspace.controllerEpoch &&
@@ -1844,13 +1852,19 @@ export function BrowserGatewayApp({
       : undefined;
     if (!selectedTab) {
       const preferred =
-        workspace.tabs.find((tab) => tab.tabId === workspace.focusedTabId) ??
-        workspace.tabs.find(
+        tabs.find((tab) => tab.tabId === workspace.focusedTabId) ??
+        tabs.find(
           (tab) =>
             tab.sessionId === ownerSnapshot.session.foreground?.sessionId,
         ) ??
-        workspace.tabs[0];
-      if (!preferred) return;
+        tabs[0];
+      if (!preferred) {
+        logicalSelectionByInstanceRef.current.delete(selectedTabId);
+        selectedLogicalTabRef.current = null;
+        logicalSelectionGenerationRef.current += 1;
+        setSelectedLogicalTab(null);
+        return;
+      }
       const next = logicalTabSelection(selectedTabId, workspace, preferred);
       if (!next) return;
       logicalSelectionByInstanceRef.current.set(selectedTabId, next);
@@ -1998,26 +2012,6 @@ export function BrowserGatewayApp({
     void fetchModels();
   }, [modelsVersion]);
 
-  useEffect(() => {
-    const currentDiffs = snapshot?.diffs ?? [];
-
-    if (currentDiffs.length === 0) {
-      if (selectedDiffId !== null) {
-        setSelectedDiffId(null);
-      }
-      return;
-    }
-
-    if (
-      selectedDiffId &&
-      currentDiffs.some((diff) => diff.requestId === selectedDiffId)
-    ) {
-      return;
-    }
-
-    setSelectedDiffId(currentDiffs[0]?.requestId ?? null);
-  }, [selectedDiffId, snapshot?.diffs]);
-
   const foreground = snapshot?.session.foreground ?? null;
   const foregroundProjectedMessages = foreground?.projectedMessages;
   const messages = useMemo<ChatMessage[]>(() => {
@@ -2162,17 +2156,20 @@ export function BrowserGatewayApp({
     setQuestionAttachments({});
   }, [visibleQuestion?.id]);
 
-  const mobileReviewOpen = mobileLayout && mobilePane === "review";
-  const visibleApprovalDiff =
-    visibleApproval?.kind === "write"
-      ? diffs.find(
-          (diff) =>
-            diff.requestId === visibleApproval.id ||
-            (visibleApproval.filePath !== undefined &&
-              diff.filePath === visibleApproval.filePath),
-        )
-      : undefined;
-  const canOpenMobileReview = mobileLayout && Boolean(visibleApprovalDiff);
+  const visibleApprovalDiff = (() => {
+    if (visibleApproval?.kind !== "write") return undefined;
+    const exact = diffs.find((diff) => diff.requestId === visibleApproval.id);
+    if (exact) return exact;
+    if (!visibleApproval.filePath) return undefined;
+    const pathMatches = diffs.filter(
+      (diff) => diff.filePath === visibleApproval.filePath,
+    );
+    return pathMatches.length === 1 ? pathMatches[0] : undefined;
+  })();
+  const reviewPaneVisible = !isAskAgentSelected && Boolean(visibleApprovalDiff);
+  const canOpenMobileReview = mobileLayout && reviewPaneVisible;
+  const mobileReviewOpen =
+    mobileLayout && mobilePane === "review" && canOpenMobileReview;
   const awaitingUserInput = Boolean(
     visibleApproval ||
     visibleQuestion ||
@@ -2226,10 +2223,14 @@ export function BrowserGatewayApp({
   }, [mobilePane, visibleApproval?.id]);
 
   useEffect(() => {
+    if (!reviewPaneVisible) {
+      sidePaneResizeCleanupRef.current?.();
+      sidePaneResizeCleanupRef.current = null;
+    }
     if (mobilePane === "review" && !canOpenMobileReview) {
       setMobilePane(null);
     }
-  }, [canOpenMobileReview, mobilePane]);
+  }, [canOpenMobileReview, mobilePane, reviewPaneVisible]);
 
   useEffect(() => {
     if (!thinkingPending || !foreground || pendingReasoningEffort === null)
@@ -3644,12 +3645,13 @@ export function BrowserGatewayApp({
     let pendingNewSessionForeground:
       | GatewaySnapshot["session"]["foreground"]
       | null = null;
+    let newSessionSendTarget: Promise<GatewaySnapshot | null> | null = null;
     if (isAskAgentSelected) {
-      const pendingNewSession = pendingNewSessionRef.current;
-      if (pendingNewSession) {
+      newSessionSendTarget = askAgentNewSessionSendTargetRef.current;
+      if (newSessionSendTarget) {
         setSendStatus("Waiting for new session…");
         pendingNewSessionForeground =
-          (await pendingNewSession)?.session.foreground ?? null;
+          (await newSessionSendTarget)?.session.foreground ?? null;
         if (!pendingNewSessionForeground) {
           setSendStatus(
             "Message not sent because the new session failed to start.",
@@ -3870,6 +3872,12 @@ export function BrowserGatewayApp({
       const sendPath = isAskAgentSelected
         ? "/api/ask-agent/send"
         : buildApiPath("/api/send");
+      if (
+        isAskAgentSelected &&
+        askAgentNewSessionSendTargetRef.current === newSessionSendTarget
+      ) {
+        askAgentNewSessionSendTargetRef.current = null;
+      }
       const response = await fetch(sendPath, {
         method: "POST",
         credentials: "same-origin",
@@ -4108,7 +4116,6 @@ export function BrowserGatewayApp({
     setLocalDismissedQuestionId(null);
     setQuestionContextMode(null);
     setQuestionAttachments({});
-    setSelectedDiffId(null);
     setTranscriptView(null);
     forwardedFollowUpRef.current = "";
   };
@@ -4333,6 +4340,9 @@ export function BrowserGatewayApp({
     if (pendingNewSessionRef.current) return;
     const pending = createNewSession();
     pendingNewSessionRef.current = pending;
+    if (isAskAgentSelected) {
+      askAgentNewSessionSendTargetRef.current = pending;
+    }
     void pending.finally(() => {
       if (pendingNewSessionRef.current === pending) {
         pendingNewSessionRef.current = null;
@@ -4360,6 +4370,9 @@ export function BrowserGatewayApp({
   };
 
   const handleLoadSession = (sessionId: string, stopRunning = false): void => {
+    if (isAskAgentSelected) {
+      askAgentNewSessionSendTargetRef.current = null;
+    }
     void (async () => {
       try {
         const selection = isAskAgentSelected
@@ -5155,7 +5168,38 @@ export function BrowserGatewayApp({
 
   const handleRetry = (): void => {
     if (!isAskAgentSelected) {
-      void handleSend("Retry the last step.", []);
+      if (!foreground) {
+        setSendStatus("No session is loaded to retry.");
+        return;
+      }
+      void (async () => {
+        try {
+          setSendStatus("Retrying…");
+          const response = await fetch(buildApiPath("/api/retry"), {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              sessionId: foreground.sessionId,
+              projectId: foreground.project?.projectId,
+            }),
+          });
+          const body = (await response.json().catch(() => ({}))) as {
+            ok?: boolean;
+            error?: string;
+          };
+          if (body.ok) {
+            setSendStatus("");
+            return;
+          }
+          setSendStatus(`Retry failed: ${body.error ?? response.status}`);
+        } catch (err) {
+          setSendStatus(`Retry error: ${String(err)}`);
+        }
+      })();
       return;
     }
     void (async () => {
@@ -5425,7 +5469,14 @@ export function BrowserGatewayApp({
       case "fleet":
         setShowFleetRequest((request) => request + 1);
         return;
+      case "environment":
+        setEnvironmentPanelOpen(true);
+        setMemoryPanelOpen(false);
+        setShowMcpStatus(false);
+        void fetchDebugInfo();
+        return;
       case "memory":
+        setEnvironmentPanelOpen(false);
         if (isAskAgentSelected) {
           setMemoryPanelOpen(true);
           setShowAskAgentMemory(false);
@@ -5437,6 +5488,7 @@ export function BrowserGatewayApp({
         }
         return;
       case "mcp":
+        setEnvironmentPanelOpen(false);
         setShowMcpStatus(true);
         void refreshWorkspaceMcpStatus(
           foreground?.project?.projectId ??
@@ -5461,42 +5513,37 @@ export function BrowserGatewayApp({
     }
   };
 
-  const reviewPaneContent =
-    diffs.length > 0 ? (
-      <>
-        <div class="diff-list" role="tablist" aria-label="Pending file diffs">
-          {diffs.map((diff) => (
-            <button
-              key={diff.requestId}
-              class={`diff-list-item ${selectedDiffId === diff.requestId ? "active" : ""}`}
-              onClick={() => setSelectedDiffId(diff.requestId)}
-              role="tab"
-              aria-selected={selectedDiffId === diff.requestId}
-              aria-label={diff.filePath}
-              title={`${diff.operation} ${diff.filePath}${diff.outsideWorkspace ? " (outside workspace)" : ""} · ${formatTimestamp(diff.createdAt)}`}
-            >
-              <i class="codicon codicon-file" />
-              <span class="diff-list-title">{basenameOf(diff.filePath)}</span>
-              {dirnameOf(diff.filePath) ? (
-                <span class="diff-list-subtitle">
-                  {dirnameOf(diff.filePath)}
-                </span>
-              ) : null}
-            </button>
-          ))}
-        </div>
-        <div class="diff-detail-card">
-          <BrowserDiffViewer
-            requestId={selectedDiffId}
-            authToken={authToken}
-            buildApiPath={buildApiPath}
-            theme={snapshot?.theme ?? initialTheme}
-          />
-        </div>
-      </>
-    ) : (
-      <EmptyState>No pending file diffs.</EmptyState>
-    );
+  const reviewPaneContent = visibleApprovalDiff ? (
+    <>
+      <div class="diff-list" role="tablist" aria-label="Pending file diffs">
+        <button
+          class="diff-list-item active"
+          role="tab"
+          aria-selected="true"
+          aria-label={visibleApprovalDiff.filePath}
+          title={`${visibleApprovalDiff.operation} ${visibleApprovalDiff.filePath}${visibleApprovalDiff.outsideWorkspace ? " (outside workspace)" : ""} · ${formatTimestamp(visibleApprovalDiff.createdAt)}`}
+        >
+          <i class="codicon codicon-file" />
+          <span class="diff-list-title">
+            {basenameOf(visibleApprovalDiff.filePath)}
+          </span>
+          {dirnameOf(visibleApprovalDiff.filePath) ? (
+            <span class="diff-list-subtitle">
+              {dirnameOf(visibleApprovalDiff.filePath)}
+            </span>
+          ) : null}
+        </button>
+      </div>
+      <div class="diff-detail-card">
+        <BrowserDiffViewer
+          requestId={visibleApprovalDiff.requestId}
+          authToken={authToken}
+          buildApiPath={buildApiPath}
+          theme={snapshot?.theme ?? initialTheme}
+        />
+      </div>
+    </>
+  ) : null;
 
   const streaming = foreground?.streaming === true;
   const statusOverride = foreground?.statusOverride ?? null;
@@ -6064,6 +6111,39 @@ export function BrowserGatewayApp({
           type: "agentDroppedFilesResolved",
           files: [],
         });
+        return;
+      }
+
+      if (command === "agentResolveAttachmentPreviews") {
+        const paths = Array.isArray(data.paths) ? data.paths : [];
+        void fetch(buildApiPath("/api/attachment-previews"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            paths,
+            projectId:
+              foreground?.project?.projectId ??
+              snapshot?.session.defaultProjectId,
+          }),
+        })
+          .then(async (response) => {
+            const body = response.ok
+              ? ((await response.json()) as { images?: unknown })
+              : {};
+            window.postMessage({
+              type: "agentAttachmentPreviewsResolved",
+              images: Array.isArray(body.images) ? body.images : [],
+            });
+          })
+          .catch(() => {
+            window.postMessage({
+              type: "agentAttachmentPreviewsResolved",
+              images: [],
+            });
+          });
       }
     },
   };
@@ -6112,8 +6192,9 @@ export function BrowserGatewayApp({
             instance.instanceId,
           )?.snapshot;
           const workspace = ownerSnapshot?.session.chatWorkspace;
+          const tabs = workspace ? selectableLogicalTabs(workspace) : [];
           const activeInstance = instance.instanceId === selectedInstanceId;
-          if (!workspace || workspace.tabs.length === 0) {
+          if (!workspace || tabs.length === 0) {
             return (
               <button
                 key={instance.instanceId}
@@ -6159,7 +6240,7 @@ export function BrowserGatewayApp({
           const groupColor = instanceGroupColor(instance.instanceId);
           return (
             <Fragment key={instance.instanceId}>
-              {workspace.tabs.map((tab, tabIndex) => {
+              {tabs.map((tab, tabIndex) => {
                 const selection = logicalTabSelection(
                   instance.instanceId,
                   workspace,
@@ -6177,11 +6258,11 @@ export function BrowserGatewayApp({
                     ? getLogicalTabStatus(tab.status)
                     : instanceStatus;
                 const groupPosition =
-                  workspace.tabs.length === 1
+                  tabs.length === 1
                     ? "single"
                     : tabIndex === 0
                       ? "start"
-                      : tabIndex === workspace.tabs.length - 1
+                      : tabIndex === tabs.length - 1
                         ? "end"
                         : "middle";
                 return (
@@ -6247,7 +6328,7 @@ export function BrowserGatewayApp({
               )
             : `instance-tab-${selectedTabId}`
         }
-        class={`browser-layout${sidePaneResizing ? " browser-layout-resizing" : ""}${isAskAgentSelected ? " browser-layout-chat-only" : ""}`}
+        class={`browser-layout${sidePaneResizing ? " browser-layout-resizing" : ""}${!reviewPaneVisible ? " browser-layout-chat-only" : ""}`}
         id="browser-instance-panel"
         role="tabpanel"
         style={
@@ -6256,7 +6337,7 @@ export function BrowserGatewayApp({
           } as unknown as JSX.CSSProperties
         }
       >
-        {!isAskAgentSelected && (
+        {reviewPaneVisible && (
           <>
             <section class="browser-side browser-side-top">
               <PaneCard fill className="review-pane-card">
@@ -6815,15 +6896,6 @@ export function BrowserGatewayApp({
                   </div>
                 </div>
               )}
-              {foreground?.debugInfo && (
-                <DebugInfo
-                  info={foreground.debugInfo}
-                  systemPrompt={foreground.systemPrompt}
-                  loadedInstructions={
-                    foreground.loadedInstructions ?? undefined
-                  }
-                />
-              )}
               {askAgentMemoryCandidateNudge && (
                 <div
                   class="ask-agent-memory-candidate-nudge"
@@ -7060,8 +7132,14 @@ export function BrowserGatewayApp({
                 )}
               </div>
               <ChatActivityShelf
-                revealKey={visibleApproval?.id ?? null}
-                revealMinHeight={approvalPanelHeight + 10}
+                revealKey={
+                  visibleApproval?.id ??
+                  (environmentPanelOpen ? "environment" : null)
+                }
+                revealMinHeight={Math.max(
+                  approvalPanelHeight + 10,
+                  environmentPanelOpen ? 320 : 0,
+                )}
               >
                 {!isAskAgentSelected &&
                   foreground &&
@@ -7123,6 +7201,19 @@ export function BrowserGatewayApp({
                   !mobileReviewOpen &&
                   foreground?.contextHealth && (
                     <ContextHealthPanel health={foreground.contextHealth} />
+                  )}
+                {!mobileReviewOpen &&
+                  !isAskAgentSelected &&
+                  environmentPanelOpen &&
+                  foreground && (
+                    <EnvironmentPanel
+                      info={foreground.debugInfo}
+                      systemPrompt={foreground.systemPrompt}
+                      loadedInstructions={
+                        foreground.loadedInstructions ?? undefined
+                      }
+                      onClose={() => setEnvironmentPanelOpen(false)}
+                    />
                   )}
                 {!mobileReviewOpen && isAskAgentSelected && memoryPanelOpen && (
                   <MemoryPanel
@@ -7623,6 +7714,7 @@ export function BrowserGatewayApp({
                     }
                     allowAttachments={!isAskAgentSelected}
                     allowMediaPaste={true}
+                    allowUriAttachments={false}
                     allowThinkingToggle={true}
                     allowExportTranscript={isAskAgentSelected}
                     allowFileMentions={!isAskAgentSelected}
